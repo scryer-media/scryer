@@ -1,6 +1,99 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
+  "settings.oauthClientIdCopied": "OAuth client ID copied.",
+  "status.copyFailedSelected":
+    "Could not copy. The text is selected; press Ctrl+C or ⌘C.",
+  "status.copyFailed": "Could not copy: the browser refused clipboard access.",
+  "pendingImports.conflict.returnToConflicts": "Return to folder conflicts",
+  "error.reason.LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED":
+    "This folder rename would leave an additional movie file outside the title folder. Keep the folder name or move the title with its additional files before renaming.",
+  "pendingImports.conflict.taskMissing":
+    "This resolution task is no longer available. Check Activity for its location operations or dismiss this progress panel.",
+  "pendingImports.conflict.hideProgress": "Hide progress",
+  "pendingImports.conflict.showFiles": "Show files",
+  "pendingImports.conflict.sampledFiles":
+    "Only a sample of paths is shown; the counts include all files.",
+  "pendingImports.conflict.ownershipHelp":
+    "This title already owns {{folder}}. Preview Adopt all or Keep one to settle its folders.",
+  "error.reason.LOCATION_CONFLICT_SELECTION_INVALID":
+    "Select pending folder conflicts to resolve.",
+  "error.reason.LOCATION_CONFLICT_NOT_FOUND":
+    "A selected conflict no longer exists. Refresh the page.",
+  "error.reason.LOCATION_CONFLICT_UNSUPPORTED":
+    "This conflict cannot be resolved with this workflow.",
+  "error.reason.LOCATION_CONFLICT_FOLDER_UNSAFE":
+    "A folder is outside the permitted roots or cannot be safely accessed.",
+  "error.reason.LOCATION_CONFLICT_OWNERSHIP_CHANGED":
+    "Folder ownership changed. Refresh the preview.",
+  "error.reason.LOCATION_CONFLICT_MEDIA_MISSING":
+    "The media needed to resolve this conflict is missing.",
+  "error.reason.LOCATION_CONFLICT_PLAN_CHANGED":
+    "Files or folder ownership changed. Refresh the preview before applying.",
+  "error.reason.LOCATION_CONFLICT_PERMANENT_CONFIRMATION_REQUIRED":
+    "Confirm the listed permanent deletions before continuing.",
+  "error.reason.LOCATION_CONFLICT_FILE_CHANGED":
+    "A file changed since the preview. Refresh the preview.",
+  "error.reason.LOCATION_CONFLICT_RECYCLE_UNAVAILABLE":
+    "The recycle destination is unavailable. Restore access and try again.",
+
+  "pendingImports.conflict.select": "Select conflict",
+  "pendingImports.conflict.adoptAll": "Adopt all",
+  "pendingImports.conflict.keepOne": "Keep one",
+  "pendingImports.conflict.title": "Resolve folder conflicts",
+  "pendingImports.conflict.description":
+    "Preview how {{count}} conflicts will be settled. Each conflict runs as its own location operation in Activity.",
+  "pendingImports.conflict.policy": "Media policy",
+  "pendingImports.conflict.leftovers": "Remaining files",
+  "pendingImports.conflict.adoptHelp":
+    "Move every media file into the survivor folder. The best file becomes Primary; other movie files become Additional.",
+  "pendingImports.conflict.keepHelp":
+    "Keep the best media in the survivor folder, moving it there if needed. Recycle inferior media.",
+  "pendingImports.conflict.preserveAll": "Preserve all files (default)",
+  "pendingImports.conflict.mediaOnly": "Preserve media files only",
+  "pendingImports.conflict.preserveHelp":
+    "Move remaining files into the survivor folder, resolving collisions without overwriting files.",
+  "pendingImports.conflict.mediaOnlyHelp":
+    "Recycle the previewed non-media remainder only after the media is safe at its destination.",
+  "pendingImports.conflict.preview": "Refresh preview",
+  "pendingImports.conflict.previewCount":
+    "{{count}} conflicts; showing {{shown}} rows.",
+  "pendingImports.conflict.sampled":
+    "This is a sample. Counts include the entire selection.",
+  "pendingImports.conflict.titleColumn": "Title",
+  "pendingImports.conflict.survivor": "Survivor folder",
+  "pendingImports.conflict.primary": "Primary file",
+  "pendingImports.conflict.moveBytes": "To move",
+  "pendingImports.conflict.recycleBytes": "To recycle",
+  "pendingImports.conflict.renames": "Collision renames",
+  "pendingImports.conflict.leftoverFiles": "Remaining files",
+  "pendingImports.conflict.filesBytes": "{{count}} files · {{bytes}}",
+  "pendingImports.conflict.apply": "Apply resolution",
+  "pendingImports.conflict.permanentTitle": "Delete files permanently?",
+  "pendingImports.conflict.permanentDescription":
+    "No recycle bin is configured. The {{count}} previewed files ({{bytes}}) will be deleted permanently. This cannot be undone.",
+  "pendingImports.conflict.permanentConfirm": "Delete permanently",
+  "pendingImports.conflict.previewFailed":
+    "Could not preview these conflicts. Try again.",
+  "pendingImports.conflict.applyFailed":
+    "Could not start conflict resolution. Refresh the preview and try again.",
+  "pendingImports.conflict.progress":
+    "Settled {{settled}} of {{total}} conflicts; {{failed}} failed.",
+  "pendingImports.conflict.completed":
+    "Resolution finished: {{settled}} of {{total}} settled; {{failed}} failed.",
+  "pendingImports.conflict.progressUnavailable":
+    "Progress is temporarily unavailable. The background task can continue; check Activity.",
+  "pendingImports.conflict.operation": "View operation {{id}}",
+  "pendingImports.conflict.selectPage": "Select conflicts on this page",
+  "pendingImports.conflict.selected": "{{count}} selected",
+  "pendingImports.conflict.resolveSelected": "Resolve selected",
+  "move.operationType.FOLDER_CONSOLIDATION": "Folder consolidation",
+  "move.operationType.FOLDER_KEEP_ONE": "Keep one folder",
+
+  "settings.copyVerificationTitle": "Copy verification",
+  "settings.copyVerificationScope":
+    "Applies to download-client imports and library and root moves. Quick is the default. Choose Full when moving off a disk you plan to erase.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer cannot connect to the metadata gateway because your system clock is off by more than 5 minutes. Synchronize your system clock and restart Scryer.",
   "initialAuth.title": "Set up access to Scryer",
@@ -18,6 +111,26 @@ const en: LocaleDictionary = {
   "initialAuth.mismatch": "The passwords do not match.",
   "initialAuth.acknowledge":
     "I understand that anyone allowed to reach this unauthenticated instance can act as administrator. Existing network restrictions still apply.",
+  "initialAuth.networkHeading": "Who can reach Scryer?",
+  "initialAuth.networkLocal": "Only this computer",
+  "initialAuth.networkLocalBody": "Reachable at localhost.",
+  "initialAuth.networkOther": "Other computers can talk to Scryer",
+  "initialAuth.networkOtherBody":
+    "Other devices on your network can reach Scryer. Takes effect after a restart.",
+  "initialAuth.networkContainer":
+    "Network access is decided by the ports your container publishes.",
+  "initialAuth.networkEnvironment":
+    "This install pins Scryer's address with SCRYER_BIND.",
+  "initialAuth.noAuthNetworkWarning":
+    "Without authentication, anyone on your network who can reach Scryer gets full administrator access, and unauthenticated access from other computers is deprecated. If other computers should use Scryer, choose “Require an administrator password” instead.",
+  "initialAuth.restartTitle": "Restart Scryer",
+  "initialAuth.restartBody":
+    "Setup is saved. Other computers can reach Scryer after it restarts.",
+  "initialAuth.restartNow": "Restart now",
+  "initialAuth.restartLater": "Restart later",
+  "initialAuth.restarting": "Restarting Scryer…",
+  "initialAuth.restartUnreachable":
+    "Scryer has not answered for 45 seconds. Check the server output, then reload this page.",
   "initialAuth.code": "Setup code",
   "initialAuth.codeHelp":
     "Find the one-time code in the server console or container/service output. On desktop, open logs/console.log in Scryer’s data folder. Restarting Scryer replaces the code.",
@@ -51,6 +164,16 @@ const en: LocaleDictionary = {
   "error.reason.EXTERNAL_ACCOUNT_LINK_FAILED":
     "The external account could not be linked.",
   "error.reason.CATALOG_TAG_INVALID": "The title tag is invalid.",
+  "error.reason.NETWORK_BIND_HOST_INVALID":
+    "Enter an IP address, such as 127.0.0.1 or 192.168.1.20, without a port.",
+  "error.reason.NETWORK_BIND_ENV_PINNED":
+    "SCRYER_BIND sets Scryer's address on this install, so it cannot be changed here.",
+  "error.reason.NETWORK_BIND_SAVE_AND_RESET":
+    "Choose an address or the default, not both.",
+  "error.reason.NETWORK_RESTART_NOT_REQUIRED":
+    "Scryer is already using this network setting, so no restart is needed.",
+  "error.reason.NETWORK_RESTART_UNAVAILABLE":
+    "Scryer cannot restart itself here. Restart it the way you started it.",
   "error.reason.SETTINGS_DELAY_PROFILE_CATALOG_INVALID":
     "The delay profile catalog is invalid.",
   "error.reason.SETTINGS_TRUSTED_PROXY_POLICY_INVALID":
@@ -145,7 +268,6 @@ const en: LocaleDictionary = {
   "error.fallback.unableToAuthorizeThisIntegration":
     "Unable to authorize this integration.",
   "error.fallback.unableToCancelImport": "Unable to cancel import.",
-  "error.fallback.unableToCopyTheAPIKey": "Unable to copy the API key.",
   "error.fallback.unableToCreateAPIKey": "Unable to create API key.",
   "error.fallback.unableToDeleteOAuthApplication":
     "Unable to delete OAuth application.",
@@ -310,10 +432,14 @@ const en: LocaleDictionary = {
   "error.reason.ACQUISITION_NO_ROUTABLE_DOWNLOAD_CLIENT":
     "No enabled compatible download client is allowed by routing.",
   "error.reason.ACQUISITION_NZBGET_JOB_ID_INVALID": "Invalid nzbget job ID.",
+  "error.reason.ACQUISITION_NZBGET_KEEP_HISTORY_DISABLED":
+    "NZBGet's KeepHistory setting is 0, so finished downloads are removed before Scryer can import them. Set KeepHistory to at least 1 in NZBGet.",
   "error.reason.ACQUISITION_NZBGET_METHOD_UNAVAILABLE":
     "NZBGet does not support this request signature.",
   "error.reason.ACQUISITION_NZBGET_QUEUE_ID_INVALID":
     "Invalid nzbget queue id.",
+  "error.reason.ACQUISITION_NZBGET_VERSION_UNSUPPORTED":
+    "This NZBGet version is too old. Scryer needs NZBGet 12.0 or newer.",
   "error.reason.ACQUISITION_NZB_ARTIFACT_TOO_LARGE":
     "The resolved NZB artifact exceeds the size limit.",
   "error.reason.ACQUISITION_NZB_COMPRESSION_UNSUPPORTED":
@@ -1425,6 +1551,8 @@ const en: LocaleDictionary = {
     "Indexer connection test did not return a valid Newznab caps document.",
   "error.reason.INTEGRATION_INDEXER_CONNECTION_TEST_FAILED":
     "Indexer connection test failed.",
+  "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED":
+    "Download client connection test failed.",
   "error.reason.INTEGRATION_INDEXER_CONNECTION_UNREACHABLE":
     "The indexer could not be reached.",
   "error.reason.INTEGRATION_INDEXER_CONNECTION_URL_REQUIRED":
@@ -3924,6 +4052,8 @@ const en: LocaleDictionary = {
     "Discovery filter entries cannot be blank.",
   "error.reason.INTERFACE_DISCOVERY_LIMIT_INVALID":
     "Choose a valid number of results per section.",
+  "error.reason.INTERFACE_DISCOVERY_SECTION_BLANK":
+    "Choose a discovery section to open.",
   "error.reason.INTERFACE_DISCOVERY_RATING_INVALID":
     "Choose a minimum rating between 0 and 10.",
   "error.reason.INTERFACE_DISCOVERY_SURFACE_UNSUPPORTED":
@@ -4214,7 +4344,41 @@ const en: LocaleDictionary = {
   "settings.publicUrlColumnSource": "Source",
   "settings.publicUrlEffective": "Public URL",
   "settings.publicUrlBasePath": "Base path",
-  "settings.publicUrlBindAddress": "Bind address",
+  "settings.publicUrlBindAddress": "Listening address",
+  "settings.publicUrlBindPending": "Listening address after restart",
+  "settings.networkGroupTitle": "Network",
+  "settings.networkTitle": "Who can reach Scryer",
+  "settings.networkHelp":
+    "Choose whether only this computer or other computers on your network can open Scryer. Changes take effect after Scryer restarts.",
+  "settings.networkAdvanced": "Advanced",
+  "settings.networkCustom": "A specific address on this computer",
+  "settings.networkCustomLabel": "IP address",
+  "settings.networkCustomHelp":
+    "Enter an IP address that belongs to this computer, such as its address on your network. Scryer keeps its current port.",
+  "settings.networkPinnedEnvironment":
+    "This install pins Scryer's address with SCRYER_BIND, so it cannot be changed here.",
+  "settings.networkPinnedContainer":
+    "Network access is decided by the ports your container publishes, so it cannot be changed here.",
+  "settings.networkClear": "Use the default",
+  "settings.networkSaved": "Network access saved.",
+  "settings.networkLoadError": "Unable to load network access.",
+  "settings.networkSaveError": "Unable to save network access.",
+  "settings.networkPendingSource": "After restart",
+  "settings.networkRestartPending":
+    "Scryer will listen on {{address}} after it restarts.",
+  "settings.networkRestartNow": "Restart now",
+  "settings.networkRestarting": "Restarting Scryer…",
+  "settings.networkRestartUnreachable":
+    "Scryer has not answered for 45 seconds. If you changed who can reach it, open it at its new address ({{address}}), or check the server output.",
+  "settings.networkRestartFailed": "Unable to restart Scryer.",
+  "settings.networkFallbackTitle":
+    "Scryer is listening on {{address}} instead of the configured address.",
+  "settings.networkFallback.unbindable":
+    "Scryer could not use {{address}}, so it stayed reachable from this computer only. Check that the address belongs to this computer, then choose again.",
+  "settings.networkFallback.storedInvalid":
+    "The saved network address is not valid, so Scryer used its default. Choose again to replace it.",
+  "settings.networkFallback.storedUnreadable":
+    "The saved network address could not be read, so Scryer used its default. Choose again to replace it.",
   "settings.publicUrlTrustedProxies": "Trusted proxies",
   "settings.publicUrlPasskeyRpId": "Passkey relying party ID",
   "settings.publicUrlPasskeyRpOrigin": "Passkey origin",
@@ -4248,7 +4412,7 @@ const en: LocaleDictionary = {
   "settings.hideEnteredPasswords": "Hide entered passwords",
   "settings.pluginSettingsSaveFailed": "Could not save plugin settings.",
   "settings.regoValidationUnavailable":
-    "Validation unavailable. Check your connection and try Validate again.",
+    "Validation unavailable. Check your connection and try saving again.",
   "settings.regoValidationFailed": "Rule validation failed. Show errors.",
   "settings.regoFileAvailability":
     "Available only when scoring an imported file with media information. During release searches input.file is null; guard it before reading fields.",
@@ -4417,7 +4581,8 @@ const en: LocaleDictionary = {
   "nav.logs": "Logs",
   "nav.serviceLogs": "Service Logs",
   "nav.auditLogs": "Audit Logs",
-  "nav.usersAccess": "Users & Access",
+  "nav.users": "Users",
+  "nav.securityAccess": "Security & Access",
   "nav.mobileTitle": "Scryer navigation",
   "nav.mobileDescription": "Primary Scryer navigation",
   "nav.mobileTrigger": "Open navigation",
@@ -4517,6 +4682,14 @@ const en: LocaleDictionary = {
   "dashboard.panel.storageDescription": "Space used on each root folder.",
   "dashboard.panel.activeQueueDescription":
     "What is downloading now and how long is left.",
+  "dashboard.recycleBin": "Pending deletion",
+  "dashboard.panel.recycleBinDescription":
+    "Recycle-bin files due for permanent deletion in the next 72 hours, including overdue items.",
+  "dashboard.recycleBinEmpty":
+    "No recycle-bin items are due for deletion in the next 72 hours.",
+  "dashboard.recycleBinWindow": "Next 72 hours",
+  "dashboard.recycleBinDueNow": "Due now",
+  "dashboard.recycleBinDueIn": "In {{hours}}h",
   "dashboard.layout.edit": "Edit dashboard",
   "dashboard.layout.editing": "Editing dashboard",
   "dashboard.layout.editHint":
@@ -4585,6 +4758,7 @@ const en: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "All-Time Favorites",
   "discovery.section.rightNow": "Right Now",
   "discovery.section.fromYourTaste": "From Your Taste",
+  "discovery.section.fromYourWatchlist": "From Your Watchlist",
   "discovery.section.almostComplete": "Almost Complete",
   "discovery.section.nextAnimeSeason": "Next Anime Season",
   "discovery.section.popularInAnime": "Popular in Anime",
@@ -4604,7 +4778,6 @@ const en: LocaleDictionary = {
   "settings.profile": "Profile",
   "settings.general": "General",
   "settings.backups": "Backups",
-  "settings.security": "Security",
   "settings.enableFormLogin": "Enable login",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
@@ -4718,7 +4891,6 @@ const en: LocaleDictionary = {
   "settings.indexerSearch": "Indexer Search",
   "settings.indexerClients": "Client management",
   "indexerClients.endpoints": "Endpoints",
-  "indexerClients.endpointCopyFailed": "Could not copy the endpoint URL.",
   "indexerClients.existing": "Indexer clients",
   "indexerClients.none": "No indexer clients yet.",
   "indexerClients.key": "Key",
@@ -4927,7 +5099,6 @@ const en: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Keepalive is a whole number of seconds, and 0 switches it off.",
   "status.proxyTunnelPublicKeyCopied": "Public key copied.",
-  "status.proxyTunnelPublicKeyCopyFailed": "Unable to copy the public key.",
   "settings.qualityProfiles": "Quality Profiles",
   "settings.downloadClients": "Download Clients",
   "settings.mediaServers": "Media Servers",
@@ -5428,6 +5599,35 @@ const en: LocaleDictionary = {
   "settings.noMediaServersFound": "No media server connections found.",
   "settings.capabilities": "Capabilities",
   "settings.credentials": "Credentials",
+  "settings.watchHistory": "Watch history",
+  "settings.watchHistoryNotRead": "Not read yet",
+  "settings.watchHistoryLastFullRead": "Last full read {{time}}",
+  "settings.watchHistoryIncomplete": "Last read incomplete",
+  "settings.watchHistoryIncompleteHelp":
+    "Lifecycle rules treat watch history as unknown until every enabled media server is read in full. Reason: {{reason}}",
+  "settings.watchHistorySignalCount": "{{count}} watched items from {{accounts}} linked accounts",
+  "settings.watchHistoryDisabled": "Not read while disabled",
+  "settings.watchHistoryStale": "Out of date",
+  "settings.watchHistoryStaleHelp":
+    "Lifecycle rules treat watch history as unknown until every enabled media server has been read in full recently.",
+  "settings.watchSyncReason.credentialMissing": "No API key is saved for this connection.",
+  "settings.watchSyncReason.providerUnsupported": "This media server type does not support reading watch history.",
+  "settings.watchSyncReason.baseUrlInvalid": "The connection's base URL is not a usable address.",
+  "settings.watchSyncReason.plexServerNotSelected": "No Plex server is selected for this connection.",
+  "settings.watchSyncReason.plexServerUnreachable": "The selected Plex server is not listed on the account, or lists no address to reach it at.",
+  "settings.watchSyncReason.plexAccountIdInvalid": "A linked Plex account has an id the server cannot look up.",
+  "settings.watchSyncReason.participantIdMissing": "A linked account has no media server user id.",
+  "settings.watchSyncReason.accessDenied": "The media server refused access.",
+  "settings.watchSyncReason.requestRejected": "The media server refused the request.",
+  "settings.watchSyncReason.requestFailed": "The media server could not be reached.",
+  "settings.watchSyncReason.responseUnreadable": "The media server sent an answer Scryer could not read.",
+  "settings.watchSyncReason.itemsUnreadable": "Some watched items could not be read.",
+  "settings.watchSyncReason.pagingNotHonoured": "The media server did not return its watch history page by page as asked.",
+  "settings.watchSyncReason.filterNotHonoured": "The media server returned unwatched items when asked for watched ones.",
+  "settings.watchSyncReason.itemCapReached": "A linked account's watch history is larger than one read covers.",
+  "settings.watchSyncReason.unmappedPlayedMovies": "Some watched movies could not be matched to a library title.",
+  "settings.watchSyncReason.storeFailed": "Scryer could not save the watch history it read.",
+  "settings.watchSyncReason.sourceUnavailable": "Watch history reading is not available in this build.",
   "settings.apiKeyConfigured": "API key saved",
   "settings.apiKeyMissing": "API key missing",
   "settings.plexServerSelected": "Plex server selected",
@@ -5708,16 +5908,132 @@ const en: LocaleDictionary = {
     "When an automatic import from SABnzbd or NZBGet contains video files with obfuscated names, Scryer sends each file's CRC-32 checksum and size to srrdb.com, a third-party service, to look up the original filename. Nothing else about your library or the file is sent. Files on disk are never renamed.",
   "discovery.personalizedDisabled":
     "Personalized discovery is turned off for this instance.",
+  "discovery.browseBy.action": "Action",
+  "discovery.browseBy.adventure": "Adventure",
+  "discovery.browseBy.comedy": "Comedy",
+  "discovery.browseBy.crime": "Crime",
+  "discovery.browseBy.documentary": "Documentaries",
+  "discovery.browseBy.drama": "Drama",
+  "discovery.browseBy.family": "Family",
+  "discovery.browseBy.fantasy": "Fantasy",
+  "discovery.browseBy.history": "History",
+  "discovery.browseBy.horror": "Horror",
+  "discovery.browseBy.mystery": "Mystery",
+  "discovery.browseBy.romance": "Romance",
+  "discovery.browseBy.science-fiction": "Science Fiction",
+  "discovery.browseBy.thriller": "Thrillers",
+  "discovery.browseBy.war": "War",
+  "discovery.browseBy.western": "Westerns",
+  "discovery.browseBy.sports": "Sports",
+  "discovery.browseBy.supernatural": "Supernatural",
+  "discovery.browseBy.coming-of-age": "Coming of Age",
+  "discovery.browseBy.found-family": "Found Family",
+  "discovery.browseBy.revenge": "Revenge",
+  "discovery.browseBy.heist": "Heists",
+  "discovery.browseBy.time-travel": "Time Travel",
+  "discovery.browseBy.dystopia": "Dystopia",
+  "discovery.browseBy.cyberpunk": "Cyberpunk",
+  "discovery.browseBy.superhero": "Superheroes",
+  "discovery.browseBy.vampire": "Vampires",
+  "discovery.browseBy.zombie": "Zombies",
+  "discovery.browseBy.survival": "Survival",
+  "discovery.browseBy.space": "Space",
+  "discovery.browseBy.detective": "Detectives",
+  "discovery.browseBy.organized-crime": "Organized Crime",
+  "discovery.browseBy.period-drama": "Period Dramas",
+  "discovery.browseBy.psychological": "Psychological",
+  "discovery.browseBy.mythology": "Mythology",
+  "discovery.browseBy.isekai": "Isekai",
+  "discovery.browseBy.mecha": "Mecha",
+  "discovery.browseBy.martial-arts": "Martial Arts",
+  "discovery.browseBy.music": "Music",
+  "discovery.browseBy.workplace": "Workplace",
+  "discovery.browseBy.medical": "Medical",
+  "discovery.browseBy.military": "Military",
+  "discovery.browseBy.spy": "Spies",
+  "discovery.browseBy.royal-politics": "Royal Intrigue",
+  "discovery.browseBy.first-love": "First Love",
+  "discovery.browseBy.forbidden-love": "Forbidden Love",
+  "discovery.browseBy.lgbtq": "LGBTQ+",
+  "discovery.browseBy.samurai": "Samurai",
+  "discovery.browseBy.magical-girl": "Magical Girls",
+  "discovery.browseBy.genreHeading": "Browse by genre",
+  "discovery.browseBy.themeHeading": "Browse by theme",
+  "discovery.browseBy.titleCount": "{{count}} titles",
+  "discovery.railScroll.right": "{{heading}}: scroll right",
+  "discovery.railScroll.left": "{{heading}}: scroll left",
+  "discovery.section.seeAll": "See all",
+  "discovery.section.seeAllLabel": "See all: {{section}}",
+  "discovery.section.backToDiscovery": "Back to Discovery",
+  "discovery.section.titleCount": "{{count}} titles",
+  "discovery.section.sortLabel": "Sort by",
+  "discovery.section.sort.relevance": "Relevance",
+  "discovery.section.sort.popularity": "Popularity",
+  "discovery.section.sort.rating": "Rating",
+  "discovery.section.sort.releaseDate": "Release date",
+  "discovery.section.sort.title": "Title",
+  "discovery.section.hideOwned": "Hide owned",
+  "discovery.section.hideRequested": "Hide requested",
+  "discovery.section.empty": "No titles match these filters.",
+  "discovery.section.loadMore": "Load more",
+  "discovery.section.preferenceSaveFailed":
+    "Could not save the grid preference.",
+  "discovery.rail.becauseYouLike.action": "Because you like action",
+  "discovery.rail.becauseYouLike.adventure": "Because you like adventure",
+  "discovery.rail.becauseYouLike.comedy": "Because you like comedy",
+  "discovery.rail.becauseYouLike.crime": "Because you like crime",
+  "discovery.rail.becauseYouLike.documentary": "Because you like documentaries",
+  "discovery.rail.becauseYouLike.drama": "Because you like drama",
+  "discovery.rail.becauseYouLike.family": "Because you like family favorites",
+  "discovery.rail.becauseYouLike.fantasy": "Because you like fantasy",
+  "discovery.rail.becauseYouLike.history": "Because you like history",
+  "discovery.rail.becauseYouLike.horror": "Because you like horror",
+  "discovery.rail.becauseYouLike.mystery": "Because you like mysteries",
+  "discovery.rail.becauseYouLike.romance": "Because you like romance",
+  "discovery.rail.becauseYouLike.science-fiction": "Because you like science fiction",
+  "discovery.rail.becauseYouLike.thriller": "Because you like thrillers",
+  "discovery.rail.becauseYouLike.war": "Because you like war stories",
+  "discovery.rail.becauseYouLike.western": "Because you like westerns",
+  "discovery.rail.becauseYouLike.sports": "Because you like sports stories",
+  "discovery.rail.becauseYouLike.supernatural": "Because you like the supernatural",
+  "discovery.rail.becauseYouLike.coming-of-age": "Because you like coming-of-age stories",
+  "discovery.rail.becauseYouLike.found-family": "Because you like found families",
+  "discovery.rail.becauseYouLike.revenge": "Because you like revenge stories",
+  "discovery.rail.becauseYouLike.heist": "Because you like heists",
+  "discovery.rail.becauseYouLike.time-travel": "Because you like time travel",
+  "discovery.rail.becauseYouLike.dystopia": "Because you like dystopias",
+  "discovery.rail.becauseYouLike.cyberpunk": "Because you like cyberpunk",
+  "discovery.rail.becauseYouLike.superhero": "Because you like superheroes",
+  "discovery.rail.becauseYouLike.vampire": "Because you like vampires",
+  "discovery.rail.becauseYouLike.zombie": "Because you like zombies",
+  "discovery.rail.becauseYouLike.survival": "Because you like survival stories",
+  "discovery.rail.becauseYouLike.space": "Because you like space adventures",
+  "discovery.rail.becauseYouLike.detective": "Because you like detective stories",
+  "discovery.rail.becauseYouLike.organized-crime": "Because you like organized crime",
+  "discovery.rail.becauseYouLike.period-drama": "Because you like period dramas",
+  "discovery.rail.becauseYouLike.psychological": "Because you like psychological stories",
+  "discovery.rail.becauseYouLike.mythology": "Because you like mythology",
+  "discovery.rail.becauseYouLike.isekai": "Because you like isekai",
+  "discovery.rail.becauseYouLike.mecha": "Because you like mecha",
+  "discovery.rail.becauseYouLike.martial-arts": "Because you like martial arts",
+  "discovery.rail.becauseYouLike.music": "Because you like music stories",
+  "discovery.rail.becauseYouLike.workplace": "Because you like workplace stories",
+  "discovery.rail.becauseYouLike.medical": "Because you like medical dramas",
+  "discovery.rail.becauseYouLike.military": "Because you like military stories",
+  "discovery.rail.becauseYouLike.spy": "Because you like spy stories",
+  "discovery.rail.becauseYouLike.royal-politics": "Because you like royal intrigue",
+  "discovery.rail.becauseYouLike.first-love": "Because you like first-love stories",
+  "discovery.rail.becauseYouLike.forbidden-love": "Because you like forbidden love",
+  "discovery.rail.becauseYouLike.lgbtq": "Because you like LGBTQ+ stories",
+  "discovery.rail.becauseYouLike.samurai": "Because you like samurai",
+  "discovery.rail.becauseYouLike.magical-girl": "Because you like magical girls",
   "settings.keepHistoryForever": "Keep history forever",
   "settings.historyRetentionDaysHeader": "Retain history for",
   "settings.historyRetentionDaysSuffix": "days",
   "settings.securitySessionDurationSuffix": "days",
   "settings.generalSaved": "General settings saved.",
-  "settings.verificationDepthTitle": "Import copy verification",
   "settings.verificationDepthHelp":
     "How thoroughly Scryer proves a copied file before it touches the source.",
-  "settings.verificationDepthScope":
-    "This applies to download-client import copies only. Library and root moves always verify in full, whatever is chosen here.",
   "settings.verificationDepthLabel": "Verification depth",
   "settings.verificationDepthFull": "Full read-back",
   "settings.verificationDepthFullHelp":
@@ -5991,6 +6307,28 @@ const en: LocaleDictionary = {
   "title.viewModeCompact": "Compact",
   "title.viewModePosterTable": "List",
   "title.viewModePoster": "Poster view",
+  "title.viewModeGraph": "Graph view",
+  "libraryGraph.regionLabel": "Library graph",
+  "libraryGraph.sizeByLabel": "Size by",
+  "libraryGraph.sizeBy.ratingEvidence": "Rating evidence",
+  "libraryGraph.sizeBy.rating": "Rating",
+  "libraryGraph.sizeBy.popularity": "Popularity",
+  "libraryGraph.resetView": "Fit graph",
+  "libraryGraph.clustersLabel": "Clusters",
+  "libraryGraph.clusterAroundTitle": "Around {{title}}",
+  "libraryGraph.unplaced": "Unplaced titles",
+  "libraryGraph.collapsedCluster": "{{name}} ({{count}} titles)",
+  "libraryGraph.collapseCluster": "Collapse {{name}}",
+  "libraryGraph.linkedBy": "Linked by",
+  "libraryGraph.empty": "No titles in this view are in the library graph yet.",
+  "libraryGraph.edgeKind.semantic": "Similar",
+  "libraryGraph.edgeKind.sequel": "Sequel",
+  "libraryGraph.edgeKind.prequel": "Prequel",
+  "libraryGraph.edgeKind.coWatch": "Often watched together",
+  "libraryGraph.edgeKind.relation": "Related",
+  "libraryGraph.edgeKind.affinity": "Shared interest: {{label}}",
+  "libraryGraph.edgeKind.sharedTaste": "Shared interest",
+  "libraryGraph.edgeKind.other": "Linked",
   "title.bulkSelectionCount": "{{count}} selected",
   "title.bulkSelectionPanelTitle": "Bulk selection",
   "title.bulkSelectionPanelHint":
@@ -6042,6 +6380,20 @@ const en: LocaleDictionary = {
     "{{count}} indexer(s) failed: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} indexer(s) skipped: {{names}}",
+  "title.contextReleaseSearchUnroutable.noUsenetClient":
+    "{{count}} Usenet release(s) hidden, no enabled Usenet download client: {{names}}",
+  "title.contextReleaseSearchUnroutable.noTorrentClient":
+    "{{count}} torrent release(s) hidden, no enabled torrent download client: {{names}}",
+  "title.contextReleaseSearchUnroutable.noHttpClient":
+    "{{count}} direct download release(s) hidden, no enabled HTTP download client: {{names}}",
+  "title.contextReleaseSearchUnroutable.usenetClientPluginUnavailable":
+    "{{count}} Usenet release(s) hidden, an enabled download client's plugin is not loaded: {{names}}",
+  "title.contextReleaseSearchUnroutable.torrentClientPluginUnavailable":
+    "{{count}} torrent release(s) hidden, an enabled download client's plugin is not loaded: {{names}}",
+  "title.contextReleaseSearchUnroutable.httpClientPluginUnavailable":
+    "{{count}} direct download release(s) hidden, an enabled download client's plugin is not loaded: {{names}}",
+  "title.contextReleaseSearchUnroutable.unknown":
+    "{{count}} release(s) hidden, no enabled download client accepts them: {{names}}",
   "title.noReleasesFound": "No releases found for {{name}}.",
   "title.searchNeedsDownloadClientTitle": "Search requires a download client",
   "title.searchNeedsDownloadClientDescription":
@@ -6599,7 +6951,6 @@ const en: LocaleDictionary = {
   "settings.rulePriority": "Priority",
   "settings.ruleAppliedFacets": "Applied Facets",
   "settings.ruleAppliedFacetsHelp": "Leave empty to apply to all media types.",
-  "settings.ruleValidate": "Validate",
   "settings.ruleValidating": "Validating…",
   "settings.ruleValid": "Rule is valid.",
   "settings.ruleValidationRequired": "Name and Rego source are required.",
@@ -7693,7 +8044,7 @@ const en: LocaleDictionary = {
   "plugins.failure.temporary":
     "The plugin ran into a temporary problem. Try again in a little while.",
   "plugins.failure.permanent":
-    "The plugin could not complete this request. Trying again will not help until something changes.",
+    "The request could not be completed. Trying again will not help until something changes.",
   "plugins.failure.hostFailure":
     "The plugin stopped unexpectedly. The Scryer log has the details.",
   "plugins.failure.timedOut": "The plugin took too long to respond.",
@@ -8764,6 +9115,14 @@ const en: LocaleDictionary = {
   "settings.recycleBinSelectTitle": "Select {{title}}",
   "settings.recycleBinSelectFile": "Select {{name}}",
   "settings.recycleBinUnassociatedFiles": "Unassociated files",
+  "settings.recycleBinHistory": "Related title history",
+  "settings.recycleBinHistoryFor": "Show related history for {{name}}",
+  "settings.recycleBinHistoryHelp":
+    "Grabs, imports, upgrades and deletions linked to this recycled file, in chronological order.",
+  "settings.recycleBinHistoryEmpty":
+    "No linked history is available in this instance. The title or events may be absent, or the entry may predate retained file and acquisition links.",
+  "settings.recycleBinHistoryTruncated":
+    "This summary shows up to 50 related events from the latest 5,000 acquisition and file events for the title. Older related history may not be included.",
   "settings.recycleBinFileCountOne": "{{count}} file",
   "settings.recycleBinFileCountOther": "{{count}} files",
   "settings.recycleBinBatchLimit":

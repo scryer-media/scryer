@@ -24,9 +24,11 @@
 
 use std::collections::HashMap;
 
-use scryer_domain::{MediaFacet, MediaServerSignalKind};
+use scryer_domain::{MediaFacet, MediaServerPathMapping, MediaServerSignalKind};
 
+use crate::media_servers::map_media_server_path;
 use crate::ports::ProviderPlayedItem;
+use crate::title_folder_rules::stored_path_is_inside_folder;
 
 /// External id sources joined against `title_external_ids`, strongest first.
 ///
@@ -130,6 +132,82 @@ pub fn resolve_title(item: &ProviderPlayedItem, index: &TitleExternalIdIndex) ->
     }
 
     None
+}
+
+/// Where Scryer keeps files, as a check on a media server's file paths: every
+/// library root, plus the connection's path mappings read from the server's
+/// side back to Scryer's.
+pub struct ScryerLibraryPaths {
+    /// `None` when the roots could not be read: then no path can be shown to
+    /// lie outside them.
+    roots: Option<Vec<String>>,
+    /// The connection's mappings, server path to Scryer path.
+    to_scryer: Vec<MediaServerPathMapping>,
+}
+
+impl ScryerLibraryPaths {
+    pub fn new(roots: Option<Vec<String>>, mappings: &[MediaServerPathMapping]) -> Self {
+        Self {
+            roots,
+            to_scryer: mappings
+                .iter()
+                .map(|mapping| MediaServerPathMapping {
+                    source_path: mapping.destination_path.clone(),
+                    destination_path: mapping.source_path.clone(),
+                    sort_order: mapping.sort_order,
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether a server file path could be one of Scryer's files: once mapped
+    /// to Scryer's spelling it lies inside a library root, or the roots are
+    /// unknown.
+    pub fn may_hold(&self, server_path: &str) -> bool {
+        let Some(roots) = &self.roots else {
+            return true;
+        };
+        let path = map_media_server_path(server_path, &self.to_scryer);
+        roots
+            .iter()
+            .any(|root| stored_path_is_inside_folder(root, &path))
+    }
+}
+
+/// Whether an item lies outside Scryer's catalog: it carries at least one
+/// usable external id, no Scryer title of any facet claims any of them, and
+/// none of its files the server reports lies inside a Scryer library root.
+///
+/// An item with no usable id is never foreign. It could be a Scryer title the
+/// server failed to identify, so nothing can be concluded about it. An item
+/// whose ids reach a Scryer title that its facet cannot accept, or reach two
+/// titles at once, is not foreign either: Scryer knows the id, it just cannot
+/// settle which title was watched. An item whose file is in a Scryer library is
+/// not foreign whatever its ids say: the server may have identified Scryer's
+/// file as a different film. With no file paths reported, the ids decide.
+pub fn is_foreign_item(
+    item: &ProviderPlayedItem,
+    index: &TitleExternalIdIndex,
+    library: &ScryerLibraryPaths,
+) -> bool {
+    if item.file_paths.iter().any(|path| library.may_hold(path)) {
+        return false;
+    }
+    let ids = match item.kind {
+        MediaServerSignalKind::Movie => &item.external_ids,
+        MediaServerSignalKind::Episode => &item.series_external_ids,
+    };
+    let mut usable = SIGNAL_EXTERNAL_ID_SOURCES
+        .iter()
+        .filter_map(|source| {
+            let value = ids.get(*source)?.trim();
+            (!value.is_empty()).then(|| ((*source).to_string(), value.to_string()))
+        })
+        .peekable();
+    if usable.peek().is_none() {
+        return false;
+    }
+    usable.all(|key| !index.contains_key(&key))
 }
 
 /// The Scryer episode at this item's coordinates under `title_id`, or `None`.

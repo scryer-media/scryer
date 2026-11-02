@@ -178,6 +178,7 @@ fn recycled_item_from_entry(
     entry: crate::recycle_bin::RecycleEntry,
     library: &RecycleEntryLibrary,
     title_name: Option<String>,
+    title_facet: Option<scryer_domain::MediaFacet>,
     retention_days: u32,
 ) -> RecycledItem {
     let original_path = entry.manifest.original_path_buf();
@@ -200,6 +201,10 @@ fn recycled_item_from_entry(
         size_bytes: entry.manifest.size_bytes,
         title_id: entry.manifest.title_id,
         title_name,
+        title_facet,
+        episode_id: None,
+        original_file_id: entry.manifest.original_file_id,
+        replacement_file_id: entry.manifest.replacement_file_id,
         reason: entry.manifest.reason,
         recycled_at: entry.manifest.recycled_at,
         scheduled_deletion_at,
@@ -1029,7 +1034,7 @@ impl AppUseCase {
             let Some(library) = resolve_recycle_entry_library_with_title(
                 &entry,
                 &roots,
-                title.map(|(library_id, _)| library_id.as_str()),
+                title.map(|(library_id, _, _)| library_id.as_str()),
             ) else {
                 continue;
             };
@@ -1037,7 +1042,10 @@ impl AppUseCase {
                 items.push(recycled_item_from_entry(
                     entry,
                     &library,
-                    title.map(|(_, title_name)| title_name.clone()),
+                    title.map(|(_, title_name, _)| title_name.clone()),
+                    title
+                        .filter(|(library_id, _, _)| library_id == &library.id)
+                        .map(|(_, _, facet)| facet.clone()),
                     retention_days,
                 ));
             }
@@ -1047,10 +1055,98 @@ impl AppUseCase {
         Ok(items)
     }
 
+    /// List files due by the requested horizon (including overdue files), soonest first.
+    /// Disabled or invalid recycle bins cannot schedule automatic deletion.
+    pub async fn list_recycled_items_deleting_within(
+        &self,
+        actor: &scryer_domain::User,
+        library_ids: Option<Vec<String>>,
+        hours: i32,
+    ) -> AppResult<Vec<RecycledItem>> {
+        let items = self.list_recycled_items(actor, library_ids).await?;
+        let active_roots: HashSet<String> = self
+            .resolve_all_recycle_configs()
+            .await
+            .into_iter()
+            .filter(|(_, config)| config.enabled && config.cleanup_enabled)
+            .map(|(root, _)| root)
+            .collect();
+        let deadline =
+            self.runtime.environment.now() + chrono::Duration::hours(i64::from(hours.clamp(1, 72)));
+        let mut due = items
+            .into_iter()
+            .filter(|item| active_roots.contains(&item.media_root))
+            .filter_map(|item| {
+                let scheduled =
+                    chrono::DateTime::parse_from_rfc3339(&item.scheduled_deletion_at).ok()?;
+                (scheduled <= deadline).then_some((scheduled, item))
+            })
+            .collect::<Vec<_>>();
+        due.sort_by(|(left_time, left), (right_time, right)| {
+            left_time
+                .cmp(right_time)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(due.into_iter().map(|(_, item)| item).collect())
+    }
+
+    /// Read the acquisition/import history tied to one authorized recycle entry.
+    pub async fn recycled_item_history(
+        &self,
+        actor: &scryer_domain::User,
+        entry_id: &str,
+    ) -> AppResult<crate::RecycledItemHistory> {
+        self.require_recycle_bin_page_access(actor).await?;
+        crate::recycle_bin::validate_recycle_entry_id(entry_id)?;
+        let roots = self.recycle_root_libraries().await?;
+        for (media_root, config) in self.resolve_all_recycle_configs().await {
+            let Some((_, manifest)) = crate::recycle_bin::find_entry(&config, entry_id).await?
+            else {
+                continue;
+            };
+            let entry = crate::recycle_bin::RecycleEntry {
+                entry_id: entry_id.to_string(),
+                manifest,
+                media_root,
+            };
+            let library = self
+                .resolve_recycle_entry_library(&entry, &roots)
+                .await?
+                .ok_or_else(|| {
+                    AppError::unauthorized_reason(
+                        crate::error_reasons::jobs::LIBRARY_ACCESS_DENIED,
+                        "You do not have access to this library",
+                    )
+                })?;
+            self.require_library_permission(
+                actor,
+                &library.id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await?;
+            // A mounted bin may belong to another catalog. Never substitute a
+            // similarly named title or read events from a title that moved libraries.
+            if let Some(title_id) = entry.manifest.title_id.as_deref()
+                && let Some(title) = self.services.catalog.titles.get_by_id(title_id).await?
+                && title.library_id == library.id
+            {
+                return super::recycle_history::load_summary(self, &entry.manifest, title_id).await;
+            }
+            return Ok(crate::RecycledItemHistory {
+                records: Vec::new(),
+                truncated: false,
+            });
+        }
+        Err(AppError::not_found_reason(
+            crate::error_reasons::jobs::RECYCLE_ENTRY_NOT_FOUND,
+            format!("recycle entry {entry_id}"),
+        ))
+    }
+
     async fn recycle_entry_titles_by_id(
         &self,
         mut title_ids: Vec<String>,
-    ) -> AppResult<HashMap<String, (String, String)>> {
+    ) -> AppResult<HashMap<String, (String, String, scryer_domain::MediaFacet)>> {
         const MAX_CONCURRENT_TITLE_LOOKUPS: usize = 16;
 
         title_ids.sort();
@@ -1075,7 +1171,7 @@ impl AppUseCase {
                 AppError::Repository(format!("recycle-bin title lookup task failed: {error}"))
             })?;
             if let Some(title) = title? {
-                titles_by_id.insert(title_id, (title.library_id, title.name));
+                titles_by_id.insert(title_id, (title.library_id, title.name, title.facet));
             }
 
             if let Some(next_title_id) = remaining_ids.next() {
@@ -1183,7 +1279,7 @@ impl AppUseCase {
             fingerprint_parts.push(format!(
                 "{}:{}:{}",
                 entry_id,
-                original_path.display(),
+                crate::stored_paths::path_to_stored_string(&original_path),
                 target_state
             ));
             items.push(crate::RecycleRestorePreviewItem {
@@ -1225,11 +1321,13 @@ impl AppUseCase {
             fingerprint_parts.push(format!(
                 "{}:{}:{}",
                 entry_id,
-                original_path.display(),
+                crate::stored_paths::path_to_stored_string(&original_path),
                 target_state
             ));
-            if !destination_keys.insert(format!("recycle-destination:{}", original_path.display()))
-            {
+            if !destination_keys.insert(format!(
+                "recycle-destination:{}",
+                crate::stored_paths::path_to_stored_string(&original_path)
+            )) {
                 return Err(AppError::validation_refused(crate::error_reasons::jobs::SELECTED_RECYCLE_ENTRIES_CANNOT_SHARE_SAME_RESTORE_DESTINATION, "selected recycle entries cannot share the same restore destination"
                         .to_string()));
             }
@@ -1513,10 +1611,8 @@ impl AppUseCase {
                     &original_path,
                 )
                 .await?;
-                let file_name = original_path
-                    .file_name()
-                    .unwrap_or_else(|| std::ffi::OsStr::new("unknown"));
-                let recycled_file = entry_dir.join(file_name);
+                let recycled_file =
+                    crate::recycle_bin::recycled_payload_path(&entry_dir, &manifest).await?;
                 crate::recycle_bin::ensure_recycled_restore_source_is_regular(&recycled_file)
                     .await?;
 
@@ -1558,10 +1654,9 @@ impl AppUseCase {
             &original_path,
         )
         .await?;
-        let file_name = original_path
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("unknown"));
-        let recycled_file = context.entry_dir.join(file_name);
+        let recycled_file =
+            crate::recycle_bin::recycled_payload_path(&context.entry_dir, &context.manifest)
+                .await?;
 
         let restored_to = match conflict_policy {
             crate::RecycleRestoreConflictPolicy::KeepBoth => {
@@ -1620,14 +1715,13 @@ impl AppUseCase {
         original_path: &Path,
         restored_to: &Path,
     ) {
-        let restored_path = restored_to.to_string_lossy().to_string();
+        let restored_path = crate::stored_paths::path_to_stored_string(restored_to);
         let restored_library_file = crate::LibraryFile {
             path: restored_path.clone(),
             display_name: original_path
                 .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_string(),
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             nfo_path: None,
             size_bytes: tokio::fs::metadata(restored_to)
                 .await
@@ -1846,7 +1940,7 @@ impl AppUseCase {
             ));
         }
 
-        let original_path_text = original_path.to_string_lossy().to_string();
+        let original_path_text = crate::stored_paths::path_to_stored_string(original_path);
         let incumbent = self
             .services
             .library

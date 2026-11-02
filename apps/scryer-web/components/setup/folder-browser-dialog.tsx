@@ -254,7 +254,7 @@ export function FolderBrowserDialog({
                 type="button"
                 onClick={() => browse("/")}
                 className={cn(
-                  "shrink-0 rounded-[8px] border px-2 py-1 font-[var(--font-code)] transition-colors",
+                  "shrink-0 rounded-[8px] border px-2 py-1 font-[family-name:var(--font-code)] transition-colors",
                   pathSegments.length === 0
                     ? "border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.14)] text-[var(--scry-accent-text)]"
                     : "border-transparent text-[var(--scry-muted3)] hover:border-[var(--scry-border3)] hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]",
@@ -275,7 +275,7 @@ export function FolderBrowserDialog({
                       type="button"
                       onClick={() => browse(segPath)}
                       className={cn(
-                        "max-w-[14rem] shrink-0 truncate rounded-[8px] border px-2 py-1 font-[var(--font-code)] transition-colors",
+                        "max-w-[14rem] shrink-0 truncate rounded-[8px] border px-2 py-1 font-[family-name:var(--font-code)] transition-colors",
                         isLast
                           ? "border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.14)] font-medium text-[var(--scry-accent-text)]"
                           : "border-transparent text-[var(--scry-muted3)] hover:border-[var(--scry-border3)] hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]",
@@ -302,7 +302,7 @@ export function FolderBrowserDialog({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") browse(currentPath);
                 }}
-                className="h-10 min-w-0 border-[var(--scry-border3)] bg-[var(--scry-inset)] font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
+                className="h-10 min-w-0 border-[var(--scry-border3)] bg-[var(--scry-inset)] font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]"
               />
               <Button
                 id="folder-browser-go"
@@ -485,7 +485,7 @@ export function FolderBrowserDialog({
                         )}
                       </span>
                       <span
-                        className="block min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-[var(--font-code)] text-[var(--scry-ink2)]"
+                        className="block min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-[family-name:var(--font-code)] text-[var(--scry-ink2)]"
                         title={entry.name}
                       >
                         {entry.name}
@@ -510,7 +510,7 @@ export function FolderBrowserDialog({
 
         <DialogFooter className="min-w-0 max-w-full border-t border-[var(--scry-border3)] bg-[var(--scry-inset)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <p
-            className="min-w-0 truncate text-left font-[var(--font-code)] text-xs text-[var(--scry-muted3)] sm:mr-auto"
+            className="min-w-0 truncate text-left font-[family-name:var(--font-code)] text-xs text-[var(--scry-muted3)] sm:mr-auto"
             title={currentPath}
           >
             {currentPath}

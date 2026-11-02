@@ -1456,6 +1456,26 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_builtin_client_key_is_an_auth_failure_not_an_internal_error() {
+        use scryer_application::PluginFailureReason;
+
+        let error = to_gql_error(AppError::native_client_failed(
+            PluginFailureReason::AuthFailed,
+            "weaver rejected the API key",
+        ));
+        assert_eq!(error.message, "weaver rejected the API key");
+        assert_eq!(graphql_error_code(&error), Some("PLUGIN_FAILED"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("PLUGIN_AUTH_FAILED")
+        );
+        assert_eq!(
+            graphql_error_extension_string(&error, "detail"),
+            Some("weaver rejected the API key")
+        );
+    }
+
+    #[test]
     fn a_plugin_reason_the_host_does_not_know_is_carried_verbatim() {
         use scryer_application::{PluginFailure, PluginFailureReason};
 

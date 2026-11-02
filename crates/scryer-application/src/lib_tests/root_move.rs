@@ -2332,7 +2332,7 @@ async fn a_finished_operations_leftover_ownership_claims_are_released_at_boot() 
 // ── US9.1–9.2 end-to-end, and SC-007 against a live operation ───────────────
 
 /// US9.1: with no preference set, the plan, the persisted operation, and every
-/// per-file record all say full depth. The default has to survive the whole
+/// per-file record all say quick depth. The default has to survive the whole
 /// path, not just the settings reader.
 #[tokio::test]
 async fn the_default_verification_depth_reaches_the_operation_and_every_record() {
@@ -2349,42 +2349,33 @@ async fn the_default_verification_depth_reaches_the_operation_and_every_record()
         .await;
 
     let preview = fixture.preview(&[&title.id]).await;
-    assert_eq!(preview.plan.verification.depth, VerificationDepth::Full);
+    assert_eq!(preview.plan.verification.depth, VerificationDepth::Quick);
 
     let operation = fixture.start_and_settle(&[&title.id]).await;
-    assert_eq!(operation.verification_depth, VerificationDepth::Full);
+    assert_eq!(operation.verification_depth, VerificationDepth::Quick);
     assert_eq!(operation.verification_fallback_count, 0);
 
     let records = fixture.verifications();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].depth.applied, VerificationDepth::Full);
+    assert_eq!(records[0].depth.applied, VerificationDepth::Quick);
     assert!(!records[0].depth.fell_back);
 }
 
-/// US9.2, as the operator settled it: the verification-depth preference is an
-/// **import** preference, and a location operation ignores it.
-///
-/// The preference governs the copy that lands a freshly downloaded file, which
-/// still exists at the download client if the copy was wrong. A move is the
-/// other case — it is the user's only copy, and the source is recycled once the
-/// destination verifies — so every location operation plans full depth however
-/// the preference is set. What stays is the *fallback*: when a full read-back
-/// cannot run, verification still drops to the quick floor and says so
-/// (FR-043), because a capability limit the user is told about is a different
-/// thing from a preference that quietly asked for less.
+/// US9.2: opting into full verification reaches planning, persistence and the
+/// file's achieved-depth stamp without changing the quick default.
 #[tokio::test]
-async fn a_quick_verification_preference_is_ignored_by_a_location_operation() {
+async fn a_full_verification_preference_reaches_a_location_operation() {
     let fixture = RootMoveFixture::new().await;
     fixture
         .app
         .update_verification_settings(
             &fixture.user,
             UpdateVerificationSettings {
-                depth: VerificationDepth::Quick,
+                depth: VerificationDepth::Full,
             },
         )
         .await
-        .expect("choose quick verification");
+        .expect("choose full verification");
 
     let title = fixture
         .seed_title(
@@ -2401,7 +2392,7 @@ async fn a_quick_verification_preference_is_ignored_by_a_location_operation() {
     assert_eq!(
         preview.plan.verification.depth,
         VerificationDepth::Full,
-        "a move promises full verification whatever the import preference says"
+        "the preview must name the configured verification depth"
     );
 
     let operation = fixture.start_and_settle(&[&title.id]).await;
@@ -2418,11 +2409,11 @@ async fn a_quick_verification_preference_is_ignored_by_a_location_operation() {
     );
     assert!(!records[0].depth.fell_back);
 
-    // The preference is still stored and still means something — to imports.
+    // The operation uses the setting without modifying it.
     assert_eq!(
         fixture.app.resolve_verification_depth().await,
-        VerificationDepth::Quick,
-        "the setting is untouched; only the location path stopped reading it"
+        VerificationDepth::Full,
+        "the setting remains available to subsequent imports and moves"
     );
 
     // And the quick floor is still expressible as a *fallback*, which is what

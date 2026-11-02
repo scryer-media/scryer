@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { buildSchema, Kind, parse, validate, type DocumentNode } from "graphql";
 
+import * as pendingImportConflicts from "../pending-import-conflicts.ts";
 import * as indexerClients from "./indexer-clients.ts";
 import * as mutations from "./mutations.ts";
 import * as queries from "./queries.ts";
@@ -45,7 +46,24 @@ function collectDocuments(
   return documents;
 }
 
-const documents = collectDocuments({ queries, mutations, indexerClients });
+const documents = collectDocuments({
+  queries,
+  mutations,
+  indexerClients,
+  pendingImportConflicts,
+});
+
+test("pending import conflict documents validate against the API schema", () => {
+  const operations = collectDocuments({ pendingImportConflicts });
+  assert.equal(operations.length, 3);
+  for (const { name, document } of operations) {
+    assert.deepEqual(
+      validate(schema, document).map((error) => error.message),
+      [],
+      name,
+    );
+  }
+});
 
 test("collects the hand-written operations", () => {
   assert.ok(

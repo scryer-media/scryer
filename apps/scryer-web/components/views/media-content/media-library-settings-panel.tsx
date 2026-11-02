@@ -37,7 +37,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
 import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { METADATA_LANGUAGES } from "@/lib/i18n";
@@ -322,9 +321,6 @@ export const MediaLibrarySettingsPanel = React.memo(
     onActiveLibraryNameChange,
   }: MediaLibrarySettingsPanelProps) {
     const t = useTranslate();
-    // Root changes are still being finished, so the row action and its dialog
-    // only exist when the instance has opted in.
-    const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
     const [mode, setMode] = React.useState<"existing" | "new">("existing");
     // `saving` covers the container's mutation and refreshes only; this also
     // covers the panel adopting the saved library afterwards.
@@ -918,11 +914,7 @@ export const MediaLibrarySettingsPanel = React.memo(
     // A root change is planned against the *stored* configuration, so it is
     // offered only while the panel has nothing unsaved to contradict it.
     const canChangeRoot =
-      experimentalFeaturesEnabled &&
-      mode !== "new" &&
-      !!activeLibrary &&
-      !hasDraftChanges &&
-      !actionBusy;
+      mode !== "new" && !!activeLibrary && !hasDraftChanges && !actionBusy;
     const changeRootTarget = React.useMemo(
       () =>
         savedRoots.find((candidate) => candidate.id === changeRootId) ?? null,
@@ -1491,7 +1483,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                             <div className="flex min-w-0 flex-1 items-center gap-2.5">
                               <FolderOpen className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
                               <span
-                                className="min-w-0 flex-1 break-all font-[var(--font-code)] text-[13.5px] text-[var(--scry-text2)] @xl/facet-page:truncate"
+                                className="min-w-0 flex-1 break-all font-[family-name:var(--font-code)] text-[13.5px] text-[var(--scry-text2)] @xl/facet-page:truncate"
                                 title={rf.path}
                               >
                                 {rf.path}
@@ -1526,7 +1518,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                   {t("settings.rootFolderSetDefault")}
                                 </Button>
                               )}
-                              {rf.id && experimentalFeaturesEnabled ? (
+                              {rf.id ? (
                                 <Button
                                   id={selectorId(
                                     "media-library-root-change",
@@ -1920,7 +1912,8 @@ export const MediaLibrarySettingsPanel = React.memo(
                 <div
                   className={cn(
                     "grid grid-cols-1 gap-5",
-                    canManageDownloadClientRouting && "@xl/facet-page:grid-cols-2",
+                    canManageDownloadClientRouting &&
+                      "@xl/facet-page:grid-cols-2",
                   )}
                 >
                   <div className="space-y-2">
@@ -2022,7 +2015,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                     <span>
                                       {option.value} - {t(option.labelKey)}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(option.value, "file")}
                                     </span>
                                   </span>
@@ -2035,7 +2028,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                       {customFileChmod} -{" "}
                                       {t("settings.chmodPresetCustom")}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(customFileChmod, "file")}
                                     </span>
                                   </span>
@@ -2079,7 +2072,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                     <span>
                                       {option.value} - {t(option.labelKey)}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(option.value, "folder")}
                                     </span>
                                   </span>
@@ -2092,7 +2085,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                       {customFolderChmod} -{" "}
                                       {t("settings.chmodPresetCustom")}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(
                                         customFolderChmod,
                                         "folder",
@@ -2502,9 +2495,7 @@ export const MediaLibrarySettingsPanel = React.memo(
           initialPath={browserInitialPath}
           title={browserTitle}
         />
-        {experimentalFeaturesEnabled &&
-        activeLibrary &&
-        changeRootTarget?.id ? (
+        {activeLibrary && changeRootTarget?.id ? (
           <ChangeRootDialog
             open
             onOpenChange={(next) => {

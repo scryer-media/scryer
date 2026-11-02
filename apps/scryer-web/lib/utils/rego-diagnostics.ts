@@ -66,7 +66,9 @@ export function regoDiagnostics(
       const line = regoSourceLine(source, diagnostic.line);
       const column = diagnostic.column;
       if (line > 0 && line <= source.split("\n").length && column > 0)
-        return [{ line, column, message }];
+        return [
+          { line, column, message: formatRegoValidationError(message, source) },
+        ];
       return [];
     }
     if (!path) return [];
@@ -137,4 +139,73 @@ export function graphQlRuleValidationResult(
     }
   }
   return { valid: false, errors: [message], diagnostics };
+}
+
+function adjustRegoErrorLocations(text: string, source: string): string {
+  return text.replace(
+    /(\S+\.rego:)(\d+)(:\d+)/g,
+    (_, prefix: string, lineText: string, suffix: string) => {
+      const line = Number.parseInt(lineText, 10);
+      return Number.isFinite(line)
+        ? `${prefix}${regoSourceLine(source, line)}${suffix}`
+        : `${prefix}${lineText}${suffix}`;
+    },
+  );
+}
+
+export function formatRegoValidationError(
+  error: string,
+  source: string,
+): string {
+  const normalized = error.replace(/\r\n/g, "\n").trim();
+  if (normalized.includes("\n")) {
+    return adjustRegoErrorLocations(normalized, source).replace(
+      /^(\s*)(\d+)(\s+\|)/gm,
+      (match, prefix: string, lineText: string, suffix: string) => {
+        const line = Number.parseInt(lineText, 10);
+        return Number.isFinite(line)
+          ? `${prefix}${regoSourceLine(source, line)}${suffix}`
+          : match;
+      },
+    );
+  }
+
+  const parts = normalized.split(/\s+\|\s+/);
+  if (parts.length < 4) {
+    return normalized;
+  }
+
+  const [location, lineNumber, sourceText, ...hintParts] = parts;
+  const rawLine = Number.parseInt(lineNumber, 10);
+  const visibleLineNumber = Number.isFinite(rawLine)
+    ? String(regoSourceLine(source, rawLine))
+    : lineNumber;
+  const gutterWidth = Math.max(visibleLineNumber.length, 1);
+  const columnMatch = location.match(/:(\d+):(\d+)(?:\D*$|$)/);
+  const column = columnMatch ? Number.parseInt(columnMatch[2] ?? "", 10) : null;
+  const hint = hintParts.join(" | ").trim();
+  const visibleLocation = adjustRegoErrorLocations(location.trim(), source);
+  const locationMatch = visibleLocation.match(/^(.*?:)\s*(-->\s+.+)$/);
+  const locationLines = locationMatch
+    ? [locationMatch[1], locationMatch[2]]
+    : [visibleLocation];
+  const pointerErrorMatch = hint.match(
+    /^(\^+)\s+((?:error|warning|note):\s*.+)$/,
+  );
+  const pointerMarker = pointerErrorMatch?.[1] ?? hint;
+  const trailingDiagnostic = pointerErrorMatch?.[2];
+  const pointer =
+    column && Number.isFinite(column) && pointerMarker.startsWith("^")
+      ? `${" ".repeat(Math.max(0, column - 1))}${pointerMarker}`
+      : pointerMarker;
+
+  return [
+    ...locationLines,
+    `${" ".repeat(gutterWidth)} |`,
+    `${visibleLineNumber.padStart(gutterWidth)} | ${sourceText.trim()}`,
+    `${" ".repeat(gutterWidth)} | ${pointer}`,
+    trailingDiagnostic,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
 }

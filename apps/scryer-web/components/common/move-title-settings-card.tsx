@@ -1,5 +1,6 @@
 import { FolderInput } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 
@@ -29,8 +30,15 @@ export function MoveTitleSettingsCard({
       className="mt-5 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3"
     >
       <div className="min-w-0">
-        <p className="text-sm font-medium text-foreground">
+        <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
           {t("move.actionHeading")}
+          <Badge
+            id={`${idPrefix}-move-to-beta`}
+            tone="warning"
+            className="text-[11px]"
+          >
+            {t("settings.pluginBeta")}
+          </Badge>
         </p>
         <p className="text-xs text-muted-foreground">
           {t("move.actionDescription")}

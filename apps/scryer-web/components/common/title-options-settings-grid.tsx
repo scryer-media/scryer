@@ -415,7 +415,7 @@ export function TitleOptionsSettingsGrid({
             effective={
               <span
                 id={rootFolderReadOnly ? `${idPrefix}-root-folder` : undefined}
-                className="font-[var(--font-code)] text-xs"
+                className="font-[family-name:var(--font-code)] text-xs"
               >
                 {currentRootFolderLabel}
               </span>
@@ -440,7 +440,7 @@ export function TitleOptionsSettingsGrid({
               >
                 <SelectTrigger
                   id={`${idPrefix}-root-folder`}
-                  className="ml-auto h-9 w-[70%] font-[var(--font-code)] text-sm"
+                  className="ml-auto h-9 w-[70%] font-[family-name:var(--font-code)] text-sm"
                 >
                   <SelectValue />
                 </SelectTrigger>

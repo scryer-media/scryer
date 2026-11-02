@@ -108,6 +108,7 @@ export const DISCOVERY_SECTION_FIELDS = `
     sectionId
     sectionType
     title
+    labelKey
     surface
     totalCount
     items {
@@ -118,6 +119,7 @@ const DISCOVERY_HOME_SECTION_FIELDS = `
     sectionId
     sectionType
     title
+    labelKey
     surface
     totalCount
     items {
@@ -142,6 +144,13 @@ ${DISCOVERY_HOME_SECTION_FIELDS}
     completeCollection {
 ${DISCOVERY_HOME_SECTION_FIELDS}
     }
+    browseLabels {
+      family
+      labelKey
+      sectionId
+      title
+      itemCount
+    }
   }
 }`;
 
@@ -159,6 +168,17 @@ export const discoveryItemsQuery = `query DiscoveryItems($input: DiscoveryItemsI
     canViewPersonalized
     items {
 ${DISCOVERY_ITEM_FIELDS}
+    }
+  }
+}`;
+
+export const discoverySectionPageQuery = `query DiscoverySectionPage($input: DiscoveryItemsInput) {
+  discoveryItems(input: $input) {
+    totalCount
+    canViewPersonalized
+    section {
+${DISCOVERY_HOME_SECTION_FIELDS}
+      generationIds
     }
   }
 }`;
@@ -212,6 +232,7 @@ export const catalogDiscoveryQuery = `query CatalogDiscovery($input: CatalogDisc
       kind
       surface
       labelValue
+      labelKey
       totalCount
       items {
 ${CATALOG_DISCOVERY_ITEM_FIELDS}
@@ -1424,12 +1445,17 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       rateLimited
       skipReason
       skippedUntil
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt
@@ -1477,6 +1503,8 @@ export type TitleCatalogTitleProjection = {
   ratings?: boolean;
   movieMedia?: boolean;
   popularity?: boolean;
+  /** The title's provider ids, which the library graph joins on. */
+  externalIds?: boolean;
 };
 
 export type TitleCatalogQueryBuildOptions = {
@@ -1556,6 +1584,14 @@ function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
   if (projection.popularity) {
     fields.push(`
     popularity`);
+  }
+  if (projection.externalIds) {
+    fields.push(`
+    imdbId
+    externalIds {
+      source
+      value
+    }`);
   }
   if (projection.movieMedia) {
     fields.push(`
@@ -1841,9 +1877,12 @@ export const titleCatalogCountsQuery = `query TitleCatalogCounts(
 }`;
 
 export const titleCatalogManagedBytesQuery = `query TitleCatalogManagedBytes(
-  $facet: MediaFacetValue, $libraryIds: [ID!]
+  $facet: MediaFacetValue, $libraryIds: [ID!], $query: String,
+  $filter: TitleCatalogFilterInput
 ) {
-  titles(facet: $facet, libraryIds: $libraryIds) { managedBytes }
+  titles(facet: $facet, libraryIds: $libraryIds, query: $query, filter: $filter) {
+    managedBytes
+  }
 }`;
 
 export const titlesQuery = buildTitlesQuery();
@@ -2501,6 +2540,15 @@ export const downloadClientsQuery = `query DownloadClients {
 
 export const mediaServerConnectionsQuery = `query MediaServerConnections($provider: MediaServerProviderValue) {
   mediaServerConnections(provider: $provider) {${MEDIA_SERVER_CONNECTION_FIELDS}
+    watchSignalSync {
+      lastStartedAt
+      lastCleanSweepAt
+      lastError
+      lastErrorCode
+      cleanSweepStale
+      participantCount
+      signalCount
+    }
   }
   runtimeInfo {
     runtimePathStyle
@@ -2773,6 +2821,14 @@ const serviceSettingsFieldSelection = `
     basePathSource
     bindAddress
     bindSource
+    bindSavedHost
+    bindEditable
+    bindPinnedBy
+    bindPending
+    bindRestartRequired
+    bindFallbackCode
+    bindFallbackAddress
+    bindFallbackReason
     passkeyRpId
     passkeyRpOrigin
     passkeyRpSource
@@ -3063,6 +3119,8 @@ export const myUiSettingsQuery = `query MyUiSettings {
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -3349,6 +3407,8 @@ export const authRuntimeStateQuery = `query AuthRuntimeState {
     mfaRequirePasswordLogin
     mfaRequireConfigStepUp
     mfaRequireJellyfinLogin
+    bindEditable
+    bindPinnedBy
   }
 }`;
 
@@ -3793,6 +3853,35 @@ export const pluginAutoUpdateSettingsQuery = `query PluginAutoUpdateSettings {
   }
 }`;
 
+export const dashboardRecycleBinQuery = `query DashboardRecycleBin {
+  recycledItems(limit: 15, deletionWithinHours: 72) {
+    items {
+      id
+      fileName
+      sizeBytes
+      titleName
+      libraryName
+      scheduledDeletionAt
+    }
+    totalCount
+  }
+}`;
+
+export const recycledItemHistoryQuery = `query RecycledItemHistory($id: ID!) {
+  recycledItemHistory(id: $id) {
+    items {
+      ${HISTORY_SCORING_FIELDS}
+      id titleId titleName facet posterUrl episodeId episodeIds collectionId
+      eventType actorKind actorUserId actorDisplayName
+      sourceTitle displayTitle sourceSystem sourceRef sourceProvider sourceHint
+      quality downloadId clientId clientName importId skipReason
+      retryRequiresPassword failureReasonCode failureReason blocklistReason
+      sourcePath destPath dataJson occurredAt createdAt
+    }
+    truncated
+  }
+}`;
+
 export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
   recycledItems(libraryIds: $libraryIds) {
     items {
@@ -3802,6 +3891,8 @@ export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
       sizeBytes
       titleId
       titleName
+      titleFacet
+      episodeId
       reason
       recycledAt
       scheduledDeletionAt

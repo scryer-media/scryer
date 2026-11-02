@@ -604,6 +604,7 @@ pub fn from_interactive_release_search_snapshot(
                 .elapsed_ms
                 .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
+            failure_reason_code: indexer.failure_reason_code.map(str::to_owned),
             caps_source: indexer.caps.map(|caps| {
                 use scryer_application::IndexerCapsSource as Source;
                 match caps.source {
@@ -635,6 +636,16 @@ pub fn from_interactive_release_search_snapshot(
                 }
             }),
             skipped_until: indexer.skipped_until,
+            unroutable_results: indexer
+                .unroutable_results
+                .into_iter()
+                .map(
+                    |(reason, count)| InteractiveReleaseSearchUnroutableResultsPayload {
+                        reason: reason.to_string(),
+                        count: i32::try_from(count).unwrap_or(i32::MAX),
+                    },
+                )
+                .collect(),
         })
         .collect();
     InteractiveReleaseSearchPayload {
@@ -1917,6 +1928,20 @@ impl CatalogQueries {
             })
     }
 
+    /// Read progress while a background task settles a selected set of folder conflicts.
+    async fn pending_import_conflict_task(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Background job identity returned when conflicts were accepted.")]
+        job_run_id: ID,
+    ) -> GqlResult<Option<PendingImportConflictTaskPayload>> {
+        app_from_ctx(ctx)?
+            .pending_import_conflict_task(&actor_from_ctx(ctx)?, job_run_id.as_str())
+            .await
+            .map_err(to_gql_error)
+            .map(|task| task.map(mappers::from_pending_import_conflict_task))
+    }
+
     /// Read one location operation with its per-title checkpoints.
     async fn location_operation(
         &self,
@@ -2880,11 +2905,12 @@ impl JobAndDownloadQueries {
     ) -> GqlResult<DiscoveryItemsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let query = discovery_items_query_from_input(input).map_err(to_gql_error)?;
         let result = app
-            .discovery_items(&actor, discovery_items_query_from_input(input))
+            .discovery_items(&actor, query)
             .await
             .map_err(to_gql_error)?;
-        Ok(from_discovery_items_result(&app, result))
+        from_discovery_items_result(&app, result).map_err(to_gql_error)
     }
 
     /// Fetch one discovery item by identity and scope, returning null when unavailable.
@@ -3393,21 +3419,33 @@ impl SystemQueries {
             desc = "Library IDs to include; omitted or empty includes all permitted libraries."
         )]
         library_ids: Option<Vec<ID>>,
+        #[graphql(
+            desc = "Only files scheduled for automatic deletion within this many hours, including overdue files; clamped to 1 through 72 and sorted soonest first before pagination. Omit for all entries, newest first."
+        )]
+        deletion_within_hours: Option<i32>,
     ) -> GqlResult<RecycledItemsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let library_ids = library_ids.map(|ids| ids.into_iter().map(|id| id.to_string()).collect());
-        let all = app
-            .list_recycled_items(&actor, library_ids)
-            .await
-            .map_err(to_gql_error)?;
+        let all = match deletion_within_hours {
+            Some(hours) => {
+                app.list_recycled_items_deleting_within(&actor, library_ids, hours)
+                    .await
+            }
+            None => app.list_recycled_items(&actor, library_ids).await,
+        }
+        .map_err(to_gql_error)?;
         let total_count = all.len() as i32;
         let limit = limit.clamp(1, 500) as usize;
         let offset = offset.max(0) as usize;
-        let items = all
+        let mut page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+        if ctx.look_ahead().field("items").field("episodeId").exists() {
+            app.populate_recycled_item_episode_ids(&actor, &mut page)
+                .await
+                .map_err(to_gql_error)?;
+        }
+        let items = page
             .into_iter()
-            .skip(offset)
-            .take(limit)
             .map(|item| {
                 Ok(RecycledItemPayload {
                     id: ID::from(item.id),
@@ -3416,6 +3454,8 @@ impl SystemQueries {
                     size_bytes: Long::from_u64_saturating(item.size_bytes),
                     title_id: item.title_id.map(ID::from),
                     title_name: item.title_name,
+                    title_facet: item.title_facet.map(|facet| facet.as_str().to_string()),
+                    episode_id: item.episode_id.map(ID::from),
                     reason: item.reason,
                     recycled_at: parse_required_datetime(
                         &item.recycled_at,
@@ -3434,6 +3474,36 @@ impl SystemQueries {
             })
             .collect::<GqlResult<Vec<_>>>()?;
         Ok(RecycledItemsPayload { items, total_count })
+    }
+
+    /// Read the file-correlated grab, import, upgrade and deletion history for a recycle entry.
+    async fn recycled_item_history(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Recycle-bin entry whose history is requested; requires title-management access to its library."
+        )]
+        id: ID,
+    ) -> GqlResult<RecycledItemHistoryPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let summary = app
+            .recycled_item_history(&actor, id.as_str())
+            .await
+            .map_err(to_gql_error)?;
+        let total_count = summary.records.len() as i64;
+        let page = from_title_history_page(
+            scryer_application::TitleHistoryPage {
+                records: summary.records,
+                total_count,
+            },
+            0,
+        )
+        .map_err(to_gql_error)?;
+        Ok(RecycledItemHistoryPayload {
+            items: page.items,
+            truncated: summary.truncated,
+        })
     }
 
     /// Preview restoring recycled items by ID without changing their files.

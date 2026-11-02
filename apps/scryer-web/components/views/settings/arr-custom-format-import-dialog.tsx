@@ -295,7 +295,7 @@ export default function ArrCustomFormatImportDialog({
             </Label>
             <Textarea
               id="settings-rules-arr-custom-format-json"
-              className="bg-field font-[var(--font-code)] text-foreground"
+              className="bg-field font-[family-name:var(--font-code)] text-foreground"
               value={json}
               rows={10}
               disabled={reviewing || translating}
@@ -307,7 +307,7 @@ export default function ArrCustomFormatImportDialog({
           {error ? (
             <div className="flex gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <pre className="whitespace-pre-wrap font-sans">{error}</pre>
+              <div className="whitespace-pre-wrap">{error}</div>
             </div>
           ) : null}
 

@@ -103,6 +103,14 @@ impl CatalogOwnedVisibility {
             .into_iter()
             .any(|key| self.keys.contains(&key))
     }
+
+    /// Whether a title named only by a discovery target key is in the
+    /// catalog, for a card that has no stored discovery item to check.
+    pub(super) fn target_key_is_owned(&self, target_key: &str) -> bool {
+        discovery_target_key_ownership_keys(target_key)
+            .into_iter()
+            .any(|key| self.keys.contains(&key))
+    }
 }
 
 pub(super) fn add_catalog_owned_external_keys(
@@ -156,13 +164,16 @@ pub(super) fn insert_catalog_owned_key(
 }
 
 pub(super) fn discovery_item_ownership_keys(item: &DiscoveryItemRecord) -> HashSet<String> {
+    discovery_target_key_ownership_keys(&item.target_key)
+}
+
+pub(super) fn discovery_target_key_ownership_keys(target_key: &str) -> HashSet<String> {
     let mut keys = HashSet::new();
-    let target_key = normalize_catalog_owned_key(&item.target_key);
-    if !target_key.is_empty() {
-        keys.insert(target_key);
+    let normalized_target_key = normalize_catalog_owned_key(target_key);
+    if !normalized_target_key.is_empty() {
+        keys.insert(normalized_target_key);
     }
-    let target_parts = item
-        .target_key
+    let target_parts = target_key
         .split(':')
         .map(str::trim)
         .filter(|part| !part.is_empty())
@@ -260,6 +271,7 @@ pub(super) fn catalog_public_top_group(
             kind: CatalogDiscoveryGroupKind::PublicTop,
             surface: CatalogDiscoverySurface::Public,
             label_value,
+            label_key: None,
             total_count: Some(section.total_count),
         },
         section.items,
@@ -284,6 +296,7 @@ pub(super) fn catalog_public_section_group(
             kind: CatalogDiscoveryGroupKind::PublicSection,
             surface: CatalogDiscoverySurface::Public,
             label_value,
+            label_key: None,
             total_count: Some(section.total_count),
         },
         section.items,
@@ -348,12 +361,19 @@ pub(super) fn catalog_personalized_groups(
         .collect::<Vec<_>>();
     let items = gated_items.as_slice();
 
-    // Same specificity ladder and same anime/animation boundary as the home
-    // composer (`personalized_section_results`): theme/tag groups claim titles
-    // before the broader genre groups, and neither may comingle Western animation
-    // with anime. The two surfaces must not disagree about what a rail means.
-    for label in
+    // Same specificity ladder as the home composer
+    // (`personalized_section_results`): theme/tag groups claim titles before
+    // the broader genre groups. Labels come from the rail-label allowlist, and
+    // the same floor as home skips any other label, so no group is ever named
+    // after a medium or a raw tag; medium stays with the gate above.
+    // The two surfaces must not disagree about what a rail means.
+    for (label, rail_label) in
         canonical_affinity_labels_for_profile(items, &library_profile.theme_labels, "theme")
+            .into_iter()
+            .filter_map(|label| {
+                discovery_rail_label(DiscoveryRailLabelFamily::Theme, &label)
+                    .map(|entry| (label, entry))
+            })
     {
         if groups.len() >= max_groups {
             return;
@@ -368,7 +388,6 @@ pub(super) fn catalog_personalized_groups(
                         "theme",
                         settings.genre_rail_corroboration,
                     )
-                    && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -379,6 +398,7 @@ pub(super) fn catalog_personalized_groups(
                 kind: CatalogDiscoveryGroupKind::ThemeAffinity,
                 surface: CatalogDiscoverySurface::Personalized,
                 label_value: Some(label),
+                label_key: Some(rail_label.key.to_string()),
                 total_count: None,
             },
             section_items,
@@ -389,8 +409,13 @@ pub(super) fn catalog_personalized_groups(
         }
     }
 
-    for label in
+    for (label, rail_label) in
         canonical_affinity_labels_for_profile(items, &library_profile.genre_labels, "genre")
+            .into_iter()
+            .filter_map(|label| {
+                discovery_rail_label(DiscoveryRailLabelFamily::Genre, &label)
+                    .map(|entry| (label, entry))
+            })
     {
         if groups.len() >= max_groups {
             return;
@@ -405,7 +430,6 @@ pub(super) fn catalog_personalized_groups(
                         "genre",
                         settings.genre_rail_corroboration,
                     )
-                    && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -416,6 +440,7 @@ pub(super) fn catalog_personalized_groups(
                 kind: CatalogDiscoveryGroupKind::GenreAffinity,
                 surface: CatalogDiscoverySurface::Personalized,
                 label_value: Some(label),
+                label_key: Some(rail_label.key.to_string()),
                 total_count: None,
             },
             section_items,
@@ -439,6 +464,7 @@ pub(super) fn catalog_personalized_groups(
                 kind: CatalogDiscoveryGroupKind::CompleteCollection,
                 surface: CatalogDiscoverySurface::Personalized,
                 label_value: None,
+                label_key: None,
                 total_count: None,
             },
             section_items,
@@ -458,6 +484,7 @@ pub(super) fn catalog_personalized_groups(
                 kind: CatalogDiscoveryGroupKind::Fallback,
                 surface: CatalogDiscoverySurface::Personalized,
                 label_value: None,
+                label_key: None,
                 total_count: None,
             },
             section_items,
@@ -474,6 +501,7 @@ pub(super) struct CatalogDiscoveryGroupDraft {
     kind: CatalogDiscoveryGroupKind,
     surface: CatalogDiscoverySurface,
     label_value: Option<String>,
+    label_key: Option<String>,
     total_count: Option<i64>,
 }
 
@@ -506,6 +534,7 @@ pub(super) fn catalog_group_excluding_emitted(
         kind: draft.kind,
         surface: draft.surface,
         label_value: draft.label_value,
+        label_key: draft.label_key,
         total_count: draft.total_count.unwrap_or(available_count),
         items,
     })
@@ -681,12 +710,18 @@ pub(super) fn corroborated_canonical_genre_labels(
 
 /// Ranked labels the library actually supports.
 ///
+/// Only labels on the rail-label allowlist for `family` are counted
+/// ([`discovery_rail_label`]): a label nobody would say out loud ("School",
+/// "Anime") is skipped and the next allowlisted label considered, however many
+/// owned titles carry it.
+///
 /// `min_carriers` is the evidence floor: a label carried by fewer owned titles
 /// than that is skipped and the next-ranked label considered, rather than
 /// promoted into a rail the library never earned. Three crime titles out of ten
 /// is not a crime library.
 pub(super) fn top_owned_title_labels<'a, F, I>(
     titles: &'a [Title],
+    family: DiscoveryRailLabelFamily,
     labels_for_title: F,
     limit: usize,
     min_carriers: usize,
@@ -703,8 +738,7 @@ where
             let raw_label = raw_label.as_ref();
             let label_key = normalize_discovery_affinity_key(raw_label);
             if label_key.is_empty()
-                || discovery_affinity_label_is_generic(&label_key)
-                || raw_label.trim_start().starts_with("scryer:")
+                || discovery_rail_label(family, raw_label).is_none()
                 || !seen_for_title.insert(label_key.clone())
             {
                 continue;
@@ -800,31 +834,6 @@ pub(super) fn discovery_item_comparable_rating(item: &DiscoveryItemRecord) -> f6
         .filter(|rating| rating.is_finite())
         .map(|rating| if rating <= 1.0 { rating * 10.0 } else { rating })
         .unwrap_or_default()
-}
-
-pub(super) fn discovery_affinity_label_is_generic(normalized: &str) -> bool {
-    matches!(
-        normalized,
-        "movie"
-            | "movies"
-            | "series"
-            | "show"
-            | "shows"
-            // "anime" is deliberately absent: it names a tradition, not a medium
-            // noun, so "Because You Like Anime" is a legitimate rail and the
-            // anime/animation boundary guard depends on the label being reachable.
-            | "recommendation"
-            | "recommendations"
-            | "similar"
-            | "relation"
-            | "list"
-            | "community"
-            | "tmdb"
-            | "tvdb"
-            | "mal"
-            | "anilist"
-            | "myanimelist"
-    )
 }
 
 pub(super) fn normalize_discovery_affinity_key(value: &str) -> String {
@@ -934,6 +943,7 @@ pub(super) fn section_result(
         surface,
         total_count,
         items,
+        label_key: None,
     })
 }
 
@@ -1189,7 +1199,7 @@ pub(super) fn theme_affinity_signal_qualifies(
         .strip_prefix("affinity:theme:")
         .unwrap_or("");
     signal.category == "theme"
-        && affinity_value_matches_label(key, label_key)
+        && discovery_rail_label_signal_matches(DiscoveryRailLabelFamily::Theme, label_key, key)
         && signal.rail_eligible
 }
 

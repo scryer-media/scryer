@@ -55,8 +55,14 @@ ${LOGIN_PAYLOAD_FIELDS}
 export const completeInitialAuthenticationMutation = `mutation CompleteInitialAuthentication($input: CompleteInitialAuthenticationInput!) {
   completeInitialAuthentication(input: $input) {
     completed
+    restartRequiredForBind
+    bindIgnoredBecausePinned
     login { ${LOGIN_PAYLOAD_FIELDS} }
   }
+}`;
+
+export const restartForNetworkChangeMutation = `mutation RestartForNetworkChange {
+  restartForNetworkChange
 }`;
 
 export const completeRequiredPasswordChangeMutation = `mutation CompleteRequiredPasswordChange($input: CompleteRequiredPasswordChangeInput!) {
@@ -929,6 +935,8 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -970,6 +978,8 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -1010,6 +1020,8 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -1454,6 +1466,14 @@ const serviceSettingsFieldSelection = `
     basePathSource
     bindAddress
     bindSource
+    bindSavedHost
+    bindEditable
+    bindPinnedBy
+    bindPending
+    bindRestartRequired
+    bindFallbackCode
+    bindFallbackAddress
+    bindFallbackReason
     passkeyRpId
     passkeyRpOrigin
     passkeyRpSource
@@ -2043,12 +2063,17 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       skipReason
       skippedUntil
       rateLimited
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt
@@ -2075,12 +2100,17 @@ export const continueInteractiveReleaseSearchMutation = `mutation ContinueIntera
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       skipReason
       skippedUntil
       rateLimited
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt

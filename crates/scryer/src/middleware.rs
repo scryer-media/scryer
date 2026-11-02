@@ -4296,6 +4296,8 @@ mod tests {
                 public_url: Some("https://media.home/scryer/".into()),
                 reset_public_url: false,
                 acknowledge_passkey_impact: false,
+                bind_host: None,
+                reset_bind_host: false,
             }).await.expect("save public URL");
             assert_eq!(settings.public_url.effective.as_deref(), Some("https://media.home/scryer"));
             let approved = origin_policy.request_context().approved_origins().await.to_vec();

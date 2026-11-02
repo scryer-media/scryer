@@ -307,8 +307,8 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                         className={cn(
                           "min-w-0 leading-5",
                           selectedTitlePresentation
-                            ? "break-all font-[var(--font-code)] text-[12px] text-[var(--scry-text2)]"
-                            : "break-all font-[var(--font-code)] text-sm text-muted-foreground",
+                            ? "break-all font-[family-name:var(--font-code)] text-[12px] text-[var(--scry-text2)]"
+                            : "break-all font-[family-name:var(--font-code)] text-sm text-muted-foreground",
                         )}
                       >
                         {file.filePath}

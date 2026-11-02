@@ -4637,3 +4637,457 @@ async fn empty_duplicate_title_folders_are_kept_while_a_location_operation_is_un
         .expect("cleanup after release");
     assert_eq!(report.removed, vec![leftover.to_string_lossy().to_string()]);
 }
+
+/// The first rename after adopt-all has one collection-backed Primary and an
+/// Additional in the same survivor folder. Their media and companions must
+/// remain distinct even though the template has only one movie filename.
+#[tokio::test]
+async fn first_movie_rename_after_adoption_preserves_additional_media_and_companions() {
+    for (relocate_folder, collection_backed_additional) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let mut ctx = TestContext::new().await;
+        seed_typed_settings_definitions(&ctx).await;
+        set_folder_template(
+            &ctx,
+            "MOVIE",
+            if relocate_folder {
+                "{title} ({year})"
+            } else {
+                "{title}"
+            },
+        )
+        .await;
+        ctx.app = ctx.app.with_test_overrides(|builder| {
+            builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+        });
+        let media_root = tempfile::tempdir().expect("synthetic movie root");
+        configure_default_library_root(&ctx, MediaFacet::Movie, media_root.path()).await;
+        let (title, survivor, _) =
+            seed_movie_with_companions(&ctx, media_root.path(), "Adopted Variant", "94170").await;
+        let expected_folder = if relocate_folder {
+            media_root.path().join("Adopted Variant (2024)")
+        } else {
+            survivor.clone()
+        };
+        let additional_path = survivor.join("inferior.720p.mkv");
+        let additional_subtitle = survivor.join("inferior.720p.en.srt");
+        std::fs::write(&additional_path, b"synthetic additional movie").unwrap();
+        std::fs::write(&additional_subtitle, b"synthetic additional subtitle").unwrap();
+        let additional_id = ctx
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: additional_path.to_string_lossy().into_owned(),
+                size_bytes: b"synthetic additional movie".len() as i64,
+                quality_label: Some("720p".into()),
+                role: MediaFileRole::Additional,
+                ..Default::default()
+            })
+            .await
+            .expect("associate adopted Additional");
+        let additional_collection = if collection_backed_additional {
+            Some(
+                ctx.shows
+                    .create_collection(Collection {
+                        id: Id::new().0,
+                        title_id: title.id.clone(),
+                        collection_type: CollectionType::Movie,
+                        collection_index: "2".into(),
+                        // A stale scan collection may share the Primary's quality
+                        // label. Role, rather than its prospective name, excludes it.
+                        label: Some("1080p".into()),
+                        ordered_path: Some(additional_path.to_string_lossy().into_owned()),
+                        narrative_order: None,
+                        first_episode_number: None,
+                        last_episode_number: None,
+                        monitored: true,
+                        created_at: Utc::now(),
+                    })
+                    .await
+                    .expect("seed scan-style Additional movie collection"),
+            )
+        } else {
+            None
+        };
+        let before = sorted_file_bytes(&survivor);
+        let catalog_before = ctx
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|file| (file.id, file.file_path))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let actor = ctx.app.find_or_create_default_user().await.unwrap();
+        let preview = ctx
+            .app
+            .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+            .await
+            .expect("preview first rename after adoption");
+        let targets = preview
+            .items
+            .iter()
+            .filter_map(|item| item.proposed_path.as_ref())
+            .collect::<Vec<_>>();
+        let unique = targets
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            targets.len(),
+            unique.len(),
+            "every media/companion target must be distinct"
+        );
+        assert!(
+            preview
+                .items
+                .iter()
+                .all(|item| item.media_file_id.as_deref() != Some(&additional_id)),
+            "Additional must never be renamed onto the Primary"
+        );
+        if let Some(collection) = &additional_collection {
+            assert!(
+                preview
+                    .items
+                    .iter()
+                    .all(|item| item.collection_id.as_deref() != Some(&collection.id)),
+                "Additional-backed movie collections must not generate rename actions"
+            );
+        }
+        let blocked =
+            scryer_application::error_reasons::library::RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED;
+        if relocate_folder {
+            assert_eq!(
+                preview.renamable, 0,
+                "the preview blocks a folder move that would strand the Additional"
+            );
+            assert!(
+                preview.items.iter().any(|item| {
+                    item.write_action == scryer_application::RenameWriteAction::Error
+                        && item.reason_code == blocked
+                }),
+                "the preview names the blocked title's items"
+            );
+        } else {
+            assert!(
+                preview.renamable > 0,
+                "exercise an actual first filename rename"
+            );
+        }
+        let applied = ctx
+            .app
+            .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+            .await;
+        if relocate_folder {
+            let result = applied.expect("a blocked title applies as failed items, not a refusal");
+            assert_eq!(result.applied, 0);
+            assert!(
+                result.items.iter().any(|item| item.status
+                    == scryer_application::RenameApplyStatus::Failed
+                    && item.reason_code == blocked),
+                "the blocked Primary is reported failed with the blocking reason"
+            );
+            assert_eq!(
+                sorted_file_bytes(&survivor),
+                before,
+                "refusal preserves every movie and companion"
+            );
+            assert_eq!(
+                ctx.media_files
+                    .list_media_files_for_title(&title.id)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|file| (file.id, file.file_path))
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+                catalog_before
+            );
+            assert_eq!(
+                ctx.titles
+                    .get_by_id(&title.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .folder_path
+                    .as_deref(),
+                survivor.to_str()
+            );
+            if let Some(collection) = &additional_collection {
+                assert_eq!(
+                    ctx.shows
+                        .get_collection_by_id(&collection.id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .ordered_path,
+                    collection.ordered_path,
+                    "refusal keeps the Additional collection unchanged"
+                );
+            }
+            assert!(
+                !expected_folder.exists(),
+                "refusal must not create the destination"
+            );
+            continue;
+        }
+        let result = applied.expect("apply first filename rename after adoption");
+        if let Some(collection) = additional_collection {
+            assert_eq!(
+                ctx.shows
+                    .get_collection_by_id(&collection.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .ordered_path,
+                collection.ordered_path,
+                "Additional-backed collection keeps its original file"
+            );
+        }
+        assert_eq!(result.failed, 0);
+        assert!(result.applied > 0);
+        assert_eq!(
+            sorted_file_bytes(&expected_folder),
+            before,
+            "all movie and companion bytes survive"
+        );
+        assert_eq!(
+            std::fs::read(expected_folder.join("inferior.720p.mkv")).unwrap(),
+            b"synthetic additional movie"
+        );
+        assert_eq!(
+            std::fs::read(expected_folder.join("inferior.720p.en.srt")).unwrap(),
+            b"synthetic additional subtitle"
+        );
+        let files = ctx
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            files.len(),
+            2,
+            "the union of Primary and Additional remains associated"
+        );
+        let additional = files
+            .iter()
+            .find(|file| file.id == additional_id)
+            .expect("Additional remains associated");
+        assert_eq!(additional.role, MediaFileRole::Additional);
+        assert_eq!(
+            additional.file_path,
+            expected_folder.join("inferior.720p.mkv").to_string_lossy()
+        );
+        let primary = files
+            .iter()
+            .find(|file| file.role == MediaFileRole::Primary)
+            .expect("Primary remains associated");
+        assert_ne!(primary.file_path, additional.file_path);
+        assert!(std::path::Path::new(&primary.file_path).is_file());
+        assert_eq!(
+            ctx.titles
+                .get_by_id(&title.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .folder_path
+                .as_deref(),
+            expected_folder.to_str()
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_additional_movie_folder_target_collision_preserves_the_whole_title() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    let media_root = tempfile::tempdir().expect("synthetic movie root");
+    configure_default_library_root(&ctx, MediaFacet::Movie, media_root.path()).await;
+    let (title, survivor, _) =
+        seed_movie_with_companions(&ctx, media_root.path(), "Blocked Variant", "94171").await;
+    let additional = survivor.join("inferior.720p.mkv");
+    std::fs::write(&additional, b"synthetic additional movie").unwrap();
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: additional.to_string_lossy().into_owned(),
+            size_bytes: b"synthetic additional movie".len() as i64,
+            role: MediaFileRole::Additional,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let destination = media_root.path().join("Blocked Variant (2024)");
+    std::fs::create_dir(&destination).unwrap();
+    let unrelated = destination.join("inferior.720p.mkv");
+    std::fs::write(&unrelated, b"unrelated destination movie").unwrap();
+    let before = sorted_file_bytes(&survivor);
+    let files_before = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|file| (file.id, file.file_path))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let actor = ctx.app.find_or_create_default_user().await.unwrap();
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .unwrap();
+    let blocked = scryer_application::error_reasons::library::RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED;
+    assert_eq!(preview.renamable, 0);
+    assert!(
+        preview.items.iter().any(|item| item.write_action
+            == scryer_application::RenameWriteAction::Error
+            && item.reason_code == blocked),
+        "the preview names the blocked title"
+    );
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("a colliding Additional blocks its title, not the request");
+    assert_eq!(
+        result.applied, 0,
+        "a colliding Additional cannot be abandoned by moving the Primary"
+    );
+    assert_eq!(
+        sorted_file_bytes(&survivor),
+        before,
+        "every original and companion stays put"
+    );
+    assert_eq!(
+        std::fs::read(&unrelated).unwrap(),
+        b"unrelated destination movie"
+    );
+    assert_eq!(
+        ctx.media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|file| (file.id, file.file_path))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        files_before
+    );
+    assert_eq!(
+        ctx.titles
+            .get_by_id(&title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .folder_path
+            .as_deref(),
+        survivor.to_str()
+    );
+}
+
+/// A facet-wide rename previews each title whose folder move would strand an
+/// Additional as blocked, and applying moves the rest of the batch while that
+/// title's files and folder record stay exactly where they were.
+#[tokio::test]
+async fn a_facet_rename_blocks_only_the_title_whose_additional_would_be_stranded() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    let media_root = tempfile::tempdir().expect("synthetic movie root");
+    configure_default_library_root(&ctx, MediaFacet::Movie, media_root.path()).await;
+    let (blocked_title, blocked_folder, _) =
+        seed_movie_with_companions(&ctx, media_root.path(), "Emberfall", "94172").await;
+    let additional = blocked_folder.join("inferior.720p.mkv");
+    std::fs::write(&additional, b"synthetic additional movie").unwrap();
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: blocked_title.id.clone(),
+            file_path: additional.to_string_lossy().into_owned(),
+            size_bytes: b"synthetic additional movie".len() as i64,
+            role: MediaFileRole::Additional,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (free_title, free_folder, free_files) =
+        seed_movie_with_companions(&ctx, media_root.path(), "Quiet Harbor", "94173").await;
+    let blocked_before = sorted_file_bytes(&blocked_folder);
+
+    let actor = ctx.app.find_or_create_default_user().await.unwrap();
+    let preview = ctx
+        .app
+        .preview_rename_for_facet(&actor, MediaFacet::Movie)
+        .await
+        .expect("preview the facet");
+    let blocked = scryer_application::error_reasons::library::RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED;
+    let blocked_primary = blocked_folder.join("Emberfall.2024.1080p.WEB-DL.mkv");
+    let blocked_item = preview
+        .items
+        .iter()
+        .find(|item| item.current_path == blocked_primary.to_string_lossy())
+        .expect("the blocked title's Primary is in the plan");
+    assert_eq!(
+        blocked_item.write_action,
+        scryer_application::RenameWriteAction::Error
+    );
+    assert_eq!(blocked_item.reason_code, blocked);
+    assert!(preview.errors > 0, "the blocked title counts as an error");
+    assert!(
+        preview.renamable > 0,
+        "the unblocked title still has work in the same plan"
+    );
+
+    let result = ctx
+        .app
+        .apply_rename_for_facet(&actor, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("a blocked title does not refuse the whole batch");
+    assert!(result.applied > 0);
+    assert!(result.items.iter().any(|item| {
+        item.reason_code == blocked && item.status == scryer_application::RenameApplyStatus::Failed
+    }));
+
+    assert_eq!(
+        sorted_file_bytes(&blocked_folder),
+        blocked_before,
+        "the blocked title keeps every file in place"
+    );
+    assert_eq!(
+        ctx.titles
+            .get_by_id(&blocked_title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .folder_path
+            .as_deref(),
+        blocked_folder.to_str()
+    );
+
+    let free_destination = media_root.path().join("Quiet Harbor (2024)");
+    assert!(!free_folder.join(&free_files[0].0).exists());
+    assert_eq!(
+        ctx.titles
+            .get_by_id(&free_title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .folder_path
+            .as_deref(),
+        free_destination.to_str(),
+        "the rest of the batch applies"
+    );
+    let free_media = ctx
+        .media_files
+        .list_media_files_for_title(&free_title.id)
+        .await
+        .unwrap();
+    assert_eq!(free_media.len(), 1);
+    assert!(std::path::Path::new(&free_media[0].file_path).starts_with(&free_destination));
+    assert!(std::path::Path::new(&free_media[0].file_path).is_file());
+}

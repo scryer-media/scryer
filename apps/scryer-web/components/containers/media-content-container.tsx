@@ -97,6 +97,7 @@ import {
   EMPTY_TITLE_QUICK_FILTERS,
   buildTitleCatalogQueryVariables,
   titleCatalogFilterInput,
+  titleCatalogProjectionForGraph,
   titleCatalogProjectionForTable,
   loadTitleCatalogSelection,
   titleCatalogQueryKey,
@@ -164,7 +165,6 @@ import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
 import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
 import { catalogDeletionRefresh } from "@/lib/utils/catalog-deletion-refresh";
@@ -637,9 +637,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const { startAutomaticSearch } = useAutomaticSearch();
   const client = useClient();
   const auth = useAuth();
-  // Library and root moves are still being finished, so the bulk dialog only
-  // becomes a move entry point when the instance has opted in.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const canManageLists = hasAppPermission(
     auth.user,
     APP_PERMISSIONS.manageLists,
@@ -980,7 +977,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const [titleCatalogSort, setTitleCatalogSort] =
     React.useState<TitleCatalogSortState>(defaultTitleCatalogSortState);
   const effectiveTitleCatalogSort = React.useMemo<TitleCatalogSortState>(() => {
-    if (effectiveViewMode === "poster") {
+    if (effectiveViewMode === "poster" || effectiveViewMode === "graph") {
       return defaultTitleCatalogSortState;
     }
     if (titleCatalogSort.key === "name") {
@@ -996,15 +993,18 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     return titleCatalogSort;
   }, [effectiveViewMode, titleCatalogSort, view, visibleTitleTableColumns]);
   const titleCatalogProjection = React.useMemo(
-    () => ({
-      ...titleCatalogProjectionForTable({
-        facet: activeFacet,
-        visibleColumns:
-          effectiveViewMode === "poster" ? {} : visibleTitleTableColumns,
-        sort: effectiveTitleCatalogSort,
-      }),
-      includeSettings: effectiveViewMode !== "poster",
-    }),
+    () =>
+      effectiveViewMode === "graph"
+        ? titleCatalogProjectionForGraph()
+        : {
+            ...titleCatalogProjectionForTable({
+              facet: activeFacet,
+              visibleColumns:
+                effectiveViewMode === "poster" ? {} : visibleTitleTableColumns,
+              sort: effectiveTitleCatalogSort,
+            }),
+            includeSettings: effectiveViewMode !== "poster",
+          },
     [
       activeFacet,
       effectiveTitleCatalogSort,
@@ -1880,14 +1880,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
   const summaryScopesRef = React.useRef({
     counts: "",
-    bytes: "",
     countsReady: false,
   });
   React.useEffect(() => {
     if (!shouldLoadCatalogTitles) return;
     summaryLoaders.counts.activate();
     summaryLoaders.bytes.activate();
-    summaryScopesRef.current = { counts: "", bytes: "", countsReady: false };
+    summaryScopesRef.current = { counts: "", countsReady: false };
     return () => {
       summaryLoaders.counts.dispose();
       summaryLoaders.bytes.dispose();
@@ -1915,17 +1914,19 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         limit: 0,
         offset: 0,
       });
-      const scope = { facet, libraryIds: [...(scopedIds ?? [])].sort() };
-      const countVariables = { ...scope, query, filter };
+      const countVariables = {
+        facet,
+        libraryIds: [...(scopedIds ?? [])].sort(),
+        query,
+        filter,
+      };
       const countKey = JSON.stringify(countVariables);
-      const bytesKey = JSON.stringify(scope);
       // A new scope keeps the previous counts on screen until its own counts
       // land; the loader drops a superseded scope's late result.
       if (summaryScopesRef.current.counts !== countKey) {
         summaryScopesRef.current.counts = countKey;
         summaryScopesRef.current.countsReady = false;
       }
-      summaryScopesRef.current.bytes = bytesKey;
       void summaryLoaders.counts.run(
         countKey,
         async () => {
@@ -1952,10 +1953,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         invalidate,
       );
       void summaryLoaders.bytes.run(
-        bytesKey,
+        countKey,
         async () => {
           const { data, error } = await client
-            .query(titleCatalogManagedBytesQuery, scope, {
+            .query(titleCatalogManagedBytesQuery, countVariables, {
               requestPolicy: "network-only",
             })
             .toPromise();
@@ -2919,7 +2920,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       sessionIds,
     };
     void refreshLoadedCatalogTitlesQuietly({
-      firstPageOnly: effectiveViewMode !== "poster",
+      // The poster grid and the graph show every loaded page, so a scan
+      // refreshes them all; the tables only need their first page.
+      firstPageOnly:
+        effectiveViewMode !== "poster" && effectiveViewMode !== "graph",
     });
   }, [
     effectiveViewMode,
@@ -5285,6 +5289,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           catalogHasMoreTitles:
             catalogPaginationState.hasMore && !catalogPageError,
           catalogPageError,
+          catalogListingKey: catalogPaginationState.queryKey,
           retryCatalogPage,
           catalogLoadingMoreTitles: catalogPaginationState.loadingMore,
           loadMoreCatalogTitles,
@@ -5456,14 +5461,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         busy={bulkActionBusy}
         onSubmit={applyBulkTitleOptions}
         destinationLibraryName={editDialogLibraryName}
-        onRequestMove={
-          experimentalFeaturesEnabled
-            ? (rootFolderId) => {
-                setBulkEditDialogOpen(false);
-                setBulkMoveRootId(rootFolderId);
-              }
-            : undefined
-        }
+        onRequestMove={(rootFolderId) => {
+          setBulkEditDialogOpen(false);
+          setBulkMoveRootId(rootFolderId);
+        }}
       />
       <MoveTitlesDialog
         open={bulkMoveRootId !== null}

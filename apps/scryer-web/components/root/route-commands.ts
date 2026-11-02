@@ -604,10 +604,20 @@ export function buildRouteCommands({
       ? [
           {
             id: "settings-security",
-            label: `${systemGroupLabel} / ${t("settings.security")}`,
-            description: t("settings.security"),
+            label: `${systemGroupLabel} / ${t("nav.securityAccess")}`,
+            description: t("nav.securityAccess"),
             groupLabel: systemGroupLabel,
-            keywords: ["settings", "security", "auth", "login", "password"],
+            keywords: [
+              "settings",
+              "security",
+              "access",
+              "auth",
+              "login",
+              "password",
+              "network",
+              "public url",
+              "proxy",
+            ],
             icon: ShieldCheck,
             onSelect: buildNavigate(onNavigate, "settings", "security"),
           } satisfies RouteCommand,
@@ -617,7 +627,7 @@ export function buildRouteCommands({
       ? [
           {
             id: "settings-users",
-            label: `${systemGroupLabel} / ${t("nav.usersAccess")}`,
+            label: `${systemGroupLabel} / ${t("nav.users")}`,
             description: t("settings.users"),
             groupLabel: systemGroupLabel,
             keywords: ["settings", "users", "access", "accounts", "management"],

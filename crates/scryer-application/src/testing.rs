@@ -256,3 +256,42 @@ impl crate::lists::ListPluginProvider for ListAccountFixtureProvider {
         vec!["trakt".into()]
     }
 }
+
+/// A list plugin provider that offers nothing and counts full provider
+/// reloads. Every full reload swaps the list providers exactly once, so a
+/// test can tell whether a step reloaded the runtime plugins.
+#[derive(Debug, Default)]
+pub struct ReloadCountingListPluginProvider {
+    reloads: std::sync::atomic::AtomicUsize,
+}
+
+impl ReloadCountingListPluginProvider {
+    pub fn reloads(&self) -> usize {
+        self.reloads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl crate::lists::ListPluginProvider for ReloadCountingListPluginProvider {
+    fn client_for_provider(
+        &self,
+        _provider: &str,
+        _config: &std::collections::BTreeMap<String, String>,
+    ) -> Option<std::sync::Arc<dyn crate::lists::ListProviderClient>> {
+        None
+    }
+    fn descriptors(&self) -> Vec<scryer_plugin_sdk::PluginDescriptor> {
+        Vec::new()
+    }
+    fn available_provider_types(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn reload_runtime_plugins(
+        &self,
+        _runtime_plugins: &[crate::RuntimePluginLoad],
+        _disabled_builtins: &[String],
+    ) -> Result<(), String> {
+        self.reloads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}

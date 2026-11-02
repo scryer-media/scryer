@@ -82,7 +82,7 @@ fn rail_floor_padding_titles(library_id: &str, count: usize) -> Vec<Title> {
                 Vec::new(),
             );
             title.library_id = library_id.to_string();
-            title.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+            title.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
             title
                 .canonical_tags
                 .extend(canonical_theme_tags(&["Isekai"]));
@@ -205,7 +205,7 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
         vec![("tmdb_movie", "603")],
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
     owned_drama_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Horror", "Isekai"]));
@@ -232,7 +232,7 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
         vec![("tmdb_movie", "605")],
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Science Fiction"]);
     owned_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Isekai"]));
@@ -368,7 +368,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         vec![("tmdb_movie", "603")],
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
     owned_drama_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Horror", "Isekai"]));
@@ -395,7 +395,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         vec![("tmdb_movie", "605")],
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Science Fiction"]);
     owned_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Isekai"]));
@@ -521,7 +521,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Sci-Fi One",
         "movie",
         89.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -536,7 +536,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Sci-Fi Two",
         "movie",
         88.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -581,7 +581,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "High-Rated Sci-Fi",
         "movie",
         85.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -656,7 +656,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Weekly Series Two",
         "series",
         80.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -805,7 +805,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     rail_padding.extend(rail_floor_padding_items(
         "context-run",
         "scifi",
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         10,
     ));
@@ -892,7 +892,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         viewer_home
             .facets
             .iter()
-            .any(|facet| facet.facet_name == "genre" && facet.facet_value == "Sci Fi")
+            .any(|facet| facet.facet_name == "genre" && facet.facet_value == "Science Fiction")
     );
     assert!(
         viewer_home
@@ -917,17 +917,20 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     assert!(personalized_section_types.contains(&"BECAUSE_YOU_LIKE_TAG"));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
         section.section_type == "BECAUSE_YOU_LIKE_GENRE"
-            && section.title == "Because You Like Sci Fi"
+            && section.title == "Because you like science fiction"
+            && section.label_key.as_deref() == Some("science-fiction")
     }));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
         section.section_type == "BECAUSE_YOU_LIKE_GENRE"
-            && section.title == "Because You Like Drama"
+            && section.title == "Because you like drama"
     }));
     assert!(!viewer_home.personalized_sections.iter().any(|section| {
-        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because You Like Horror"
+        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because you like horror"
     }));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
-        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because You Like Isekai"
+        section.section_type == "BECAUSE_YOU_LIKE_TAG"
+            && section.title == "Because you like isekai"
+            && section.label_key.as_deref() == Some("isekai")
     }));
 
     let filtered = app
@@ -6077,6 +6080,7 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
     async fn list_public_discovery_section_items(
         &self,
         run_id: &str,
+        section_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
         _filters: &DiscoveryHomeFilters,
@@ -6091,6 +6095,9 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
                 .trim()
                 .eq_ignore_ascii_case("COMPLETE_THE_COLLECTION")
             {
+                continue;
+            }
+            if !section_ids.is_empty() && !section_ids.contains(&section.section_id) {
                 continue;
             }
             let mut items = all_items
@@ -6123,6 +6130,7 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
         readable_library_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
+        include_owned: bool,
         _filters: &DiscoveryHomeFilters,
         limit: i64,
     ) -> AppResult<Vec<DiscoveryHomeCandidate>> {
@@ -6133,7 +6141,7 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
             include_unresolved,
         )
         .into_iter()
-        .filter(|item| !item.owned_in_input)
+        .filter(|item| include_owned || !item.owned_in_input)
         .filter(|item| recording_item_is_allowed(item, allowed_media_kinds))
         .collect::<Vec<_>>();
         recording_dedupe_and_sort(&mut items);
@@ -7940,4 +7948,1280 @@ async fn discovery_sync_fails_an_abandoned_library_scan_session() {
             || !discovery.incremental_commits.lock().await.is_empty(),
         "discovery work must resume once the abandoned scan is finished"
     );
+}
+
+fn watchlist_subscription(id: &str, owner_user_id: &str) -> scryer_domain::ListSubscription {
+    let mut subscription = crate::lists::test_support::subscription(id);
+    subscription.scope = scryer_domain::ListScope::Personal;
+    subscription.owner_user_id = owner_user_id.to_string();
+    subscription.credential_id = Some(format!("{id}-account"));
+    subscription.source.provider = "plex".to_string();
+    subscription.source.source_type = "watchlist".to_string();
+    subscription.source.params.clear();
+    subscription
+}
+
+fn watchlist_row(
+    subscription_id: &str,
+    tmdb_id: &str,
+    added_minute: i64,
+    state: scryer_domain::ListMembershipState,
+) -> scryer_domain::ListMembership {
+    let mut row = crate::lists::test_support::membership(subscription_id, tmdb_id, state);
+    row.external_ids = vec![crate::lists::test_support::tmdb(tmdb_id)];
+    row.display_title = Some(format!("Fixture Row {tmdb_id}"));
+    row.first_seen_at = crate::lists::test_support::at(added_minute);
+    row
+}
+
+fn pending_movie_request(id: &str, tmdb_id: &str) -> scryer_domain::MediaRequest {
+    let now = Utc.timestamp_opt(2_000, 0).unwrap();
+    scryer_domain::MediaRequest {
+        id: id.to_string(),
+        library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+        facet: MediaFacet::Movie,
+        status: scryer_domain::MediaRequestStatus::Pending,
+        identity_fingerprint: format!("fingerprint-{id}"),
+        title: "Fixture Requested Movie".to_string(),
+        sort_title: None,
+        slug: None,
+        poster_url: None,
+        background_url: None,
+        year: None,
+        overview: None,
+        runtime_minutes: None,
+        language: None,
+        content_status: None,
+        rating_summary: scryer_domain::TitleRatingSummary::default(),
+        requested_quality_profile_id: None,
+        requested_quality_profile_name: None,
+        requested_monitor_type: None,
+        requested_monitor_selection: None,
+        resolved_by_user_id: None,
+        resolved_at: None,
+        created_title_id: None,
+        approved_quality_profile_id: None,
+        approved_quality_profile_name: None,
+        requested_lease_days: None,
+        approved_lease_days: None,
+        decision_id: None,
+        decided_by_rule_set_ids: Vec::new(),
+        policy_tags: Vec::new(),
+        metadata_snapshot_json: "{}".to_string(),
+        external_ids: vec![ExternalId::new("tmdb", tmdb_id)],
+        requesters: Vec::new(),
+        origin: scryer_domain::MediaRequestOrigin::default(),
+        created_by_user_id: "requester-fixture".to_string(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn watchlist_home_query() -> DiscoveryHomeQuery {
+    DiscoveryHomeQuery {
+        include_public: true,
+        include_personalized: true,
+        include_unresolved: true,
+        limit_per_section: 10,
+        filters: DiscoveryHomeFilters::default(),
+    }
+}
+
+fn watchlist_section_titles(home: &crate::ports::DiscoveryHomeResult) -> Option<Vec<String>> {
+    home.personalized_sections
+        .iter()
+        .find(|section| section.section_type == "FROM_YOUR_WATCHLIST")
+        .map(|section| {
+            section
+                .items
+                .iter()
+                .map(|item| item.display_title.clone())
+                .collect()
+        })
+}
+
+#[tokio::test]
+async fn discovery_home_shows_each_viewer_only_their_own_watchlist() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let media_requests = Arc::new(super::MockMediaRequestRepo::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+            .with_media_requests(media_requests.clone())
+    });
+    let permissions = || {
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ]
+    };
+    let (_, first_viewer) =
+        create_authenticated_user(&app, &admin, "watchlist-first", "password", permissions()).await;
+    let (_, second_viewer) =
+        create_authenticated_user(&app, &admin, "watchlist-second", "password", permissions())
+            .await;
+    let (_, unlinked_viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-unlinked",
+        "password",
+        permissions(),
+    )
+    .await;
+
+    let mut owned = test_title(
+        "watchlist-owned-title",
+        "Fixture Owned Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "7003")],
+    );
+    owned.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    titles.store.lock().await.push(owned);
+    media_requests
+        .requests
+        .lock()
+        .await
+        .push(pending_movie_request("watchlist-request", "7004"));
+
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.extend(
+        [
+            ("7001", "Fixture Watchlist Alpha"),
+            ("7002", "Fixture Watchlist Beta"),
+            ("7003", "Fixture Owned Movie"),
+            ("7004", "Fixture Requested Movie"),
+            ("7005", "Fixture Declined Movie"),
+            ("7006", "Fixture Library Movie"),
+            ("7101", "Fixture Second Viewer Movie"),
+        ]
+        .into_iter()
+        .map(|(tmdb_id, title)| {
+            discovery_item_record(
+                "public-watchlist-run",
+                "public-watchlist-run",
+                None,
+                &format!("tmdb:movie:{tmdb_id}"),
+                title,
+                "movie",
+                10.0,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            )
+        }),
+    );
+
+    let first = watchlist_subscription("watchlist-first", &first_viewer.id);
+    let second = watchlist_subscription("watchlist-second", &second_viewer.id);
+    // A personal list of the first viewer's that is not a watchlist feeds
+    // nothing here.
+    let mut other_list = watchlist_subscription("watchlist-first-other", &first_viewer.id);
+    other_list.source.source_type = "user_list".to_string();
+    *lists.subscriptions.lock().unwrap() = vec![first, second, other_list];
+    use scryer_domain::ListMembershipState as State;
+    lists.insert_rows(vec![
+        watchlist_row("watchlist-first", "7001", 10, State::Pending),
+        watchlist_row("watchlist-first", "7002", 20, State::Pending),
+        watchlist_row("watchlist-first", "7003", 30, State::Pending),
+        watchlist_row("watchlist-first", "7004", 40, State::Pending),
+        watchlist_row("watchlist-first", "7005", 50, State::Excluded),
+        // In no discovery pool this viewer can see: a card from its row.
+        watchlist_row("watchlist-first", "7999", 60, State::Pending),
+        // In a library somewhere: never the watchlist's to offer.
+        watchlist_row("watchlist-first", "7006", 70, State::InLibrary),
+        watchlist_row("watchlist-first-other", "7002", 5, State::Pending),
+        watchlist_row("watchlist-second", "7101", 10, State::Pending),
+    ]);
+    // Known by an AniList id alone: a request could not add it, so no card.
+    let mut anilist_only = watchlist_row("watchlist-first", "7998", 80, State::Pending);
+    anilist_only.external_ids = vec![ExternalId::new("anilist", "7998")];
+    lists.insert_rows(vec![anilist_only]);
+
+    let first_home = app
+        .discovery_home(&first_viewer, watchlist_home_query())
+        .await
+        .expect("first viewer home");
+    assert_eq!(
+        first_home
+            .personalized_sections
+            .first()
+            .map(|section| section.section_type.as_str()),
+        Some("FROM_YOUR_WATCHLIST")
+    );
+    assert_eq!(
+        watchlist_section_titles(&first_home),
+        Some(vec![
+            "Fixture Watchlist Beta".to_string(),
+            "Fixture Watchlist Alpha".to_string(),
+            "Fixture Row 7999".to_string(),
+        ])
+    );
+
+    let second_home = app
+        .discovery_home(&second_viewer, watchlist_home_query())
+        .await
+        .expect("second viewer home");
+    assert_eq!(
+        watchlist_section_titles(&second_home),
+        Some(vec!["Fixture Second Viewer Movie".to_string()])
+    );
+
+    // The row card reads back for the add or request action, for its owner
+    // only.
+    let detail_query = |target_key: &str| DiscoveryItemDetailQuery {
+        target_key: target_key.to_string(),
+        include_unresolved: true,
+    };
+    let row_card = app
+        .discovery_item_detail(&first_viewer, detail_query("tmdb:movie:7999"))
+        .await
+        .expect("row card detail")
+        .expect("the owner reads their row card");
+    assert_eq!(row_card.display_title, "Fixture Row 7999");
+    assert_eq!(row_card.target_key, "tmdb:movie:7999");
+    assert!(!row_card.resolved);
+    assert_eq!(
+        app.discovery_item_detail(&second_viewer, detail_query("tmdb:movie:7999"))
+            .await
+            .expect("other viewer detail"),
+        None
+    );
+    assert_eq!(
+        app.discovery_item_detail(&first_viewer, detail_query("anilist:anime:7998"))
+            .await
+            .expect("anilist-only detail"),
+        None
+    );
+
+    let unlinked_home = app
+        .discovery_home(&unlinked_viewer, watchlist_home_query())
+        .await
+        .expect("unlinked viewer home");
+    assert_eq!(watchlist_section_titles(&unlinked_home), None);
+}
+
+#[tokio::test]
+async fn discovery_home_has_no_watchlist_section_when_personalized_discovery_is_off() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(true).await;
+    let (app, admin, _titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway, settings.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    let (_, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-switched-off",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.push(discovery_item_record(
+        "public-watchlist-run",
+        "public-watchlist-run",
+        None,
+        "tmdb:movie:7001",
+        "Fixture Watchlist Alpha",
+        "movie",
+        10.0,
+        &["Drama"],
+        &[],
+        false,
+        true,
+    ));
+    *lists.subscriptions.lock().unwrap() =
+        vec![watchlist_subscription("watchlist-switched-off", &viewer.id)];
+    lists.insert_rows(vec![watchlist_row(
+        "watchlist-switched-off",
+        "7001",
+        10,
+        scryer_domain::ListMembershipState::Pending,
+    )]);
+
+    let shown = app
+        .discovery_home(&viewer, watchlist_home_query())
+        .await
+        .expect("home with personalized discovery on");
+    assert!(watchlist_section_titles(&shown).is_some());
+
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            "false",
+        )
+        .await;
+    let hidden = app
+        .discovery_home(&viewer, watchlist_home_query())
+        .await
+        .expect("home with personalized discovery off");
+    assert_eq!(watchlist_section_titles(&hidden), None);
+}
+
+/// Titles on the library's reason rails and the FOR_YOU sweep: the rails the
+/// watchlist claims its titles from.
+fn reason_rail_titles(home: &crate::ports::DiscoveryHomeResult) -> Vec<String> {
+    home.personalized_sections
+        .iter()
+        .filter(|section| {
+            section.section_type.starts_with("BECAUSE_YOU_LIKE")
+                || section.section_type == "FOR_YOU"
+        })
+        .flat_map(|section| section.items.iter())
+        .map(|item| item.display_title.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn discovery_home_watchlist_claims_its_titles_from_the_library_rails() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    let (_, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-claims",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut library_title = test_title(
+        "watchlist-claims-library-title",
+        "Fixture Library Title",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "8000")],
+    );
+    library_title.library_id = movie_library_id.clone();
+    titles.store.lock().await.push(library_title);
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("watchlist-claims-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery
+        .submitted_subjects
+        .lock()
+        .await
+        .push(DiscoverySubmittedSubjectRecord {
+            run_id: "watchlist-claims-run".to_string(),
+            subject_key: "tmdb:movie:8000".to_string(),
+            title_id: Some("watchlist-claims-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+            library_facet: Some("movie".to_string()),
+            title_kind: Some("movie".to_string()),
+            display_title: Some("Fixture Library Title".to_string()),
+            external_ids_json: "[]".to_string(),
+            raw_subject_json: "{}".to_string(),
+        });
+    discovery.items.lock().await.extend((0..24).map(|index| {
+        let mut item = discovery_item_record(
+            "watchlist-claims-run",
+            "watchlist-claims-run",
+            None,
+            &format!("tmdb:movie:{}", 8_100 + index),
+            &format!("Fixture Candidate {index}"),
+            "movie",
+            1_000.0 - index as f64,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        );
+        item.matched_subject_keys = vec!["tmdb:movie:8000".to_string()];
+        item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+            subject_key: "tmdb:movie:8000".to_string(),
+            title_id: Some("watchlist-claims-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+        }];
+        item
+    }));
+    let query = || DiscoveryHomeQuery {
+        include_public: false,
+        include_personalized: true,
+        include_unresolved: true,
+        limit_per_section: 10,
+        filters: DiscoveryHomeFilters::default(),
+    };
+
+    let before = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home before the watchlist");
+    assert!(
+        reason_rail_titles(&before).contains(&"Fixture Candidate 0".to_string()),
+        "fixture must offer the candidate on a library rail first"
+    );
+
+    *lists.subscriptions.lock().unwrap() =
+        vec![watchlist_subscription("watchlist-claims", &viewer.id)];
+    lists.insert_rows(vec![watchlist_row(
+        "watchlist-claims",
+        "8100",
+        10,
+        scryer_domain::ListMembershipState::Pending,
+    )]);
+    let with_watchlist = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home with the watchlist");
+    assert_eq!(
+        watchlist_section_titles(&with_watchlist),
+        Some(vec!["Fixture Candidate 0".to_string()])
+    );
+    assert!(!reason_rail_titles(&with_watchlist).contains(&"Fixture Candidate 0".to_string()));
+
+    // A member whose list policy is none has no watchlist, and nothing is
+    // claimed on its behalf.
+    lists
+        .policies
+        .lock()
+        .unwrap()
+        .push(scryer_domain::UserListPolicy {
+            user_id: viewer.id.clone(),
+            policy: scryer_domain::ListPolicy::None,
+            updated_by_user_id: None,
+            updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        });
+    let refused = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home with personal lists refused");
+    assert_eq!(watchlist_section_titles(&refused), None);
+    assert!(reason_rail_titles(&refused).contains(&"Fixture Candidate 0".to_string()));
+}
+
+#[tokio::test]
+async fn discovery_home_watchlist_needs_an_enabled_personal_linked_list() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.push(discovery_item_record(
+        "public-watchlist-run",
+        "public-watchlist-run",
+        None,
+        "tmdb:movie:7001",
+        "Fixture Watchlist Alpha",
+        "movie",
+        10.0,
+        &["Drama"],
+        &[],
+        false,
+        true,
+    ));
+
+    let variants: [(&str, fn(&mut scryer_domain::ListSubscription)); 3] = [
+        ("public", |subscription| {
+            subscription.scope = scryer_domain::ListScope::Public;
+        }),
+        ("disabled", |subscription| subscription.enabled = false),
+        ("unlinked", |subscription| subscription.credential_id = None),
+    ];
+    for (name, adjust) in variants {
+        let (_, viewer) = create_authenticated_user(
+            &app,
+            &admin,
+            &format!("watchlist-{name}"),
+            "password",
+            vec![
+                TestPermissionPreset::CatalogView,
+                TestPermissionPreset::MediaRequest,
+            ],
+        )
+        .await;
+        let subscription_id = format!("watchlist-{name}");
+        let mut subscription = watchlist_subscription(&subscription_id, &viewer.id);
+        adjust(&mut subscription);
+        lists.subscriptions.lock().unwrap().push(subscription);
+        lists.insert_rows(vec![watchlist_row(
+            &subscription_id,
+            "7001",
+            10,
+            scryer_domain::ListMembershipState::Pending,
+        )]);
+
+        let home = app
+            .discovery_home(&viewer, watchlist_home_query())
+            .await
+            .expect("home");
+        assert_eq!(watchlist_section_titles(&home), None, "{name} list");
+    }
+}
+
+struct DiscoverySectionFixture {
+    app: crate::AppUseCase,
+    viewer: scryer_domain::User,
+    media_requests: Arc<super::support_events_requests::MockMediaRequestRepo>,
+    movie_library_id: String,
+}
+
+/// A personalized pool of `count` synthetic drama movies, all found through
+/// one library title, ranked by index.
+async fn discovery_section_fixture(username: &str, count: usize) -> DiscoverySectionFixture {
+    discovery_section_fixture_with_lists(username, count, None).await
+}
+
+/// [`discovery_section_fixture`], with the viewer's personal lists read from
+/// `lists` when given.
+async fn discovery_section_fixture_with_lists(
+    username: &str,
+    count: usize,
+    lists: Option<Arc<crate::lists::test_support::MemoryListStore>>,
+) -> DiscoverySectionFixture {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let media_requests = Arc::new(super::support_events_requests::MockMediaRequestRepo::default());
+    let app = app.with_test_overrides(|builder| {
+        let builder = builder
+            .with_discovery_store(discovery.clone())
+            .with_media_requests(media_requests.clone());
+        match lists.clone() {
+            Some(lists) => builder.with_list_store(lists),
+            None => builder,
+        }
+    });
+    let (_viewer, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        username,
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut library_title = test_title(
+        "section-library-title",
+        "Section Library Title",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "9000")],
+    );
+    library_title.library_id = movie_library_id.clone();
+    titles.store.lock().await.push(library_title);
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("section-run".to_string()),
+        last_public_feed_generation_id: Some("section-public".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery
+        .submitted_subjects
+        .lock()
+        .await
+        .push(DiscoverySubmittedSubjectRecord {
+            run_id: "section-run".to_string(),
+            subject_key: "tmdb:movie:9000".to_string(),
+            title_id: Some("section-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+            library_facet: Some("movie".to_string()),
+            title_kind: Some("movie".to_string()),
+            display_title: Some("Section Library Title".to_string()),
+            external_ids_json: "[]".to_string(),
+            raw_subject_json: "{}".to_string(),
+        });
+    let mut items = Vec::new();
+    for index in 0..count {
+        let mut item = discovery_item_record(
+            "section-run",
+            "section-run",
+            None,
+            &format!("tmdb:movie:{}", 20_000 + index),
+            &format!("Section Candidate {index}"),
+            "movie",
+            1_000.0 - index as f64,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        );
+        item.matched_subject_keys = vec!["tmdb:movie:9000".to_string()];
+        item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+            subject_key: "tmdb:movie:9000".to_string(),
+            title_id: Some("section-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+        }];
+        items.push(item);
+    }
+    discovery.items.lock().await.extend(items);
+    DiscoverySectionFixture {
+        app,
+        viewer,
+        media_requests,
+        movie_library_id,
+    }
+}
+
+fn discovery_section_items_query(
+    section_id: &str,
+    rail_limit: usize,
+    offset: usize,
+    limit: usize,
+) -> DiscoveryItemsQuery {
+    DiscoveryItemsQuery {
+        offset,
+        limit,
+        section: Some(crate::DiscoverySectionItemsQuery {
+            section_id: section_id.to_string(),
+            rail_limit,
+            ..crate::DiscoverySectionItemsQuery::default()
+        }),
+        ..DiscoveryItemsQuery::default()
+    }
+}
+
+/// Every page of one section, in order, until the reported total is read.
+async fn discovery_section_pages(
+    fixture: &DiscoverySectionFixture,
+    query: impl Fn(usize) -> DiscoveryItemsQuery,
+) -> (Vec<Vec<String>>, i64) {
+    let mut pages = Vec::new();
+    let mut offset = 0;
+    let total_count = loop {
+        let page = fixture
+            .app
+            .discovery_items(&fixture.viewer, query(offset))
+            .await
+            .expect("section page should load");
+        assert!(page.section.is_some(), "a section page names its section");
+        if page.items.is_empty() {
+            break page.total_count;
+        }
+        offset += page.items.len();
+        pages.push(
+            page.items
+                .into_iter()
+                .map(|item| item.target_key)
+                .collect::<Vec<_>>(),
+        );
+        if offset as i64 >= page.total_count {
+            break page.total_count;
+        }
+    };
+    (pages, total_count)
+}
+
+#[tokio::test]
+async fn discovery_section_pages_start_with_the_home_rail_and_never_repeat() {
+    let fixture = discovery_section_fixture("discovery-section-paging", 140).await;
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("home should load");
+    assert!(
+        home.personalized_sections.len() >= 2,
+        "the pool should fill more than one rail: {:?}",
+        home.personalized_sections
+            .iter()
+            .map(|section| (&section.section_id, section.items.len()))
+            .collect::<Vec<_>>()
+    );
+
+    // Only the composed shelf (the label rails and For You) claims titles
+    // in rail order; standalone rails such as Top Rated list on their own.
+    let composed =
+        |section_id: &str| section_id == "for_you" || section_id.starts_with("because_you_like_");
+    for (position, rail) in home.personalized_sections.iter().enumerate() {
+        let earlier = home.personalized_sections[..position]
+            .iter()
+            .filter(|section| composed(&rail.section_id) && composed(&section.section_id))
+            .flat_map(|section| section.items.iter().map(|item| item.target_key.clone()))
+            .collect::<HashSet<_>>();
+        let (pages, total_count) = discovery_section_pages(&fixture, |offset| {
+            discovery_section_items_query(&rail.section_id, 25, offset, 25)
+        })
+        .await;
+        let home_keys = rail
+            .items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pages.first(),
+            Some(&home_keys),
+            "the first page of {} is the home rail",
+            rail.section_id
+        );
+        let all_keys = pages.iter().flatten().cloned().collect::<Vec<_>>();
+        assert_eq!(all_keys.len() as i64, total_count);
+        assert_eq!(
+            all_keys.iter().collect::<HashSet<_>>().len(),
+            all_keys.len(),
+            "no title repeats across the pages of {}",
+            rail.section_id
+        );
+        assert!(
+            all_keys.iter().all(|key| !earlier.contains(key)),
+            "{} never lists a title an earlier rail claimed",
+            rail.section_id
+        );
+    }
+    let last = home
+        .personalized_sections
+        .iter()
+        .rev()
+        .find(|section| composed(&section.section_id))
+        .expect("home composes a personalized shelf");
+    let (pages, _) = discovery_section_pages(&fixture, |offset| {
+        discovery_section_items_query(&last.section_id, 25, offset, 25)
+    })
+    .await;
+    assert!(
+        pages.len() > 1,
+        "the last composed rail ({}) continues past its home window into the pool",
+        last.section_id
+    );
+}
+
+#[tokio::test]
+async fn discovery_browse_labels_open_a_section_of_every_matching_pool_title() {
+    let fixture = discovery_section_fixture("discovery-section-browse", 60).await;
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("home should load");
+    let drama = home
+        .browse_labels
+        .iter()
+        .find(|label| label.label_key == "drama")
+        .expect("the pool's genre is browsable");
+    assert_eq!(drama.family, crate::DiscoveryBrowseLabelFamily::Genre);
+    assert_eq!(drama.item_count, 60);
+    assert!(
+        home.browse_labels
+            .iter()
+            .all(|label| label.label_key == "drama"),
+        "only labels the pool holds are offered"
+    );
+
+    let (pages, total_count) = discovery_section_pages(&fixture, |offset| {
+        discovery_section_items_query(&drama.section_id, 25, offset, 25)
+    })
+    .await;
+    assert_eq!(total_count, 60);
+    let all_keys = pages.into_iter().flatten().collect::<Vec<_>>();
+    assert_eq!(all_keys.iter().collect::<HashSet<_>>().len(), 60);
+
+    let sorted = fixture
+        .app
+        .discovery_items(&fixture.viewer, {
+            let mut query = discovery_section_items_query(&drama.section_id, 25, 0, 60);
+            if let Some(section) = query.section.as_mut() {
+                section.sort = crate::DiscoverySectionSort::Title;
+            }
+            query
+        })
+        .await
+        .expect("sorted section should load");
+    let titles = sorted
+        .items
+        .iter()
+        .map(|item| item.display_title.to_lowercase())
+        .collect::<Vec<_>>();
+    let mut expected = titles.clone();
+    expected.sort();
+    assert_eq!(titles, expected);
+}
+
+#[tokio::test]
+async fn discovery_section_hides_pending_requests_only_when_asked() {
+    let fixture = discovery_section_fixture("discovery-section-requested", 30).await;
+    let now = Utc.timestamp_opt(3_000, 0).unwrap();
+    fixture
+        .media_requests
+        .requests
+        .lock()
+        .await
+        .push(scryer_domain::MediaRequest {
+            background_url: None,
+            requested_monitor_selection: None,
+            requested_lease_days: None,
+            approved_lease_days: None,
+            decision_id: None,
+            decided_by_rule_set_ids: Vec::new(),
+            policy_tags: Vec::new(),
+            metadata_snapshot_json: "{}".to_string(),
+            rating_summary: scryer_domain::TitleRatingSummary::default(),
+            id: "section-pending-request".to_string(),
+            library_id: fixture.movie_library_id.clone(),
+            facet: MediaFacet::Movie,
+            status: scryer_domain::MediaRequestStatus::Pending,
+            identity_fingerprint: "section-pending-request".to_string(),
+            title: "Section Candidate 3".to_string(),
+            sort_title: None,
+            slug: None,
+            poster_url: None,
+            year: None,
+            overview: None,
+            runtime_minutes: None,
+            language: None,
+            content_status: None,
+            requested_quality_profile_id: None,
+            requested_quality_profile_name: None,
+            requested_monitor_type: None,
+            resolved_by_user_id: None,
+            resolved_at: None,
+            created_title_id: None,
+            approved_quality_profile_id: None,
+            approved_quality_profile_name: None,
+            external_ids: vec![ExternalId {
+                source: "tmdb".to_string(),
+                kind: None,
+                value: "20003".to_string(),
+            }],
+            requesters: Vec::new(),
+            created_by_user_id: "section-requester".to_string(),
+            origin: Default::default(),
+            created_at: now,
+            updated_at: now,
+        });
+    let section_id = "browse_genre_drama";
+    let shown = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            discovery_section_items_query(section_id, 25, 0, 50),
+        )
+        .await
+        .expect("section should load");
+    assert!(
+        shown
+            .items
+            .iter()
+            .any(|item| item.target_key == "tmdb:movie:20003")
+    );
+    let mut hidden_query = discovery_section_items_query(section_id, 25, 0, 50);
+    if let Some(section) = hidden_query.section.as_mut() {
+        section.hide_requested = true;
+    }
+    let hidden = fixture
+        .app
+        .discovery_items(&fixture.viewer, hidden_query)
+        .await
+        .expect("section should load");
+    assert_eq!(hidden.total_count, shown.total_count - 1);
+    assert!(
+        hidden
+            .items
+            .iter()
+            .all(|item| item.target_key != "tmdb:movie:20003")
+    );
+}
+
+#[tokio::test]
+async fn discovery_public_section_page_folds_its_merged_source() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let (_viewer, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "discovery-section-public",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-fold".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.sections.lock().await.extend([
+        discovery_section_record("public-fold", "popular_now", "POPULAR_RIGHT_NOW", "public"),
+        discovery_section_record("public-fold", "trending", "TRENDING_NOW", "public"),
+        discovery_section_record("public-fold", "upcoming", "UPCOMING", "public"),
+    ]);
+    let mut items = Vec::new();
+    for (section_id, prefix, count) in [
+        ("popular_now", 30_000, 30),
+        ("trending", 31_000, 30),
+        ("upcoming", 32_000, 10),
+    ] {
+        for index in 0..count {
+            items.push(discovery_item_record(
+                "public-fold",
+                "public-fold",
+                Some(section_id),
+                &format!("tmdb:movie:{}", prefix + index),
+                &format!("Public Candidate {}", prefix + index),
+                "movie",
+                100.0 - index as f64,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            ));
+        }
+    }
+    // The same title in both folded sources is listed once.
+    items.push(discovery_item_record(
+        "public-fold",
+        "public-fold",
+        Some("trending"),
+        "tmdb:movie:30000",
+        "Public Candidate 30000",
+        "movie",
+        1.0,
+        &["Drama"],
+        &[],
+        false,
+        true,
+    ));
+    discovery.items.lock().await.extend(items);
+
+    let first = app
+        .discovery_items(
+            &viewer,
+            discovery_section_items_query("popular_now", 25, 0, 40),
+        )
+        .await
+        .expect("public section should load");
+    assert_eq!(first.total_count, 60);
+    assert_eq!(first.items.len(), 40);
+    // Page one is the folded rail the dashboard shows: each rail's window
+    // of 25, target first, then what is left of each.
+    let expected = (30_000..30_025)
+        .chain(31_000..31_025)
+        .chain(30_025..30_030)
+        .chain(31_025..31_030)
+        .map(|id| format!("tmdb:movie:{id}"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>(),
+        expected[..40]
+    );
+    let second = app
+        .discovery_items(
+            &viewer,
+            discovery_section_items_query("popular_now", 25, 40, 40),
+        )
+        .await
+        .expect("public section should page");
+    assert_eq!(second.items.len(), 20);
+    assert_eq!(
+        second
+            .items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>(),
+        expected[40..]
+    );
+    assert_eq!(
+        second.generation_ids,
+        ["public-fold".to_string()],
+        "a page names the generations it was composed from"
+    );
+    let keys = first
+        .items
+        .iter()
+        .chain(second.items.iter())
+        .map(|item| item.target_key.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(keys.len(), 60);
+    assert!(keys.iter().all(|key| !key.starts_with("tmdb:movie:32")));
+}
+
+#[tokio::test]
+async fn discovery_top_rated_section_skips_titles_earlier_rails_showed() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let (_viewer, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "discovery-section-top-rated",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-top".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.sections.lock().await.extend([
+        discovery_section_record("public-top", "popular_now", "POPULAR_RIGHT_NOW", "public"),
+        discovery_section_record(
+            "public-top",
+            "next_season",
+            "UPCOMING_NEXT_SEASON",
+            "public",
+        ),
+    ]);
+    let mut items = Vec::new();
+    for (section_id, prefix, count, top_score) in [
+        ("popular_now", 40_000, 10, 100.0),
+        ("next_season", 41_000, 30, 90.0),
+    ] {
+        for index in 0..count {
+            items.push(discovery_item_record(
+                "public-top",
+                "public-top",
+                Some(section_id),
+                &format!("tmdb:movie:{}", prefix + index),
+                &format!("Top Candidate {}", prefix + index),
+                "movie",
+                top_score - index as f64,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            ));
+        }
+    }
+    discovery.items.lock().await.extend(items);
+
+    // Top Rated takes the ten popular titles and fifteen more; the dashboard
+    // reads the popular rail first, so Top Rated shows only the fifteen, and
+    // its section continues with the rest of the ranking.
+    let expected = (41_000..41_030)
+        .map(|id| format!("tmdb:movie:{id}"))
+        .collect::<Vec<_>>();
+    let first = app
+        .discovery_items(
+            &viewer,
+            discovery_section_items_query("top_rated", 25, 0, 15),
+        )
+        .await
+        .expect("top rated section should load");
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>(),
+        expected[..15]
+    );
+    assert_eq!(first.total_count, 30);
+    let rest = app
+        .discovery_items(
+            &viewer,
+            discovery_section_items_query("top_rated", 25, 15, 40),
+        )
+        .await
+        .expect("top rated section should page");
+    assert_eq!(
+        rest.items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>(),
+        expected[15..]
+    );
+}
+
+#[tokio::test]
+async fn discovery_watchlist_section_pages_the_rail_and_no_reason_rail_repeats_it() {
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let fixture = discovery_section_fixture_with_lists(
+        "discovery-section-watchlist",
+        140,
+        Some(lists.clone()),
+    )
+    .await;
+    *lists.subscriptions.lock().unwrap() = vec![watchlist_subscription(
+        "section-watchlist",
+        &fixture.viewer.id,
+    )];
+    use scryer_domain::ListMembershipState as State;
+    // Every third pool title from the top of the pool, then two titles no
+    // stored item names.
+    let mut rows = (0..90)
+        .step_by(3)
+        .map(|index| {
+            watchlist_row(
+                "section-watchlist",
+                &(20_000 + index).to_string(),
+                index as i64,
+                State::Pending,
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.push(watchlist_row(
+        "section-watchlist",
+        "29001",
+        200,
+        State::Pending,
+    ));
+    rows.push(watchlist_row(
+        "section-watchlist",
+        "29002",
+        201,
+        State::Pending,
+    ));
+    lists.insert_rows(rows);
+    let watchlisted = (0..90)
+        .step_by(3)
+        .map(|index| format!("tmdb:movie:{}", 20_000 + index))
+        .chain([
+            "tmdb:movie:29001".to_string(),
+            "tmdb:movie:29002".to_string(),
+        ])
+        .collect::<HashSet<_>>();
+
+    // The home shows unresolved titles, so the section pages do too.
+    let watchlist_section_query = |section_id: &str, offset: usize| DiscoveryItemsQuery {
+        include_unresolved: true,
+        ..discovery_section_items_query(section_id, 25, offset, 25)
+    };
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("home should load");
+    let rail = home
+        .personalized_sections
+        .iter()
+        .find(|section| section.section_id == "from_your_watchlist")
+        .expect("the watchlist rail");
+    assert_eq!(rail.items.len(), 25);
+    assert_eq!(rail.total_count, 32);
+
+    let first = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            watchlist_section_query("from_your_watchlist", 0),
+        )
+        .await
+        .expect("watchlist section page");
+    assert!(!first.generation_ids.is_empty());
+    let (pages, total_count) = discovery_section_pages(&fixture, |offset| {
+        watchlist_section_query("from_your_watchlist", offset)
+    })
+    .await;
+    assert_eq!(
+        pages.first(),
+        Some(
+            &rail
+                .items
+                .iter()
+                .map(|item| item.target_key.clone())
+                .collect::<Vec<_>>()
+        ),
+        "the first page of the watchlist is the home rail"
+    );
+    let all_keys = pages.iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(total_count, 32);
+    assert_eq!(all_keys.len(), 32);
+    assert_eq!(
+        all_keys.iter().cloned().collect::<HashSet<_>>(),
+        watchlisted
+    );
+
+    let reason_rails = home
+        .personalized_sections
+        .iter()
+        .filter(|section| {
+            section.section_id == "for_you" || section.section_id.starts_with("because_you_like_")
+        })
+        .collect::<Vec<_>>();
+    assert!(!reason_rails.is_empty(), "the pool composes a reason rail");
+    for reason_rail in reason_rails {
+        let (pages, _) = discovery_section_pages(&fixture, |offset| {
+            watchlist_section_query(&reason_rail.section_id, offset)
+        })
+        .await;
+        assert_eq!(
+            pages.first(),
+            Some(
+                &reason_rail
+                    .items
+                    .iter()
+                    .map(|item| item.target_key.clone())
+                    .collect::<Vec<_>>()
+            ),
+            "the first page of {} is still the home rail",
+            reason_rail.section_id
+        );
+        assert!(
+            pages.iter().flatten().all(|key| !watchlisted.contains(key)),
+            "{} never lists a title the watchlist claimed",
+            reason_rail.section_id
+        );
+    }
 }

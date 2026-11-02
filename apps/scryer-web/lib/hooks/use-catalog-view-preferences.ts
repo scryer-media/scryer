@@ -6,6 +6,7 @@ import { setMyCatalogViewMutation } from "@/lib/graphql/mutations";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import type { SetMyCatalogViewInput, UiSettings } from "@/lib/types/settings";
 import {
+  availableCatalogViewMode,
   catalogColumnsInput,
   catalogDeviceClass,
   catalogFacetForView,
@@ -64,13 +65,13 @@ export function useCatalogViewPreferences(
   const viewMode: ContentViewMode = React.useMemo(() => {
     const local = localViewModes[scopeKey];
     if (local) {
-      return local;
+      return availableCatalogViewMode(local);
     }
     const saved =
       uiSettingsLoaded && facet
         ? savedCatalogViewMode(uiSettings, deviceClass, facet)
         : null;
-    return saved ?? readStoredContentViewMode(view);
+    return availableCatalogViewMode(saved ?? readStoredContentViewMode(view));
   }, [
     deviceClass,
     facet,

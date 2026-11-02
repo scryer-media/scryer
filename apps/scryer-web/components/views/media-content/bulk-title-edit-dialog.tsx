@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -255,7 +256,20 @@ export function BulkTitleEditDialog({
 
           <EditableField
             label={
-              onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
+              onRequestMove ? (
+                <>
+                  {t("move.destinationRoot")}
+                  <Badge
+                    id="bulk-title-edit-move-beta"
+                    tone="warning"
+                    className="text-[11px]"
+                  >
+                    {t("settings.pluginBeta")}
+                  </Badge>
+                </>
+              ) : (
+                t("title.rootFolder")
+              )
             }
           >
             <Select
@@ -283,7 +297,7 @@ export function BulkTitleEditDialog({
                     ? t("move.destinationRoot")
                     : t("title.rootFolder")
                 }
-                className="h-9 w-full font-[var(--font-code)] text-sm"
+                className="h-9 w-full font-[family-name:var(--font-code)] text-sm"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -573,12 +587,14 @@ function EditableField({
   label,
   children,
 }: {
-  label: string;
+  label: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3">
-      <p className="text-sm font-medium text-card-foreground">{label}</p>
+      <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-card-foreground">
+        {label}
+      </p>
       {children}
     </div>
   );

@@ -1,4 +1,7 @@
-import { regoDiagnostics } from "@/lib/utils/rego-diagnostics";
+import {
+  formatRegoValidationError,
+  regoDiagnostics,
+} from "@/lib/utils/rego-diagnostics";
 import { formatBytes } from "@/lib/utils/activity-utils";
 import * as React from "react";
 import { MaintenanceSubjectPicker } from "@/components/common/maintenance-subject-picker";
@@ -111,7 +114,6 @@ type SettingsMaintenanceRulesSectionProps = {
   copyRuleSet: (record: MaintenanceRuleSetRecord) => void;
   editRuleSet: (record: MaintenanceRuleSetRecord) => void;
   deleteRuleSet: (record: MaintenanceRuleSetRecord) => Promise<void> | void;
-  validateDraft: () => Promise<MaintenanceValidationResult | null>;
   validating: boolean;
   validationResult: MaintenanceValidationResult | null;
   previewSource: MaintenancePreviewSource;
@@ -878,7 +880,6 @@ export function SettingsMaintenanceRulesSection({
   copyRuleSet,
   editRuleSet,
   deleteRuleSet,
-  validateDraft,
   validating,
   validationResult,
   instanceSwitches,
@@ -1207,6 +1208,12 @@ export function SettingsMaintenanceRulesSection({
                             id="settings-maintenance-rule-validation"
                             checking={validating}
                             result={validationResult}
+                            formatError={(error) =>
+                              formatRegoValidationError(
+                                error,
+                                ruleSetDraft.regoSource,
+                              )
+                            }
                           />
                         }
                         minLines={12}
@@ -1402,17 +1409,6 @@ export function SettingsMaintenanceRulesSection({
                           : editingRuleSetId
                             ? t("settings.maintenanceRuleUpdate")
                             : t("settings.maintenanceRuleCreate")}
-                      </Button>
-                      <Button
-                        id="settings-maintenance-rule-validate"
-                        type="button"
-                        variant="secondary"
-                        onClick={() => void validateDraft()}
-                        disabled={validating || !ruleSetDraft.regoSource.trim()}
-                      >
-                        {validating
-                          ? t("settings.ruleValidating")
-                          : t("settings.ruleValidate")}
                       </Button>
                       <Button
                         id="settings-maintenance-rule-cancel"

@@ -91,6 +91,7 @@ export const DASHBOARD_PANEL_IDS = [
   "download-clients",
   "storage",
   "active-queue",
+  "recycle-bin",
 ] as const;
 
 export type DashboardPanelId = (typeof DASHBOARD_PANEL_IDS)[number];
@@ -195,6 +196,12 @@ export const DASHBOARD_PANELS: Readonly<
   "active-queue": {
     titleKey: "dashboard.activeQueue",
     descriptionKey: "dashboard.panel.activeQueueDescription",
+    min: { XS: size(1, 5), SM: size(3, 5), MD: size(4, 5), LG: size(3, 5) },
+    tiers: LIST_TIERS,
+  },
+  "recycle-bin": {
+    titleKey: "dashboard.recycleBin",
+    descriptionKey: "dashboard.panel.recycleBinDescription",
     min: { XS: size(1, 5), SM: size(3, 5), MD: size(4, 5), LG: size(3, 5) },
     tiers: LIST_TIERS,
   },

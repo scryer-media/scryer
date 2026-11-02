@@ -108,6 +108,70 @@ pub struct DiscoveryItemsInput {
     pub limit: Option<i32>,
     /// Zero-based offset; defaults to 0 and negative values become 0.
     pub offset: Option<i32>,
+    /// Page one discovery home section in full instead of listing items.
+    /// With the same `sectionRailLimit`, home filters and `includeOwned` as
+    /// the home and the default sort, the first `sectionRailLimit` items are
+    /// the rail as the dashboard renders it, after titles earlier rails
+    /// showed. When set, only `includeOwned`, `includeUnresolved`, `limit`,
+    /// `offset` and the section fields below apply. A blank id is refused;
+    /// an unknown or empty section returns no items and no section.
+    pub section_id: Option<String>,
+    /// The home's `limitPerSection` the section was opened from; defaults to
+    /// 25 and must be between 1 and 100. It must match the home for the
+    /// first page to match the rail.
+    pub section_rail_limit: Option<i32>,
+    /// Home filters applied to the section, validated as on the home.
+    pub home_filters: Option<DiscoveryHomeFiltersInput>,
+    /// Section ordering; defaults to `RELEVANCE`, the rail's own order.
+    pub sort: Option<DiscoverySectionSortValue>,
+    /// Drop titles with a pending media request in a readable library;
+    /// defaults to false.
+    pub hide_requested: Option<bool>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Ordering of a paged discovery section. Every order other than relevance
+/// falls back to relevance on ties.
+pub enum DiscoverySectionSortValue {
+    /// The section's own order, as the home rail shows it.
+    Relevance,
+    /// Most popular first.
+    Popularity,
+    /// Highest rated first.
+    Rating,
+    /// Newest release year first; titles without a year last.
+    ReleaseDate,
+    /// Alphabetical by sort title.
+    Title,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Label family a browse card lists titles under.
+pub enum DiscoveryBrowseLabelFamilyValue {
+    /// A canonical genre.
+    Genre,
+    /// A canonical theme.
+    Theme,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One "browse by" card: an allowlisted genre or theme the caller's
+/// personalized pool holds enough titles of to open as a section.
+pub struct DiscoveryBrowseLabelPayload {
+    /// Whether the card lists a genre or a theme.
+    pub family: DiscoveryBrowseLabelFamilyValue,
+    /// Canonical hyphenated label key, such as `coming-of-age`. Clients
+    /// translate the key and fall back to `title` for a key they do not know.
+    pub label_key: String,
+    /// Section id to pass to `discoveryItems.sectionId`.
+    pub section_id: String,
+    /// English card title.
+    pub title: String,
+    /// Titles under the label in the home's candidate pool. The section reads
+    /// a deeper pool, so it can list more than this.
+    pub item_count: Long,
 }
 
 #[derive(InputObject, Clone)]
@@ -134,6 +198,9 @@ pub struct DiscoveryHomePayload {
     pub complete_collection: Option<DiscoverySectionPayload>,
     /// Facet summaries returned for the selected discovery scope.
     pub facets: Vec<DiscoveryFacetPayload>,
+    /// "Browse by" genre and theme cards, in allowlist order; empty when
+    /// personalized results are unavailable.
+    pub browse_labels: Vec<DiscoveryBrowseLabelPayload>,
     /// Whether the caller may view personalized results.
     pub can_view_personalized: bool,
 }
@@ -151,6 +218,9 @@ pub struct DiscoveryHomeCardsPayload {
     pub personalized_sections: Vec<DiscoveryHomeSectionPayload>,
     /// Complete-collection card section, or null when none is available.
     pub complete_collection: Option<DiscoveryHomeSectionPayload>,
+    /// "Browse by" genre and theme cards, in allowlist order; empty when
+    /// personalized results are unavailable.
+    pub browse_labels: Vec<DiscoveryBrowseLabelPayload>,
     /// Whether the caller may view personalized cards.
     pub can_view_personalized: bool,
 }
@@ -166,10 +236,19 @@ pub struct DiscoveryHomeSectionPayload {
     pub title: String,
     /// Whether this section is public, personalized, or mixed.
     pub surface: DiscoverySurfaceValue,
+    /// Rail-label key a personalized "because you like" section is named after,
+    /// in canonical hyphenated form such as `coming-of-age`; null for every other
+    /// section. Clients translate the key and fall back to `title` for a key they
+    /// do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this section, possibly fewer than the total.
     pub items: Vec<DiscoveryHomeCardPayload>,
+    /// Discovery generations a section page was composed from. Empty on the
+    /// home. A client paging a section restarts from the first page when
+    /// these change between pages.
+    pub generation_ids: Vec<String>,
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -281,6 +360,9 @@ pub struct DiscoveryItemsPayload {
     pub total_count: Long,
     /// Whether the caller may view personalized results.
     pub can_view_personalized: bool,
+    /// The paged section when `sectionId` was requested and found: its
+    /// identity, total and this page's items as cards. Null otherwise.
+    pub section: Option<DiscoveryHomeSectionPayload>,
 }
 
 #[derive(InputObject, Clone)]
@@ -318,6 +400,11 @@ pub struct CatalogDiscoveryGroupPayload {
     pub surface: CatalogDiscoverySurfaceValue,
     /// Optional label value, such as a genre or theme key.
     pub label_value: Option<String>,
+    /// Rail-label key a genre or theme affinity group is named after, in
+    /// canonical hyphenated form such as `coming-of-age`; null for every other
+    /// group. Clients translate the key and fall back to `labelValue` for a key
+    /// they do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this group.
@@ -365,6 +452,11 @@ pub struct DiscoverySectionPayload {
     pub title: String,
     /// Surface label for this section.
     pub surface: String,
+    /// Rail-label key a personalized "because you like" section is named after,
+    /// in canonical hyphenated form such as `coming-of-age`; null for every other
+    /// section. Clients translate the key and fall back to `title` for a key they
+    /// do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this section.

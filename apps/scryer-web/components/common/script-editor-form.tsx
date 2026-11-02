@@ -1,5 +1,4 @@
 import * as React from "react";
-import { FolderOpen } from "lucide-react";
 
 import { FacetSelect } from "@/components/common/facet-select";
 import { InfoHelp } from "@/components/common/info-help";
@@ -8,8 +7,8 @@ import {
   LazyCodeEditor,
   type CodeEditorLanguage,
 } from "@/components/common/lazy-code-editor";
+import { PathPickerButton } from "@/components/common/path-picker-button";
 import { ScriptScheduleEditor } from "@/components/common/script-schedule-editor";
-import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
 import { ScriptChoiceGroup } from "@/components/common/script-choice-group";
 import { ScriptLanguageIcon } from "@/components/common/script-language-icon";
@@ -29,6 +28,7 @@ import {
   type ScriptLanguageValue,
   type ScriptTriggerValue,
 } from "@/lib/types/scripts";
+import { withScriptType } from "@/lib/utils/script-draft";
 import { defaultScriptSchedule } from "@/lib/utils/script-schedule";
 
 function editorLanguageFor(language: ScriptLanguageValue): CodeEditorLanguage {
@@ -75,7 +75,6 @@ export function ScriptEditorForm({
   legacyIdPrefix,
 }: ScriptEditorFormProps) {
   const t = useTranslate();
-  const [folderBrowserOpen, setFolderBrowserOpen] = React.useState(false);
   const isScheduled = trigger === "SCHEDULE";
 
   /** The control id and, when a legacy id holds the control, the wrapper id. */
@@ -168,10 +167,7 @@ export function ScriptEditorForm({
           label={t("settings.pp.scriptType")}
           value={draft.scriptType}
           onValueChange={(scriptType) =>
-            setDraft((prev) => ({
-              ...prev,
-              scriptType: scriptType as PostProcessingScriptDraft["scriptType"],
-            }))
+            setDraft((prev) => withScriptType(prev, scriptType))
           }
           options={[
             {
@@ -231,38 +227,23 @@ export function ScriptEditorForm({
                 ? t("script.editor.filePathHelp")
                 : t("settings.pp.filePathHelp")}
             </Label>
-            {/* The path is always one picked from the host, never typed. */}
             <div id={pathIds.wrapper} className="flex">
-              <Button
+              <PathPickerButton
                 id={pathIds.control}
-                type="button"
-                variant="outline"
-                aria-haspopup="dialog"
-                onClick={() => setFolderBrowserOpen(true)}
-                className="min-w-0 flex-1 justify-start font-[var(--font-code)]"
-                title={draft.scriptContent || t("script.editor.selectFile")}
-                data-value={draft.scriptContent}
-              >
-                <FolderOpen className="mr-2 h-4 w-4 shrink-0" />
-                <span className="truncate">
-                  {draft.scriptContent || t("script.editor.selectFile")}
-                </span>
-              </Button>
+                value={draft.scriptContent}
+                placeholder={t("script.editor.selectFile")}
+                onSelect={(path) =>
+                  setDraft((prev) => ({ ...prev, scriptContent: path }))
+                }
+                selectionTypes={["file"]}
+                dialogTitle={t("script.editor.selectFile")}
+                initialPath={
+                  draft.scriptContent.startsWith("/")
+                    ? draft.scriptContent.replace(/\/[^/]+$/, "") || "/"
+                    : "/"
+                }
+              />
             </div>
-            <FolderBrowserDialog
-              open={folderBrowserOpen}
-              onOpenChange={setFolderBrowserOpen}
-              onSelect={(path) =>
-                setDraft((prev) => ({ ...prev, scriptContent: path }))
-              }
-              selectionTypes={["file"]}
-              initialPath={
-                draft.scriptContent.startsWith("/")
-                  ? draft.scriptContent.replace(/\/[^/]+$/, "") || "/"
-                  : "/"
-              }
-              title={t("script.editor.selectFile")}
-            />
           </>
         )}
       </div>

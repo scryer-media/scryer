@@ -775,20 +775,25 @@ impl AppUseCase {
                 "account is disabled",
             ));
         }
-        if self
-            .services
-            .lists
-            .policies
-            .get(&actor.id)
-            .await?
-            .is_some_and(|policy| policy.policy == ListPolicy::None)
-        {
+        if self.personal_lists_refused_by_policy(actor).await? {
             return Err(AppError::unauthorized_reason(
                 crate::error_reasons::lists::PERSONAL_LISTS_NOT_ALLOWED_MEMBER,
                 "personal lists are not allowed for this member",
             ));
         }
         Ok(())
+    }
+
+    /// Whether an admin has set this member's list policy to none, so nothing
+    /// may be read from or done with their personal lists.
+    pub(crate) async fn personal_lists_refused_by_policy(&self, actor: &User) -> AppResult<bool> {
+        Ok(self
+            .services
+            .lists
+            .policies
+            .get(&actor.id)
+            .await?
+            .is_some_and(|policy| policy.policy == ListPolicy::None))
     }
     pub async fn my_list_accounts(&self, actor: &User) -> AppResult<Vec<ListAccountView>> {
         Ok(self

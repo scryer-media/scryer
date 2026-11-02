@@ -285,12 +285,23 @@ impl RootMoveTitleExecution {
             })
             .collect();
         files.sort_by_key(|file| file.media_file_id.is_none());
+        let renamed_destinations = self
+            .renamed_destinations
+            .iter()
+            .map(|path| crate::stored_paths::stored_path_to_path_buf(path))
+            .collect::<std::collections::BTreeSet<_>>();
+        let planned_rename_sources = files
+            .iter()
+            .filter(|file| renamed_destinations.contains(&file.destination_path))
+            .map(|file| file.source_path.clone())
+            .collect();
         PlannedTitle {
             title_id: self.title_id.clone(),
             sequence: self.sequence,
             classification: Some(self.class),
             placement: self.placement(),
             files,
+            planned_rename_sources,
             outcomes: TitleOutcomeCounts {
                 dedups: self.deduplicated_sources.len() as i64,
                 renames: self.renamed_destinations.len() as i64,
@@ -309,6 +320,9 @@ impl RootMoveTitleExecution {
 /// so a restart resumes without rebuilding a preview (FR-033).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RootMoveExecutionPlan {
+    /// Confirmed anonymous-folder consolidation, including its disposal allowlist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<crate::location::conflicts::ConflictExecution>,
     pub titles: Vec<RootMoveTitleExecution>,
     /// Catalog path updates confirmed by a user who moved files externally.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -395,6 +409,19 @@ impl RootMoveExecutionPlan {
                 ]
             })
             .collect::<Vec<_>>();
+        if let Some(conflict) = &self.conflict {
+            owned_roots.extend(
+                conflict
+                    .roots
+                    .iter()
+                    .filter(|root| {
+                        conflict.folders.iter().any(|folder| {
+                            crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
+                        })
+                    })
+                    .map(|root| root.id.clone()),
+            );
+        }
         owned_roots.sort();
         owned_roots.dedup();
 
@@ -1888,6 +1915,32 @@ mod tests {
         assert_eq!(execution.renamed_destinations.len(), 1);
         let work = planned.work_plan();
         assert_eq!(work.titles[0].outcomes.renames, 1);
+    }
+
+    #[test]
+    fn planned_rename_sources_survive_restart_for_parent_directory_renames() {
+        let mut planned = build_root_move_plan(&request(vec![draft(TitleLocationClass::RootMove)]));
+        let mut execution = planned.execution.titles.remove(0);
+        execution.files = vec![RootMoveFileExecution {
+            media_file_id: None,
+            source_path: "/a/Movie/movie.trickplay/frame.jpg".into(),
+            destination_path: "/b/Movie/movie (from source).trickplay/frame.jpg".into(),
+            size_bytes: 10,
+            source_content: None,
+        }];
+        execution.renamed_destinations = vec![execution.files[0].destination_path.clone()];
+        let persisted = serde_json::to_string(&execution).unwrap();
+        let restored: RootMoveTitleExecution = serde_json::from_str(&persisted).unwrap();
+        let work = restored.to_planned_title();
+        assert_eq!(
+            work.files[0].source_path.file_name(),
+            work.files[0].destination_path.file_name()
+        );
+        assert_eq!(
+            work.planned_rename_sources,
+            [work.files[0].source_path.clone()].into()
+        );
+        assert_eq!(work.outcomes.renames, 1);
     }
 
     /// A file the preview could not sample is still the transfer's call: the

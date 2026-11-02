@@ -118,6 +118,9 @@ pub struct InteractiveReleaseSearchIndexerView {
     /// Wall time of this indexer's own call, once it has answered.
     pub elapsed_ms: Option<i64>,
     pub failure_reason: Option<String>,
+    /// Stable code beside `failure_reason` for a failure the operator must
+    /// act on, such as an indexer whose plugin client could not be built.
+    pub failure_reason_code: Option<&'static str>,
     pub caps: Option<crate::IndexerCapsDiagnostic>,
     /// The indexer asked Scryer to slow down rather than failing. It is a
     /// cooldown that lifts on its own, so the UI reads it as "cooling down"
@@ -128,6 +131,10 @@ pub struct InteractiveReleaseSearchIndexerView {
     pub skip_reason: Option<InteractiveIndexerSkipReason>,
     /// When a skip that lifts on its own ends, if known.
     pub skipped_until: Option<DateTime<Utc>>,
+    /// Releases this indexer returned that a title search removed because no
+    /// enabled download client accepts their source kind, by reason code.
+    /// They are not part of `result_count`.
+    pub unroutable_results: super::release_search::UnroutableReleaseCounts,
 }
 
 /// Why an interactive search did not ask an indexer.
@@ -657,10 +664,12 @@ impl AppUseCase {
                 result_count: 0,
                 elapsed_ms: None,
                 failure_reason: skip.map(|(reason, _)| reason.describe(None)),
+                failure_reason_code: None,
                 caps: None,
                 rate_limited: false,
                 skip_reason: skip.map(|(reason, _)| reason),
                 skipped_until: skip.and_then(|(_, until)| until),
+                unroutable_results: Default::default(),
             });
         }
 
@@ -956,14 +965,15 @@ impl AppUseCase {
             } else {
                 InteractiveReleaseSearchIndexerStatus::Completed
             };
-            view.failure_reason =
-                skip.map(|(reason, until)| reason.describe(until))
-                    .or_else(|| {
-                        source
-                            .outcome
-                            .and_then(incomplete_indexer_reason)
-                            .map(|reason| reason.message)
-                    });
+            let incomplete = if skip.is_some() {
+                None
+            } else {
+                source.outcome.and_then(incomplete_indexer_reason)
+            };
+            view.failure_reason_code = incomplete.as_ref().and_then(|reason| reason.code);
+            view.failure_reason = skip
+                .map(|(reason, until)| reason.describe(until))
+                .or_else(|| incomplete.map(|reason| reason.message));
         }
     }
 
@@ -1163,6 +1173,10 @@ impl AppUseCase {
                                 let failure_reason = search_outcome
                                     .incomplete_indexer_reasons
                                     .remove(&indexer_id);
+                                let unroutable = search_outcome
+                                    .unroutable_by_indexer
+                                    .remove(&indexer_id)
+                                    .unwrap_or_default();
                                 app.attach_candidate_tokens(
                                     &actor,
                                     title_for_search,
@@ -1171,7 +1185,7 @@ impl AppUseCase {
                                     *preserve_subject_scope,
                                 )
                                 .await;
-                                Ok((search_outcome.results, failure_reason, None))
+                                Ok((search_outcome.results, failure_reason, None, unroutable))
                             }
                             Err(error) => Err(error),
                         }
@@ -1180,8 +1194,8 @@ impl AppUseCase {
                         query,
                         categories,
                         page_size,
-                    } => {
-                        app.search_query_subject_on_indexer(
+                    } => app
+                        .search_query_subject_on_indexer(
                             query,
                             categories,
                             *page_size,
@@ -1189,7 +1203,9 @@ impl AppUseCase {
                             child_token,
                         )
                         .await
-                    }
+                        .map(|(results, failure_reason, skip)| {
+                            (results, failure_reason, skip, Default::default())
+                        }),
                 };
                 let elapsed_ms = i64::try_from(began.elapsed().as_millis()).unwrap_or(i64::MAX);
                 (indexer_id, elapsed_ms, outcome)
@@ -1210,7 +1226,7 @@ impl AppUseCase {
                     }
                 };
                 match outcome {
-                    Ok((_, _, Some((reason, until)))) => {
+                    Ok((_, _, Some((reason, until)), _)) => {
                         self.set_interactive_indexer_skipped(
                             &job_id,
                             &indexer_id,
@@ -1220,12 +1236,13 @@ impl AppUseCase {
                         )
                         .await;
                     }
-                    Ok((batch, failure_reason, None)) => {
+                    Ok((batch, failure_reason, None, unroutable)) => {
                         self.merge_interactive_indexer_batch(
                             &job_id,
                             &indexer_id,
                             query_listing,
                             batch,
+                            unroutable,
                             &indexer_priority_by_name,
                             &preferred_source_kind,
                             elapsed_ms,
@@ -1288,6 +1305,7 @@ impl AppUseCase {
                     ) {
                         indexer.status = InteractiveReleaseSearchIndexerStatus::Failed;
                         indexer.failure_reason = Some("timed out".to_string());
+                        indexer.failure_reason_code = None;
                         indexer.rate_limited = false;
                     }
                 }
@@ -1329,6 +1347,7 @@ impl AppUseCase {
             indexer.rate_limited = failure_reason
                 .as_ref()
                 .is_some_and(super::release_search::reason_is_rate_limit);
+            indexer.failure_reason_code = failure_reason.as_ref().and_then(|reason| reason.code);
             indexer.failure_reason = failure_reason.map(|reason| reason.message);
             if elapsed_ms.is_some() {
                 indexer.elapsed_ms = elapsed_ms;
@@ -1367,6 +1386,7 @@ impl AppUseCase {
             indexer.result_count = 0;
             indexer.elapsed_ms = Some(elapsed_ms);
             indexer.failure_reason = Some(reason.describe(until));
+            indexer.failure_reason_code = None;
             indexer.rate_limited = false;
             indexer.skip_reason = Some(reason);
             indexer.skipped_until = until;
@@ -1386,6 +1406,7 @@ impl AppUseCase {
         indexer_id: &str,
         query_listing: bool,
         batch: Vec<IndexerSearchResult>,
+        unroutable: super::release_search::UnroutableReleaseCounts,
         indexer_priority_by_name: &HashMap<String, i64>,
         preferred_source_kind: &str,
         elapsed_ms: i64,
@@ -1434,7 +1455,9 @@ impl AppUseCase {
             indexer.result_count = batch_len;
             indexer.elapsed_ms = Some(elapsed_ms);
             indexer.failure_reason = None;
+            indexer.failure_reason_code = None;
             indexer.rate_limited = false;
+            indexer.unroutable_results = unroutable;
         }
         if query_listing {
             // A query search counts what each indexer contributed to the

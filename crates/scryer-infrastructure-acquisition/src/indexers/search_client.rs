@@ -7120,11 +7120,23 @@ impl IndexerClient for MultiIndexerSearchClient {
                             config.name.as_str(),
                             IndexerSkipReason::ClientSetupFailed,
                         );
+                        let reason = err.reason().unwrap_or(
+                            crate::error_reasons::ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED,
+                        );
                         warn!(
                             indexer = config.name.as_str(),
                             error = %err,
+                            reason,
                             "skipping indexer: client setup failed"
                         );
+                        // An enabled indexer the search cannot run is reported,
+                        // not dropped: otherwise it reads as asked with no
+                        // results, and nothing tells the operator to act.
+                        indexer_outcomes.push(IndexerQueryOutcome {
+                            page: None,
+                            indexer_id: config.id.clone(),
+                            outcome: IndexerSearchOutcome::ClientUnavailable { reason },
+                        });
                         continue;
                     }
                 };
@@ -9265,7 +9277,9 @@ impl IndexerClient for MultiIndexerSearchClient {
             let caps = caps.filter(|caps| !nominal_caps_diagnostic(caps));
             let failed = matches!(
                 outcome,
-                IndexerSearchOutcome::BackedOff { .. } | IndexerSearchOutcome::Errored
+                IndexerSearchOutcome::BackedOff { .. }
+                    | IndexerSearchOutcome::ClientUnavailable { .. }
+                    | IndexerSearchOutcome::Errored
             );
             let completion = match outcome {
                 IndexerSearchOutcome::Complete { .. } | IndexerSearchOutcome::Unsupported => {
@@ -9286,12 +9300,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                         retry_after,
                     }
                 }
-                IndexerSearchOutcome::BackedOff { .. } | IndexerSearchOutcome::Errored => {
-                    IndexerSearchCompletion::Partial {
-                        reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
-                        retry_after: None,
-                    }
-                }
+                IndexerSearchOutcome::BackedOff { .. }
+                | IndexerSearchOutcome::ClientUnavailable { .. }
+                | IndexerSearchOutcome::Errored => IndexerSearchCompletion::Partial {
+                    reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
+                    retry_after: None,
+                },
             };
             if caps.is_some() {
                 if let Some(page) = page.as_mut() {
@@ -13680,6 +13694,73 @@ mod tests {
             .clone();
         expected.reverse();
         assert_eq!(*starts.lock().expect("start order mutex"), expected);
+    }
+
+    /// A provider whose plugin is not loaded: it advertises capabilities but
+    /// cannot build a client.
+    struct UnloadedIndexerPluginProvider;
+
+    impl IndexerPluginProvider for UnloadedIndexerPluginProvider {
+        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+            None
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            vec![]
+        }
+
+        fn capabilities_for_provider(&self, _provider_type: &str) -> IndexerProviderCapabilities {
+            movie_caps()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_indexer_whose_client_cannot_be_built_is_reported_with_its_setup_code() {
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config()],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(UnloadedIndexerPluginProvider),
+        );
+
+        let response = multi
+            .search(
+                "Synthetic Search".to_string(),
+                HashMap::new(),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("a search with an unbuildable client still answers");
+
+        assert_eq!(
+            response
+                .indexer_outcomes
+                .iter()
+                .map(|outcome| (outcome.indexer_id.clone(), outcome.outcome))
+                .collect::<Vec<_>>(),
+            vec![(
+                mock_indexer_config().id,
+                IndexerSearchOutcome::ClientUnavailable {
+                    reason: crate::error_reasons::ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED,
+                },
+            )],
+            "the indexer is reported, not dropped"
+        );
+        assert!(response.results.is_empty());
     }
 
     #[tokio::test(start_paused = true)]

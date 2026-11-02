@@ -1,13 +1,16 @@
-import { useMemo, useState } from "react";
-import { FolderOpen, Trash2, Undo2 } from "lucide-react";
-import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
+import { Trash2, Undo2 } from "lucide-react";
+import { RecycleBinHistory } from "./recycle-bin-history";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import { PathPickerButton } from "@/components/common/path-picker-button";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
 import {
   Table,
   TableBody,
@@ -21,6 +24,7 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { buildCalendarEventHref } from "@/lib/utils/calendar-event-href";
 import type { LibraryRecord } from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDateTime } from "@/lib/utils/date-format";
@@ -42,6 +46,8 @@ export type RecycledItem = {
   sizeBytes: number;
   titleId: string | null;
   titleName: string | null;
+  titleFacet: string | null;
+  episodeId: string | null;
   reason: string;
   recycledAt: string;
   scheduledDeletionAt: string;
@@ -51,6 +57,7 @@ export type RecycledItem = {
 };
 
 type Props = {
+  initialHistoryItemId?: string | null;
   enabled: boolean;
   path: string | null;
   retentionDays: number;
@@ -156,7 +163,6 @@ function RecycleBinLocationForm({
 }: LocationFormProps) {
   const t = useTranslate();
   const [pathDraft, setPathDraft] = useState(path ?? "");
-  const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
   const [retentionDraft, setRetentionDraft] = useState(String(retentionDays));
   const parsedRetention = parseRecycleBinRetentionDays(retentionDraft);
   const dirty =
@@ -188,21 +194,17 @@ function RecycleBinLocationForm({
             {t("settings.recycleBinPath")}
           </Label>
           <div className="flex max-w-xl items-center gap-2">
-            <Button
+            <PathPickerButton
               id="settings-recycle-bin-path"
-              type="button"
-              variant="outline"
+              value={pathDraft}
+              placeholder={t("settings.recycleBinPathPlaceholder")}
+              onSelect={(selectedPath) => {
+                if (!disabled) setPathDraft(selectedPath);
+              }}
+              selectionTypes={["folder"]}
+              dialogTitle={t("settings.recycleBinPath")}
               disabled={disabled}
-              aria-haspopup="dialog"
-              onClick={() => setFolderBrowserOpen(true)}
-              className="min-w-0 flex-1 justify-start font-mono"
-              title={pathDraft || t("settings.recycleBinPathPlaceholder")}
-            >
-              <FolderOpen className="mr-2 h-4 w-4 shrink-0" />
-              <span className="truncate">
-                {pathDraft || t("settings.recycleBinPathPlaceholder")}
-              </span>
-            </Button>
+            />
             {pathDraft ? (
               <Button
                 type="button"
@@ -214,18 +216,6 @@ function RecycleBinLocationForm({
               </Button>
             ) : null}
           </div>
-          {folderBrowserOpen ? (
-            <FolderBrowserDialog
-              open={folderBrowserOpen}
-              onOpenChange={setFolderBrowserOpen}
-              onSelect={(selectedPath) => {
-                if (!disabled) setPathDraft(selectedPath);
-              }}
-              selectionTypes={["folder"]}
-              initialPath={pathDraft || "/"}
-              title={t("settings.recycleBinPath")}
-            />
-          ) : null}
           <p className="text-xs text-muted-foreground">
             {t("settings.recycleBinPathHelp")}
           </p>
@@ -354,6 +344,7 @@ function RecycleBinRelocationNotice({
 }
 
 export function SettingsRecycleBinSection({
+  initialHistoryItemId = null,
   enabled,
   path,
   retentionDays,
@@ -384,6 +375,33 @@ export function SettingsRecycleBinSection({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const [filter, setFilter] = useState("");
+  const [historyItemId, setHistoryItemId] = useState<string | null>(
+    initialHistoryItemId,
+  );
+  const initialHistoryScrolled = useRef(false);
+  useEffect(() => {
+    if (
+      !initialHistoryItemId ||
+      initialHistoryScrolled.current ||
+      settingsLoading ||
+      loading ||
+      librariesLoading
+    )
+      return;
+    const row = document.getElementById(
+      selectorId("settings-recycle-bin-row", initialHistoryItemId),
+    );
+    if (!row) return;
+    row.scrollIntoView({ block: "start" });
+    document
+      .getElementById(
+        selectorId("settings-recycle-bin-history", initialHistoryItemId),
+      )
+      ?.focus({ preventScroll: true });
+    initialHistoryScrolled.current = true;
+  }, [initialHistoryItemId, items, librariesLoading, loading, settingsLoading]);
+  const toggleHistory = (id: string) =>
+    setHistoryItemId((current) => (current === id ? null : id));
   const isBusy = settingsSaving || mutatingId !== null;
   const unassociatedTitleName = t("settings.recycleBinUnassociatedFiles");
   const groups = useMemo(
@@ -439,8 +457,11 @@ export function SettingsRecycleBinSection({
   }
 
   return (
-    <div id="settings-recycle-bin-section" className="space-y-4">
-      <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
+    <div
+      id="settings-recycle-bin-section"
+      className="@container/recycle min-w-0 space-y-4"
+    >
+      <div className="flex flex-col gap-3 border-b border-border pb-4 @[40rem]/recycle:flex-row @[40rem]/recycle:items-center @[40rem]/recycle:justify-between">
         <div className="space-y-1">
           <Label htmlFor="settings-recycle-bin-enabled-toggle">
             {t("settings.recycleBinEnabled")}
@@ -489,8 +510,8 @@ export function SettingsRecycleBinSection({
         </p>
       ) : (
         <>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div className="space-y-1">
+          <div className="flex flex-col gap-3 @[40rem]/recycle:flex-row @[40rem]/recycle:items-end @[40rem]/recycle:justify-between">
+            <div className="min-w-0 space-y-1">
               <Label>{t("settings.recycleBinLibraryFilter")}</Label>
               <LibraryMultiSelect
                 libraries={libraries}
@@ -499,7 +520,7 @@ export function SettingsRecycleBinSection({
                 disabled={librariesLoading || isBusy}
                 triggerId="settings-recycle-bin-library-filter-trigger"
                 allLibrariesButtonId="settings-recycle-bin-library-filter-all"
-                triggerClassName="w-full min-w-56 sm:w-72"
+                triggerClassName="w-full min-w-0 @[40rem]/recycle:w-72"
               />
             </div>
             <Button
@@ -520,18 +541,18 @@ export function SettingsRecycleBinSection({
             </Button>
           </div>
 
-          <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-muted/30 p-3 @[56rem]/recycle:flex-row @[56rem]/recycle:items-center @[56rem]/recycle:justify-between">
             <Input
               id="settings-recycle-bin-filter"
               value={filter}
               onChange={(event) => setFilter(event.target.value)}
               placeholder={t("settings.recycleBinFilterPlaceholder")}
               aria-label={t("settings.recycleBinFilterAria")}
-              className="max-w-md"
+              className="min-w-0 @[56rem]/recycle:max-w-md @[56rem]/recycle:flex-1"
             />
             {selectedItems.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-muted-foreground">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 @max-[40rem]/recycle:[&>button]:h-auto @max-[40rem]/recycle:[&>button]:min-h-10 @max-[40rem]/recycle:[&>button]:w-full @max-[40rem]/recycle:[&>button]:whitespace-normal">
+                <span className="text-sm text-muted-foreground @max-[40rem]/recycle:w-full">
                   {t("settings.recycleBinSelectedCount", {
                     count: selectedItems.length,
                   })}
@@ -588,13 +609,18 @@ export function SettingsRecycleBinSection({
               {t("settings.recycleBinNoFilterMatches")}
             </p>
           ) : (
-            <Table wrapperClassName="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]">
-              <TableHeader>
-                <TableRow>
-                  <TableCheckboxHead>
+            <Table
+              aria-label={t("settings.recycleBinSection")}
+              wrapperClassName="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]"
+              className="@max-[72rem]/recycle:block"
+            >
+              <TableHeader className="@max-[72rem]/recycle:block">
+                <TableRow className="@max-[72rem]/recycle:grid @max-[72rem]/recycle:grid-cols-[3rem_minmax(0,1fr)]">
+                  <TableCheckboxHead className="@max-[72rem]/recycle:flex @max-[72rem]/recycle:h-auto @max-[72rem]/recycle:min-h-11 @max-[72rem]/recycle:items-center @max-[72rem]/recycle:justify-center">
                     <Checkbox
                       id="settings-recycle-bin-select-all"
                       size="table"
+                      className="@max-[72rem]/recycle:size-6"
                       checked={selectAllState}
                       disabled={visibleSelectableItems.length === 0 || isBusy}
                       aria-label={t("settings.recycleBinSelectAllFiltered")}
@@ -603,20 +629,38 @@ export function SettingsRecycleBinSection({
                       }
                     />
                   </TableCheckboxHead>
-                  <TableHead>{t("label.name")}</TableHead>
-                  <TableHead>{t("nav.library")}</TableHead>
-                  <TableHead>{t("settings.recycleBinReason")}</TableHead>
-                  <TableHead>{t("settings.recycleBinSize")}</TableHead>
-                  <TableHead>{t("settings.recycleBinRecycled")}</TableHead>
-                  <TableHead>
+                  <TableHead className="@max-[72rem]/recycle:flex @max-[72rem]/recycle:h-auto @max-[72rem]/recycle:min-h-11 @max-[72rem]/recycle:items-center @max-[72rem]/recycle:py-2">
+                    <span className="@max-[72rem]/recycle:hidden">
+                      {t("label.name")}
+                    </span>
+                    <Label
+                      htmlFor="settings-recycle-bin-select-all"
+                      className="hidden cursor-pointer @max-[72rem]/recycle:block"
+                    >
+                      {t("settings.recycleBinSelectAllFiltered")}
+                    </Label>
+                  </TableHead>
+                  <TableHead className="@max-[72rem]/recycle:hidden">
+                    {t("nav.library")}
+                  </TableHead>
+                  <TableHead className="@max-[72rem]/recycle:hidden">
+                    {t("settings.recycleBinReason")}
+                  </TableHead>
+                  <TableHead className="@max-[72rem]/recycle:hidden">
+                    {t("settings.recycleBinSize")}
+                  </TableHead>
+                  <TableHead className="@max-[72rem]/recycle:hidden">
+                    {t("settings.recycleBinRecycled")}
+                  </TableHead>
+                  <TableHead className="@max-[72rem]/recycle:hidden">
                     {t("settings.recycleBinScheduledDeletion")}
                   </TableHead>
-                  <TableHead className="text-right">
+                  <TableHead className="text-right @max-[72rem]/recycle:hidden">
                     {t("label.actions")}
                   </TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
+              <TableBody className="@max-[72rem]/recycle:block">
                 {groups.flatMap((group) => {
                   const groupSelectableItems = group.items.filter(
                     (item) => !pendingItemIds.has(item.id),
@@ -633,7 +677,7 @@ export function SettingsRecycleBinSection({
                   return [
                     <TableRow
                       key={`${group.id}:heading`}
-                      className="bg-muted/40 hover:bg-muted/40"
+                      className="bg-muted/40 hover:bg-muted/40 @max-[72rem]/recycle:grid @max-[72rem]/recycle:grid-cols-[3rem_minmax(0,1fr)] @max-[72rem]/recycle:items-center"
                     >
                       <TableCheckboxCell>
                         <Checkbox
@@ -643,6 +687,7 @@ export function SettingsRecycleBinSection({
                           )}
                           size="table"
                           checked={groupChecked}
+                          className="@max-[72rem]/recycle:size-6"
                           disabled={groupSelectableItems.length === 0 || isBusy}
                           aria-label={t("settings.recycleBinSelectTitle", {
                             title: group.titleName,
@@ -652,10 +697,12 @@ export function SettingsRecycleBinSection({
                           }
                         />
                       </TableCheckboxCell>
-                      <TableCell colSpan={7}>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{group.titleName}</span>
-                          <span className="text-xs text-muted-foreground">
+                      <TableCell colSpan={7} className="min-w-0">
+                        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                          <span className="font-medium [overflow-wrap:anywhere]">
+                            {group.titleName}
+                          </span>
+                          <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                             {group.libraryName} ·{" "}
                             {t(
                               group.items.length === 1
@@ -668,90 +715,192 @@ export function SettingsRecycleBinSection({
                       </TableCell>
                     </TableRow>,
                     ...group.items.map((item) => {
+                      const isHistoryExpanded = historyItemId === item.id;
+                      const itemHref = buildCalendarEventHref({
+                        id: item.episodeId ?? "",
+                        titleId: item.titleId ?? "",
+                        titleFacet: item.titleFacet ?? "",
+                      });
                       const rowBusy =
                         pendingItemIds.has(item.id) ||
                         mutatingId === "__empty__";
                       return (
-                        <TableRow
-                          key={item.id}
-                          id={selectorId("settings-recycle-bin-row", item.id)}
-                          data-ui="settings-table-row"
-                        >
-                          <TableCheckboxCell>
-                            <Checkbox
+                        <Fragment key={item.id}>
+                          <TableRow
+                            id={selectorId("settings-recycle-bin-row", item.id)}
+                            data-ui="settings-table-row"
+                            className="scroll-mt-24 cursor-pointer @max-[72rem]/recycle:relative @max-[72rem]/recycle:grid @max-[72rem]/recycle:grid-cols-2 @max-[72rem]/recycle:gap-x-4 @max-[72rem]/recycle:gap-y-3 @max-[72rem]/recycle:p-3 @[40rem]/recycle:grid-cols-3 @max-[72rem]/recycle:[&>td]:min-w-0 @max-[72rem]/recycle:[&>td]:p-0 @max-[72rem]/recycle:[&>td]:[overflow-wrap:anywhere]"
+                            onClick={(event) => {
+                              if (
+                                event.target instanceof Element &&
+                                event.target.closest(
+                                  "button, a, input, select, textarea, [role='button'], [role='checkbox']",
+                                )
+                              ) {
+                                return;
+                              }
+                              toggleHistory(item.id);
+                            }}
+                          >
+                            <TableCheckboxCell className="@max-[72rem]/recycle:absolute @max-[72rem]/recycle:left-3 @max-[72rem]/recycle:top-3 @max-[72rem]/recycle:w-6">
+                              <Checkbox
+                                id={selectorId(
+                                  "settings-recycle-bin-select",
+                                  item.id,
+                                )}
+                                size="table"
+                                checked={selectedItemIds.has(item.id)}
+                                className="@max-[72rem]/recycle:size-6"
+                                disabled={rowBusy || isBusy}
+                                aria-label={t("settings.recycleBinSelectFile", {
+                                  name: item.fileName,
+                                })}
+                                onCheckedChange={(checked) =>
+                                  toggleItem(item, checked === true)
+                                }
+                              />
+                            </TableCheckboxCell>
+                            <TableCell className="w-full min-w-64 max-w-0 @max-[72rem]/recycle:col-span-full @max-[72rem]/recycle:w-auto @max-[72rem]/recycle:min-w-0 @max-[72rem]/recycle:max-w-none @max-[72rem]/recycle:pl-8!">
+                              <div className="flex items-center gap-3 @max-[72rem]/recycle:items-start">
+                                <TableDisclosureButton
+                                  id={selectorId(
+                                    "settings-recycle-bin-history",
+                                    item.id,
+                                  )}
+                                  className="@max-[72rem]/recycle:h-11 @max-[72rem]/recycle:w-11"
+                                  aria-label={t(
+                                    "settings.recycleBinHistoryFor",
+                                    {
+                                      name: item.fileName,
+                                    },
+                                  )}
+                                  expanded={isHistoryExpanded}
+                                  aria-controls={selectorId(
+                                    "settings-recycle-bin-history-detail",
+                                    item.id,
+                                  )}
+                                  onClick={() => toggleHistory(item.id)}
+                                />
+                                <div className="min-w-0">
+                                  {itemHref ? (
+                                    <Link
+                                      id={selectorId(
+                                        "settings-recycle-bin-item-link",
+                                        item.id,
+                                      )}
+                                      to={itemHref}
+                                      className="block truncate font-medium text-foreground transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @max-[72rem]/recycle:whitespace-normal"
+                                      title={item.fileName}
+                                    >
+                                      {item.fileName}
+                                    </Link>
+                                  ) : (
+                                    <div
+                                      className="truncate font-medium @max-[72rem]/recycle:whitespace-normal"
+                                      title={item.fileName}
+                                    >
+                                      {item.fileName}
+                                    </div>
+                                  )}
+                                  <div
+                                    className="truncate font-[family-name:var(--font-code)] text-xs text-muted-foreground @max-[72rem]/recycle:whitespace-normal"
+                                    title={item.originalPath}
+                                  >
+                                    {item.originalPath}
+                                  </div>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              <span className="mb-1 hidden font-sans text-xs text-muted-foreground @max-[72rem]/recycle:block">
+                                {t("nav.library")}
+                              </span>
+                              <span className="block w-28 [overflow-wrap:anywhere] @max-[72rem]/recycle:w-auto">
+                                {item.libraryName}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <span className="mb-1 hidden font-sans text-xs text-muted-foreground @max-[72rem]/recycle:block">
+                                {t("settings.recycleBinReason")}
+                              </span>
+                              <ReasonBadge reason={item.reason} />
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap font-[family-name:var(--font-code)] text-sm text-muted-foreground @max-[72rem]/recycle:whitespace-normal">
+                              <span className="mb-1 hidden font-sans text-xs text-muted-foreground @max-[72rem]/recycle:block">
+                                {t("settings.recycleBinSize")}
+                              </span>
+                              {formatSize(item.sizeBytes)}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground whitespace-nowrap @max-[72rem]/recycle:whitespace-normal">
+                              <span className="mb-1 hidden font-sans text-xs text-muted-foreground @max-[72rem]/recycle:block">
+                                {t("settings.recycleBinRecycled")}
+                              </span>
+                              <time dateTime={item.recycledAt}>
+                                {formatDate(item.recycledAt, dateTimeFormat)}
+                              </time>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground whitespace-nowrap @max-[72rem]/recycle:whitespace-normal">
+                              <span className="mb-1 hidden font-sans text-xs text-muted-foreground @max-[72rem]/recycle:block">
+                                {t("settings.recycleBinScheduledDeletion")}
+                              </span>
+                              <time dateTime={item.scheduledDeletionAt}>
+                                {formatDate(
+                                  item.scheduledDeletionAt,
+                                  dateTimeFormat,
+                                )}
+                              </time>
+                            </TableCell>
+                            <TableCell className="text-right @max-[72rem]/recycle:self-end">
+                              <span className="mb-1 hidden font-sans text-xs text-muted-foreground @max-[72rem]/recycle:block">
+                                {t("label.actions")}
+                              </span>
+                              <div className="flex items-center justify-end gap-1">
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-recycle-bin-restore",
+                                    item.id,
+                                  )}
+                                  label={t("settings.recycleBinRestore")}
+                                  className="@max-[72rem]/recycle:h-11 @max-[72rem]/recycle:w-11"
+                                  tone="enabled"
+                                  disabled={rowBusy || isBusy}
+                                  onClick={() => onRestoreItems([item])}
+                                >
+                                  <Undo2 className="h-4 w-4" />
+                                </IconButton>
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-recycle-bin-delete",
+                                    item.id,
+                                  )}
+                                  label={t("settings.recycleBinDelete")}
+                                  className="@max-[72rem]/recycle:h-11 @max-[72rem]/recycle:w-11"
+                                  tone="delete"
+                                  disabled={rowBusy || isBusy}
+                                  onClick={() => onDeleteItems([item])}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </IconButton>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                          {isHistoryExpanded ? (
+                            <TableRow
                               id={selectorId(
-                                "settings-recycle-bin-select",
+                                "settings-recycle-bin-history-detail",
                                 item.id,
                               )}
-                              size="table"
-                              checked={selectedItemIds.has(item.id)}
-                              disabled={rowBusy || isBusy}
-                              aria-label={t("settings.recycleBinSelectFile", {
-                                name: item.fileName,
-                              })}
-                              onCheckedChange={(checked) =>
-                                toggleItem(item, checked === true)
-                              }
-                            />
-                          </TableCheckboxCell>
-                          <TableCell>
-                            <div>
-                              <div className="font-medium">{item.fileName}</div>
-                              <div
-                                className="max-w-[300px] truncate font-[var(--font-code)] text-xs text-muted-foreground"
-                                title={item.originalPath}
+                              className="@max-[72rem]/recycle:block"
+                            >
+                              <TableCell
+                                colSpan={8}
+                                className="max-w-0 bg-muted/20 p-0 @max-[72rem]/recycle:block @max-[72rem]/recycle:w-full @max-[72rem]/recycle:max-w-none"
                               >
-                                {item.originalPath}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {item.libraryName}
-                          </TableCell>
-                          <TableCell>
-                            <ReasonBadge reason={item.reason} />
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap font-[var(--font-code)] text-sm text-muted-foreground">
-                            {formatSize(item.sizeBytes)}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                            {formatDate(item.recycledAt, dateTimeFormat)}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                            {formatDate(
-                              item.scheduledDeletionAt,
-                              dateTimeFormat,
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <IconButton
-                                id={selectorId(
-                                  "settings-recycle-bin-restore",
-                                  item.id,
-                                )}
-                                label={t("settings.recycleBinRestore")}
-                                tone="enabled"
-                                disabled={rowBusy || isBusy}
-                                onClick={() => onRestoreItems([item])}
-                              >
-                                <Undo2 className="h-4 w-4" />
-                              </IconButton>
-                              <IconButton
-                                id={selectorId(
-                                  "settings-recycle-bin-delete",
-                                  item.id,
-                                )}
-                                label={t("settings.recycleBinDelete")}
-                                tone="delete"
-                                disabled={rowBusy || isBusy}
-                                onClick={() => onDeleteItems([item])}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </IconButton>
-                            </div>
-                          </TableCell>
-                        </TableRow>
+                                <RecycleBinHistory key={item.id} id={item.id} />
+                              </TableCell>
+                            </TableRow>
+                          ) : null}
+                        </Fragment>
                       );
                     }),
                   ];

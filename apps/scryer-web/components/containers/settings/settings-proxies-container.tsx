@@ -32,6 +32,7 @@ import {
   buildUpdateProxyInput,
 } from "@/lib/utils/settings-mutation-inputs";
 import { parseWireguardConfig } from "@/lib/utils/wireguard-config";
+import { copyText, selectFieldById } from "@/lib/utils/clipboard";
 import { proxyConfigsQuery } from "@/lib/graphql/queries";
 import {
   createProxyConfigMutation,
@@ -415,22 +416,17 @@ export function SettingsProxiesContainer() {
 
   /**
    * The tunnel's own public key is the one value the operator has to carry
-   * back to their WireGuard server, so it gets a copy button. There is no
-   * shared copy affordance in this app yet, so this is the same shape the API
-   * keys panel uses, reported through the page's own status line.
+   * back to their WireGuard server, so it gets a copy button, reported
+   * through the page's own status line.
    */
   const copyTunnelPublicKey = useCallback(
     async (publicKey: string) => {
-      try {
-        if (!navigator.clipboard) {
-          throw new Error("clipboard unavailable");
-        }
-        await navigator.clipboard.writeText(publicKey);
+      if (await copyText(publicKey)) {
         setGlobalStatus(t("status.proxyTunnelPublicKeyCopied"));
-      } catch {
-        setGlobalStatus(t("status.proxyTunnelPublicKeyCopyFailed"), {
-          level: "ERROR",
-        });
+      } else {
+        // Selected, so the user's own copy keystroke is the next step.
+        selectFieldById("settings-indexer-proxy-tunnel-public-key-value");
+        setGlobalStatus(t("status.copyFailedSelected"), { level: "ERROR" });
       }
     },
     [setGlobalStatus, t],

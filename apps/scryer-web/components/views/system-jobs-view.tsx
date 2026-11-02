@@ -525,7 +525,7 @@ function CustomJobCapturedOutput({
             <span
               id="jobs-history-exit-code"
               className={cn(
-                "font-[var(--font-code)]",
+                "font-[family-name:var(--font-code)]",
                 selectedScriptRun
                   ? scriptRunStatusColor(selectedScriptRun.status)
                   : undefined,
@@ -552,7 +552,7 @@ function CustomJobCapturedOutput({
             ) : null}
             <pre
               id="jobs-history-output-stdout"
-              className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-[var(--font-code)] text-[11px] leading-relaxed text-muted-foreground"
+              className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-[family-name:var(--font-code)] text-[11px] leading-relaxed text-muted-foreground"
             >
               {selectedScriptRun?.stdoutTail ||
                 t("settings.pp.outputNotCaptured")}
@@ -568,7 +568,7 @@ function CustomJobCapturedOutput({
             ) : null}
             <pre
               id="jobs-history-output-stderr"
-              className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-[var(--scry-danger-bg)] p-2 font-[var(--font-code)] text-[11px] leading-relaxed text-[var(--scry-danger-text)]"
+              className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-[var(--scry-danger-bg)] p-2 font-[family-name:var(--font-code)] text-[11px] leading-relaxed text-[var(--scry-danger-text)]"
             >
               {selectedScriptRun?.stderrTail ||
                 t("settings.pp.outputNotCaptured")}

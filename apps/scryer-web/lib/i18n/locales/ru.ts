@@ -1,6 +1,13 @@
 import type { LocaleDictionary } from "../types";
 
 const ru: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied":
+    "URL обратного вызова Jellyfin скопирован.",
+  "settings.oauthClientIdCopied": "ID клиента OAuth скопирован.",
+  "status.copyFailedSelected":
+    "Не удалось скопировать. Текст выделен; нажмите Ctrl+C или ⌘C.",
+  "status.copyFailed":
+    "Не удалось скопировать: браузер запретил доступ к буферу обмена.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer не может подключиться к шлюзу метаданных, поскольку системные часы расходятся более чем на 5 минут. Синхронизируйте системные часы и перезапустите Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -255,7 +262,8 @@ const ru: LocaleDictionary = {
   "nav.logs": "Журналы",
   "nav.serviceLogs": "Журналы служб",
   "nav.auditLogs": "Журналы аудита",
-  "nav.usersAccess": "Пользователи и доступ",
+  "nav.users": "Пользователи",
+  "nav.securityAccess": "Безопасность и доступ",
   "nav.group": "Навигация",
   "nav.mobileTitle": "Навигация Scryer",
   "nav.mobileDescription": "Основная навигация Scryer",
@@ -311,6 +319,7 @@ const ru: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "Любимые за всё время",
   "discovery.section.rightNow": "Прямо сейчас",
   "discovery.section.fromYourTaste": "На основе ваших предпочтений",
+  "discovery.section.fromYourWatchlist": "Из вашего списка «Буду смотреть»",
   "discovery.section.almostComplete": "Почти завершено",
   "discovery.section.nextAnimeSeason": "Следующий сезон аниме",
   "discovery.section.popularInAnime": "Популярное в аниме",
@@ -353,7 +362,6 @@ const ru: LocaleDictionary = {
   "settings.profile": "Профиль",
   "settings.general": "Общие",
   "settings.backups": "Резервные копии",
-  "settings.security": "Безопасность",
   "settings.securityLoginSettings": "Настройки входа",
   "settings.securityEnableFormLoginHelp":
     "Если параметр включён, Scryer требует аутентифицированный сеанс пользователя. Если параметр отключён, запросы выполняются от имени администратора по умолчанию.",
@@ -609,8 +617,6 @@ const ru: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Keepalive — целое число секунд; 0 отключает его.",
   "status.proxyTunnelPublicKeyCopied": "Открытый ключ скопирован.",
-  "status.proxyTunnelPublicKeyCopyFailed":
-    "Не удалось скопировать открытый ключ.",
   "settings.qualityProfiles": "Профили качества",
   "settings.downloadClients": "Клиенты загрузки",
   "settings.mediaServers": "Медиасерверы",
@@ -1257,11 +1263,8 @@ const ru: LocaleDictionary = {
   "settings.title": "Настройки",
   "settings.sectionTitle": "Настройки • {{section}}",
   "settings.generalText": "Общие настройки приложения.",
-  "settings.verificationDepthTitle": "Проверка копий при импорте",
   "settings.verificationDepthHelp":
     "Насколько тщательно Scryer проверяет скопированный файл, прежде чем трогать оригинал.",
-  "settings.verificationDepthScope":
-    "Относится только к копиям, создаваемым при импорте из клиентов загрузки. Перемещения библиотек и корней всегда проверяются полностью, независимо от этой настройки.",
   "settings.verificationDepthLabel": "Глубина проверки",
   "settings.verificationDepthFull": "Полное перечитывание",
   "settings.verificationDepthFullHelp":
@@ -1295,6 +1298,55 @@ const ru: LocaleDictionary = {
     "Когда автоматический импорт из SABnzbd или NZBGet содержит видеофайлы с запутанными именами, Scryer отправляет контрольную сумму CRC-32 и размер каждого файла в стороннюю службу srrdb.com, чтобы найти исходное имя файла. Больше ничего о вашей библиотеке или файле не отправляется. Файлы на диске никогда не переименовываются.",
   "discovery.personalizedDisabled":
     "Персонализированные рекомендации отключены для этого экземпляра.",
+  "discovery.rail.becauseYouLike.action": "Потому что вам нравятся боевики",
+  "discovery.rail.becauseYouLike.adventure": "Потому что вам нравятся приключения",
+  "discovery.rail.becauseYouLike.comedy": "Потому что вам нравятся комедии",
+  "discovery.rail.becauseYouLike.crime": "Потому что вам нравится криминал",
+  "discovery.rail.becauseYouLike.documentary": "Потому что вам нравится документалистика",
+  "discovery.rail.becauseYouLike.drama": "Потому что вам нравятся драмы",
+  "discovery.rail.becauseYouLike.family": "Потому что вам нравится семейное кино",
+  "discovery.rail.becauseYouLike.fantasy": "Потому что вам нравится фэнтези",
+  "discovery.rail.becauseYouLike.history": "Потому что вам нравится история",
+  "discovery.rail.becauseYouLike.horror": "Потому что вам нравятся ужасы",
+  "discovery.rail.becauseYouLike.mystery": "Потому что вам нравятся загадки",
+  "discovery.rail.becauseYouLike.romance": "Потому что вам нравится романтика",
+  "discovery.rail.becauseYouLike.science-fiction": "Потому что вам нравится научная фантастика",
+  "discovery.rail.becauseYouLike.thriller": "Потому что вам нравятся триллеры",
+  "discovery.rail.becauseYouLike.war": "Потому что вам нравятся военные истории",
+  "discovery.rail.becauseYouLike.western": "Потому что вам нравятся вестерны",
+  "discovery.rail.becauseYouLike.sports": "Потому что вам нравятся спортивные истории",
+  "discovery.rail.becauseYouLike.supernatural": "Потому что вам нравится сверхъестественное",
+  "discovery.rail.becauseYouLike.coming-of-age": "Потому что вам нравятся истории взросления",
+  "discovery.rail.becauseYouLike.found-family": "Потому что вам нравятся обретённые семьи",
+  "discovery.rail.becauseYouLike.revenge": "Потому что вам нравятся истории мести",
+  "discovery.rail.becauseYouLike.heist": "Потому что вам нравятся ограбления",
+  "discovery.rail.becauseYouLike.time-travel": "Потому что вам нравятся путешествия во времени",
+  "discovery.rail.becauseYouLike.dystopia": "Потому что вам нравятся антиутопии",
+  "discovery.rail.becauseYouLike.cyberpunk": "Потому что вам нравится киберпанк",
+  "discovery.rail.becauseYouLike.superhero": "Потому что вам нравятся супергерои",
+  "discovery.rail.becauseYouLike.vampire": "Потому что вам нравятся вампиры",
+  "discovery.rail.becauseYouLike.zombie": "Потому что вам нравятся зомби",
+  "discovery.rail.becauseYouLike.survival": "Потому что вам нравятся истории о выживании",
+  "discovery.rail.becauseYouLike.space": "Потому что вам нравятся космические приключения",
+  "discovery.rail.becauseYouLike.detective": "Потому что вам нравятся детективы",
+  "discovery.rail.becauseYouLike.organized-crime": "Потому что вам нравится организованная преступность",
+  "discovery.rail.becauseYouLike.period-drama": "Потому что вам нравятся исторические драмы",
+  "discovery.rail.becauseYouLike.psychological": "Потому что вам нравятся психологические истории",
+  "discovery.rail.becauseYouLike.mythology": "Потому что вам нравится мифология",
+  "discovery.rail.becauseYouLike.isekai": "Потому что вам нравится исекай",
+  "discovery.rail.becauseYouLike.mecha": "Потому что вам нравится меха",
+  "discovery.rail.becauseYouLike.martial-arts": "Потому что вам нравятся боевые искусства",
+  "discovery.rail.becauseYouLike.music": "Потому что вам нравятся музыкальные истории",
+  "discovery.rail.becauseYouLike.workplace": "Потому что вам нравятся истории о работе",
+  "discovery.rail.becauseYouLike.medical": "Потому что вам нравятся медицинские драмы",
+  "discovery.rail.becauseYouLike.military": "Потому что вам нравятся армейские истории",
+  "discovery.rail.becauseYouLike.spy": "Потому что вам нравятся шпионские истории",
+  "discovery.rail.becauseYouLike.royal-politics": "Потому что вам нравятся королевские интриги",
+  "discovery.rail.becauseYouLike.first-love": "Потому что вам нравятся истории о первой любви",
+  "discovery.rail.becauseYouLike.forbidden-love": "Потому что вам нравится запретная любовь",
+  "discovery.rail.becauseYouLike.lgbtq": "Потому что вам нравятся ЛГБТК+-истории",
+  "discovery.rail.becauseYouLike.samurai": "Потому что вам нравятся самураи",
+  "discovery.rail.becauseYouLike.magical-girl": "Потому что вам нравятся девочки-волшебницы",
   "settings.keepHistoryForever": "Хранить историю бессрочно",
   "settings.historyRetentionDaysHeader": "Хранить историю",
   "settings.historyRetentionDaysSuffix": "дней",
@@ -1461,6 +1513,8 @@ const ru: LocaleDictionary = {
 
   "label.back": "Назад",
   "label.close": "Закрыть",
+  "label.copy": "Копировать",
+  "label.copied": "Скопировано",
   "label.dismiss": "Скрыть",
 
   "pwa.offline": "Вы не в сети. Некоторые функции могут быть недоступны.",
@@ -1605,6 +1659,29 @@ const ru: LocaleDictionary = {
   "title.viewModePosterTable": "Список",
   "title.viewModeTable": "Таблица",
   "title.viewModePoster": "Постеры",
+  "title.viewModeGraph": "Граф",
+  "libraryGraph.regionLabel": "Граф библиотеки",
+  "libraryGraph.sizeByLabel": "Размер по",
+  "libraryGraph.sizeBy.ratingEvidence": "Объём оценок",
+  "libraryGraph.sizeBy.rating": "Рейтинг",
+  "libraryGraph.sizeBy.popularity": "Популярность",
+  "libraryGraph.resetView": "Вместить граф",
+  "libraryGraph.clustersLabel": "Кластеры",
+  "libraryGraph.clusterAroundTitle": "Вокруг «{{title}}»",
+  "libraryGraph.unplaced": "Без кластера",
+  "libraryGraph.collapsedCluster": "{{name}} (тайтлов: {{count}})",
+  "libraryGraph.collapseCluster": "Свернуть {{name}}",
+  "libraryGraph.linkedBy": "Связь",
+  "libraryGraph.empty":
+    "Ни один тайтл в этом представлении пока не входит в граф библиотеки.",
+  "libraryGraph.edgeKind.semantic": "Похожее",
+  "libraryGraph.edgeKind.sequel": "Продолжение",
+  "libraryGraph.edgeKind.prequel": "Приквел",
+  "libraryGraph.edgeKind.coWatch": "Часто смотрят вместе",
+  "libraryGraph.edgeKind.relation": "Связано",
+  "libraryGraph.edgeKind.affinity": "Общий интерес: {{label}}",
+  "libraryGraph.edgeKind.sharedTaste": "Общий интерес",
+  "libraryGraph.edgeKind.other": "Связано",
   "title.bulkSelectionCount": "Выбрано: {{count}}",
   "title.bulkSelectionPanelTitle": "Множественный выбор",
   "title.bulkSelectionPanelHint":
@@ -2323,7 +2400,6 @@ const ru: LocaleDictionary = {
   "settings.ruleAppliedFacetsHelp":
     "Оставьте поле пустым, чтобы применять правило ко всем типам медиаконтента.",
 
-  "settings.ruleValidate": "Проверить",
   "settings.ruleValidating": "Проверка…",
   "settings.ruleValid": "Правило корректно.",
   "settings.ruleValidationRequired":

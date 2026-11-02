@@ -1,4 +1,4 @@
-use super::{JobRunPayload, Long};
+use super::{JobRunPayload, Long, TitleHistoryEventPayload};
 use async_graphql::{Enum, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
@@ -19,6 +19,10 @@ pub struct RecycledItemPayload {
     pub title_id: Option<async_graphql::ID>,
     /// Associated title name, or null when no title was matched.
     pub title_name: Option<String>,
+    /// Current local title facet, or null when the entry has no matching local title.
+    pub title_facet: Option<String>,
+    /// Single episode tied to the recycled file; null for movies or ambiguous history.
+    pub episode_id: Option<async_graphql::ID>,
     /// Reason the file entered the recycle bin.
     pub reason: String,
     /// Time the file entered the recycle bin in UTC.
@@ -40,6 +44,15 @@ pub struct RecycledItemsPayload {
     pub items: Vec<RecycledItemPayload>,
     /// Total matching entries across all pages.
     pub total_count: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Bounded history correlated to a recycle entry's retained file and acquisition identities.
+pub struct RecycledItemHistoryPayload {
+    /// Related events in chronological order, up to the latest 50 matches.
+    pub items: Vec<TitleHistoryEventPayload>,
+    /// The summary reached its 5000-candidate or 50-match bound.
+    pub truncated: bool,
 }
 
 #[derive(SimpleObject, Clone)]

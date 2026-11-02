@@ -1,7 +1,5 @@
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import * as React from "react";
-import { PublicUrlPanel } from "@/components/containers/settings/public-url-panel";
-import { TrustedProxiesPanel } from "@/components/containers/settings/trusted-proxies-panel";
 import { SettingsOverviewSection } from "@/components/views/settings/settings-overview-section";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
@@ -85,7 +83,7 @@ export function SettingsOverviewContainer({
   const [generalLoading, setGeneralLoading] = React.useState(true);
   const [generalSaving, setGeneralSaving] = React.useState(false);
   const [imageCacheClearing, setImageCacheClearing] = React.useState(false);
-  // FR-040–FR-047: the import-copy verification depth. Its own query and
+  // The copy verification depth for imports and library moves. Its own query and
   // mutation, so it loads and saves independently of the general settings blob.
   const [verificationDepth, setVerificationDepth] =
     React.useState<VerificationDepth>("QUICK");
@@ -400,8 +398,6 @@ export function SettingsOverviewContainer({
         verificationSaving={verificationSaving}
         onVerificationDepthChange={handleVerificationDepthChange}
       />
-      <PublicUrlPanel />
-      <TrustedProxiesPanel />
       <ConfirmDialog
         open={experimentalFeaturesConfirmationOpen}
         contentId="settings-general-experimental-features-dialog"

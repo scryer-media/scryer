@@ -1,5 +1,6 @@
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
   SettingsRecycleBinSection,
@@ -100,6 +101,8 @@ function uniqueItems(items: RecycledItem[]): RecycledItem[] {
 }
 
 export function SettingsRecycleBinContainer() {
+  const [searchParams] = useSearchParams();
+  const initialHistoryItemId = searchParams.get("itemId");
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
@@ -545,6 +548,8 @@ export function SettingsRecycleBinContainer() {
   return (
     <>
       <SettingsRecycleBinSection
+        key={initialHistoryItemId ?? ""}
+        initialHistoryItemId={initialHistoryItemId}
         enabled={settings.enabled}
         path={settings.path}
         retentionDays={settings.retentionDays}

@@ -441,7 +441,7 @@ export function ChangeTitleFolderDialog({
                   {t("title.changeFolderCurrentFolder")}
                 </dt>
                 <dd
-                  className="truncate font-[var(--font-code)] text-foreground"
+                  className="truncate font-[family-name:var(--font-code)] text-foreground"
                   title={currentFolderPath ?? undefined}
                 >
                   {currentFolderPath ??
@@ -453,7 +453,7 @@ export function ChangeTitleFolderDialog({
                   {t("title.changeFolderCurrentRoot")}
                 </dt>
                 <dd
-                  className="truncate font-[var(--font-code)] text-foreground"
+                  className="truncate font-[family-name:var(--font-code)] text-foreground"
                   title={currentRootPath ?? undefined}
                 >
                   {currentRootPath ?? t("title.changeFolderCurrentRootUnknown")}
@@ -486,7 +486,7 @@ export function ChangeTitleFolderDialog({
                 >
                   <SelectTrigger
                     id="change-title-folder-root"
-                    className="h-9 w-full font-[var(--font-code)] text-sm"
+                    className="h-9 w-full font-[family-name:var(--font-code)] text-sm"
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -508,7 +508,7 @@ export function ChangeTitleFolderDialog({
                       id="change-title-folder-breadcrumb-root"
                       type="button"
                       className={cn(
-                        "shrink-0 rounded px-1.5 py-1 font-[var(--font-code)]",
+                        "shrink-0 rounded px-1.5 py-1 font-[family-name:var(--font-code)]",
                         browsePath === selectedRootPath
                           ? "bg-muted text-foreground"
                           : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -530,7 +530,7 @@ export function ChangeTitleFolderDialog({
                           <ChevronRight className="h-3 w-3 text-muted-foreground" />
                           <button
                             type="button"
-                            className="shrink-0 rounded px-1.5 py-1 font-[var(--font-code)] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                            className="shrink-0 rounded px-1.5 py-1 font-[family-name:var(--font-code)] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                             onClick={() => setBrowsePath(segmentPath)}
                             disabled={applying}
                           >
@@ -603,7 +603,7 @@ export function ChangeTitleFolderDialog({
                               >
                                 <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
                                 <span
-                                  className="truncate font-[var(--font-code)] text-sm text-foreground"
+                                  className="truncate font-[family-name:var(--font-code)] text-sm text-foreground"
                                   title={entry.path}
                                 >
                                   {entry.name}
@@ -668,7 +668,7 @@ export function ChangeTitleFolderDialog({
                     {t("title.changeFolderSelectedFolder")}
                   </p>
                   <p
-                    className="truncate font-[var(--font-code)] text-sm text-foreground"
+                    className="truncate font-[family-name:var(--font-code)] text-sm text-foreground"
                     title={preview.selectedFolderPath}
                   >
                     {preview.selectedFolderPath}

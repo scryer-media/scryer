@@ -16,6 +16,10 @@ import {
   type AuthUser,
 } from "@/lib/hooks/use-auth";
 import type { AuthRuntimeState } from "@/lib/types/settings";
+import { useNetworkRestart } from "@/lib/hooks/use-network-restart";
+
+/** Who can reach Scryer once setup is done, as the setup question asks it. */
+type InitialNetworkAccess = "THIS_COMPUTER" | "OTHER_COMPUTERS";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
@@ -118,6 +122,7 @@ export function InitialAuthenticationGate({
         state={handoff ?? data.authRuntimeState}
         onStale={() => refresh({ requestPolicy: "network-only" })}
         onComplete={completeHandoff}
+        onHold={() => setHandoff(data.authRuntimeState)}
       />
     );
   if (stage === "password_replacement" && location.pathname !== "/login")
@@ -248,10 +253,13 @@ function AuthenticationChoice({
   state,
   onStale,
   onComplete,
+  onHold,
 }: {
   state: AuthRuntimeState;
   onStale: () => void;
   onComplete: (adopt: () => void) => Promise<void>;
+  /** Keep this screen up after setup completes, for the restart offer. */
+  onHold: () => void;
 }) {
   const t = useTranslate();
   const { adoptSession } = useAuth();
@@ -265,9 +273,18 @@ function AuthenticationChoice({
   const [acknowledged, setAcknowledged] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transitioning, setTransitioning] = useState(false);
+  const [networkAccess, setNetworkAccess] =
+    useState<InitialNetworkAccess>("THIS_COMPUTER");
+  const [restartOffer, setRestartOffer] = useState<{
+    adopt: () => void;
+  } | null>(null);
+  const restart = useNetworkRestart();
+  const bindEditable = state.bindEditable === true;
   const [{ fetching: mutationFetching }, complete] = useMutation<{
     completeInitialAuthentication: {
       completed: boolean;
+      restartRequiredForBind: boolean;
+      bindIgnoredBecausePinned: boolean;
       login: {
         token: string;
         persistSession: boolean;
@@ -304,6 +321,8 @@ function AuthenticationChoice({
           acknowledgeNoAuthentication:
             mode === "NO_AUTHENTICATION" && acknowledged,
           setupCode: state.initialAuthenticationCodeRequired ? setupCode : null,
+          // A pinned address cannot be chosen here, so nothing is sent for it.
+          networkAccess: bindEditable ? networkAccess : null,
         },
       });
       if (
@@ -321,12 +340,17 @@ function AuthenticationChoice({
         return;
       }
       const login = result.data.completeInitialAuthentication.login;
+      const adopt = () => {
+        if (login) adoptSession(login.token, login.user, login.persistSession);
+      };
+      if (result.data.completeInitialAuthentication.restartRequiredForBind) {
+        onHold();
+        setRestartOffer({ adopt });
+        return;
+      }
       setTransitioning(true);
       try {
-        await onComplete(() => {
-          if (login)
-            adoptSession(login.token, login.user, login.persistSession);
-        });
+        await onComplete(adopt);
       } catch (error) {
         setError(
           userFacingGraphQlErrorMessage(error, t("initialAuth.loadFailed"), t),
@@ -345,12 +369,92 @@ function AuthenticationChoice({
       acknowledged,
       state.initialAuthenticationCodeRequired,
       setupCode,
+      bindEditable,
+      networkAccess,
       t,
       onStale,
       onComplete,
+      onHold,
       adoptSession,
     ],
   );
+  if (restartOffer) {
+    const restarting =
+      restart.phase === "requesting" || restart.phase === "restarting";
+    return (
+      <SetupFrame>
+        <h1
+          id="initial-authentication-restart-heading"
+          className="text-2xl font-semibold"
+        >
+          {t("initialAuth.restartTitle")}
+        </h1>
+        <p>{t("initialAuth.restartBody")}</p>
+        {restart.phase === "restarting" && (
+          <p role="status">{t("initialAuth.restarting")}</p>
+        )}
+        {restart.phase === "unreachable" && (
+          <p role="alert">{t("initialAuth.restartUnreachable")}</p>
+        )}
+        {(restart.error || error) && (
+          <p id="initial-authentication-error" role="alert">
+            {restart.error ?? error}
+          </p>
+        )}
+        <Button
+          id="initial-authentication-restart-now"
+          disabled={restarting || transitioning}
+          onClick={() => {
+            void (async () => {
+              setError(null);
+              try {
+                // Restarting needs the new administrator session, and the
+                // session outlives the reload that follows the restart.
+                await refreshInitialAuthenticationSession(restartOffer.adopt);
+              } catch (cause) {
+                setError(
+                  userFacingGraphQlErrorMessage(
+                    cause,
+                    t("initialAuth.loadFailed"),
+                    t,
+                  ),
+                );
+                return;
+              }
+              await restart.restart();
+            })();
+          }}
+        >
+          {t(restarting ? "initialAuth.restarting" : "initialAuth.restartNow")}
+        </Button>
+        <Button
+          id="initial-authentication-restart-later"
+          variant="outline"
+          disabled={restarting || transitioning}
+          onClick={() => {
+            void (async () => {
+              setTransitioning(true);
+              try {
+                await onComplete(restartOffer.adopt);
+              } catch (cause) {
+                setError(
+                  userFacingGraphQlErrorMessage(
+                    cause,
+                    t("initialAuth.loadFailed"),
+                    t,
+                  ),
+                );
+              } finally {
+                setTransitioning(false);
+              }
+            })();
+          }}
+        >
+          {t("initialAuth.restartLater")}
+        </Button>
+      </SetupFrame>
+    );
+  }
   if (restoring) {
     return (
       <SetupFrame panel={false}>
@@ -451,6 +555,63 @@ function AuthenticationChoice({
             <span>{t("initialAuth.acknowledge")}</span>
           </label>
         )}
+        {bindEditable ? (
+          <fieldset disabled={fetching} className="space-y-3">
+            <legend className="mb-3 font-medium">
+              {t("initialAuth.networkHeading")}
+            </legend>
+            {(["THIS_COMPUTER", "OTHER_COMPUTERS"] as const).map((choice) => (
+              <label key={choice} className="flex gap-3 rounded-lg border p-4">
+                <input
+                  type="radio"
+                  id={
+                    choice === "THIS_COMPUTER"
+                      ? "initial-authentication-network-local"
+                      : "initial-authentication-network-other"
+                  }
+                  name="network-access"
+                  value={choice}
+                  checked={networkAccess === choice}
+                  onChange={() => setNetworkAccess(choice)}
+                />
+                <span>
+                  <span className="block">
+                    {t(
+                      choice === "THIS_COMPUTER"
+                        ? "initialAuth.networkLocal"
+                        : "initialAuth.networkOther",
+                    )}
+                  </span>
+                  <span className="block text-sm text-muted-foreground">
+                    {t(
+                      choice === "THIS_COMPUTER"
+                        ? "initialAuth.networkLocalBody"
+                        : "initialAuth.networkOtherBody",
+                    )}
+                  </span>
+                </span>
+              </label>
+            ))}
+            {mode === "NO_AUTHENTICATION" &&
+              networkAccess === "OTHER_COMPUTERS" && (
+                <p
+                  id="initial-authentication-network-warning"
+                  role="alert"
+                  className="text-sm text-[var(--scry-warning-text)]"
+                >
+                  {t("initialAuth.noAuthNetworkWarning")}
+                </p>
+              )}
+          </fieldset>
+        ) : state.bindPinnedBy ? (
+          <p className="text-sm text-muted-foreground">
+            {t(
+              state.bindPinnedBy === "CONTAINER"
+                ? "initialAuth.networkContainer"
+                : "initialAuth.networkEnvironment",
+            )}
+          </p>
+        ) : null}
         {state.initialAuthenticationCodeRequired && (
           <div>
             <SetupCodeInput

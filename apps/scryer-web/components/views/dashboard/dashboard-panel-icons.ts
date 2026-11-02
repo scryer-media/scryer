@@ -26,4 +26,5 @@ export const DASHBOARD_PANEL_ICONS: Readonly<
   "download-clients": Download,
   storage: HardDrive,
   "active-queue": ActivitySquare,
+  "recycle-bin": Inbox,
 };

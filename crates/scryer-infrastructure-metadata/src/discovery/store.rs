@@ -912,22 +912,27 @@ impl DiscoveryRepository for DiscoveryStore {
     async fn list_public_discovery_section_items(
         &self,
         run_id: &str,
+        section_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
         filters: &DiscoveryHomeFilters,
         limit_per_section: i64,
     ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>> {
-        let sections = self.list_discovery_sections(run_id, Some("public")).await?;
+        let mut sections = self.list_discovery_sections(run_id, Some("public")).await?;
+        if !section_ids.is_empty() {
+            sections.retain(|section| section_ids.contains(&section.section_id));
+        }
         if sections.is_empty() {
             return Ok(Vec::new());
         }
         let rows = fetch_public_section_item_rows(
             &self.datastore,
             run_id,
+            section_ids,
             allowed_media_kinds,
             include_unresolved,
             filters,
-            limit_per_section.clamp(1, 100),
+            limit_per_section.clamp(1, 2_500),
         )
         .await?;
         section_candidates_from_rows(&self.datastore, sections, rows).await
@@ -939,6 +944,7 @@ impl DiscoveryRepository for DiscoveryStore {
         readable_library_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
+        include_owned: bool,
         filters: &DiscoveryHomeFilters,
         limit: i64,
     ) -> AppResult<Vec<DiscoveryHomeCandidate>> {
@@ -948,6 +954,7 @@ impl DiscoveryRepository for DiscoveryStore {
             readable_library_ids,
             allowed_media_kinds,
             include_unresolved,
+            include_owned,
             filters,
             None,
             limit.clamp(1, 5_000),
@@ -970,6 +977,7 @@ impl DiscoveryRepository for DiscoveryStore {
             readable_library_ids,
             allowed_media_kinds,
             include_unresolved,
+            false,
             filters,
             Some(PersonalizedItemSubset::CompleteCollection),
             limit.clamp(1, 2_000),
@@ -2247,6 +2255,7 @@ struct DiscoveryItemsSql {
 async fn fetch_public_section_item_rows(
     datastore: &StoreDatastore,
     run_id: &str,
+    section_ids: &[String],
     allowed_media_kinds: &[String],
     include_unresolved: bool,
     filters: &DiscoveryHomeFilters,
@@ -2273,6 +2282,13 @@ async fn fetch_public_section_item_rows(
     );
     let mut home_filter_clauses = Vec::new();
     append_discovery_home_filters(&mut home_filter_clauses, &mut args, filters);
+    if !section_ids.is_empty() {
+        home_filter_clauses.push(format!(
+            "si.section_id IN ({})",
+            placeholders(section_ids.len())
+        ));
+        args.extend(section_ids.iter().cloned().map(SqlArg::Text));
+    }
     args.push(SqlArg::I64(limit_per_section));
     SqlRuntime::fetch_all(
         datastore.read_exec(),
@@ -2387,6 +2403,7 @@ async fn fetch_personalized_home_candidates(
     readable_library_ids: &[String],
     allowed_media_kinds: &[String],
     include_unresolved: bool,
+    include_owned: bool,
     filters: &DiscoveryHomeFilters,
     subset: Option<PersonalizedItemSubset>,
     limit: i64,
@@ -2401,6 +2418,7 @@ async fn fetch_personalized_home_candidates(
         readable_library_ids,
         allowed_media_kinds,
         include_unresolved,
+        include_owned,
         filters,
         subset,
         limit,
@@ -2415,6 +2433,7 @@ fn personalized_home_candidates_query(
     readable_library_ids: &[String],
     allowed_media_kinds: &[String],
     include_unresolved: bool,
+    include_owned: bool,
     filters: &DiscoveryHomeFilters,
     subset: Option<PersonalizedItemSubset>,
     limit: i64,
@@ -2423,9 +2442,11 @@ fn personalized_home_candidates_query(
     let mut clauses = vec![
         "i.base_generation_id = {}".to_string(),
         "i.tombstoned_at IS NULL".to_string(),
-        "i.owned_in_input = FALSE".to_string(),
         displayable_discovery_title_clause(datastore, "t"),
     ];
+    if !include_owned {
+        clauses.push("i.owned_in_input = FALSE".to_string());
+    }
     if !include_unresolved {
         clauses.push("t.resolved = TRUE".to_string());
     }
@@ -3264,12 +3285,23 @@ fn build_discovery_items_sql(
 
     let mut args = Vec::new();
     let mut sources = Vec::new();
+    // The home filter bar reads the joined title row, so it narrows each
+    // source where `t` is in scope rather than the projected union.
+    let home_filter_clause = |args: &mut Vec<SqlArg>| {
+        if query.home_filters == DiscoveryHomeFilters::default() {
+            return String::new();
+        }
+        let mut clauses = Vec::new();
+        append_discovery_home_filters(&mut clauses, args, &query.home_filters);
+        format!(" AND {}", clauses.join(" AND "))
+    };
     if let Some(context_run_id) = query.context_run_id.as_deref()
         && !query.readable_library_ids.is_empty()
     {
         let mut source_args = vec![SqlArg::Text(context_run_id.to_string())];
         let provenance_clause =
             library_provenance_exists_clause("i", &query.readable_library_ids, &mut source_args);
+        let filter_clause = home_filter_clause(&mut source_args);
         args.extend(source_args);
         sources.push(format!(
             "SELECT {}, 0 AS source_priority
@@ -3278,19 +3310,20 @@ fn build_discovery_items_sql(
                ON t.id = i.discovery_title_id
              WHERE i.base_generation_id = {{}}
                AND i.tombstoned_at IS NULL
-               AND {provenance_clause}",
+               AND {provenance_clause}{filter_clause}",
             discovery_item_projection(datastore, "i", "t")
         ));
     }
     if let Some(public_run_id) = query.public_run_id.as_deref() {
         args.push(SqlArg::Text(public_run_id.to_string()));
+        let filter_clause = home_filter_clause(&mut args);
         sources.push(format!(
             "SELECT {}, 1 AS source_priority
              FROM discovery_items i
              JOIN discovery_titles t
                ON t.id = i.discovery_title_id
              WHERE i.base_generation_id = {{}}
-               AND i.tombstoned_at IS NULL",
+               AND i.tombstoned_at IS NULL{filter_clause}",
             discovery_item_projection(datastore, "i", "t")
         ));
     }
@@ -6349,6 +6382,7 @@ mod tests {
             &[library_id.to_string()],
             &["movie".to_string()],
             true,
+            false,
             &filters,
             None,
             25,
@@ -6373,6 +6407,7 @@ mod tests {
             &[library_id.to_string()],
             &["movie".to_string()],
             true,
+            false,
             &no_rating_filter,
             None,
             25,
@@ -6689,6 +6724,7 @@ mod tests {
         let sections = store
             .list_public_discovery_section_items(
                 run_id,
+                &[],
                 &["movie".to_string()],
                 true,
                 &DiscoveryHomeFilters::default(),
@@ -8091,6 +8127,7 @@ mod tests {
         second_movie.sort_title = Some("Second Movie".to_string());
         second_movie.content_type = Some("movie".to_string());
         second_movie.rank_score = Some(0.2);
+        second_movie.year = Some(2099);
         let mut unknown_content_type = movie_template;
         unknown_content_type.id = "item-row-unknown-kind".to_string();
         unknown_content_type.target_key = "tmdb:movie:12".to_string();
@@ -8114,6 +8151,7 @@ mod tests {
                     include_unresolved: false,
                     ..DiscoveryItemsQuery::default()
                 },
+                home_filters: DiscoveryHomeFilters::default(),
                 limit: 1,
                 offset: 0,
             })
@@ -8132,6 +8170,7 @@ mod tests {
                     include_unresolved: false,
                     ..DiscoveryItemsQuery::default()
                 },
+                home_filters: DiscoveryHomeFilters::default(),
                 limit: 1,
                 offset: 1,
             })
@@ -8139,6 +8178,43 @@ mod tests {
             .expect("second movie page should preserve filtered pagination");
         assert_eq!(second_movie_page.total_count, 2);
         assert_eq!(second_movie_page.items[0].target_key, "tmdb:movie:11");
+        let filtered_query = |home_filters: DiscoveryHomeFilters| DiscoveryItemsStorageQuery {
+            context_run_id: Some("run-1".to_string()),
+            public_run_id: None,
+            readable_library_ids: vec!["series-library-a".to_string()],
+            allowed_media_kinds: vec!["movie".to_string()],
+            filters: DiscoveryItemsQuery {
+                target_keys: vec!["tmdb:movie:10".to_string(), "tmdb:movie:11".to_string()],
+                include_unresolved: false,
+                ..DiscoveryItemsQuery::default()
+            },
+            home_filters,
+            limit: 10,
+            offset: 0,
+        };
+        let year_page = store
+            .query_discovery_items(&filtered_query(DiscoveryHomeFilters {
+                maximum_year: Some(2050),
+                ..DiscoveryHomeFilters::default()
+            }))
+            .await
+            .expect("home filters should narrow a target-key query");
+        assert_eq!(
+            year_page
+                .items
+                .iter()
+                .map(|item| item.target_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tmdb:movie:10"]
+        );
+        let chip_page = store
+            .query_discovery_items(&filtered_query(DiscoveryHomeFilters {
+                content_types: vec!["series".to_string()],
+                ..DiscoveryHomeFilters::default()
+            }))
+            .await
+            .expect("media-type chips should narrow a target-key query");
+        assert_eq!(chip_page.total_count, 0);
 
         store
             .upsert_pending_discovery_context_change(&DiscoveryPendingContextChangeRecord {
@@ -9261,6 +9337,7 @@ mod tests {
             &["movie-library".to_string()],
             &["movie".to_string()],
             true,
+            false,
             &DiscoveryHomeFilters::default(),
             None,
             18,
@@ -9406,6 +9483,7 @@ mod tests {
             &["movie-library".to_string()],
             &["movie".to_string()],
             true,
+            false,
             &DiscoveryHomeFilters::default(),
             None,
             18,
@@ -9439,6 +9517,7 @@ mod tests {
             &["movie-library".to_string()],
             &["movie".to_string()],
             true,
+            false,
             &DiscoveryHomeFilters::default(),
             None,
             18,
@@ -9678,5 +9757,93 @@ mod tests {
             created_at: observed_at,
             updated_at: observed_at,
         }
+    }
+
+    /// Wall-clock cost of loading the personalized home pool at a candidate
+    /// ceiling. Ignored by default: it measures, it does not assert. Run it with
+    /// `cargo nextest run --locked -p scryer-infrastructure-metadata
+    /// --run-ignored only sqlite_personalized_home_pool_timing --no-capture`.
+    #[tokio::test]
+    #[ignore = "timing measurement, run on demand"]
+    async fn sqlite_personalized_home_pool_timing() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_pool_timing_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+        let run_id = "run-pool-timing";
+        let library_id = "timing-library";
+        store
+            .upsert_discovery_sync_run(&discovery_prune_run(
+                run_id,
+                "context_snapshot",
+                "complete",
+                now,
+            ))
+            .await
+            .expect("run should upsert");
+        let genres = ["Crime", "Drama", "Comedy", "Thriller", "Fantasy", "Horror"];
+        let items = (0..3_000usize)
+            .map(|index| {
+                let mut item = discovery_prune_item(run_id, now);
+                item.id = format!("{run_id}:item:{index}");
+                item.target_key = format!("tmdb:movie:{}", 10_000 + index);
+                item.display_title = format!("Pool title {index}");
+                item.sort_title = Some(item.display_title.clone());
+                item.poster_url = Some(format!("https://example.invalid/pool-{index}.jpg"));
+                item.year = Some(1990 + (index % 30) as i32);
+                item.rank_score = Some(5.0);
+                item.recommendation_score = Some((3_000 - index) as f64);
+                item.canonical_tags = canonical_genre_tags(&[
+                    genres[index % genres.len()],
+                    genres[(index / genres.len()) % genres.len()],
+                ]);
+                item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+                    subject_key: format!("tmdb:movie:{}", 50_000 + index % 400),
+                    title_id: Some(format!("timing-title-{}", index % 400)),
+                    library_id: Some(library_id.to_string()),
+                }];
+                item
+            })
+            .collect::<Vec<_>>();
+        store
+            .replace_discovery_items(run_id, &items)
+            .await
+            .expect("items should upsert");
+
+        const ROUNDS: usize = 10;
+        for limit in [1_000i64, 2_500] {
+            let mut samples = Vec::with_capacity(ROUNDS);
+            let mut loaded = 0;
+            for _ in 0..ROUNDS {
+                let started = Instant::now();
+                let candidates = store
+                    .list_personalized_discovery_home_items(
+                        run_id,
+                        &[library_id.to_string()],
+                        &["movie".to_string()],
+                        true,
+                        false,
+                        &DiscoveryHomeFilters::default(),
+                        limit,
+                    )
+                    .await
+                    .expect("pool should load");
+                samples.push(started.elapsed());
+                loaded = candidates.len();
+            }
+            samples.sort();
+            println!(
+                "personalized home pool: limit={limit} loaded={loaded} median={:?} max={:?}",
+                samples[ROUNDS / 2],
+                samples[ROUNDS - 1]
+            );
+        }
+
+        let _ = std::fs::remove_file(db);
     }
 }

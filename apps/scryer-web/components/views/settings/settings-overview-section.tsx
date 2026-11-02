@@ -441,13 +441,13 @@ export function SettingsOverviewSection({
       >
         <div className="space-y-1">
           <h3 className="text-sm font-semibold">
-            {t("settings.verificationDepthTitle")}
+            {t("settings.copyVerificationTitle")}
           </h3>
           <p className="text-muted-foreground">
             {t("settings.verificationDepthHelp")}
           </p>
           <p className="text-muted-foreground">
-            {t("settings.verificationDepthScope")}
+            {t("settings.copyVerificationScope")}
           </p>
         </div>
         <SingleSelectField

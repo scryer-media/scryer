@@ -240,12 +240,11 @@ pub struct UpdateRecycleBinSettings {
     pub retention_days: Option<i64>,
 }
 
-/// How thoroughly a download-client completed-download copy is proven before
-/// its source may be touched (FR-042).
-///
-/// Location operations do not read it: `LOCATION_OPERATION_VERIFICATION_DEPTH`
-/// forces full depth for every library move, root change, and consolidation,
-/// because those relocate the user's only copy.
+/// How thoroughly a copied file is proven before its source may be touched:
+/// download-client completed-download copies and every location operation
+/// (library move, root change, consolidation) use this depth.
+/// `LOCATION_OPERATION_VERIFICATION_DEPTH` is only the default a location plan
+/// carries before the workflow resolves this setting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerificationSettings {
     pub depth: crate::location::model::VerificationDepth,
@@ -264,6 +263,10 @@ pub struct RecycledItem {
     pub size_bytes: u64,
     pub title_id: Option<String>,
     pub title_name: Option<String>,
+    pub title_facet: Option<scryer_domain::MediaFacet>,
+    pub episode_id: Option<String>,
+    pub(crate) original_file_id: Option<String>,
+    pub(crate) replacement_file_id: Option<String>,
     pub reason: String,
     pub recycled_at: String,
     pub scheduled_deletion_at: String,
@@ -276,6 +279,13 @@ pub struct RecycledItem {
 pub enum RecycleRestoreConflictPolicy {
     KeepBoth,
     ReplaceExisting,
+}
+
+/// A bounded, item-correlated projection of durable title history.
+pub struct RecycledItemHistory {
+    pub records: Vec<scryer_domain::TitleHistoryRecord>,
+    /// More candidate history or matching rows exist beyond the summary bounds.
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2907,6 +2917,13 @@ pub enum IndexerSearchOutcome {
     BackedOff {
         until: Option<chrono::DateTime<chrono::Utc>>,
     },
+    /// The indexer's client could not be built, so nothing was sent: its
+    /// plugin is not loaded, or its proxy is missing or disabled. `reason` is
+    /// the stable code of the setup failure. The indexer stays enabled, so
+    /// every search reports it until the operator acts.
+    ClientUnavailable {
+        reason: &'static str,
+    },
     Errored,
 }
 
@@ -4720,6 +4737,7 @@ pub enum UiCatalogViewMode {
     Compact,
     PosterTable,
     Poster,
+    Graph,
 }
 
 impl UiCatalogViewMode {
@@ -4728,6 +4746,7 @@ impl UiCatalogViewMode {
             Self::Compact => "compact",
             Self::PosterTable => "poster-table",
             Self::Poster => "poster",
+            Self::Graph => "graph",
         }
     }
 
@@ -4736,8 +4755,31 @@ impl UiCatalogViewMode {
             "compact" => Some(Self::Compact),
             "poster-table" => Some(Self::PosterTable),
             "poster" => Some(Self::Poster),
+            "graph" => Some(Self::Graph),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod ui_settings_catalog_view_mode_tests {
+    use super::UiCatalogViewMode;
+
+    #[test]
+    fn every_catalog_view_mode_round_trips_through_its_stored_text() {
+        for mode in [
+            UiCatalogViewMode::Compact,
+            UiCatalogViewMode::PosterTable,
+            UiCatalogViewMode::Poster,
+            UiCatalogViewMode::Graph,
+        ] {
+            assert_eq!(UiCatalogViewMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(
+            UiCatalogViewMode::parse("graph"),
+            Some(UiCatalogViewMode::Graph)
+        );
+        assert_eq!(UiCatalogViewMode::parse("map"), None);
     }
 }
 
@@ -4876,6 +4918,10 @@ pub struct UiSettings {
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
+    /// Discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4899,6 +4945,10 @@ pub struct UiSettingsUpdate {
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
+    /// Discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4920,6 +4970,8 @@ impl UiSettings {
             high_contrast_mode: false,
             reduce_motion: false,
             hide_sponsor_button: false,
+            discovery_grid_hide_owned: true,
+            discovery_grid_hide_requested: false,
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),

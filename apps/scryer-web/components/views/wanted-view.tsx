@@ -1464,7 +1464,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                         </div>
                         <div>
                           <span className="block">{t("pending.colSize")}</span>
-                          <span className="font-[var(--font-code)] text-foreground">
+                          <span className="font-[family-name:var(--font-code)] text-foreground">
                             {item.releaseSizeBytes == null
                               ? "—"
                               : formatBytes(item.releaseSizeBytes)}

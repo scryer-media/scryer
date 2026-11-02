@@ -3152,11 +3152,16 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                             format!("download submission failed: {error}"),
                         ));
                     }
+                    // A built-in client names what went wrong as a typed
+                    // failure (a rejected key, an unreachable host); the next
+                    // client may still take the release, as it did when those
+                    // failures were untyped.
                     let should_failover = matches!(
                         error,
                         AppError::Repository(_)
                             | AppError::RepositoryFailure { .. }
                             | AppError::DownloadSubmitUnavailable(_)
+                            | AppError::PluginFailed { .. }
                     );
                     warn!(
                         client_id = config.id.as_str(),

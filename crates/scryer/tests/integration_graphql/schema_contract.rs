@@ -788,8 +788,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"restoreStatus"));
     // Indexer clients add `indexerClients`, the administration list: 196->197.
     assert!(query_field_names.contains(&"indexerClients"));
+    // Recycle-bin item history adds `recycledItemHistory`: 197->198.
+    assert!(query_field_names.contains(&"recycledItemHistory"));
+    // Folder-conflict resolution adds `pendingImportConflictTask`: 198->199.
+    assert!(query_field_names.contains(&"pendingImportConflictTask"));
     assert_eq!(
-        query_field_count, 197,
+        query_field_count, 199,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -867,17 +871,35 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"createFolder"));
     // The first-run authentication decision adds one mutation: 284->285.
     assert!(mutation_field_names.contains(&"completeInitialAuthentication"));
-    // Durable source imports add acceptance, status, retry, and explicit skip.
+    // Restarting so a saved listening address takes effect adds one
+    // mutation: 285->286.
+    assert!(mutation_field_names.contains(&"restartForNetworkChange"));
+    // Folder-conflict resolution adds `previewPendingImportConflicts` and
+    // `resolvePendingImportConflicts`: 286->288.
+    for name in [
+        "previewPendingImportConflicts",
+        "resolvePendingImportConflicts",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
+    // Durable source imports add acceptance, status, retry, and explicit skip:
+    // 288->292.
     for name in [
         "startExternalImportSources",
         "externalImportSourceStatus",
         "retryExternalImportSources",
         "skipExternalImportSource",
     ] {
-        assert!(mutation_field_names.contains(&name));
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
     }
     assert_eq!(
-        mutation_field_count, 289,
+        mutation_field_count, 292,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1276,21 +1298,60 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Tagged alias metadata adds TitleAliasPayload: public types 990->991,
     // OBJECT 534->535.
     assert!(public_type_names.contains(&"TitleAliasPayload"));
-    // Durable source imports add a job progress object and per-item receipt object.
+    // Unroutable search results add InteractiveReleaseSearchUnroutableResultsPayload:
+    // public types 991->992, OBJECT 535->536.
+    assert!(public_type_names.contains(&"InteractiveReleaseSearchUnroutableResultsPayload"));
+    // The listening address adds what pins it and the first-run network
+    // choice: public types 992->994, ENUM 201->203. The stated baseline was
+    // also one OBJECT behind the schema it ran against, so the totals absorb
+    // that drift: public types 994->995, OBJECT 536->537.
+    for name in ["BindPinValue", "InitialNetworkAccess"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Watch-history sweep state on media-server connections adds
+    // MediaServerWatchSignalSyncPayload: public types 995->996, OBJECT 537->538.
+    assert!(public_type_names.contains(&"MediaServerWatchSignalSyncPayload"));
+    // Paged discovery sections and the "browse by" cards add the browse card
+    // payload and two enums (section sort and browse label family): public
+    // types 996->999, OBJECT 538->539, ENUM 203->205. The section input fields,
+    // the section on the items payload and the grid preferences are additive
+    // fields on types that already existed.
+    for name in [
+        "DiscoveryBrowseLabelPayload",
+        "DiscoveryBrowseLabelFamilyValue",
+        "DiscoverySectionSortValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Folder-conflict resolution adds the pending-conflict task, preview, row
+    // and rename payloads, two inputs and two enums: public types 999->1007,
+    // OBJECT 539->543, INPUT_OBJECT 243->245, ENUM 205->207.
+    for name in [
+        "PendingImportConflictTaskPayload",
+        "PendingImportConflictPreviewPayload",
+        "PendingImportConflictInput",
+        "PendingImportConflictPolicy",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Durable source imports add a job progress object and per-item receipt
+    // object: public types 1007->1009, OBJECT 543->545.
     for name in [
         "ExternalImportSourceJobPayload",
         "ExternalImportSourceItemPayload",
     ] {
-        assert!(public_type_names.contains(&name));
+        assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // The library graph catalog view is a GRAPH value on the existing catalog
+    // view mode enum, so every count below is unchanged.
     assert_eq!(
         public_types.len(),
-        993,
+        1009,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 537);
-    assert_eq!(kind_count("INPUT_OBJECT"), 243);
-    assert_eq!(kind_count("ENUM"), 201);
+    assert_eq!(kind_count("OBJECT"), 545);
+    assert_eq!(kind_count("INPUT_OBJECT"), 245);
+    assert_eq!(kind_count("ENUM"), 207);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

@@ -1,0 +1,46 @@
+{
+  "personalizedShelf": [
+    "FROM_YOUR_WATCHLIST",
+    "BECAUSE_YOU_LIKE_TAG",
+    "BECAUSE_YOU_LIKE_GENRE",
+    "TOP_MOVIES_THIS_WEEK",
+    "TOP_SERIES_THIS_WEEK",
+    "TOP_ANIME_THIS_WEEK",
+    "TOP_RATED_FOR_YOU",
+    "TOP_RATED"
+  ],
+  "genericForYouFallback": ["FOR_YOU"],
+  "nonLibraryPersonalized": ["FROM_YOUR_WATCHLIST"],
+  "publicPromotion": ["NEW_ON_STREAMING", "NEW_ON_PHYSICAL"],
+  "worldShelf": [
+    "POPULAR_RIGHT_NOW",
+    "POPULAR_MOVIES",
+    "POPULAR_SERIES",
+    "UPCOMING_MOVIES",
+    "UPCOMING_SERIES",
+    "TOP_RATED",
+    "EVERGREEN_POPULAR",
+    "ANIME_THIS_WEEK",
+    "ANIME_SEASON_STANDOUTS",
+    "MOST_ANTICIPATED_ANIME",
+    "UPCOMING_NEXT_SEASON"
+  ],
+  "curated": ["CURATED"],
+  "suppressedLegacy": [
+    "BECAUSE_YOU_HAVE",
+    "MOVIES_FOR_YOU",
+    "SERIES_FOR_YOU",
+    "ANIME_FOR_YOU"
+  ],
+  "mergedSectionTargets": [
+    ["TRENDING_NOW", "POPULAR_RIGHT_NOW"],
+    ["POPULAR_WITH_ANIME_FANS", "ANIME_THIS_WEEK"]
+  ],
+  "animeOnlyPublic": ["ANIME_THIS_WEEK", "POPULAR_WITH_ANIME_FANS"],
+  "animeExcludingPublic": [
+    "TRENDING_NOW",
+    "POPULAR_RIGHT_NOW",
+    "POPULAR_SERIES"
+  ],
+  "minPublicRailItems": 3
+}

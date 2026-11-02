@@ -100,33 +100,8 @@ use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult};
 use futures_util::{StreamExt, stream};
 
-/// Every location operation verifies at full depth, whatever the operator's
-/// verification preference says.
-///
-/// # Why the preference does not reach here
-///
-/// The configured depth (`VERIFICATION_DEPTH_KEY`, FR-042) governs the
-/// **download-client import copy**: a file Scryer has just acquired, which
-/// still exists at the download client if the copy turns out to be wrong. A
-/// location operation is the opposite situation. It moves content the user
-/// already has — the only copy, in the library, sometimes for years — and the
-/// source is recycled once the destination verifies. Proving that destination
-/// with the sampled head+tail floor instead of a full read-back is a risk taken
-/// with banked data on the user's behalf, and it is not the operator's to take
-/// per-installation: a lost library file is a materially worse outcome than a
-/// re-downloadable import.
-///
-/// So every workflow in this subsystem — root move, root change, cross-library
-/// transfer, and consolidation when it lands — plans
-/// [`VerificationDepth::Full`] and never reads the preference.
-///
-/// This is a floor, not a guarantee of the *achieved* depth. When a full
-/// read-back cannot run, [`crate::location::verify`] still falls back to the
-/// quick floor and records the fallback on the file's verification record and
-/// on the operation's counter (FR-043) — that is a capability limit the user is
-/// told about, which is a different thing from a preference that quietly asked
-/// for less.
-pub const LOCATION_OPERATION_VERIFICATION_DEPTH: VerificationDepth = VerificationDepth::Full;
+/// Default depth for location plans before a workflow resolves the setting.
+pub const LOCATION_OPERATION_VERIFICATION_DEPTH: VerificationDepth = VerificationDepth::Quick;
 
 /// How many titles a root-move preview gathers folder facts for at once.
 ///
@@ -406,6 +381,16 @@ impl AppUseCase {
         &self,
         admission: LocationOperationAdmission<'_>,
     ) -> AppResult<LocationOperationAccepted> {
+        self.admit_location_operation_dispatch(admission, None, true)
+            .await
+    }
+
+    pub(super) async fn admit_location_operation_dispatch(
+        &self,
+        admission: LocationOperationAdmission<'_>,
+        operation_id: Option<String>,
+        dispatch: bool,
+    ) -> AppResult<LocationOperationAccepted> {
         let LocationOperationAdmission {
             actor,
             plan,
@@ -414,7 +399,7 @@ impl AppUseCase {
             failure_message,
         } = admission;
 
-        let operation_id = scryer_domain::Id::new().0;
+        let operation_id = operation_id.unwrap_or_else(|| scryer_domain::Id::new().0);
         let job_run = self
             .open_location_operation_job_run(
                 &operation_id,
@@ -522,7 +507,9 @@ impl AppUseCase {
         }
 
         self.runtime.library.location_runners.transfers.changed();
-        self.spawn_location_operation(operation.id.clone(), execution);
+        if dispatch {
+            self.spawn_location_operation(operation.id.clone(), execution);
+        }
 
         Ok(LocationOperationAccepted { operation, plan })
     }
@@ -1111,10 +1098,12 @@ impl AppUseCase {
             self.services.library.location_operations.as_ref(),
         )
         .await?;
-        Ok(operations
+        let mut runs = operations
             .into_iter()
             .filter_map(|operation| operation.job_run_id)
-            .collect())
+            .collect::<Vec<_>>();
+        runs.extend(self.resumable_conflict_task_job_run_ids().await?);
+        Ok(runs)
     }
 
     /// Boot hook: pick every interrupted location operation back up (FR-033).
@@ -1181,6 +1170,7 @@ impl AppUseCase {
             .library
             .location_runners
             .mark_boot_resume_settled();
+        self.resume_pending_import_conflict_tasks().await?;
         Ok(resumed)
     }
 
@@ -1432,11 +1422,27 @@ impl AppUseCase {
         titles_total: i64,
         actor: LocationJobRunActor<'_>,
     ) -> AppResult<crate::JobRunRecord> {
+        self.open_location_job_run(
+            operation_id,
+            titles_total,
+            actor,
+            format!("location_operation:{operation_id}"),
+        )
+        .await
+    }
+
+    pub(super) async fn open_location_job_run(
+        &self,
+        operation_id: &str,
+        titles_total: i64,
+        actor: LocationJobRunActor<'_>,
+        operation_type: String,
+    ) -> AppResult<crate::JobRunRecord> {
         let now = chrono::Utc::now();
         let mut run = crate::JobRunRecord {
             id: scryer_domain::Id::new().0,
             job_key: crate::JobKey::LocationOperation,
-            operation_type: format!("location_operation:{operation_id}"),
+            operation_type,
             status: crate::JobRunStatus::Running,
             trigger_source: actor.trigger_source(),
             actor_user_id: actor.actor_user_id(),
@@ -1635,13 +1641,15 @@ impl AppUseCase {
 
         let now = chrono::Utc::now();
         run.status = status;
-        run.progress_json = serde_json::to_string(&serde_json::json!({
-            "status": status.as_str(),
-            "phase": "completed",
-            "titlesTotal": counters.map(|counters| counters.titles_total).unwrap_or_default(),
-            "titlesProcessed": counters.map(|counters| counters.titles_processed).unwrap_or_default(),
-        }))
-        .ok();
+        if run.operation_type != "pending_import_conflicts" {
+            run.progress_json = serde_json::to_string(&serde_json::json!({
+                "status": status.as_str(),
+                "phase": "completed",
+                "titlesTotal": counters.map(|counters| counters.titles_total).unwrap_or_default(),
+                "titlesProcessed": counters.map(|counters| counters.titles_processed).unwrap_or_default(),
+            }))
+            .ok();
+        }
         run.summary_json = counters.and_then(|counters| serde_json::to_string(counters).ok());
         run.summary_text = Some(summary_text.clone());
         run.error_text = error_text.clone();
@@ -1703,6 +1711,17 @@ impl AppUseCase {
                 self.recycle_bin_config_for_media_root(Some(root_path))
                     .await,
             );
+        }
+        if let Some(conflict) = &plan.conflict {
+            for root in &conflict.roots {
+                if !configs.contains_key(&root.path) {
+                    configs.insert(
+                        root.path.clone(),
+                        self.recycle_bin_config_for_media_root(Some(&root.path))
+                            .await,
+                    );
+                }
+            }
         }
         RecycleBinSourceRecycler::new(configs)
     }
@@ -1889,6 +1908,21 @@ async fn unavailable_plan_root(
         return None;
     }
     let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    if let Some(conflict) = &plan.conflict {
+        for root in conflict.roots.iter().filter(|root| {
+            conflict.folders.iter().any(|folder| {
+                crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
+            })
+        }) {
+            if seen.insert(&root.path)
+                && !tokio::fs::metadata(stored_path_to_path_buf(&root.path))
+                    .await
+                    .is_ok_and(|metadata| metadata.is_dir())
+            {
+                return Some(format!("a conflict root {}", root.path));
+            }
+        }
+    }
     for title in &plan.titles {
         for (label, root) in [
             ("the source root", title.source_root_path.as_deref()),
@@ -2235,7 +2269,7 @@ impl AppUseCase {
         let folder_template = self
             .title_folder_template_for(&destination_library.facet)
             .await?;
-        let depth = LOCATION_OPERATION_VERIFICATION_DEPTH;
+        let depth = self.resolve_verification_depth().await;
         let probe = SystemVolumeProbe;
         let all_root_paths = self
             .all_library_root_folders()
@@ -3391,6 +3425,32 @@ struct AppUseCaseRootMoveCatalog {
 
 #[async_trait::async_trait]
 impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
+    async fn reconcile_conflict(
+        &self,
+        operation: &LocationOperation,
+        plan: &RootMoveExecutionPlan,
+    ) -> AppResult<()> {
+        self.app.reconcile_folder_conflict(operation, plan).await
+    }
+    async fn clean_up_conflict(
+        &self,
+        operation: &LocationOperation,
+        plan: &RootMoveExecutionPlan,
+        recycler: &dyn crate::location::execution::SourceRecycler,
+    ) -> AppResult<()> {
+        self.app
+            .clean_up_folder_conflict(operation, plan, recycler)
+            .await
+    }
+    async fn admit_conflict(
+        &self,
+        operation: &LocationOperation,
+        plan: &RootMoveExecutionPlan,
+    ) -> AppResult<()> {
+        self.app
+            .validate_folder_conflict(plan, Some(&operation.id))
+            .await
+    }
     async fn has_other_media_at_path(
         &self,
         title_id: &str,
@@ -3462,6 +3522,11 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
         media_file_id: &str,
         hashes: &crate::location::model::PersistedContentHashes,
     ) -> AppResult<()> {
+        if media_file_id.starts_with("conflict-media:") {
+            // Anonymous media gets its durable row only after every destination
+            // verifies. Reconciliation carries this receipt onto the new row.
+            return Ok(());
+        }
         self.app
             .services
             .library

@@ -767,8 +767,12 @@ pub async fn resolve_staged_nzb_for_request(
 #[cfg(test)]
 mod tests {
     use scryer_application::StagedNzbStore;
+    use scryer_outbound_http::OutboundHttpError;
+    use serde_json::{Value, json};
     use std::path::Path;
     use tempfile::TempDir;
+    use wiremock::matchers::{any, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::downloads::staged_nzb_store::FileSystemStagedNzbStore;
 
@@ -1045,5 +1049,95 @@ mod tests {
         )
         .await
         .expect("missing category remains permissive");
+    }
+
+    /// A reqwest connect failure from a port nothing listens on.
+    pub(super) async fn refused_connection_error() -> reqwest::Error {
+        scryer_outbound_http::install_default_rustls_provider();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .expect_err("nothing listens on a released port")
+    }
+
+    pub(super) async fn refused_transport_error(label: &'static str) -> OutboundHttpError {
+        OutboundHttpError::Transport {
+            scope: scryer_outbound_http::RateLimitScopeKey::from(label),
+            request_label: std::borrow::Cow::Borrowed(label),
+            attempts: 1,
+            source: refused_connection_error().await,
+        }
+    }
+
+    fn assert_auth_failed(error: scryer_application::AppError) {
+        match &error {
+            scryer_application::AppError::PluginFailed { failure, .. } => assert_eq!(
+                failure.reason,
+                scryer_application::PluginFailureReason::AuthFailed,
+                "{error:?}"
+            ),
+            other => panic!("expected an auth failure, got {other:?}"),
+        }
+    }
+
+    async fn test_builtin_connection(client_type: &str, server: &MockServer, extra: Value) {
+        let mut config = json!({
+            "host": "127.0.0.1",
+            "port": server.address().port().to_string(),
+        });
+        config
+            .as_object_mut()
+            .expect("object")
+            .extend(extra.as_object().expect("object").clone());
+        let error = <super::BuiltinDownloadClientConnectionTester as scryer_application::BuiltinDownloadClientConnectionTester>::test_connection(
+            &super::BuiltinDownloadClientConnectionTester,
+            client_type,
+            &config.to_string(),
+            None,
+        )
+        .await
+        .expect_err("the client refused the credentials");
+        assert_auth_failed(error);
+    }
+
+    #[tokio::test]
+    async fn a_wrong_credential_is_an_auth_failure_for_every_builtin_client() {
+        let weaver = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&weaver)
+            .await;
+        test_builtin_connection("weaver", &weaver, json!({"api_key": "synthetic-wrong-key"})).await;
+
+        let nzbget = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&nzbget)
+            .await;
+        test_builtin_connection(
+            "nzbget",
+            &nzbget,
+            json!({"username": "synthetic-user", "password": "synthetic-wrong"}),
+        )
+        .await;
+
+        let sabnzbd = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"status": false, "error": "API Key Incorrect"})),
+            )
+            .mount(&sabnzbd)
+            .await;
+        test_builtin_connection(
+            "sabnzbd",
+            &sabnzbd,
+            json!({"api_key": "synthetic-wrong-key"}),
+        )
+        .await;
     }
 }

@@ -2,7 +2,7 @@ import * as React from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useClient } from "urql";
 import { toast } from "sonner";
-import { ExternalAccountInvitesContainer } from "@/components/containers/settings/external-account-invites-container";
+import { NetworkSettingsGroup } from "@/components/containers/settings/network-settings-group";
 import { OAuthClientRegistrationsPanel } from "@/components/containers/settings/oauth-client-registrations-panel";
 import { SettingsSecuritySection } from "@/components/views/settings/settings-security-section";
 import { disposeWsClient } from "@/lib/graphql/ws-client";
@@ -99,8 +99,6 @@ export function SettingsSecurityContainer() {
     passwordMinLengthSaveQueueRef.current = new LatestWinsSaveQueue<string>();
   }
   const passwordMinLengthSaveToastRequestedRef = React.useRef(false);
-  const canManageExternalInvites =
-    user != null && hasAppPermission(user, APP_PERMISSIONS.manageUsers);
   const canManageOAuthApplications =
     user != null &&
     hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
@@ -947,11 +945,7 @@ export function SettingsSecurityContainer() {
       onMfaPasswordLoginChange={handleMfaPasswordLoginChange}
       onTotpJellyfinLoginChange={handleTotpJellyfinLoginChange}
       onTotpEmbyLoginChange={handleTotpEmbyLoginChange}
-      externalAccountInvitesPanel={
-        canManageExternalInvites ? (
-          <ExternalAccountInvitesContainer showMediaServersLink />
-        ) : null
-      }
+      networkPanel={<NetworkSettingsGroup />}
       oauthApplicationsPanel={
         canManageOAuthApplications ? <OAuthClientRegistrationsPanel /> : null
       }

@@ -334,6 +334,9 @@ pub mod library {
     pub const RENAME_PATH_OUTSIDE_ROOT: &str = "LIBRARY_RENAME_PATH_OUTSIDE_ROOT";
     /// The selected title folders overlap.
     pub const RENAME_FOLDERS_OVERLAP: &str = "LIBRARY_RENAME_FOLDERS_OVERLAP";
+    /// An Additional movie or its companion cannot safely follow a folder rename.
+    pub const RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED: &str =
+        "LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED";
     /// The template optional group is invalid.
     pub const TEMPLATE_OPTIONAL_GROUP_INVALID: &str = "LIBRARY_TEMPLATE_OPTIONAL_GROUP_INVALID";
     /// The folder is not a valid title boundary for scanning.
@@ -429,6 +432,7 @@ pub mod library {
         DELETE_TARGET_NOT_FILE,
         RENAME_PATH_OUTSIDE_ROOT,
         RENAME_FOLDERS_OVERLAP,
+        RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED,
         TEMPLATE_OPTIONAL_GROUP_INVALID,
         SCAN_FOLDER_BOUNDARY_INVALID,
     ];
@@ -4150,6 +4154,58 @@ pub mod indexer_caps {
     }
 }
 
+/// Why a title search removed an indexer's releases before scoring them.
+pub mod release_search {
+    /// No enabled download client accepts Usenet releases (NZB files or links).
+    pub const NO_USENET_CLIENT: &str = "RELEASE_SEARCH_NO_USENET_CLIENT";
+    /// No enabled download client accepts torrent releases (torrent files or magnets).
+    pub const NO_TORRENT_CLIENT: &str = "RELEASE_SEARCH_NO_TORRENT_CLIENT";
+    /// No enabled download client accepts direct HTTP downloads.
+    pub const NO_HTTP_CLIENT: &str = "RELEASE_SEARCH_NO_HTTP_CLIENT";
+    /// No loaded download client accepts Usenet releases, and an enabled
+    /// client's plugin is blocked or uninstalled.
+    pub const USENET_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_USENET_CLIENT_PLUGIN_UNAVAILABLE";
+    /// No loaded download client accepts torrent releases, and an enabled
+    /// client's plugin is blocked or uninstalled.
+    pub const TORRENT_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_TORRENT_CLIENT_PLUGIN_UNAVAILABLE";
+    /// No loaded download client accepts direct HTTP downloads, and an
+    /// enabled client's plugin is blocked or uninstalled.
+    pub const HTTP_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_HTTP_CLIENT_PLUGIN_UNAVAILABLE";
+    /// An automatic search set a release aside because its indexer has used
+    /// its whole grab allowance.
+    pub const INDEXER_GRAB_QUOTA_EXHAUSTED: &str = "RELEASE_SEARCH_INDEXER_GRAB_QUOTA_EXHAUSTED";
+    /// Every reason a title search reports for removed releases.
+    pub const ALL: &[&str] = &[
+        NO_USENET_CLIENT,
+        NO_TORRENT_CLIENT,
+        NO_HTTP_CLIENT,
+        USENET_CLIENT_PLUGIN_UNAVAILABLE,
+        TORRENT_CLIENT_PLUGIN_UNAVAILABLE,
+        HTTP_CLIENT_PLUGIN_UNAVAILABLE,
+        INDEXER_GRAB_QUOTA_EXHAUSTED,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("RELEASE_SEARCH_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
 pub mod integration {
     /// Indexer provider is unavailable.
     pub const INDEXER_PROVIDER_UNAVAILABLE: &str = "INTEGRATION_INDEXER_PROVIDER_UNAVAILABLE";
@@ -4183,6 +4239,9 @@ pub mod integration {
         "INTEGRATION_PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC";
     /// Indexer connection test failed.
     pub const INDEXER_CONNECTION_TEST_FAILED: &str = "INTEGRATION_INDEXER_CONNECTION_TEST_FAILED";
+    /// A built-in download client's connection test failed in a way the client did not classify.
+    pub const DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED: &str =
+        "INTEGRATION_DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED";
     /// Base URL must use http or https.
     pub const BASE_URL_INVALID: &str = "INTEGRATION_BASE_URL_INVALID";
     /// Base URL must include a host.
@@ -4495,6 +4554,7 @@ pub mod integration {
         PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS,
         PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC,
         INDEXER_CONNECTION_TEST_FAILED,
+        DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED,
         BASE_URL_INVALID,
         BASE_URL_HOST_REQUIRED,
         BASE_URL_CREDENTIALS_FORBIDDEN,
@@ -5852,6 +5912,36 @@ pub mod media {
     ];
 }
 
+pub mod network {
+    /// The listening address is not an IPv4 or IPv6 address.
+    pub const BIND_HOST_INVALID: &str = "NETWORK_BIND_HOST_INVALID";
+    /// `SCRYER_BIND` sets the listening address, so the saved one cannot change it.
+    pub const BIND_ENV_PINNED: &str = "NETWORK_BIND_ENV_PINNED";
+    /// A request asked to save and to clear the listening address together.
+    pub const BIND_SAVE_AND_RESET: &str = "NETWORK_BIND_SAVE_AND_RESET";
+    /// The configured address could not be listened on, so loopback is used.
+    pub const BIND_FALLBACK_UNBINDABLE: &str = "NETWORK_BIND_FALLBACK_UNBINDABLE";
+    /// The saved listening address is not a valid address, so the default is used.
+    pub const BIND_STORED_HOST_INVALID: &str = "NETWORK_BIND_STORED_HOST_INVALID";
+    /// The saved listening address could not be read at startup, so the default is used.
+    pub const BIND_STORED_HOST_UNREADABLE: &str = "NETWORK_BIND_STORED_HOST_UNREADABLE";
+    /// Nothing about the listening address waits for a restart.
+    pub const RESTART_NOT_REQUIRED: &str = "NETWORK_RESTART_NOT_REQUIRED";
+    /// This process cannot restart itself.
+    pub const RESTART_UNAVAILABLE: &str = "NETWORK_RESTART_UNAVAILABLE";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        BIND_HOST_INVALID,
+        BIND_ENV_PINNED,
+        BIND_SAVE_AND_RESET,
+        BIND_FALLBACK_UNBINDABLE,
+        BIND_STORED_HOST_INVALID,
+        BIND_STORED_HOST_UNREADABLE,
+        RESTART_NOT_REQUIRED,
+        RESTART_UNAVAILABLE,
+    ];
+}
+
 pub mod scripts {
     /// The script schedule is invalid.
     pub const SCHEDULE_INVALID: &str = "SCRIPTS_SCHEDULE_INVALID";
@@ -5867,6 +5957,7 @@ mod tests {
         let areas: &[(&str, &[&str])] = &[
             ("METADATA_GATEWAY_", metadata_gateway::ALL),
             ("SCRIPTS_", scripts::ALL),
+            ("NETWORK_", network::ALL),
             ("LIBRARY_", library::ALL),
             ("EXTERNAL_IMPORT_", external_import::ALL),
             ("CATALOG_", catalog::ALL),

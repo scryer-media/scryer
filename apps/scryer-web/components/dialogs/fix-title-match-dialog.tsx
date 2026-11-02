@@ -214,7 +214,7 @@ export function FixTitleMatchDialog({
             />
             <div className="text-xs text-muted-foreground sm:min-w-[180px]">
               {t("title.fixMatchCurrentTvdbId")}:{" "}
-              <span className="font-[var(--font-code)]">
+              <span className="font-[family-name:var(--font-code)]">
                 {existingTvdbId ?? t("title.fixMatchCurrentTvdbNone")}
               </span>
             </div>

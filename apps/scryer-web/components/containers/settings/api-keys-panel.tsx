@@ -36,6 +36,9 @@ import { myApiKeysQuery } from "@/lib/graphql/queries";
 import type { ApiKeySummary, UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { copyText, selectFieldById } from "@/lib/utils/clipboard";
+
+const REVEALED_API_KEY_FIELD_ID = "settings-profile-api-key-revealed";
 
 type MyApiKeysQueryResult = {
   canCreateMyApiKeys: boolean;
@@ -252,17 +255,16 @@ export function ApiKeysPanel({
     if (!revealed) {
       return;
     }
-    try {
-      if (!navigator.clipboard) {
-        throw new Error("Clipboard access is unavailable.");
-      }
-      await navigator.clipboard.writeText(revealed);
+    const taken = await copyText(revealed);
+    // The key is selected either way: a copy the browser refuses leaves the
+    // user's own copy keystroke as the next thing to do.
+    selectFieldById(REVEALED_API_KEY_FIELD_ID);
+    if (taken) {
       setRevealedCopied(true);
       setStatus(null);
-    } catch (error) {
-      setStatus(
-        errorMessage(error, t("error.fallback.unableToCopyTheAPIKey"), t),
-      );
+    } else {
+      setRevealedCopied(false);
+      setStatus(t("status.copyFailedSelected"));
     }
   }, [revealed, t]);
 
@@ -376,16 +378,18 @@ export function ApiKeysPanel({
                 readOnly
                 value={revealed}
                 size={revealed.length + 2}
-                id="settings-profile-api-key-revealed"
+                id={REVEALED_API_KEY_FIELD_ID}
                 aria-label="New API key"
-                className="h-10 w-auto max-w-full rounded-r-none font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
+                className="h-10 w-auto max-w-full rounded-r-none font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]"
               />
               <Button
                 type="button"
                 variant="outline"
                 size="icon-sm"
                 className={`-ml-px h-10 shrink-0 rounded-l-none ${revealedCopied ? "text-emerald-600 dark:text-emerald-300" : ""}`}
-                aria-label={revealedCopied ? "API key copied" : "Copy API key"}
+                aria-label={
+                  revealedCopied ? t("label.copied") : t("label.copy")
+                }
                 onClick={() => void copyRevealedKey()}
               >
                 {revealedCopied ? (
@@ -510,7 +514,7 @@ export function ApiKeysPanel({
                     <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
                       <div className="min-w-0">
                         <dt className="text-[var(--scry-muted3)]">Actor</dt>
-                        <dd className="truncate font-[var(--font-code)] text-[var(--scry-ink2)]">
+                        <dd className="truncate font-[family-name:var(--font-code)] text-[var(--scry-ink2)]">
                           {key.actor}
                         </dd>
                       </div>

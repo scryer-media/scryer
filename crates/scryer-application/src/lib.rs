@@ -14,6 +14,7 @@ pub mod http_release_refusal;
 pub mod indexer_clients;
 pub mod initial_auth;
 pub mod login_challenge_refusal;
+pub mod network_bind;
 pub mod public_url;
 pub mod rate_limit_proxy_policy;
 pub mod title_delete;
@@ -199,15 +200,16 @@ pub use ports::{
     CatalogDiscoveryCandidatesRecord, CatalogDiscoveryGroup, CatalogDiscoveryGroupKind,
     CatalogDiscoveryQuery, CatalogDiscoveryResult, CatalogDiscoverySectionCandidatesRecord,
     CatalogDiscoverySurface, DISCOVERY_DEFAULT_SCOPE_KEY, DiscoveryAffinitySignalRecord,
-    DiscoveryCanonicalTagFilterOption, DiscoveryContextIncrementalCommit,
-    DiscoveryContextSnapshotCommit, DiscoveryExternalIdRecord, DiscoveryFacetRecord,
-    DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeFilters, DiscoveryHomeQuery,
-    DiscoveryHomeResult, DiscoveryHomeSectionCandidatesRecord, DiscoveryItemDetailQuery,
-    DiscoveryItemLibraryProvenanceRecord, DiscoveryItemRecord, DiscoveryItemsPageRecord,
-    DiscoveryItemsQuery, DiscoveryItemsResult, DiscoveryItemsStorageQuery,
-    DiscoveryPendingContextChangeRecord, DiscoveryPruneReport, DiscoveryPublicFeedCommit,
-    DiscoveryRankComponentRecord, DiscoveryRepository, DiscoverySectionItemsRecord,
-    DiscoverySectionRecord, DiscoverySectionResult, DiscoverySourceTagRecord,
+    DiscoveryBrowseLabel, DiscoveryBrowseLabelFamily, DiscoveryCanonicalTagFilterOption,
+    DiscoveryContextIncrementalCommit, DiscoveryContextSnapshotCommit, DiscoveryExternalIdRecord,
+    DiscoveryFacetRecord, DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeFilters,
+    DiscoveryHomeQuery, DiscoveryHomeResult, DiscoveryHomeSectionCandidatesRecord,
+    DiscoveryItemDetailQuery, DiscoveryItemLibraryProvenanceRecord, DiscoveryItemRecord,
+    DiscoveryItemsPageRecord, DiscoveryItemsQuery, DiscoveryItemsResult,
+    DiscoveryItemsStorageQuery, DiscoveryPendingContextChangeRecord, DiscoveryPruneReport,
+    DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord, DiscoveryRepository,
+    DiscoverySectionItemsQuery, DiscoverySectionItemsRecord, DiscoverySectionRecord,
+    DiscoverySectionResult, DiscoverySectionSort, DiscoverySourceTagRecord,
     DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord, DiscoverySyncStateRecord,
     DiscoverySyncStatus, EpisodeImageUrlUpdate, MediaRequestQualityProfileReferenceCounts,
     MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
@@ -249,9 +251,8 @@ pub use plugins::catalog::blake3_digest as plugin_wasm_blake3_digest;
 pub use plugins::catalog::decompress_zstd as plugin_wasm_decompress_zstd;
 pub use plugins::catalog::verify_split_digest as plugin_wasm_verify_split_digest;
 pub use plugins::managed_rules;
-pub use plugins::plugins::RUNTIME_PLUGIN_LOAD_CONCURRENCY;
+pub use plugins::plugins::RuntimePluginLoadReport;
 pub use plugins::plugins::decode_persisted_plugin_wasm_payload;
-pub use plugins::plugins::load_runtime_plugin_from_persisted_installation_payload;
 pub use plugins::settings::PluginSettingsView;
 pub use quality::evaluations::{
     FileScoreEvaluation, FileScoreEvaluationView, ScoreEvaluationEntry, ScoreRefreshSelection,
@@ -697,7 +698,10 @@ pub use ports::{
     title_lookup_forms, titles_matching_external_id, titles_matching_lookup_key_shapes,
     titles_matching_lookup_keys,
 };
-pub use ports::{MediaServerSignalRepository, MediaServerSignalSource, ProviderPlayedItem};
+pub use ports::{
+    MediaServerSignalReader, MediaServerSignalRepository, MediaServerSignalSource,
+    ProviderPlayedItem, SignalReadFailure,
+};
 pub use quality::release_parser::{
     AudioCodec, ExternalIdSource, ParsedEpisodeMetadata, ParsedEpisodeReleaseType,
     ParsedReleaseMetadata, ParsedSpecialKind, ParsedStereoscopy, ReleaseParseAnalysis,
@@ -814,11 +818,11 @@ pub use types::{
     PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
     PrimaryCollectionSummary, ReassignEpisodeFileResult, RecycleBinBatchJobAccepted,
     RecycleBinSettings, RecycleRestoreConflictPolicy, RecycleRestorePreview,
-    RecycleRestorePreviewItem, RecycledItem, ReleaseDecision, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureRecord, ReleaseDownloadFailureSignature, ResolvePendingImportResult,
-    RuntimePathStyle, ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics,
-    TitleAward, TitleCatalogAggregates, TitleCatalogContentStatus, TitleCatalogFilter,
-    TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogPresence,
+    RecycleRestorePreviewItem, RecycledItem, RecycledItemHistory, ReleaseDecision,
+    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureRecord, ReleaseDownloadFailureSignature,
+    ResolvePendingImportResult, RuntimePathStyle, ScopedExternalId, SortDirection, SystemHealth,
+    TitleAcquisitionDiagnostics, TitleAward, TitleCatalogAggregates, TitleCatalogContentStatus,
+    TitleCatalogFilter, TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogPresence,
     TitleCatalogProfileNames, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary, TitleExternalRating,
     TitleImageBlob, TitleImageKind, TitleImageSourceResult, TitleImageSyncTask,

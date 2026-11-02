@@ -85,10 +85,8 @@ pub struct RecycleBinRelocationFailurePayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Verification depth applied to download-client completed-download copies.
-/// Location operations (library moves, root changes, consolidations) always
-/// verify in full and ignore this preference: they move the only copy of the
-/// content, so the stronger guarantee is a floor rather than a choice.
+/// Verification depth applied to download-client completed-download copies
+/// and to location operations (library moves, root changes, consolidations).
 pub struct VerificationSettingsPayload {
     /// Depth applied when proving a copied file before its source is touched.
     pub depth: VerificationDepthValue,
@@ -448,6 +446,8 @@ pub enum UiCatalogViewModeValue {
     PosterTable,
     /// Poster grid.
     Poster,
+    /// Graph of how the library's titles relate.
+    Graph,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -486,6 +486,10 @@ pub struct UiSettingsPayload {
     pub reduce_motion: bool,
     /// Whether the sponsor button is hidden.
     pub hide_sponsor_button: bool,
+    /// Whether discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Whether discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
@@ -589,6 +593,12 @@ pub struct SetMyUiSettingsInput {
     pub reduce_motion: bool,
     /// Whether the sponsor button should be hidden.
     pub hide_sponsor_button: bool,
+    /// Whether discovery section grids leave out titles already in a library;
+    /// omitted or null preserves the saved value.
+    pub discovery_grid_hide_owned: Option<bool>,
+    /// Whether discovery section grids leave out titles with a pending
+    /// request; omitted or null preserves the saved value.
+    pub discovery_grid_hide_requested: Option<bool>,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
@@ -660,6 +670,12 @@ pub struct AuthRuntimeStatePayload {
     pub initial_authentication_stage: Option<String>,
     /// Whether the pending initial choice requires the operator's console code.
     pub initial_authentication_code_required: bool,
+    /// Whether initial setup may choose who can reach this instance. False
+    /// outside the pending initial choice and while SCRYER_BIND sets the address.
+    pub bind_editable: bool,
+    /// What sets the listening address during the pending initial choice;
+    /// null when setup may choose it or setup is not pending.
+    pub bind_pinned_by: Option<BindPinValue>,
     /// Minimum length for the administrator's new password.
     pub password_min_length: i32,
     /// Effective form-login state.
@@ -1056,10 +1072,26 @@ pub struct ServiceSettingsPayload {
     pub base_path: String,
     /// Where the base path comes from; never the saved settings.
     pub base_path_source: ConfigValueSourceValue,
-    /// Listening address and port.
+    /// Address and port the server is listening on now.
     pub bind_address: String,
-    /// Where the listening address comes from; never the saved settings.
+    /// Where the listening address comes from.
     pub bind_source: ConfigValueSourceValue,
+    /// Saved listening host, shown even while SCRYER_BIND overrides it.
+    pub bind_saved_host: Option<String>,
+    /// False while SCRYER_BIND sets the listening address.
+    pub bind_editable: bool,
+    /// What pins the listening address; null when it can be changed here.
+    pub bind_pinned_by: Option<BindPinValue>,
+    /// Address and port the next start listens on.
+    pub bind_pending: String,
+    /// Whether a restart is needed for the saved listening address to apply.
+    pub bind_restart_required: bool,
+    /// Stable reason the server is not listening where configured; null when it is.
+    pub bind_fallback_code: Option<String>,
+    /// Address that could not be used, when there was one.
+    pub bind_fallback_address: Option<String>,
+    /// Operating-system or parse detail for the fallback, for display only.
+    pub bind_fallback_reason: Option<String>,
     /// Passkey relying-party ID in effect since startup.
     pub passkey_rp_id: Option<String>,
     /// Passkey relying-party origin in effect since startup.
@@ -1093,6 +1125,25 @@ pub struct PublicUrlChangePreviewPayload {
     pub passkey_only_user_count: Option<i64>,
     /// Whether the save must set acknowledgePasskeyImpact.
     pub acknowledgement_required: bool,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What sets the listening address when it cannot be changed from Scryer.
+pub enum BindPinValue {
+    /// The SCRYER_BIND environment variable.
+    Environment,
+    /// SCRYER_BIND inside a container; its published ports decide who can reach Scryer.
+    Container,
+}
+
+impl BindPinValue {
+    pub fn from_application(pin: scryer_application::network_bind::BindPin) -> Self {
+        match pin {
+            scryer_application::network_bind::BindPin::Environment => Self::Environment,
+            scryer_application::network_bind::BindPin::Container => Self::Container,
+        }
+    }
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -1358,6 +1409,11 @@ pub struct UpdateServiceSettingsInput {
     /// Required when the public URL change moves or disables passkeys while
     /// any are registered.
     pub acknowledge_passkey_impact: Option<bool>,
+    /// Save the listening host (an IPv4 or IPv6 address, no port); applies on
+    /// the next start. Omission preserves the saved value.
+    pub bind_host: Option<String>,
+    /// Clear the saved listening host so the next start listens on loopback.
+    pub reset_bind_host: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]
@@ -1493,10 +1549,8 @@ pub struct UpdateRecycleBinSettingsInput {
 }
 
 #[derive(InputObject, Clone)]
-/// Verification depth applied to download-client completed-download copies.
-/// Location operations (library moves, root changes, consolidations) always
-/// verify in full and ignore this preference: they move the only copy of the
-/// content, so the stronger guarantee is a floor rather than a choice.
+/// Verification depth applied to download-client completed-download copies
+/// and to location operations (library moves, root changes, consolidations).
 pub struct UpdateVerificationSettingsInput {
     /// Depth applied when proving a copied file before its source is touched.
     pub depth: VerificationDepthValue,

@@ -227,7 +227,7 @@ export function ExclusionTitleSearch({
                         </span>
                       ) : null}
                     </span>
-                    <span className="block truncate font-[var(--font-code)] text-xs text-muted-foreground">
+                    <span className="block truncate font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                       {fields.ids}
                     </span>
                   </span>

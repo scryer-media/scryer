@@ -1209,7 +1209,8 @@ fn row_to_user(row: &SqlRow) -> AppResult<User> {
 // preferences live in user_ui_settings.
 const UI_SETTINGS_SELECT: &str =
     "SELECT user_id, theme, palette, date_time_format, highlight_color, secondary_color, high_contrast_mode,
-            reduce_motion, hide_sponsor_button, density, sidebar_mode, default_landing_view,
+            reduce_motion, hide_sponsor_button, discovery_grid_hide_owned,
+            discovery_grid_hide_requested, density, sidebar_mode, default_landing_view,
             (SELECT locale FROM users WHERE users.id = user_ui_settings.user_id) AS language,
             created_at, updated_at
        FROM user_ui_settings
@@ -1283,9 +1284,10 @@ async fn upsert_ui_settings_tx(
     tx.execute(
         "INSERT INTO user_ui_settings (
              user_id, theme, palette, date_time_format, highlight_color, secondary_color, high_contrast_mode, reduce_motion,
-             hide_sponsor_button, density, sidebar_mode, default_landing_view, created_at, updated_at
+             hide_sponsor_button, discovery_grid_hide_owned, discovery_grid_hide_requested, density,
+             sidebar_mode, default_landing_view, created_at, updated_at
          )
-         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
          ON CONFLICT(user_id) DO UPDATE SET
              theme = excluded.theme,
              palette = excluded.palette,
@@ -1295,6 +1297,8 @@ async fn upsert_ui_settings_tx(
              high_contrast_mode = excluded.high_contrast_mode,
              reduce_motion = excluded.reduce_motion,
              hide_sponsor_button = excluded.hide_sponsor_button,
+             discovery_grid_hide_owned = excluded.discovery_grid_hide_owned,
+             discovery_grid_hide_requested = excluded.discovery_grid_hide_requested,
              density = excluded.density,
              sidebar_mode = excluded.sidebar_mode,
              default_landing_view = excluded.default_landing_view,
@@ -1309,6 +1313,8 @@ async fn upsert_ui_settings_tx(
             SqlArg::Bool(settings.high_contrast_mode),
             SqlArg::Bool(settings.reduce_motion),
             SqlArg::Bool(settings.hide_sponsor_button),
+            SqlArg::Bool(settings.discovery_grid_hide_owned),
+            SqlArg::Bool(settings.discovery_grid_hide_requested),
             SqlArg::Text(settings.density.as_str().to_string()),
             SqlArg::Text(settings.sidebar_mode.as_str().to_string()),
             SqlArg::Text(settings.default_landing_view.as_str().to_string()),
@@ -1404,6 +1410,8 @@ fn row_to_ui_settings(row: &SqlRow) -> AppResult<UiSettings> {
         high_contrast_mode: row.bool("high_contrast_mode")?,
         reduce_motion: row.bool("reduce_motion")?,
         hide_sponsor_button: row.bool("hide_sponsor_button")?,
+        discovery_grid_hide_owned: row.bool("discovery_grid_hide_owned")?,
+        discovery_grid_hide_requested: row.bool("discovery_grid_hide_requested")?,
         density: parse_ui_density(row.text("density")?)?,
         sidebar_mode: parse_ui_sidebar_mode(row.text("sidebar_mode")?)?,
         default_landing_view: parse_ui_default_landing_view(row.text("default_landing_view")?)?,
@@ -1866,6 +1874,8 @@ mod tests {
                 high_contrast_mode INTEGER NOT NULL DEFAULT 0,
                 reduce_motion INTEGER NOT NULL DEFAULT 0,
                 hide_sponsor_button INTEGER NOT NULL DEFAULT 0,
+                discovery_grid_hide_owned INTEGER NOT NULL DEFAULT 1,
+                discovery_grid_hide_requested INTEGER NOT NULL DEFAULT 0,
                 density TEXT NOT NULL DEFAULT 'comfortable',
                 sidebar_mode TEXT NOT NULL DEFAULT 'expanded',
                 default_landing_view TEXT NOT NULL DEFAULT 'movies',
@@ -2260,6 +2270,8 @@ mod tests {
                 high_contrast_mode: true,
                 reduce_motion: true,
                 hide_sponsor_button: true,
+                discovery_grid_hide_owned: false,
+                discovery_grid_hide_requested: true,
                 density: UiDensity::Compact,
                 sidebar_mode: UiSidebarMode::Collapsed,
                 default_landing_view: UiDefaultLandingView::Calendar,
@@ -2291,6 +2303,8 @@ mod tests {
         assert_eq!(stored.palette, UiPalette::Papyrus);
         assert_eq!(stored.date_time_format, UiDateTimeFormat::Iso24h);
         assert!(stored.hide_sponsor_button);
+        assert!(!stored.discovery_grid_hide_owned);
+        assert!(stored.discovery_grid_hide_requested);
         assert_eq!(stored.table_columns.len(), 2);
         assert_eq!(stored.table_columns[0].column_id, "name");
         assert_eq!(stored.table_columns[1].column_id, "episodes");
@@ -2328,6 +2342,8 @@ mod tests {
                 high_contrast_mode: false,
                 reduce_motion: false,
                 hide_sponsor_button: false,
+                discovery_grid_hide_owned: true,
+                discovery_grid_hide_requested: false,
                 density: UiDensity::Comfortable,
                 sidebar_mode: UiSidebarMode::Expanded,
                 default_landing_view: UiDefaultLandingView::Movies,
@@ -2485,6 +2501,8 @@ mod tests {
             high_contrast_mode: false,
             reduce_motion: false,
             hide_sponsor_button: true,
+            discovery_grid_hide_owned: true,
+            discovery_grid_hide_requested: false,
             density: loaded.density,
             sidebar_mode: loaded.sidebar_mode,
             default_landing_view: loaded.default_landing_view,
@@ -2600,6 +2618,40 @@ mod tests {
         ] {
             assert_eq!(count_user_rows(&store, table, &user.id).await, 0, "{table}");
         }
+    }
+
+    #[tokio::test]
+    async fn catalog_graph_view_mode_round_trips() {
+        let store = test_store().await;
+        let user = UserRepository::create(&store, test_user("catalog_graph_user"))
+            .await
+            .expect("create user");
+
+        UserUiSettingsRepository::set_catalog_view(
+            &store,
+            &user.id,
+            UiCatalogViewUpdate {
+                device_class: UiDeviceClass::Desktop,
+                facet: UiSettingsFacet::Anime,
+                view_mode: Some(UiCatalogViewMode::Graph),
+                columns: None,
+            },
+        )
+        .await
+        .expect("save graph view mode");
+
+        let loaded = UserUiSettingsRepository::get_by_user_id(&store, &user.id)
+            .await
+            .expect("load settings")
+            .expect("settings exist");
+        assert_eq!(
+            loaded.catalog_views,
+            vec![UiCatalogViewSetting {
+                device_class: UiDeviceClass::Desktop,
+                facet: UiSettingsFacet::Anime,
+                view_mode: UiCatalogViewMode::Graph,
+            }]
+        );
     }
 
     #[tokio::test]
@@ -2737,6 +2789,8 @@ mod tests {
             high_contrast_mode: false,
             reduce_motion: false,
             hide_sponsor_button: false,
+            discovery_grid_hide_owned: true,
+            discovery_grid_hide_requested: false,
             density: current.density,
             sidebar_mode: current.sidebar_mode,
             default_landing_view: current.default_landing_view,

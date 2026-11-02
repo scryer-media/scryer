@@ -38,6 +38,17 @@ use tracing::{debug, warn};
 pub(crate) const DISCOVERY_CONTEXT_CHANGES_MAX_CHANGED_SUBJECTS: usize = 250;
 const DISCOVERY_HOME_MIN_CANDIDATES: usize = 500;
 const DISCOVERY_HOME_MAX_CANDIDATES: usize = 2_000;
+/// The personalized pool a section page reads, and so how deep a personalized
+/// section can go. The home reads a prefix of the same ordered pool
+/// (`personalized_home_candidate_limit`), which is what a section rebuilds
+/// the home's rails and evidence median from.
+const DISCOVERY_PERSONALIZED_SECTION_MAX_CANDIDATES: usize = 2_500;
+/// How deep a public section page can go.
+const DISCOVERY_PUBLIC_SECTION_MAX_ITEMS: usize = 2_500;
+const DISCOVERY_FOR_YOU_SECTION_ID: &str = "for_you";
+/// Titles read per query when building the library affinity profile, kept
+/// well under every datastore's bound-parameter limit.
+const DISCOVERY_AFFINITY_TITLE_BATCH: usize = 500;
 const DISCOVERY_COMPLETE_COLLECTION_MIN_CANDIDATES: usize = 100;
 const DISCOVERY_COMPLETE_COLLECTION_MAX_CANDIDATES: usize = 500;
 const CATALOG_ANIME_WEEKLY_SECTION_ID: &str = "anime_this_week";
@@ -228,13 +239,20 @@ mod catalog;
 mod context;
 mod home;
 mod medium;
+mod rail_labels;
 mod records;
+mod section;
+mod watchlist;
 
 use catalog::*;
 use context::*;
 use home::*;
 use medium::*;
+use rail_labels::*;
 use records::*;
+pub(crate) use section::DiscoverySectionCache;
+use section::*;
+use watchlist::*;
 
 pub(crate) use catalog::discovery_library_growth_warrants_snapshot;
 #[cfg(test)]
@@ -449,8 +467,9 @@ impl AppUseCase {
         // The instance-wide switch is a second input to the same per-caller
         // gate, so every read path below serves public rows only when it is
         // off without needing a branch of its own.
+        let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
         let can_view_personalized =
-            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
+            !readable_library_ids.is_empty() && personalized_discovery_enabled;
         let status = self
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
@@ -489,6 +508,7 @@ impl AppUseCase {
                     .discovery
                     .list_public_discovery_section_items(
                         public_run_id,
+                        &[],
                         &allowed_media_kinds,
                         include_unresolved,
                         &query.filters,
@@ -514,9 +534,29 @@ impl AppUseCase {
             }
         }
 
+        // The viewer's own watchlist composes ahead of every library rail and
+        // claims its titles first, so a title the viewer already asked for is
+        // never offered again as "because you like".
+        let watchlist = if query.include_personalized && personalized_discovery_enabled {
+            self.discovery_watchlist_composition(
+                actor,
+                &visibility,
+                &owned_visibility,
+                &status.state,
+                can_view_personalized,
+                &query.filters,
+                include_unresolved,
+                limit,
+            )
+            .await?
+        } else {
+            DiscoveryWatchlistComposition::default()
+        };
+
         let mut personalized_sections = Vec::new();
         let mut complete_collection = None;
         let mut facets = Vec::new();
+        let mut browse_labels = Vec::new();
         if can_view_personalized
             && query.include_personalized
             && let Some(context_run_id) = status.state.last_success_generation_id.as_deref()
@@ -530,6 +570,7 @@ impl AppUseCase {
                     &readable_library_id_list,
                     &allowed_media_kinds,
                     include_unresolved,
+                    false,
                     &query.filters,
                     personalized_home_candidate_limit(limit) as i64,
                 )
@@ -583,13 +624,21 @@ impl AppUseCase {
             )?;
             complete_collection =
                 complete_collection_section(&complete_collection_items, include_unresolved, limit);
-            personalized_sections = personalized_section_results(
-                &personalized_items,
-                &library_profile,
+            let visible_items =
+                discovery_home_visible_items(&personalized_items, include_unresolved);
+            let rail_context = DiscoveryRailContext::new(
                 &candidates_by_id,
                 rail_settings,
-                include_unresolved,
+                &library_profile,
+                &visible_items,
                 limit,
+            );
+            browse_labels = discovery_browse_labels(&visible_items, &rail_context);
+            personalized_sections = personalized_section_results_in_context(
+                visible_items,
+                &library_profile,
+                &rail_context,
+                &watchlist.claimed_item_keys,
             );
             if hydrate_selected_cards {
                 facets = self
@@ -674,6 +723,11 @@ impl AppUseCase {
             &personalized_sections,
             &candidates_by_id,
         );
+        // Added after the hero is chosen: watchlist cards are resolved outside
+        // the candidate pool, so they carry no candidate for hero hydration.
+        if let Some(watchlist_section) = watchlist.section {
+            personalized_sections.insert(0, watchlist_section);
+        }
         let mut result = DiscoveryHomeResult {
             status,
             hero_item,
@@ -682,6 +736,7 @@ impl AppUseCase {
             complete_collection,
             facets,
             can_view_personalized,
+            browse_labels,
         };
         debug!(
             operation = "discovery_home",
@@ -790,6 +845,11 @@ impl AppUseCase {
         actor: &User,
         query: DiscoveryItemsQuery,
     ) -> AppResult<DiscoveryItemsResult> {
+        if let Some(section_query) = &query.section {
+            return self
+                .discovery_section_items(actor, &query, section_query)
+                .await;
+        }
         let visibility = self.discovery_visibility(actor).await?;
         let readable_library_ids = &visibility.readable_library_ids;
         // The instance-wide switch is a second input to the same per-caller
@@ -817,6 +877,7 @@ impl AppUseCase {
             readable_library_ids: readable_library_id_list,
             allowed_media_kinds: visibility.sorted_allowed_media_kinds(),
             filters: query,
+            home_filters: crate::ports::DiscoveryHomeFilters::default(),
             limit,
             offset,
         };
@@ -842,6 +903,8 @@ impl AppUseCase {
             items: page.items,
             total_count: page.total_count,
             can_view_personalized,
+            section: None,
+            generation_ids: Vec::new(),
         })
     }
 
@@ -887,6 +950,7 @@ impl AppUseCase {
                 offset: 0,
                 ..DiscoveryItemsQuery::default()
             },
+            home_filters: crate::ports::DiscoveryHomeFilters::default(),
             limit: 1,
             offset: 0,
         };
@@ -897,7 +961,16 @@ impl AppUseCase {
             .query_discovery_items(&storage_query)
             .await?;
         if page.items.is_empty() {
-            return Ok(None);
+            // A watchlist card built from the viewer's own list rows has no
+            // stored item; it reads back under the rail's own gates.
+            return self
+                .discovery_watchlist_row_card_detail(
+                    actor,
+                    &visibility,
+                    target_key,
+                    query.include_unresolved,
+                )
+                .await;
         }
         if let Some(context_run_id) = context_run_id.as_deref() {
             let submitted_subjects = self
@@ -1240,19 +1313,25 @@ impl AppUseCase {
     ) -> AppResult<DiscoveryLibraryAffinityProfile> {
         let mut library_ids = allowed_library_ids.iter().cloned().collect::<Vec<_>>();
         library_ids.sort();
-        let mut titles = Vec::new();
         let mut seen_title_ids = HashSet::new();
-        for title_id in submitted_subjects
+        let title_ids = submitted_subjects
             .iter()
             .filter_map(|subject| subject.title_id.as_deref())
             .filter(|title_id| seen_title_ids.insert((*title_id).to_string()))
-        {
-            if let Some(title) = self.services.catalog.titles.get_by_id(title_id).await?
-                && allowed_library_ids.contains(&title.library_id)
-            {
-                titles.push(title);
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let mut titles_by_id = HashMap::with_capacity(title_ids.len());
+        for chunk in title_ids.chunks(DISCOVERY_AFFINITY_TITLE_BATCH) {
+            for title in self.services.catalog.titles.get_by_ids(chunk).await? {
+                titles_by_id.insert(title.id.clone(), title);
             }
         }
+        // Submission order, as the per-title reads produced it.
+        let mut titles = title_ids
+            .iter()
+            .filter_map(|title_id| titles_by_id.remove(title_id))
+            .filter(|title| allowed_library_ids.contains(&title.library_id))
+            .collect::<Vec<_>>();
         if titles.is_empty() {
             titles = self
                 .services
@@ -1331,6 +1410,7 @@ pub(super) fn discovery_library_affinity_profile_from_titles(
     DiscoveryLibraryAffinityProfile {
         genre_labels: top_owned_title_labels(
             titles,
+            DiscoveryRailLabelFamily::Genre,
             |title| {
                 corroborated_canonical_genre_labels(&title.canonical_tags, genre_rail_corroboration)
             },
@@ -1344,6 +1424,7 @@ pub(super) fn discovery_library_affinity_profile_from_titles(
         // sourced from canonical genre tags.
         theme_labels: top_owned_title_labels(
             titles,
+            DiscoveryRailLabelFamily::Theme,
             |title| qualified_owned_theme_labels(&title.canonical_tags),
             DISCOVERY_RAIL_LADDER_LABELS,
             support_floor,
