@@ -3662,6 +3662,42 @@ const es: LocaleDictionary = {
     "No se pudo mover el archivo a su nuevo nombre. El archivo y sus episodios quedaron como estaban.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "La numeración de episodios es ambigua",
+  "setup.sourceImportProgress": "Importando orígenes",
+  "setup.sourceImportInvalidRequest":
+    "Un origen seleccionado no está disponible. Actualiza la detección de orígenes y vuelve a seleccionarlo.",
+  "setup.sourceImportSelectionChanged":
+    "Las selecciones de orígenes enviadas son fijas. Reintenta los orígenes fallidos desde el Resumen.",
+  "setup.sourceImportNotOwned":
+    "Esta importación de orígenes no está disponible para tu cuenta.",
+  "setup.sourceImportQueueFull":
+    "La capacidad de importación de orígenes está llena. Inténtalo de nuevo cuando termine otra importación.",
+  "setup.sourceImportActive": "Esta importación de orígenes sigue en curso.",
+  "setup.sourceImportNotRetryable":
+    "Solo se pueden reintentar u omitir los orígenes fallidos o interrumpidos.",
+  "setup.sourceImportUnresolved":
+    "Reintenta u omite explícitamente los orígenes pendientes antes de finalizar la configuración.",
+  "setup.sourceImportCredentialRequired":
+    "Introduce la credencial del origen antes de continuar.",
+  "setup.sourceImportConfigConflict":
+    "La configuración reservada cambió. Revisa el origen antes de reintentar.",
+  "setup.sourceImportSourceNotReady":
+    "Espera a que termine la detección de orígenes antes de continuar.",
+  "setup.sourceImportResume": "Reconectar con el progreso",
+  "setup.sourceImportLoading":
+    "Cargando el progreso de la importación de orígenes",
+  "setup.sourceImportCredential": "Credencial corregida para {{name}}",
+  "setup.sourceImportRetry": "Reintentar orígenes fallidos",
+  "setup.sourceImportSkip": "Omitir este origen",
+  "setup.sourceImportItemFailed":
+    "Comprueba la conexión y las credenciales y luego reintenta u omite.",
+  "setup.sourceImportState.queued": "En cola",
+  "setup.sourceImportState.installing": "Instalando proveedor",
+  "setup.sourceImportState.checking": "Comprobando conexión",
+  "setup.sourceImportState.saving": "Guardando configuración",
+  "setup.sourceImportState.succeeded": "Importado",
+  "setup.sourceImportState.failed": "Fallido",
+  "setup.sourceImportState.interrupted": "Interrumpido",
+  "setup.sourceImportState.skipped": "Omitido",
 };
 
 export default es;

@@ -3632,6 +3632,42 @@ const pt_BR: LocaleDictionary = {
     "Falha ao mover o arquivo para o novo nome. O arquivo e seus episódios ficaram como estavam.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numeração de episódios ambígua",
+  "setup.sourceImportProgress": "Importando fontes",
+  "setup.sourceImportInvalidRequest":
+    "Uma fonte selecionada não está disponível. Atualize a descoberta de fontes e selecione-a novamente.",
+  "setup.sourceImportSelectionChanged":
+    "As seleções de fontes enviadas são fixas. Tente novamente as fontes com falha no Resumo.",
+  "setup.sourceImportNotOwned":
+    "Esta importação de fontes não está disponível para sua conta.",
+  "setup.sourceImportQueueFull":
+    "A capacidade de importação de fontes está cheia. Tente novamente quando outra importação terminar.",
+  "setup.sourceImportActive":
+    "Esta importação de fontes ainda está em andamento.",
+  "setup.sourceImportNotRetryable":
+    "Somente fontes com falha ou interrompidas podem ser repetidas ou ignoradas.",
+  "setup.sourceImportUnresolved":
+    "Tente novamente ou ignore explicitamente as fontes pendentes antes de concluir a configuração.",
+  "setup.sourceImportCredentialRequired":
+    "Informe a credencial da fonte antes de continuar.",
+  "setup.sourceImportConfigConflict":
+    "A configuração reservada mudou. Revise a fonte antes de tentar novamente.",
+  "setup.sourceImportSourceNotReady":
+    "Aguarde a conclusão da descoberta de fontes antes de continuar.",
+  "setup.sourceImportResume": "Reconectar ao progresso",
+  "setup.sourceImportLoading": "Carregando o progresso da importação de fontes",
+  "setup.sourceImportCredential": "Credencial corrigida para {{name}}",
+  "setup.sourceImportRetry": "Tentar novamente fontes com falha",
+  "setup.sourceImportSkip": "Ignorar esta fonte",
+  "setup.sourceImportItemFailed":
+    "Verifique a conexão e as credenciais e depois tente novamente ou ignore.",
+  "setup.sourceImportState.queued": "Na fila",
+  "setup.sourceImportState.installing": "Instalando provedor",
+  "setup.sourceImportState.checking": "Verificando conexão",
+  "setup.sourceImportState.saving": "Salvando configuração",
+  "setup.sourceImportState.succeeded": "Importada",
+  "setup.sourceImportState.failed": "Falhou",
+  "setup.sourceImportState.interrupted": "Interrompida",
+  "setup.sourceImportState.skipped": "Ignorada",
 };
 
 export default pt_BR;

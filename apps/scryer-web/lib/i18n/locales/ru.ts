@@ -6872,6 +6872,41 @@ const ru: LocaleDictionary = {
     "Не удалось переместить файл под новое имя. Файл и его эпизоды остались без изменений.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Нумерация эпизодов неоднозначна",
+  "setup.sourceImportProgress": "Импорт источников",
+  "setup.sourceImportInvalidRequest":
+    "Выбранный источник недоступен. Обновите обнаружение источников и выберите его снова.",
+  "setup.sourceImportSelectionChanged":
+    "Отправленный выбор источников изменить нельзя. Повторите неудачные источники в разделе «Сводка».",
+  "setup.sourceImportNotOwned":
+    "Этот импорт источников недоступен для вашей учётной записи.",
+  "setup.sourceImportQueueFull":
+    "Достигнут предел импорта источников. Повторите попытку после завершения другого импорта.",
+  "setup.sourceImportActive": "Этот импорт источников ещё выполняется.",
+  "setup.sourceImportNotRetryable":
+    "Повторить или пропустить можно только неудачные или прерванные источники.",
+  "setup.sourceImportUnresolved":
+    "Перед завершением настройки повторите или явно пропустите нерешённые источники.",
+  "setup.sourceImportCredentialRequired":
+    "Перед продолжением введите учётные данные источника.",
+  "setup.sourceImportConfigConflict":
+    "Зарезервированная конфигурация изменилась. Проверьте источник перед повтором.",
+  "setup.sourceImportSourceNotReady":
+    "Перед продолжением дождитесь завершения обнаружения источников.",
+  "setup.sourceImportResume": "Переподключиться к ходу выполнения",
+  "setup.sourceImportLoading": "Загрузка хода импорта источников",
+  "setup.sourceImportCredential": "Исправленные учётные данные для {{name}}",
+  "setup.sourceImportRetry": "Повторить неудачные источники",
+  "setup.sourceImportSkip": "Пропустить этот источник",
+  "setup.sourceImportItemFailed":
+    "Проверьте подключение и учётные данные, затем повторите или пропустите.",
+  "setup.sourceImportState.queued": "В очереди",
+  "setup.sourceImportState.installing": "Установка провайдера",
+  "setup.sourceImportState.checking": "Проверка подключения",
+  "setup.sourceImportState.saving": "Сохранение конфигурации",
+  "setup.sourceImportState.succeeded": "Импортировано",
+  "setup.sourceImportState.failed": "Ошибка",
+  "setup.sourceImportState.interrupted": "Прервано",
+  "setup.sourceImportState.skipped": "Пропущено",
 };
 
 export default ru;

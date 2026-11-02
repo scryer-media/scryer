@@ -21,6 +21,8 @@ import { finalizeProgressPercent } from "@/lib/external-import-wizard-orchestrat
 import type { UseExternalImportSetupReturn } from "@/lib/hooks/use-external-import-setup";
 import { LoadingMark } from "@/components/common/loading-mark";
 
+const SOURCE_IMPORT_ITEM_FAILED = "SOURCE_IMPORT_ITEM_FAILED";
+
 interface SetupImportSummaryViewProps {
   wizard: UseExternalImportSetupReturn;
   t: (key: string, values?: Record<string, unknown>) => string;
@@ -224,6 +226,14 @@ export default function SetupImportSummaryView({
                     : item.message || t("setup.sourceImportItemFailed")}
                 </span>
               )}
+              {/* The catch-all code carries the server's own connection detail. */}
+              {unresolved &&
+                item.reason === SOURCE_IMPORT_ITEM_FAILED &&
+                item.message && (
+                  <span className="basis-full text-sm text-muted-foreground">
+                    {item.message}
+                  </span>
+                )}
               {unresolved && !wizard.sourceJob?.active && (
                 <>
                   <Input
