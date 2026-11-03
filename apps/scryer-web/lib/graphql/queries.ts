@@ -1936,7 +1936,17 @@ ${DISCOVERY_ITEM_DETAIL_FIELDS}
 
 export const discoveryNeighborsQuery = `query DiscoveryNeighbors($input: DiscoveryNeighborsInput!) {
   discoveryNeighbors(input: $input) {
+    items {
 ${DISCOVERY_ITEM_DETAIL_FIELDS}
+      groupId
+    }
+    groups {
+      id
+      labelKey
+      label
+      medoid
+      size
+    }
   }
 }`;
 

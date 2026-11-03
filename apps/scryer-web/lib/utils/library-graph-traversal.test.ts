@@ -212,6 +212,53 @@ test("expanding links owned results to their nodes and dedupes ghosts", () => {
   );
 });
 
+test("an expansion keeps the server's groups with each one's subject keys", () => {
+  const state = expandTraversal(
+    emptyTraversal<Item>(),
+    "s:a",
+    [
+      item("tmdb:movie:2", { groupId: 1 }),
+      item("tmdb:movie:60", { groupId: 0 }),
+      item("tmdb:movie:61", { groupId: 1 }),
+      // The same ghost again under another group stays in its first one.
+      item("tmdb:movie:060", { groupId: 1 }),
+      item("tmdb:movie:62", { groupId: null }),
+      // An id the groups do not name joins none.
+      item("tmdb:movie:63", { groupId: 7 }),
+    ],
+    ownedIndex(),
+    undefined,
+    [
+      { id: 1, labelKey: "theme:fixture-bravo", label: "Fixture Bravo" },
+      { id: 0, labelKey: null, label: "Synthetic Sixty" },
+      // A group none of the results fell into is dropped.
+      { id: 2, labelKey: null, label: "Synthetic Empty" },
+    ],
+  );
+  assert.deepEqual(state.expansions[0].groups, [
+    {
+      id: 1,
+      labelKey: "theme:fixture-bravo",
+      label: "Fixture Bravo",
+      keys: ["s:b", "ghost:tmdb:movie:61"],
+    },
+    {
+      id: 0,
+      labelKey: null,
+      label: "Synthetic Sixty",
+      keys: ["ghost:tmdb:movie:60"],
+    },
+  ]);
+  // Without groups an expansion has none.
+  const plain = expandTraversal(
+    emptyTraversal<Item>(),
+    "s:a",
+    [item("tmdb:movie:60", { groupId: 0 })],
+    ownedIndex(),
+  );
+  assert.deepEqual(plain.expansions[0].groups, []);
+});
+
 test("a ghost reached from another ghost takes its cluster, and expanding again replaces in place", () => {
   let state = expandTraversal(
     emptyTraversal<Item>(),

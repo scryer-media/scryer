@@ -11,7 +11,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { discoveryNeighborsQuery } from "@/lib/graphql/queries";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useTitleMoreLikeThisActions } from "@/lib/hooks/use-title-more-like-this-actions";
-import type { DiscoveryItem } from "@/lib/types/discovery";
+import type { DiscoveryItem, DiscoveryNeighbors } from "@/lib/types/discovery";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
 import { discoveryErrorMessage } from "@/lib/utils/discovery-error-message";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
@@ -43,6 +43,8 @@ import {
   neighborReason,
   neighborReasonLines,
   nodeSizesByTitleId,
+  RECOMMENDATION_SECTION_LIMIT,
+  recommendationSectionName,
   recommendationSections,
   titleIndexByMatchKey,
   titleMatchKeys,
@@ -73,6 +75,7 @@ import {
   invalidateExpansions,
   isCurrentExpansion,
   isGhostSubjectKey,
+  LIBRARY_GRAPH_GHOST_CAP,
   isLibraryItem,
   itemMatchKeys,
   moreLikeThisEdgeKinds,
@@ -282,7 +285,7 @@ function catalogTitleForItem(
 }
 
 type NeighborsData = {
-  discoveryNeighbors?: DiscoveryItem[] | null;
+  discoveryNeighbors?: DiscoveryNeighbors | null;
 };
 
 /**
@@ -392,7 +395,7 @@ export default function LibraryGraphView({
   >(() => new Map());
   // Replies already read this session, by facet and target key, so going
   // back to a title does not ask again.
-  const neighborCacheRef = React.useRef(new Map<string, DiscoveryItem[]>());
+  const neighborCacheRef = React.useRef(new Map<string, DiscoveryNeighbors>());
   const [expandingKey, setExpandingKey] = React.useState<string | null>(null);
   const [expandNotice, setExpandNotice] = React.useState<ExpandNotice | null>(
     null,
@@ -621,12 +624,16 @@ export default function LibraryGraphView({
     [explored, focusCenterKey, overview],
   );
   // A focused view's rings, inner first, each as sections around the circle:
-  // library titles as one, recommendations grouped by a shared genre or
-  // theme.
+  // library titles as one, recommendations by the neighbourhoods the server
+  // found among the focused title's results, else by a shared genre or theme.
   const focusRings = React.useMemo(() => {
     if (focusCenterKey === null || !displayed) {
       return [];
     }
+    const groups =
+      traversal.expansions.find(
+        (expansion) => expansion.anchor === focusCenterKey,
+      )?.groups ?? [];
     const ghostKeys = new Set(
       displayed.nodes
         .filter((node) => node.ghost)
@@ -640,22 +647,25 @@ export default function LibraryGraphView({
                 key,
                 tags: traversal.ghostItems.get(key)?.canonicalTags,
               })),
+              RECOMMENDATION_SECTION_LIMIT,
+              groups,
             )
           : [{ tagKey: null, name: null, keys: ring }],
     );
-  }, [displayed, focusCenterKey, traversal.ghostItems]);
+  }, [displayed, focusCenterKey, traversal.expansions, traversal.ghostItems]);
   const recommendationBands = React.useMemo(
     () =>
       focusRings
         .flat()
         .filter((section) => section.name !== null)
         .map((section, index) => ({
-          key: section.tagKey ?? String(index),
-          name: section.name ?? "",
+          // Two neighbourhoods can carry the same label key.
+          key: `${index}:${section.tagKey ?? ""}`,
+          name: recommendationSectionName(section, t) ?? "",
           keys: section.keys,
           color: CLUSTER_COLORS[index % CLUSTER_COLORS.length],
         })),
-    [focusRings],
+    [focusRings, t],
   );
   const recommendationBandsRef = React.useRef(recommendationBands);
   React.useEffect(() => {
@@ -1811,8 +1821,8 @@ export default function LibraryGraphView({
       setExpandNotice(null);
       try {
         const cacheKey = `${anchor.facet}|${anchor.targetKey}`;
-        let items = neighborCacheRef.current.get(cacheKey);
-        if (!items) {
+        let neighbors = neighborCacheRef.current.get(cacheKey);
+        if (!neighbors) {
           const { data, error } = await client
             .query<NeighborsData>(
               discoveryNeighborsQuery,
@@ -1825,9 +1835,13 @@ export default function LibraryGraphView({
           if (error) {
             throw error;
           }
-          items = data?.discoveryNeighbors ?? [];
-          neighborCacheRef.current.set(cacheKey, items);
+          neighbors = {
+            items: data?.discoveryNeighbors?.items ?? [],
+            groups: data?.discoveryNeighbors?.groups ?? [],
+          };
+          neighborCacheRef.current.set(cacheKey, neighbors);
         }
+        const { items, groups } = neighbors;
         if (!isCurrentExpansion(expandTokenRef, token)) {
           return;
         }
@@ -1857,7 +1871,14 @@ export default function LibraryGraphView({
             : new Map(current).set(key, label),
         );
         setTraversal((current) =>
-          expandTraversal(current, key, items, ownedIndexRef.current),
+          expandTraversal(
+            current,
+            key,
+            items,
+            ownedIndexRef.current,
+            LIBRARY_GRAPH_GHOST_CAP,
+            groups,
+          ),
         );
       } catch (error) {
         if (isCurrentExpansion(expandTokenRef, token)) {

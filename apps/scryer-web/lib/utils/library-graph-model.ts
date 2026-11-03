@@ -600,16 +600,113 @@ export function neighborReasonLines(
 /** The most named sections a focused view splits its recommendations into. */
 export const RECOMMENDATION_SECTION_LIMIT = 5;
 
-/** A run of recommendations that share a genre or theme. */
+/** A run of recommendations in one neighbourhood or sharing a genre or theme. */
 export type RecommendationSection = {
-  /** The shared tag's key and name, or null for the ones left over. */
+  /**
+   * The genre or theme key naming the section, null for the ones left over
+   * and for a neighbourhood named after its medoid title.
+   */
   tagKey: string | null;
+  /** The section's name, or null for the ones left over. */
   name: string | null;
   keys: string[];
+  /** Set when the name is the title a neighbourhood is centred on. */
+  aroundTitle?: true;
+};
+
+/** A neighbourhood the server found among an anchor's recommendations. */
+export type RecommendationGroup = {
+  labelKey: string | null;
+  label: string;
+  /** Its recommendations' keys. */
+  keys: readonly string[];
 };
 
 /**
- * Recommendations grouped by the genre or theme most of them share. Each
+ * Recommendations split by the server's neighbourhoods, in the server's
+ * order. A neighbourhood needs two of the given recommendations to be named;
+ * past `limit` named sections, and for recommendations no neighbourhood
+ * holds, they form a last unnamed section. With fewer than two named
+ * sections, everything is one unnamed section. Null when no neighbourhood
+ * holds any of them.
+ */
+function groupedRecommendationSections(
+  keys: readonly string[],
+  groups: readonly RecommendationGroup[],
+  limit: number,
+): RecommendationSection[] | null {
+  const present = new Set(keys);
+  const claimed = new Set<string>();
+  const sections: RecommendationSection[] = [];
+  let covered = false;
+  for (const group of groups) {
+    const members = new Set(
+      group.keys.filter((key) => present.has(key) && !claimed.has(key)),
+    );
+    if (members.size === 0) {
+      continue;
+    }
+    covered = true;
+    if (members.size < 2 || sections.length >= limit) {
+      continue;
+    }
+    for (const key of members) {
+      claimed.add(key);
+    }
+    const name = group.label.trim();
+    sections.push({
+      tagKey: group.labelKey,
+      name: name || null,
+      keys: keys.filter((key) => members.has(key)),
+      ...(group.labelKey || !name ? {} : { aroundTitle: true as const }),
+    });
+  }
+  if (!covered) {
+    return null;
+  }
+  if (sections.length < 2) {
+    return keys.length > 0
+      ? [{ tagKey: null, name: null, keys: [...keys] }]
+      : [];
+  }
+  const rest = keys.filter((key) => !claimed.has(key));
+  if (rest.length > 0) {
+    sections.push({ tagKey: null, name: null, keys: rest });
+  }
+  return sections;
+}
+
+/**
+ * A named section's name in the viewer's language: a neighbourhood's genre or
+ * theme the way the library graph names its clusters, "Around" its title for
+ * one named after a title, else the name as given. Null for the ones left
+ * over.
+ */
+export function recommendationSectionName(
+  section: RecommendationSection,
+  t: Translate,
+): string | null {
+  if (section.name === null) {
+    return null;
+  }
+  if (section.aroundTitle) {
+    return t("libraryGraph.clusterAroundTitle", { title: section.name });
+  }
+  if (section.tagKey) {
+    for (const candidate of clusterLabelKeyCandidates(section.tagKey)) {
+      const label = discoveryBrowseLabelTitle(candidate, t);
+      if (label) {
+        return label;
+      }
+    }
+  }
+  return section.name;
+}
+
+/**
+ * Recommendations split into sections. When the server grouped them into
+ * neighbourhoods, those decide the sections. Otherwise they are grouped by
+ * the genre or theme most of them share. Each
  * round takes the tag that covers the most recommendations not yet grouped,
  * themes before genres on a tie. A tag carried by more than two thirds of
  * them, or by only one, does not tell them apart and is skipped. The
@@ -623,8 +720,13 @@ export function recommendationSections(
     tags: readonly CanonicalMediaTag[] | null | undefined;
   }[],
   limit: number = RECOMMENDATION_SECTION_LIMIT,
+  groups: readonly RecommendationGroup[] = [],
 ): RecommendationSection[] {
   const keys = items.map((item) => item.key);
+  const grouped = groupedRecommendationSections(keys, groups, limit);
+  if (grouped) {
+    return grouped;
+  }
   const tagsByKey = new Map<string, Map<string, CanonicalMediaTag>>();
   const carriers = new Map<string, Set<string>>();
   for (const item of items) {

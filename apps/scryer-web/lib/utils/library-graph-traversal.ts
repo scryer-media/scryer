@@ -36,12 +36,27 @@ export type TraversalItem = {
   relationTypes?: readonly string[] | null;
   relationSubtypes?: readonly string[] | null;
   rankScore?: number | null;
+  /** The anchor's neighbourhood this result falls into, when the server grouped them. */
+  groupId?: number | null;
   externalIds?: ReadonlyArray<{
     source?: string | null;
     kind?: string | null;
     id?: string | null;
     key?: string | null;
   }> | null;
+};
+
+/** A neighbourhood the server found among an anchor's results. */
+export type TraversalGroupInput = {
+  id: number;
+  labelKey: string | null;
+  label: string;
+};
+
+/** A neighbourhood of one expansion, with the subject keys of its results. */
+export type TraversalGroup = TraversalGroupInput & {
+  /** Owned or ghost subject keys, in result order. */
+  keys: string[];
 };
 
 export type TraversalExpansion = {
@@ -51,6 +66,11 @@ export type TraversalExpansion = {
   edges: LibraryGraphEdge[];
   /** The ghost subject keys this expansion reached. */
   ghostKeys: string[];
+  /**
+   * The server's neighbourhoods among the results, in its order, each with at
+   * least one result; empty when the results were not grouped.
+   */
+  groups: TraversalGroup[];
   /** When it was last expanded, on the traversal's own clock. */
   expandedAt: number;
 };
@@ -292,8 +312,13 @@ export function expandTraversal<T extends TraversalItem>(
   items: readonly T[],
   owned: OwnedNodeIndex,
   cap: number = LIBRARY_GRAPH_GHOST_CAP,
+  groups: readonly TraversalGroupInput[] = [],
 ): TraversalState<T> {
   const weights = moreLikeThisEdgeWeights(items);
+  const groupKeys = new Map<number, string[]>(
+    groups.map((group) => [group.id, []]),
+  );
+  const grouped = new Set<string>();
   const edgesByTarget = new Map<string, LibraryGraphEdge>();
   const ghostItems = new Map(state.ghostItems);
   const ghostKeys: string[] = [];
@@ -306,6 +331,15 @@ export function expandTraversal<T extends TraversalItem>(
     if (!ownedSubject && !edgesByTarget.has(target)) {
       ghostKeys.push(target);
       ghostItems.set(target, item);
+    }
+    const members =
+      item.groupId === null || item.groupId === undefined
+        ? undefined
+        : groupKeys.get(item.groupId);
+    // A title several results name stays in the first one's group.
+    if (members && !grouped.has(target)) {
+      grouped.add(target);
+      members.push(target);
     }
     const kinds = moreLikeThisEdgeKinds(item);
     const existing = edgesByTarget.get(target);
@@ -328,6 +362,14 @@ export function expandTraversal<T extends TraversalItem>(
     anchor,
     edges: Array.from(edgesByTarget.values()),
     ghostKeys,
+    groups: groups
+      .map((group) => ({
+        id: group.id,
+        labelKey: group.labelKey,
+        label: group.label,
+        keys: groupKeys.get(group.id) ?? [],
+      }))
+      .filter((group) => group.keys.length > 0),
     expandedAt: clock,
   };
   const position = state.expansions.findIndex(
