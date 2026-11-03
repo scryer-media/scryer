@@ -624,16 +624,11 @@ export const RECOMMENDATION_SECTION_LIMIT = 5;
 
 /** A run of recommendations in one neighbourhood or sharing a genre or theme. */
 export type RecommendationSection = {
-  /**
-   * The genre or theme key naming the section, null for the ones left over
-   * and for a neighbourhood named after its medoid title.
-   */
+  /** The genre or theme key naming the section, null for the ones left over. */
   tagKey: string | null;
   /** The section's name, or null for the ones left over. */
   name: string | null;
   keys: string[];
-  /** Set when the name is the title a neighbourhood is centred on. */
-  aroundTitle?: true;
 };
 
 /** A neighbourhood the server found among an anchor's recommendations. */
@@ -646,7 +641,9 @@ export type RecommendationGroup = {
 
 /**
  * Recommendations split by the server's neighbourhoods, in the server's
- * order. A neighbourhood needs two of the given recommendations to be named;
+ * order. A neighbourhood needs a genre or theme and two of the given
+ * recommendations to be named; one known only by the title it centres on is
+ * not;
  * past `limit` named sections, and for recommendations no neighbourhood
  * holds, they form a last unnamed section. With fewer than two named
  * sections, everything is one unnamed section. Null when no neighbourhood
@@ -669,7 +666,7 @@ function groupedRecommendationSections(
       continue;
     }
     covered = true;
-    if (members.size < 2 || sections.length >= limit) {
+    if (!group.labelKey || members.size < 2 || sections.length >= limit) {
       continue;
     }
     for (const key of members) {
@@ -680,7 +677,6 @@ function groupedRecommendationSections(
       tagKey: group.labelKey,
       name: name || null,
       keys: keys.filter((key) => members.has(key)),
-      ...(group.labelKey || !name ? {} : { aroundTitle: true as const }),
     });
   }
   if (!covered) {
@@ -700,9 +696,8 @@ function groupedRecommendationSections(
 
 /**
  * A named section's name in the viewer's language: a neighbourhood's genre or
- * theme the way the library graph names its clusters, "Around" its title for
- * one named after a title, else the name as given. Null for the ones left
- * over.
+ * theme the way the library graph names its clusters, else the name as given.
+ * Null for the ones left over.
  */
 export function recommendationSectionName(
   section: RecommendationSection,
@@ -710,9 +705,6 @@ export function recommendationSectionName(
 ): string | null {
   if (section.name === null) {
     return null;
-  }
-  if (section.aroundTitle) {
-    return t("libraryGraph.clusterAroundTitle", { title: section.name });
   }
   if (section.tagKey) {
     for (const candidate of clusterLabelKeyCandidates(section.tagKey)) {

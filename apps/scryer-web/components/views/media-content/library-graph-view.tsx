@@ -1225,14 +1225,24 @@ export default function LibraryGraphView({
         context.beginPath();
         context.arc(point.x, point.y, radius + 2, 0, Math.PI * 2);
         context.lineWidth = 3;
-        context.strokeStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-accent", "#5b64ff");
+        context.strokeStyle = cachedCssColor(
+          themeColorsRef.current,
+          canvas,
+          "--scry-accent",
+          "#5b64ff",
+        );
         context.stroke();
       }
       drawn += 1;
     });
 
     // Ghosts wear a dashed ring so they read apart from library titles.
-    const muted = cachedCssColor(themeColorsRef.current, canvas, "--scry-muted2", UNPLACED_COLOR);
+    const muted = cachedCssColor(
+      themeColorsRef.current,
+      canvas,
+      "--scry-muted2",
+      UNPLACED_COLOR,
+    );
     context.save();
     context.setLineDash([3, 3]);
     context.lineWidth = 1.5;
@@ -1269,8 +1279,18 @@ export default function LibraryGraphView({
       context.textBaseline = "middle";
       context.lineJoin = "round";
       context.lineWidth = 3;
-      context.strokeStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-surfD", "#0b0e15");
-      context.fillStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-ink2", "#e6e8ef");
+      context.strokeStyle = cachedCssColor(
+        themeColorsRef.current,
+        canvas,
+        "--scry-surfD",
+        "#0b0e15",
+      );
+      context.fillStyle = cachedCssColor(
+        themeColorsRef.current,
+        canvas,
+        "--scry-ink2",
+        "#e6e8ef",
+      );
       const keyboardKey = focusedKeyRef.current;
       const order: string[] = [];
       graph.forEachNode((key) => {
@@ -1314,20 +1334,40 @@ export default function LibraryGraphView({
         };
         context.beginPath();
         context.roundRect(box.left, box.top, half * 2, 20, 10);
-        context.fillStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-surfD", "#0b0e15");
+        context.fillStyle = cachedCssColor(
+          themeColorsRef.current,
+          canvas,
+          "--scry-surfD",
+          "#0b0e15",
+        );
         context.fill();
         context.fillStyle = withAlpha(label.color, 0.25);
         context.fill();
         context.lineWidth = 1;
         context.strokeStyle = label.color;
         context.stroke();
-        context.fillStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-ink2", "#e6e8ef");
+        context.fillStyle = cachedCssColor(
+          themeColorsRef.current,
+          canvas,
+          "--scry-ink2",
+          "#e6e8ef",
+        );
         context.fillText(label.text, x, y);
         placed.push(box);
       }
       context.lineWidth = 3;
-      context.strokeStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-surfD", "#0b0e15");
-      context.fillStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-ink2", "#e6e8ef");
+      context.strokeStyle = cachedCssColor(
+        themeColorsRef.current,
+        canvas,
+        "--scry-surfD",
+        "#0b0e15",
+      );
+      context.fillStyle = cachedCssColor(
+        themeColorsRef.current,
+        canvas,
+        "--scry-ink2",
+        "#e6e8ef",
+      );
       for (const key of order) {
         const point = viewportByNode.get(key);
         const raw = graph.getNodeAttribute(key, "label");
@@ -1402,7 +1442,12 @@ export default function LibraryGraphView({
       context.beginPath();
       context.arc(focusPoint.x, focusPoint.y, radius + 5, 0, Math.PI * 2);
       context.lineWidth = 2;
-      context.strokeStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-ink2", "#e6e8ef");
+      context.strokeStyle = cachedCssColor(
+        themeColorsRef.current,
+        canvas,
+        "--scry-ink2",
+        "#e6e8ef",
+      );
       context.stroke();
     }
   }, []);
@@ -1734,12 +1779,16 @@ export default function LibraryGraphView({
         graph.getNodeAttribute(edge.from, "ghost") === true ||
         graph.getNodeAttribute(edge.to, "ghost") === true;
       const weight = Math.min(1, Math.max(0, edge.weight));
+      // In a focused view, links between the neighbours sit behind the
+      // focused title's own links.
+      const ring =
+        focusing && edge.from !== focusCenterKey && edge.to !== focusCenterKey;
       // A focused view draws few links, so they can be bolder.
       const alpha = focusing
-        ? (0.3 + weight * 0.4) * (toGhost ? 0.7 : 1)
+        ? (0.3 + weight * 0.4) * (toGhost ? 0.7 : 1) * (ring ? 0.55 : 1)
         : (0.18 + weight * 0.4) * (toGhost ? 0.6 : 1);
       const attributes: EdgeAttributes = {
-        size: 0.4 + weight * 2.2,
+        size: (0.4 + weight * 2.2) * (ring ? 0.6 : 1),
         color: mutedEdge.startsWith("#")
           ? withAlpha(mutedEdge, alpha)
           : mutedEdge,
@@ -2205,6 +2254,10 @@ export default function LibraryGraphView({
           return;
         }
         case "Escape": {
+          // An open title panel takes Escape first; the page closes it.
+          if (selectedTitleId !== null) {
+            return;
+          }
           if (selectedNode) {
             event.preventDefault();
             exitFocus();
@@ -2218,7 +2271,14 @@ export default function LibraryGraphView({
           return;
       }
     },
-    [activateNode, exitFocus, keyboardNodes, selectedNode, shownFocusedKey],
+    [
+      activateNode,
+      exitFocus,
+      keyboardNodes,
+      selectedNode,
+      selectedTitleId,
+      shownFocusedKey,
+    ],
   );
 
   // A hovered node or edge that a filter removed has no tooltip.

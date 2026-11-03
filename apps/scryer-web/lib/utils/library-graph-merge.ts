@@ -377,8 +377,9 @@ export function pruneLeastRecentlyUsed(
 }
 
 /**
- * One node and everything one link from it, with only the links that leave
- * that node. Null when the node is not in the graph.
+ * One node and everything one link from it, with the links among them: those
+ * that leave that node and those between its neighbours. Null when the node is
+ * not in the graph.
  */
 export function egoGraphState(
   graph: GraphState,
@@ -387,18 +388,19 @@ export function egoGraphState(
   if (!graph.nodes.some((node) => node.subjectKey === center)) {
     return null;
   }
-  const edges = graph.edges.filter(
-    (edge) => edge.from === center || edge.to === center,
-  );
   const keep = new Set<string>([center]);
-  for (const edge of edges) {
-    keep.add(edge.from);
-    keep.add(edge.to);
+  for (const edge of graph.edges) {
+    if (edge.from === center || edge.to === center) {
+      keep.add(edge.from);
+      keep.add(edge.to);
+    }
   }
   const nodes = graph.nodes.filter((node) => keep.has(node.subjectKey));
   return {
     nodes,
-    edges: edges.filter((edge) => keep.has(edge.from) && keep.has(edge.to)),
+    edges: graph.edges.filter(
+      (edge) => keep.has(edge.from) && keep.has(edge.to),
+    ),
     clusters: withClusterSizes(graph.clusters, nodes),
   };
 }

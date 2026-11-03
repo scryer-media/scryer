@@ -305,7 +305,7 @@ test("ghosts with blank target keys stay separate", () => {
   assert.ok(edgeBetween(merged, "x:blank-2", "s:c"));
 });
 
-test("a focused view keeps one node, its neighbours and only their links to it", () => {
+test("a focused view keeps one node, its neighbours and the links among them", () => {
   const graph = owned();
   const ego = egoGraphState(graph, "s:a");
   assert.ok(ego);
@@ -313,7 +313,7 @@ test("a focused view keeps one node, its neighbours and only their links to it",
     "s:a",
     "s:b",
   ]);
-  // The b-c link does not touch a, so it and c are left out.
+  // c is not a neighbour of a, so it and the b-c link are left out.
   assert.equal(ego.edges.length, 1);
   assert.equal(egoGraphState(graph, "s:missing"), null);
 
@@ -324,6 +324,29 @@ test("a focused view keeps one node, its neighbours and only their links to it",
     "s:b",
     "s:c",
   ]);
+
+  // Links between the neighbours stay; one leaving the neighbourhood does not.
+  const ring: GraphState = {
+    nodes: ["s:a", "s:b", "s:c", "s:d"].map((subjectKey) => ({
+      subjectKey,
+      targetKey: subjectKey,
+      clusterId: 0,
+      ghost: false,
+    })),
+    edges: [
+      { from: "s:a", to: "s:b", weight: 0.5, kinds: ["semantic"] },
+      { from: "s:a", to: "s:c", weight: 0.5, kinds: ["semantic"] },
+      { from: "s:b", to: "s:c", weight: 0.3, kinds: ["semantic"] },
+      { from: "s:c", to: "s:d", weight: 0.3, kinds: ["semantic"] },
+    ],
+    clusters: [],
+  };
+  const fromA = egoGraphState(ring, "s:a");
+  assert.ok(fromA);
+  assert.deepEqual(
+    fromA.edges.map((edge) => `${edge.from}-${edge.to}`),
+    ["s:a-s:b", "s:a-s:c", "s:b-s:c"],
+  );
 });
 
 test("focused rings put library titles inside explored ones, heaviest link first", () => {

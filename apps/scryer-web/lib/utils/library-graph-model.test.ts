@@ -639,7 +639,13 @@ test("server neighbourhoods decide the sections when there are any", () => {
       label: "Fixture Alpha",
       keys: ["r:4", "r:1", "r:9"],
     },
-    { labelKey: null, label: "Synthetic Bravo", keys: ["r:2", "r:5"] },
+    {
+      labelKey: "theme:fixture-bravo",
+      label: "Fixture Bravo",
+      keys: ["r:2", "r:5"],
+    },
+    // A neighbourhood known only by the title it centres on is not named.
+    { labelKey: null, label: "Synthetic Delta", keys: ["r:3", "r:6"] },
     // One of the given recommendations is not enough to name a section.
     {
       labelKey: "theme:fixture-charlie",
@@ -655,24 +661,27 @@ test("server neighbourhoods decide the sections when there are any", () => {
       keys: ["r:1", "r:4"],
     },
     {
-      tagKey: null,
-      name: "Synthetic Bravo",
+      tagKey: "theme:fixture-bravo",
+      name: "Fixture Bravo",
       keys: ["r:2", "r:5"],
-      aroundTitle: true,
     },
     { tagKey: null, name: null, keys: ["r:3", "r:6"] },
   ]);
-  assert.equal(
-    recommendationSectionName(sections[1], t),
-    "Around Synthetic Bravo",
-  );
   assert.equal(recommendationSectionName(sections[2], t), null);
 
   // Past the limit, a neighbourhood's titles join the rest.
   assert.deepEqual(
     recommendationSections(items, 1, [
-      { labelKey: null, label: "Synthetic Alpha", keys: ["r:1", "r:2"] },
-      { labelKey: null, label: "Synthetic Bravo", keys: ["r:3", "r:4"] },
+      {
+        labelKey: "theme:fixture-alpha",
+        label: "Fixture Alpha",
+        keys: ["r:1", "r:2"],
+      },
+      {
+        labelKey: "theme:fixture-bravo",
+        label: "Fixture Bravo",
+        keys: ["r:3", "r:4"],
+      },
     ]).map((section) => [section.name, section.keys]),
     [[null, ["r:1", "r:2", "r:3", "r:4", "r:5", "r:6"]]],
   );
