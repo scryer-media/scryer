@@ -1,25 +1,36 @@
 import type { LocaleDictionary } from "../types";
 
 const ru: LocaleDictionary = {
-  "error.reason.STANDBY_NOT_FOUND": "Этот сохранённый кандидат больше не существует.",
-  "error.reason.STANDBY_NOT_AVAILABLE": "Этот сохранённый кандидат больше недоступен. Обновите список и повторите попытку.",
-  "error.reason.STANDBY_NOT_QUEUEABLE": "Сохранённый релиз не удалось поставить в очередь. Его можно попробовать снова.",
-  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Этот релиз находится в списке блокировки тайтла. Удалите его из списка блокировки, чтобы поставить в очередь.",
-  "error.reason.STANDBY_ALREADY_ACTIVE": "Этот релиз уже находится в очереди загрузок.",
-  "error.reason.STANDBY_TITLE_BUSY": "Для этого тайтла уже выполняется другой поиск или постановка в очередь. Повторите попытку после завершения.",
+  "error.reason.STANDBY_NOT_FOUND":
+    "Этот сохранённый кандидат больше не существует.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Этот сохранённый кандидат больше недоступен. Обновите список и повторите попытку.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "Сохранённый релиз не удалось поставить в очередь. Его можно попробовать снова.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Этот релиз находится в списке блокировки тайтла. Удалите его из списка блокировки, чтобы поставить в очередь.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Этот релиз уже находится в очереди загрузок.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Для этого тайтла уже выполняется другой поиск или постановка в очередь. Повторите попытку после завершения.",
   "wanted.standby": "Резерв · {{count}}",
-  "wanted.standbyTooltip": "Если текущая загрузка не удастся, будут опробованы сохранённые кандидаты: {{count}}.",
-  "wanted.standbyScopeNote": "Учитываются строки этой области; сезонные паки учитываются по опорному эпизоду сезона.",
+  "wanted.standbyTooltip":
+    "Если текущая загрузка не удастся, будут опробованы сохранённые кандидаты: {{count}}.",
+  "wanted.standbyScopeNote":
+    "Учитываются строки этой области; сезонные паки учитываются по опорному эпизоду сезона.",
   "wanted.loadingStandby": "Загрузка сохранённых кандидатов…",
   "wanted.standbyCandidates": "Резервные кандидаты · {{count}}",
   "wanted.downloadStandby": "Скачать",
   "wanted.downloadStandbyLabel": "Скачать {{name}}",
   "wanted.standbyConflictTitle": "Загрузки уже выполняются",
-  "wanted.standbyConflictDescription": "Поставить {{name}} в очередь рядом с этими загрузками или отменить их и поставить в очередь вместо них.",
+  "wanted.standbyConflictDescription":
+    "Поставить {{name}} в очередь рядом с этими загрузками или отменить их и поставить в очередь вместо них.",
   "wanted.standbyQueue": "В очередь",
-  "wanted.standbyQueuedRefreshFailed": "Релиз поставлен в очередь, но список не удалось обновить. Обновите страницу, чтобы увидеть текущее состояние.",
+  "wanted.standbyQueuedRefreshFailed":
+    "Релиз поставлен в очередь, но список не удалось обновить. Обновите страницу, чтобы увидеть текущее состояние.",
   "wanted.standbyCancelAndQueue": "Отменить и поставить в очередь",
-  "wanted.standbyQueuedCancelFailed": "Релиз поставлен в очередь, но конфликтующие загрузки ({{count}}) не удалось отменить, и они продолжают выполняться.",
+  "wanted.standbyQueuedCancelFailed":
+    "Релиз поставлен в очередь, но конфликтующие загрузки ({{count}}) не удалось отменить, и они продолжают выполняться.",
   "wanted.standbyRank": "Место {{rank}}",
   "wanted.standbyIndexer": "Индексатор",
   "wanted.standbySize": "Размер",
@@ -1337,54 +1348,86 @@ const ru: LocaleDictionary = {
   "discovery.personalizedDisabled":
     "Персонализированные рекомендации отключены для этого экземпляра.",
   "discovery.rail.becauseYouLike.action": "Потому что вам нравятся боевики",
-  "discovery.rail.becauseYouLike.adventure": "Потому что вам нравятся приключения",
+  "discovery.rail.becauseYouLike.adventure":
+    "Потому что вам нравятся приключения",
   "discovery.rail.becauseYouLike.comedy": "Потому что вам нравятся комедии",
   "discovery.rail.becauseYouLike.crime": "Потому что вам нравится криминал",
-  "discovery.rail.becauseYouLike.documentary": "Потому что вам нравится документалистика",
+  "discovery.rail.becauseYouLike.documentary":
+    "Потому что вам нравится документалистика",
   "discovery.rail.becauseYouLike.drama": "Потому что вам нравятся драмы",
-  "discovery.rail.becauseYouLike.family": "Потому что вам нравится семейное кино",
+  "discovery.rail.becauseYouLike.family":
+    "Потому что вам нравится семейное кино",
   "discovery.rail.becauseYouLike.fantasy": "Потому что вам нравится фэнтези",
   "discovery.rail.becauseYouLike.history": "Потому что вам нравится история",
   "discovery.rail.becauseYouLike.horror": "Потому что вам нравятся ужасы",
   "discovery.rail.becauseYouLike.mystery": "Потому что вам нравятся загадки",
   "discovery.rail.becauseYouLike.romance": "Потому что вам нравится романтика",
-  "discovery.rail.becauseYouLike.science-fiction": "Потому что вам нравится научная фантастика",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Потому что вам нравится научная фантастика",
   "discovery.rail.becauseYouLike.thriller": "Потому что вам нравятся триллеры",
-  "discovery.rail.becauseYouLike.war": "Потому что вам нравятся военные истории",
+  "discovery.rail.becauseYouLike.war":
+    "Потому что вам нравятся военные истории",
   "discovery.rail.becauseYouLike.western": "Потому что вам нравятся вестерны",
-  "discovery.rail.becauseYouLike.sports": "Потому что вам нравятся спортивные истории",
-  "discovery.rail.becauseYouLike.supernatural": "Потому что вам нравится сверхъестественное",
-  "discovery.rail.becauseYouLike.coming-of-age": "Потому что вам нравятся истории взросления",
-  "discovery.rail.becauseYouLike.found-family": "Потому что вам нравятся обретённые семьи",
-  "discovery.rail.becauseYouLike.revenge": "Потому что вам нравятся истории мести",
+  "discovery.rail.becauseYouLike.sports":
+    "Потому что вам нравятся спортивные истории",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Потому что вам нравится сверхъестественное",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Потому что вам нравятся истории взросления",
+  "discovery.rail.becauseYouLike.found-family":
+    "Потому что вам нравятся обретённые семьи",
+  "discovery.rail.becauseYouLike.revenge":
+    "Потому что вам нравятся истории мести",
   "discovery.rail.becauseYouLike.heist": "Потому что вам нравятся ограбления",
-  "discovery.rail.becauseYouLike.time-travel": "Потому что вам нравятся путешествия во времени",
-  "discovery.rail.becauseYouLike.dystopia": "Потому что вам нравятся антиутопии",
-  "discovery.rail.becauseYouLike.cyberpunk": "Потому что вам нравится киберпанк",
-  "discovery.rail.becauseYouLike.superhero": "Потому что вам нравятся супергерои",
+  "discovery.rail.becauseYouLike.time-travel":
+    "Потому что вам нравятся путешествия во времени",
+  "discovery.rail.becauseYouLike.dystopia":
+    "Потому что вам нравятся антиутопии",
+  "discovery.rail.becauseYouLike.cyberpunk":
+    "Потому что вам нравится киберпанк",
+  "discovery.rail.becauseYouLike.superhero":
+    "Потому что вам нравятся супергерои",
   "discovery.rail.becauseYouLike.vampire": "Потому что вам нравятся вампиры",
   "discovery.rail.becauseYouLike.zombie": "Потому что вам нравятся зомби",
-  "discovery.rail.becauseYouLike.survival": "Потому что вам нравятся истории о выживании",
-  "discovery.rail.becauseYouLike.space": "Потому что вам нравятся космические приключения",
-  "discovery.rail.becauseYouLike.detective": "Потому что вам нравятся детективы",
-  "discovery.rail.becauseYouLike.organized-crime": "Потому что вам нравится организованная преступность",
-  "discovery.rail.becauseYouLike.period-drama": "Потому что вам нравятся исторические драмы",
-  "discovery.rail.becauseYouLike.psychological": "Потому что вам нравятся психологические истории",
-  "discovery.rail.becauseYouLike.mythology": "Потому что вам нравится мифология",
+  "discovery.rail.becauseYouLike.survival":
+    "Потому что вам нравятся истории о выживании",
+  "discovery.rail.becauseYouLike.space":
+    "Потому что вам нравятся космические приключения",
+  "discovery.rail.becauseYouLike.detective":
+    "Потому что вам нравятся детективы",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Потому что вам нравится организованная преступность",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Потому что вам нравятся исторические драмы",
+  "discovery.rail.becauseYouLike.psychological":
+    "Потому что вам нравятся психологические истории",
+  "discovery.rail.becauseYouLike.mythology":
+    "Потому что вам нравится мифология",
   "discovery.rail.becauseYouLike.isekai": "Потому что вам нравится исекай",
   "discovery.rail.becauseYouLike.mecha": "Потому что вам нравится меха",
-  "discovery.rail.becauseYouLike.martial-arts": "Потому что вам нравятся боевые искусства",
-  "discovery.rail.becauseYouLike.music": "Потому что вам нравятся музыкальные истории",
-  "discovery.rail.becauseYouLike.workplace": "Потому что вам нравятся истории о работе",
-  "discovery.rail.becauseYouLike.medical": "Потому что вам нравятся медицинские драмы",
-  "discovery.rail.becauseYouLike.military": "Потому что вам нравятся армейские истории",
-  "discovery.rail.becauseYouLike.spy": "Потому что вам нравятся шпионские истории",
-  "discovery.rail.becauseYouLike.royal-politics": "Потому что вам нравятся королевские интриги",
-  "discovery.rail.becauseYouLike.first-love": "Потому что вам нравятся истории о первой любви",
-  "discovery.rail.becauseYouLike.forbidden-love": "Потому что вам нравится запретная любовь",
-  "discovery.rail.becauseYouLike.lgbtq": "Потому что вам нравятся ЛГБТК+-истории",
+  "discovery.rail.becauseYouLike.martial-arts":
+    "Потому что вам нравятся боевые искусства",
+  "discovery.rail.becauseYouLike.music":
+    "Потому что вам нравятся музыкальные истории",
+  "discovery.rail.becauseYouLike.workplace":
+    "Потому что вам нравятся истории о работе",
+  "discovery.rail.becauseYouLike.medical":
+    "Потому что вам нравятся медицинские драмы",
+  "discovery.rail.becauseYouLike.military":
+    "Потому что вам нравятся армейские истории",
+  "discovery.rail.becauseYouLike.spy":
+    "Потому что вам нравятся шпионские истории",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Потому что вам нравятся королевские интриги",
+  "discovery.rail.becauseYouLike.first-love":
+    "Потому что вам нравятся истории о первой любви",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Потому что вам нравится запретная любовь",
+  "discovery.rail.becauseYouLike.lgbtq":
+    "Потому что вам нравятся ЛГБТК+-истории",
   "discovery.rail.becauseYouLike.samurai": "Потому что вам нравятся самураи",
-  "discovery.rail.becauseYouLike.magical-girl": "Потому что вам нравятся девочки-волшебницы",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Потому что вам нравятся девочки-волшебницы",
   "settings.keepHistoryForever": "Хранить историю бессрочно",
   "settings.historyRetentionDaysHeader": "Хранить историю",
   "settings.historyRetentionDaysSuffix": "дней",
@@ -1728,6 +1771,7 @@ const ru: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "Ищем похожие тайтлы…",
   "libraryGraph.reason.recommendedBy": "Рекомендуют: {{sources}}",
   "libraryGraph.reason.shares": "Общее: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Группы рекомендаций",
   "libraryGraph.notInLibrary": "Нет в вашей библиотеке",
   "libraryGraph.inLibrary": "В вашей библиотеке",
   "libraryGraph.openTitle": "Открыть тайтл",

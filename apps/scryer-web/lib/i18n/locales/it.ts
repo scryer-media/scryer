@@ -2,24 +2,34 @@ import type { LocaleDictionary } from "../types";
 
 const it: LocaleDictionary = {
   "error.reason.STANDBY_NOT_FOUND": "Questo candidato salvato non esiste più.",
-  "error.reason.STANDBY_NOT_AVAILABLE": "Questo candidato salvato non è più disponibile. Aggiorna l'elenco e riprova.",
-  "error.reason.STANDBY_NOT_QUEUEABLE": "La release salvata non è stata messa in coda. Resta disponibile per un nuovo tentativo.",
-  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Questa release è nella lista di blocco del titolo. Rimuovila dalla lista di blocco per metterla in coda.",
-  "error.reason.STANDBY_ALREADY_ACTIVE": "Questa release è già nella coda di download.",
-  "error.reason.STANDBY_TITLE_BUSY": "Un'altra ricerca o azione di coda è in corso su questo titolo. Riprova quando sarà terminata.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Questo candidato salvato non è più disponibile. Aggiorna l'elenco e riprova.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "La release salvata non è stata messa in coda. Resta disponibile per un nuovo tentativo.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Questa release è nella lista di blocco del titolo. Rimuovila dalla lista di blocco per metterla in coda.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Questa release è già nella coda di download.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Un'altra ricerca o azione di coda è in corso su questo titolo. Riprova quando sarà terminata.",
   "wanted.standby": "Riserva · {{count}}",
-  "wanted.standbyTooltip": "{{count}} candidati salvati verranno provati se il grab corrente fallisce.",
-  "wanted.standbyScopeNote": "Conta le righe di questo ambito; i pacchetti di stagione sono conteggiati sull'episodio di ancoraggio della stagione.",
+  "wanted.standbyTooltip":
+    "{{count}} candidati salvati verranno provati se il grab corrente fallisce.",
+  "wanted.standbyScopeNote":
+    "Conta le righe di questo ambito; i pacchetti di stagione sono conteggiati sull'episodio di ancoraggio della stagione.",
   "wanted.loadingStandby": "Caricamento dei candidati salvati…",
   "wanted.standbyCandidates": "Candidati di riserva · {{count}}",
   "wanted.downloadStandby": "Scarica",
   "wanted.downloadStandbyLabel": "Scarica {{name}}",
   "wanted.standbyConflictTitle": "Download già in corso",
-  "wanted.standbyConflictDescription": "Metti {{name}} in coda accanto a questi download, oppure annullali e metti in coda questo al loro posto.",
+  "wanted.standbyConflictDescription":
+    "Metti {{name}} in coda accanto a questi download, oppure annullali e metti in coda questo al loro posto.",
   "wanted.standbyQueue": "Metti in coda",
-  "wanted.standbyQueuedRefreshFailed": "La release è stata messa in coda, ma l'elenco non è stato aggiornato. Ricarica la pagina per vedere lo stato attuale.",
+  "wanted.standbyQueuedRefreshFailed":
+    "La release è stata messa in coda, ma l'elenco non è stato aggiornato. Ricarica la pagina per vedere lo stato attuale.",
   "wanted.standbyCancelAndQueue": "Annulla e metti in coda",
-  "wanted.standbyQueuedCancelFailed": "La release è stata messa in coda, ma {{count}} download in conflitto non sono stati annullati e sono ancora in corso.",
+  "wanted.standbyQueuedCancelFailed":
+    "La release è stata messa in coda, ma {{count}} download in conflitto non sono stati annullati e sono ancora in corso.",
   "wanted.standbyRank": "Posizione {{rank}}",
   "wanted.standbyIndexer": "Indexer",
   "wanted.standbySize": "Dimensione",
@@ -971,51 +981,78 @@ const it: LocaleDictionary = {
   "discovery.rail.becauseYouLike.adventure": "Perché ti piace l'avventura",
   "discovery.rail.becauseYouLike.comedy": "Perché ti piacciono le commedie",
   "discovery.rail.becauseYouLike.crime": "Perché ti piacciono i polizieschi",
-  "discovery.rail.becauseYouLike.documentary": "Perché ti piacciono i documentari",
+  "discovery.rail.becauseYouLike.documentary":
+    "Perché ti piacciono i documentari",
   "discovery.rail.becauseYouLike.drama": "Perché ti piacciono i drammi",
-  "discovery.rail.becauseYouLike.family": "Perché ti piace l'intrattenimento per famiglie",
+  "discovery.rail.becauseYouLike.family":
+    "Perché ti piace l'intrattenimento per famiglie",
   "discovery.rail.becauseYouLike.fantasy": "Perché ti piace il fantasy",
   "discovery.rail.becauseYouLike.history": "Perché ti piace la storia",
   "discovery.rail.becauseYouLike.horror": "Perché ti piace l'horror",
   "discovery.rail.becauseYouLike.mystery": "Perché ti piacciono i misteri",
-  "discovery.rail.becauseYouLike.romance": "Perché ti piacciono le storie d'amore",
-  "discovery.rail.becauseYouLike.science-fiction": "Perché ti piace la fantascienza",
+  "discovery.rail.becauseYouLike.romance":
+    "Perché ti piacciono le storie d'amore",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Perché ti piace la fantascienza",
   "discovery.rail.becauseYouLike.thriller": "Perché ti piacciono i thriller",
-  "discovery.rail.becauseYouLike.war": "Perché ti piacciono le storie di guerra",
+  "discovery.rail.becauseYouLike.war":
+    "Perché ti piacciono le storie di guerra",
   "discovery.rail.becauseYouLike.western": "Perché ti piacciono i western",
-  "discovery.rail.becauseYouLike.sports": "Perché ti piacciono le storie di sport",
-  "discovery.rail.becauseYouLike.supernatural": "Perché ti piace il soprannaturale",
-  "discovery.rail.becauseYouLike.coming-of-age": "Perché ti piacciono le storie di formazione",
-  "discovery.rail.becauseYouLike.found-family": "Perché ti piacciono le famiglie scelte",
-  "discovery.rail.becauseYouLike.revenge": "Perché ti piacciono le storie di vendetta",
+  "discovery.rail.becauseYouLike.sports":
+    "Perché ti piacciono le storie di sport",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Perché ti piace il soprannaturale",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Perché ti piacciono le storie di formazione",
+  "discovery.rail.becauseYouLike.found-family":
+    "Perché ti piacciono le famiglie scelte",
+  "discovery.rail.becauseYouLike.revenge":
+    "Perché ti piacciono le storie di vendetta",
   "discovery.rail.becauseYouLike.heist": "Perché ti piacciono le rapine",
-  "discovery.rail.becauseYouLike.time-travel": "Perché ti piacciono i viaggi nel tempo",
+  "discovery.rail.becauseYouLike.time-travel":
+    "Perché ti piacciono i viaggi nel tempo",
   "discovery.rail.becauseYouLike.dystopia": "Perché ti piacciono le distopie",
   "discovery.rail.becauseYouLike.cyberpunk": "Perché ti piace il cyberpunk",
   "discovery.rail.becauseYouLike.superhero": "Perché ti piacciono i supereroi",
   "discovery.rail.becauseYouLike.vampire": "Perché ti piacciono i vampiri",
   "discovery.rail.becauseYouLike.zombie": "Perché ti piacciono gli zombie",
-  "discovery.rail.becauseYouLike.survival": "Perché ti piacciono le storie di sopravvivenza",
-  "discovery.rail.becauseYouLike.space": "Perché ti piacciono le avventure spaziali",
-  "discovery.rail.becauseYouLike.detective": "Perché ti piacciono le storie di detective",
-  "discovery.rail.becauseYouLike.organized-crime": "Perché ti piace la criminalità organizzata",
-  "discovery.rail.becauseYouLike.period-drama": "Perché ti piacciono i drammi in costume",
-  "discovery.rail.becauseYouLike.psychological": "Perché ti piacciono le storie psicologiche",
+  "discovery.rail.becauseYouLike.survival":
+    "Perché ti piacciono le storie di sopravvivenza",
+  "discovery.rail.becauseYouLike.space":
+    "Perché ti piacciono le avventure spaziali",
+  "discovery.rail.becauseYouLike.detective":
+    "Perché ti piacciono le storie di detective",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Perché ti piace la criminalità organizzata",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Perché ti piacciono i drammi in costume",
+  "discovery.rail.becauseYouLike.psychological":
+    "Perché ti piacciono le storie psicologiche",
   "discovery.rail.becauseYouLike.mythology": "Perché ti piace la mitologia",
   "discovery.rail.becauseYouLike.isekai": "Perché ti piace l'isekai",
   "discovery.rail.becauseYouLike.mecha": "Perché ti piacciono i mecha",
-  "discovery.rail.becauseYouLike.martial-arts": "Perché ti piacciono le arti marziali",
-  "discovery.rail.becauseYouLike.music": "Perché ti piacciono le storie musicali",
-  "discovery.rail.becauseYouLike.workplace": "Perché ti piacciono le storie d'ufficio",
-  "discovery.rail.becauseYouLike.medical": "Perché ti piacciono i medical drama",
-  "discovery.rail.becauseYouLike.military": "Perché ti piacciono le storie militari",
-  "discovery.rail.becauseYouLike.spy": "Perché ti piacciono le storie di spionaggio",
-  "discovery.rail.becauseYouLike.royal-politics": "Perché ti piacciono gli intrighi di corte",
-  "discovery.rail.becauseYouLike.first-love": "Perché ti piacciono le storie di primo amore",
-  "discovery.rail.becauseYouLike.forbidden-love": "Perché ti piacciono gli amori proibiti",
+  "discovery.rail.becauseYouLike.martial-arts":
+    "Perché ti piacciono le arti marziali",
+  "discovery.rail.becauseYouLike.music":
+    "Perché ti piacciono le storie musicali",
+  "discovery.rail.becauseYouLike.workplace":
+    "Perché ti piacciono le storie d'ufficio",
+  "discovery.rail.becauseYouLike.medical":
+    "Perché ti piacciono i medical drama",
+  "discovery.rail.becauseYouLike.military":
+    "Perché ti piacciono le storie militari",
+  "discovery.rail.becauseYouLike.spy":
+    "Perché ti piacciono le storie di spionaggio",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Perché ti piacciono gli intrighi di corte",
+  "discovery.rail.becauseYouLike.first-love":
+    "Perché ti piacciono le storie di primo amore",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Perché ti piacciono gli amori proibiti",
   "discovery.rail.becauseYouLike.lgbtq": "Perché ti piacciono le storie LGBTQ+",
   "discovery.rail.becauseYouLike.samurai": "Perché ti piacciono i samurai",
-  "discovery.rail.becauseYouLike.magical-girl": "Perché ti piacciono le maghette",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Perché ti piacciono le maghette",
   "settings.keepHistoryForever": "Conserva la cronologia per sempre",
   "settings.historyRetentionDaysHeader": "Conserva la cronologia per",
   "settings.historyRetentionDaysSuffix": "giorni",
@@ -1206,6 +1243,7 @@ const it: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "Ricerca di titoli simili…",
   "libraryGraph.reason.recommendedBy": "Consigliato su {{sources}}",
   "libraryGraph.reason.shares": "In comune: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Gruppi di consigli",
   "libraryGraph.notInLibrary": "Non nella tua libreria",
   "libraryGraph.inLibrary": "Nella tua libreria",
   "libraryGraph.openTitle": "Apri titolo",

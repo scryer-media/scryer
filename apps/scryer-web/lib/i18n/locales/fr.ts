@@ -2,24 +2,34 @@ import type { LocaleDictionary } from "../types";
 
 const fr: LocaleDictionary = {
   "error.reason.STANDBY_NOT_FOUND": "Ce candidat enregistré n'existe plus.",
-  "error.reason.STANDBY_NOT_AVAILABLE": "Ce candidat enregistré n'est plus disponible. Actualisez la liste et réessayez.",
-  "error.reason.STANDBY_NOT_QUEUEABLE": "La release enregistrée n'a pas pu être mise en file. Elle reste disponible pour une nouvelle tentative.",
-  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Cette release figure sur la liste de blocage du titre. Retirez-la de la liste de blocage pour la mettre en file.",
-  "error.reason.STANDBY_ALREADY_ACTIVE": "Cette release est déjà dans la file de téléchargement.",
-  "error.reason.STANDBY_TITLE_BUSY": "Une autre recherche ou mise en file est en cours pour ce titre. Réessayez quand elle sera terminée.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Ce candidat enregistré n'est plus disponible. Actualisez la liste et réessayez.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "La release enregistrée n'a pas pu être mise en file. Elle reste disponible pour une nouvelle tentative.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Cette release figure sur la liste de blocage du titre. Retirez-la de la liste de blocage pour la mettre en file.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Cette release est déjà dans la file de téléchargement.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Une autre recherche ou mise en file est en cours pour ce titre. Réessayez quand elle sera terminée.",
   "wanted.standby": "Réserve · {{count}}",
-  "wanted.standbyTooltip": "{{count}} candidats enregistrés seront essayés si la capture en cours échoue.",
-  "wanted.standbyScopeNote": "Compte les lignes de cette portée ; les packs de saison sont comptés sur l'épisode d'ancrage de la saison.",
+  "wanted.standbyTooltip":
+    "{{count}} candidats enregistrés seront essayés si la capture en cours échoue.",
+  "wanted.standbyScopeNote":
+    "Compte les lignes de cette portée ; les packs de saison sont comptés sur l'épisode d'ancrage de la saison.",
   "wanted.loadingStandby": "Chargement des candidats enregistrés…",
   "wanted.standbyCandidates": "Candidats en réserve · {{count}}",
   "wanted.downloadStandby": "Télécharger",
   "wanted.downloadStandbyLabel": "Télécharger {{name}}",
   "wanted.standbyConflictTitle": "Téléchargements déjà en cours",
-  "wanted.standbyConflictDescription": "Mettre {{name}} en file d'attente à côté de ces téléchargements, ou les annuler et le mettre en file à leur place.",
+  "wanted.standbyConflictDescription":
+    "Mettre {{name}} en file d'attente à côté de ces téléchargements, ou les annuler et le mettre en file à leur place.",
   "wanted.standbyQueue": "Mettre en file",
-  "wanted.standbyQueuedRefreshFailed": "La release a été mise en file, mais la liste n'a pas pu être actualisée. Rechargez la page pour voir l'état actuel.",
+  "wanted.standbyQueuedRefreshFailed":
+    "La release a été mise en file, mais la liste n'a pas pu être actualisée. Rechargez la page pour voir l'état actuel.",
   "wanted.standbyCancelAndQueue": "Annuler et mettre en file",
-  "wanted.standbyQueuedCancelFailed": "La release a été mise en file, mais {{count}} téléchargement(s) en conflit n'ont pas pu être annulés et sont toujours en cours.",
+  "wanted.standbyQueuedCancelFailed":
+    "La release a été mise en file, mais {{count}} téléchargement(s) en conflit n'ont pas pu être annulés et sont toujours en cours.",
   "wanted.standbyRank": "Rang {{rank}}",
   "wanted.standbyIndexer": "Indexeur",
   "wanted.standbySize": "Taille",
@@ -1029,52 +1039,85 @@ const fr: LocaleDictionary = {
   "discovery.rail.becauseYouLike.action": "Parce que vous aimez l'action",
   "discovery.rail.becauseYouLike.adventure": "Parce que vous aimez l'aventure",
   "discovery.rail.becauseYouLike.comedy": "Parce que vous aimez les comédies",
-  "discovery.rail.becauseYouLike.crime": "Parce que vous aimez les histoires criminelles",
-  "discovery.rail.becauseYouLike.documentary": "Parce que vous aimez les documentaires",
+  "discovery.rail.becauseYouLike.crime":
+    "Parce que vous aimez les histoires criminelles",
+  "discovery.rail.becauseYouLike.documentary":
+    "Parce que vous aimez les documentaires",
   "discovery.rail.becauseYouLike.drama": "Parce que vous aimez les drames",
-  "discovery.rail.becauseYouLike.family": "Parce que vous aimez les divertissements en famille",
+  "discovery.rail.becauseYouLike.family":
+    "Parce que vous aimez les divertissements en famille",
   "discovery.rail.becauseYouLike.fantasy": "Parce que vous aimez la fantasy",
   "discovery.rail.becauseYouLike.history": "Parce que vous aimez l'histoire",
   "discovery.rail.becauseYouLike.horror": "Parce que vous aimez l'horreur",
   "discovery.rail.becauseYouLike.mystery": "Parce que vous aimez les mystères",
   "discovery.rail.becauseYouLike.romance": "Parce que vous aimez la romance",
-  "discovery.rail.becauseYouLike.science-fiction": "Parce que vous aimez la science-fiction",
-  "discovery.rail.becauseYouLike.thriller": "Parce que vous aimez les thrillers",
-  "discovery.rail.becauseYouLike.war": "Parce que vous aimez les récits de guerre",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Parce que vous aimez la science-fiction",
+  "discovery.rail.becauseYouLike.thriller":
+    "Parce que vous aimez les thrillers",
+  "discovery.rail.becauseYouLike.war":
+    "Parce que vous aimez les récits de guerre",
   "discovery.rail.becauseYouLike.western": "Parce que vous aimez les westerns",
-  "discovery.rail.becauseYouLike.sports": "Parce que vous aimez les histoires de sport",
-  "discovery.rail.becauseYouLike.supernatural": "Parce que vous aimez le surnaturel",
-  "discovery.rail.becauseYouLike.coming-of-age": "Parce que vous aimez les récits d'apprentissage",
-  "discovery.rail.becauseYouLike.found-family": "Parce que vous aimez les familles de cœur",
-  "discovery.rail.becauseYouLike.revenge": "Parce que vous aimez les histoires de vengeance",
+  "discovery.rail.becauseYouLike.sports":
+    "Parce que vous aimez les histoires de sport",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Parce que vous aimez le surnaturel",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Parce que vous aimez les récits d'apprentissage",
+  "discovery.rail.becauseYouLike.found-family":
+    "Parce que vous aimez les familles de cœur",
+  "discovery.rail.becauseYouLike.revenge":
+    "Parce que vous aimez les histoires de vengeance",
   "discovery.rail.becauseYouLike.heist": "Parce que vous aimez les casses",
-  "discovery.rail.becauseYouLike.time-travel": "Parce que vous aimez les voyages dans le temps",
-  "discovery.rail.becauseYouLike.dystopia": "Parce que vous aimez les dystopies",
-  "discovery.rail.becauseYouLike.cyberpunk": "Parce que vous aimez le cyberpunk",
-  "discovery.rail.becauseYouLike.superhero": "Parce que vous aimez les super-héros",
+  "discovery.rail.becauseYouLike.time-travel":
+    "Parce que vous aimez les voyages dans le temps",
+  "discovery.rail.becauseYouLike.dystopia":
+    "Parce que vous aimez les dystopies",
+  "discovery.rail.becauseYouLike.cyberpunk":
+    "Parce que vous aimez le cyberpunk",
+  "discovery.rail.becauseYouLike.superhero":
+    "Parce que vous aimez les super-héros",
   "discovery.rail.becauseYouLike.vampire": "Parce que vous aimez les vampires",
   "discovery.rail.becauseYouLike.zombie": "Parce que vous aimez les zombies",
-  "discovery.rail.becauseYouLike.survival": "Parce que vous aimez les histoires de survie",
-  "discovery.rail.becauseYouLike.space": "Parce que vous aimez les aventures spatiales",
-  "discovery.rail.becauseYouLike.detective": "Parce que vous aimez les histoires de détectives",
-  "discovery.rail.becauseYouLike.organized-crime": "Parce que vous aimez le crime organisé",
-  "discovery.rail.becauseYouLike.period-drama": "Parce que vous aimez les drames d'époque",
-  "discovery.rail.becauseYouLike.psychological": "Parce que vous aimez les histoires psychologiques",
-  "discovery.rail.becauseYouLike.mythology": "Parce que vous aimez la mythologie",
+  "discovery.rail.becauseYouLike.survival":
+    "Parce que vous aimez les histoires de survie",
+  "discovery.rail.becauseYouLike.space":
+    "Parce que vous aimez les aventures spatiales",
+  "discovery.rail.becauseYouLike.detective":
+    "Parce que vous aimez les histoires de détectives",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Parce que vous aimez le crime organisé",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Parce que vous aimez les drames d'époque",
+  "discovery.rail.becauseYouLike.psychological":
+    "Parce que vous aimez les histoires psychologiques",
+  "discovery.rail.becauseYouLike.mythology":
+    "Parce que vous aimez la mythologie",
   "discovery.rail.becauseYouLike.isekai": "Parce que vous aimez l'isekai",
   "discovery.rail.becauseYouLike.mecha": "Parce que vous aimez les mechas",
-  "discovery.rail.becauseYouLike.martial-arts": "Parce que vous aimez les arts martiaux",
-  "discovery.rail.becauseYouLike.music": "Parce que vous aimez les histoires musicales",
-  "discovery.rail.becauseYouLike.workplace": "Parce que vous aimez les histoires de bureau",
-  "discovery.rail.becauseYouLike.medical": "Parce que vous aimez les drames médicaux",
-  "discovery.rail.becauseYouLike.military": "Parce que vous aimez les histoires militaires",
-  "discovery.rail.becauseYouLike.spy": "Parce que vous aimez les histoires d'espionnage",
-  "discovery.rail.becauseYouLike.royal-politics": "Parce que vous aimez les intrigues royales",
-  "discovery.rail.becauseYouLike.first-love": "Parce que vous aimez les premiers amours",
-  "discovery.rail.becauseYouLike.forbidden-love": "Parce que vous aimez les amours interdites",
-  "discovery.rail.becauseYouLike.lgbtq": "Parce que vous aimez les histoires LGBTQ+",
+  "discovery.rail.becauseYouLike.martial-arts":
+    "Parce que vous aimez les arts martiaux",
+  "discovery.rail.becauseYouLike.music":
+    "Parce que vous aimez les histoires musicales",
+  "discovery.rail.becauseYouLike.workplace":
+    "Parce que vous aimez les histoires de bureau",
+  "discovery.rail.becauseYouLike.medical":
+    "Parce que vous aimez les drames médicaux",
+  "discovery.rail.becauseYouLike.military":
+    "Parce que vous aimez les histoires militaires",
+  "discovery.rail.becauseYouLike.spy":
+    "Parce que vous aimez les histoires d'espionnage",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Parce que vous aimez les intrigues royales",
+  "discovery.rail.becauseYouLike.first-love":
+    "Parce que vous aimez les premiers amours",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Parce que vous aimez les amours interdites",
+  "discovery.rail.becauseYouLike.lgbtq":
+    "Parce que vous aimez les histoires LGBTQ+",
   "discovery.rail.becauseYouLike.samurai": "Parce que vous aimez les samouraïs",
-  "discovery.rail.becauseYouLike.magical-girl": "Parce que vous aimez les magical girls",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Parce que vous aimez les magical girls",
   "settings.keepHistoryForever": "Conserver l’historique indéfiniment",
   "settings.historyRetentionDaysHeader": "Conserver l’historique pendant",
   "settings.historyRetentionDaysSuffix": "jours",
@@ -1270,11 +1313,13 @@ const fr: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "Recherche de titres similaires…",
   "libraryGraph.reason.recommendedBy": "Recommandé sur {{sources}}",
   "libraryGraph.reason.shares": "En commun : {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Groupes de recommandations",
   "libraryGraph.notInLibrary": "Absent de votre bibliothèque",
   "libraryGraph.inLibrary": "Dans votre bibliothèque",
   "libraryGraph.openTitle": "Ouvrir le titre",
   "libraryGraph.exploredGroup": "Exploré",
-  "libraryGraph.focusedOutsideLibrary": "{{title}}, absent de votre bibliothèque",
+  "libraryGraph.focusedOutsideLibrary":
+    "{{title}}, absent de votre bibliothèque",
   "libraryGraph.trailLabel": "Exploré",
   "libraryGraph.canvasLabel":
     "Graphe de la bibliothèque. Utilisez les flèches pour passer d'un titre à l'autre dans un groupe et Entrée pour en ouvrir un.",

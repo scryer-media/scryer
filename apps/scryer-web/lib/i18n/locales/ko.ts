@@ -1,25 +1,36 @@
 import type { LocaleDictionary } from "../types";
 
 const ko: LocaleDictionary = {
-  "error.reason.STANDBY_NOT_FOUND": "이 저장된 후보는 더 이상 존재하지 않습니다.",
-  "error.reason.STANDBY_NOT_AVAILABLE": "이 저장된 후보는 더 이상 사용할 수 없습니다. 목록을 새로 고친 뒤 다시 시도하세요.",
-  "error.reason.STANDBY_NOT_QUEUEABLE": "저장된 릴리스를 대기열에 추가하지 못했습니다. 다시 시도할 수 있습니다.",
-  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "이 릴리스는 타이틀의 차단 목록에 있습니다. 대기열에 추가하려면 차단 목록에서 제거하세요.",
-  "error.reason.STANDBY_ALREADY_ACTIVE": "이 릴리스는 이미 다운로드 대기열에 있습니다.",
-  "error.reason.STANDBY_TITLE_BUSY": "이 타이틀에 대해 다른 검색 또는 대기열 작업이 실행 중입니다. 완료된 뒤 다시 시도하세요.",
+  "error.reason.STANDBY_NOT_FOUND":
+    "이 저장된 후보는 더 이상 존재하지 않습니다.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "이 저장된 후보는 더 이상 사용할 수 없습니다. 목록을 새로 고친 뒤 다시 시도하세요.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "저장된 릴리스를 대기열에 추가하지 못했습니다. 다시 시도할 수 있습니다.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "이 릴리스는 타이틀의 차단 목록에 있습니다. 대기열에 추가하려면 차단 목록에서 제거하세요.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "이 릴리스는 이미 다운로드 대기열에 있습니다.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "이 타이틀에 대해 다른 검색 또는 대기열 작업이 실행 중입니다. 완료된 뒤 다시 시도하세요.",
   "wanted.standby": "대기 · {{count}}",
-  "wanted.standbyTooltip": "현재 가져오기가 실패하면 저장된 후보 {{count}}개를 순서대로 시도합니다.",
-  "wanted.standbyScopeNote": "이 범위에 속한 행을 셉니다. 시즌 팩은 시즌의 기준 에피소드에서 셉니다.",
+  "wanted.standbyTooltip":
+    "현재 가져오기가 실패하면 저장된 후보 {{count}}개를 순서대로 시도합니다.",
+  "wanted.standbyScopeNote":
+    "이 범위에 속한 행을 셉니다. 시즌 팩은 시즌의 기준 에피소드에서 셉니다.",
   "wanted.loadingStandby": "저장된 후보 불러오는 중…",
   "wanted.standbyCandidates": "대기 후보 · {{count}}",
   "wanted.downloadStandby": "다운로드",
   "wanted.downloadStandbyLabel": "{{name}} 다운로드",
   "wanted.standbyConflictTitle": "이미 진행 중인 다운로드가 있습니다",
-  "wanted.standbyConflictDescription": "이 다운로드들과 함께 {{name}}을(를) 대기열에 추가하거나, 취소하고 대신 대기열에 추가합니다.",
+  "wanted.standbyConflictDescription":
+    "이 다운로드들과 함께 {{name}}을(를) 대기열에 추가하거나, 취소하고 대신 대기열에 추가합니다.",
   "wanted.standbyQueue": "대기열에 추가",
-  "wanted.standbyQueuedRefreshFailed": "릴리스가 대기열에 추가되었지만 목록을 새로 고치지 못했습니다. 현재 상태를 보려면 페이지를 새로 고치세요.",
+  "wanted.standbyQueuedRefreshFailed":
+    "릴리스가 대기열에 추가되었지만 목록을 새로 고치지 못했습니다. 현재 상태를 보려면 페이지를 새로 고치세요.",
   "wanted.standbyCancelAndQueue": "취소하고 대기열에 추가",
-  "wanted.standbyQueuedCancelFailed": "릴리스가 대기열에 추가되었지만 충돌하는 다운로드 {{count}}개를 취소하지 못해 아직 실행 중입니다.",
+  "wanted.standbyQueuedCancelFailed":
+    "릴리스가 대기열에 추가되었지만 충돌하는 다운로드 {{count}}개를 취소하지 못해 아직 실행 중입니다.",
   "wanted.standbyRank": "순위 {{rank}}",
   "wanted.standbyIndexer": "인덱서",
   "wanted.standbySize": "크기",
@@ -955,7 +966,8 @@ const ko: LocaleDictionary = {
   "discovery.rail.becauseYouLike.sports": "스포츠 이야기를 좋아하는 분께",
   "discovery.rail.becauseYouLike.supernatural": "초자연물을 좋아하는 분께",
   "discovery.rail.becauseYouLike.coming-of-age": "성장 이야기를 좋아하는 분께",
-  "discovery.rail.becauseYouLike.found-family": "유사 가족 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.found-family":
+    "유사 가족 이야기를 좋아하는 분께",
   "discovery.rail.becauseYouLike.revenge": "복수극을 좋아하는 분께",
   "discovery.rail.becauseYouLike.heist": "하이스트물을 좋아하는 분께",
   "discovery.rail.becauseYouLike.time-travel": "시간 여행을 좋아하는 분께",
@@ -967,7 +979,8 @@ const ko: LocaleDictionary = {
   "discovery.rail.becauseYouLike.survival": "생존물을 좋아하는 분께",
   "discovery.rail.becauseYouLike.space": "우주 모험을 좋아하는 분께",
   "discovery.rail.becauseYouLike.detective": "탐정물을 좋아하는 분께",
-  "discovery.rail.becauseYouLike.organized-crime": "조직 범죄물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "조직 범죄물을 좋아하는 분께",
   "discovery.rail.becauseYouLike.period-drama": "시대극을 좋아하는 분께",
   "discovery.rail.becauseYouLike.psychological": "심리극을 좋아하는 분께",
   "discovery.rail.becauseYouLike.mythology": "신화를 좋아하는 분께",
@@ -1173,6 +1186,7 @@ const ko: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "비슷한 작품을 찾는 중…",
   "libraryGraph.reason.recommendedBy": "{{sources}}에서 추천",
   "libraryGraph.reason.shares": "공통점: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "추천 그룹",
   "libraryGraph.notInLibrary": "라이브러리에 없음",
   "libraryGraph.inLibrary": "라이브러리에 있음",
   "libraryGraph.openTitle": "타이틀 열기",

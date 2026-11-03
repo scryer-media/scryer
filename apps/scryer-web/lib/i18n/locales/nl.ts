@@ -1,20 +1,29 @@
 import type { LocaleDictionary } from "../types";
 
 const nl: LocaleDictionary = {
-  "error.reason.STANDBY_NOT_FOUND": "Deze opgeslagen kandidaat bestaat niet meer.",
-  "error.reason.STANDBY_NOT_AVAILABLE": "Deze opgeslagen kandidaat is niet meer beschikbaar. Vernieuw de lijst en probeer het opnieuw.",
-  "error.reason.STANDBY_NOT_QUEUEABLE": "De opgeslagen release kon niet in de wachtrij worden gezet. Hij blijft beschikbaar om opnieuw te proberen.",
-  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Deze release staat op de blokkeerlijst van de titel. Verwijder hem van de blokkeerlijst om hem in de wachtrij te zetten.",
-  "error.reason.STANDBY_ALREADY_ACTIVE": "Deze release staat al in de downloadwachtrij.",
-  "error.reason.STANDBY_TITLE_BUSY": "Er loopt al een andere zoekopdracht of wachtrijactie voor deze titel. Probeer het opnieuw zodra die klaar is.",
+  "error.reason.STANDBY_NOT_FOUND":
+    "Deze opgeslagen kandidaat bestaat niet meer.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Deze opgeslagen kandidaat is niet meer beschikbaar. Vernieuw de lijst en probeer het opnieuw.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "De opgeslagen release kon niet in de wachtrij worden gezet. Hij blijft beschikbaar om opnieuw te proberen.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Deze release staat op de blokkeerlijst van de titel. Verwijder hem van de blokkeerlijst om hem in de wachtrij te zetten.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Deze release staat al in de downloadwachtrij.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Er loopt al een andere zoekopdracht of wachtrijactie voor deze titel. Probeer het opnieuw zodra die klaar is.",
   "wanted.downloadStandby": "Downloaden",
   "wanted.downloadStandbyLabel": "{{name}} downloaden",
   "wanted.standbyConflictTitle": "Downloads al bezig",
-  "wanted.standbyConflictDescription": "Zet {{name}} naast deze downloads in de wachtrij, of annuleer ze en zet deze in plaats daarvan in de wachtrij.",
+  "wanted.standbyConflictDescription":
+    "Zet {{name}} naast deze downloads in de wachtrij, of annuleer ze en zet deze in plaats daarvan in de wachtrij.",
   "wanted.standbyQueue": "In wachtrij",
-  "wanted.standbyQueuedRefreshFailed": "De release is in de wachtrij gezet, maar de lijst kon niet worden vernieuwd. Vernieuw de pagina om de huidige status te zien.",
+  "wanted.standbyQueuedRefreshFailed":
+    "De release is in de wachtrij gezet, maar de lijst kon niet worden vernieuwd. Vernieuw de pagina om de huidige status te zien.",
   "wanted.standbyCancelAndQueue": "Annuleren en in wachtrij",
-  "wanted.standbyQueuedCancelFailed": "De release is in de wachtrij gezet, maar {{count}} conflicterende download(s) konden niet worden geannuleerd en lopen nog.",
+  "wanted.standbyQueuedCancelFailed":
+    "De release is in de wachtrij gezet, maar {{count}} conflicterende download(s) konden niet worden geannuleerd en lopen nog.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin-callback-URL gekopieerd.",
   "settings.oauthClientIdCopied": "OAuth-client-ID gekopieerd.",
   "status.copyFailedSelected":
@@ -405,7 +414,8 @@ const nl: LocaleDictionary = {
   "discovery.rail.becauseYouLike.adventure": "Omdat je avontuur leuk vindt",
   "discovery.rail.becauseYouLike.comedy": "Omdat je komedies leuk vindt",
   "discovery.rail.becauseYouLike.crime": "Omdat je misdaad leuk vindt",
-  "discovery.rail.becauseYouLike.documentary": "Omdat je documentaires leuk vindt",
+  "discovery.rail.becauseYouLike.documentary":
+    "Omdat je documentaires leuk vindt",
   "discovery.rail.becauseYouLike.drama": "Omdat je drama leuk vindt",
   "discovery.rail.becauseYouLike.family": "Omdat je familievermaak leuk vindt",
   "discovery.rail.becauseYouLike.fantasy": "Omdat je fantasy leuk vindt",
@@ -413,14 +423,18 @@ const nl: LocaleDictionary = {
   "discovery.rail.becauseYouLike.horror": "Omdat je horror leuk vindt",
   "discovery.rail.becauseYouLike.mystery": "Omdat je mysteries leuk vindt",
   "discovery.rail.becauseYouLike.romance": "Omdat je romantiek leuk vindt",
-  "discovery.rail.becauseYouLike.science-fiction": "Omdat je sciencefiction leuk vindt",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Omdat je sciencefiction leuk vindt",
   "discovery.rail.becauseYouLike.thriller": "Omdat je thrillers leuk vindt",
   "discovery.rail.becauseYouLike.war": "Omdat je oorlogsverhalen leuk vindt",
   "discovery.rail.becauseYouLike.western": "Omdat je westerns leuk vindt",
   "discovery.rail.becauseYouLike.sports": "Omdat je sportverhalen leuk vindt",
-  "discovery.rail.becauseYouLike.supernatural": "Omdat je het bovennatuurlijke leuk vindt",
-  "discovery.rail.becauseYouLike.coming-of-age": "Omdat je opgroeiverhalen leuk vindt",
-  "discovery.rail.becauseYouLike.found-family": "Omdat je gekozen families leuk vindt",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Omdat je het bovennatuurlijke leuk vindt",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Omdat je opgroeiverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.found-family":
+    "Omdat je gekozen families leuk vindt",
   "discovery.rail.becauseYouLike.revenge": "Omdat je wraakverhalen leuk vindt",
   "discovery.rail.becauseYouLike.heist": "Omdat je overvallen leuk vindt",
   "discovery.rail.becauseYouLike.time-travel": "Omdat je tijdreizen leuk vindt",
@@ -429,27 +443,40 @@ const nl: LocaleDictionary = {
   "discovery.rail.becauseYouLike.superhero": "Omdat je superhelden leuk vindt",
   "discovery.rail.becauseYouLike.vampire": "Omdat je vampiers leuk vindt",
   "discovery.rail.becauseYouLike.zombie": "Omdat je zombies leuk vindt",
-  "discovery.rail.becauseYouLike.survival": "Omdat je overlevingsverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.survival":
+    "Omdat je overlevingsverhalen leuk vindt",
   "discovery.rail.becauseYouLike.space": "Omdat je ruimteavonturen leuk vindt",
-  "discovery.rail.becauseYouLike.detective": "Omdat je detectiveverhalen leuk vindt",
-  "discovery.rail.becauseYouLike.organized-crime": "Omdat je georganiseerde misdaad leuk vindt",
-  "discovery.rail.becauseYouLike.period-drama": "Omdat je historische drama's leuk vindt",
-  "discovery.rail.becauseYouLike.psychological": "Omdat je psychologische verhalen leuk vindt",
+  "discovery.rail.becauseYouLike.detective":
+    "Omdat je detectiveverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Omdat je georganiseerde misdaad leuk vindt",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Omdat je historische drama's leuk vindt",
+  "discovery.rail.becauseYouLike.psychological":
+    "Omdat je psychologische verhalen leuk vindt",
   "discovery.rail.becauseYouLike.mythology": "Omdat je mythologie leuk vindt",
   "discovery.rail.becauseYouLike.isekai": "Omdat je isekai leuk vindt",
   "discovery.rail.becauseYouLike.mecha": "Omdat je mecha leuk vindt",
-  "discovery.rail.becauseYouLike.martial-arts": "Omdat je vechtsporten leuk vindt",
+  "discovery.rail.becauseYouLike.martial-arts":
+    "Omdat je vechtsporten leuk vindt",
   "discovery.rail.becauseYouLike.music": "Omdat je muziekverhalen leuk vindt",
-  "discovery.rail.becauseYouLike.workplace": "Omdat je verhalen op de werkvloer leuk vindt",
-  "discovery.rail.becauseYouLike.medical": "Omdat je ziekenhuisdrama's leuk vindt",
-  "discovery.rail.becauseYouLike.military": "Omdat je militaire verhalen leuk vindt",
+  "discovery.rail.becauseYouLike.workplace":
+    "Omdat je verhalen op de werkvloer leuk vindt",
+  "discovery.rail.becauseYouLike.medical":
+    "Omdat je ziekenhuisdrama's leuk vindt",
+  "discovery.rail.becauseYouLike.military":
+    "Omdat je militaire verhalen leuk vindt",
   "discovery.rail.becauseYouLike.spy": "Omdat je spionageverhalen leuk vindt",
-  "discovery.rail.becauseYouLike.royal-politics": "Omdat je koninklijke intriges leuk vindt",
-  "discovery.rail.becauseYouLike.first-love": "Omdat je verhalen over eerste liefde leuk vindt",
-  "discovery.rail.becauseYouLike.forbidden-love": "Omdat je verboden liefde leuk vindt",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Omdat je koninklijke intriges leuk vindt",
+  "discovery.rail.becauseYouLike.first-love":
+    "Omdat je verhalen over eerste liefde leuk vindt",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Omdat je verboden liefde leuk vindt",
   "discovery.rail.becauseYouLike.lgbtq": "Omdat je LGBTQ+-verhalen leuk vindt",
   "discovery.rail.becauseYouLike.samurai": "Omdat je samoerai leuk vindt",
-  "discovery.rail.becauseYouLike.magical-girl": "Omdat je magical girls leuk vindt",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Omdat je magical girls leuk vindt",
 
   "settings.profile": "Profiel",
   "settings.general": "Algemeen",
@@ -1556,6 +1583,7 @@ const nl: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "Vergelijkbare titels zoeken…",
   "libraryGraph.reason.recommendedBy": "Aanbevolen op {{sources}}",
   "libraryGraph.reason.shares": "Gedeeld: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Aanbevelingsgroepen",
   "libraryGraph.notInLibrary": "Niet in je bibliotheek",
   "libraryGraph.inLibrary": "In je bibliotheek",
   "libraryGraph.openTitle": "Titel openen",

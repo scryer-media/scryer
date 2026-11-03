@@ -5627,29 +5627,47 @@ const en: LocaleDictionary = {
   "settings.watchHistoryIncomplete": "Last read incomplete",
   "settings.watchHistoryIncompleteHelp":
     "Lifecycle rules treat watch history as unknown until every enabled media server is read in full. Reason: {{reason}}",
-  "settings.watchHistorySignalCount": "{{count}} watched items from {{accounts}} linked accounts",
+  "settings.watchHistorySignalCount":
+    "{{count}} watched items from {{accounts}} linked accounts",
   "settings.watchHistoryDisabled": "Not read while disabled",
   "settings.watchHistoryStale": "Out of date",
   "settings.watchHistoryStaleHelp":
     "Lifecycle rules treat watch history as unknown until every enabled media server has been read in full recently.",
-  "settings.watchSyncReason.credentialMissing": "No API key is saved for this connection.",
-  "settings.watchSyncReason.providerUnsupported": "This media server type does not support reading watch history.",
-  "settings.watchSyncReason.baseUrlInvalid": "The connection's base URL is not a usable address.",
-  "settings.watchSyncReason.plexServerNotSelected": "No Plex server is selected for this connection.",
-  "settings.watchSyncReason.plexServerUnreachable": "The selected Plex server is not listed on the account, or lists no address to reach it at.",
-  "settings.watchSyncReason.plexAccountIdInvalid": "A linked Plex account has an id the server cannot look up.",
-  "settings.watchSyncReason.participantIdMissing": "A linked account has no media server user id.",
+  "settings.watchSyncReason.credentialMissing":
+    "No API key is saved for this connection.",
+  "settings.watchSyncReason.providerUnsupported":
+    "This media server type does not support reading watch history.",
+  "settings.watchSyncReason.baseUrlInvalid":
+    "The connection's base URL is not a usable address.",
+  "settings.watchSyncReason.plexServerNotSelected":
+    "No Plex server is selected for this connection.",
+  "settings.watchSyncReason.plexServerUnreachable":
+    "The selected Plex server is not listed on the account, or lists no address to reach it at.",
+  "settings.watchSyncReason.plexAccountIdInvalid":
+    "A linked Plex account has an id the server cannot look up.",
+  "settings.watchSyncReason.participantIdMissing":
+    "A linked account has no media server user id.",
   "settings.watchSyncReason.accessDenied": "The media server refused access.",
-  "settings.watchSyncReason.requestRejected": "The media server refused the request.",
-  "settings.watchSyncReason.requestFailed": "The media server could not be reached.",
-  "settings.watchSyncReason.responseUnreadable": "The media server sent an answer Scryer could not read.",
-  "settings.watchSyncReason.itemsUnreadable": "Some watched items could not be read.",
-  "settings.watchSyncReason.pagingNotHonoured": "The media server did not return its watch history page by page as asked.",
-  "settings.watchSyncReason.filterNotHonoured": "The media server returned unwatched items when asked for watched ones.",
-  "settings.watchSyncReason.itemCapReached": "A linked account's watch history is larger than one read covers.",
-  "settings.watchSyncReason.unmappedPlayedMovies": "Some watched movies could not be matched to a library title.",
-  "settings.watchSyncReason.storeFailed": "Scryer could not save the watch history it read.",
-  "settings.watchSyncReason.sourceUnavailable": "Watch history reading is not available in this build.",
+  "settings.watchSyncReason.requestRejected":
+    "The media server refused the request.",
+  "settings.watchSyncReason.requestFailed":
+    "The media server could not be reached.",
+  "settings.watchSyncReason.responseUnreadable":
+    "The media server sent an answer Scryer could not read.",
+  "settings.watchSyncReason.itemsUnreadable":
+    "Some watched items could not be read.",
+  "settings.watchSyncReason.pagingNotHonoured":
+    "The media server did not return its watch history page by page as asked.",
+  "settings.watchSyncReason.filterNotHonoured":
+    "The media server returned unwatched items when asked for watched ones.",
+  "settings.watchSyncReason.itemCapReached":
+    "A linked account's watch history is larger than one read covers.",
+  "settings.watchSyncReason.unmappedPlayedMovies":
+    "Some watched movies could not be matched to a library title.",
+  "settings.watchSyncReason.storeFailed":
+    "Scryer could not save the watch history it read.",
+  "settings.watchSyncReason.sourceUnavailable":
+    "Watch history reading is not available in this build.",
   "settings.apiKeyConfigured": "API key saved",
   "settings.apiKeyMissing": "API key missing",
   "settings.plexServerSelected": "Plex server selected",
@@ -6012,14 +6030,18 @@ const en: LocaleDictionary = {
   "discovery.rail.becauseYouLike.horror": "Because you like horror",
   "discovery.rail.becauseYouLike.mystery": "Because you like mysteries",
   "discovery.rail.becauseYouLike.romance": "Because you like romance",
-  "discovery.rail.becauseYouLike.science-fiction": "Because you like science fiction",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Because you like science fiction",
   "discovery.rail.becauseYouLike.thriller": "Because you like thrillers",
   "discovery.rail.becauseYouLike.war": "Because you like war stories",
   "discovery.rail.becauseYouLike.western": "Because you like westerns",
   "discovery.rail.becauseYouLike.sports": "Because you like sports stories",
-  "discovery.rail.becauseYouLike.supernatural": "Because you like the supernatural",
-  "discovery.rail.becauseYouLike.coming-of-age": "Because you like coming-of-age stories",
-  "discovery.rail.becauseYouLike.found-family": "Because you like found families",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Because you like the supernatural",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Because you like coming-of-age stories",
+  "discovery.rail.becauseYouLike.found-family":
+    "Because you like found families",
   "discovery.rail.becauseYouLike.revenge": "Because you like revenge stories",
   "discovery.rail.becauseYouLike.heist": "Because you like heists",
   "discovery.rail.becauseYouLike.time-travel": "Because you like time travel",
@@ -6030,25 +6052,34 @@ const en: LocaleDictionary = {
   "discovery.rail.becauseYouLike.zombie": "Because you like zombies",
   "discovery.rail.becauseYouLike.survival": "Because you like survival stories",
   "discovery.rail.becauseYouLike.space": "Because you like space adventures",
-  "discovery.rail.becauseYouLike.detective": "Because you like detective stories",
-  "discovery.rail.becauseYouLike.organized-crime": "Because you like organized crime",
-  "discovery.rail.becauseYouLike.period-drama": "Because you like period dramas",
-  "discovery.rail.becauseYouLike.psychological": "Because you like psychological stories",
+  "discovery.rail.becauseYouLike.detective":
+    "Because you like detective stories",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Because you like organized crime",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Because you like period dramas",
+  "discovery.rail.becauseYouLike.psychological":
+    "Because you like psychological stories",
   "discovery.rail.becauseYouLike.mythology": "Because you like mythology",
   "discovery.rail.becauseYouLike.isekai": "Because you like isekai",
   "discovery.rail.becauseYouLike.mecha": "Because you like mecha",
   "discovery.rail.becauseYouLike.martial-arts": "Because you like martial arts",
   "discovery.rail.becauseYouLike.music": "Because you like music stories",
-  "discovery.rail.becauseYouLike.workplace": "Because you like workplace stories",
+  "discovery.rail.becauseYouLike.workplace":
+    "Because you like workplace stories",
   "discovery.rail.becauseYouLike.medical": "Because you like medical dramas",
   "discovery.rail.becauseYouLike.military": "Because you like military stories",
   "discovery.rail.becauseYouLike.spy": "Because you like spy stories",
-  "discovery.rail.becauseYouLike.royal-politics": "Because you like royal intrigue",
-  "discovery.rail.becauseYouLike.first-love": "Because you like first-love stories",
-  "discovery.rail.becauseYouLike.forbidden-love": "Because you like forbidden love",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Because you like royal intrigue",
+  "discovery.rail.becauseYouLike.first-love":
+    "Because you like first-love stories",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Because you like forbidden love",
   "discovery.rail.becauseYouLike.lgbtq": "Because you like LGBTQ+ stories",
   "discovery.rail.becauseYouLike.samurai": "Because you like samurai",
-  "discovery.rail.becauseYouLike.magical-girl": "Because you like magical girls",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Because you like magical girls",
   "settings.keepHistoryForever": "Keep history forever",
   "settings.historyRetentionDaysHeader": "Retain history for",
   "settings.historyRetentionDaysSuffix": "days",
@@ -6359,6 +6390,7 @@ const en: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "Finding more like this…",
   "libraryGraph.reason.recommendedBy": "Recommended on {{sources}}",
   "libraryGraph.reason.shares": "In common: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Recommendation groups",
   "libraryGraph.notInLibrary": "Not in your library",
   "libraryGraph.inLibrary": "In your library",
   "libraryGraph.openTitle": "Open title",

@@ -42,11 +42,13 @@ import {
   neighborReason,
   neighborReasonLines,
   nodeSizesByTitleId,
+  recommendationSections,
   titleIndexByMatchKey,
   titleMatchKeys,
   titleTargetKey,
   type LibraryGraphSizeMetric,
   type NeighborReason,
+  type RecommendationSection,
 } from "@/lib/utils/library-graph-model";
 import {
   convexHull,
@@ -562,6 +564,47 @@ export default function LibraryGraphView({
         : overview,
     [explored, focusCenterKey, overview],
   );
+  // A focused view's rings, inner first, each as sections around the circle:
+  // library titles as one, recommendations grouped by a shared genre or
+  // theme.
+  const focusRings = React.useMemo(() => {
+    if (focusCenterKey === null || !displayed) {
+      return [];
+    }
+    const ghostKeys = new Set(
+      displayed.nodes
+        .filter((node) => node.ghost)
+        .map((node) => node.subjectKey),
+    );
+    return egoRingGroups(displayed, focusCenterKey).map(
+      (ring): RecommendationSection[] =>
+        ring.length > 0 && ghostKeys.has(ring[0])
+          ? recommendationSections(
+              ring.map((key) => ({
+                key,
+                tags: traversal.ghostItems.get(key)?.canonicalTags,
+              })),
+            )
+          : [{ tagKey: null, name: null, keys: ring }],
+    );
+  }, [displayed, focusCenterKey, traversal.ghostItems]);
+  const recommendationBands = React.useMemo(
+    () =>
+      focusRings
+        .flat()
+        .filter((section) => section.name !== null)
+        .map((section, index) => ({
+          key: section.tagKey ?? String(index),
+          name: section.name ?? "",
+          keys: section.keys,
+          color: CLUSTER_COLORS[index % CLUSTER_COLORS.length],
+        })),
+    [focusRings],
+  );
+  const recommendationBandsRef = React.useRef(recommendationBands);
+  React.useEffect(() => {
+    recommendationBandsRef.current = recommendationBands;
+  }, [recommendationBands]);
   // Every cluster of the whole graph, before filtering, so layout centres hold
   // still when a filter empties a cluster. The unplaced group takes a slot on
   // the ring only when the graph has unplaced titles, so a single
@@ -605,6 +648,14 @@ export default function LibraryGraphView({
           : a.id - b.id,
     );
   }, [clusterOrder, join, t]);
+  // Neighbourhoods are named and outlined only when there are several; one
+  // neighbourhood is the whole library.
+  const showsNeighbourhoods =
+    groups.filter((group) => group.id !== UNPLACED_CLUSTER_ID).length > 1;
+  const showsNeighbourhoodsRef = React.useRef(showsNeighbourhoods);
+  React.useEffect(() => {
+    showsNeighbourhoodsRef.current = showsNeighbourhoods;
+  }, [showsNeighbourhoods]);
   const groupsRef = React.useRef(groups);
   React.useEffect(() => {
     groupsRef.current = groups;
@@ -705,8 +756,14 @@ export default function LibraryGraphView({
     for (const group of groupsRef.current) {
       const label = hullLabelRefs.current.get(group.id);
       const points = pointsByCluster.get(group.id);
-      // A focused view draws no cluster hulls.
-      if (focusCenter !== null || !points || points.length === 0) {
+      // A focused view draws no cluster hulls, and neither does a graph
+      // with one neighbourhood, which would only outline everything.
+      if (
+        focusCenter !== null ||
+        !showsNeighbourhoodsRef.current ||
+        !points ||
+        points.length === 0
+      ) {
         if (label) {
           label.style.visibility = "hidden";
         }
@@ -750,6 +807,83 @@ export default function LibraryGraphView({
         );
         label.style.visibility = "visible";
         label.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+      }
+    }
+
+    // In a focused view, a tinted band behind each group of recommendations
+    // that share a genre or theme.
+    const bandCenter =
+      focusCenter !== null ? viewportByNode.get(focusCenter) : undefined;
+    // Where each band's name goes: just outside the band, midway along it.
+    const bandLabels: { text: string; x: number; y: number; color: string }[] =
+      [];
+    if (bandCenter) {
+      for (const band of recommendationBandsRef.current) {
+        let inner = Infinity;
+        let outer = 0;
+        let start = Infinity;
+        let end = -Infinity;
+        let pad = 0;
+        for (const key of band.keys) {
+          const point = viewportByNode.get(key);
+          if (!point || !graph.hasNode(key)) {
+            continue;
+          }
+          const radius = Math.hypot(
+            point.x - bandCenter.x,
+            point.y - bandCenter.y,
+          );
+          // Angles run clockwise from straight up, as the rings lay out.
+          let angle = Math.atan2(
+            point.y - bandCenter.y,
+            point.x - bandCenter.x,
+          );
+          if (angle < -Math.PI / 2) {
+            angle += Math.PI * 2;
+          }
+          const size = sigma.scaleSize(
+            graph.getNodeAttribute(key, "size") as number,
+          );
+          inner = Math.min(inner, radius);
+          outer = Math.max(outer, radius);
+          start = Math.min(start, angle);
+          end = Math.max(end, angle);
+          pad = Math.max(pad, size + 6);
+        }
+        if (outer === 0) {
+          continue;
+        }
+        const spread = pad / Math.max(outer, 1);
+        context.beginPath();
+        context.arc(
+          bandCenter.x,
+          bandCenter.y,
+          outer + pad,
+          start - spread,
+          end + spread,
+        );
+        context.arc(
+          bandCenter.x,
+          bandCenter.y,
+          Math.max(0, inner - pad),
+          end + spread,
+          start - spread,
+          true,
+        );
+        context.closePath();
+        context.fillStyle = withAlpha(band.color, 0.14);
+        context.fill();
+        context.strokeStyle = withAlpha(band.color, 0.45);
+        context.lineWidth = 1;
+        context.stroke();
+        const middle = (start + end) / 2;
+        const labelRadius = outer + pad + 12;
+        bandLabels.push({
+          text: band.name,
+          x: bandCenter.x + Math.cos(middle) * labelRadius,
+          y: bandCenter.y + Math.sin(middle) * labelRadius,
+          color: band.color,
+        });
       }
     }
 
@@ -889,6 +1023,36 @@ export default function LibraryGraphView({
         right: number;
         bottom: number;
       }[] = [];
+      // Band names first, as pills kept on the canvas; node labels give way
+      // to them.
+      context.font = "700 12px system-ui, sans-serif";
+      context.textAlign = "center";
+      for (const label of bandLabels) {
+        const half = context.measureText(label.text).width / 2 + 8;
+        const x = Math.min(Math.max(label.x, half + 4), width - half - 4);
+        const y = Math.min(Math.max(label.y, 14), height - 14);
+        const box = {
+          left: x - half,
+          top: y - 10,
+          right: x + half,
+          bottom: y + 10,
+        };
+        context.beginPath();
+        context.roundRect(box.left, box.top, half * 2, 20, 10);
+        context.fillStyle = readCssColor(canvas, "--scry-surfD", "#0b0e15");
+        context.fill();
+        context.fillStyle = withAlpha(label.color, 0.25);
+        context.fill();
+        context.lineWidth = 1;
+        context.strokeStyle = label.color;
+        context.stroke();
+        context.fillStyle = readCssColor(canvas, "--scry-ink2", "#e6e8ef");
+        context.fillText(label.text, x, y);
+        placed.push(box);
+      }
+      context.lineWidth = 3;
+      context.strokeStyle = readCssColor(canvas, "--scry-surfD", "#0b0e15");
+      context.fillStyle = readCssColor(canvas, "--scry-ink2", "#e6e8ef");
       for (const key of order) {
         const point = viewportByNode.get(key);
         const raw = graph.getNodeAttribute(key, "label");
@@ -1104,7 +1268,11 @@ export default function LibraryGraphView({
     if (focusCenterKey !== null) {
       // The rings share the overview's frame, so nodes glide in one space.
       // They are sized in screen pixels for the camera at rest on the
-      // origin, leaving room beside the outer ring for labels.
+      // origin, leaving room beside the outer ring for labels. The frame is
+      // pinned first: left to itself it would fit whatever the nodes cover
+      // now, and change scale under the rings once they move.
+      const extent = extentRef.current;
+      sigma.setCustomBBox({ x: [-extent, extent], y: [-extent, extent] });
       const rest = restCamera(sigma);
       const unit = 1000;
       const origin = sigma.graphToViewport(
@@ -1128,7 +1296,7 @@ export default function LibraryGraphView({
       );
       targets = egoLayout(
         focusCenterKey,
-        egoRingGroups(displayed, focusCenterKey),
+        focusRings.map((ring) => ring.map((section) => section.keys)),
         outerPixels / pixelsPerUnit,
         FOCUS_RING_SPACING_PX / pixelsPerUnit,
       );
@@ -1317,8 +1485,9 @@ export default function LibraryGraphView({
       tweenFrameRef.current = window.requestAnimationFrame(glide);
     }
     // Entering, moving or leaving focus brings the camera back to rest on
-    // the frame, where the rings fit.
-    if (cameraCenterRef.current !== focusCenterKey) {
+    // the frame, where the rings fit; so does any new ring layout, since
+    // the rings are sized for the camera at rest.
+    if (cameraCenterRef.current !== focusCenterKey || focusCenterKey !== null) {
       cameraCenterRef.current = focusCenterKey;
       void sigma
         .getCamera()
@@ -1334,6 +1503,7 @@ export default function LibraryGraphView({
     displayed,
     focusCenterKey,
     focusFrameVersion,
+    focusRings,
     join,
     metric,
     nodeLabel,
@@ -1839,12 +2009,13 @@ export default function LibraryGraphView({
           <span className="max-sm:sr-only">{t("libraryGraph.resetView")}</span>
         </Button>
       </div>
-      {groups.length > 0 && focusCenterKey === null ? (
+      {(showsNeighbourhoods || exploredGroups.length > 0) &&
+      focusCenterKey === null ? (
         <nav
           aria-label={t("libraryGraph.clustersLabel")}
           className="flex gap-1.5 overflow-x-auto pb-1"
         >
-          {groups.map((group) => (
+          {(showsNeighbourhoods ? groups : []).map((group) => (
             <span key={group.id} className="flex shrink-0 items-center gap-0.5">
               <button
                 type="button"
@@ -1924,6 +2095,30 @@ export default function LibraryGraphView({
               </button>
             </React.Fragment>
           ))}
+          {recommendationBands.length > 0 ? (
+            <ul
+              aria-label={t("libraryGraph.recommendationGroupsLabel")}
+              className="flex flex-wrap items-center gap-1.5"
+            >
+              {recommendationBands.map((band) => (
+                <li
+                  key={band.key}
+                  className="flex items-center gap-1.5 rounded-full border border-[var(--scry-border2)] px-2.5 py-0.5 text-[12px] text-[var(--scry-body)]"
+                  style={{ backgroundColor: withAlpha(band.color, 0.14) }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="h-2 w-2 rounded-full"
+                    style={{ backgroundColor: band.color }}
+                  />
+                  <span>{band.name}</span>
+                  <span className="text-[var(--scry-muted2)]">
+                    {band.keys.length}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <Button
             type="button"
             variant="outline"

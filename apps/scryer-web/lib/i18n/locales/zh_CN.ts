@@ -2,24 +2,33 @@ import type { LocaleDictionary } from "../types";
 
 const zh_CN: LocaleDictionary = {
   "error.reason.STANDBY_NOT_FOUND": "此已保存的候选版本已不存在。",
-  "error.reason.STANDBY_NOT_AVAILABLE": "此已保存的候选版本已不可用。请刷新列表后重试。",
-  "error.reason.STANDBY_NOT_QUEUEABLE": "已保存的版本无法加入队列。仍可稍后重试。",
-  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "此版本在该标题的屏蔽列表中。请先从屏蔽列表移除再加入队列。",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "此已保存的候选版本已不可用。请刷新列表后重试。",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "已保存的版本无法加入队列。仍可稍后重试。",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "此版本在该标题的屏蔽列表中。请先从屏蔽列表移除再加入队列。",
   "error.reason.STANDBY_ALREADY_ACTIVE": "此版本已在下载队列中。",
-  "error.reason.STANDBY_TITLE_BUSY": "该标题正在进行另一项搜索或队列操作。请等其完成后重试。",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "该标题正在进行另一项搜索或队列操作。请等其完成后重试。",
   "wanted.standby": "候选 · {{count}}",
-  "wanted.standbyTooltip": "如果当前抓取失败，将依次尝试 {{count}} 个已保存的候选版本。",
-  "wanted.standbyScopeNote": "统计归属于此范围的行；季度合集计入该季的基准剧集。",
+  "wanted.standbyTooltip":
+    "如果当前抓取失败，将依次尝试 {{count}} 个已保存的候选版本。",
+  "wanted.standbyScopeNote":
+    "统计归属于此范围的行；季度合集计入该季的基准剧集。",
   "wanted.loadingStandby": "正在加载已保存的候选版本…",
   "wanted.standbyCandidates": "候选版本 · {{count}}",
   "wanted.downloadStandby": "下载",
   "wanted.downloadStandbyLabel": "下载 {{name}}",
   "wanted.standbyConflictTitle": "已有下载正在进行",
-  "wanted.standbyConflictDescription": "将 {{name}} 与这些下载一同加入队列，或取消它们并改为加入此版本。",
+  "wanted.standbyConflictDescription":
+    "将 {{name}} 与这些下载一同加入队列，或取消它们并改为加入此版本。",
   "wanted.standbyQueue": "加入队列",
-  "wanted.standbyQueuedRefreshFailed": "该版本已加入队列，但列表无法刷新。请刷新页面以查看当前状态。",
+  "wanted.standbyQueuedRefreshFailed":
+    "该版本已加入队列，但列表无法刷新。请刷新页面以查看当前状态。",
   "wanted.standbyCancelAndQueue": "取消并加入队列",
-  "wanted.standbyQueuedCancelFailed": "该版本已加入队列，但有 {{count}} 个冲突下载无法取消，仍在运行。",
+  "wanted.standbyQueuedCancelFailed":
+    "该版本已加入队列，但有 {{count}} 个冲突下载无法取消，仍在运行。",
   "wanted.standbyRank": "排名 {{rank}}",
   "wanted.standbyIndexer": "索引器",
   "wanted.standbySize": "大小",
@@ -1111,13 +1120,15 @@ const zh_CN: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "正在查找相似作品…",
   "libraryGraph.reason.recommendedBy": "{{sources}} 推荐",
   "libraryGraph.reason.shares": "共同点：{{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "推荐分组",
   "libraryGraph.notInLibrary": "不在你的媒体库中",
   "libraryGraph.inLibrary": "在你的媒体库中",
   "libraryGraph.openTitle": "打开作品",
   "libraryGraph.exploredGroup": "已探索",
   "libraryGraph.focusedOutsideLibrary": "{{title}}，不在你的媒体库中",
   "libraryGraph.trailLabel": "已探索",
-  "libraryGraph.canvasLabel": "媒体库图谱。使用方向键在同一聚类的作品间移动，按 Enter 打开。",
+  "libraryGraph.canvasLabel":
+    "媒体库图谱。使用方向键在同一聚类的作品间移动，按 Enter 打开。",
   "title.seasonMonitored": "季度监控中",
   "title.episodeMonitored": "集监控中",
   "title.seriesMovieMonitored": "系列电影监控中",

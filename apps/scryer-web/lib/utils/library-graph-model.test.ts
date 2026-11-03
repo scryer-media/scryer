@@ -26,6 +26,7 @@ import {
   libraryGraphGroupName,
   neighborReason,
   neighborReasonLines,
+  recommendationSections,
   nodeSizesByTitleId,
   targetKeyMatchKeys,
   titleForTargetKey,
@@ -570,4 +571,41 @@ test("a plain recommendation with nothing shared has no reason lines", () => {
   const reason = neighborReason(null, {}, ["relation:recommendation"]);
   assert.deepEqual(reason, { relations: [], sources: [], shared: [] });
   assert.deepEqual(neighborReasonLines(reason, t), []);
+});
+
+test("recommendations group by the genre or theme most of them share", () => {
+  const sports = tag("canonical:genre:sports", "genre", "Sports");
+  const team = tag("canonical:theme:team", "theme", "Team");
+  const magic = tag("canonical:theme:magic", "theme", "Magic");
+  const action = tag("canonical:genre:action", "genre", "Action");
+  const sections = recommendationSections([
+    { key: "r:1", tags: [sports, team, action] },
+    { key: "r:2", tags: [magic, action] },
+    { key: "r:3", tags: [sports, team, action] },
+    { key: "r:4", tags: [magic, action] },
+    { key: "r:5", tags: [sports, action] },
+    { key: "r:6", tags: null },
+  ]);
+  // Action is on too many to tell them apart; Sports covers three, Magic two.
+  assert.deepEqual(
+    sections.map((section) => [section.name, section.keys]),
+    [
+      ["Sports", ["r:1", "r:3", "r:5"]],
+      ["Magic", ["r:2", "r:4"]],
+      [null, ["r:6"]],
+    ],
+  );
+});
+
+test("recommendations with nothing that splits them stay one section", () => {
+  const drama = tag("canonical:genre:drama", "genre", "Drama");
+  const sections = recommendationSections([
+    { key: "r:1", tags: [drama] },
+    { key: "r:2", tags: [drama] },
+    { key: "r:3", tags: [] },
+  ]);
+  assert.deepEqual(sections, [
+    { tagKey: null, name: null, keys: ["r:1", "r:2", "r:3"] },
+  ]);
+  assert.deepEqual(recommendationSections([]), []);
 });

@@ -1,25 +1,36 @@
 import type { LocaleDictionary } from "../types";
 
 const de: LocaleDictionary = {
-  "error.reason.STANDBY_NOT_FOUND": "Dieser gespeicherte Kandidat existiert nicht mehr.",
-  "error.reason.STANDBY_NOT_AVAILABLE": "Dieser gespeicherte Kandidat ist nicht mehr verfügbar. Liste aktualisieren und erneut versuchen.",
-  "error.reason.STANDBY_NOT_QUEUEABLE": "Das gespeicherte Release konnte nicht eingereiht werden. Es bleibt für einen erneuten Versuch verfügbar.",
-  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Dieses Release steht auf der Sperrliste des Titels. Von der Sperrliste entfernen, um es einzureihen.",
-  "error.reason.STANDBY_ALREADY_ACTIVE": "Dieses Release befindet sich bereits in der Download-Warteschlange.",
-  "error.reason.STANDBY_TITLE_BUSY": "Für diesen Titel läuft bereits eine Suche oder Einreihung. Erneut versuchen, sobald sie abgeschlossen ist.",
+  "error.reason.STANDBY_NOT_FOUND":
+    "Dieser gespeicherte Kandidat existiert nicht mehr.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Dieser gespeicherte Kandidat ist nicht mehr verfügbar. Liste aktualisieren und erneut versuchen.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "Das gespeicherte Release konnte nicht eingereiht werden. Es bleibt für einen erneuten Versuch verfügbar.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Dieses Release steht auf der Sperrliste des Titels. Von der Sperrliste entfernen, um es einzureihen.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Dieses Release befindet sich bereits in der Download-Warteschlange.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Für diesen Titel läuft bereits eine Suche oder Einreihung. Erneut versuchen, sobald sie abgeschlossen ist.",
   "wanted.standby": "Reserve · {{count}}",
-  "wanted.standbyTooltip": "{{count}} gespeicherte Kandidaten werden versucht, falls der aktuelle Grab fehlschlägt.",
-  "wanted.standbyScopeNote": "Zählt Zeilen dieses Bereichs; Staffelpakete werden bei der Ankerepisode der Staffel gezählt.",
+  "wanted.standbyTooltip":
+    "{{count}} gespeicherte Kandidaten werden versucht, falls der aktuelle Grab fehlschlägt.",
+  "wanted.standbyScopeNote":
+    "Zählt Zeilen dieses Bereichs; Staffelpakete werden bei der Ankerepisode der Staffel gezählt.",
   "wanted.loadingStandby": "Gespeicherte Kandidaten werden geladen…",
   "wanted.standbyCandidates": "Reservekandidaten · {{count}}",
   "wanted.downloadStandby": "Herunterladen",
   "wanted.downloadStandbyLabel": "{{name}} herunterladen",
   "wanted.standbyConflictTitle": "Downloads bereits aktiv",
-  "wanted.standbyConflictDescription": "{{name}} neben diesen Downloads einreihen oder sie abbrechen und stattdessen diesen einreihen.",
+  "wanted.standbyConflictDescription":
+    "{{name}} neben diesen Downloads einreihen oder sie abbrechen und stattdessen diesen einreihen.",
   "wanted.standbyQueue": "Einreihen",
-  "wanted.standbyQueuedRefreshFailed": "Das Release wurde eingereiht, aber die Liste konnte nicht aktualisiert werden. Seite neu laden, um den aktuellen Status zu sehen.",
+  "wanted.standbyQueuedRefreshFailed":
+    "Das Release wurde eingereiht, aber die Liste konnte nicht aktualisiert werden. Seite neu laden, um den aktuellen Status zu sehen.",
   "wanted.standbyCancelAndQueue": "Abbrechen und einreihen",
-  "wanted.standbyQueuedCancelFailed": "Das Release wurde eingereiht, aber {{count}} kollidierende Downloads konnten nicht abgebrochen werden und laufen weiter.",
+  "wanted.standbyQueuedCancelFailed":
+    "Das Release wurde eingereiht, aber {{count}} kollidierende Downloads konnten nicht abgebrochen werden und laufen weiter.",
   "wanted.standbyRank": "Rang {{rank}}",
   "wanted.standbyIndexer": "Indexer",
   "wanted.standbySize": "Größe",
@@ -975,13 +986,16 @@ const de: LocaleDictionary = {
   "discovery.rail.becauseYouLike.horror": "Weil Sie Horror mögen",
   "discovery.rail.becauseYouLike.mystery": "Weil Sie Mystery mögen",
   "discovery.rail.becauseYouLike.romance": "Weil Sie Romantik mögen",
-  "discovery.rail.becauseYouLike.science-fiction": "Weil Sie Science-Fiction mögen",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Weil Sie Science-Fiction mögen",
   "discovery.rail.becauseYouLike.thriller": "Weil Sie Thriller mögen",
   "discovery.rail.becauseYouLike.war": "Weil Sie Kriegsgeschichten mögen",
   "discovery.rail.becauseYouLike.western": "Weil Sie Western mögen",
   "discovery.rail.becauseYouLike.sports": "Weil Sie Sportgeschichten mögen",
-  "discovery.rail.becauseYouLike.supernatural": "Weil Sie Übernatürliches mögen",
-  "discovery.rail.becauseYouLike.coming-of-age": "Weil Sie Coming-of-Age-Geschichten mögen",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Weil Sie Übernatürliches mögen",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Weil Sie Coming-of-Age-Geschichten mögen",
   "discovery.rail.becauseYouLike.found-family": "Weil Sie Wahlfamilien mögen",
   "discovery.rail.becauseYouLike.revenge": "Weil Sie Rachegeschichten mögen",
   "discovery.rail.becauseYouLike.heist": "Weil Sie Raubzüge mögen",
@@ -991,24 +1005,32 @@ const de: LocaleDictionary = {
   "discovery.rail.becauseYouLike.superhero": "Weil Sie Superhelden mögen",
   "discovery.rail.becauseYouLike.vampire": "Weil Sie Vampire mögen",
   "discovery.rail.becauseYouLike.zombie": "Weil Sie Zombies mögen",
-  "discovery.rail.becauseYouLike.survival": "Weil Sie Überlebensgeschichten mögen",
+  "discovery.rail.becauseYouLike.survival":
+    "Weil Sie Überlebensgeschichten mögen",
   "discovery.rail.becauseYouLike.space": "Weil Sie Weltraumabenteuer mögen",
-  "discovery.rail.becauseYouLike.detective": "Weil Sie Detektivgeschichten mögen",
-  "discovery.rail.becauseYouLike.organized-crime": "Weil Sie organisiertes Verbrechen mögen",
-  "discovery.rail.becauseYouLike.period-drama": "Weil Sie Historiendramen mögen",
-  "discovery.rail.becauseYouLike.psychological": "Weil Sie psychologische Geschichten mögen",
+  "discovery.rail.becauseYouLike.detective":
+    "Weil Sie Detektivgeschichten mögen",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Weil Sie organisiertes Verbrechen mögen",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Weil Sie Historiendramen mögen",
+  "discovery.rail.becauseYouLike.psychological":
+    "Weil Sie psychologische Geschichten mögen",
   "discovery.rail.becauseYouLike.mythology": "Weil Sie Mythologie mögen",
   "discovery.rail.becauseYouLike.isekai": "Weil Sie Isekai mögen",
   "discovery.rail.becauseYouLike.mecha": "Weil Sie Mecha mögen",
   "discovery.rail.becauseYouLike.martial-arts": "Weil Sie Kampfkunst mögen",
   "discovery.rail.becauseYouLike.music": "Weil Sie Musikgeschichten mögen",
-  "discovery.rail.becauseYouLike.workplace": "Weil Sie Geschichten aus dem Berufsleben mögen",
+  "discovery.rail.becauseYouLike.workplace":
+    "Weil Sie Geschichten aus dem Berufsleben mögen",
   "discovery.rail.becauseYouLike.medical": "Weil Sie Arztdramen mögen",
   "discovery.rail.becauseYouLike.military": "Weil Sie Militärgeschichten mögen",
   "discovery.rail.becauseYouLike.spy": "Weil Sie Spionagegeschichten mögen",
   "discovery.rail.becauseYouLike.royal-politics": "Weil Sie Hofintrigen mögen",
-  "discovery.rail.becauseYouLike.first-love": "Weil Sie Geschichten über die erste Liebe mögen",
-  "discovery.rail.becauseYouLike.forbidden-love": "Weil Sie verbotene Liebe mögen",
+  "discovery.rail.becauseYouLike.first-love":
+    "Weil Sie Geschichten über die erste Liebe mögen",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Weil Sie verbotene Liebe mögen",
   "discovery.rail.becauseYouLike.lgbtq": "Weil Sie LGBTQ+-Geschichten mögen",
   "discovery.rail.becauseYouLike.samurai": "Weil Sie Samurai mögen",
   "discovery.rail.becauseYouLike.magical-girl": "Weil Sie Magical Girls mögen",
@@ -1205,6 +1227,7 @@ const de: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "Suche ähnliche Titel…",
   "libraryGraph.reason.recommendedBy": "Empfohlen auf {{sources}}",
   "libraryGraph.reason.shares": "Gemeinsam: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Empfehlungsgruppen",
   "libraryGraph.notInLibrary": "Nicht in deiner Bibliothek",
   "libraryGraph.inLibrary": "In deiner Bibliothek",
   "libraryGraph.openTitle": "Titel öffnen",

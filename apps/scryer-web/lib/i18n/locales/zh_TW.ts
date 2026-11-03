@@ -2,19 +2,26 @@ import type { LocaleDictionary } from "../types";
 
 const zh_TW: LocaleDictionary = {
   "error.reason.STANDBY_NOT_FOUND": "此已儲存的候選版本已不存在。",
-  "error.reason.STANDBY_NOT_AVAILABLE": "此已儲存的候選版本已不可用。請重新整理清單後再試。",
-  "error.reason.STANDBY_NOT_QUEUEABLE": "已儲存的版本無法加入佇列。仍可稍後重試。",
-  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "此版本在該標題的封鎖清單中。請先從封鎖清單移除再加入佇列。",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "此已儲存的候選版本已不可用。請重新整理清單後再試。",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "已儲存的版本無法加入佇列。仍可稍後重試。",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "此版本在該標題的封鎖清單中。請先從封鎖清單移除再加入佇列。",
   "error.reason.STANDBY_ALREADY_ACTIVE": "此版本已在下載佇列中。",
-  "error.reason.STANDBY_TITLE_BUSY": "該標題正在進行另一項搜尋或佇列操作。請待其完成後再試。",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "該標題正在進行另一項搜尋或佇列操作。請待其完成後再試。",
   "wanted.downloadStandby": "下載",
   "wanted.downloadStandbyLabel": "下載 {{name}}",
   "wanted.standbyConflictTitle": "已有下載正在進行",
-  "wanted.standbyConflictDescription": "將 {{name}} 與這些下載一同加入佇列，或取消它們並改為加入此版本。",
+  "wanted.standbyConflictDescription":
+    "將 {{name}} 與這些下載一同加入佇列，或取消它們並改為加入此版本。",
   "wanted.standbyQueue": "加入佇列",
-  "wanted.standbyQueuedRefreshFailed": "該版本已加入佇列，但清單無法重新整理。請重新整理頁面以查看目前狀態。",
+  "wanted.standbyQueuedRefreshFailed":
+    "該版本已加入佇列，但清單無法重新整理。請重新整理頁面以查看目前狀態。",
   "wanted.standbyCancelAndQueue": "取消並加入佇列",
-  "wanted.standbyQueuedCancelFailed": "該版本已加入佇列，但有 {{count}} 個衝突下載無法取消，仍在執行。",
+  "wanted.standbyQueuedCancelFailed":
+    "該版本已加入佇列，但有 {{count}} 個衝突下載無法取消，仍在執行。",
   "settings.oauthJellyfinCallbackCopied": "已複製 Jellyfin 回呼 URL。",
   "settings.oauthClientIdCopied": "已複製 OAuth 用戶端 ID。",
   "status.copyFailedSelected": "無法複製。文字已選取，請按 Ctrl+C 或 ⌘C。",
@@ -1623,13 +1630,15 @@ const zh_TW: LocaleDictionary = {
   "libraryGraph.findingMoreLikeThis": "正在尋找相似作品…",
   "libraryGraph.reason.recommendedBy": "{{sources}} 推薦",
   "libraryGraph.reason.shares": "共同點：{{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "推薦分組",
   "libraryGraph.notInLibrary": "不在你的媒體庫",
   "libraryGraph.inLibrary": "在你的媒體庫",
   "libraryGraph.openTitle": "開啟作品",
   "libraryGraph.exploredGroup": "已探索",
   "libraryGraph.focusedOutsideLibrary": "{{title}}，不在你的媒體庫",
   "libraryGraph.trailLabel": "已探索",
-  "libraryGraph.canvasLabel": "媒體庫圖譜。使用方向鍵在同一群組的作品間移動，按 Enter 開啟。",
+  "libraryGraph.canvasLabel":
+    "媒體庫圖譜。使用方向鍵在同一群組的作品間移動，按 Enter 開啟。",
   "title.bulkSelectionCount": "已選取 {{count}} 部",
   "title.bulkSelectionPanelTitle": "批次選取",
   "title.bulkSelectionPanelHint": "為選取的作品選擇操作，或清除選取。",

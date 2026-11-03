@@ -566,3 +566,115 @@ export function neighborReasonLines(
   }
   return lines;
 }
+
+/** The most named sections a focused view splits its recommendations into. */
+export const RECOMMENDATION_SECTION_LIMIT = 5;
+
+/** A run of recommendations that share a genre or theme. */
+export type RecommendationSection = {
+  /** The shared tag's key and name, or null for the ones left over. */
+  tagKey: string | null;
+  name: string | null;
+  keys: string[];
+};
+
+/**
+ * Recommendations grouped by the genre or theme most of them share. Each
+ * round takes the tag that covers the most recommendations not yet grouped,
+ * themes before genres on a tie. A tag carried by more than two thirds of
+ * them, or by only one, does not tell them apart and is skipped. The
+ * rest form a last unnamed section. Order within a section follows the
+ * input. With fewer than two named sections, everything is one unnamed
+ * section.
+ */
+export function recommendationSections(
+  items: readonly {
+    key: string;
+    tags: readonly CanonicalMediaTag[] | null | undefined;
+  }[],
+  limit: number = RECOMMENDATION_SECTION_LIMIT,
+): RecommendationSection[] {
+  const keys = items.map((item) => item.key);
+  const tagsByKey = new Map<string, Map<string, CanonicalMediaTag>>();
+  const carriers = new Map<string, Set<string>>();
+  for (const item of items) {
+    const tags = new Map<string, CanonicalMediaTag>();
+    for (const tag of item.tags ?? []) {
+      if (
+        tag.isSpoiler ||
+        (tag.category !== "theme" && tag.category !== "genre") ||
+        UNINFORMATIVE_TERM_KEYS.has(tag.key) ||
+        !tag.name.trim()
+      ) {
+        continue;
+      }
+      tags.set(tag.key, tag);
+      const set = carriers.get(tag.key) ?? new Set<string>();
+      set.add(item.key);
+      carriers.set(tag.key, set);
+    }
+    tagsByKey.set(item.key, tags);
+  }
+  const tagFor = (tagKey: string) => {
+    for (const tags of tagsByKey.values()) {
+      const tag = tags.get(tagKey);
+      if (tag) {
+        return tag;
+      }
+    }
+    return null;
+  };
+  const unassigned = new Set(keys);
+  const sections: RecommendationSection[] = [];
+  while (sections.length < limit && unassigned.size > 1) {
+    let best: { tag: CanonicalMediaTag; cover: number } | null = null;
+    for (const [tagKey, holders] of carriers) {
+      // A tag most recommendations carry does not tell them apart.
+      if (holders.size > (keys.length * 2) / 3) {
+        continue;
+      }
+      let cover = 0;
+      for (const key of holders) {
+        if (unassigned.has(key)) {
+          cover += 1;
+        }
+      }
+      const tag = tagFor(tagKey);
+      if (cover < 2 || !tag) {
+        continue;
+      }
+      const better =
+        !best ||
+        cover > best.cover ||
+        (cover === best.cover &&
+          ((tag.category === "theme" && best.tag.category !== "theme") ||
+            (tag.category === best.tag.category && tag.key < best.tag.key)));
+      if (better) {
+        best = { tag, cover };
+      }
+    }
+    if (!best) {
+      break;
+    }
+    const holders = carriers.get(best.tag.key) ?? new Set<string>();
+    const members = keys.filter(
+      (key) => unassigned.has(key) && holders.has(key),
+    );
+    for (const key of members) {
+      unassigned.delete(key);
+    }
+    sections.push({
+      tagKey: best.tag.key,
+      name: best.tag.name.trim(),
+      keys: members,
+    });
+  }
+  if (sections.length < 2) {
+    return keys.length > 0 ? [{ tagKey: null, name: null, keys }] : [];
+  }
+  const rest = keys.filter((key) => unassigned.has(key));
+  if (rest.length > 0) {
+    sections.push({ tagKey: null, name: null, keys: rest });
+  }
+  return sections;
+}
