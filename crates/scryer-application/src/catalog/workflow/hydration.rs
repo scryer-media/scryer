@@ -1,6 +1,6 @@
 pub(crate) const HYDRATION_BULK_BATCH_SIZE: usize = 20;
-const TITLE_MORE_LIKE_THIS_HYDRATION_LIMIT: usize = 24;
-const TITLE_MORE_LIKE_THIS_BACKGROUND_REFRESH_HOURS: i64 = 24;
+pub(crate) const TITLE_MORE_LIKE_THIS_HYDRATION_LIMIT: usize = 24;
+pub(crate) const TITLE_MORE_LIKE_THIS_BACKGROUND_REFRESH_HOURS: i64 = 24;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HydrationCompletionOptions {
     sync_wanted_after_completion: bool,

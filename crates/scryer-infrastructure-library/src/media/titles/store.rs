@@ -665,7 +665,7 @@ impl TitleRepository for TitleStore {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &format!(
-                "SELECT id, library_id, name, facet, external_ids, {genres} AS genres FROM titles"
+                "SELECT id, library_id, name, facet, external_ids, created_at, {genres} AS genres FROM titles"
             ),
             &[],
         )
@@ -682,6 +682,7 @@ impl TitleRepository for TitleStore {
                     facet,
                     external_ids: decode_title_json_or_default(row, "external_ids")?,
                     genres: decode_title_json_or_default(row, "genres")?,
+                    created_at: row.timestamp("created_at")?,
                 })
             })
             .collect()

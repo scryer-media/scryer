@@ -7,6 +7,11 @@ pub mod challenge_solver;
 mod contracts;
 pub mod delete_refusal;
 mod discovery;
+pub use discovery::{
+    DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery, LIBRARY_GRAPH_AXIS,
+    LIBRARY_GRAPH_MAX_SUBJECTS, LIBRARY_GRAPH_MIN_COSINE, LIBRARY_GRAPH_NEIGHBORS_PER_NODE,
+    LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
+};
 mod download_client_config;
 mod download_client_path_mappings;
 mod download_identity;
@@ -207,16 +212,18 @@ pub use ports::{
     DiscoveryHomeQuery, DiscoveryHomeResult, DiscoveryHomeSectionCandidatesRecord,
     DiscoveryItemDetailQuery, DiscoveryItemLibraryProvenanceRecord, DiscoveryItemRecord,
     DiscoveryItemsPageRecord, DiscoveryItemsQuery, DiscoveryItemsResult,
-    DiscoveryItemsStorageQuery, DiscoveryPendingContextChangeRecord, DiscoveryPruneReport,
-    DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord, DiscoveryRepository,
-    DiscoverySectionItemsQuery, DiscoverySectionItemsRecord, DiscoverySectionRecord,
-    DiscoverySectionResult, DiscoverySectionSort, DiscoverySourceTagRecord,
+    DiscoveryItemsStorageQuery, DiscoveryNeighborCacheRecord, DiscoveryPendingContextChangeRecord,
+    DiscoveryPruneReport, DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord,
+    DiscoveryRepository, DiscoverySectionItemsQuery, DiscoverySectionItemsRecord,
+    DiscoverySectionRecord, DiscoverySectionResult, DiscoverySectionSort, DiscoverySourceTagRecord,
     DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord, DiscoverySyncStateRecord,
-    DiscoverySyncStatus, EpisodeImageUrlUpdate, MediaRequestQualityProfileReferenceCounts,
-    MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
-    MediaRequestUpdateResult, SeriesMovieExternalIdLookupMatch, SubtitleSyncClient,
-    SubtitleSyncJob, TitleArtworkUrlUpdate, TitleDeletePreviewInfo, TitleExternalIdLookup,
-    TitleExternalIdLookupMatch, UserUiSettingsRepository,
+    DiscoverySyncStatus, EpisodeImageUrlUpdate, LibraryGraphClusterRecord, LibraryGraphEdgeRecord,
+    LibraryGraphNodeRecord, LibraryGraphPruneReport, LibraryGraphRunRecord,
+    LibraryGraphSnapshotRecord, MediaRequestQualityProfileReferenceCounts, MediaRequestResolution,
+    MediaRequestResolutionResult, MediaRequestSubmissionResult, MediaRequestUpdateResult,
+    SeriesMovieExternalIdLookupMatch, SubtitleSyncClient, SubtitleSyncJob, TitleArtworkUrlUpdate,
+    TitleDeletePreviewInfo, TitleExternalIdLookup, TitleExternalIdLookupMatch,
+    UserUiSettingsRepository,
 };
 pub(crate) mod normalize;
 pub use acquisition::submission::describe_acquisition_metrics;
@@ -571,6 +578,8 @@ pub use library_scan::{
     DiscoveryRelatedResult, DiscoverySnapshotFacetGroup, DiscoverySnapshotFacetValue,
     DiscoverySubjectInput, DiscoveryTitle, EpisodeArtworkUrls, EpisodeMetadata,
     LibraryDirectoryScanResult, LibraryFile, LibraryFileBatch, LibraryFileBatchReceiver,
+    LibraryGraphAxis, LibraryGraphGatewayCluster, LibraryGraphGatewayEdge,
+    LibraryGraphGatewayInput, LibraryGraphGatewayNode, LibraryGraphGatewayResult,
     LibraryScanSummary, LibraryScanner, MetadataGateway, MetadataSearchItem, MetadataSearchQuery,
     MovieMetadata, MovieTitleBulkResult, MovieTitleRef, MultiMetadataSearchResult,
     RichMetadataSearchItem, SeasonMetadata, SeriesArtworkUrls, SeriesMetadata,

@@ -295,6 +295,85 @@ pub struct DiscoverySyncRunRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// One build of a facet's library graph. A `complete` run owns the nodes,
+/// edges and clusters stored under its id; a `failed` run owns none and keeps
+/// the reason it failed in `error_code` and `error_text`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphRunRecord {
+    pub id: String,
+    pub facet: String,
+    pub axis: String,
+    pub status: String,
+    /// Owned subjects the facet had when the build started.
+    pub subject_count: i64,
+    /// Subjects actually sent to the gateway; below `subject_count` when the
+    /// facet was over the per-call cap.
+    pub submitted_count: i64,
+    /// The gateway's own `generated_at` stamp, kept verbatim.
+    pub generated_at: Option<String>,
+    pub error_code: Option<String>,
+    pub error_text: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphNodeRecord {
+    pub subject_key: String,
+    pub target_key: String,
+    /// The node's cluster, or -1 when it was not placed in one.
+    pub cluster_id: i64,
+    /// Owned titles that stand for this subject.
+    pub title_ids: Vec<String>,
+}
+
+/// An undirected edge between two target keys, stored once with
+/// `from_key < to_key`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphEdgeRecord {
+    pub from_key: String,
+    pub to_key: String,
+    pub weight: f64,
+    pub kinds: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphClusterRecord {
+    pub cluster_id: i64,
+    pub label_key: Option<String>,
+    pub label: String,
+    /// The target key that best represents the cluster.
+    pub medoid: String,
+    pub size: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphSnapshotRecord {
+    pub run: LibraryGraphRunRecord,
+    pub nodes: Vec<LibraryGraphNodeRecord>,
+    pub edges: Vec<LibraryGraphEdgeRecord>,
+    pub clusters: Vec<LibraryGraphClusterRecord>,
+}
+
+/// What removing one title did to a facet's stored library graph.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LibraryGraphPruneReport {
+    pub removed_nodes: u64,
+    pub removed_edges: u64,
+}
+
+/// The related titles the gateway last returned for one discovery target
+/// key, in one metadata language.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiscoveryNeighborCacheRecord {
+    pub target_key: String,
+    pub language: String,
+    pub items: Vec<DiscoveryItemRecord>,
+    pub fetched_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DiscoverySyncStatus {
     pub state: DiscoverySyncStateRecord,
@@ -1001,6 +1080,48 @@ pub trait DiscoveryRepository: Send + Sync {
         retain_successful_per_kind: usize,
         diagnostic_cutoff: DateTime<Utc>,
     ) -> AppResult<DiscoveryPruneReport>;
+
+    /// Records a library graph build that produced no graph. Any earlier
+    /// failed run for the facet is replaced; the last complete graph stays.
+    async fn record_failed_library_graph_run(&self, run: &LibraryGraphRunRecord) -> AppResult<()>;
+    /// Writes a complete graph under its new run id, then deletes every other
+    /// run for the facet, in one transaction.
+    async fn commit_library_graph(&self, snapshot: &LibraryGraphSnapshotRecord) -> AppResult<()>;
+    /// The newest complete graph for a facet.
+    async fn get_latest_library_graph(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<LibraryGraphSnapshotRecord>>;
+    /// The newest run for a facet, complete or failed.
+    async fn get_latest_library_graph_run(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<LibraryGraphRunRecord>>;
+    /// Drops one removed title from the facet's complete graph. The node goes
+    /// once no title stands for it any more; its edges go when no remaining
+    /// node shares its target, and its cluster shrinks by one.
+    async fn prune_library_graph_title(
+        &self,
+        facet: &str,
+        subject_key: &str,
+        title_id: &str,
+    ) -> AppResult<LibraryGraphPruneReport>;
+
+    /// The cached related titles of `target_key` in `language`, whatever
+    /// their age.
+    async fn get_discovery_neighbor_cache(
+        &self,
+        target_key: &str,
+        language: &str,
+    ) -> AppResult<Option<DiscoveryNeighborCacheRecord>>;
+
+    /// Stores `record` in place of any earlier entry for the same key and
+    /// language, and drops every entry fetched before `expire_before`.
+    async fn replace_discovery_neighbor_cache(
+        &self,
+        record: &DiscoveryNeighborCacheRecord,
+        expire_before: DateTime<Utc>,
+    ) -> AppResult<()>;
 }
 
 /// What a title list read projects on top of the `titles` row itself.
@@ -1281,6 +1402,9 @@ pub struct DiscoveryContextTitle {
     pub facet: MediaFacet,
     pub external_ids: Vec<scryer_domain::ExternalId>,
     pub genres: Vec<String>,
+    /// When the title was added; the library graph prefers recent titles
+    /// when a facet is over the gateway's subject cap.
+    pub created_at: DateTime<Utc>,
 }
 
 impl From<&Title> for DiscoveryContextTitle {
@@ -1297,6 +1421,7 @@ impl From<&Title> for DiscoveryContextTitle {
                 .filter(|tag| tag.category.eq_ignore_ascii_case("genre"))
                 .map(|tag| tag.name.clone())
                 .collect(),
+            created_at: title.created_at,
         }
     }
 }

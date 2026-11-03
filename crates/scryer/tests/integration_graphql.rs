@@ -30,6 +30,8 @@ mod external_import_sources;
 mod folder_match;
 #[path = "integration_graphql/indexer_configs.rs"]
 mod indexer_configs;
+#[path = "integration_graphql/library_graph.rs"]
+mod library_graph;
 #[path = "integration_graphql/library_scan.rs"]
 mod library_scan;
 #[path = "integration_graphql/location_conflicts.rs"]

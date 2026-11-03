@@ -2419,6 +2419,179 @@ async fn title_more_like_this_filters_readable_library_titles_and_refills_limit(
     assert!(items.iter().all(|item| item.resolved_title_id.is_none()));
 }
 
+fn neighbor_discovery_title(target_key: &str, display_title: &str) -> DiscoveryTitle {
+    DiscoveryTitle {
+        target_key: target_key.to_string(),
+        display_title: display_title.to_string(),
+        poster_url: format!("https://images.example.test/{target_key}.jpg"),
+        matched_subject_keys: Vec::new(),
+        matched_subject_titles: Vec::new(),
+        ..test_discovery_title()
+    }
+}
+
+#[tokio::test]
+async fn discovery_neighbors_returns_owned_neighbors_with_their_title_while_more_like_this_filters_them()
+ {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let viewer = library_permission_user_with_grants(
+        "discovery-neighbors-viewer",
+        &[(
+            &movie_library_id,
+            &[
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::Request,
+            ],
+        )],
+    );
+    let mut source_title = test_title(
+        "source-title",
+        "Synthetic Source Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "100")],
+    );
+    source_title.library_id = movie_library_id.clone();
+    let mut owned_title = test_title(
+        "owned-title",
+        "Synthetic Owned Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    );
+    owned_title.library_id = movie_library_id.clone();
+    titles
+        .store
+        .lock()
+        .await
+        .extend([source_title, owned_title]);
+    *gateway.title_recommendation_results.lock().await = vec![
+        neighbor_discovery_title("tmdb:movie:100", "Synthetic Source Movie"),
+        neighbor_discovery_title("tmdb:movie:603", "Synthetic Owned Movie"),
+        neighbor_discovery_title("tmdb:movie:605", "Synthetic Fresh Movie"),
+    ];
+
+    let query = crate::DiscoveryNeighborsQuery {
+        target_key: "TMDB:movie:100".to_string(),
+        facet: MediaFacet::Movie,
+        limit: crate::DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
+    };
+    let neighbors = app
+        .discovery_neighbors(&viewer, query.clone())
+        .await
+        .expect("discovery neighbors should load");
+
+    // The anchor itself is not its own neighbour; the owned one stays, with
+    // its title id.
+    assert_eq!(
+        neighbors
+            .iter()
+            .map(|item| (item.target_key.as_str(), item.resolved_title_id.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("tmdb:movie:603", Some("owned-title")),
+            ("tmdb:movie:605", None),
+        ]
+    );
+    let inputs = gateway.title_recommendation_inputs.lock().await.clone();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].subject.key.as_deref(), Some("tmdb:movie:100"));
+    assert_eq!(inputs[0].subject.tmdb_id, Some(100));
+    assert_eq!(inputs[0].subject.facet.as_deref(), Some("movie"));
+
+    // A second expansion of the same anchor is served from the cache.
+    let again = app
+        .discovery_neighbors(&viewer, query)
+        .await
+        .expect("cached discovery neighbors should load");
+    assert_eq!(again, neighbors);
+    assert_eq!(gateway.title_recommendation_inputs.lock().await.len(), 1);
+
+    // More-like-this over the same related titles still drops the owned one.
+    let mut cached_items = ["tmdb:movie:603", "tmdb:movie:605"]
+        .into_iter()
+        .map(|target_key| {
+            discovery_item_record(
+                "title-more-like-this-run",
+                "title-more-like-this-run",
+                None,
+                target_key,
+                target_key,
+                "movie",
+                90.0,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+    for item in &mut cached_items {
+        item.updated_at = Utc::now();
+    }
+    discovery
+        .title_more_like_this_items
+        .lock()
+        .await
+        .insert("source-title".to_string(), cached_items);
+    let more_like_this = app
+        .title_more_like_this(&viewer, "source-title", 12)
+        .await
+        .expect("title more-like-this should load");
+    assert_eq!(
+        more_like_this
+            .iter()
+            .map(|item| item.target_key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tmdb:movie:605"]
+    );
+}
+
+#[tokio::test]
+async fn discovery_neighbors_refuses_an_unknown_target_key_with_a_reason_code() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+
+    for (target_key, facet, reason) in [
+        (
+            "plex:movie:100",
+            MediaFacet::Movie,
+            crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_UNSUPPORTED,
+        ),
+        (
+            "tmdb:movie",
+            MediaFacet::Movie,
+            crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_UNSUPPORTED,
+        ),
+        (
+            "tmdb:movie:not-a-number",
+            MediaFacet::Movie,
+            crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_UNSUPPORTED,
+        ),
+        (
+            "tmdb:series:100",
+            MediaFacet::Movie,
+            crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_FACET_MISMATCH,
+        ),
+    ] {
+        let error = app
+            .discovery_neighbors(
+                &admin,
+                crate::DiscoveryNeighborsQuery {
+                    target_key: target_key.to_string(),
+                    facet,
+                    limit: 24,
+                },
+            )
+            .await
+            .expect_err("an unusable anchor is refused");
+        assert_eq!(error.validation_reason(), Some(reason), "{target_key}");
+    }
+    assert!(gateway.title_recommendation_inputs.lock().await.is_empty());
+}
+
 #[tokio::test]
 async fn title_more_like_this_queues_empty_cache_refresh_off_the_read_path() {
     let gateway = Arc::new(SnapshotMetadataGateway::default());
@@ -3795,6 +3968,123 @@ async fn discovery_sync_incremental_reload_calls_smg_and_commits_patch() {
     assert_eq!(commit.state.last_seen_domain_event_sequence, Some(12));
     drop(commits);
 
+    assert!(discovery.pending_changes.lock().await.is_empty());
+}
+
+async fn run_incremental_movie_change_with_library_graph(
+    queue_full: bool,
+) -> (
+    Arc<SnapshotMetadataGateway>,
+    Arc<RecordingDiscoveryRepository>,
+) {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    *gateway.library_graph_queue_full.lock().await = queue_full;
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-1".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-1".to_string()),
+        last_context_snapshot_completed_at: Some(due_at),
+        next_incremental_reload_eligible_at: Some(due_at),
+        dirty_since: Some(due_at),
+        dirty_reason_mask: 1,
+        updated_at: due_at,
+        ..DiscoverySyncStateRecord::default()
+    });
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "The Example Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+    discovery
+        .upsert_pending_discovery_context_change(&DiscoveryPendingContextChangeRecord {
+            id: "change-1".to_string(),
+            scope_key: crate::DISCOVERY_DEFAULT_SCOPE_KEY.to_string(),
+            subject_key: Some("tmdb:movie:603".to_string()),
+            previous_subject_key: None,
+            change_type: "updated".to_string(),
+            title_id: Some("title-1".to_string()),
+            previous_title_id: None,
+            library_facet: Some("movie".to_string()),
+            raw_subject_json: Some(
+                serde_json::json!({
+                    "tmdbId": 603,
+                    "kind": "movie",
+                    "facet": "movie",
+                    "externalIds": [{"source": "tmdb", "value": "603"}]
+                })
+                .to_string(),
+            ),
+            raw_previous_subject_json: None,
+            first_seen_sequence: Some(10),
+            last_seen_sequence: Some(12),
+            first_seen_at: due_at,
+            last_seen_at: due_at,
+        })
+        .await
+        .expect("pending change should seed");
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should succeed whatever the library graph does");
+    (gateway, discovery)
+}
+
+#[tokio::test]
+async fn discovery_sync_incremental_change_rebuilds_the_touched_facet_library_graph() {
+    let (gateway, discovery) = run_incremental_movie_change_with_library_graph(false).await;
+
+    let inputs = gateway.library_graph_inputs.lock().await;
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].axis, crate::LIBRARY_GRAPH_AXIS);
+    assert_eq!(
+        inputs[0].neighbors_per_node,
+        crate::LIBRARY_GRAPH_NEIGHBORS_PER_NODE
+    );
+    assert_eq!(inputs[0].min_cosine, crate::LIBRARY_GRAPH_MIN_COSINE);
+    assert_eq!(
+        inputs[0]
+            .subjects
+            .iter()
+            .map(|subject| subject.key.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("tmdb:movie:603")]
+    );
+    drop(inputs);
+
+    let commits = discovery.library_graph_commits.lock().await;
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].run.facet, "movie");
+    assert_eq!(commits[0].run.status, "complete");
+    assert_eq!(commits[0].run.subject_count, 1);
+    assert_eq!(commits[0].run.submitted_count, 1);
+    assert_eq!(commits[0].nodes.len(), 1);
+    assert_eq!(commits[0].nodes[0].title_ids, vec!["title-1".to_string()]);
+}
+
+#[tokio::test]
+async fn discovery_sync_library_graph_queue_full_is_recorded_as_transient_without_failing_the_run()
+{
+    let (gateway, discovery) = run_incremental_movie_change_with_library_graph(true).await;
+
+    // One call for the touched facet, and no retry within the run.
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+    assert!(discovery.library_graph_commits.lock().await.is_empty());
+    let runs = discovery.library_graph_runs.lock().await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].facet, "movie");
+    assert_eq!(runs[0].status, "failed");
+    assert_eq!(
+        runs[0].error_code.as_deref(),
+        Some(crate::error_reasons::library_graph::GATEWAY_QUEUE_FULL)
+    );
+    drop(runs);
+
+    // The sync run itself still committed its incremental patch.
+    assert_eq!(discovery.incremental_commits.lock().await.len(), 1);
     assert!(discovery.pending_changes.lock().await.is_empty());
 }
 
@@ -5409,6 +5699,8 @@ struct SnapshotMetadataGateway {
     fail_snapshot_page: Mutex<bool>,
     context_changes_override: Mutex<Option<DiscoveryContextChangesResult>>,
     fail_context_changes: Mutex<bool>,
+    library_graph_inputs: Mutex<Vec<crate::LibraryGraphGatewayInput>>,
+    library_graph_queue_full: Mutex<bool>,
 }
 
 #[async_trait]
@@ -5621,6 +5913,47 @@ impl MetadataGateway for SnapshotMetadataGateway {
         })
     }
 
+    async fn library_graph(
+        &self,
+        input: &crate::LibraryGraphGatewayInput,
+    ) -> AppResult<crate::LibraryGraphGatewayResult> {
+        self.library_graph_inputs.lock().await.push(input.clone());
+        if *self.library_graph_queue_full.lock().await {
+            return Err(AppError::temporary_unavailable_reason(
+                crate::error_reasons::metadata_gateway::QUEUE_FULL,
+                "library graph queue is full",
+                Some(std::time::Duration::from_secs(5)),
+            ));
+        }
+        let nodes = input
+            .subjects
+            .iter()
+            .filter_map(|subject| subject.key.clone())
+            .map(|key| crate::LibraryGraphGatewayNode {
+                subject_key: key.clone(),
+                target_key: key,
+                cluster_id: 0,
+            })
+            .collect::<Vec<_>>();
+        let clusters = nodes
+            .first()
+            .map(|node| crate::LibraryGraphGatewayCluster {
+                id: 0,
+                label_key: None,
+                label: "Synthetic Cluster".to_string(),
+                medoid: node.target_key.clone(),
+                size: nodes.len() as i64,
+            })
+            .into_iter()
+            .collect();
+        Ok(crate::LibraryGraphGatewayResult {
+            generated_at: "2026-06-25T00:00:04Z".to_string(),
+            nodes,
+            edges: Vec::new(),
+            clusters,
+        })
+    }
+
     async fn acknowledge_discovery_context_snapshot(
         &self,
         request_id: &str,
@@ -5669,6 +6002,10 @@ struct RecordingDiscoveryRepository {
     // Simulates a metadata language change landing between the SMG fetch and
     // the public-feed commit: the store rolls the commit back as superseded.
     supersede_public_feed_commits: Mutex<bool>,
+    library_graph_runs: Mutex<Vec<crate::LibraryGraphRunRecord>>,
+    library_graph_commits: Mutex<Vec<crate::LibraryGraphSnapshotRecord>>,
+    neighbor_cache: Mutex<Vec<crate::DiscoveryNeighborCacheRecord>>,
+    library_graph_prunes: Mutex<Vec<(String, String, String)>>,
 }
 
 #[async_trait]
@@ -6546,6 +6883,100 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
         Ok(crate::DiscoveryPruneReport {
             runs_deleted: (before - runs.len()) as u64,
         })
+    }
+
+    async fn record_failed_library_graph_run(
+        &self,
+        run: &crate::LibraryGraphRunRecord,
+    ) -> AppResult<()> {
+        self.library_graph_runs.lock().await.push(run.clone());
+        Ok(())
+    }
+
+    async fn commit_library_graph(
+        &self,
+        snapshot: &crate::LibraryGraphSnapshotRecord,
+    ) -> AppResult<()> {
+        self.library_graph_runs
+            .lock()
+            .await
+            .push(snapshot.run.clone());
+        self.library_graph_commits
+            .lock()
+            .await
+            .push(snapshot.clone());
+        Ok(())
+    }
+
+    async fn get_latest_library_graph(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<crate::LibraryGraphSnapshotRecord>> {
+        Ok(self
+            .library_graph_commits
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find(|snapshot| snapshot.run.facet == facet)
+            .cloned())
+    }
+
+    async fn get_latest_library_graph_run(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<crate::LibraryGraphRunRecord>> {
+        Ok(self
+            .library_graph_runs
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find(|run| run.facet == facet)
+            .cloned())
+    }
+
+    async fn prune_library_graph_title(
+        &self,
+        facet: &str,
+        subject_key: &str,
+        title_id: &str,
+    ) -> AppResult<crate::LibraryGraphPruneReport> {
+        self.library_graph_prunes.lock().await.push((
+            facet.to_string(),
+            subject_key.to_string(),
+            title_id.to_string(),
+        ));
+        Ok(crate::LibraryGraphPruneReport::default())
+    }
+
+    async fn get_discovery_neighbor_cache(
+        &self,
+        target_key: &str,
+        language: &str,
+    ) -> AppResult<Option<crate::DiscoveryNeighborCacheRecord>> {
+        Ok(self
+            .neighbor_cache
+            .lock()
+            .await
+            .iter()
+            .find(|record| record.target_key == target_key && record.language == language)
+            .cloned())
+    }
+
+    async fn replace_discovery_neighbor_cache(
+        &self,
+        record: &crate::DiscoveryNeighborCacheRecord,
+        expire_before: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut cache = self.neighbor_cache.lock().await;
+        cache.retain(|existing| {
+            existing.fetched_at >= expire_before
+                && !(existing.target_key == record.target_key
+                    && existing.language == record.language)
+        });
+        cache.push(record.clone());
+        Ok(())
     }
 }
 
