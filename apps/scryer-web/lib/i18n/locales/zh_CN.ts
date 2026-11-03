@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_CN: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "不支持此 Prowlarr 版本。请将 Prowlarr 升级到 2.0 或更高版本。",
   "error.reason.STANDBY_NOT_FOUND": "此已保存的候选版本已不存在。",
   "error.reason.STANDBY_NOT_AVAILABLE":
     "此已保存的候选版本已不可用。请刷新列表后重试。",

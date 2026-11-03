@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const nl: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "Deze Prowlarr-versie wordt niet ondersteund. Werk Prowlarr bij naar 2.0 of nieuwer.",
   "error.reason.STANDBY_NOT_FOUND":
     "Deze opgeslagen kandidaat bestaat niet meer.",
   "error.reason.STANDBY_NOT_AVAILABLE":

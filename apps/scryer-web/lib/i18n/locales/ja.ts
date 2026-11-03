@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const ja: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "この Prowlarr のバージョンはサポートされていません。Prowlarr を 2.0 以降に更新してください。",
   "error.reason.STANDBY_NOT_FOUND": "この保存済み候補はもう存在しません。",
   "error.reason.STANDBY_NOT_AVAILABLE":
     "この保存済み候補は利用できなくなりました。一覧を更新して再試行してください。",

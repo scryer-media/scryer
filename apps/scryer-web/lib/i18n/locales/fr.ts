@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const fr: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "Cette version de Prowlarr n’est pas prise en charge. Mettez Prowlarr à jour vers la 2.0 ou une version ultérieure.",
   "error.reason.STANDBY_NOT_FOUND": "Ce candidat enregistré n'existe plus.",
   "error.reason.STANDBY_NOT_AVAILABLE":
     "Ce candidat enregistré n'est plus disponible. Actualisez la liste et réessayez.",

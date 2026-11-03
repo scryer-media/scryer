@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const ko: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "이 Prowlarr 버전은 지원되지 않습니다. Prowlarr를 2.0 이상으로 업그레이드하세요.",
   "error.reason.STANDBY_NOT_FOUND":
     "이 저장된 후보는 더 이상 존재하지 않습니다.",
   "error.reason.STANDBY_NOT_AVAILABLE":

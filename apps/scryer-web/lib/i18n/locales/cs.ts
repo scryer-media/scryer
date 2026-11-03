@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const cs: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "Tato verze Prowlarru není podporována. Aktualizujte Prowlarr na verzi 2.0 nebo novější.",
   "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
   "error.reason.STANDBY_NOT_AVAILABLE":
     "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",
