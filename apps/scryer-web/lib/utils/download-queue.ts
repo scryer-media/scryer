@@ -497,7 +497,12 @@ export function buildQueueStatusDetail(
       ? QUEUE_ATTENTION_REASON_KEYS[code]
       : null;
   const messages = [
-    ...(code && t && Object.hasOwn(QUEUE_ATTENTION_REASON_KEYS, code)
+    // A refusal the web translates replaces the client's own status lines;
+    // other attention codes keep them (the password-retry hint is additive).
+    ...(code &&
+    t &&
+    (Object.hasOwn(HTTP_RELEASE_REFUSAL_KEYS, code) ||
+      Object.hasOwn(MEDIA_REFUSAL_KEYS, code))
       ? []
       : (queueItem.trackedStatusMessages ?? [])),
     key && t ? t(key) : reason,
