@@ -38,19 +38,28 @@ async fn seeding_profile_create_validation_rejects_bad_goals() {
         .create_seeding_profile(&admin, blank)
         .await
         .expect_err("blank names are rejected");
-    assert!(
-        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("name is required"))
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::integration::SEEDING_PROFILE_INVALID)
     );
 
-    let mut zero_ratio = new_seeding_profile("Zero ratio");
-    zero_ratio.ratio = Some(0.0);
-    let error = app
-        .create_seeding_profile(&admin, zero_ratio)
-        .await
-        .expect_err("non-positive ratios are rejected");
-    assert!(
-        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("greater than 0")),
-    );
+    for season_pack in [false, true] {
+        let mut negative_ratio = new_seeding_profile("Negative ratio");
+        if season_pack {
+            negative_ratio.season_pack_mode = scryer_domain::SeasonPackSeedMode::Override;
+            negative_ratio.season_pack_ratio = Some(-1.0);
+        } else {
+            negative_ratio.ratio = Some(-1.0);
+        }
+        let error = app
+            .create_seeding_profile(&admin, negative_ratio)
+            .await
+            .expect_err("negative ratios are rejected");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::integration::SEEDING_PROFILE_INVALID)
+        );
+    }
 
     let mut zero_time = new_seeding_profile("Zero time");
     zero_time.seed_time_minutes = Some(0);
@@ -58,8 +67,9 @@ async fn seeding_profile_create_validation_rejects_bad_goals() {
         .create_seeding_profile(&admin, zero_time)
         .await
         .expect_err("non-positive seed times are rejected");
-    assert!(
-        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("greater than 0"))
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::integration::SEEDING_PROFILE_INVALID)
     );
 
     // Inherit mode normalizes stray season-pack goals instead of rejecting them.
@@ -72,6 +82,51 @@ async fn seeding_profile_create_validation_rejects_bad_goals() {
         .expect("inherit mode normalizes season pack goals");
     assert_eq!(created.season_pack_ratio, None);
     assert_eq!(created.season_pack_seed_time_minutes, None);
+}
+
+#[tokio::test]
+async fn seeding_profile_zero_ratios_survive_create_update_and_clear() {
+    let (app, admin) = bootstrap().await;
+    let mut input = new_seeding_profile("Zero goals");
+    input.ratio = Some(0.0);
+    input.season_pack_mode = scryer_domain::SeasonPackSeedMode::Override;
+    input.season_pack_ratio = Some(0.0);
+    let created = app
+        .create_seeding_profile(&admin, input)
+        .await
+        .expect("zero ratio goals are valid");
+    assert_eq!(created.ratio, Some(0.0));
+    assert_eq!(created.season_pack_ratio, Some(0.0));
+
+    let cleared = app
+        .update_seeding_profile(
+            &admin,
+            SeedingProfileUpdate {
+                id: created.id.clone(),
+                ratio: Some(None),
+                season_pack_ratio: Some(None),
+                ..SeedingProfileUpdate::default()
+            },
+        )
+        .await
+        .expect("blank clears zero goals");
+    assert_eq!(cleared.ratio, None);
+    assert_eq!(cleared.season_pack_ratio, None);
+
+    let restored = app
+        .update_seeding_profile(
+            &admin,
+            SeedingProfileUpdate {
+                id: created.id,
+                ratio: Some(Some(0.0)),
+                season_pack_ratio: Some(Some(0.0)),
+                ..SeedingProfileUpdate::default()
+            },
+        )
+        .await
+        .expect("zero goals can replace blank goals");
+    assert_eq!(restored.ratio, Some(0.0));
+    assert_eq!(restored.season_pack_ratio, Some(0.0));
 }
 
 #[tokio::test]

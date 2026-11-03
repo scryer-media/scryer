@@ -126,8 +126,8 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
       event?.preventDefault();
       const validationError = validateSeedingProfileDraft(draft);
       if (validationError) {
-        setErrorMessage(validationError);
-        showStatus(validationError);
+        setErrorMessage(t(validationError));
+        showStatus(t(validationError));
         return false;
       }
 
