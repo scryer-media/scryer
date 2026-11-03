@@ -1775,6 +1775,7 @@ const ru: LocaleDictionary = {
   "libraryGraph.backToOverview": "Назад к обзору",
   "libraryGraph.findingMoreLikeThis": "Ищем похожие тайтлы…",
   "libraryGraph.reason.recommendedBy": "Рекомендуют: {{sources}}",
+  "libraryGraph.reason.similarOn": "Похожее: {{sources}}",
   "libraryGraph.reason.shares": "Общее: {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "Группы рекомендаций",
   "libraryGraph.notInLibrary": "Нет в вашей библиотеке",

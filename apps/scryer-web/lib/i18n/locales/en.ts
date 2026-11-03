@@ -6390,6 +6390,7 @@ const en: LocaleDictionary = {
   "libraryGraph.backToOverview": "Back to overview",
   "libraryGraph.findingMoreLikeThis": "Finding more like this…",
   "libraryGraph.reason.recommendedBy": "Recommended on {{sources}}",
+  "libraryGraph.reason.similarOn": "Similar on {{sources}}",
   "libraryGraph.reason.shares": "In common: {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "Recommendation groups",
   "libraryGraph.notInLibrary": "Not in your library",

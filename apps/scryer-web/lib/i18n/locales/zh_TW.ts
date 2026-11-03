@@ -1634,6 +1634,7 @@ const zh_TW: LocaleDictionary = {
   "libraryGraph.backToOverview": "返回總覽",
   "libraryGraph.findingMoreLikeThis": "正在尋找相似作品…",
   "libraryGraph.reason.recommendedBy": "{{sources}} 推薦",
+  "libraryGraph.reason.similarOn": "{{sources}} 相似",
   "libraryGraph.reason.shares": "共同點：{{terms}}",
   "libraryGraph.recommendationGroupsLabel": "推薦分組",
   "libraryGraph.notInLibrary": "不在你的媒體庫",

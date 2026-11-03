@@ -1907,6 +1907,7 @@ const cs: LocaleDictionary = {
   "libraryGraph.backToOverview": "Zpět na přehled",
   "libraryGraph.findingMoreLikeThis": "Hledám podobné tituly…",
   "libraryGraph.reason.recommendedBy": "Doporučeno na {{sources}}",
+  "libraryGraph.reason.similarOn": "Podobné na {{sources}}",
   "libraryGraph.reason.shares": "Společné: {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "Skupiny doporučení",
   "libraryGraph.notInLibrary": "Není ve vaší knihovně",

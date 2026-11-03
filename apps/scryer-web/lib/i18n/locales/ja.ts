@@ -1207,6 +1207,7 @@ const ja: LocaleDictionary = {
   "libraryGraph.backToOverview": "概要に戻る",
   "libraryGraph.findingMoreLikeThis": "似た作品を探しています…",
   "libraryGraph.reason.recommendedBy": "{{sources}} でおすすめ",
+  "libraryGraph.reason.similarOn": "{{sources}} で類似",
   "libraryGraph.reason.shares": "共通点: {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "おすすめのグループ",
   "libraryGraph.notInLibrary": "ライブラリにありません",

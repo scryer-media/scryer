@@ -1587,6 +1587,7 @@ const nl: LocaleDictionary = {
   "libraryGraph.backToOverview": "Terug naar overzicht",
   "libraryGraph.findingMoreLikeThis": "Vergelijkbare titels zoeken…",
   "libraryGraph.reason.recommendedBy": "Aanbevolen op {{sources}}",
+  "libraryGraph.reason.similarOn": "Vergelijkbaar op {{sources}}",
   "libraryGraph.reason.shares": "Gedeeld: {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "Aanbevelingsgroepen",
   "libraryGraph.notInLibrary": "Niet in je bibliotheek",
