@@ -34,6 +34,7 @@ import {
 } from "@/lib/utils/library-graph-merge";
 import {
   LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
+  LIBRARY_GRAPH_MAX_NODE_SIZE,
   LIBRARY_GRAPH_MIN_NODE_SIZE,
   LIBRARY_GRAPH_SIZE_METRICS,
   displayedLibraryGraph,
@@ -122,13 +123,30 @@ const SELECT_AFTER_GLIDE_SLACK_MS = 80;
 /** The outer ring of a focused node's neighbours, as a share of the frame. */
 const FOCUS_OUTER_RADIUS_SHARE = 0.78;
 /** The least on-screen gap between neighbours on one ring. */
-const FOCUS_RING_SPACING_PX = 40;
+const FOCUS_RING_SPACING_PX = 60;
 /** Room left beside the outer ring for its labels. */
 const FOCUS_LABEL_ROOM_PX = 130;
 const FOCUS_MIN_OUTER_RADIUS_PX = 90;
-const FOCUS_CENTER_SIZE = 16;
-const FOCUS_NEIGHBOR_MIN_SIZE = 10;
-const FOCUS_NEIGHBOR_MAX_SIZE = 14;
+// Focused-view node radii in screen pixels, large enough that every title on
+// the rings shows its poster.
+const FOCUS_CENTER_RADIUS_PX = 28;
+const FOCUS_NEIGHBOR_MIN_RADIUS_PX = 17;
+const FOCUS_NEIGHBOR_MAX_RADIUS_PX = 22;
+/** A focused neighbour's radius: its overview size, spread over the range. */
+function focusNeighborRadiusPx(metricSize: number) {
+  const share = Math.min(
+    1,
+    Math.max(
+      0,
+      (metricSize - LIBRARY_GRAPH_MIN_NODE_SIZE) /
+        (LIBRARY_GRAPH_MAX_NODE_SIZE - LIBRARY_GRAPH_MIN_NODE_SIZE),
+    ),
+  );
+  return (
+    FOCUS_NEIGHBOR_MIN_RADIUS_PX +
+    share * (FOCUS_NEIGHBOR_MAX_RADIUS_PX - FOCUS_NEIGHBOR_MIN_RADIUS_PX)
+  );
+}
 /** Focused-view labels longer than this are cut short. */
 const FOCUS_LABEL_MAX_CHARS = 28;
 
@@ -1117,7 +1135,10 @@ export default function LibraryGraphView({
       }
     }
 
-    // Posters over the nodes large enough on screen to show one.
+    // Posters over the nodes large enough on screen to show one; a focused
+    // view shows every title on its rings with its poster.
+    const minPosterRadius =
+      cameraCenterRef.current != null ? 0 : MIN_POSTER_RADIUS_PX;
     let drawn = 0;
     graph.forEachNode((key, attributes) => {
       if (drawn >= MAX_POSTERS_PER_FRAME) {
@@ -1131,7 +1152,7 @@ export default function LibraryGraphView({
       const point = viewportByNode.get(key);
       if (
         !point ||
-        radius < MIN_POSTER_RADIUS_PX ||
+        radius < minPosterRadius ||
         point.x < -radius ||
         point.y < -radius ||
         point.x > width + radius ||
@@ -1540,6 +1561,9 @@ export default function LibraryGraphView({
 
     let layout: LayoutState | null = null;
     let targets: Map<string, LayoutPoint>;
+    // Node sizes are in graph units; a focused view sizes its nodes in
+    // screen pixels through this.
+    let focusPixelsPerUnit = 1;
     if (focusCenterKey !== null) {
       // The rings share the overview's frame, so nodes glide in one space.
       // They are sized in screen pixels for the camera at rest on the
@@ -1559,6 +1583,7 @@ export default function LibraryGraphView({
         { cameraState: rest },
       );
       const pixelsPerUnit = Math.max(1e-6, Math.abs(along.x - origin.x) / unit);
+      focusPixelsPerUnit = pixelsPerUnit;
       const { width, height } = sigma.getDimensions();
       const outerPixels = Math.max(
         FOCUS_MIN_OUTER_RADIUS_PX,
@@ -1633,9 +1658,9 @@ export default function LibraryGraphView({
         const ghostColor = withAlpha(color, 0.35);
         const size =
           node.subjectKey === focusCenterKey
-            ? FOCUS_CENTER_SIZE
+            ? FOCUS_CENTER_RADIUS_PX / focusPixelsPerUnit
             : focusing
-              ? FOCUS_NEIGHBOR_MIN_SIZE
+              ? FOCUS_NEIGHBOR_MIN_RADIUS_PX / focusPixelsPerUnit
               : GHOST_NODE_SIZE;
         attributes = {
           ...position,
@@ -1653,12 +1678,9 @@ export default function LibraryGraphView({
         const metricSize = title ? (sizes.get(title.id) ?? 4) : 4;
         const size =
           node.subjectKey === focusCenterKey
-            ? FOCUS_CENTER_SIZE
+            ? FOCUS_CENTER_RADIUS_PX / focusPixelsPerUnit
             : focusing
-              ? Math.min(
-                  FOCUS_NEIGHBOR_MAX_SIZE,
-                  Math.max(FOCUS_NEIGHBOR_MIN_SIZE, metricSize),
-                )
+              ? focusNeighborRadiusPx(metricSize) / focusPixelsPerUnit
               : metricSize;
         attributes = {
           ...position,
