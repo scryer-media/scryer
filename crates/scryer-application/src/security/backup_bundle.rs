@@ -639,15 +639,7 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
-        table: "discovery_library_graph_clusters",
-        classification: BackupTableClassification::ResetOnRestore,
-    },
-    BackupTableCatalogEntry {
-        table: "discovery_library_graph_edges",
-        classification: BackupTableClassification::ResetOnRestore,
-    },
-    BackupTableCatalogEntry {
-        table: "discovery_library_graph_nodes",
+        table: "discovery_library_graph_payloads",
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {

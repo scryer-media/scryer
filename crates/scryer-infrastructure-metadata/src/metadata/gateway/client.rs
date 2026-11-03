@@ -2711,7 +2711,7 @@ mod tests {
                 json!({ "input": { "subjects": (1..=30_000).map(|id| json!({ "key": format!("tvdb:series:{id}"), "kind": "series" })).collect::<Vec<_>>(), "region": "US", "language": "eng", "maxItems": 50, "includeOwned": true, "includeUnresolved": false } })
             }
             "library_graph" => {
-                json!({ "input": { "subjects": (1..=5_000).map(|id| json!({ "key": format!("tvdb:series:{id}"), "kind": "series" })).collect::<Vec<_>>(), "axis": "SEMANTIC", "neighborsPerNode": 8, "minCosine": 0.55 } })
+                json!({ "input": { "subjects": (1..=10_000).map(|id| json!({ "key": format!("tvdb:series:{id}"), "kind": "series" })).collect::<Vec<_>>(), "axis": "SEMANTIC", "neighborsPerNode": 8, "minCosine": 0.55 } })
             }
             "discovery_context_snapshot_status" | "acknowledge_discovery_context_snapshot" => {
                 json!({ "requestId": "fixture-request" })

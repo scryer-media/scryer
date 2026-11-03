@@ -3748,6 +3748,23 @@ file = "postgres/migrations/0325_media_server_signal_roster.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 326
+description = "discovery library graph payload"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0326_discovery_library_graph_payload.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0326_discovery_library_graph_payload.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

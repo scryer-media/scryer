@@ -1,4 +1,5 @@
 pub mod common;
+pub mod compressed_blob;
 pub mod domain_event_payload;
 pub mod json;
 pub mod migration;
