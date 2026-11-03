@@ -123,7 +123,7 @@ const SELECT_AFTER_GLIDE_SLACK_MS = 80;
 /** The outer ring of a focused node's neighbours, as a share of the frame. */
 const FOCUS_OUTER_RADIUS_SHARE = 0.78;
 /** The least on-screen gap between neighbours on one ring. */
-const FOCUS_RING_SPACING_PX = 60;
+const FOCUS_RING_SPACING_PX = 68;
 /** Room left beside the outer ring for its labels. */
 const FOCUS_LABEL_ROOM_PX = 130;
 const FOCUS_MIN_OUTER_RADIUS_PX = 90;
@@ -132,6 +132,8 @@ const FOCUS_MIN_OUTER_RADIUS_PX = 90;
 const FOCUS_CENTER_RADIUS_PX = 28;
 const FOCUS_NEIGHBOR_MIN_RADIUS_PX = 17;
 const FOCUS_NEIGHBOR_MAX_RADIUS_PX = 22;
+// Recommendations on the outer rings.
+const FOCUS_GHOST_RADIUS_PX = 26;
 /** A focused neighbour's radius: its overview size, spread over the range. */
 function focusNeighborRadiusPx(metricSize: number) {
   const share = Math.min(
@@ -1660,7 +1662,7 @@ export default function LibraryGraphView({
           node.subjectKey === focusCenterKey
             ? FOCUS_CENTER_RADIUS_PX / focusPixelsPerUnit
             : focusing
-              ? FOCUS_NEIGHBOR_MIN_RADIUS_PX / focusPixelsPerUnit
+              ? FOCUS_GHOST_RADIUS_PX / focusPixelsPerUnit
               : GHOST_NODE_SIZE;
         attributes = {
           ...position,
