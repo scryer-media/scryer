@@ -882,29 +882,35 @@ function SeasonSectionImpl({
           })}
           description={t("series.interactiveSearchSeason")}
         >
-          <div className="mb-2 flex items-start gap-4">
-            <ReleaseSearchSummary
-              presentation={seasonSearchPresentation}
-              results={seasonSearchResults ?? EMPTY_RELEASES}
-              dataUi="season-release-search-summary"
-            />
-          </div>
-          {seasonSearchPresentation.showInitialLoader ? (
-            <ReleaseSearchLoader />
-          ) : seasonSearchResults && seasonSearchResults.length > 0 ? (
-            <SearchResultBuckets
-              titleId={collection.titleId}
-              ownedScope={{ collectionId: collection.id }}
-              results={seasonSearchResults}
-              onQueue={(release) =>
-                onQueueFromSeasonSearch(collection, release)
-              }
-              requireCandidateToken
-            />
+          {searchBlocked ? (
+            <TitleSearchDownloadClientNotice />
           ) : (
-            <p className="text-sm text-muted-foreground">
-              {t("nzb.noResultsYet")}
-            </p>
+            <>
+              <div className="mb-2 flex items-start gap-4">
+                <ReleaseSearchSummary
+                  presentation={seasonSearchPresentation}
+                  results={seasonSearchResults ?? EMPTY_RELEASES}
+                  dataUi="season-release-search-summary"
+                />
+              </div>
+              {seasonSearchPresentation.showInitialLoader ? (
+                <ReleaseSearchLoader />
+              ) : seasonSearchResults && seasonSearchResults.length > 0 ? (
+                <SearchResultBuckets
+                  titleId={collection.titleId}
+                  ownedScope={{ collectionId: collection.id }}
+                  results={seasonSearchResults}
+                  onQueue={(release) =>
+                    onQueueFromSeasonSearch(collection, release)
+                  }
+                  requireCandidateToken
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {t("nzb.noResultsYet")}
+                </p>
+              )}
+            </>
           )}
         </InteractiveSearchDialog>
       ) : null}
