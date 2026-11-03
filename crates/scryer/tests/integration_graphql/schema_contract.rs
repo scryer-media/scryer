@@ -899,8 +899,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         );
     }
     assert!(!mutation_field_names.contains(&"executeExternalImport"));
+    // Queueing a saved standby release with conflict confirmation adds
+    // `queueStandbyRelease`: 291->292.
+    assert!(mutation_field_names.contains(&"queueStandbyRelease"));
     assert_eq!(
-        mutation_field_count, 291,
+        mutation_field_count, 292,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1345,16 +1348,26 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
     assert!(!public_type_names.contains(&"ExternalImportResultPayload"));
+    // Standby queueing adds its payload, the conflict identity input and the
+    // choice enum: public types 1008->1011, OBJECT 544->545,
+    // INPUT_OBJECT 245->246, ENUM 207->208.
+    for name in [
+        "QueueStandbyReleasePayload",
+        "StandbyConflictIdentityInput",
+        "StandbyQueueChoiceValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     // The library graph catalog view is a GRAPH value on the existing catalog
     // view mode enum, so every count below is unchanged.
     assert_eq!(
         public_types.len(),
-        1008,
+        1011,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 544);
-    assert_eq!(kind_count("INPUT_OBJECT"), 245);
-    assert_eq!(kind_count("ENUM"), 207);
+    assert_eq!(kind_count("OBJECT"), 545);
+    assert_eq!(kind_count("INPUT_OBJECT"), 246);
+    assert_eq!(kind_count("ENUM"), 208);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
