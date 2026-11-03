@@ -503,7 +503,7 @@ fn apply_profile(
         // Prowlarr-managed criteria are synthesized, so there is no profile row
         // to point at; the resolution source records where they came from.
         seeding_profile_id: (!profile.id.is_empty()).then(|| profile.id.clone()),
-        seed_goal_ratio: ratio.filter(|value| value.is_finite() && *value > 0.0),
+        seed_goal_ratio: ratio.filter(|value| value.is_finite() && *value >= 0.0),
         seed_goal_seconds: seed_time_minutes
             .filter(|minutes| *minutes > 0)
             .and_then(|minutes| minutes.checked_mul(60)),
@@ -522,7 +522,7 @@ fn apply_profile(
 /// worth pinning is which axes count as clamped, not that `tracing` works.
 ///
 /// Derived from the inputs rather than by comparing the goal before and after,
-/// so a non-finite or non-positive profile value can never read as "clamped".
+/// so a non-finite profile value can never read as "clamped".
 fn clamped_axes(clamp: &TrackerMinimumClamp) -> Option<&'static str> {
     let ratio_clamped = clamp
         .min_ratio
@@ -1576,6 +1576,43 @@ mod tests {
         );
         assert_eq!(resolved.seed_goal_ratio, Some(0.5));
         assert_eq!(resolved.seed_goal_seconds, Some(3600));
+    }
+
+    #[test]
+    fn explicit_zero_ratios_resolve_separately_from_unset_and_honor_tracker_minimums() {
+        let mut zero = profile("zero", Some(0.0), None);
+        zero.season_pack_mode = SeasonPackSeedMode::Override;
+        zero.season_pack_ratio = Some(0.0);
+        let source = SeedGoalResolutionSource::Indexer;
+
+        for season_pack in [false, true] {
+            let request = SeedGoalRequest {
+                season_pack,
+                ..SeedGoalRequest::default()
+            };
+            let resolved = apply_profile(&zero, &request, source);
+            assert_eq!(resolved.seed_goal_ratio, Some(0.0));
+            assert!(resolved.has_goals());
+
+            let clamped_request = SeedGoalRequest {
+                tracker_min_seed_ratio: Some(1.5),
+                season_pack_min_seed_ratio: Some(2.0),
+                ..request
+            };
+            let resolved = apply_profile(&zero, &clamped_request, source);
+            assert_eq!(
+                resolved.seed_goal_ratio,
+                Some(if season_pack { 2.0 } else { 1.5 })
+            );
+        }
+
+        let unset = apply_profile(
+            &profile("unset", None, None),
+            &SeedGoalRequest::default(),
+            source,
+        );
+        assert_eq!(unset.seed_goal_ratio, None);
+        assert!(!unset.has_goals());
     }
 
     #[tokio::test]

@@ -5504,7 +5504,14 @@ const en: LocaleDictionary = {
     "Leave empty to use the client's own limit",
   "settings.seedingProfileRatioLabel": "Ratio",
   "settings.seedingProfileRatioHelp":
-    "Stop seeding once this share ratio is reached. Empty defers to the download client's own limit.",
+    "Stop seeding once this share ratio is reached. Enter 0.00 for no seeding obligation; honored tracker minimums can raise it. Empty defers to the download client's own limit.",
+  "settings.seedingProfileNameRequired": "Enter a name for this profile.",
+  "settings.seedingProfileRatioInvalid":
+    "Enter a number of zero or more, or leave empty.",
+  "settings.seedingProfileDurationInvalid":
+    "Enter a duration like 90m, 36h, 1d 12h or 2w, or leave empty.",
+  "settings.seedingProfileMinimumSeedersInvalid":
+    "Enter a whole number of 0 or more, or leave empty.",
   "settings.seedingProfileSeedTimeFormatHint":
     "Duration such as 90m, 36h, 1d 12h or 2w. A plain number is minutes.",
   "settings.seedingProfileSeedTimeLabel": "Seed time",
@@ -5544,7 +5551,7 @@ const en: LocaleDictionary = {
   "settings.seedingProfileSeasonPackRatioLabel": "Season pack ratio",
   "settings.seedingProfileSeasonPackSeedTimeLabel": "Season pack seed time",
   "settings.seedingProfileSeasonPackGoalsHelp":
-    "Only used in override mode. An empty field defers that goal to the download client.",
+    "Only used in override mode. A ratio of 0.00 has no seeding obligation; honored tracker minimums can raise it. An empty field defers that goal to the download client.",
   "settings.seedingProfileHonorTrackerMinimumsLabel": "Honor tracker minimums",
   "settings.seedingProfileHonorTrackerMinimumsHelp":
     "Raise the resolved goals to the minimum ratio and seed time a release declares, so private trackers do not record a hit and run.",
