@@ -97,3 +97,72 @@ test("a request error rejects the load", async () => {
     (caught) => caught === failure,
   );
 });
+
+function sequenceClient(answers: Answer[]) {
+  let calls = 0;
+  const client = {
+    query() {
+      const answer = answers[Math.min(calls, answers.length - 1)];
+      calls += 1;
+      return { toPromise: () => Promise.resolve(answer) };
+    },
+  } as unknown as Pick<Client, "query">;
+  return { client, calls: () => calls };
+}
+
+const superseded = {
+  graphQLErrors: [
+    {
+      message: "replaced",
+      extensions: {
+        code: "TEMPORARY_UNAVAILABLE",
+        reason: "LIBRARY_GRAPH_READ_SUPERSEDED",
+      },
+    },
+  ],
+};
+
+test("a graph replaced mid-read is read once more after a wait", async () => {
+  const { client, calls } = sequenceClient([
+    { error: superseded },
+    { data: { libraryGraph: payload } },
+  ]);
+  const waits: number[] = [];
+  const loaded = await createServerLibraryGraphSource(client, async (ms) => {
+    waits.push(ms);
+  }).load({ facet: "MOVIE", libraryIds: [] });
+  assert.equal(calls(), 2);
+  assert.equal(waits.length, 1);
+  assert.ok(loaded);
+});
+
+test("a graph replaced on the retry too rejects, and other errors never retry", async () => {
+  const twice = sequenceClient([{ error: superseded }]);
+  await assert.rejects(
+    createServerLibraryGraphSource(twice.client, async () => {}).load({
+      facet: "MOVIE",
+      libraryIds: [],
+    }),
+  );
+  assert.equal(twice.calls(), 2);
+
+  const other = sequenceClient([
+    {
+      error: {
+        graphQLErrors: [
+          {
+            message: "LIBRARY_GRAPH_READ_SUPERSEDED",
+            extensions: { code: "TEMPORARY_UNAVAILABLE", reason: "OTHER" },
+          },
+        ],
+      },
+    },
+  ]);
+  await assert.rejects(
+    createServerLibraryGraphSource(other.client, async () => {}).load({
+      facet: "MOVIE",
+      libraryIds: [],
+    }),
+  );
+  assert.equal(other.calls(), 1);
+});

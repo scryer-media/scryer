@@ -10,6 +10,7 @@ import type {
   LibraryGraphNode,
   LibraryGraphResult,
 } from "../types/library-graph.ts";
+import { hasGraphQlErrorReason } from "../graphql/error-message.ts";
 import { libraryGraphQuery } from "../graphql/queries.ts";
 import { libraryGraphFixture } from "./library-graph-fixture.ts";
 
@@ -86,28 +87,52 @@ export function libraryGraphResultFromPayload(
   };
 }
 
+/** The reason the server gives when the graph was replaced mid-read. */
+const LIBRARY_GRAPH_READ_SUPERSEDED = "LIBRARY_GRAPH_READ_SUPERSEDED";
+
+/** How long to wait before reading a graph that was replaced mid-read again. */
+export const LIBRARY_GRAPH_SUPERSEDED_RETRY_MS = 750;
+
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /**
  * The graph the server built for the facet and libraries. A request error
- * rejects; a graph that has not been built yet resolves to null.
+ * rejects; a graph that has not been built yet resolves to null. A graph
+ * replaced while it was being read is read once more after a short wait.
  */
 export function createServerLibraryGraphSource(
   client: Pick<Client, "query">,
+  wait: (ms: number) => Promise<void> = delay,
 ): LibraryGraphSource {
   return {
     async load(request) {
       const libraryIds = [...request.libraryIds];
-      const { data, error } = await client
-        .query<LibraryGraphQueryData, LibraryGraphQueryVariables>(
-          libraryGraphQuery,
-          {
-            input: {
-              facet: request.facet,
-              ...(libraryIds.length > 0 ? { libraryIds } : {}),
+      const read = () =>
+        client
+          .query<LibraryGraphQueryData, LibraryGraphQueryVariables>(
+            libraryGraphQuery,
+            {
+              input: {
+                facet: request.facet,
+                ...(libraryIds.length > 0 ? { libraryIds } : {}),
+              },
             },
-          },
-          { requestPolicy: "network-only" },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+      let { data, error } = await read();
+      if (
+        error &&
+        hasGraphQlErrorReason(
+          error,
+          LIBRARY_GRAPH_READ_SUPERSEDED,
+          "TEMPORARY_UNAVAILABLE",
         )
-        .toPromise();
+      ) {
+        await wait(LIBRARY_GRAPH_SUPERSEDED_RETRY_MS);
+        ({ data, error } = await read());
+      }
       if (error) {
         throw error;
       }
