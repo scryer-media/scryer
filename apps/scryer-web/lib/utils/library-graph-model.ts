@@ -467,6 +467,8 @@ const RELATION_KIND_KEYS: Record<string, string> = {
   prequel: "libraryGraph.edgeKind.prequel",
   co_watch: "libraryGraph.edgeKind.coWatch",
   recommendation: "libraryGraph.edgeKind.recommendation",
+  // A provider's "similar titles" list reads the same as a similar link.
+  similar: "libraryGraph.edgeKind.semantic",
 };
 
 /** One edge kind in the viewer's language. */
@@ -520,11 +522,20 @@ const SOURCE_NAMES: Record<string, string> = {
   tvdb: "TVDB",
 };
 
+/** The relation kinds a reason's services line can speak for. */
+export type NeighborReasonSourceKind = "recommendation" | "similar";
+
 /** Why a More Like This result sits next to the title it was found from. */
 export type NeighborReason = {
-  /** The relation edge kinds, other than a plain recommendation. */
+  /** The relation edge kinds the services line does not already state. */
   relations: string[];
-  /** The services that recommend it, by display name. */
+  /**
+   * What the services line says the services did: recommended it, or listed
+   * it as similar. Null when no line names them: there are none, or the link
+   * is of another kind, whose label already says what it is.
+   */
+  sourceKind: NeighborReasonSourceKind | null;
+  /** The services the link came from, by display name. */
   sources: string[];
   /** Genre and theme names both titles carry, themes first. */
   shared: string[];
@@ -579,17 +590,34 @@ export function neighborReason(
       break;
     }
   }
+  const sources = Array.from(
+    new Set(
+      (item.sources ?? [])
+        .filter((source) => source.trim() !== "")
+        .map(discoverySourceName),
+    ),
+  );
+  const relationOf = (kind: string) => kind.trim().split(":")[1] ?? "";
+  const recommended = kinds.some(
+    (kind) => relationOf(kind) === "recommendation",
+  );
+  const similar = kinds.some((kind) => relationOf(kind) === "similar");
+  let sourceKind: NeighborReasonSourceKind | null = null;
+  if (sources.length > 0) {
+    sourceKind = recommended ? "recommendation" : similar ? "similar" : null;
+  }
   return {
-    relations: kinds.filter(
-      (kind) => kind.trim().split(":")[1] !== "recommendation",
-    ),
-    sources: Array.from(
-      new Set(
-        (item.sources ?? [])
-          .filter((source) => source.trim() !== "")
-          .map(discoverySourceName),
-      ),
-    ),
+    // A plain recommendation is never a label of its own; a similar link is
+    // one unless the services line already says similar.
+    relations: kinds.filter((kind) => {
+      const relation = relationOf(kind);
+      return (
+        relation !== "recommendation" &&
+        !(relation === "similar" && sourceKind === "similar")
+      );
+    }),
+    sourceKind,
+    sources,
     shared: names,
   };
 }
@@ -604,11 +632,14 @@ export function neighborReasonLines(
   if (relations.length > 0) {
     lines.push(relations.join(", "));
   }
-  if (reason.sources.length > 0) {
+  if (reason.sourceKind !== null && reason.sources.length > 0) {
     lines.push(
-      t("libraryGraph.reason.recommendedBy", {
-        sources: reason.sources.join(", "),
-      }),
+      t(
+        reason.sourceKind === "similar"
+          ? "libraryGraph.reason.similarOn"
+          : "libraryGraph.reason.recommendedBy",
+        { sources: reason.sources.join(", ") },
+      ),
     );
   }
   if (reason.shared.length > 0) {

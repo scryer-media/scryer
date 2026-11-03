@@ -573,6 +573,7 @@ test("a neighbour's reason names its services and the genres and themes both tit
   );
   assert.deepEqual(reason, {
     relations: ["relation:sequel"],
+    sourceKind: "recommendation",
     sources: ["MyAnimeList", "Trakt", "zz-service"],
     // Themes first; the facet's own genre, spoilers, content tags and
     // unshared tags explain nothing.
@@ -586,8 +587,54 @@ test("a neighbour's reason names its services and the genres and themes both tit
 
 test("a plain recommendation with nothing shared has no reason lines", () => {
   const reason = neighborReason(null, {}, ["relation:recommendation"]);
-  assert.deepEqual(reason, { relations: [], sources: [], shared: [] });
+  assert.deepEqual(reason, {
+    relations: [],
+    sourceKind: null,
+    sources: [],
+    shared: [],
+  });
   assert.deepEqual(neighborReasonLines(reason, t), []);
+});
+
+test("only a recommendation says its services recommended it", () => {
+  const recommended = neighborReason(null, { sources: ["tmdb"] }, [
+    "relation:recommendation",
+  ]);
+  assert.deepEqual(neighborReasonLines(recommended, t), [
+    "Recommended on TMDB",
+  ]);
+
+  const similar = neighborReason(null, { sources: ["tmdb"] }, [
+    "relation:similar",
+  ]);
+  assert.deepEqual(similar.relations, []);
+  assert.equal(similar.sourceKind, "similar");
+  assert.deepEqual(neighborReasonLines(similar, t), ["Similar on TMDB"]);
+
+  // Both kinds: the services line keeps the recommendation wording and the
+  // similar link still shows as a label.
+  const both = neighborReason(null, { sources: ["tmdb", "mal"] }, [
+    "relation:recommendation",
+    "relation:similar",
+  ]);
+  assert.deepEqual(neighborReasonLines(both, t), [
+    "Similar",
+    "Recommended on TMDB, MyAnimeList",
+  ]);
+});
+
+test("a similar link without services keeps its kind label", () => {
+  const reason = neighborReason(null, {}, ["relation:similar"]);
+  assert.equal(reason.sourceKind, null);
+  assert.deepEqual(neighborReasonLines(reason, t), ["Similar"]);
+});
+
+test("a link of another kind keeps its label and names no recommender", () => {
+  const reason = neighborReason(null, { sources: ["tmdb"] }, [
+    "relation:sequel",
+  ]);
+  assert.equal(reason.sourceKind, null);
+  assert.deepEqual(neighborReasonLines(reason, t), ["Sequel"]);
 });
 
 test("recommendations group by the genre or theme most of them share", () => {

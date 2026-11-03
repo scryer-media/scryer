@@ -1190,6 +1190,7 @@ const ko: LocaleDictionary = {
   "libraryGraph.backToOverview": "개요로 돌아가기",
   "libraryGraph.findingMoreLikeThis": "비슷한 작품을 찾는 중…",
   "libraryGraph.reason.recommendedBy": "{{sources}}에서 추천",
+  "libraryGraph.reason.similarOn": "{{sources}}에서 비슷함",
   "libraryGraph.reason.shares": "공통점: {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "추천 그룹",
   "libraryGraph.notInLibrary": "라이브러리에 없음",

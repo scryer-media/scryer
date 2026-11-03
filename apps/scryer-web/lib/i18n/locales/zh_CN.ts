@@ -1124,6 +1124,7 @@ const zh_CN: LocaleDictionary = {
   "libraryGraph.backToOverview": "返回概览",
   "libraryGraph.findingMoreLikeThis": "正在查找相似作品…",
   "libraryGraph.reason.recommendedBy": "{{sources}} 推荐",
+  "libraryGraph.reason.similarOn": "{{sources}} 相似",
   "libraryGraph.reason.shares": "共同点：{{terms}}",
   "libraryGraph.recommendationGroupsLabel": "推荐分组",
   "libraryGraph.notInLibrary": "不在你的媒体库中",

@@ -1231,6 +1231,7 @@ const de: LocaleDictionary = {
   "libraryGraph.backToOverview": "Zurück zur Übersicht",
   "libraryGraph.findingMoreLikeThis": "Suche ähnliche Titel…",
   "libraryGraph.reason.recommendedBy": "Empfohlen auf {{sources}}",
+  "libraryGraph.reason.similarOn": "Ähnlich auf {{sources}}",
   "libraryGraph.reason.shares": "Gemeinsam: {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "Empfehlungsgruppen",
   "libraryGraph.notInLibrary": "Nicht in deiner Bibliothek",

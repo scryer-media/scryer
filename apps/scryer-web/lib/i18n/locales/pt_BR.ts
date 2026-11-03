@@ -1250,6 +1250,7 @@ const pt_BR: LocaleDictionary = {
   "libraryGraph.backToOverview": "Voltar à visão geral",
   "libraryGraph.findingMoreLikeThis": "Buscando títulos parecidos…",
   "libraryGraph.reason.recommendedBy": "Recomendado em {{sources}}",
+  "libraryGraph.reason.similarOn": "Semelhante em {{sources}}",
   "libraryGraph.reason.shares": "Em comum: {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "Grupos de recomendações",
   "libraryGraph.notInLibrary": "Fora da sua biblioteca",

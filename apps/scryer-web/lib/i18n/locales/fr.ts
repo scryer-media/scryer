@@ -1317,6 +1317,7 @@ const fr: LocaleDictionary = {
   "libraryGraph.backToOverview": "Retour à la vue d'ensemble",
   "libraryGraph.findingMoreLikeThis": "Recherche de titres similaires…",
   "libraryGraph.reason.recommendedBy": "Recommandé sur {{sources}}",
+  "libraryGraph.reason.similarOn": "Similaire sur {{sources}}",
   "libraryGraph.reason.shares": "En commun : {{terms}}",
   "libraryGraph.recommendationGroupsLabel": "Groupes de recommandations",
   "libraryGraph.notInLibrary": "Absent de votre bibliothèque",
