@@ -2812,6 +2812,7 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
       outcome
       reasonCodes
       error
+      facts
     }
   }
 }`;

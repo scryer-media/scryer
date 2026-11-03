@@ -92,7 +92,8 @@ fn watch_app(
     accounts: Vec<UserExternalAccount>,
 ) -> WatchFixture {
     let (app, user) = bootstrap();
-    let signals = Arc::new(InMemorySignalRepo::default());
+    // Every fixture link stands for one a sweep has read.
+    let signals = Arc::new(InMemorySignalRepo::swept(&accounts));
     let media_requests = Arc::new(MockMediaRequestRepo::default());
     let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
     let app = app.with_test_overrides(|services| {
@@ -182,6 +183,7 @@ async fn record_play(
                 is_favorite: false,
                 observed_at: Utc::now(),
             }],
+            None,
         )
         .await
         .expect("record play");
@@ -924,4 +926,38 @@ async fn a_stored_person_fact_rule_still_evaluates_under_the_system_principal() 
     let candidates = fixture.evaluation.all_candidates().await;
     assert_eq!(candidates.len(), 1, "{candidates:?}");
     assert_eq!(candidates[0].title_id, title.id);
+}
+
+/// The per-subject fact document names who watched and who requested a
+/// subject, so preview shows it only to a caller who may author rules about
+/// people, even when the rule itself reads nothing about them.
+#[tokio::test]
+async fn preview_shows_the_fact_document_only_to_a_permissions_manager() {
+    let fixture = watch_app(Vec::new(), Vec::new());
+    let title = seed_title(&fixture.app, &fixture.user, "Example Feature").await;
+
+    let privileged = fixture
+        .preview_as(&fixture.user, inline_matcher(MONITORED_MATCHER), &title.id)
+        .await
+        .expect("preview");
+    let facts = privileged.titles[0]
+        .facts
+        .as_ref()
+        .expect("a permissions manager sees the fact document");
+    assert!(facts["facts"].is_object(), "{facts}");
+    assert_eq!(
+        facts["observations"]["watched_by_anyone"]["status"],
+        serde_json::json!("unknown"),
+        "{facts}"
+    );
+
+    let catalog_only = fixture
+        .preview_as(
+            &catalog_only_author(),
+            inline_matcher(MONITORED_MATCHER),
+            &title.id,
+        )
+        .await
+        .expect("a rule about media previews for a catalog manager");
+    assert!(catalog_only.titles[0].facts.is_none());
 }

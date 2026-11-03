@@ -181,6 +181,17 @@ pub mod execution_reason {
     pub const PLAYBACK_HOLD: &str = "playback_hold";
     /// A configured media server could not be asked about playback.
     pub const PLAYBACK_UNKNOWN: &str = "playback_unknown";
+    /// A rule that reads a watch fact matched, and reading the subject's
+    /// items back from the media server found a play newer than the stored
+    /// facts, by an account the watch facts count.
+    pub const WATCH_RECHECK_NEWER_PLAY: &str = "watch_recheck_newer_play";
+    /// The media server's history names a play of the subject that the
+    /// stored facts credit to no account, such as one by an account that is
+    /// not linked to a Scryer user.
+    pub const WATCH_RECHECK_UNCREDITED_PLAY: &str = "watch_recheck_uncredited_play";
+    /// The subject's items could not be read back from the media server
+    /// before acting on a watch fact.
+    pub const WATCH_RECHECK_UNAVAILABLE: &str = "watch_recheck_unavailable";
     /// The title has a grab, download, or import in flight.
     pub const ACTIVE_ACQUISITION: &str = "active_acquisition";
     /// Acquisition activity could not be ruled out.
@@ -1930,6 +1941,9 @@ impl AppUseCase {
             Ok(signals) => signals,
             Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
         };
+        let (watch_context, audience_by_title) = self
+            .maintenance_audience_plays_for_titles(&watch_context, std::slice::from_ref(&title))
+            .await;
         let people = MaintenanceTitlePeople {
             requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
             usernames: &usernames,
@@ -1937,6 +1951,7 @@ impl AppUseCase {
         let watch = MaintenanceTitleWatch {
             context: &watch_context,
             signals: signals_by_title.get(&title.id).map(Vec::as_slice),
+            audience: audience_by_title.get(&title.id).map(Vec::as_slice),
         };
         let claims = MaintenanceTitleClaims {
             claims: claims_by_title
@@ -2313,6 +2328,41 @@ impl AppUseCase {
             Some(MaintenanceOutcome::NoMatch) => {}
             Some(MaintenanceOutcome::Unknown) | None => {
                 return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+            }
+        }
+
+        // (3b) A match that rests on watch facts rests on the last sweep. Read
+        // the subject's watched items back from their servers first; a play
+        // since then, a play no stored fact credits, or a read that cannot be
+        // made holds. A clean read changes nothing it read.
+        if super::watch_recheck::rule_reads_watch_facts(
+            &detail.revision.rego_source,
+            &candidate.rule_set_id,
+        ) {
+            let episode_ids = (subject.kind != scryer_domain::MaintenanceRuleSubjectKind::Title)
+                .then(|| {
+                    subject
+                        .episodes
+                        .iter()
+                        .map(|episode| episode.id.clone())
+                        .collect::<HashSet<_>>()
+                });
+            let recheck = self
+                .maintenance_watch_recheck(
+                    &watch_context,
+                    signals_by_title
+                        .get(&title.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                    audience_by_title
+                        .get(&title.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                    episode_ids.as_ref(),
+                )
+                .await;
+            if let Some(reason) = recheck.hold_reason() {
+                return SafetyDecision::Hold(reason);
             }
         }
 

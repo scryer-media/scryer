@@ -697,8 +697,9 @@ pub use ports::{
     titles_matching_lookup_keys,
 };
 pub use ports::{
-    MediaServerSignalReader, MediaServerSignalRepository, MediaServerSignalSource,
-    ProviderPlayedItem, SignalReadFailure,
+    AudiencePlay, AudienceRead, MediaServerSignalReader, MediaServerSignalRepository,
+    MediaServerSignalSource, ProviderAudiencePlay, ProviderItemPlay, ProviderItemRecheck,
+    ProviderPlayedItem, SignalReadFailure, SignalRosterEntry, SignalRosterLink,
 };
 pub use quality::release_parser::{
     AudioCodec, ExternalIdSource, ParsedEpisodeMetadata, ParsedEpisodeReleaseType,

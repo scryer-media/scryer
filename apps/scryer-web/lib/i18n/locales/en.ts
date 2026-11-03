@@ -5635,7 +5635,6 @@ const en: LocaleDictionary = {
   "settings.watchSyncReason.itemsUnreadable": "Some watched items could not be read.",
   "settings.watchSyncReason.pagingNotHonoured": "The media server did not return its watch history page by page as asked.",
   "settings.watchSyncReason.filterNotHonoured": "The media server returned unwatched items when asked for watched ones.",
-  "settings.watchSyncReason.itemCapReached": "A linked account's watch history is larger than one read covers.",
   "settings.watchSyncReason.unmappedPlayedMovies": "Some watched movies could not be matched to a library title.",
   "settings.watchSyncReason.storeFailed": "Scryer could not save the watch history it read.",
   "settings.watchSyncReason.sourceUnavailable": "Watch history reading is not available in this build.",
@@ -9747,13 +9746,13 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsActiveDownloadsValue":
     "True when a download for the subject is in flight",
   "settings.refMaintFactsWatchedByUserIdsValue":
-    "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. Season completion requires the same person to have watched every aired episode, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown for title-scoped shows (show_watch_rollup_unavailable), when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
+    "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. Season completion requires the same person to have watched every aired episode, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown for title-scoped shows (show_watch_rollup_unavailable), when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), when linked accounts exist but no sync has read them yet (participants_not_yet_swept), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
   "settings.refMaintFactsLastWatchedAtValue":
-    "RFC3339 timestamp of the most recent play; absent with reason never_watched when nobody has played it",
+    "RFC3339 timestamp of the most recent play; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing when a play has no recorded time",
   "settings.refMaintFactsWatchedByAnyRequesterValue":
-    "True when at least one requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account",
+    "True when at least one requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
   "settings.refMaintFactsWatchedByAllRequestersValue":
-    "True when every requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account",
+    "True when every requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
   "settings.refMaintFactsRequestLeaseStateValue":
     "none when no request lease was ever written for the subject, dormant when a lease is waiting for the first import, active while a lease is running, and expired once every lease has run out. A lease that was released or converted is withdrawn rather than spent, so it does not make the state expired. Expiry is measured against the evaluation time, so a lease reads as expired the moment its window closes.",
   "settings.refMaintFactsRequestLeaseExpiresAtValue":
@@ -11702,6 +11701,16 @@ const en: LocaleDictionary = {
     "Moving the file to its new name failed. The file and its episodes were left as they were.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episode numbering is ambiguous",
+  "settings.maintenanceExecutionReason.playbackHold": "Held: something is playing on a media server.",
+  "settings.maintenanceExecutionReason.playbackUnknown": "Held: a media server could not be asked whether something is playing.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Held: the media server shows a play newer than the stored watch history.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Held: the media server's history shows a play by an account the watch history does not count.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Held: the media server could not confirm the watch history before acting.",
+  "settings.refMaintFactsWatchedByAnyone": "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",
+  "settings.refMaintFactsLastWatchedByAnyoneAt": "When anyone with an account on a connected media server last played the subject",
+  "settings.refMaintFactsWatchedByAnyoneValue": "True when any account on an enabled media server has played it, whether or not the account is linked to a Scryer user; for seasons and shows, any aired episode counts. Unknown with reason audience_not_read until a sync in the last 48 hours has read every account on every enabled connection, and with the usual watch-fact reasons whenever watch facts are unknown.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "RFC3339 timestamp of the most recent play by any account; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing (episode_play_time_missing for seasons and shows) when a play has no recorded time, or audience_not_read when the accounts have not all been read",
+  "settings.maintenancePreviewFacts": "Facts the rule read",
 };
 
 export default en;

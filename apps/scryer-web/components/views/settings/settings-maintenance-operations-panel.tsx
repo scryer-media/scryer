@@ -1,4 +1,5 @@
 import { formatBytes } from "@/lib/utils/activity-utils";
+import { maintenanceExecutionReasonText } from "@/lib/utils/maintenance-execution-reason";
 import * as React from "react";
 import { Ban, Play, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -155,7 +156,7 @@ function MaintenanceSequenceProgress({
             )}
             {entry?.run?.holdReason ? (
               <span className="text-[var(--scry-warning-text)]">
-                {entry.run.holdReason}
+                {maintenanceExecutionReasonText(t, entry.run.holdReason)}
               </span>
             ) : null}
             {entry?.run?.error ? (
@@ -559,14 +560,28 @@ export function MaintenanceCandidatesPanel({
                       <div className="flex flex-col gap-1">
                         <Badge
                           tone={candidateStateBadgeTone(candidate.state)}
-                          title={candidate.stateReason || undefined}
+                          title={
+                            candidate.stateReason
+                              ? maintenanceExecutionReasonText(
+                                  t,
+                                  candidate.stateReason,
+                                )
+                              : undefined
+                          }
                         >
                           {stateKey ? t(stateKey) : candidate.state}
                         </Badge>
                         {candidate.heldSince ? (
                           <span
                             className="text-xs text-[var(--scry-warning-text)]"
-                            title={candidate.stateReason || undefined}
+                            title={
+                              candidate.stateReason
+                                ? maintenanceExecutionReasonText(
+                                    t,
+                                    candidate.stateReason,
+                                  )
+                                : undefined
+                            }
                           >
                             {t("settings.maintenanceCandidatesHeldSince", {
                               time: timestamp(
@@ -582,7 +597,10 @@ export function MaintenanceCandidatesPanel({
                       <ReasonCodes codes={candidate.reasonCodes} />
                       {candidate.stateReason ? (
                         <p className="mt-1 max-w-[280px] truncate text-xs">
-                          {candidate.stateReason}
+                          {maintenanceExecutionReasonText(
+                            t,
+                            candidate.stateReason,
+                          )}
                         </p>
                       ) : null}
                     </TableCell>
@@ -890,7 +908,9 @@ export function MaintenanceRunsPanel({
                       {run.attempt}
                     </TableCell>
                     <TableCell className="max-w-[220px] truncate text-[var(--scry-warning-text)]">
-                      {run.holdReason ?? "—"}
+                      {run.holdReason
+                        ? maintenanceExecutionReasonText(t, run.holdReason)
+                        : "—"}
                     </TableCell>
                     <TableCell className="min-w-[220px] whitespace-normal text-[var(--scry-danger-text)]">
                       {run.error ?? "—"}

@@ -796,6 +796,9 @@ function MaintenancePreviewPanel({
                         ) : (
                           "—"
                         )}
+                        {title.facts ? (
+                          <PreviewFacts facts={title.facts} />
+                        ) : null}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -817,6 +820,25 @@ function MaintenancePreviewPanel({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/// The fact document the rule read for one subject, collapsed until asked
+/// for so a long preview stays scannable.
+function PreviewFacts({ facts }: { facts: Record<string, unknown> }) {
+  const t = useTranslate();
+  return (
+    <details className="mt-1 whitespace-normal text-foreground">
+      <summary className="cursor-pointer text-xs">
+        {t("settings.maintenancePreviewFacts")}
+      </summary>
+      <pre
+        data-code-font
+        className="mt-1 max-h-80 max-w-xl overflow-auto rounded bg-muted p-2 text-xs"
+      >
+        {JSON.stringify(facts, null, 2)}
+      </pre>
+    </details>
   );
 }
 

@@ -39,6 +39,7 @@ fn built_input() -> MaintenanceInput {
         super::super::facts::MaintenanceTitleWatch {
             context: &watch,
             signals: None,
+            audience: None,
         },
         super::super::facts::MaintenanceTitleClaims::none(),
         &[],

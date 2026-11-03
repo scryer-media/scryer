@@ -613,6 +613,7 @@ pub fn from_maintenance_preview_result(result: AppPreviewResult) -> MaintenanceP
                 outcome: title.outcome.map(maintenance_outcome_value),
                 reason_codes: title.reason_codes,
                 error: title.error,
+                facts: title.facts.map(async_graphql::Json),
             })
             .collect(),
     }

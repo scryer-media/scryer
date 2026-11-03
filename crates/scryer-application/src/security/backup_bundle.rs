@@ -1108,6 +1108,23 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "media_server_signal_sync_state",
         classification: BackupTableClassification::ResetOnRestore,
     },
+    // Which links a sweep read is sweep bookkeeping like the sync state: a
+    // restored instance observes nobody until its next sweep reads them again.
+    BackupTableCatalogEntry {
+        table: "media_server_signal_roster",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    // Audience plays are re-read from the server every sweep, and their read
+    // marker says when; a restored instance answers "anyone watched it" only
+    // after its own next read.
+    BackupTableCatalogEntry {
+        table: "media_server_audience_plays",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "media_server_audience_reads",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "media_request_external_ids",
         classification: BackupTableClassification::Export,

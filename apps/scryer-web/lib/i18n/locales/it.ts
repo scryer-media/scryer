@@ -3739,6 +3739,16 @@ const it: LocaleDictionary = {
     "Lo spostamento del file al nuovo nome non è riuscito. Il file e i suoi episodi sono rimasti invariati.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numerazione degli episodi ambigua",
+  "settings.maintenanceExecutionReason.playbackHold": "In attesa: è in corso una riproduzione su un server multimediale.",
+  "settings.maintenanceExecutionReason.playbackUnknown": "In attesa: non è stato possibile chiedere a un server multimediale se è in corso una riproduzione.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "In attesa: il server multimediale mostra una riproduzione più recente della cronologia salvata.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "In attesa: la cronologia del server multimediale mostra una riproduzione da un account che la cronologia di visione non conta.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "In attesa: il server multimediale non ha potuto confermare la cronologia di visione prima di agire.",
+  "settings.refMaintFactsWatchedByAnyone": "Se qualcuno con un account su un media server collegato lo ha riprodotto, collegato a Scryer o no; non nomina nessuno",
+  "settings.refMaintFactsLastWatchedByAnyoneAt": "Quando qualcuno con un account su un media server collegato lo ha riprodotto l'ultima volta",
+  "settings.refMaintFactsWatchedByAnyoneValue": "True quando un qualsiasi account su un media server abilitato lo ha riprodotto, che l'account sia collegato o meno a un utente Scryer; per stagioni e serie conta qualsiasi episodio trasmesso. Sconosciuto con il motivo audience_not_read finché una sincronizzazione nelle ultime 48 ore non ha letto ogni account su ogni connessione abilitata, e con i soliti motivi ogni volta che i dati di visione sono sconosciuti.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "Timestamp RFC3339 della riproduzione più recente da parte di qualsiasi account; assente con il motivo never_watched quando nessuno lo ha riprodotto, e sconosciuto con il motivo play_time_missing (episode_play_time_missing per stagioni e serie) quando una riproduzione non ha un orario registrato, o audience_not_read quando non tutti gli account sono stati letti",
+  "settings.maintenancePreviewFacts": "Dati letti dalla regola",
 };
 
 export default it;

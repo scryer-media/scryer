@@ -94,6 +94,7 @@ async fn signals_round_trip_with_their_subject_and_play_facts() {
             CONNECTION_ID,
             PARTICIPANT,
             &[movie_signal("jf-movie-1", Some("title-movie"), 3)],
+            None,
         )
         .await
         .expect("first sweep");
@@ -135,6 +136,7 @@ async fn a_second_sweep_advances_the_generation_and_drops_what_it_did_not_report
                 movie_signal("jf-movie-1", Some("title-movie"), 1),
                 movie_signal("jf-movie-2", Some("title-other"), 1),
             ],
+            None,
         )
         .await
         .expect("first sweep");
@@ -154,6 +156,7 @@ async fn a_second_sweep_advances_the_generation_and_drops_what_it_did_not_report
             CONNECTION_ID,
             PARTICIPANT,
             &[movie_signal("jf-movie-1", Some("title-movie"), 5)],
+            None,
         )
         .await
         .expect("second sweep");
@@ -188,6 +191,7 @@ async fn an_empty_sweep_clears_that_participant_and_leaves_others_alone() {
             CONNECTION_ID,
             PARTICIPANT,
             &[movie_signal("jf-movie-1", Some("title-movie"), 1)],
+            None,
         )
         .await
         .expect("seed participant one");
@@ -196,12 +200,13 @@ async fn an_empty_sweep_clears_that_participant_and_leaves_others_alone() {
             CONNECTION_ID,
             "jf-user-beta",
             &[movie_signal("jf-movie-1", Some("title-movie"), 1)],
+            None,
         )
         .await
         .expect("seed participant two");
 
     let remaining = store
-        .replace_participant_signals(CONNECTION_ID, PARTICIPANT, &[])
+        .replace_participant_signals(CONNECTION_ID, PARTICIPANT, &[], None)
         .await
         .expect("empty sweep is a real write");
     assert_eq!(remaining, 0);
@@ -232,6 +237,7 @@ async fn movie_and_episode_reads_are_grouped_by_owning_title_and_never_mix_kinds
                 episode_signal("jf-ep-1", "title-series", "episode-1"),
                 episode_signal("jf-ep-2", "title-series", "episode-2"),
             ],
+            None,
         )
         .await
         .expect("sweep");
@@ -278,6 +284,7 @@ async fn an_unmapped_observation_is_stored_and_stays_out_of_every_title_read() {
             CONNECTION_ID,
             PARTICIPANT,
             &[movie_signal("jf-movie-unknown", None, 1)],
+            None,
         )
         .await
         .expect("sweep");
@@ -391,6 +398,7 @@ async fn retired_participant_cleanup_preserves_only_exact_current_account_pairs(
             CONNECTION_ID,
             PARTICIPANT,
             &[movie_signal("kept", Some("movie"), 1)],
+            None,
         )
         .await
         .unwrap();
@@ -399,6 +407,7 @@ async fn retired_participant_cleanup_preserves_only_exact_current_account_pairs(
             CONNECTION_ID,
             "retired",
             &[movie_signal("removed", Some("movie"), 1)],
+            None,
         )
         .await
         .unwrap();
@@ -433,6 +442,7 @@ async fn retired_participant_cleanup_preserves_only_exact_current_account_pairs(
             CONNECTION_ID,
             PARTICIPANT,
             &[movie_signal("empty-participants", Some("movie"), 1)],
+            None,
         )
         .await
         .unwrap();
@@ -451,5 +461,288 @@ async fn retired_participant_cleanup_preserves_only_exact_current_account_pairs(
             .is_empty()
     );
     services.pool().close().await;
+    let _ = std::fs::remove_file(db);
+}
+
+fn roster_link(link_id: &str) -> scryer_application::SignalRosterLink {
+    scryer_application::SignalRosterLink {
+        link_id: link_id.to_string(),
+        scryer_user_id: "scryer-user-alpha".to_string(),
+        link_verified_at: Some(Utc::now()),
+        sweep_started_at: Utc::now(),
+    }
+}
+
+#[tokio::test]
+async fn a_swap_records_the_link_it_read_through_in_the_roster() {
+    let (services, db) = temp_services("scryer_media_server_signal_roster_write").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[movie_signal("jf-movie-1", Some("title-movie"), 1)],
+            Some(&roster_link("link-alpha")),
+        )
+        .await
+        .expect("swap with roster");
+    // A later read through the same link replaces its row rather than adding
+    // a second one.
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[],
+            Some(&roster_link("link-alpha")),
+        )
+        .await
+        .expect("second swap");
+
+    let roster = store.signal_roster().await.expect("read roster");
+    assert_eq!(roster.len(), 1);
+    assert_eq!(roster[0].connection_id, CONNECTION_ID);
+    assert_eq!(roster[0].external_user_id, PARTICIPANT);
+    assert_eq!(roster[0].link.link_id, "link-alpha");
+    assert_eq!(roster[0].link.scryer_user_id, "scryer-user-alpha");
+    assert!(roster[0].link.link_verified_at.is_some());
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// The roster row and the signal swap are one unit of work: when the roster
+/// write is refused, the swap it would have vouched for is rolled back too, so
+/// the store never holds a read the roster does not name, nor the reverse.
+#[tokio::test]
+async fn a_refused_roster_write_rolls_back_the_signal_swap() {
+    let (services, db) = temp_services("scryer_media_server_signal_roster_atomic").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[movie_signal("jf-movie-kept", Some("title-movie"), 1)],
+            Some(&roster_link("link-alpha")),
+        )
+        .await
+        .expect("first swap");
+
+    // An empty link id breaks the roster's CHECK constraint, after the swap
+    // has already upserted and deleted inside the same transaction.
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[movie_signal("jf-movie-new", Some("title-movie"), 1)],
+            Some(&roster_link("")),
+        )
+        .await
+        .expect_err("the roster refuses an empty link id");
+
+    let rows = store
+        .movie_signals_for_titles(&["title-movie".to_string()])
+        .await
+        .expect("read signals");
+    let ids: Vec<_> = rows["title-movie"]
+        .iter()
+        .map(|row| row.provider_item_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["jf-movie-kept"], "the refused swap left no trace");
+    let roster = store.signal_roster().await.expect("read roster");
+    assert_eq!(roster.len(), 1);
+    assert_eq!(roster[0].link.link_id, "link-alpha");
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn retiring_an_identity_removes_its_roster_entry_with_its_signals() {
+    let (services, db) = temp_services("scryer_media_server_signal_roster_retire").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[movie_signal("jf-movie-1", Some("title-movie"), 1)],
+            Some(&roster_link("link-alpha")),
+        )
+        .await
+        .expect("kept participant");
+    let mut retired = roster_link("link-retired");
+    retired.scryer_user_id = "scryer-user-retired".to_string();
+    store
+        .replace_participant_signals(CONNECTION_ID, "jf-user-retired", &[], Some(&retired))
+        .await
+        .expect("retired participant");
+
+    store
+        .retain_connection_participants(
+            CONNECTION_ID,
+            &[(PARTICIPANT.into(), "scryer-user-alpha".into())],
+        )
+        .await
+        .expect("retain");
+
+    let roster = store.signal_roster().await.expect("read roster");
+    assert_eq!(roster.len(), 1);
+    assert_eq!(roster[0].link.link_id, "link-alpha");
+
+    let _ = std::fs::remove_file(db);
+}
+
+fn audience_play(
+    account: &str,
+    item_id: &str,
+    title_id: Option<&str>,
+    play_count: i64,
+) -> scryer_application::AudiencePlay {
+    scryer_application::AudiencePlay {
+        connection_id: CONNECTION_ID.to_string(),
+        external_account_id: account.to_string(),
+        provider_item_id: item_id.to_string(),
+        kind: MediaServerSignalKind::Movie,
+        scryer_title_id: title_id.map(str::to_string),
+        scryer_episode_id: None,
+        play_count,
+        last_played_at: Some(Utc::now()),
+    }
+}
+
+#[tokio::test]
+async fn an_audience_read_replaces_the_connections_plays_and_marks_it_read() {
+    let (services, db) = temp_services("scryer_media_server_audience_round_trip").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+    let started = Utc::now();
+
+    let written = store
+        .replace_connection_audience(
+            CONNECTION_ID,
+            &[
+                audience_play("account-a", "jf-movie-1", Some("title-movie"), 1),
+                audience_play("account-b", "jf-movie-1", Some("title-movie"), 2),
+                audience_play("account-b", "jf-movie-2", Some("title-other"), 1),
+                // The same account and item twice: the last entry is kept.
+                audience_play("account-a", "jf-movie-1", Some("title-movie"), 5),
+            ],
+            started,
+        )
+        .await
+        .expect("first audience read");
+    assert_eq!(written, 3);
+
+    let reads = store.audience_reads().await.expect("reads");
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].connection_id, CONNECTION_ID);
+    assert_eq!(reads[0].play_count, 3);
+    assert_eq!(
+        reads[0].sweep_started_at.timestamp_micros(),
+        started.timestamp_micros()
+    );
+
+    let by_title = store
+        .audience_plays_for_titles(&["title-movie".to_string()])
+        .await
+        .expect("plays by title");
+    assert_eq!(by_title.len(), 1, "only the titles asked for are read");
+    let mut plays = by_title.get("title-movie").expect("grouped").clone();
+    plays.sort_by(|a, b| a.external_account_id.cmp(&b.external_account_id));
+    let counts = plays
+        .iter()
+        .map(|play| (play.external_account_id.as_str(), play.play_count))
+        .collect::<Vec<_>>();
+    assert_eq!(counts, vec![("account-a", 5), ("account-b", 2)]);
+    assert!(plays.iter().all(|play| play.last_played_at.is_some()));
+
+    // A later read replaces every row, including ones it did not report.
+    let written = store
+        .replace_connection_audience(
+            CONNECTION_ID,
+            &[audience_play(
+                "account-c",
+                "jf-movie-2",
+                Some("title-other"),
+                1,
+            )],
+            Utc::now(),
+        )
+        .await
+        .expect("second audience read");
+    assert_eq!(written, 1);
+    assert!(
+        store
+            .audience_plays_for_titles(&["title-movie".to_string()])
+            .await
+            .expect("read")
+            .is_empty()
+    );
+    let other = store
+        .audience_plays_for_titles(&["title-other".to_string()])
+        .await
+        .expect("read");
+    assert_eq!(other.get("title-other").map(Vec::len), Some(1));
+
+    // A read that found nobody's plays is still a read.
+    let written = store
+        .replace_connection_audience(CONNECTION_ID, &[], Utc::now())
+        .await
+        .expect("an empty audience read");
+    assert_eq!(written, 0);
+    assert_eq!(
+        store.audience_reads().await.expect("reads")[0].play_count,
+        0
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn clearing_an_audience_read_keeps_the_plays_but_drops_the_marker() {
+    let (services, db) = temp_services("scryer_media_server_audience_clear").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    store
+        .replace_connection_audience(
+            CONNECTION_ID,
+            &[audience_play(
+                "account-a",
+                "jf-movie-1",
+                Some("title-movie"),
+                1,
+            )],
+            Utc::now(),
+        )
+        .await
+        .expect("audience read");
+    store
+        .clear_audience_read(CONNECTION_ID)
+        .await
+        .expect("clear the marker");
+
+    assert!(store.audience_reads().await.expect("reads").is_empty());
+    assert_eq!(
+        store
+            .audience_plays_for_titles(&["title-movie".to_string()])
+            .await
+            .expect("read")
+            .get("title-movie")
+            .map(Vec::len),
+        Some(1),
+        "the plays stay; only the marker that vouches for them goes"
+    );
+    assert!(
+        store
+            .audience_plays_for_titles(&[])
+            .await
+            .expect("an empty read")
+            .is_empty()
+    );
+
     let _ = std::fs::remove_file(db);
 }

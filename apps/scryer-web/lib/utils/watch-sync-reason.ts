@@ -27,7 +27,6 @@ export const WATCH_SYNC_REASON_KEYS: Readonly<Record<string, string>> = {
   WATCH_SYNC_ITEMS_UNREADABLE: "settings.watchSyncReason.itemsUnreadable",
   WATCH_SYNC_PAGING_NOT_HONOURED: "settings.watchSyncReason.pagingNotHonoured",
   WATCH_SYNC_FILTER_NOT_HONOURED: "settings.watchSyncReason.filterNotHonoured",
-  WATCH_SYNC_ITEM_CAP_REACHED: "settings.watchSyncReason.itemCapReached",
   WATCH_SYNC_UNMAPPED_PLAYED_MOVIES:
     "settings.watchSyncReason.unmappedPlayedMovies",
   WATCH_SYNC_STORE_FAILED: "settings.watchSyncReason.storeFailed",

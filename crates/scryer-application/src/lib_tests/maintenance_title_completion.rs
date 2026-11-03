@@ -766,7 +766,7 @@ async fn record_episode_plays(
         })
         .collect::<Vec<_>>();
     signals
-        .replace_participant_signals(CONNECTION_ID, external_user_id, &plays)
+        .replace_participant_signals(CONNECTION_ID, external_user_id, &plays, None)
         .await
         .expect("record episode plays");
 }
@@ -800,19 +800,18 @@ async fn preview_whole_show_completion(
 async fn whole_show_watch_preview_requires_one_verified_person_for_all_aired_episodes() {
     let execution = execution_app(None);
     let user = execution.user;
-    let signals = Arc::new(InMemorySignalRepo::default());
+    let accounts = vec![
+        linked_account("viewer-a", "jf-a"),
+        linked_account("viewer-b", "jf-b"),
+    ];
+    let signals = Arc::new(InMemorySignalRepo::swept(&accounts));
     let app = execution.app.with_test_overrides(|services| {
         services
             .with_media_server_connection_store(Arc::new(StubSignalConnections {
                 connections: vec![jellyfin_connection(true)],
                 fail_list: false,
             }))
-            .with_external_account_store(Arc::new(StubExternalAccounts {
-                accounts: vec![
-                    linked_account("viewer-a", "jf-a"),
-                    linked_account("viewer-b", "jf-b"),
-                ],
-            }))
+            .with_external_account_store(Arc::new(StubExternalAccounts { accounts }))
             .with_media_server_signal_store(signals.clone())
     });
     let title = app
