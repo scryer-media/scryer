@@ -1571,17 +1571,23 @@ function TitleContextPanel({
           title={`${title.name} — ${t("label.interactiveSearch")}`}
         >
           <div aria-live="polite">
-            <TitleContextReleaseSearchPanel
-              title={title}
-              onInteractiveSearch={onInteractiveSearch}
-              onQueueFromInteractive={onQueueFromInteractive}
-              onQueueAdditionalFromInteractive={
-                onQueueAdditionalFromInteractive
-              }
-              disabled={bulkActionBusy}
-              runRequestId={releaseSearchRequestId}
-              onLoadingChange={setReleaseSearchLoading}
-            />
+            {/* Like the series episode panel: with no download client there is
+                nothing a search here could queue, so say what to set up. */}
+            {hasDownloadClients === false ? (
+              <TitleSearchDownloadClientNotice />
+            ) : (
+              <TitleContextReleaseSearchPanel
+                title={title}
+                onInteractiveSearch={onInteractiveSearch}
+                onQueueFromInteractive={onQueueFromInteractive}
+                onQueueAdditionalFromInteractive={
+                  onQueueAdditionalFromInteractive
+                }
+                disabled={bulkActionBusy}
+                runRequestId={releaseSearchRequestId}
+                onLoadingChange={setReleaseSearchLoading}
+              />
+            )}
           </div>
         </InteractiveSearchDialog>
 
