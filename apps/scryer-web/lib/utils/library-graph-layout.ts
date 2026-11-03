@@ -29,12 +29,17 @@ export type LayoutState = {
 };
 
 const CLUSTER_RING_RADIUS = 260;
+/** How much wider than tall the ring of clusters is. */
+export const CLUSTER_RING_WIDTH = 1.8;
 const START_JITTER = 70;
 const REPULSION_RANGE = 90;
 const REPULSION = 900;
 const SPRING_LENGTH = 34;
 const SPRING = 0.04;
-const CLUSTER_GRAVITY = 0.012;
+/** Pull toward the cluster's own titles, so a weakly linked one stays near. */
+const CLUSTER_GRAVITY = 0.03;
+/** Pull toward the cluster's spot on the ring, keeping clusters apart. */
+const RING_GRAVITY = 0.012;
 const START_TEMPERATURE = 24;
 const SETTLE_TEMPERATURE = 6;
 const COOLING = 0.97;
@@ -54,7 +59,10 @@ function unitFromHash(hash: number): number {
   return hash / 4294967296;
 }
 
-/** Where each cluster's nodes gather: a circle, in cluster id order. */
+/**
+ * Where each cluster's nodes gather: a wide oval, in cluster id order, since
+ * the screens the graph is drawn on are wider than they are tall.
+ */
 export function clusterCenters(
   clusterIds: Iterable<number>,
 ): Map<number, LayoutPoint> {
@@ -68,7 +76,7 @@ export function clusterCenters(
   ids.forEach((id, position) => {
     const angle = (2 * Math.PI * position) / ids.length - Math.PI / 2;
     centers.set(id, {
-      x: Math.cos(angle) * radius,
+      x: Math.cos(angle) * radius * CLUSTER_RING_WIDTH,
       y: Math.sin(angle) * radius,
     });
   });
@@ -101,6 +109,20 @@ export function createLayout(
   const y = new Float64Array(nodes.length);
   const indexByKey = new Map<string, number>();
   let kept = 0;
+  // A title with no links starts in the middle rather than on its ring spot,
+  // which is too far to travel before the layout cools.
+  const present = new Set(keys);
+  const linkedKeys = new Set<string>();
+  for (const edge of edges) {
+    if (
+      edge.from !== edge.to &&
+      present.has(edge.from) &&
+      present.has(edge.to)
+    ) {
+      linkedKeys.add(edge.from);
+      linkedKeys.add(edge.to);
+    }
+  }
   nodes.forEach((node, index) => {
     indexByKey.set(node.key, index);
     const prior = previous.get(node.key);
@@ -110,7 +132,10 @@ export function createLayout(
       kept += 1;
       return;
     }
-    const center = centers.get(node.clusterId) ?? { x: 0, y: 0 };
+    const center =
+      linkedKeys.size > 0 && !linkedKeys.has(node.key)
+        ? { x: 0, y: 0 }
+        : (centers.get(node.clusterId) ?? { x: 0, y: 0 });
     const hash = hashString(node.key);
     const angle = unitFromHash(hash) * 2 * Math.PI;
     const distance =
@@ -167,10 +192,19 @@ export function layoutLoopDecision(
  * found through a grid, so a step stays linear in the node count.
  */
 export function stepLayout(state: LayoutState, iterations: number): number {
+  if (layoutIsSettled(state)) {
+    return 0;
+  }
   const count = state.keys.length;
   const dx = new Float64Array(count);
   const dy = new Float64Array(count);
   let ran = 0;
+  // The forces act in a space squeezed across by the ring's width, so the
+  // layout they settle is round there and comes out that much wider than
+  // tall, to suit wide screens.
+  for (let index = 0; index < count; index += 1) {
+    state.x[index] /= CLUSTER_RING_WIDTH;
+  }
   for (let step = 0; step < iterations; step += 1) {
     if (layoutIsSettled(state)) {
       break;
@@ -239,13 +273,62 @@ export function stepLayout(state: LayoutState, iterations: number): number {
       dy[edge.b] -= fy;
     }
 
+    // A title with no links at all is drawn to the nearest linked title
+    // rather than to its ring spot, which the linked titles have been pulled
+    // well inside of, so it rests on the edge of the graph instead of off on
+    // its own.
+    const linked = new Uint8Array(count);
+    for (const edge of state.edges) {
+      linked[edge.a] = 1;
+      linked[edge.b] = 1;
+    }
+    const nearestLinked = (index: number): LayoutPoint | null => {
+      let best: LayoutPoint | null = null;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (let other = 0; other < count; other += 1) {
+        if (!linked[other]) {
+          continue;
+        }
+        const distance =
+          (state.x[other] - state.x[index]) ** 2 +
+          (state.y[other] - state.y[index]) ** 2;
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = { x: state.x[other], y: state.y[other] };
+        }
+      }
+      return best;
+    };
+
+    // Each cluster's middle this step. A title drawn only to a fixed ring
+    // spot would park there whenever its few links are weak, far from the
+    // rest of its cluster.
+    const middles = new Map<number, { x: number; y: number; n: number }>();
     for (let index = 0; index < count; index += 1) {
-      const center = state.centers.get(state.clusterIds[index]) ?? {
-        x: 0,
-        y: 0,
-      };
-      dx[index] += (center.x - state.x[index]) * CLUSTER_GRAVITY;
-      dy[index] += (center.y - state.y[index]) * CLUSTER_GRAVITY;
+      const id = state.clusterIds[index];
+      const middle = middles.get(id);
+      if (middle) {
+        middle.x += state.x[index];
+        middle.y += state.y[index];
+        middle.n += 1;
+      } else {
+        middles.set(id, { x: state.x[index], y: state.y[index], n: 1 });
+      }
+    }
+    for (let index = 0; index < count; index += 1) {
+      const ring = state.centers.get(state.clusterIds[index]);
+      const anchor = linked[index] === 0 ? nearestLinked(index) : null;
+      const center =
+        anchor ??
+        (ring ? { x: ring.x / CLUSTER_RING_WIDTH, y: ring.y } : { x: 0, y: 0 });
+      const pull = anchor ? CLUSTER_GRAVITY : RING_GRAVITY;
+      const middle = middles.get(state.clusterIds[index]);
+      if (middle && middle.n > 1) {
+        dx[index] += (middle.x / middle.n - state.x[index]) * CLUSTER_GRAVITY;
+        dy[index] += (middle.y / middle.n - state.y[index]) * CLUSTER_GRAVITY;
+      }
+      dx[index] += (center.x - state.x[index]) * pull;
+      dy[index] += (center.y - state.y[index]) * pull;
       const length = Math.sqrt(dx[index] ** 2 + dy[index] ** 2);
       if (length > 0) {
         const limited = Math.min(length, state.temperature);
@@ -255,6 +338,9 @@ export function stepLayout(state: LayoutState, iterations: number): number {
     }
     state.temperature *= COOLING;
     ran += 1;
+  }
+  for (let index = 0; index < count; index += 1) {
+    state.x[index] *= CLUSTER_RING_WIDTH;
   }
   return ran;
 }

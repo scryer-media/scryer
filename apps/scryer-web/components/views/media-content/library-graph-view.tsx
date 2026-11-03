@@ -180,9 +180,48 @@ function clusterColor(clusterId: number, order: readonly number[]): string {
 
 // The camera at rest: unzoomed and centred on the layout's origin, where
 // cluster rings and focused views are centred.
+/** Room around the titles when the overview is fitted to them. */
+const OVERVIEW_FIT_PADDING = 1.25;
+
 function restCamera(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
   const origin = sigma.graphToFramedGraph({ x: 0, y: 0 });
   return { x: origin.x, y: origin.y, ratio: 1, angle: 0 };
+}
+
+// The camera framing the nodes `include` keeps, with `padding` around them,
+// or null when it keeps none.
+function framingCamera(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  graph: LibraryGraphStore,
+  include: (attributes: NodeAttributes) => boolean,
+  padding: number,
+) {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  graph.forEachNode((_key, attributes) => {
+    if (!include(attributes)) {
+      return;
+    }
+    const point = sigma.graphToFramedGraph({
+      x: attributes.x as number,
+      y: attributes.y as number,
+    });
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  });
+  if (!Number.isFinite(minX)) {
+    return null;
+  }
+  const span = Math.max(maxX - minX, maxY - minY);
+  return {
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+    ratio: Math.min(1, Math.max(0.08, span * padding)),
+  };
 }
 
 function withAlpha(hex: string, alpha: number): string {
@@ -271,6 +310,8 @@ export default function LibraryGraphView({
   // The focused node the camera last came to rest for; undefined before the
   // first drawing.
   const cameraCenterRef = React.useRef<string | null | undefined>(undefined);
+  // Whether the overview fits its titles once its layout settles.
+  const fitWhenSettledRef = React.useRef(false);
   // Bumped when a focused view's frame changes size, so its rings refit.
   const [focusFrameVersion, setFocusFrameVersion] = React.useState(0);
   // Restarts the layout loop after it paused for a hidden container.
@@ -754,6 +795,9 @@ export default function LibraryGraphView({
     context.lineJoin = "round";
     context.lineCap = "round";
     const focusCenter = focusCenterRef.current;
+    // Neighbourhood names already placed this frame, so later ones step aside.
+    const placedHullLabels: { x: number; y: number; w: number; h: number }[] =
+      [];
     for (const group of groupsRef.current) {
       const label = hullLabelRefs.current.get(group.id);
       const points = pointsByCluster.get(group.id);
@@ -795,17 +839,45 @@ export default function LibraryGraphView({
         context.stroke();
       }
       if (label) {
-        const top = hull.reduce(
-          (best, point) => (point.y < best.y ? point : best),
-          hull[0],
+        // The name sits where the neighbourhood's titles are, at their
+        // median, not on the hull's rim: hulls stretch far past their
+        // core and overlap each other.
+        const median = (values: number[]) => {
+          const sorted = [...values].sort((a, b) => a - b);
+          return sorted[sorted.length >> 1];
+        };
+        const w = label.offsetWidth || 80;
+        const h = label.offsetHeight || 22;
+        let x = Math.min(
+          Math.max(median(points.map((point) => point.x)), w / 2 + 4),
+          width - w / 2 - 4,
         );
-        const centerX =
-          hull.reduce((total, point) => total + point.x, 0) / hull.length;
-        const x = Math.min(Math.max(centerX, 60), width - 60);
-        const y = Math.min(
-          Math.max(top.y - HULL_PADDING_PX - 14, 14),
-          height - 14,
+        let y = Math.min(
+          Math.max(median(points.map((point) => point.y)), h / 2 + 4),
+          height - h / 2 - 4,
         );
+        // Step down, then up, past any name already placed on this spot.
+        const overlaps = (cx: number, cy: number) =>
+          placedHullLabels.some(
+            (other) =>
+              Math.abs(other.x - cx) < (other.w + w) / 2 + 4 &&
+              Math.abs(other.y - cy) < (other.h + h) / 2 + 4,
+          );
+        for (let step = 1; overlaps(x, y) && step <= 8; step += 1) {
+          const offset = Math.ceil(step / 2) * (h + 6) * (step % 2 ? 1 : -1);
+          const candidate = Math.min(
+            Math.max(y + offset, h / 2 + 4),
+            height - h / 2 - 4,
+          );
+          if (!overlaps(x, candidate)) {
+            y = candidate;
+            break;
+          }
+        }
+        x = Math.round(x);
+        y = Math.round(y);
+        placedHullLabels.push({ x, y, w, h });
+        label.style.borderColor = withAlpha(group.color, 0.85);
         label.style.visibility = "visible";
         label.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
       }
@@ -1153,6 +1225,10 @@ export default function LibraryGraphView({
         enableEdgeEvents: true,
         autoRescale: false,
         gestureTarget: "graph",
+        // Small, quick steps per wheel or trackpad event, so zooming reads
+        // as one smooth motion rather than a jump between fixed levels.
+        zoomingRatio: 1.1,
+        zoomDuration: 90,
       },
     });
     graphRef.current = graph;
@@ -1436,6 +1512,22 @@ export default function LibraryGraphView({
         { width: container.offsetWidth, height: container.offsetHeight },
         running,
       );
+      if (decision === "done") {
+        // The overview just opened has settled: fit what it drew.
+        if (fitWhenSettledRef.current && focusCenterRef.current === null) {
+          fitWhenSettledRef.current = false;
+          const camera = framingCamera(
+            sigma,
+            graph,
+            () => true,
+            OVERVIEW_FIT_PADDING,
+          );
+          if (camera) {
+            void sigma.getCamera().animate(camera, { duration: 400 });
+          }
+        }
+        return;
+      }
       if (decision !== "step") {
         // Paused while hidden: the next non-zero size resumes it.
         return;
@@ -1490,6 +1582,7 @@ export default function LibraryGraphView({
     // the rings are sized for the camera at rest.
     if (cameraCenterRef.current !== focusCenterKey || focusCenterKey !== null) {
       cameraCenterRef.current = focusCenterKey;
+      fitWhenSettledRef.current = focusCenterKey === null;
       void sigma
         .getCamera()
         .animate(restCamera(sigma), { duration: FOCUS_TWEEN_MS });
@@ -1534,42 +1627,32 @@ export default function LibraryGraphView({
     }
     // The arrow keys then cycle through this cluster.
     setFocusedKey(firstNodeInCluster(keyboardNodesRef.current, clusterId));
-    let minX = Number.POSITIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-    graph.forEachNode((_key, attributes) => {
-      if (attributes.clusterId !== clusterId) {
-        return;
-      }
-      const point = sigma.graphToFramedGraph({
-        x: attributes.x as number,
-        y: attributes.y as number,
-      });
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    });
-    if (!Number.isFinite(minX)) {
-      return;
-    }
-    const span = Math.max(maxX - minX, maxY - minY);
-    void sigma.getCamera().animate(
-      {
-        x: (minX + maxX) / 2,
-        y: (minY + maxY) / 2,
-        ratio: Math.min(1, Math.max(0.08, span * 1.5)),
-      },
-      { duration: 400 },
+    const camera = framingCamera(
+      sigma,
+      graph,
+      (attributes) => attributes.clusterId === clusterId,
+      1.5,
     );
+    if (camera) {
+      void sigma.getCamera().animate(camera, { duration: 400 });
+    }
   }, []);
 
+  // A focused view rests on its rings; the overview fits its titles, which
+  // the layout gathers well inside the frame around the cluster ring.
   const resetCamera = React.useCallback(() => {
     const sigma = sigmaRef.current;
-    if (sigma) {
-      void sigma.getCamera().animate(restCamera(sigma), { duration: 300 });
+    const graph = graphRef.current;
+    if (!sigma) {
+      return;
     }
+    const camera =
+      focusCenterRef.current === null && graph
+        ? framingCamera(sigma, graph, () => true, OVERVIEW_FIT_PADDING)
+        : null;
+    void sigma
+      .getCamera()
+      .animate(camera ?? restCamera(sigma), { duration: 300 });
   }, []);
 
   // The node picked in the graph, while it is still drawn.
@@ -2168,7 +2251,7 @@ export default function LibraryGraphView({
               }}
               onClick={() => focusGroup(group.id)}
               style={{ visibility: "hidden" }}
-              className="absolute left-0 top-0 max-w-[14rem] truncate rounded-full border bg-[var(--scry-card2)]/90 px-2.5 py-0.5 text-[11px] font-semibold text-[var(--scry-ink2)] shadow-sm backdrop-blur-sm"
+              className="absolute left-0 top-0 max-w-[14rem] truncate rounded-full border-2 bg-[var(--scry-card2)] px-3 py-1 text-[13px] font-bold text-[var(--scry-ink)] shadow-[0_2px_10px_rgba(0,0,0,0.6)]"
             >
               <span
                 aria-hidden="true"

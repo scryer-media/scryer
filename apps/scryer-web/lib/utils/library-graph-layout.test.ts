@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { libraryGraphFixture } from "./library-graph-fixture.ts";
 import {
+  CLUSTER_RING_WIDTH,
   clusterCenters,
   convexHull,
   createLayout,
@@ -135,7 +136,9 @@ test("filtering out a whole cluster leaves the other clusters where they were", 
         const was = before.get(node.key);
         const now = after.get(node.key);
         assert.ok(was && now);
-        return Math.hypot(now.x - was.x, now.y - was.y);
+        // Measured with the oval's widening taken out, so a drift counts
+        // the same across and down.
+        return Math.hypot((now.x - was.x) / CLUSTER_RING_WIDTH, now.y - was.y);
       })
       .sort((a, b) => a - b);
     return {
@@ -244,4 +247,91 @@ test("each section of a ring keeps to its own arc, with a gap between sections",
     ["a:1", "a:2", "a:3", "b:1", "b:2"].map(slot),
     [0, 1, 2, 4, 5],
   );
+});
+
+test("a weakly linked title stays near the rest of its cluster", () => {
+  // Cluster 0's core is tied hard to cluster 1's, which drags it off its
+  // ring spot; its last title has one weak link into the core.
+  const core = ["a:1", "a:2", "a:3", "a:4", "a:5"];
+  const other = ["b:1", "b:2", "b:3", "b:4", "b:5"];
+  const nodes = [
+    ...core.map((key) => ({ key, clusterId: 0 })),
+    { key: "a:weak", clusterId: 0 },
+    ...other.map((key) => ({ key, clusterId: 1 })),
+  ];
+  const edges = [
+    ...core.flatMap((from, i) =>
+      core.slice(i + 1).map((to) => ({ from, to, weight: 1 })),
+    ),
+    ...other.flatMap((from, i) =>
+      other.slice(i + 1).map((to) => ({ from, to, weight: 1 })),
+    ),
+    ...core.map((from, i) => ({ from, to: other[i], weight: 1 })),
+    { from: "a:weak", to: "a:1", weight: 0.05 },
+  ];
+  const layout = createLayout(nodes, edges);
+  settle(layout);
+  const positions = layoutPositions(layout);
+  const middle = core.reduce(
+    (total, key) => {
+      const point = positions.get(key);
+      assert.ok(point);
+      return {
+        x: total.x + point.x / core.length,
+        y: total.y + point.y / core.length,
+      };
+    },
+    { x: 0, y: 0 },
+  );
+  const weak = positions.get("a:weak");
+  assert.ok(weak);
+  const spread = Math.max(
+    ...core.map((key) => {
+      const point = positions.get(key);
+      assert.ok(point);
+      return Math.hypot(point.x - middle.x, point.y - middle.y);
+    }),
+  );
+  const distance = Math.hypot(weak.x - middle.x, weak.y - middle.y);
+  assert.ok(
+    distance < spread * 3,
+    `weak title ${distance.toFixed(0)} from the core, core spread ${spread.toFixed(0)}`,
+  );
+});
+
+test("a title with no links rests at the edge of the graph, not off on its own", () => {
+  const { nodes, edges } = fixtureLayoutInput();
+  const loners = [
+    { key: "loner:1", clusterId: 40 },
+    { key: "loner:2", clusterId: 41 },
+  ];
+  const layout = createLayout([...nodes, ...loners], edges);
+  settle(layout);
+  const positions = layoutPositions(layout);
+  const linked = new Set(edges.flatMap((edge) => [edge.from, edge.to]));
+  for (const loner of loners) {
+    const point = positions.get(loner.key);
+    assert.ok(point);
+    const nearest = Math.min(
+      ...nodes
+        .filter((node) => linked.has(node.key))
+        .map((node) => {
+          const other = positions.get(node.key);
+          assert.ok(other);
+          return Math.hypot(other.x - point.x, other.y - point.y);
+        }),
+    );
+    assert.ok(nearest < 120, `${loner.key} is ${nearest.toFixed(0)} away`);
+  }
+});
+
+test("the layout comes out wider than tall, for wide screens", () => {
+  const { nodes, edges } = fixtureLayoutInput();
+  const layout = createLayout(nodes, edges);
+  settle(layout);
+  const points = [...layoutPositions(layout).values()];
+  const span = (values: number[]) => Math.max(...values) - Math.min(...values);
+  const width = span(points.map((point) => point.x));
+  const height = span(points.map((point) => point.y));
+  assert.ok(width > height * 1.4, `width ${width}, height ${height}`);
 });
