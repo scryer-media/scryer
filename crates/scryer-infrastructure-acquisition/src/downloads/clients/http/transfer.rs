@@ -650,19 +650,7 @@ async fn verify_media(
 
 /// The video extension for a container the analyzer names.
 fn container_extension(container: &str) -> Option<&'static str> {
-    match container.to_ascii_lowercase().as_str() {
-        "matroska" | "mkv" => Some("mkv"),
-        "webm" => Some("webm"),
-        "mp4" => Some("mp4"),
-        "mov" => Some("mov"),
-        "mpegts" | "ts" => Some("ts"),
-        "m2ts" => Some("m2ts"),
-        "avi" => Some("avi"),
-        "flv" => Some("flv"),
-        "ogg" => Some("ogv"),
-        "asf" | "wmv" => Some("wmv"),
-        _ => None,
-    }
+    scryer_domain::preferred_video_extension_for_container(container)
 }
 
 /// The final name for a media file whose name does not say it is video

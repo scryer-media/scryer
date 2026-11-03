@@ -692,6 +692,13 @@ impl DownloadClientSnapshot {
                 .contains(&release_title.to_ascii_lowercase())
     }
 
+    /// Whether a client that answered listed this release as active. Unlike
+    /// [`Self::is_active`], an unreadable queue does not count as active.
+    pub(crate) fn is_known_active(&self, release_title: &str) -> bool {
+        self.active_titles
+            .contains(&release_title.to_ascii_lowercase())
+    }
+
     /// Whether the queue could not be listed while building this snapshot.
     /// Callers that would otherwise expire a release on an "already active"
     /// signal must instead defer, since the signal here is "unknown", not

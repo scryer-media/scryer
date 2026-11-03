@@ -126,8 +126,29 @@ impl<T: Clone> AnalysisFlight<T> {
 
 #[cfg(feature = "runtime-media-analysis")]
 static NATIVE_PROBE_FLIGHTS: std::sync::LazyLock<
-    AnalysisFlights<Result<scryer_mediainfo::MediaAnalysis, String>>,
+    AnalysisFlights<Result<scryer_mediainfo::MediaAnalysis, scryer_mediainfo::MediaInfoError>>,
 > = std::sync::LazyLock::new(AnalysisFlights::default);
+
+#[cfg(feature = "runtime-media-analysis")]
+fn permits_unavailable_probe(path: &std::path::Path) -> bool {
+    use scryer_media_types::formats::{MediaHandling, media_format_for_path};
+    media_format_for_path(path).is_some_and(|entry| {
+        matches!(
+            entry.handling,
+            MediaHandling::Native | MediaHandling::Unsupported
+        )
+    })
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+pub(crate) fn unavailable_analysis(path: &std::path::Path) -> scryer_mediainfo::MediaAnalysis {
+    let mut analysis = scryer_mediainfo::MediaAnalysis::default();
+    analysis.details.revision = scryer_media_types::ANALYSIS_REVISION;
+    analysis.details.report.status = scryer_media_types::ProbeStatus::Unsupported;
+    analysis.container_format =
+        scryer_media_types::formats::canonical_video_extension(path).map(str::to_owned);
+    analysis
+}
 
 /// Share the physical probe across catalog scans and final import validation.
 #[cfg(feature = "runtime-media-analysis")]
@@ -135,7 +156,7 @@ pub(crate) async fn probe_native_catalog(
     path: PathBuf,
     selection: scryer_media_types::DiscSelection,
     operation: crate::media::metrics::ProbeOperation,
-) -> AppResult<Result<scryer_mediainfo::MediaAnalysis, String>> {
+) -> AppResult<Result<scryer_mediainfo::MediaAnalysis, scryer_mediainfo::MediaInfoError>> {
     let source_path = path.clone();
     // A metadata read that fails is an I/O failure for this file, not
     // evidence about the file's identity. Folding it into `None` and
@@ -152,10 +173,29 @@ pub(crate) async fn probe_native_catalog(
         move || {
             nice_thread();
             let started = std::time::Instant::now();
-            let result = if scryer_domain::is_disc_image(&path) {
-                scryer_mediainfo::analyze_disc_file(&path, selection)
-            } else {
-                scryer_mediainfo::analyze_catalog_file(&path)
+            let result =
+                if scryer_media_types::formats::media_format_for_path(&path).is_some_and(|entry| {
+                    entry.handling == scryer_media_types::formats::MediaHandling::Playlist
+                }) {
+                    match crate::media_references::playlist_is_relocatable(&path) {
+                        Ok(true) => Ok(unavailable_analysis(&path)),
+                        Ok(false) => Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(
+                            "playlist references require review".into(),
+                        )),
+                        Err(error) => Err(error.into()),
+                    }
+                } else if scryer_domain::is_disc_image(&path) {
+                    scryer_mediainfo::analyze_disc_file(&path, selection)
+                } else {
+                    scryer_mediainfo::analyze_catalog_file(&path)
+                };
+            let result = match result {
+                Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(_))
+                    if permits_unavailable_probe(&path) =>
+                {
+                    Ok(unavailable_analysis(&path))
+                }
+                result => result,
             };
             crate::media::metrics::record_probe(
                 operation,
@@ -165,7 +205,7 @@ pub(crate) async fn probe_native_catalog(
                     .ok()
                     .map(|analysis| &analysis.details.report),
             );
-            Ok(result.map_err(|error| error.to_string()))
+            Ok(result)
         },
     );
     let outcome = flight.outcome().await?;
@@ -194,7 +234,7 @@ pub(crate) async fn hold_native_probe_for_test(
         // first drops the sender, which ends the wait too.
         held.recv()
             .map_err(|error| AppError::Repository(error.to_string()))?;
-        Ok(scryer_mediainfo::analyze_catalog_file(&path).map_err(|error| error.to_string()))
+        Ok(scryer_mediainfo::analyze_catalog_file(&path))
     });
     (release, move || std::sync::Arc::strong_count(&flight))
 }
@@ -250,11 +290,7 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
     ) -> AppResult<MediaAnalysisOutcome> {
         #[cfg(not(feature = "runtime-media-analysis"))]
         let _ = selection;
-        if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("strm"))
-        {
+        if scryer_domain::canonical_video_extension(&path) == Some("strm") {
             return Ok(MediaAnalysisOutcome::Valid(Box::new(
                 crate::post_download_gate::build_stream_pointer_media_file_analysis(),
             )));
@@ -489,6 +525,36 @@ mod tests {
             }
             MediaAnalysisOutcome::Inconclusive(_) => panic!("unexpected incomplete stream pointer"),
             MediaAnalysisOutcome::NoVideo => panic!("expected valid strm analysis, got no video"),
+        }
+    }
+
+    // Exercises the native probe, which only the runtime build compiles in.
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn unsupported_self_contained_and_remote_playlist_scans_are_inconclusive() {
+        for (extension, contents) in [
+            ("wtv", "unsupported recorder container"),
+            ("m3u", "#EXTM3U\nhttps://unreachable.invalid/video.mkv\n"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join(format!("Movie.{extension}"));
+            std::fs::write(&path, contents).unwrap();
+            let outcome = tokio::time::timeout(
+                crate::test_wait::TEST_WAIT_DEADLINE,
+                NativeMediaAnalyzer.analyze_file(path.clone()),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let MediaAnalysisOutcome::Inconclusive(analysis) = outcome else {
+                panic!("unavailable {extension} scan must be inconclusive");
+            };
+            assert_eq!(
+                analysis.details.report.status,
+                scryer_media_types::ProbeStatus::Unsupported
+            );
+            assert_eq!(analysis.duration_seconds, None);
+            assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
         }
     }
 }

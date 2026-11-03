@@ -14,10 +14,14 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ERROR_REASON_KEYS } from "@/lib/graphql/error-message";
 import { Progress } from "@/components/ui/progress";
 import { finalizeProgressPercent } from "@/lib/external-import-wizard-orchestration";
 import type { UseExternalImportSetupReturn } from "@/lib/hooks/use-external-import-setup";
 import { LoadingMark } from "@/components/common/loading-mark";
+
+const SOURCE_IMPORT_ITEM_FAILED = "SOURCE_IMPORT_ITEM_FAILED";
 
 interface SetupImportSummaryViewProps {
   wizard: UseExternalImportSetupReturn;
@@ -95,6 +99,9 @@ export default function SetupImportSummaryView({
       t("setup.importWarmupFailedDetail");
 
   const [retrying, setRetrying] = useState(false);
+  const [sourceSecrets, setSourceSecrets] = useState<Record<string, string>>(
+    {},
+  );
   const handleRetry = async () => {
     setRetrying(true);
     try {
@@ -189,6 +196,91 @@ export default function SetupImportSummaryView({
       data-slot="setup-import-summary"
       className="flex flex-col gap-5"
     >
+      <div style={cardStyle} aria-live="polite">
+        <h3>{t("setup.sourceImportProgress")}</h3>
+        {wizard.executeError && (
+          <div role="alert">
+            <p>{wizard.executeError}</p>
+            <Button onClick={wizard.resumeSourceImport}>
+              {t("setup.sourceImportResume")}
+            </Button>
+          </div>
+        )}
+        {wizard.sourceRunId && !wizard.sourceJob && (
+          <LoadingMark aria-label={t("setup.sourceImportLoading")} />
+        )}
+        {wizard.sourceJob?.items.map((item) => {
+          const unresolved =
+            item.state === "failed" || item.state === "interrupted";
+          return (
+            <div
+              key={item.key}
+              className="flex flex-wrap items-center gap-3 py-2"
+            >
+              <span className="min-w-0 flex-1">{item.name}</span>
+              <span>{t(`setup.sourceImportState.${item.state}`)}</span>
+              {unresolved && (
+                <span>
+                  {item.reason && ERROR_REASON_KEYS[item.reason]
+                    ? t(ERROR_REASON_KEYS[item.reason])
+                    : item.message || t("setup.sourceImportItemFailed")}
+                </span>
+              )}
+              {/* The catch-all code carries the server's own connection detail. */}
+              {unresolved &&
+                item.reason === SOURCE_IMPORT_ITEM_FAILED &&
+                item.message && (
+                  <span className="basis-full text-sm text-muted-foreground">
+                    {item.message}
+                  </span>
+                )}
+              {unresolved && !wizard.sourceJob?.active && (
+                <>
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    aria-label={t("setup.sourceImportCredential", {
+                      name: item.name,
+                    })}
+                    placeholder={t("setup.sourceImportCredential", {
+                      name: item.name,
+                    })}
+                    value={sourceSecrets[item.key] ?? ""}
+                    onChange={(event) =>
+                      setSourceSecrets((previous) => ({
+                        ...previous,
+                        [item.key]: event.target.value,
+                      }))
+                    }
+                  />
+                  <Button
+                    disabled={wizard.executing}
+                    onClick={() => {
+                      void wizard.retrySourceImport(
+                        item.key,
+                        sourceSecrets[item.key],
+                      );
+                      setSourceSecrets((previous) => ({
+                        ...previous,
+                        [item.key]: "",
+                      }));
+                    }}
+                  >
+                    {t("setup.sourceImportRetry")}
+                  </Button>
+                  <Button
+                    disabled={wizard.executing}
+                    variant="outline"
+                    onClick={() => void wizard.skipSourceImport(item.key)}
+                  >
+                    {t("setup.sourceImportSkip")}
+                  </Button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
       {/* ── Stat list card ─────────────────────────────────────────────── */}
       <div style={cardStyle}>
         {rows.map((row, index) => {

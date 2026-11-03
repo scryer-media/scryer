@@ -1,12 +1,50 @@
 import type { LocaleDictionary } from "../types";
 
 const ko: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "이 저장된 후보는 더 이상 존재하지 않습니다.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "이 저장된 후보는 더 이상 사용할 수 없습니다. 목록을 새로 고친 뒤 다시 시도하세요.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "저장된 릴리스를 대기열에 추가하지 못했습니다. 다시 시도할 수 있습니다.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "이 릴리스는 타이틀의 차단 목록에 있습니다. 대기열에 추가하려면 차단 목록에서 제거하세요.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "이 릴리스는 이미 다운로드 대기열에 있습니다.",
+  "error.reason.STANDBY_TITLE_BUSY": "이 타이틀에 대해 다른 검색 또는 대기열 작업이 실행 중입니다. 완료된 뒤 다시 시도하세요.",
+  "wanted.standby": "대기 · {{count}}",
+  "wanted.standbyTooltip": "현재 가져오기가 실패하면 저장된 후보 {{count}}개를 순서대로 시도합니다.",
+  "wanted.standbyScopeNote": "이 범위에 속한 행을 셉니다. 시즌 팩은 시즌의 기준 에피소드에서 셉니다.",
+  "wanted.loadingStandby": "저장된 후보 불러오는 중…",
+  "wanted.standbyCandidates": "대기 후보 · {{count}}",
+  "wanted.downloadStandby": "다운로드",
+  "wanted.downloadStandbyLabel": "{{name}} 다운로드",
+  "wanted.standbyConflictTitle": "이미 진행 중인 다운로드가 있습니다",
+  "wanted.standbyConflictDescription": "이 다운로드들과 함께 {{name}}을(를) 대기열에 추가하거나, 취소하고 대신 대기열에 추가합니다.",
+  "wanted.standbyQueue": "대기열에 추가",
+  "wanted.standbyQueuedRefreshFailed": "릴리스가 대기열에 추가되었지만 목록을 새로 고치지 못했습니다. 현재 상태를 보려면 페이지를 새로 고치세요.",
+  "wanted.standbyCancelAndQueue": "취소하고 대기열에 추가",
+  "wanted.standbyQueuedCancelFailed": "릴리스가 대기열에 추가되었지만 충돌하는 다운로드 {{count}}개를 취소하지 못해 아직 실행 중입니다.",
+  "wanted.standbyRank": "순위 {{rank}}",
+  "wanted.standbyIndexer": "인덱서",
+  "wanted.standbySize": "크기",
+  "wanted.standbySeeders": "시더",
+  "wanted.standbyScore": "점수",
+  "wanted.standbyAge": "경과 시간",
+  "wanted.seasonPack": "시즌 팩",
+  "wanted.noStandbyCandidates": "대기 후보 없음",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin 콜백 URL을 복사했습니다.",
   "settings.oauthClientIdCopied": "OAuth 클라이언트 ID를 복사했습니다.",
   "status.copyFailedSelected":
     "복사하지 못했습니다. 텍스트가 선택되어 있으니 Ctrl+C 또는 ⌘C를 누르세요.",
   "status.copyFailed":
     "복사하지 못했습니다. 브라우저가 클립보드 접근을 거부했습니다.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "미디어를 검증할 수 없어 기존 라이브러리 파일을 대체할 수 없습니다.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "이 재생 목록 또는 동반 파일은 다른 파일에 의존할 수 있으므로 검토가 필요합니다.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "미디어를 읽을 수 없습니다. 원본에 대한 접근 권한을 확인하고 다시 시도하세요.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "미디어 구조가 잘못되었습니다. 가져오기 전에 원본 파일을 확인하세요.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "미디어가 암호화되어 검증할 수 없습니다.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "시스템 시계가 5분 이상 차이 나서 Scryer가 메타데이터 게이트웨이에 연결할 수 없습니다. 시스템 시계를 동기화한 후 Scryer를 다시 시작하세요.",
   "httpRelease.refusal.detailsUnavailable":
@@ -3580,6 +3618,41 @@ const ko: LocaleDictionary = {
     "파일을 새 이름으로 옮기지 못했습니다. 파일과 에피소드는 그대로 유지되었습니다.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "에피소드 번호가 모호합니다",
+  "setup.sourceImportProgress": "소스 가져오는 중",
+  "setup.sourceImportInvalidRequest":
+    "선택한 소스를 사용할 수 없습니다. 소스 검색을 새로 고친 후 다시 선택하세요.",
+  "setup.sourceImportSelectionChanged":
+    "제출된 소스 선택은 변경할 수 없습니다. 실패한 소스는 요약에서 다시 시도하세요.",
+  "setup.sourceImportNotOwned":
+    "이 소스 가져오기는 현재 계정에서 사용할 수 없습니다.",
+  "setup.sourceImportQueueFull":
+    "소스 가져오기 용량이 가득 찼습니다. 다른 가져오기가 끝난 후 다시 시도하세요.",
+  "setup.sourceImportActive": "이 소스 가져오기는 아직 실행 중입니다.",
+  "setup.sourceImportNotRetryable":
+    "실패하거나 중단된 소스만 다시 시도하거나 건너뛸 수 있습니다.",
+  "setup.sourceImportUnresolved":
+    "설정을 완료하기 전에 해결되지 않은 소스를 다시 시도하거나 명시적으로 건너뛰세요.",
+  "setup.sourceImportCredentialRequired":
+    "계속하기 전에 소스 자격 증명을 입력하세요.",
+  "setup.sourceImportConfigConflict":
+    "예약된 구성이 변경되었습니다. 다시 시도하기 전에 소스를 검토하세요.",
+  "setup.sourceImportSourceNotReady":
+    "계속하기 전에 소스 검색이 끝날 때까지 기다리세요.",
+  "setup.sourceImportResume": "진행 상황에 다시 연결",
+  "setup.sourceImportLoading": "소스 가져오기 진행 상황을 불러오는 중",
+  "setup.sourceImportCredential": "{{name}}의 수정된 자격 증명",
+  "setup.sourceImportRetry": "실패한 소스 다시 시도",
+  "setup.sourceImportSkip": "이 소스 건너뛰기",
+  "setup.sourceImportItemFailed":
+    "연결과 자격 증명을 확인한 후 다시 시도하거나 건너뛰세요.",
+  "setup.sourceImportState.queued": "대기 중",
+  "setup.sourceImportState.installing": "공급자 설치 중",
+  "setup.sourceImportState.checking": "연결 확인 중",
+  "setup.sourceImportState.saving": "구성 저장 중",
+  "setup.sourceImportState.succeeded": "가져옴",
+  "setup.sourceImportState.failed": "실패",
+  "setup.sourceImportState.interrupted": "중단됨",
+  "setup.sourceImportState.skipped": "건너뜀",
 };
 
 export default ko;

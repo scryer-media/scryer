@@ -1,12 +1,37 @@
 import type { LocaleDictionary } from "../types";
 
 const nl: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Deze opgeslagen kandidaat bestaat niet meer.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Deze opgeslagen kandidaat is niet meer beschikbaar. Vernieuw de lijst en probeer het opnieuw.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "De opgeslagen release kon niet in de wachtrij worden gezet. Hij blijft beschikbaar om opnieuw te proberen.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Deze release staat op de blokkeerlijst van de titel. Verwijder hem van de blokkeerlijst om hem in de wachtrij te zetten.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Deze release staat al in de downloadwachtrij.",
+  "error.reason.STANDBY_TITLE_BUSY": "Er loopt al een andere zoekopdracht of wachtrijactie voor deze titel. Probeer het opnieuw zodra die klaar is.",
+  "wanted.downloadStandby": "Downloaden",
+  "wanted.downloadStandbyLabel": "{{name}} downloaden",
+  "wanted.standbyConflictTitle": "Downloads al bezig",
+  "wanted.standbyConflictDescription": "Zet {{name}} naast deze downloads in de wachtrij, of annuleer ze en zet deze in plaats daarvan in de wachtrij.",
+  "wanted.standbyQueue": "In wachtrij",
+  "wanted.standbyQueuedRefreshFailed": "De release is in de wachtrij gezet, maar de lijst kon niet worden vernieuwd. Vernieuw de pagina om de huidige status te zien.",
+  "wanted.standbyCancelAndQueue": "Annuleren en in wachtrij",
+  "wanted.standbyQueuedCancelFailed": "De release is in de wachtrij gezet, maar {{count}} conflicterende download(s) konden niet worden geannuleerd en lopen nog.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin-callback-URL gekopieerd.",
   "settings.oauthClientIdCopied": "OAuth-client-ID gekopieerd.",
   "status.copyFailedSelected":
     "Kopiëren mislukt. De tekst is geselecteerd; druk op Ctrl+C of ⌘C.",
   "status.copyFailed":
     "Kopiëren mislukt: de browser weigerde toegang tot het klembord.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Het mediabestand kon niet worden geverifieerd en kan daarom geen bestaand bibliotheekbestand vervangen.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Deze afspeellijst of dit bijbehorende bestand moet worden gecontroleerd omdat het van andere bestanden kan afhangen.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Het mediabestand kon niet worden gelezen. Controleer de toegang tot de bron en probeer het opnieuw.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "De mediastructuur is ongeldig. Controleer het bronbestand voordat je het importeert.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Het mediabestand is versleuteld en kon niet worden geverifieerd.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer kan geen verbinding maken met de metadatagateway omdat uw systeemklok meer dan 5 minuten afwijkt. Synchroniseer uw systeemklok en start Scryer opnieuw.",
   "httpRelease.refusal.detailsUnavailable":
@@ -4432,6 +4457,41 @@ const nl: LocaleDictionary = {
     "Het verplaatsen van het bestand naar de nieuwe naam is mislukt. Het bestand en de afleveringen zijn ongewijzigd gebleven.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Afleveringsnummering is dubbelzinnig",
+  "setup.sourceImportProgress": "Bronnen importeren",
+  "setup.sourceImportInvalidRequest":
+    "Een geselecteerde bron is niet beschikbaar. Vernieuw de bronnendetectie en selecteer de bron opnieuw.",
+  "setup.sourceImportSelectionChanged":
+    "Verzonden bronselecties liggen vast. Probeer mislukte bronnen opnieuw vanuit Samenvatting.",
+  "setup.sourceImportNotOwned":
+    "Deze bronimport is niet beschikbaar voor je account.",
+  "setup.sourceImportQueueFull":
+    "De capaciteit voor bronimports is vol. Probeer het opnieuw zodra een andere import klaar is.",
+  "setup.sourceImportActive": "Deze bronimport loopt nog.",
+  "setup.sourceImportNotRetryable":
+    "Alleen mislukte of onderbroken bronnen kunnen opnieuw worden geprobeerd of overgeslagen.",
+  "setup.sourceImportUnresolved":
+    "Probeer onopgeloste bronnen opnieuw of sla ze expliciet over voordat je de installatie voltooit.",
+  "setup.sourceImportCredentialRequired":
+    "Voer de inloggegevens van de bron in voordat je doorgaat.",
+  "setup.sourceImportConfigConflict":
+    "De gereserveerde configuratie is gewijzigd. Controleer de bron voordat je het opnieuw probeert.",
+  "setup.sourceImportSourceNotReady":
+    "Wacht tot de bronnendetectie klaar is voordat je doorgaat.",
+  "setup.sourceImportResume": "Opnieuw verbinden met voortgang",
+  "setup.sourceImportLoading": "Voortgang van bronimport laden",
+  "setup.sourceImportCredential": "Gecorrigeerde inloggegevens voor {{name}}",
+  "setup.sourceImportRetry": "Mislukte bronnen opnieuw proberen",
+  "setup.sourceImportSkip": "Deze bron overslaan",
+  "setup.sourceImportItemFailed":
+    "Controleer de verbinding en inloggegevens en probeer het daarna opnieuw of sla over.",
+  "setup.sourceImportState.queued": "In wachtrij",
+  "setup.sourceImportState.installing": "Provider installeren",
+  "setup.sourceImportState.checking": "Verbinding controleren",
+  "setup.sourceImportState.saving": "Configuratie opslaan",
+  "setup.sourceImportState.succeeded": "Geïmporteerd",
+  "setup.sourceImportState.failed": "Mislukt",
+  "setup.sourceImportState.interrupted": "Onderbroken",
+  "setup.sourceImportState.skipped": "Overgeslagen",
 };
 
 export default nl;

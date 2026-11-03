@@ -1,12 +1,50 @@
 import type { LocaleDictionary } from "../types";
 
 const pt_BR: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Este candidato salvo não existe mais.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Este candidato salvo não está mais disponível. Atualize a lista e tente novamente.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "O release salvo não pôde ser enfileirado. Ele continua disponível para nova tentativa.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Este release está na lista de bloqueio do título. Remova-o da lista de bloqueio para enfileirá-lo.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Este release já está na fila de downloads.",
+  "error.reason.STANDBY_TITLE_BUSY": "Outra busca ou ação de fila está em andamento neste título. Tente novamente quando terminar.",
+  "wanted.standby": "Reserva · {{count}}",
+  "wanted.standbyTooltip": "{{count}} candidatos salvos serão tentados se a captura atual falhar.",
+  "wanted.standbyScopeNote": "Conta as linhas deste escopo; pacotes de temporada são contados no episódio âncora da temporada.",
+  "wanted.loadingStandby": "Carregando candidatos salvos…",
+  "wanted.standbyCandidates": "Candidatos de reserva · {{count}}",
+  "wanted.downloadStandby": "Baixar",
+  "wanted.downloadStandbyLabel": "Baixar {{name}}",
+  "wanted.standbyConflictTitle": "Downloads já em andamento",
+  "wanted.standbyConflictDescription": "Enfileirar {{name}} junto com esses downloads, ou cancelá-los e enfileirá-lo no lugar.",
+  "wanted.standbyQueue": "Enfileirar",
+  "wanted.standbyQueuedRefreshFailed": "O release foi enfileirado, mas a lista não pôde ser atualizada. Recarregue a página para ver o status atual.",
+  "wanted.standbyCancelAndQueue": "Cancelar e enfileirar",
+  "wanted.standbyQueuedCancelFailed": "O release foi enfileirado, mas {{count}} download(s) em conflito não puderam ser cancelados e continuam em andamento.",
+  "wanted.standbyRank": "Posição {{rank}}",
+  "wanted.standbyIndexer": "Indexador",
+  "wanted.standbySize": "Tamanho",
+  "wanted.standbySeeders": "Seeders",
+  "wanted.standbyScore": "Pontuação",
+  "wanted.standbyAge": "Idade",
+  "wanted.seasonPack": "Pacote de temporada",
+  "wanted.noStandbyCandidates": "sem candidatos de reserva",
   "settings.oauthJellyfinCallbackCopied": "URL de retorno do Jellyfin copiada.",
   "settings.oauthClientIdCopied": "ID do cliente OAuth copiado.",
   "status.copyFailedSelected":
     "Não foi possível copiar. O texto está selecionado; pressione Ctrl+C ou ⌘C.",
   "status.copyFailed":
     "Não foi possível copiar: o navegador recusou o acesso à área de transferência.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Não foi possível verificar a mídia, portanto ela não pode substituir um arquivo existente da biblioteca.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Esta lista de reprodução ou arquivo complementar precisa de revisão porque pode depender de outros arquivos.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Não foi possível ler a mídia. Verifique o acesso à origem e tente novamente.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "A estrutura da mídia está malformada. Revise o arquivo de origem antes de importar.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "A mídia está criptografada e não pôde ser verificada.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "O Scryer não consegue se conectar ao gateway de metadados porque o relógio do sistema está com uma diferença de mais de 5 minutos. Sincronize o relógio do sistema e reinicie o Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -3707,6 +3745,42 @@ const pt_BR: LocaleDictionary = {
     "Falha ao mover o arquivo para o novo nome. O arquivo e seus episódios ficaram como estavam.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numeração de episódios ambígua",
+  "setup.sourceImportProgress": "Importando fontes",
+  "setup.sourceImportInvalidRequest":
+    "Uma fonte selecionada não está disponível. Atualize a descoberta de fontes e selecione-a novamente.",
+  "setup.sourceImportSelectionChanged":
+    "As seleções de fontes enviadas são fixas. Tente novamente as fontes com falha no Resumo.",
+  "setup.sourceImportNotOwned":
+    "Esta importação de fontes não está disponível para sua conta.",
+  "setup.sourceImportQueueFull":
+    "A capacidade de importação de fontes está cheia. Tente novamente quando outra importação terminar.",
+  "setup.sourceImportActive":
+    "Esta importação de fontes ainda está em andamento.",
+  "setup.sourceImportNotRetryable":
+    "Somente fontes com falha ou interrompidas podem ser repetidas ou ignoradas.",
+  "setup.sourceImportUnresolved":
+    "Tente novamente ou ignore explicitamente as fontes pendentes antes de concluir a configuração.",
+  "setup.sourceImportCredentialRequired":
+    "Informe a credencial da fonte antes de continuar.",
+  "setup.sourceImportConfigConflict":
+    "A configuração reservada mudou. Revise a fonte antes de tentar novamente.",
+  "setup.sourceImportSourceNotReady":
+    "Aguarde a conclusão da descoberta de fontes antes de continuar.",
+  "setup.sourceImportResume": "Reconectar ao progresso",
+  "setup.sourceImportLoading": "Carregando o progresso da importação de fontes",
+  "setup.sourceImportCredential": "Credencial corrigida para {{name}}",
+  "setup.sourceImportRetry": "Tentar novamente fontes com falha",
+  "setup.sourceImportSkip": "Ignorar esta fonte",
+  "setup.sourceImportItemFailed":
+    "Verifique a conexão e as credenciais e depois tente novamente ou ignore.",
+  "setup.sourceImportState.queued": "Na fila",
+  "setup.sourceImportState.installing": "Instalando provedor",
+  "setup.sourceImportState.checking": "Verificando conexão",
+  "setup.sourceImportState.saving": "Salvando configuração",
+  "setup.sourceImportState.succeeded": "Importada",
+  "setup.sourceImportState.failed": "Falhou",
+  "setup.sourceImportState.interrupted": "Interrompida",
+  "setup.sourceImportState.skipped": "Ignorada",
 };
 
 export default pt_BR;

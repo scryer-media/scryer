@@ -131,6 +131,7 @@ pub struct TestContext {
     pub schema: ApiSchema,
     pub auth_runtime: AuthRuntimeStateHandle,
     pub app: AppUseCase,
+    pub plugin_install_orchestrator: scryer_application::PluginInstallOrchestrator,
     pub titles: TitleStore,
     pub shows: ShowStore,
     pub libraries: LibraryStore,
@@ -797,6 +798,21 @@ impl TestContext {
     pub async fn new_with_external_identity_verifier(
         external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
     ) -> Self {
+        Self::new_with_dependencies(external_identity_verifier, None).await
+    }
+
+    pub async fn new_with_indexer_provider(provider: Arc<dyn IndexerPluginProvider>) -> Self {
+        Self::new_with_dependencies(
+            Arc::new(HttpExternalIdentityVerifier::new()),
+            Some(provider),
+        )
+        .await
+    }
+
+    async fn new_with_dependencies(
+        external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
+        indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
+    ) -> Self {
         disable_platform_keystore_for_tests();
         initialize_wasm_runtime_for_tests();
 
@@ -866,10 +882,11 @@ impl TestContext {
 
         // Build indexer client backed by built-in WASM plugins (using DynamicPluginProvider
         // so reload_plugins works in integration tests)
-        let plugin_provider: Arc<dyn IndexerPluginProvider> =
+        let default_plugin_provider: Arc<dyn IndexerPluginProvider> =
             Arc::new(scryer_plugins::DynamicPluginProvider::new(
                 scryer_plugins::build_indexer_plugin_provider(&[], &[]),
             ));
+        let plugin_provider = indexer_provider.unwrap_or(default_plugin_provider);
         let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
             Arc::new(InMemoryIndexerStatsTracker::new(None));
         let indexer_client = MultiIndexerSearchClient::new(
@@ -958,7 +975,10 @@ impl TestContext {
         );
         let download_queue_command_store =
             Arc::new(DownloadQueueCommandStore::new(datastore.clone()));
-        let workflow_operation_store = Arc::new(WorkflowOperationStore::new(datastore.clone()));
+        let workflow_operation_store = Arc::new(
+            WorkflowOperationStore::new(datastore.clone())
+                .with_encryption_key(db.encryption_key_state()),
+        );
         let services = AppServices::builder(
             titles,
             shows,
@@ -1044,6 +1064,9 @@ impl TestContext {
         )
         .build();
 
+        let plugin_install_orchestrator =
+            services.runtime.plugins.plugin_install_orchestrator.clone();
+
         // Facet registry with all built-in facets
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
@@ -1090,6 +1113,7 @@ impl TestContext {
             schema,
             auth_runtime,
             app,
+            plugin_install_orchestrator,
             titles: title_store,
             shows: show_store,
             libraries: library_store,

@@ -295,7 +295,10 @@ pub fn from_service_settings(settings: ServiceSettings) -> ServiceSettingsPayloa
         bind_source: ConfigValueSourceValue::from_application(addressing.bind.source),
         bind_saved_host: addressing.bind.saved_host.map(|host| host.to_string()),
         bind_editable: addressing.bind.editable(),
-        bind_pinned_by: addressing.bind.pinned_by.map(BindPinValue::from_application),
+        bind_pinned_by: addressing
+            .bind
+            .pinned_by
+            .map(BindPinValue::from_application),
         bind_pending: addressing.bind.pending().to_string(),
         bind_restart_required: addressing.bind.restart_required(),
         bind_fallback_code: addressing

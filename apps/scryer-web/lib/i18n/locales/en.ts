@@ -94,6 +94,17 @@ const en: LocaleDictionary = {
   "settings.copyVerificationTitle": "Copy verification",
   "settings.copyVerificationScope":
     "Applies to download-client imports and library and root moves. Quick is the default. Choose Full when moving off a disk you plan to erase.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Media could not be verified, so it cannot replace an existing library file.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "This playlist or companion needs review because it may depend on other files.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Media could not be read. Check access to the source and retry.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "The media structure is malformed. Review the source file before importing.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "The media is encrypted and could not be verified.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer cannot connect to the metadata gateway because your system clock is off by more than 5 minutes. Synchronize your system clock and restart Scryer.",
   "initialAuth.title": "Set up access to Scryer",
@@ -3255,6 +3266,17 @@ const en: LocaleDictionary = {
     "The requested value version is not valid semantic version.",
   "error.reason.RULE_VOTES_CANNOT_NEGATIVE": "Votes cannot be negative.",
   "error.reason.SCRIPTS_SCHEDULE_INVALID": "The script schedule is invalid.",
+  "error.reason.STANDBY_NOT_FOUND": "This saved candidate no longer exists.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "This saved candidate is no longer available. Refresh the list and try again.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "The saved release could not be queued. It remains available to retry.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "This release is on the title's blocklist. Remove it from the blocklist to queue it.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "This release is already in the download queue.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Another search or queue action on this title is running. Try again when it finishes.",
   "error.reason.SECURITY_ACCOUNT_NO_PASSWORD_SET":
     "Account has no password set.",
   "error.reason.SECURITY_ACTOR_CAPABILITY_CLAIM_UNKNOWN":
@@ -8370,6 +8392,17 @@ const en: LocaleDictionary = {
     "Counts rows keyed to this scope; season packs are counted on the season's anchor episode.",
   "wanted.loadingStandby": "Loading saved candidates…",
   "wanted.standbyCandidates": "Standby candidates · {{count}}",
+  "wanted.downloadStandby": "Download",
+  "wanted.downloadStandbyLabel": "Download {{name}}",
+  "wanted.standbyConflictTitle": "Downloads already in progress",
+  "wanted.standbyConflictDescription":
+    "Queue {{name}} alongside these downloads, or cancel them and queue it instead.",
+  "wanted.standbyQueue": "Queue",
+  "wanted.standbyQueuedRefreshFailed":
+    "The release was queued, but the list could not be refreshed. Refresh the page to see the current status.",
+  "wanted.standbyCancelAndQueue": "Cancel and queue",
+  "wanted.standbyQueuedCancelFailed":
+    "The release was queued, but {{count}} conflicting download(s) could not be cancelled and are still running.",
   "wanted.standbyRank": "Rank {{rank}}",
   "wanted.standbyIndexer": "Indexer",
   "wanted.standbySize": "Size",
@@ -8828,6 +8861,41 @@ const en: LocaleDictionary = {
   "setup.summaryPathsRemappedDetail": "Provenance kept for monitored status",
   "setup.summaryClientsMerged": "Merged across instances",
   "setup.summaryIndexersEnabled": "Supported & enabled",
+  "setup.sourceImportProgress": "Importing sources",
+  "setup.sourceImportInvalidRequest":
+    "A selected source is unavailable. Refresh source discovery and select it again.",
+  "setup.sourceImportSelectionChanged":
+    "Submitted source selections are fixed. Retry failed sources from Summary.",
+  "setup.sourceImportNotOwned":
+    "This source import is unavailable to your account.",
+  "setup.sourceImportQueueFull":
+    "Source import capacity is full. Try again after another import finishes.",
+  "setup.sourceImportActive": "This source import is still running.",
+  "setup.sourceImportNotRetryable":
+    "Only failed or interrupted sources can be retried or skipped.",
+  "setup.sourceImportUnresolved":
+    "Retry or explicitly skip unresolved sources before finishing setup.",
+  "setup.sourceImportCredentialRequired":
+    "Enter the source credential before continuing.",
+  "setup.sourceImportConfigConflict":
+    "The reserved configuration changed. Review the source before retrying.",
+  "setup.sourceImportSourceNotReady":
+    "Wait for source discovery to finish before continuing.",
+  "setup.sourceImportResume": "Reconnect to progress",
+  "setup.sourceImportLoading": "Loading source import progress",
+  "setup.sourceImportCredential": "Corrected credential for {{name}}",
+  "setup.sourceImportRetry": "Retry failed sources",
+  "setup.sourceImportSkip": "Skip this source",
+  "setup.sourceImportItemFailed":
+    "Check the connection and credentials, then retry or skip.",
+  "setup.sourceImportState.queued": "Queued",
+  "setup.sourceImportState.installing": "Installing provider",
+  "setup.sourceImportState.checking": "Checking connection",
+  "setup.sourceImportState.saving": "Saving configuration",
+  "setup.sourceImportState.succeeded": "Imported",
+  "setup.sourceImportState.failed": "Failed",
+  "setup.sourceImportState.interrupted": "Interrupted",
+  "setup.sourceImportState.skipped": "Skipped",
   "setup.fetchingMonitoredStatus": "Fetching monitored status…",
   "setup.fetchingMonitoredStatusDetail":
     "Pulling each title’s monitored state from your instances in the background.",

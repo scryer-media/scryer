@@ -1763,7 +1763,11 @@ mod tests {
                 "18080",
             ]
         );
-        assert!(!arguments.iter().any(|argument| argument.contains("SCRYER_BIND")));
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("SCRYER_BIND"))
+        );
     }
 
     // -- the desktop profile --------------------------------------------------

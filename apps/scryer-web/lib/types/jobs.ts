@@ -49,6 +49,7 @@ export type JobKey =
   | "AUTO_BACKUP"
   | "APPLICATION_UPGRADE"
   | "LOCATION_OPERATION"
+  | "SOURCE_IMPORT"
   | "CUSTOM_JOB";
 
 export type JobScheduleInfo = {

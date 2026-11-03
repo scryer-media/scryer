@@ -1,6 +1,20 @@
 import type { LocaleDictionary } from "../types";
 
 const cs: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "Uložené vydání se nepodařilo zařadit do fronty. Zůstává dostupné pro další pokus.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Toto vydání je na seznamu blokovaných pro tento titul. Pro zařazení do fronty jej ze seznamu odeberte.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Toto vydání už je ve frontě stahování.",
+  "error.reason.STANDBY_TITLE_BUSY": "Pro tento titul právě probíhá jiné hledání nebo zařazení do fronty. Zkuste to znovu, až skončí.",
+  "wanted.downloadStandby": "Stáhnout",
+  "wanted.downloadStandbyLabel": "Stáhnout {{name}}",
+  "wanted.standbyConflictTitle": "Stahování již probíhá",
+  "wanted.standbyConflictDescription": "Zařadit {{name}} do fronty vedle těchto stahování, nebo je zrušit a zařadit místo nich.",
+  "wanted.standbyQueue": "Zařadit do fronty",
+  "wanted.standbyQueuedRefreshFailed": "Vydání bylo zařazeno do fronty, ale seznam se nepodařilo obnovit. Obnovte stránku, abyste viděli aktuální stav.",
+  "wanted.standbyCancelAndQueue": "Zrušit a zařadit do fronty",
+  "wanted.standbyQueuedCancelFailed": "Vydání bylo zařazeno do fronty, ale {{count}} konfliktních stahování se nepodařilo zrušit a stále běží.",
   "settings.oauthJellyfinCallbackCopied":
     "URL zpětného volání Jellyfin zkopírována.",
   "settings.oauthClientIdCopied": "ID klienta OAuth zkopírováno.",
@@ -8,6 +22,17 @@ const cs: LocaleDictionary = {
     "Kopírování se nezdařilo. Text je vybraný; stiskněte Ctrl+C nebo ⌘C.",
   "status.copyFailed":
     "Kopírování se nezdařilo: prohlížeč odmítl přístup ke schránce.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Médium se nepodařilo ověřit, a proto nemůže nahradit existující soubor v knihovně.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Tento seznam skladeb nebo doprovodný soubor je nutné zkontrolovat, protože může záviset na dalších souborech.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Médium nelze přečíst. Zkontrolujte přístup ke zdroji a zkuste to znovu.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "Struktura média je poškozená. Před importem zkontrolujte zdrojový soubor.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Médium je zašifrované a nelze je ověřit.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer se nemůže připojit k bráně metadat, protože se systémové hodiny liší o více než 5 minut. Synchronizujte systémové hodiny a restartujte Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -7115,6 +7140,41 @@ const cs: LocaleDictionary = {
     "Přesun souboru pod novým názvem se nezdařil. Soubor i jeho epizody zůstaly beze změny.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Číslování epizod je nejednoznačné",
+  "setup.sourceImportProgress": "Import zdrojů",
+  "setup.sourceImportInvalidRequest":
+    "Vybraný zdroj není dostupný. Obnovte vyhledávání zdrojů a vyberte ho znovu.",
+  "setup.sourceImportSelectionChanged":
+    "Odeslaný výběr zdrojů nelze změnit. Neúspěšné zdroje zopakujte v Souhrnu.",
+  "setup.sourceImportNotOwned":
+    "Tento import zdrojů není pro váš účet dostupný.",
+  "setup.sourceImportQueueFull":
+    "Kapacita importu zdrojů je plná. Zkuste to znovu, až skončí jiný import.",
+  "setup.sourceImportActive": "Tento import zdrojů stále probíhá.",
+  "setup.sourceImportNotRetryable":
+    "Zopakovat nebo přeskočit lze pouze neúspěšné nebo přerušené zdroje.",
+  "setup.sourceImportUnresolved":
+    "Před dokončením nastavení zopakujte nebo výslovně přeskočte nevyřešené zdroje.",
+  "setup.sourceImportCredentialRequired":
+    "Před pokračováním zadejte přihlašovací údaj zdroje.",
+  "setup.sourceImportConfigConflict":
+    "Rezervovaná konfigurace se změnila. Před opakováním zdroj zkontrolujte.",
+  "setup.sourceImportSourceNotReady":
+    "Před pokračováním počkejte na dokončení vyhledávání zdrojů.",
+  "setup.sourceImportResume": "Znovu připojit k průběhu",
+  "setup.sourceImportLoading": "Načítání průběhu importu zdrojů",
+  "setup.sourceImportCredential": "Opravený přihlašovací údaj pro {{name}}",
+  "setup.sourceImportRetry": "Zopakovat neúspěšné zdroje",
+  "setup.sourceImportSkip": "Přeskočit tento zdroj",
+  "setup.sourceImportItemFailed":
+    "Zkontrolujte připojení a přihlašovací údaje, poté zopakujte nebo přeskočte.",
+  "setup.sourceImportState.queued": "Ve frontě",
+  "setup.sourceImportState.installing": "Instalace poskytovatele",
+  "setup.sourceImportState.checking": "Kontrola připojení",
+  "setup.sourceImportState.saving": "Ukládání konfigurace",
+  "setup.sourceImportState.succeeded": "Importováno",
+  "setup.sourceImportState.failed": "Selhalo",
+  "setup.sourceImportState.interrupted": "Přerušeno",
+  "setup.sourceImportState.skipped": "Přeskočeno",
 };
 
 export default cs;

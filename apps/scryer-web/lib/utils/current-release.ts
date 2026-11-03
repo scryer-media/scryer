@@ -1,3 +1,5 @@
+import { videoFileStem } from "./media-formats.ts";
+
 export type CurrentReleaseFile = {
   role: string;
   grabbedReleaseTitle?: string | null;
@@ -20,11 +22,7 @@ export function releaseIdentityName(value: string): string {
 }
 
 function fileStem(path: string | null | undefined): string {
-  const fileName = (path ?? "").split(/[\\/]/).pop() ?? "";
-  return fileName.replace(
-    /\.(mkv|mp4|avi|wmv|mov|m4v|ts|m2ts|webm|flv|ogv|strm|mpg|mpeg|vob|iso)$/i,
-    "",
-  );
+  return videoFileStem(path ?? "");
 }
 
 export function currentReleaseNames(

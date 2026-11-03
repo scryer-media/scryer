@@ -7110,6 +7110,50 @@ pub enum MaintenanceSearchJobRunCreation {
 pub trait JobRunRepository: Send + Sync {
     async fn create_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord>;
 
+    /// Accept an idempotent job and its encrypted private input atomically.
+    async fn accept_private_job(
+        &self,
+        _run: &JobRunRecord,
+        _request_key: &str,
+        _input: &str,
+    ) -> AppResult<(JobRunRecord, bool)> {
+        Err(AppError::Repository(
+            "private job input storage is not configured".into(),
+        ))
+    }
+
+    async fn private_job_input(&self, _run_id: &str, _actor_id: &str) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+
+    async fn update_private_job_input(
+        &self,
+        _run_id: &str,
+        _actor_id: &str,
+        _input: &str,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "private job input storage is not configured".into(),
+        ))
+    }
+
+    /// Erase a job's private input once nothing can need it again. The
+    /// idempotency receipt survives so a replayed request still finds its run.
+    async fn purge_private_job_input(&self, _run_id: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn list_unresolved_private_jobs(&self, _job_key: JobKey) -> AppResult<Vec<JobRunRecord>> {
+        Ok(Vec::new())
+    }
+    async fn find_private_job(
+        &self,
+        _actor_id: &str,
+        _request_key: &str,
+    ) -> AppResult<Option<JobRunRecord>> {
+        Ok(None)
+    }
+
     /// Atomically creates a policy Search job and its durable accepted receipt.
     /// A duplicate `(step key, dispatch attempt)` returns the original receipt
     /// and must never create or spawn another Search job. Implementations may

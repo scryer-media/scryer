@@ -1,6 +1,33 @@
 import type { LocaleDictionary } from "../types";
 
 const it: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Questo candidato salvato non esiste più.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Questo candidato salvato non è più disponibile. Aggiorna l'elenco e riprova.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "La release salvata non è stata messa in coda. Resta disponibile per un nuovo tentativo.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Questa release è nella lista di blocco del titolo. Rimuovila dalla lista di blocco per metterla in coda.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Questa release è già nella coda di download.",
+  "error.reason.STANDBY_TITLE_BUSY": "Un'altra ricerca o azione di coda è in corso su questo titolo. Riprova quando sarà terminata.",
+  "wanted.standby": "Riserva · {{count}}",
+  "wanted.standbyTooltip": "{{count}} candidati salvati verranno provati se il grab corrente fallisce.",
+  "wanted.standbyScopeNote": "Conta le righe di questo ambito; i pacchetti di stagione sono conteggiati sull'episodio di ancoraggio della stagione.",
+  "wanted.loadingStandby": "Caricamento dei candidati salvati…",
+  "wanted.standbyCandidates": "Candidati di riserva · {{count}}",
+  "wanted.downloadStandby": "Scarica",
+  "wanted.downloadStandbyLabel": "Scarica {{name}}",
+  "wanted.standbyConflictTitle": "Download già in corso",
+  "wanted.standbyConflictDescription": "Metti {{name}} in coda accanto a questi download, oppure annullali e metti in coda questo al loro posto.",
+  "wanted.standbyQueue": "Metti in coda",
+  "wanted.standbyQueuedRefreshFailed": "La release è stata messa in coda, ma l'elenco non è stato aggiornato. Ricarica la pagina per vedere lo stato attuale.",
+  "wanted.standbyCancelAndQueue": "Annulla e metti in coda",
+  "wanted.standbyQueuedCancelFailed": "La release è stata messa in coda, ma {{count}} download in conflitto non sono stati annullati e sono ancora in corso.",
+  "wanted.standbyRank": "Posizione {{rank}}",
+  "wanted.standbyIndexer": "Indexer",
+  "wanted.standbySize": "Dimensione",
+  "wanted.standbySeeders": "Seeder",
+  "wanted.standbyScore": "Punteggio",
+  "wanted.standbyAge": "Età",
+  "wanted.seasonPack": "Pacchetto stagione",
+  "wanted.noStandbyCandidates": "nessun candidato di riserva",
   "settings.oauthJellyfinCallbackCopied":
     "URL di callback di Jellyfin copiato.",
   "settings.oauthClientIdCopied": "ID client OAuth copiato.",
@@ -8,6 +35,17 @@ const it: LocaleDictionary = {
     "Copia non riuscita. Il testo è selezionato; premi Ctrl+C o ⌘C.",
   "status.copyFailed":
     "Copia non riuscita: il browser ha negato l'accesso agli appunti.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Il file multimediale non è stato verificato e non può sostituire un file già presente nella libreria.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Questa playlist o questo file complementare richiede una verifica perché potrebbe dipendere da altri file.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Impossibile leggere il file multimediale. Controlla l’accesso alla sorgente e riprova.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "La struttura del file multimediale non è valida. Controlla il file sorgente prima di importarlo.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Il file multimediale è crittografato e non è stato possibile verificarlo.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer non può connettersi al gateway dei metadati perché l’orologio di sistema ha uno scarto superiore a 5 minuti. Sincronizza l’orologio di sistema e riavvia Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -3728,6 +3766,42 @@ const it: LocaleDictionary = {
     "Lo spostamento del file al nuovo nome non è riuscito. Il file e i suoi episodi sono rimasti invariati.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numerazione degli episodi ambigua",
+  "setup.sourceImportProgress": "Importazione delle sorgenti",
+  "setup.sourceImportInvalidRequest":
+    "Una sorgente selezionata non è disponibile. Aggiorna il rilevamento delle sorgenti e selezionala di nuovo.",
+  "setup.sourceImportSelectionChanged":
+    "Le sorgenti inviate non possono essere modificate. Riprova le sorgenti non riuscite dal Riepilogo.",
+  "setup.sourceImportNotOwned":
+    "Questa importazione di sorgenti non è disponibile per il tuo account.",
+  "setup.sourceImportQueueFull":
+    "La capacità di importazione delle sorgenti è esaurita. Riprova al termine di un’altra importazione.",
+  "setup.sourceImportActive":
+    "Questa importazione di sorgenti è ancora in corso.",
+  "setup.sourceImportNotRetryable":
+    "Solo le sorgenti non riuscite o interrotte possono essere riprovate o saltate.",
+  "setup.sourceImportUnresolved":
+    "Riprova o salta esplicitamente le sorgenti in sospeso prima di completare la configurazione.",
+  "setup.sourceImportCredentialRequired":
+    "Inserisci la credenziale della sorgente prima di continuare.",
+  "setup.sourceImportConfigConflict":
+    "La configurazione riservata è cambiata. Controlla la sorgente prima di riprovare.",
+  "setup.sourceImportSourceNotReady":
+    "Attendi il completamento del rilevamento delle sorgenti prima di continuare.",
+  "setup.sourceImportResume": "Riconnetti all’avanzamento",
+  "setup.sourceImportLoading": "Caricamento dell’avanzamento dell’importazione",
+  "setup.sourceImportCredential": "Credenziale corretta per {{name}}",
+  "setup.sourceImportRetry": "Riprova le sorgenti non riuscite",
+  "setup.sourceImportSkip": "Salta questa sorgente",
+  "setup.sourceImportItemFailed":
+    "Controlla la connessione e le credenziali, poi riprova o salta.",
+  "setup.sourceImportState.queued": "In coda",
+  "setup.sourceImportState.installing": "Installazione del provider",
+  "setup.sourceImportState.checking": "Verifica della connessione",
+  "setup.sourceImportState.saving": "Salvataggio della configurazione",
+  "setup.sourceImportState.succeeded": "Importata",
+  "setup.sourceImportState.failed": "Non riuscita",
+  "setup.sourceImportState.interrupted": "Interrotta",
+  "setup.sourceImportState.skipped": "Saltata",
 };
 
 export default it;

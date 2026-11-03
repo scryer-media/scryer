@@ -59,6 +59,7 @@ mod folder_ownership;
 pub mod fs_integrity;
 pub mod fs_safety;
 pub mod grabbed_file_names;
+pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
 mod helpers;
@@ -97,6 +98,7 @@ pub use lists::{ListPluginProvider, ListProviderClient, NullListPluginProvider};
 pub mod location;
 pub mod maintenance_rules;
 mod media;
+pub(crate) mod media_references;
 mod media_requests;
 pub mod media_server_signals;
 mod media_servers;
@@ -273,8 +275,9 @@ pub use services::{
     ActiveImportStream, ActiveImportStreamHandle, ActiveImportStreamPhase, ActiveImportStreamSync,
     DownloadClientCategoryAdmissionSnapshot, DownloadClientCategorySnapshotStore,
     DownloadQueueSync, ImportCancellation, PluginInstallInProgressError,
-    PluginInstallOperationKind, PluginInstallProgressSnapshot, PluginInstallState, RuntimeFeature,
-    RuntimePerformanceClass, RuntimePerformanceSnapshot, describe_download_queue_metrics,
+    PluginInstallOperationKind, PluginInstallOrchestrator, PluginInstallProgressSnapshot,
+    PluginInstallState, RuntimeFeature, RuntimePerformanceClass, RuntimePerformanceSnapshot,
+    describe_download_queue_metrics,
 };
 pub use types::canonicalize_jellyfin_user_id;
 pub use upstream_scheduler::{
@@ -343,7 +346,6 @@ pub use app_usecase_rss::RssSyncReport;
 pub use audio_requirements::inferred_audio_track_language;
 #[cfg(test)]
 pub(crate) use audio_requirements::missing_required_audio_languages;
-#[cfg(feature = "runtime-media-analysis")]
 pub(crate) use audio_requirements::{RequiredAudioVerdict, classify_required_audio};
 pub(crate) use audio_requirements::{
     normalize_required_audio_languages, normalize_required_audio_requirements,
@@ -391,10 +393,11 @@ pub use contracts::{
     PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
     PreparedIndexerArtifact, ProxyConfigUpdate, ProxyTestResult, QueueDownloadOutcome,
     QueuedDownloadResult, QueuedManualImport, QueuedReleaseSelection, ReleaseDecisionsQuery,
-    ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate, StagedNzbRef, StorageRootUsage,
-    SubmissionConflictPolicy, SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
-    SubtitleProviderConfigUpdate, SubtitleProviderValidationResult, SubtitleStreamDetail,
-    SuccessfulGrabCommit, TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
+    ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate, StagedNzbRef, StandbyQueueChoice,
+    StandbyQueueOutcome, StorageRootUsage, SubmissionConflictPolicy, SubmissionScope,
+    SubmissionScopeConflict, SubtitleGenerationInput, SubtitleProviderConfigUpdate,
+    SubtitleProviderValidationResult, SubtitleStreamDetail, SuccessfulGrabCommit,
+    TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
     UnconfirmedDownloadSubmission, WantedSearchOutcome, indexer_search_eligibility,
 };
 pub use domain_events::DomainEventActor;

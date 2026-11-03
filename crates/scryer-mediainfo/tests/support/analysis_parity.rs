@@ -1,6 +1,16 @@
 //! Shared comparison for serialized parser and application analysis contracts.
 use serde_json::Value;
 
+/// FFmpeg metadata keys are case-insensitive even when JSON preserves their spelling.
+pub fn reference_language(stream: &Value) -> Option<&str> {
+    stream
+        .get("tags")?
+        .as_object()?
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("language"))
+        .and_then(|(_, value)| value.as_str())
+}
+
 fn number(value: &Value) -> Option<f64> {
     value.as_f64().or_else(|| value.as_str()?.parse().ok())
 }
@@ -357,9 +367,8 @@ pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
             {
                 differences.push(format!("{label}.bitrate_provenance is not an accountable stream measurement/declaration"));
             }
-            if let Some(language) = stream["tags"]["language"]
-                .as_str()
-                .filter(|value| !value.is_empty() && *value != "und")
+            if let Some(language) =
+                reference_language(stream).filter(|value| !value.is_empty() && *value != "und")
             {
                 // ASF's reference demuxer converts RFC 1766 tags to ISO 639
                 // and discards regions. Native fixtures separately require
@@ -534,6 +543,29 @@ pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reference_language_key_case_preserves_required_native_metadata() {
+        for key in ["language", "LANGUAGE", "Language", "lAnGuAgE"] {
+            let mut tags = serde_json::Map::new();
+            tags.insert(key.into(), "jpn".into());
+            let reference = serde_json::json!({"streams":[{"codec_type":"subtitle", "codec_name":"text", "tags":tags}]});
+            let mut native = serde_json::json!({"details":{"streams":[{"kind":"subtitle", "codec":"text", "metadata":{"original_language":"jpn"}}]}});
+            assert!(compare(&native, &reference).is_empty(), "{key}");
+            native["details"]["streams"][0]["metadata"]["original_language"] = Value::Null;
+            assert_eq!(
+                compare(&native, &reference).len(),
+                1,
+                "{key}: missing native language must fail"
+            );
+            native["details"]["streams"][0]["metadata"]["original_language"] = "eng".into();
+            assert_eq!(
+                compare(&native, &reference).len(),
+                1,
+                "{key}: wrong native language must fail"
+            );
+        }
+    }
+
     #[test]
     fn mpeg1_bitrate_sentinel_is_not_a_reference_measurement() {
         let mut stream = serde_json::json!({"codec_name":"mpeg1video", "bit_rate":"104857200"});

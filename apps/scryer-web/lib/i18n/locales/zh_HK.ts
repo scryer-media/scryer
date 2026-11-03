@@ -1,10 +1,34 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_HK: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "此已儲存的候選版本已不存在。",
+  "error.reason.STANDBY_NOT_AVAILABLE": "此已儲存的候選版本已不可用。請重新整理清單後再試。",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "已儲存的版本無法加入佇列。仍可稍後重試。",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "此版本在該標題的封鎖清單中。請先從封鎖清單移除再加入佇列。",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "此版本已在下載佇列中。",
+  "error.reason.STANDBY_TITLE_BUSY": "該標題正在進行另一項搜尋或佇列操作。請待其完成後再試。",
+  "wanted.downloadStandby": "下載",
+  "wanted.downloadStandbyLabel": "下載 {{name}}",
+  "wanted.standbyConflictTitle": "已有下載正在進行",
+  "wanted.standbyConflictDescription": "將 {{name}} 與這些下載一同加入佇列，或取消它們並改為加入此版本。",
+  "wanted.standbyQueue": "加入佇列",
+  "wanted.standbyQueuedRefreshFailed": "該版本已加入佇列，但清單無法重新整理。請重新整理頁面以查看目前狀態。",
+  "wanted.standbyCancelAndQueue": "取消並加入佇列",
+  "wanted.standbyQueuedCancelFailed": "該版本已加入佇列，但有 {{count}} 個衝突下載無法取消，仍在執行。",
   "settings.oauthJellyfinCallbackCopied": "已複製 Jellyfin 回呼 URL。",
   "settings.oauthClientIdCopied": "已複製 OAuth 用戶端 ID。",
   "status.copyFailedSelected": "無法複製。文字已選取，請按 Ctrl+C 或 ⌘C。",
   "status.copyFailed": "無法複製：瀏覽器拒絕了剪貼簿存取。",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "無法驗證此媒體，因此不能取代媒體庫中的現有檔案。",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "此播放清單或附屬檔案可能依賴其他檔案，需要檢查。",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "無法讀取媒體。請檢查來源檔案的存取權限後重試。",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "媒體結構格式錯誤。請在匯入前檢查來源檔案。",
+  "error.reason.MEDIA_PROBE_ENCRYPTED": "媒體已加密，無法驗證。",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "系統時鐘偏差超過 5 分鐘，Scryer 無法連線至中繼資料閘道。請同步系統時鐘並重新啟動 Scryer。",
   "httpRelease.refusal.detailsUnavailable":
@@ -5552,6 +5576,33 @@ const zh_HK: LocaleDictionary = {
   "episodeAssign.refusal.renameFailed":
     "將檔案移至新名稱失敗。檔案及其劇集維持原狀。",
   "pendingImports.reason.anime_numbering_ambiguous": "劇集編號不明確",
+  "setup.sourceImportProgress": "正在匯入來源",
+  "setup.sourceImportInvalidRequest":
+    "所選來源無法使用。請重新整理來源偵測後再選擇。",
+  "setup.sourceImportSelectionChanged":
+    "已提交的來源選擇無法更改。請在摘要中重試失敗的來源。",
+  "setup.sourceImportNotOwned": "此來源匯入不適用於你的帳戶。",
+  "setup.sourceImportQueueFull": "來源匯入容量已滿。請在其他匯入完成後重試。",
+  "setup.sourceImportActive": "此來源匯入仍在進行中。",
+  "setup.sourceImportNotRetryable": "只有失敗或中斷的來源才能重試或略過。",
+  "setup.sourceImportUnresolved": "完成設定前，請重試或明確略過未解決的來源。",
+  "setup.sourceImportCredentialRequired": "繼續之前請輸入來源憑證。",
+  "setup.sourceImportConfigConflict": "預留的設定已更改。重試前請檢查該來源。",
+  "setup.sourceImportSourceNotReady": "繼續之前請等待來源偵測完成。",
+  "setup.sourceImportResume": "重新連接進度",
+  "setup.sourceImportLoading": "正在載入來源匯入進度",
+  "setup.sourceImportCredential": "{{name}} 的更正憑證",
+  "setup.sourceImportRetry": "重試失敗的來源",
+  "setup.sourceImportSkip": "略過此來源",
+  "setup.sourceImportItemFailed": "請檢查連線和憑證，然後重試或略過。",
+  "setup.sourceImportState.queued": "排隊中",
+  "setup.sourceImportState.installing": "正在安裝提供者",
+  "setup.sourceImportState.checking": "正在檢查連線",
+  "setup.sourceImportState.saving": "正在儲存設定",
+  "setup.sourceImportState.succeeded": "已匯入",
+  "setup.sourceImportState.failed": "失敗",
+  "setup.sourceImportState.interrupted": "已中斷",
+  "setup.sourceImportState.skipped": "已略過",
 };
 
 export default zh_HK;

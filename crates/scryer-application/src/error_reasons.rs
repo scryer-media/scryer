@@ -2105,6 +2105,31 @@ pub mod acquisition {
     ];
 }
 
+/// Refusals of an operator's "queue now" on a saved standby candidate.
+pub mod standby {
+    /// The saved candidate no longer exists.
+    pub const NOT_FOUND: &str = "STANDBY_NOT_FOUND";
+    /// Another workflow owns or has retired this candidate.
+    pub const NOT_AVAILABLE: &str = "STANDBY_NOT_AVAILABLE";
+    /// Current coverage cannot safely identify what to queue.
+    pub const NOT_QUEUEABLE: &str = "STANDBY_NOT_QUEUEABLE";
+    /// The release is on this title's blocklist.
+    pub const RELEASE_BLOCKLISTED: &str = "STANDBY_RELEASE_BLOCKLISTED";
+    /// The same release is already active in a download client.
+    pub const ALREADY_ACTIVE: &str = "STANDBY_ALREADY_ACTIVE";
+    /// An operator search or another queue action holds this title; try again once it finishes.
+    pub const TITLE_BUSY: &str = "STANDBY_TITLE_BUSY";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        NOT_FOUND,
+        NOT_AVAILABLE,
+        NOT_QUEUEABLE,
+        RELEASE_BLOCKLISTED,
+        ALREADY_ACTIVE,
+        TITLE_BUSY,
+    ];
+}
+
 pub mod location {
     /// The plan changed. Preview it again.
     pub const STALE_PLAN: &str = "LOCATION_STALE_PLAN";
@@ -5840,6 +5865,16 @@ pub mod services {
 }
 
 pub mod media {
+    /// Unavailable media analysis cannot authorize replacement of an existing file.
+    pub const UNVERIFIED_REPLACEMENT: &str = "MEDIA_UNVERIFIED_REPLACEMENT";
+    /// References or companion files cannot safely survive relocation.
+    pub const REFERENCES_REQUIRE_REVIEW: &str = "MEDIA_REFERENCES_REQUIRE_REVIEW";
+    /// The source could not be read during media analysis.
+    pub const PROBE_IO_FAILED: &str = "MEDIA_PROBE_IO_FAILED";
+    /// The source has malformed media structure.
+    pub const PROBE_MALFORMED: &str = "MEDIA_PROBE_MALFORMED";
+    /// Encrypted media requires manual review.
+    pub const PROBE_ENCRYPTED: &str = "MEDIA_PROBE_ENCRYPTED";
     /// Media file was not found.
     pub const FILE_NOT_FOUND: &str = "MEDIA_FILE_NOT_FOUND";
     /// Registered media path changed before inspection.
@@ -5912,6 +5947,11 @@ pub mod media {
     pub const ANALYSIS_INVALID: &str = "MEDIA_ANALYSIS_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        UNVERIFIED_REPLACEMENT,
+        REFERENCES_REQUIRE_REVIEW,
+        PROBE_IO_FAILED,
+        PROBE_MALFORMED,
+        PROBE_ENCRYPTED,
         FILE_NOT_FOUND,
         REGISTERED_MEDIA_PATH_CHANGED_BEFORE_INSPECTION,
         SOURCE_CHANGED_DURING_INSPECTION,
@@ -5995,6 +6035,7 @@ mod tests {
             ("OAUTH_", oauth::ALL),
             ("MAINTENANCE_", maintenance::ALL),
             ("ACQUISITION_", acquisition::ALL),
+            ("STANDBY_", standby::ALL),
             ("LOCATION_", location::ALL),
             ("PLUGIN_", plugins::ALL),
             ("PORTS_", ports::ALL),

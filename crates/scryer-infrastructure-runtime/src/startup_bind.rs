@@ -186,11 +186,18 @@ mod tests {
             Ok(Some("0.0.0.0".to_string()))
         );
 
-        create(&path, &["UPDATE settings_values SET value_json = 'null' WHERE id = 'saved'"]).await;
+        create(
+            &path,
+            &["UPDATE settings_values SET value_json = 'null' WHERE id = 'saved'"],
+        )
+        .await;
         assert_eq!(read_saved_bind_host(&config_for(&path)).await, Ok(None));
 
-        create(&path, &["UPDATE settings_values SET value_json = 'not json' WHERE id = 'saved'"])
-            .await;
+        create(
+            &path,
+            &["UPDATE settings_values SET value_json = 'not json' WHERE id = 'saved'"],
+        )
+        .await;
         assert!(read_saved_bind_host(&config_for(&path)).await.is_err());
     }
 }

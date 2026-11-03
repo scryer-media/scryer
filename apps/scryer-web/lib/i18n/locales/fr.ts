@@ -1,12 +1,50 @@
 import type { LocaleDictionary } from "../types";
 
 const fr: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Ce candidat enregistré n'existe plus.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Ce candidat enregistré n'est plus disponible. Actualisez la liste et réessayez.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "La release enregistrée n'a pas pu être mise en file. Elle reste disponible pour une nouvelle tentative.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Cette release figure sur la liste de blocage du titre. Retirez-la de la liste de blocage pour la mettre en file.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Cette release est déjà dans la file de téléchargement.",
+  "error.reason.STANDBY_TITLE_BUSY": "Une autre recherche ou mise en file est en cours pour ce titre. Réessayez quand elle sera terminée.",
+  "wanted.standby": "Réserve · {{count}}",
+  "wanted.standbyTooltip": "{{count}} candidats enregistrés seront essayés si la capture en cours échoue.",
+  "wanted.standbyScopeNote": "Compte les lignes de cette portée ; les packs de saison sont comptés sur l'épisode d'ancrage de la saison.",
+  "wanted.loadingStandby": "Chargement des candidats enregistrés…",
+  "wanted.standbyCandidates": "Candidats en réserve · {{count}}",
+  "wanted.downloadStandby": "Télécharger",
+  "wanted.downloadStandbyLabel": "Télécharger {{name}}",
+  "wanted.standbyConflictTitle": "Téléchargements déjà en cours",
+  "wanted.standbyConflictDescription": "Mettre {{name}} en file d'attente à côté de ces téléchargements, ou les annuler et le mettre en file à leur place.",
+  "wanted.standbyQueue": "Mettre en file",
+  "wanted.standbyQueuedRefreshFailed": "La release a été mise en file, mais la liste n'a pas pu être actualisée. Rechargez la page pour voir l'état actuel.",
+  "wanted.standbyCancelAndQueue": "Annuler et mettre en file",
+  "wanted.standbyQueuedCancelFailed": "La release a été mise en file, mais {{count}} téléchargement(s) en conflit n'ont pas pu être annulés et sont toujours en cours.",
+  "wanted.standbyRank": "Rang {{rank}}",
+  "wanted.standbyIndexer": "Indexeur",
+  "wanted.standbySize": "Taille",
+  "wanted.standbySeeders": "Seeders",
+  "wanted.standbyScore": "Score",
+  "wanted.standbyAge": "Âge",
+  "wanted.seasonPack": "Pack de saison",
+  "wanted.noStandbyCandidates": "aucun candidat en réserve",
   "settings.oauthJellyfinCallbackCopied": "URL de rappel Jellyfin copiée.",
   "settings.oauthClientIdCopied": "ID client OAuth copié.",
   "status.copyFailedSelected":
     "Copie impossible. Le texte est sélectionné ; appuyez sur Ctrl+C ou ⌘C.",
   "status.copyFailed":
     "Copie impossible : le navigateur a refusé l'accès au presse-papiers.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Le média n’a pas pu être vérifié et ne peut donc pas remplacer un fichier existant de la bibliothèque.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Cette liste de lecture ou ce fichier complémentaire nécessite une vérification, car il peut dépendre d’autres fichiers.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Le média n’a pas pu être lu. Vérifiez l’accès à la source et réessayez.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "La structure du média est incorrecte. Vérifiez le fichier source avant de l’importer.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Le média est chiffré et n’a pas pu être vérifié.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer ne peut pas se connecter à la passerelle de métadonnées car l’horloge de votre système présente un décalage de plus de 5 minutes. Synchronisez l’horloge de votre système et redémarrez Scryer.",
   "initialAuth.title": "Configurer l’accès à Scryer",
@@ -3802,6 +3840,43 @@ const fr: LocaleDictionary = {
     "Le déplacement du fichier vers son nouveau nom a échoué. Le fichier et ses épisodes sont restés inchangés.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numérotation des épisodes ambiguë",
+  "setup.sourceImportProgress": "Importation des sources",
+  "setup.sourceImportInvalidRequest":
+    "Une source sélectionnée est indisponible. Actualisez la découverte des sources et sélectionnez-la à nouveau.",
+  "setup.sourceImportSelectionChanged":
+    "Les sources envoyées ne peuvent plus être modifiées. Relancez les sources en échec depuis le Récapitulatif.",
+  "setup.sourceImportNotOwned":
+    "Cette importation de sources n’est pas disponible pour votre compte.",
+  "setup.sourceImportQueueFull":
+    "La capacité d’importation des sources est atteinte. Réessayez lorsqu’une autre importation sera terminée.",
+  "setup.sourceImportActive":
+    "Cette importation de sources est toujours en cours.",
+  "setup.sourceImportNotRetryable":
+    "Seules les sources en échec ou interrompues peuvent être relancées ou ignorées.",
+  "setup.sourceImportUnresolved":
+    "Relancez ou ignorez explicitement les sources non résolues avant de terminer la configuration.",
+  "setup.sourceImportCredentialRequired":
+    "Saisissez l’identifiant de la source avant de continuer.",
+  "setup.sourceImportConfigConflict":
+    "La configuration réservée a changé. Vérifiez la source avant de relancer.",
+  "setup.sourceImportSourceNotReady":
+    "Attendez la fin de la découverte des sources avant de continuer.",
+  "setup.sourceImportResume": "Se reconnecter à la progression",
+  "setup.sourceImportLoading":
+    "Chargement de la progression de l’importation des sources",
+  "setup.sourceImportCredential": "Identifiant corrigé pour {{name}}",
+  "setup.sourceImportRetry": "Relancer les sources en échec",
+  "setup.sourceImportSkip": "Ignorer cette source",
+  "setup.sourceImportItemFailed":
+    "Vérifiez la connexion et les identifiants, puis relancez ou ignorez.",
+  "setup.sourceImportState.queued": "En file d’attente",
+  "setup.sourceImportState.installing": "Installation du fournisseur",
+  "setup.sourceImportState.checking": "Vérification de la connexion",
+  "setup.sourceImportState.saving": "Enregistrement de la configuration",
+  "setup.sourceImportState.succeeded": "Importée",
+  "setup.sourceImportState.failed": "Échec",
+  "setup.sourceImportState.interrupted": "Interrompue",
+  "setup.sourceImportState.skipped": "Ignorée",
 };
 
 export default fr;

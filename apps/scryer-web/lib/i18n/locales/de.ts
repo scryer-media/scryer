@@ -1,12 +1,50 @@
 import type { LocaleDictionary } from "../types";
 
 const de: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Dieser gespeicherte Kandidat existiert nicht mehr.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Dieser gespeicherte Kandidat ist nicht mehr verfügbar. Liste aktualisieren und erneut versuchen.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "Das gespeicherte Release konnte nicht eingereiht werden. Es bleibt für einen erneuten Versuch verfügbar.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Dieses Release steht auf der Sperrliste des Titels. Von der Sperrliste entfernen, um es einzureihen.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Dieses Release befindet sich bereits in der Download-Warteschlange.",
+  "error.reason.STANDBY_TITLE_BUSY": "Für diesen Titel läuft bereits eine Suche oder Einreihung. Erneut versuchen, sobald sie abgeschlossen ist.",
+  "wanted.standby": "Reserve · {{count}}",
+  "wanted.standbyTooltip": "{{count}} gespeicherte Kandidaten werden versucht, falls der aktuelle Grab fehlschlägt.",
+  "wanted.standbyScopeNote": "Zählt Zeilen dieses Bereichs; Staffelpakete werden bei der Ankerepisode der Staffel gezählt.",
+  "wanted.loadingStandby": "Gespeicherte Kandidaten werden geladen…",
+  "wanted.standbyCandidates": "Reservekandidaten · {{count}}",
+  "wanted.downloadStandby": "Herunterladen",
+  "wanted.downloadStandbyLabel": "{{name}} herunterladen",
+  "wanted.standbyConflictTitle": "Downloads bereits aktiv",
+  "wanted.standbyConflictDescription": "{{name}} neben diesen Downloads einreihen oder sie abbrechen und stattdessen diesen einreihen.",
+  "wanted.standbyQueue": "Einreihen",
+  "wanted.standbyQueuedRefreshFailed": "Das Release wurde eingereiht, aber die Liste konnte nicht aktualisiert werden. Seite neu laden, um den aktuellen Status zu sehen.",
+  "wanted.standbyCancelAndQueue": "Abbrechen und einreihen",
+  "wanted.standbyQueuedCancelFailed": "Das Release wurde eingereiht, aber {{count}} kollidierende Downloads konnten nicht abgebrochen werden und laufen weiter.",
+  "wanted.standbyRank": "Rang {{rank}}",
+  "wanted.standbyIndexer": "Indexer",
+  "wanted.standbySize": "Größe",
+  "wanted.standbySeeders": "Seeder",
+  "wanted.standbyScore": "Punktzahl",
+  "wanted.standbyAge": "Alter",
+  "wanted.seasonPack": "Staffelpaket",
+  "wanted.noStandbyCandidates": "keine Reservekandidaten",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin-Callback-URL kopiert.",
   "settings.oauthClientIdCopied": "OAuth-Client-ID kopiert.",
   "status.copyFailedSelected":
     "Kopieren fehlgeschlagen. Der Text ist markiert; Strg+C oder ⌘C drücken.",
   "status.copyFailed":
     "Kopieren fehlgeschlagen: Der Browser hat den Zugriff auf die Zwischenablage verweigert.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Die Mediendatei konnte nicht überprüft werden und kann daher keine vorhandene Bibliotheksdatei ersetzen.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Diese Wiedergabeliste oder Begleitdatei muss überprüft werden, da sie von anderen Dateien abhängen kann.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Die Mediendatei konnte nicht gelesen werden. Prüfe den Zugriff auf die Quelle und versuche es erneut.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "Die Medienstruktur ist fehlerhaft. Prüfe die Quelldatei vor dem Import.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Die Mediendatei ist verschlüsselt und konnte nicht überprüft werden.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer kann keine Verbindung zum Metadaten-Gateway herstellen, da Ihre Systemuhr um mehr als 5 Minuten abweicht. Synchronisieren Sie Ihre Systemuhr und starten Sie Scryer neu.",
   "httpRelease.refusal.detailsUnavailable":
@@ -3715,6 +3753,41 @@ const de: LocaleDictionary = {
     "Das Verschieben der Datei unter ihren neuen Namen ist fehlgeschlagen. Datei und Episoden blieben unverändert.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episodennummerierung ist mehrdeutig",
+  "setup.sourceImportProgress": "Quellen werden importiert",
+  "setup.sourceImportInvalidRequest":
+    "Eine ausgewählte Quelle ist nicht verfügbar. Aktualisieren Sie die Quellensuche und wählen Sie sie erneut aus.",
+  "setup.sourceImportSelectionChanged":
+    "Übermittelte Quellenauswahlen sind festgelegt. Wiederholen Sie fehlgeschlagene Quellen in der Zusammenfassung.",
+  "setup.sourceImportNotOwned":
+    "Dieser Quellenimport ist für Ihr Konto nicht verfügbar.",
+  "setup.sourceImportQueueFull":
+    "Die Kapazität für Quellenimporte ist ausgeschöpft. Versuchen Sie es erneut, wenn ein anderer Import abgeschlossen ist.",
+  "setup.sourceImportActive": "Dieser Quellenimport läuft noch.",
+  "setup.sourceImportNotRetryable":
+    "Nur fehlgeschlagene oder unterbrochene Quellen können wiederholt oder übersprungen werden.",
+  "setup.sourceImportUnresolved":
+    "Wiederholen oder überspringen Sie offene Quellen ausdrücklich, bevor Sie die Einrichtung abschließen.",
+  "setup.sourceImportCredentialRequired":
+    "Geben Sie die Zugangsdaten der Quelle ein, bevor Sie fortfahren.",
+  "setup.sourceImportConfigConflict":
+    "Die reservierte Konfiguration hat sich geändert. Prüfen Sie die Quelle vor dem Wiederholen.",
+  "setup.sourceImportSourceNotReady":
+    "Warten Sie, bis die Quellensuche abgeschlossen ist, bevor Sie fortfahren.",
+  "setup.sourceImportResume": "Erneut mit dem Fortschritt verbinden",
+  "setup.sourceImportLoading": "Fortschritt des Quellenimports wird geladen",
+  "setup.sourceImportCredential": "Korrigierte Zugangsdaten für {{name}}",
+  "setup.sourceImportRetry": "Fehlgeschlagene Quellen wiederholen",
+  "setup.sourceImportSkip": "Diese Quelle überspringen",
+  "setup.sourceImportItemFailed":
+    "Prüfen Sie Verbindung und Zugangsdaten und wiederholen oder überspringen Sie dann.",
+  "setup.sourceImportState.queued": "In Warteschlange",
+  "setup.sourceImportState.installing": "Anbieter wird installiert",
+  "setup.sourceImportState.checking": "Verbindung wird geprüft",
+  "setup.sourceImportState.saving": "Konfiguration wird gespeichert",
+  "setup.sourceImportState.succeeded": "Importiert",
+  "setup.sourceImportState.failed": "Fehlgeschlagen",
+  "setup.sourceImportState.interrupted": "Unterbrochen",
+  "setup.sourceImportState.skipped": "Übersprungen",
 };
 
 export default de;

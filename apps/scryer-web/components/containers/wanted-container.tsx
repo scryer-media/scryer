@@ -53,6 +53,7 @@ import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
 import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
 import { releaseQueueScopeInput } from "@/lib/utils/release-queue-scope";
 import { createWantedNavigationCountsCache } from "@/lib/utils/wanted-navigation-counts";
+import { createWantedDetailsRequests } from "@/lib/utils/wanted-details-request";
 
 type WantedContainerProps = {
   authorizationSignature: string;
@@ -152,6 +153,7 @@ export const WantedContainer = memo(function WantedContainer({
   const limit = 50;
 
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
+  const detailsRequests = useRef(createWantedDetailsRequests());
   const [decisions, setDecisions] = useState<ReleaseDecisionItem[]>([]);
   const [decisionsLoading, setDecisionsLoading] = useState(false);
   const [standbyReleases, setStandbyReleases] = useState<PendingReleaseItem[]>(
@@ -504,13 +506,59 @@ export const WantedContainer = memo(function WantedContainer({
 
   // --- Wanted actions ---
 
+  const refreshStandby = useCallback(async () => {
+    const request = expandedItemId
+      ? detailsRequests.current.refresh(expandedItemId)
+      : null;
+    await Promise.all([refreshItems(), refreshWantedNavigationCounts()]);
+    if (!request || !detailsRequests.current.isCurrent(request)) return;
+    try {
+      const [standbyResult, decisionsResult] = await Promise.all([
+        client
+          .query(
+            pendingReleasesQuery,
+            {
+              filter: { wantedItemId: request.itemId, statuses: ["STANDBY"] },
+              limit: 300,
+              offset: 0,
+            },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise(),
+        client
+          .query(
+            releaseDecisionsQuery,
+            { wantedItemId: request.itemId, limit: 20 },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise(),
+      ]);
+      if (!detailsRequests.current.isCurrent(request)) return;
+      if (standbyResult.error) throw standbyResult.error;
+      if (decisionsResult.error) throw decisionsResult.error;
+      setStandbyReleases(standbyResult.data?.pendingReleases?.items ?? []);
+      setDecisions(
+        decisionsResult.data?.wantedItem?.releaseDecisions?.items ?? [],
+      );
+    } finally {
+      if (detailsRequests.current.isCurrent(request)) {
+        setDecisionsLoading(false);
+        setStandbyLoading(false);
+      }
+    }
+  }, [client, expandedItemId, refreshItems, refreshWantedNavigationCounts]);
+
   const loadItemDetails = useCallback(
     async (wantedItemId: string, standbyCount: number) => {
       if (expandedItemId === wantedItemId) {
+        detailsRequests.current.select(null);
         setExpandedItemId(null);
         return;
       }
+      const request = detailsRequests.current.select(wantedItemId);
       setExpandedItemId(wantedItemId);
+      setDecisions([]);
+      setStandbyReleases([]);
       setDecisionsLoading(true);
       setStandbyLoading(standbyCount > 0);
       try {
@@ -528,6 +576,7 @@ export const WantedContainer = memo(function WantedContainer({
                 .toPromise()
             : Promise.resolve({ data: null, error: null }),
         ]);
+        if (!detailsRequests.current.isCurrent(request)) return;
         if (decisionsResult.error) throw decisionsResult.error;
         if (standbyResult.error) throw standbyResult.error;
         setDecisions(
@@ -535,11 +584,14 @@ export const WantedContainer = memo(function WantedContainer({
         );
         setStandbyReleases(standbyResult.data?.pendingReleases?.items ?? []);
       } catch {
+        if (!detailsRequests.current.isCurrent(request)) return;
         setDecisions([]);
         setStandbyReleases([]);
       } finally {
-        setDecisionsLoading(false);
-        setStandbyLoading(false);
+        if (detailsRequests.current.isCurrent(request)) {
+          setDecisionsLoading(false);
+          setStandbyLoading(false);
+        }
       }
     },
     [client, expandedItemId],
@@ -974,6 +1026,7 @@ export const WantedContainer = memo(function WantedContainer({
             decisionsLoading,
             standbyReleases,
             standbyLoading,
+            refreshStandby,
             loadItemDetails,
             triggerSearch,
             pauseItem,

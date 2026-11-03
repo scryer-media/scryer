@@ -1,6 +1,33 @@
 import type { LocaleDictionary } from "../types";
 
 const ru: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Этот сохранённый кандидат больше не существует.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Этот сохранённый кандидат больше недоступен. Обновите список и повторите попытку.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "Сохранённый релиз не удалось поставить в очередь. Его можно попробовать снова.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Этот релиз находится в списке блокировки тайтла. Удалите его из списка блокировки, чтобы поставить в очередь.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Этот релиз уже находится в очереди загрузок.",
+  "error.reason.STANDBY_TITLE_BUSY": "Для этого тайтла уже выполняется другой поиск или постановка в очередь. Повторите попытку после завершения.",
+  "wanted.standby": "Резерв · {{count}}",
+  "wanted.standbyTooltip": "Если текущая загрузка не удастся, будут опробованы сохранённые кандидаты: {{count}}.",
+  "wanted.standbyScopeNote": "Учитываются строки этой области; сезонные паки учитываются по опорному эпизоду сезона.",
+  "wanted.loadingStandby": "Загрузка сохранённых кандидатов…",
+  "wanted.standbyCandidates": "Резервные кандидаты · {{count}}",
+  "wanted.downloadStandby": "Скачать",
+  "wanted.downloadStandbyLabel": "Скачать {{name}}",
+  "wanted.standbyConflictTitle": "Загрузки уже выполняются",
+  "wanted.standbyConflictDescription": "Поставить {{name}} в очередь рядом с этими загрузками или отменить их и поставить в очередь вместо них.",
+  "wanted.standbyQueue": "В очередь",
+  "wanted.standbyQueuedRefreshFailed": "Релиз поставлен в очередь, но список не удалось обновить. Обновите страницу, чтобы увидеть текущее состояние.",
+  "wanted.standbyCancelAndQueue": "Отменить и поставить в очередь",
+  "wanted.standbyQueuedCancelFailed": "Релиз поставлен в очередь, но конфликтующие загрузки ({{count}}) не удалось отменить, и они продолжают выполняться.",
+  "wanted.standbyRank": "Место {{rank}}",
+  "wanted.standbyIndexer": "Индексатор",
+  "wanted.standbySize": "Размер",
+  "wanted.standbySeeders": "Сиды",
+  "wanted.standbyScore": "Оценка",
+  "wanted.standbyAge": "Возраст",
+  "wanted.seasonPack": "Сезонный пак",
+  "wanted.noStandbyCandidates": "нет резервных кандидатов",
   "settings.oauthJellyfinCallbackCopied":
     "URL обратного вызова Jellyfin скопирован.",
   "settings.oauthClientIdCopied": "ID клиента OAuth скопирован.",
@@ -8,6 +35,17 @@ const ru: LocaleDictionary = {
     "Не удалось скопировать. Текст выделен; нажмите Ctrl+C или ⌘C.",
   "status.copyFailed":
     "Не удалось скопировать: браузер запретил доступ к буферу обмена.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Не удалось проверить медиафайл, поэтому он не может заменить существующий файл библиотеки.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Этот плейлист или сопутствующий файл требует проверки, так как может зависеть от других файлов.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Не удалось прочитать медиафайл. Проверьте доступ к источнику и повторите попытку.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "Структура медиафайла повреждена. Проверьте исходный файл перед импортом.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Медиафайл зашифрован, и его не удалось проверить.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer не может подключиться к шлюзу метаданных, поскольку системные часы расходятся более чем на 5 минут. Синхронизируйте системные часы и перезапустите Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -6948,6 +6986,41 @@ const ru: LocaleDictionary = {
     "Не удалось переместить файл под новое имя. Файл и его эпизоды остались без изменений.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Нумерация эпизодов неоднозначна",
+  "setup.sourceImportProgress": "Импорт источников",
+  "setup.sourceImportInvalidRequest":
+    "Выбранный источник недоступен. Обновите обнаружение источников и выберите его снова.",
+  "setup.sourceImportSelectionChanged":
+    "Отправленный выбор источников изменить нельзя. Повторите неудачные источники в разделе «Сводка».",
+  "setup.sourceImportNotOwned":
+    "Этот импорт источников недоступен для вашей учётной записи.",
+  "setup.sourceImportQueueFull":
+    "Достигнут предел импорта источников. Повторите попытку после завершения другого импорта.",
+  "setup.sourceImportActive": "Этот импорт источников ещё выполняется.",
+  "setup.sourceImportNotRetryable":
+    "Повторить или пропустить можно только неудачные или прерванные источники.",
+  "setup.sourceImportUnresolved":
+    "Перед завершением настройки повторите или явно пропустите нерешённые источники.",
+  "setup.sourceImportCredentialRequired":
+    "Перед продолжением введите учётные данные источника.",
+  "setup.sourceImportConfigConflict":
+    "Зарезервированная конфигурация изменилась. Проверьте источник перед повтором.",
+  "setup.sourceImportSourceNotReady":
+    "Перед продолжением дождитесь завершения обнаружения источников.",
+  "setup.sourceImportResume": "Переподключиться к ходу выполнения",
+  "setup.sourceImportLoading": "Загрузка хода импорта источников",
+  "setup.sourceImportCredential": "Исправленные учётные данные для {{name}}",
+  "setup.sourceImportRetry": "Повторить неудачные источники",
+  "setup.sourceImportSkip": "Пропустить этот источник",
+  "setup.sourceImportItemFailed":
+    "Проверьте подключение и учётные данные, затем повторите или пропустите.",
+  "setup.sourceImportState.queued": "В очереди",
+  "setup.sourceImportState.installing": "Установка провайдера",
+  "setup.sourceImportState.checking": "Проверка подключения",
+  "setup.sourceImportState.saving": "Сохранение конфигурации",
+  "setup.sourceImportState.succeeded": "Импортировано",
+  "setup.sourceImportState.failed": "Ошибка",
+  "setup.sourceImportState.interrupted": "Прервано",
+  "setup.sourceImportState.skipped": "Пропущено",
 };
 
 export default ru;

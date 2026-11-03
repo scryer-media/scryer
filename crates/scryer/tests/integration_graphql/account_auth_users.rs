@@ -974,10 +974,11 @@ async fn graphql_settings_mutations_require_config_step_up() {
             }),
         ),
         (
-            "executeExternalImport",
-            "executeExternalImport",
-            r#"mutation($input: ExecuteExternalImportInput!) { executeExternalImport(input: $input) { mediaPathsSaved } }"#,
+            "startExternalImportSources",
+            "startExternalImportSources",
+            r#"mutation($requestKey: String!, $input: ExecuteExternalImportInput!) { startExternalImportSources(requestKey: $requestKey, input: $input) { runId } }"#,
             json!({
+                "requestKey": "step-up-source-import",
                 "input": {
                     "prowlarr": null,
                     "sourceWarmupSessionIds": [],
@@ -1566,8 +1567,9 @@ async fn graphql_config_step_up_token_satisfies_protected_settings_mutation() {
 
     let external_import = gql_with_token(
         &ctx,
-        r#"mutation($input: ExecuteExternalImportInput!) { executeExternalImport(input: $input) { mediaPathsSaved errors } }"#,
+        r#"mutation($requestKey: String!, $input: ExecuteExternalImportInput!) { startExternalImportSources(requestKey: $requestKey, input: $input) { runId items { key } } }"#,
         json!({
+            "requestKey": "stepped-up-source-import",
             "input": {
                 "prowlarr": null,
                 "sourceWarmupSessionIds": [],
@@ -1582,11 +1584,11 @@ async fn graphql_config_step_up_token_satisfies_protected_settings_mutation() {
     )
     .await;
     assert_no_errors(&external_import);
+    let accepted = &external_import["data"]["startExternalImportSources"];
     assert!(
-        external_import["data"]["executeExternalImport"]["errors"]
-            .as_array()
-            .is_some_and(Vec::is_empty),
-        "stepped-up external import should reach normal execution: {external_import}"
+        accepted["runId"].as_str().is_some_and(|id| !id.is_empty())
+            && accepted["items"].as_array().is_some_and(Vec::is_empty),
+        "stepped-up external import should be accepted: {external_import}"
     );
 }
 

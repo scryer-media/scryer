@@ -27,34 +27,27 @@ pub(crate) fn resolve_release_labels_from_analysis(
         .map(str::to_string);
 
     let metadata = selected_audio_metadata(details);
-    let best = audio_streams
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| {
-            metadata
-                .get(*index)
-                .is_none_or(|stream| stream.metadata.disposition.commentary != Some(true))
-        })
-        .map(|(index, stream)| {
+    let best = scryer_media_types::primary_audio_stream_index(
+        audio_streams.iter().enumerate().map(|(index, stream)| {
+            let disposition = metadata.get(index).map(|item| &item.metadata.disposition);
             (
-                index,
-                stream,
-                normalize_audio_codec_for_release(
-                    stream.codec.as_deref(),
-                    stream.profile.as_deref(),
-                ),
-            )
-        })
-        .max_by_key(|(index, stream, label)| {
-            (
-                label
+                disposition.is_some_and(|d| d.default == Some(true)),
+                disposition.is_some_and(|d| d.commentary == Some(true)),
+                stream
+                    .name
                     .as_deref()
-                    .map(audio_codec_rank_for_release_label)
-                    .unwrap_or(0),
-                stream.channels.unwrap_or(0),
-                std::cmp::Reverse(*index),
+                    .or_else(|| metadata.get(index).and_then(|item| item.name.as_deref())),
             )
-        });
+        }),
+    )
+    .map(|index| {
+        let stream = &audio_streams[index];
+        (
+            index,
+            stream,
+            normalize_audio_codec_for_release(stream.codec.as_deref(), stream.profile.as_deref()),
+        )
+    });
     let (best_audio_label, audio_channels) = if let Some((index, stream, label)) = best {
         // Release names and rename tokens spell channels as a count ("2.0",
         // "5.1"). Probe layouts spell the same thing as words ("stereo") or
@@ -108,7 +101,6 @@ fn selected_audio_metadata(
         .collect()
 }
 
-#[cfg(any(feature = "runtime-media-analysis", test))]
 pub(crate) fn eligible_audio_streams(
     analysis: &crate::MediaFileAnalysis,
 ) -> Vec<crate::AudioStreamDetail> {
@@ -159,9 +151,7 @@ pub(crate) fn normalize_video_codec_for_release(
     }
 }
 
-pub(crate) use scryer_media_types::{
-    audio_codec_rank_for_release_label, normalize_audio_codec_for_release,
-};
+pub(crate) use scryer_media_types::normalize_audio_codec_for_release;
 
 pub(crate) fn format_audio_channels_for_release(channels: i32) -> String {
     match channels {
@@ -194,6 +184,83 @@ fn audio_channels_from_layout(layout: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primary_audio_labels_keep_mono_instead_of_stereo_commentary() {
+        let (mut streams, mut details) = probed_audio(Some(1), Some("mono"));
+        let mut commentary = streams[0].clone();
+        commentary.channels = Some(2);
+        commentary.codec = Some("flac".into());
+        commentary.name = Some("Director Commentary".into());
+        streams.push(commentary);
+        let mut metadata = details.streams[0].clone();
+        metadata.channels = Some(2);
+        metadata.metadata.disposition.default = Some(true);
+        details.streams.push(metadata);
+        let labels = resolve_release_labels_from_analysis(
+            None,
+            None,
+            None,
+            Some("flac"),
+            None,
+            Some(2),
+            &streams,
+            &details,
+        );
+        assert_eq!(labels.audio_channels.as_deref(), Some("1.0"));
+        assert_eq!(labels.audio_codec.as_deref(), Some("AAC"));
+
+        streams[1].name = None;
+        details.streams[1].metadata.disposition.commentary = Some(true);
+        let labels = resolve_release_labels_from_analysis(
+            None, None, None, None, None, None, &streams, &details,
+        );
+        assert_eq!(labels.audio_channels.as_deref(), Some("1.0"));
+    }
+
+    #[test]
+    fn primary_audio_labels_follow_default_then_order_without_borrowing_channels() {
+        let (mut streams, mut details) = probed_audio(Some(8), None);
+        let mut mono = streams[0].clone();
+        mono.channels = Some(1);
+        streams.push(mono);
+        let mut metadata = details.streams[0].clone();
+        metadata.channels = Some(1);
+        metadata.metadata.disposition.default = Some(true);
+        details.streams.push(metadata);
+        let labels = resolve_release_labels_from_analysis(
+            None, None, None, None, None, None, &streams, &details,
+        );
+        assert_eq!(labels.audio_channels.as_deref(), Some("1.0"));
+        streams[1].channels = None;
+        details.streams[1].metadata.channel_layout = None;
+        let labels = resolve_release_labels_from_analysis(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(8),
+            &streams,
+            &details,
+        );
+        assert_eq!(labels.audio_channels, None);
+        streams.swap(0, 1);
+        let labels = resolve_release_labels_from_analysis(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &streams,
+            &Default::default(),
+        );
+        assert_eq!(
+            labels.audio_channels, None,
+            "legacy stream order must not select maximum channels"
+        );
+    }
 
     #[test]
     fn maps_profile_driven_audio_labels() {

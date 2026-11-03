@@ -307,6 +307,15 @@ export function preferJobRunSnapshot(
   if (!existing) {
     return incoming;
   }
+  if (existing.id === incoming.id && existing.jobKey === "SOURCE_IMPORT") {
+    const previous = isRecord(existing.progressJson)
+      ? normalizeNumber(existing.progressJson.revision)
+      : 0;
+    const next = isRecord(incoming.progressJson)
+      ? normalizeNumber(incoming.progressJson.revision)
+      : 0;
+    if (previous !== next) return next > previous ? incoming : existing;
+  }
   if (
     isTerminalJobRunStatus(existing.status) &&
     !isTerminalJobRunStatus(incoming.status)

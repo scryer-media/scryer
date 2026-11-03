@@ -1,3 +1,5 @@
+import { MEDIA_REFUSAL_KEYS } from "../utils/media-error-message.ts";
+
 /** Coarse error families from current producer and inventory metadata. */
 const GROUPS: readonly {
   codes: readonly string[];
@@ -22,7 +24,19 @@ const GROUPS: readonly {
       "LOCATION_CONFLICT_RECYCLE_UNAVAILABLE",
     ],
   },
+  { codes: ["VALIDATION_ERROR"], reasons: Object.keys(MEDIA_REFUSAL_KEYS) },
   { codes: ["VALIDATION_ERROR"], reasons: ["METADATA_GATEWAY_CLOCK_SKEW"] },
+  { codes: ["NOT_FOUND"], reasons: ["STANDBY_NOT_FOUND"] },
+  {
+    codes: ["VALIDATION_ERROR"],
+    reasons: [
+      "STANDBY_NOT_AVAILABLE",
+      "STANDBY_NOT_QUEUEABLE",
+      "STANDBY_RELEASE_BLOCKLISTED",
+      "STANDBY_ALREADY_ACTIVE",
+      "STANDBY_TITLE_BUSY",
+    ],
+  },
   {
     codes: ["VALIDATION_ERROR"],
     reasons: [
@@ -2273,6 +2287,23 @@ const GROUPS: readonly {
       "WORKFLOW_RETRY_DOWNLOAD_MISMATCH",
       "WORKFLOW_RETRY_PROGRESS_CONFLICT",
       "WORKFLOW_SOURCE_CLEANUP_ALREADY_CLAIMED",
+    ],
+  },
+  {
+    codes: ["VALIDATION_ERROR"],
+    reasons: [
+      "SOURCE_IMPORT_INVALID_REQUEST",
+      "SOURCE_IMPORT_SELECTION_CHANGED",
+      "SOURCE_IMPORT_NOT_OWNED",
+      "SOURCE_IMPORT_QUEUE_FULL",
+      "SOURCE_IMPORT_ACTIVE",
+      "SOURCE_IMPORT_ITEM_NOT_RETRYABLE",
+      "SOURCE_IMPORT_UNRESOLVED",
+      "SOURCE_IMPORT_INTERRUPTED",
+      "SOURCE_IMPORT_CREDENTIAL_REQUIRED",
+      "SOURCE_IMPORT_CONFIG_CONFLICT",
+      "SOURCE_IMPORT_SOURCE_NOT_READY",
+      "SOURCE_IMPORT_ITEM_FAILED",
     ],
   },
 ];

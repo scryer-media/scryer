@@ -9,6 +9,8 @@ mod avi;
 mod codec;
 pub mod diagnostics;
 mod disc;
+mod dv;
+mod elementary;
 mod flv;
 mod legacy_video;
 mod mkv;
@@ -16,6 +18,7 @@ mod mp4;
 mod ogg;
 mod probe;
 mod ps;
+mod realmedia;
 mod scan;
 pub mod source;
 mod ts;
@@ -30,7 +33,7 @@ use types::{RawContainer, RawTrack, TrackKind};
 // ---------------------------------------------------------------------------
 
 /// Errors from native container/codec parsing.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum MediaInfoError {
     #[error("unsupported format: {0}")]
     UnsupportedFormat(String),
@@ -196,18 +199,29 @@ pub fn analyze_file_with_options(
     file_path: &Path,
     options: AnalyzeOptions,
 ) -> Result<MediaAnalysis, MediaInfoError> {
-    let ext = file_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+    let ext = scryer_media_types::formats::canonical_video_extension(file_path)
+        .map(str::to_owned)
+        .or_else(|| {
+            file_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+        })
         .unwrap_or_default();
 
-    if ext == "iso" {
+    if scryer_media_types::formats::media_format_for_extension(&ext).is_some_and(|entry| {
+        entry.handling == scryer_media_types::formats::MediaHandling::DiscImage
+    }) {
         return disc::analyze(file_path, Default::default(), options.profile);
     }
     let mut source = match source::FileSource::open(file_path) {
         Ok(source) => source,
-        Err(_) if container_format_from_extension(&ext).is_none() => {
+        // An unregistered suffix is unsupported whether or not the file is
+        // readable; a registered suffix, or none at all, reports the I/O failure.
+        Err(_)
+            if !ext.is_empty()
+                && scryer_media_types::formats::media_format_for_extension(&ext).is_none() =>
+        {
             return Err(MediaInfoError::UnsupportedFormat(ext));
         }
         Err(error) => return Err(error.into()),
@@ -265,7 +279,21 @@ pub(crate) fn analyze_source_with_limits(
         Some(ContainerFormat::Ogg) => ogg::parse_ogg_source(&mut source),
         Some(ContainerFormat::Flv) => flv::parse_flv_source(&mut source),
         Some(ContainerFormat::Ps) => ps::parse_ps(&mut source),
-        None => return Err(MediaInfoError::UnsupportedFormat(ext)),
+        Some(ContainerFormat::RealMedia) => realmedia::parse(&mut source),
+        Some(ContainerFormat::Dv) => dv::parse(&mut source),
+        Some(ContainerFormat::H264) => elementary::parse_h264(&mut source),
+        Some(ContainerFormat::MpegVideo) => elementary::parse_mpeg(&mut source),
+        Some(format @ (ContainerFormat::FlacAudio | ContainerFormat::WaveAudio)) => {
+            parse_audio_only(&mut source, format)
+        }
+        None => {
+            if size == 0 || header.starts_with(b"MZ") || header.starts_with(b"\x7fELF") {
+                return Err(MediaInfoError::Parse(
+                    "empty or executable input is not media".into(),
+                ));
+            }
+            return Err(MediaInfoError::UnsupportedFormat(ext));
+        }
     };
 
     // Parsers stop enriching once the budget is gone, so a bounded failure here
@@ -295,6 +323,107 @@ pub(crate) fn analyze_source_with_limits(
     Ok(analysis)
 }
 
+/// Recognize explicit audio containers before a video suffix can turn them into
+/// an unavailable probe. Their framing is checked without decoding audio data.
+fn parse_audio_only(
+    source: &mut dyn source::MediaSource,
+    format: ContainerFormat,
+) -> Result<RawContainer, MediaInfoError> {
+    use std::io::SeekFrom;
+    let malformed = || MediaInfoError::Parse("invalid audio container framing".into());
+    source.seek(SeekFrom::Start(0))?;
+    let name = if format == ContainerFormat::FlacAudio {
+        let mut streaminfo = [0u8; 42];
+        source.read_exact(&mut streaminfo)?;
+        if &streaminfo[..4] != b"fLaC"
+            || streaminfo[4] & 0x7f != 0
+            || streaminfo[5..8] != [0, 0, 34]
+        {
+            return Err(malformed());
+        }
+        let minimum = u16::from_be_bytes([streaminfo[8], streaminfo[9]]);
+        let maximum = u16::from_be_bytes([streaminfo[10], streaminfo[11]]);
+        let rate = (u32::from(streaminfo[18]) << 12)
+            | (u32::from(streaminfo[19]) << 4)
+            | (u32::from(streaminfo[20]) >> 4);
+        let bits = ((streaminfo[20] & 1) << 4 | streaminfo[21] >> 4) + 1;
+        if minimum < 16 || maximum < minimum || rate == 0 || !(4..=32).contains(&bits) {
+            return Err(malformed());
+        }
+        let mut last = streaminfo[4] & 0x80 != 0;
+        let mut position = 42u64;
+        while !last {
+            let mut block = [0u8; 4];
+            source.read_exact(&mut block)?;
+            if matches!(block[0] & 0x7f, 0 | 127) {
+                return Err(malformed());
+            }
+            let length = u32::from_be_bytes([0, block[1], block[2], block[3]]);
+            position = position
+                .checked_add(4 + u64::from(length))
+                .filter(|end| *end <= source.len())
+                .ok_or_else(malformed)?;
+            source.seek(SeekFrom::Start(position))?;
+            last = block[0] & 0x80 != 0;
+        }
+        "flac"
+    } else {
+        let mut riff = [0u8; 12];
+        source.read_exact(&mut riff)?;
+        let end = u64::from(u32::from_le_bytes(riff[4..8].try_into().unwrap())) + 8;
+        if &riff[..4] != b"RIFF" || &riff[8..] != b"WAVE" || end < 12 || end > source.len() {
+            return Err(malformed());
+        }
+        let mut position = 12u64;
+        let mut has_format = false;
+        let mut has_data = false;
+        while position < end {
+            if end - position < 8 {
+                return Err(malformed());
+            }
+            source.seek(SeekFrom::Start(position))?;
+            let mut chunk = [0u8; 8];
+            source.read_exact(&mut chunk)?;
+            let length = u64::from(u32::from_le_bytes(chunk[4..8].try_into().unwrap()));
+            let next = position
+                .checked_add(8 + length + (length & 1))
+                .filter(|next| *next <= end)
+                .ok_or_else(malformed)?;
+            if &chunk[..4] == b"fmt " {
+                if length < 16 {
+                    return Err(malformed());
+                }
+                let mut fmt = [0u8; 16];
+                source.read_exact(&mut fmt)?;
+                if u16::from_le_bytes([fmt[0], fmt[1]]) == 0
+                    || u16::from_le_bytes([fmt[2], fmt[3]]) == 0
+                    || u32::from_le_bytes(fmt[4..8].try_into().unwrap()) == 0
+                    || u16::from_le_bytes([fmt[12], fmt[13]]) == 0
+                {
+                    return Err(malformed());
+                }
+                has_format = true;
+            } else if &chunk[..4] == b"data" {
+                has_data = true;
+            }
+            position = next;
+        }
+        if !has_format || !has_data {
+            return Err(malformed());
+        }
+        "wav"
+    };
+    let mut details = scryer_media_types::AnalysisDetails::default();
+    details.report.status = scryer_media_types::ProbeStatus::Complete;
+    Ok(RawContainer {
+        format_name: name.into(),
+        duration_seconds: None,
+        num_chapters: None,
+        tracks: Vec::new(),
+        details,
+    })
+}
+
 fn resolve_container_format(
     ext: &str,
     sniffed: Option<ContainerFormat>,
@@ -303,16 +432,32 @@ fn resolve_container_format(
 }
 
 fn container_format_from_extension(ext: &str) -> Option<ContainerFormat> {
-    match ext {
-        "mkv" | "webm" => Some(ContainerFormat::Matroska),
-        "mp4" | "m4v" | "mov" => Some(ContainerFormat::Mp4),
-        "avi" => Some(ContainerFormat::Avi),
-        "ts" | "m2ts" => Some(ContainerFormat::Ts),
-        "mpg" | "mpeg" | "vob" => Some(ContainerFormat::Ps),
-        "wmv" => Some(ContainerFormat::Asf),
-        "ogv" => Some(ContainerFormat::Ogg),
-        "flv" => Some(ContainerFormat::Flv),
-        _ => None,
+    use scryer_media_types::formats::{
+        MediaFormat, MediaProbeCapability, media_format_for_extension,
+    };
+    let registration = media_format_for_extension(ext)?;
+    if registration.probe != MediaProbeCapability::Native {
+        return None;
+    }
+    match registration.format {
+        MediaFormat::Matroska | MediaFormat::WebM => Some(ContainerFormat::Matroska),
+        MediaFormat::Mp4 | MediaFormat::QuickTime => Some(ContainerFormat::Mp4),
+        MediaFormat::Avi => Some(ContainerFormat::Avi),
+        MediaFormat::MpegTs => Some(ContainerFormat::Ts),
+        MediaFormat::MpegProgram => Some(ContainerFormat::Ps),
+        MediaFormat::Asf => Some(ContainerFormat::Asf),
+        MediaFormat::Ogg | MediaFormat::Ogm => Some(ContainerFormat::Ogg),
+        MediaFormat::Flv => Some(ContainerFormat::Flv),
+        MediaFormat::RealMedia => Some(ContainerFormat::RealMedia),
+        MediaFormat::Dv => Some(ContainerFormat::Dv),
+        MediaFormat::H264 => Some(ContainerFormat::H264),
+        MediaFormat::MpegVideo => Some(ContainerFormat::MpegVideo),
+        MediaFormat::StreamLink
+        | MediaFormat::DiscImage
+        | MediaFormat::Playlist
+        | MediaFormat::Companion
+        | MediaFormat::Unsupported
+        | MediaFormat::Svq3 => None,
     }
 }
 
@@ -326,9 +471,43 @@ enum ContainerFormat {
     Ogg,
     Flv,
     Ps,
+    RealMedia,
+    Dv,
+    H264,
+    MpegVideo,
+    FlacAudio,
+    WaveAudio,
+}
+
+#[test]
+fn every_registered_native_format_has_a_parser_dispatch() {
+    use scryer_media_types::formats::{MEDIA_FORMATS, MediaProbeCapability};
+    for entry in MEDIA_FORMATS {
+        assert_eq!(
+            container_format_from_extension(entry.extension).is_some(),
+            entry.probe == MediaProbeCapability::Native,
+            "{}",
+            entry.extension
+        );
+    }
 }
 
 fn sniff_container_format_from_bytes(data: &[u8]) -> Option<ContainerFormat> {
+    if data.starts_with(b"fLaC") {
+        return Some(ContainerFormat::FlacAudio);
+    }
+    if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WAVE") {
+        return Some(ContainerFormat::WaveAudio);
+    }
+    if dv::sniff(data) {
+        return Some(ContainerFormat::Dv);
+    }
+    if data.starts_with(b".RMF") {
+        return Some(ContainerFormat::RealMedia);
+    }
+    if data.starts_with(&[0, 0, 1, 0xb3]) {
+        return Some(ContainerFormat::MpegVideo);
+    }
     if data.starts_with(&[0, 0, 1, 0xba]) {
         return Some(ContainerFormat::Ps);
     }
@@ -363,6 +542,9 @@ fn sniff_container_format_from_bytes(data: &[u8]) -> Option<ContainerFormat> {
         return Some(ContainerFormat::Mp4);
     }
 
+    if elementary::sniff_h264(data) {
+        return Some(ContainerFormat::H264);
+    }
     None
 }
 
@@ -574,22 +756,18 @@ fn build_analysis(mut raw: RawContainer) -> MediaAnalysis {
 }
 
 fn select_primary_audio_track<'a>(audio_tracks: &[&'a RawTrack]) -> Option<&'a RawTrack> {
-    audio_tracks
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, track)| track.metadata.disposition.commentary != Some(true))
-        .max_by_key(|(index, track)| {
-            let rank = scryer_media_types::normalize_audio_codec_for_release(
-                track.codec_name.as_deref(),
-                track.audio_profile.as_deref(),
-            )
-            .as_deref()
-            .map(scryer_media_types::audio_codec_rank_for_release_label)
-            .unwrap_or(0);
-            (rank, track.channels.unwrap_or(0), std::cmp::Reverse(*index))
-        })
-        .map(|(_, track)| track)
+    scryer_media_types::primary_audio_stream_index(audio_tracks.iter().map(|track| {
+        (
+            track
+                .metadata
+                .disposition
+                .default
+                .unwrap_or(track.default_track),
+            track.metadata.disposition.commentary == Some(true),
+            track.name.as_deref(),
+        )
+    }))
+    .map(|index| audio_tracks[index])
 }
 
 fn populate_analysis_details(raw: &mut RawContainer) {
@@ -601,6 +779,9 @@ fn populate_analysis_details(raw: &mut RawContainer) {
     }
     for (index, track) in raw.tracks.iter_mut().enumerate() {
         track.metadata.id.get_or_insert_with(|| index.to_string());
+        if track.default_track {
+            track.metadata.disposition.default.get_or_insert(true);
+        }
         if track.kind == TrackKind::Audio
             && let Some((code, exhausted)) = audio_metadata::enrich_private_header(track)
         {
@@ -822,7 +1003,151 @@ mod tests {
     use super::*;
 
     #[test]
-    fn analysis_selects_best_audio_and_keeps_primary_fields_on_that_track() {
+    fn primary_audio_probe_keeps_mono_main_track_over_commentary() {
+        let mut mono = test_track(TrackKind::Audio, "aac");
+        mono.channels = Some(1);
+        let mut commentary = test_track(TrackKind::Audio, "flac");
+        commentary.channels = Some(2);
+        commentary.default_track = true;
+        commentary.name = Some("Director's Commentary".into());
+        let analysis = build_analysis(RawContainer {
+            format_name: "matroska".into(),
+            duration_seconds: Some(60.0),
+            num_chapters: None,
+            details: Default::default(),
+            tracks: vec![commentary, mono],
+        });
+        assert_eq!(analysis.audio_channels, Some(1));
+        assert_eq!(analysis.audio_codec.as_deref(), Some("aac"));
+    }
+
+    #[test]
+    fn primary_audio_probe_uses_default_then_first_non_commentary() {
+        let mut stereo = test_track(TrackKind::Audio, "flac");
+        stereo.channels = Some(2);
+        let mut mono = test_track(TrackKind::Audio, "aac");
+        mono.channels = Some(1);
+        mono.default_track = true;
+        assert_eq!(
+            select_primary_audio_track(&[&stereo, &mono])
+                .unwrap()
+                .channels,
+            Some(1)
+        );
+        mono.default_track = false;
+        assert_eq!(
+            select_primary_audio_track(&[&mono, &stereo])
+                .unwrap()
+                .channels,
+            Some(1)
+        );
+        mono.metadata.disposition.commentary = Some(true);
+        stereo.metadata.disposition.commentary = Some(true);
+        assert!(select_primary_audio_track(&[&mono, &stereo]).is_none());
+    }
+
+    #[test]
+    fn container_signatures_win_over_embedded_elementary_headers() {
+        let sps = [0, 0, 1, 0x67, 66, 0, 30, 244, 5, 1, 236, 128];
+        for (prefix, expected) in [
+            (vec![0, 0, 1, 0xba], ContainerFormat::Ps),
+            (
+                vec![0, 0, 0, 24, b'f', b't', b'y', b'p'],
+                ContainerFormat::Mp4,
+            ),
+            (vec![0x1a, 0x45, 0xdf, 0xa3], ContainerFormat::Matroska),
+        ] {
+            let bytes = [prefix, sps.to_vec()].concat();
+            assert_eq!(
+                resolve_container_format("avc", sniff_container_format_from_bytes(&bytes)),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn content_only_aliases_never_force_a_container() {
+        for extension in ["dat", "svq3", "bivx", "divx", "xvid"] {
+            assert_eq!(resolve_container_format(extension, None), None);
+            assert_eq!(
+                resolve_container_format(extension, Some(ContainerFormat::Avi)),
+                Some(ContainerFormat::Avi)
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_media_is_distinct_from_empty_executable_and_io_failure() {
+        use std::io::Cursor;
+        for bytes in [
+            Vec::new(),
+            b"MZnot-media".to_vec(),
+            b"\x7fELFnot-media".to_vec(),
+        ] {
+            assert!(matches!(
+                analyze_source(&mut Cursor::new(bytes), "wtv", AnalyzeOptions::default()),
+                Err(MediaInfoError::Parse(_))
+            ));
+        }
+        assert!(matches!(
+            analyze_source(
+                &mut Cursor::new(b"legacy format"),
+                "wtv",
+                AnalyzeOptions::default()
+            ),
+            Err(MediaInfoError::UnsupportedFormat(_))
+        ));
+        assert!(matches!(
+            analyze_file(Path::new("")),
+            Err(MediaInfoError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn audio_only_signatures_override_video_suffixes_without_becoming_unsupported() {
+        let mut flac = b"fLaC\x80\0\0\x22".to_vec();
+        flac.extend([0x10, 0, 0x10, 0, 0, 0, 0, 0, 0, 0]);
+        flac.extend(((44100u64 << 44) | (15u64 << 36)).to_be_bytes());
+        flac.extend([0; 16]);
+        let mut wave = b"RIFF".to_vec();
+        wave.extend(38u32.to_le_bytes());
+        wave.extend(b"WAVEfmt \x10\0\0\0\x01\0\x01\0");
+        wave.extend(44100u32.to_le_bytes());
+        wave.extend(88200u32.to_le_bytes());
+        wave.extend(b"\x02\0\x10\0data\x02\0\0\0\0\0");
+        for bytes in [&flac, &wave] {
+            for extension in ["dat", "xvid", "wtv", "mkv"] {
+                let analysis = analyze_source(
+                    &mut std::io::Cursor::new(bytes),
+                    extension,
+                    AnalyzeOptions::default(),
+                )
+                .unwrap();
+                assert!(!is_valid_video(&analysis));
+                assert_eq!(analysis.video_codec, None);
+                assert_eq!(analysis.details.selected_video_id, None);
+                assert_eq!(
+                    analysis.details.report.status,
+                    scryer_media_types::ProbeStatus::Complete
+                );
+            }
+        }
+        flac[7] = 33;
+        wave[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        for bytes in [flac, wave, b"fLaC".to_vec()] {
+            assert!(
+                analyze_source(
+                    &mut std::io::Cursor::new(bytes),
+                    "wtv",
+                    AnalyzeOptions::default(),
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn analysis_selects_default_audio_and_keeps_primary_fields_on_that_track() {
         let analysis = build_analysis(RawContainer {
             details: Default::default(),
             format_name: "matroska".into(),
@@ -896,6 +1221,10 @@ mod tests {
         assert_eq!(analysis.audio_profile, None);
         assert_eq!(analysis.audio_channels, Some(6));
         assert_eq!(analysis.audio_bitrate_kbps, Some(640));
+        assert_eq!(
+            analysis.details.streams[2].metadata.disposition.default,
+            Some(true)
+        );
     }
 
     #[test]
@@ -958,7 +1287,9 @@ mod tests {
             details: Default::default(),
         });
         assert_eq!(analysis.audio_codec.as_deref(), Some("aac"));
-        assert_eq!(analysis.audio_channels, Some(6));
+        // The first ordinary audio track is primary; a later six-channel
+        // descriptive track must not replace its channel count.
+        assert_eq!(analysis.audio_channels, Some(2));
         assert_eq!(analysis.audio_streams.len(), 3);
         assert!(
             analysis

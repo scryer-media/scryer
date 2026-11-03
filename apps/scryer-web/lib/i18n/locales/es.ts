@@ -1,12 +1,50 @@
 import type { LocaleDictionary } from "../types";
 
 const es: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Este candidato guardado ya no existe.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Este candidato guardado ya no está disponible. Actualiza la lista e inténtalo de nuevo.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "La publicación guardada no se pudo poner en cola. Sigue disponible para reintentar.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Esta publicación está en la lista de bloqueo del título. Quítala de la lista de bloqueo para ponerla en cola.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Esta publicación ya está en la cola de descargas.",
+  "error.reason.STANDBY_TITLE_BUSY": "Hay otra búsqueda o acción de cola en curso para este título. Inténtalo de nuevo cuando termine.",
+  "wanted.standby": "Reserva · {{count}}",
+  "wanted.standbyTooltip": "Se probarán {{count}} candidatos guardados si falla la captura actual.",
+  "wanted.standbyScopeNote": "Cuenta las filas de este ámbito; los packs de temporada se cuentan en el episodio ancla de la temporada.",
+  "wanted.loadingStandby": "Cargando candidatos guardados…",
+  "wanted.standbyCandidates": "Candidatos de reserva · {{count}}",
+  "wanted.downloadStandby": "Descargar",
+  "wanted.downloadStandbyLabel": "Descargar {{name}}",
+  "wanted.standbyConflictTitle": "Descargas ya en curso",
+  "wanted.standbyConflictDescription": "Añade {{name}} a la cola junto a estas descargas, o cancélalas y ponlo en cola en su lugar.",
+  "wanted.standbyQueue": "Poner en cola",
+  "wanted.standbyQueuedRefreshFailed": "La publicación se puso en cola, pero no se pudo actualizar la lista. Recarga la página para ver el estado actual.",
+  "wanted.standbyCancelAndQueue": "Cancelar y poner en cola",
+  "wanted.standbyQueuedCancelFailed": "La publicación se puso en cola, pero {{count}} descargas en conflicto no se pudieron cancelar y siguen en curso.",
+  "wanted.standbyRank": "Puesto {{rank}}",
+  "wanted.standbyIndexer": "Indexador",
+  "wanted.standbySize": "Tamaño",
+  "wanted.standbySeeders": "Semillas",
+  "wanted.standbyScore": "Puntuación",
+  "wanted.standbyAge": "Antigüedad",
+  "wanted.seasonPack": "Pack de temporada",
+  "wanted.noStandbyCandidates": "sin candidatos de reserva",
   "settings.oauthJellyfinCallbackCopied": "URL de retorno de Jellyfin copiada.",
   "settings.oauthClientIdCopied": "ID de cliente OAuth copiado.",
   "status.copyFailedSelected":
     "No se pudo copiar. El texto está seleccionado; pulsa Ctrl+C o ⌘C.",
   "status.copyFailed":
     "No se pudo copiar: el navegador denegó el acceso al portapapeles.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "No se pudo verificar el archivo multimedia, por lo que no puede reemplazar un archivo existente de la biblioteca.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Esta lista de reproducción o archivo complementario requiere revisión porque puede depender de otros archivos.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "No se pudo leer el archivo multimedia. Comprueba el acceso al origen y vuelve a intentarlo.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "La estructura del archivo multimedia no es válida. Revisa el archivo de origen antes de importarlo.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "El archivo multimedia está cifrado y no se pudo verificar.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer no puede conectarse a la pasarela de metadatos porque el reloj del sistema tiene un desfase de más de 5 minutos. Sincronice el reloj del sistema y reinicie Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -3737,6 +3775,42 @@ const es: LocaleDictionary = {
     "No se pudo mover el archivo a su nuevo nombre. El archivo y sus episodios quedaron como estaban.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "La numeración de episodios es ambigua",
+  "setup.sourceImportProgress": "Importando orígenes",
+  "setup.sourceImportInvalidRequest":
+    "Un origen seleccionado no está disponible. Actualiza la detección de orígenes y vuelve a seleccionarlo.",
+  "setup.sourceImportSelectionChanged":
+    "Las selecciones de orígenes enviadas son fijas. Reintenta los orígenes fallidos desde el Resumen.",
+  "setup.sourceImportNotOwned":
+    "Esta importación de orígenes no está disponible para tu cuenta.",
+  "setup.sourceImportQueueFull":
+    "La capacidad de importación de orígenes está llena. Inténtalo de nuevo cuando termine otra importación.",
+  "setup.sourceImportActive": "Esta importación de orígenes sigue en curso.",
+  "setup.sourceImportNotRetryable":
+    "Solo se pueden reintentar u omitir los orígenes fallidos o interrumpidos.",
+  "setup.sourceImportUnresolved":
+    "Reintenta u omite explícitamente los orígenes pendientes antes de finalizar la configuración.",
+  "setup.sourceImportCredentialRequired":
+    "Introduce la credencial del origen antes de continuar.",
+  "setup.sourceImportConfigConflict":
+    "La configuración reservada cambió. Revisa el origen antes de reintentar.",
+  "setup.sourceImportSourceNotReady":
+    "Espera a que termine la detección de orígenes antes de continuar.",
+  "setup.sourceImportResume": "Reconectar con el progreso",
+  "setup.sourceImportLoading":
+    "Cargando el progreso de la importación de orígenes",
+  "setup.sourceImportCredential": "Credencial corregida para {{name}}",
+  "setup.sourceImportRetry": "Reintentar orígenes fallidos",
+  "setup.sourceImportSkip": "Omitir este origen",
+  "setup.sourceImportItemFailed":
+    "Comprueba la conexión y las credenciales y luego reintenta u omite.",
+  "setup.sourceImportState.queued": "En cola",
+  "setup.sourceImportState.installing": "Instalando proveedor",
+  "setup.sourceImportState.checking": "Comprobando conexión",
+  "setup.sourceImportState.saving": "Guardando configuración",
+  "setup.sourceImportState.succeeded": "Importado",
+  "setup.sourceImportState.failed": "Fallido",
+  "setup.sourceImportState.interrupted": "Interrumpido",
+  "setup.sourceImportState.skipped": "Omitido",
 };
 
 export default es;

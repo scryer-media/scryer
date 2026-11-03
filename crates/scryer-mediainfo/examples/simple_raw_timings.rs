@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::env;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -389,15 +388,11 @@ fn group_explicit_files(paths: Vec<PathBuf>) -> BTreeMap<&'static str, Vec<PathB
 }
 
 fn empty_media_groups() -> BTreeMap<&'static str, Vec<PathBuf>> {
-    BTreeMap::from([
-        ("mkv", Vec::new()),
-        ("mp4", Vec::new()),
-        ("avi", Vec::new()),
-        ("ts", Vec::new()),
-        ("wmv", Vec::new()),
-        ("ogv", Vec::new()),
-        ("flv", Vec::new()),
-    ])
+    scryer_media_types::formats::MEDIA_FORMATS
+        .iter()
+        .filter(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
+        .map(|entry| (entry.extension, Vec::new()))
+        .collect()
 }
 
 fn collect_by_type(
@@ -456,21 +451,9 @@ fn collect_by_type(
 }
 
 fn media_type(path: &Path) -> Option<&'static str> {
-    match path
-        .extension()
-        .and_then(OsStr::to_str)
-        .map(|ext| ext.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("mkv") => Some("mkv"),
-        Some("mp4" | "m4v" | "mov") => Some("mp4"),
-        Some("avi") => Some("avi"),
-        Some("ts" | "m2ts") => Some("ts"),
-        Some("wmv") => Some("wmv"),
-        Some("ogv") => Some("ogv"),
-        Some("flv") => Some("flv"),
-        _ => None,
-    }
+    scryer_media_types::formats::media_format_for_path(path)
+        .filter(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
+        .map(|entry| entry.extension)
 }
 
 #[cfg(test)]

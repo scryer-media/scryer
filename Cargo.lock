@@ -5597,6 +5597,7 @@ dependencies = [
  "icu_collator",
  "icu_locale",
  "regex",
+ "scryer-media-types",
  "serde",
  "serde_json",
  "strum 0.28.0",

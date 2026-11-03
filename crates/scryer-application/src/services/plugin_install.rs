@@ -195,6 +195,11 @@ impl PluginInstallOrchestrator {
             .map(|handle| handle.tx.subscribe())
     }
 
+    /// Monotonic count of accepted install/upgrade operations, including expired snapshots.
+    pub async fn operation_generation(&self) -> u64 {
+        self.state.lock().await.next_generation
+    }
+
     /// Plugins whose install/upgrade slot is currently held, by any actor —
     /// including the system actor that runs scheduled automatic updates.
     pub async fn active_plugin_ids(&self) -> HashSet<String> {

@@ -1,8 +1,12 @@
 use super::*;
 use crate::stored_paths::path_to_stored_string;
 use crate::stored_paths::stored_path_to_path_buf;
+// Media here means a standalone library file, as library scans catalog it: a
+// DVD companion such as VIDEO_TS.IFO is never recorded on its own, so it must
+// neither count as media nor block a movie's disc-folder delete.
 use scryer_domain::{
-    MediaFacet, RootFolderEntry, Title, is_image_file, is_subtitle_file, is_video_file,
+    MediaFacet, RootFolderEntry, Title, is_image_file, is_standalone_video_file as is_video_file,
+    is_subtitle_file,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::ErrorKind;
@@ -2412,6 +2416,20 @@ mod tests {
         for path in context.recorded_paths {
             assert!(stored_path_to_path_buf(&path).exists());
         }
+    }
+
+    #[test]
+    fn disc_companions_and_probe_only_suffixes_are_not_delete_media() {
+        for path in ["/m/Movie/VIDEO_TS/VIDEO_TS.IFO", "/m/Movie/clip.mts"] {
+            assert!(matches!(
+                classify_path_for_preview(Path::new(path)),
+                DeletePreviewCategory::Other
+            ));
+        }
+        assert!(matches!(
+            classify_path_for_preview(Path::new("/m/Movie/VIDEO_TS/VTS_01_1.VOB")),
+            DeletePreviewCategory::Media
+        ));
     }
 
     #[test]

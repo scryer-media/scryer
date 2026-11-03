@@ -2730,12 +2730,25 @@ impl SettingsMutations {
     }
 
     /// Mark the setup wizard as complete.
-    async fn complete_setup(&self, ctx: &Context<'_>) -> GqlResult<CompleteSetupPayload> {
+    async fn complete_setup(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Accepted source import that must be owned and resolved before setup completes; omitted for manual setup."
+        )]
+        source_import_run_id: Option<ID>,
+    ) -> GqlResult<CompleteSetupPayload> {
         let app = app_from_ctx(ctx)?;
         let actor =
             require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
                 .await?;
-        let completed = app.complete_setup(&actor).await.map_err(to_gql_error)?;
+        let completed = app
+            .complete_setup_for_source_import(
+                &actor,
+                source_import_run_id.as_ref().map(|id| id.as_str()),
+            )
+            .await
+            .map_err(to_gql_error)?;
         Ok(CompleteSetupPayload { completed })
     }
 }

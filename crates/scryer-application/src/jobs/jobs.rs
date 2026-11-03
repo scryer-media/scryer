@@ -2239,6 +2239,10 @@ impl AppUseCase {
                 crate::error_reasons::jobs::LOCATION_OPERATIONS_INVALID,
                 "location operations must be started from the location operation mutation",
             )),
+            JobKey::SourceImport => Err(AppError::validation_refused(
+                crate::source_import::refusal::INVALID_REQUEST,
+                "source imports must be started from setup",
+            )),
         }
     }
 
