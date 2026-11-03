@@ -6,7 +6,7 @@ use crate::catalog_workflow::{
     TITLE_MORE_LIKE_THIS_BACKGROUND_REFRESH_HOURS, TITLE_MORE_LIKE_THIS_HYDRATION_LIMIT,
 };
 use crate::error_reasons;
-use crate::ports::DiscoveryNeighborCacheRecord;
+use crate::ports::{DiscoveryNeighborCacheRecord, DiscoveryNeighborItemRecord};
 
 /// Neighbours served when the caller names no limit.
 pub const DISCOVERY_NEIGHBORS_DEFAULT_LIMIT: i64 = 24;
@@ -21,6 +21,17 @@ pub struct DiscoveryNeighborsQuery {
     /// [`DISCOVERY_NEIGHBORS_DEFAULT_LIMIT`] (24), so a larger limit serves no
     /// more than that.
     pub limit: i64,
+}
+
+/// An anchor's related titles and the neighbourhoods they fall into.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiscoveryNeighborsView {
+    /// Related titles, best first, each naming its group.
+    pub items: Vec<DiscoveryNeighborItemRecord>,
+    /// The groups that hold at least one of `items`, in the gateway's order.
+    /// `size` counts only the served items. Empty when the gateway did not
+    /// group the results.
+    pub groups: Vec<crate::DiscoveryRelatedGroup>,
 }
 
 /// The anchor's target key in canonical form and the gateway subject that
@@ -97,22 +108,22 @@ impl AppUseCase {
     ///
     /// The gate matches the library graph's and runs before the key is
     /// checked: with personalized discovery off, the facet not visible, or no
-    /// library of the facet the actor may view, the answer is an empty list
-    /// and never a refusal.
+    /// library of the facet the actor may view, the answer is empty and never
+    /// a refusal.
     pub async fn discovery_neighbors(
         &self,
         actor: &User,
         query: DiscoveryNeighborsQuery,
-    ) -> AppResult<Vec<DiscoveryItemRecord>> {
+    ) -> AppResult<DiscoveryNeighborsView> {
         let visibility = self.discovery_visibility(actor).await?;
         if !visibility.allows_facet(&query.facet) {
-            return Ok(Vec::new());
+            return Ok(DiscoveryNeighborsView::default());
         }
         let effective_library_ids = self
             .discovery_effective_library_ids(actor, &query.facet, &[])
             .await?;
         if effective_library_ids.is_empty() || !self.personalized_discovery_enabled().await? {
-            return Ok(Vec::new());
+            return Ok(DiscoveryNeighborsView::default());
         }
         let (target_key, subject) = discovery_neighbor_subject(&query.target_key, &query.facet)?;
         let requested_limit = query
@@ -120,37 +131,50 @@ impl AppUseCase {
             .clamp(0, TITLE_MORE_LIKE_THIS_HYDRATION_LIMIT as i64)
             as usize;
         if requested_limit == 0 {
-            return Ok(Vec::new());
+            return Ok(DiscoveryNeighborsView::default());
         }
 
-        let mut items = self.discovery_neighbor_items(&target_key, subject).await?;
+        let cached = self.discovery_neighbor_items(&target_key, subject).await?;
+        let mut items = cached.items;
         items.truncate(requested_limit);
         let readable_library_ids = self
             .authorized_library_ids(actor, None, LibraryPermission::View)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
+        let records = items
+            .iter()
+            .map(|neighbor| neighbor.item.clone())
+            .collect::<Vec<_>>();
         let ownership = self
-            .discovery_items_readable_ownership(&items, &readable_library_ids)
+            .discovery_items_readable_ownership(&records, &readable_library_ids)
             .await?;
-        for (item, owned) in items.iter_mut().zip(ownership) {
-            item.resolved_title_id = owned.readable_title_id;
-            item.owned_in_input = false;
+        for (neighbor, owned) in items.iter_mut().zip(ownership) {
+            neighbor.item.resolved_title_id = owned.readable_title_id;
+            neighbor.item.owned_in_input = false;
         }
-        Ok(items)
+        let groups = discovery_neighbor_served_groups(&mut items, cached.groups);
+        Ok(DiscoveryNeighborsView { items, groups })
     }
 
     /// The anchor's related titles from the cache while it is fresh, else
     /// from the gateway, which then refreshes the cache. A failed cache write
     /// is logged and the caller gets the gateway's answer as mapped.
+    ///
+    /// An entry with related titles but no groups stays fresh only until the
+    /// next read: the gateway groups whenever it can, so such an answer is
+    /// one whose grouping was skipped (or one cached before grouping). The
+    /// next read asks the gateway again, and serves the cached entry if that
+    /// ask fails.
     async fn discovery_neighbor_items(
         &self,
         target_key: &str,
         subject: DiscoverySubjectInput,
-    ) -> AppResult<Vec<DiscoveryItemRecord>> {
+    ) -> AppResult<DiscoveryNeighborCacheRecord> {
         let language = self.metadata_language().await;
         let now = self.runtime.environment.now();
         let ttl = chrono::Duration::hours(TITLE_MORE_LIKE_THIS_BACKGROUND_REFRESH_HOURS);
+        let mut ungrouped = None;
         if let Some(cached) = self
             .services
             .library
@@ -159,7 +183,10 @@ impl AppUseCase {
             .await?
             && now.signed_duration_since(cached.fetched_at) < ttl
         {
-            return Ok(cached.items);
+            if !discovery_neighbor_cache_ungrouped(&cached) {
+                return Ok(cached);
+            }
+            ungrouped = Some(cached);
         }
 
         let input = crate::TitleRecommendationsInput {
@@ -169,30 +196,56 @@ impl AppUseCase {
             language: language.clone(),
             include_unresolved: true,
         };
-        let recommendations = self
+        let recommendations = match self
             .services
             .library
             .metadata_gateway
             .title_recommendations(&input)
-            .await?
-            .results;
+            .await
+        {
+            Ok(recommendations) => recommendations,
+            Err(error) => match ungrouped {
+                Some(cached) => {
+                    warn!(
+                        target_key,
+                        error = %error,
+                        "failed to refresh ungrouped discovery neighbors; serving the cached entry"
+                    );
+                    return Ok(cached);
+                }
+                None => return Err(error),
+            },
+        };
         let mut items = title_more_like_this_item_records(
             target_key,
             &[target_key.to_string()],
-            &recommendations,
+            &recommendations.results,
             TITLE_MORE_LIKE_THIS_HYDRATION_LIMIT,
             now,
         )?;
+        let group_of = recommendations
+            .results
+            .iter()
+            .filter_map(|result| Some((result.target_key.trim(), result.group_id?)))
+            .collect::<HashMap<_, _>>();
         let run_id = format!("neighbors:{target_key}");
         for item in &mut items {
             item.id = format!("{run_id}:{}", item.target_key);
             item.run_id = run_id.clone();
             item.base_generation_id = None;
         }
+        let items = items
+            .into_iter()
+            .map(|item| DiscoveryNeighborItemRecord {
+                group_id: group_of.get(item.target_key.as_str()).copied(),
+                item,
+            })
+            .collect();
         let record = DiscoveryNeighborCacheRecord {
             target_key: target_key.to_string(),
             language,
             items,
+            groups: recommendations.groups,
             fetched_at: now,
         };
         let discovery = &self.services.library.discovery;
@@ -205,7 +258,7 @@ impl AppUseCase {
                 error = %error,
                 "failed to cache discovery neighbors"
             );
-            return Ok(record.items);
+            return Ok(record);
         }
         // Read the entry back so a first expansion serves exactly what a
         // cached one will: the store enriches and screens what it keeps. A
@@ -214,18 +267,48 @@ impl AppUseCase {
             .get_discovery_neighbor_cache(target_key, &record.language)
             .await
         {
-            Ok(Some(cached)) => Ok(cached.items),
-            Ok(None) => Ok(record.items),
+            Ok(Some(cached)) => Ok(cached),
+            Ok(None) => Ok(record),
             Err(error) => {
                 warn!(
                     target_key,
                     error = %error,
                     "failed to read back cached discovery neighbors"
                 );
-                Ok(record.items)
+                Ok(record)
             }
         }
     }
+}
+
+/// Whether a cache entry has related titles but no groups to place them in.
+fn discovery_neighbor_cache_ungrouped(record: &DiscoveryNeighborCacheRecord) -> bool {
+    !record.items.is_empty() && record.groups.is_empty()
+}
+
+/// The groups that hold at least one served item, in the gateway's order,
+/// each sized by its served items. An item naming a group the gateway did
+/// not return is ungrouped, so every served `group_id` names a served group.
+pub(super) fn discovery_neighbor_served_groups(
+    items: &mut [DiscoveryNeighborItemRecord],
+    groups: Vec<crate::DiscoveryRelatedGroup>,
+) -> Vec<crate::DiscoveryRelatedGroup> {
+    let known = groups.iter().map(|group| group.id).collect::<HashSet<_>>();
+    let mut served = HashMap::<i64, i64>::new();
+    for neighbor in items.iter_mut() {
+        match neighbor.group_id {
+            Some(id) if known.contains(&id) => *served.entry(id).or_default() += 1,
+            Some(_) => neighbor.group_id = None,
+            None => {}
+        }
+    }
+    groups
+        .into_iter()
+        .filter_map(|mut group| {
+            group.size = *served.get(&group.id)?;
+            Some(group)
+        })
+        .collect()
 }
 
 #[cfg(test)]

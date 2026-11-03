@@ -463,17 +463,21 @@ async fn graphql_discovery_neighbors_is_empty_for_a_viewer_outside_the_facet() {
     // A movie-only viewer asking about series gets nothing, whatever the key.
     let body = schema_exec(
         &ctx,
-        r#"{ discoveryNeighbors(input: { targetKey: "plex:series:9001", facet: SERIES }) { targetKey } }"#,
+        r#"{ discoveryNeighbors(input: { targetKey: "plex:series:9001", facet: SERIES }) { items { targetKey groupId } groups { id label size } } }"#,
         Some(graph_viewer(&library.0)),
     )
     .await;
     assert_no_errors(&body);
-    assert_eq!(body["data"]["discoveryNeighbors"], json!([]), "{body}");
+    assert_eq!(
+        body["data"]["discoveryNeighbors"],
+        json!({ "items": [], "groups": [] }),
+        "{body}"
+    );
 
     // The same viewer is refused an unusable key on its own facet.
     let body = schema_exec(
         &ctx,
-        r#"{ discoveryNeighbors(input: { targetKey: "plex:movie:9001", facet: MOVIE }) { targetKey } }"#,
+        r#"{ discoveryNeighbors(input: { targetKey: "plex:movie:9001", facet: MOVIE }) { items { targetKey } } }"#,
         Some(graph_viewer(&library.0)),
     )
     .await;
@@ -491,7 +495,7 @@ async fn graphql_discovery_neighbors_refuses_an_unknown_anchor_with_its_reason()
         &ctx,
         r#"
         query DiscoveryNeighbors($input: DiscoveryNeighborsInput!) {
-          discoveryNeighbors(input: $input) { targetKey resolvedTitleId }
+          discoveryNeighbors(input: $input) { items { targetKey resolvedTitleId groupId } groups { id labelKey label medoid size } }
         }
         "#,
         json!({ "input": { "targetKey": "plex:movie:9001", "facet": "MOVIE" } }),
@@ -500,6 +504,134 @@ async fn graphql_discovery_neighbors_refuses_an_unknown_anchor_with_its_reason()
 
     assert_eq!(
         body["errors"][0]["extensions"]["reason"], "DISCOVERY_NEIGHBOR_TARGET_KEY_UNSUPPORTED",
+        "{body}"
+    );
+}
+
+/// A cached related title, as the neighbour cache stores one.
+fn cached_neighbor_item(
+    target_key: &str,
+    display_title: &str,
+) -> scryer_application::DiscoveryItemRecord {
+    let stamp = "2026-06-25T00:00:00Z";
+    serde_json::from_value(json!({
+        "id": format!("neighbors:tmdb:movie:9101:{target_key}"),
+        "run_id": "neighbors:tmdb:movie:9101",
+        "source_run_kind": "title_more_like_this",
+        "sort_index": 0,
+        "target_key": target_key,
+        "target_kind": "movie",
+        "resolved": false,
+        "display_title": display_title,
+        "sort_title": display_title,
+        "poster_url": format!("https://images.example.test/{target_key}.jpg"),
+        "canonical_tags": [],
+        "is_adult": false,
+        "content_ratings": [],
+        "rating_sources": [],
+        "external_ratings": [],
+        "external_ids": [],
+        "status_tags": [],
+        "source_tags": [],
+        "sources": [],
+        "relation_types": [],
+        "relation_subtypes": [],
+        "chart_signals": [],
+        "provider_signals": [],
+        "rank_components": [],
+        "matched_subject_keys": [],
+        "matched_subject_titles": [],
+        "matched_subject_count": 0,
+        "library_provenance": [],
+        "owned_in_input": false,
+        "person_ids": [],
+        "facet_terms": [],
+        "context_terms": [],
+        "change_subject_keys": [],
+        "removed_subject_keys": [],
+        "created_at": stamp,
+        "updated_at": stamp,
+    }))
+    .expect("synthetic neighbour item")
+}
+
+#[tokio::test]
+async fn graphql_discovery_neighbors_serves_the_gateway_groups() {
+    use scryer_application::DiscoveryRepository;
+
+    let ctx = library_graph_context().await;
+    let library = create_graph_library(
+        &ctx,
+        "Synthetic Grouped Movies",
+        "/library-graph-neighbor-groups",
+    )
+    .await;
+    let store = DiscoveryStore::new(ctx.db.datastore());
+    let fetched_at = chrono::Utc::now();
+    let neighbor = |target_key: &str, display_title: &str, group_id: Option<i64>| {
+        scryer_application::DiscoveryNeighborItemRecord {
+            item: cached_neighbor_item(target_key, display_title),
+            group_id,
+        }
+    };
+    store
+        .replace_discovery_neighbor_cache(
+            &scryer_application::DiscoveryNeighborCacheRecord {
+                target_key: "tmdb:movie:9101".to_string(),
+                language: "eng".to_string(),
+                items: vec![
+                    neighbor("tmdb:movie:9102", "Synthetic Grouped One", Some(0)),
+                    neighbor("tmdb:movie:9103", "Synthetic Grouped Two", Some(1)),
+                    neighbor("tmdb:movie:9104", "Synthetic Grouped Three", Some(0)),
+                    neighbor("tmdb:movie:9105", "Synthetic Ungrouped", None),
+                ],
+                groups: vec![
+                    scryer_application::DiscoveryRelatedGroup {
+                        id: 0,
+                        label_key: Some("canonical:theme:heist".to_string()),
+                        label: "Heist".to_string(),
+                        medoid: "tmdb:movie:9102".to_string(),
+                        size: 5,
+                    },
+                    scryer_application::DiscoveryRelatedGroup {
+                        id: 1,
+                        label_key: None,
+                        label: "Synthetic Grouped Two".to_string(),
+                        medoid: "tmdb:movie:9103".to_string(),
+                        size: 1,
+                    },
+                ],
+                fetched_at,
+            },
+            fetched_at - chrono::Duration::hours(24),
+        )
+        .await
+        .expect("seed neighbour cache");
+
+    let body = schema_exec(
+        &ctx,
+        r#"{ discoveryNeighbors(input: { targetKey: "tmdb:movie:9101", facet: MOVIE }) {
+              items { targetKey groupId }
+              groups { id labelKey label medoid size }
+            } }"#,
+        Some(graph_viewer(&library.0)),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(
+        body["data"]["discoveryNeighbors"],
+        json!({
+            "items": [
+                { "targetKey": "tmdb:movie:9102", "groupId": 0 },
+                { "targetKey": "tmdb:movie:9103", "groupId": 1 },
+                { "targetKey": "tmdb:movie:9104", "groupId": 0 },
+                { "targetKey": "tmdb:movie:9105", "groupId": null },
+            ],
+            "groups": [
+                { "id": 0, "labelKey": "canonical:theme:heist", "label": "Heist", "medoid": "tmdb:movie:9102", "size": 2 },
+                { "id": 1, "labelKey": null, "label": "Synthetic Grouped Two", "medoid": "tmdb:movie:9103", "size": 1 },
+            ],
+        }),
         "{body}"
     );
 }

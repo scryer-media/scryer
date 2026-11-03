@@ -26,6 +26,7 @@ import {
   libraryGraphGroupName,
   neighborReason,
   neighborReasonLines,
+  recommendationSectionName,
   recommendationSections,
   nodeSizesByTitleId,
   targetKeyMatchKeys,
@@ -623,4 +624,80 @@ test("recommendations with nothing that splits them stay one section", () => {
     { tagKey: null, name: null, keys: ["r:1", "r:2", "r:3"] },
   ]);
   assert.deepEqual(recommendationSections([]), []);
+});
+
+test("server neighbourhoods decide the sections when there are any", () => {
+  const sports = tag("canonical:genre:sports", "genre", "Sports");
+  const items = ["r:1", "r:2", "r:3", "r:4", "r:5", "r:6"].map((key) => ({
+    key,
+    tags: [sports],
+  }));
+  const sections = recommendationSections(items, 5, [
+    {
+      labelKey: "theme:fixture-alpha",
+      label: "Fixture Alpha",
+      keys: ["r:4", "r:1", "r:9"],
+    },
+    { labelKey: null, label: "Synthetic Bravo", keys: ["r:2", "r:5"] },
+    // One of the given recommendations is not enough to name a section.
+    {
+      labelKey: "theme:fixture-charlie",
+      label: "Fixture Charlie",
+      keys: ["r:3"],
+    },
+  ]);
+  assert.deepEqual(sections, [
+    // Input order within a section; keys outside the input are ignored.
+    {
+      tagKey: "theme:fixture-alpha",
+      name: "Fixture Alpha",
+      keys: ["r:1", "r:4"],
+    },
+    {
+      tagKey: null,
+      name: "Synthetic Bravo",
+      keys: ["r:2", "r:5"],
+      aroundTitle: true,
+    },
+    { tagKey: null, name: null, keys: ["r:3", "r:6"] },
+  ]);
+  assert.equal(
+    recommendationSectionName(sections[1], t),
+    "Around Synthetic Bravo",
+  );
+  assert.equal(recommendationSectionName(sections[2], t), null);
+
+  // Past the limit, a neighbourhood's titles join the rest.
+  assert.deepEqual(
+    recommendationSections(items, 1, [
+      { labelKey: null, label: "Synthetic Alpha", keys: ["r:1", "r:2"] },
+      { labelKey: null, label: "Synthetic Bravo", keys: ["r:3", "r:4"] },
+    ]).map((section) => [section.name, section.keys]),
+    [[null, ["r:1", "r:2", "r:3", "r:4", "r:5", "r:6"]]],
+  );
+});
+
+test("tag grouping applies when no server neighbourhood holds a recommendation", () => {
+  const sports = tag("canonical:genre:sports", "genre", "Sports");
+  const magic = tag("canonical:theme:magic", "theme", "Magic");
+  const items = [
+    { key: "r:1", tags: [sports] },
+    { key: "r:2", tags: [magic] },
+    { key: "r:3", tags: [sports] },
+    { key: "r:4", tags: [magic] },
+  ];
+  const byTags = recommendationSections(items);
+  assert.deepEqual(
+    recommendationSections(items, 5, [
+      { labelKey: null, label: "Synthetic Elsewhere", keys: ["r:9"] },
+    ]),
+    byTags,
+  );
+  assert.deepEqual(
+    byTags.map((section) => [section.name, section.keys]),
+    [
+      ["Magic", ["r:2", "r:4"]],
+      ["Sports", ["r:1", "r:3"]],
+    ],
+  );
 });

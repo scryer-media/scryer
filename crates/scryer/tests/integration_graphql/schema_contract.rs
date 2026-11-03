@@ -1378,12 +1378,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Neighbour groups wrap the expansion in a payload that carries the
+    // gateway's neighbourhoods: public types 1017->1019, OBJECT 549->551.
+    for name in ["DiscoveryNeighborsPayload", "DiscoveryNeighborGroup"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1017,
+        1019,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 549);
+    assert_eq!(kind_count("OBJECT"), 551);
     assert_eq!(kind_count("INPUT_OBJECT"), 248);
     assert_eq!(kind_count("ENUM"), 208);
     assert_eq!(kind_count("SCALAR"), 10);

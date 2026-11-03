@@ -4486,6 +4486,81 @@ mod tests {
     }
 
     #[test]
+    fn title_recommendations_response_maps_groups_and_group_ids() {
+        assert!(graphql_docs::TITLE_RECOMMENDATIONS_QUERY.contains("group_id"));
+        assert!(graphql_docs::TITLE_RECOMMENDATIONS_QUERY.contains("groups {"));
+        let title = |target_key: &str, group_id: serde_json::Value| {
+            json!({
+                "target_key": target_key,
+                "target_kind": "movie",
+                "resolved": true,
+                "resolved_title_id": "",
+                "display_title": format!("Fixture {target_key}"),
+                "original_title": "",
+                "poster_path": "",
+                "poster_url": "",
+                "overview": "",
+                "content_type": "movie",
+                "rating": null,
+                "background_url": "",
+                "source_count": 1,
+                "edge_count": 1,
+                "relation_count": 1,
+                "source_subject_count": 1,
+                "rank_score": 0.5,
+                "best_source": "tmdb",
+                "tmdb_collection_id": null,
+                "group_id": group_id,
+            })
+        };
+        let response: super::TitleRecommendationsResponse = serde_json::from_value(json!({
+            "titleRecommendations": {
+                "subject_key": "tmdb:movie:1",
+                "query": "",
+                "generated_at": "2026-01-02T00:00:00Z",
+                "results": [
+                    title("tmdb:movie:2", json!(0)),
+                    title("tmdb:movie:3", json!(1)),
+                    title("tmdb:movie:4", serde_json::Value::Null),
+                ],
+                "groups": [
+                    { "id": 0, "label_key": "canonical:theme:heist", "label": "Heist", "medoid": "tmdb:movie:2", "size": 1 },
+                    { "id": 1, "label_key": null, "label": "Fixture tmdb:movie:3", "medoid": "tmdb:movie:3", "size": 1 }
+                ]
+            }
+        }))
+        .expect("grouped recommendations should decode");
+        let result = response.title_recommendations;
+        assert_eq!(
+            result
+                .results
+                .iter()
+                .map(|title| title.group_id)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), None]
+        );
+        assert_eq!(
+            result.groups,
+            vec![
+                scryer_application::DiscoveryRelatedGroup {
+                    id: 0,
+                    label_key: Some("canonical:theme:heist".to_string()),
+                    label: "Heist".to_string(),
+                    medoid: "tmdb:movie:2".to_string(),
+                    size: 1,
+                },
+                scryer_application::DiscoveryRelatedGroup {
+                    id: 1,
+                    label_key: None,
+                    label: "Fixture tmdb:movie:3".to_string(),
+                    medoid: "tmdb:movie:3".to_string(),
+                    size: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn discovery_queries_use_discovery_rating_provenance_shape() {
         let queries = [
             graphql_docs::DISCOVER_PUBLIC_FEED_QUERY,

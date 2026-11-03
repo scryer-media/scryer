@@ -363,13 +363,25 @@ pub struct LibraryGraphSnapshotRecord {
 }
 
 /// The related titles the gateway last returned for one discovery target
-/// key, in one metadata language.
+/// key, in one metadata language, with the neighbourhoods it grouped them
+/// into. An entry cached before grouping existed reads back with every
+/// `group_id` `None` and no groups.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DiscoveryNeighborCacheRecord {
     pub target_key: String,
     pub language: String,
-    pub items: Vec<DiscoveryItemRecord>,
+    pub items: Vec<DiscoveryNeighborItemRecord>,
+    pub groups: Vec<crate::DiscoveryRelatedGroup>,
     pub fetched_at: DateTime<Utc>,
+}
+
+/// One related title of an anchor and the neighbourhood it belongs to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiscoveryNeighborItemRecord {
+    pub item: DiscoveryItemRecord,
+    /// Id of the anchor's [`crate::DiscoveryRelatedGroup`] holding this
+    /// title, or `None` when the gateway did not group the results.
+    pub group_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

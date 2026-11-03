@@ -107,6 +107,26 @@ export type DiscoveryItem = {
   contextTerms: string[];
   studioSlug: string | null;
   personIds: number[];
+  /** The neighbourhood an anchor's related title falls into; only on discoveryNeighbors items. */
+  groupId?: number | null;
+};
+
+/** One neighbourhood among an anchor's related titles. */
+export type DiscoveryNeighborGroup = {
+  id: number;
+  /** Key of the genre or theme naming the group, or null when the label is the medoid's title. */
+  labelKey: string | null;
+  label: string;
+  /** Target key of the related title that best represents the group. */
+  medoid: string;
+  /** How many of the returned related titles are in the group. */
+  size: number;
+};
+
+/** An anchor's related titles and the neighbourhoods they fall into. */
+export type DiscoveryNeighbors = {
+  items: DiscoveryItem[];
+  groups: DiscoveryNeighborGroup[];
 };
 
 export type DiscoverySection = {

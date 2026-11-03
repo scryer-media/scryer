@@ -273,7 +273,9 @@ pub use library_graph::{
     LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
 };
 pub(crate) use library_graph::{LibraryGraphRebuildSummary, library_graph_facets_for_changes};
-pub use neighbors::{DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery};
+pub use neighbors::{
+    DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery, DiscoveryNeighborsView,
+};
 pub(crate) use records::{
     pending_context_changes_need_snapshot_reconciliation,
     pending_context_changes_resolved_key_count, snapshot_facet_records,

@@ -7,11 +7,11 @@ use scryer_application::{
     DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeFilters,
     DiscoveryHomeSectionCandidatesRecord, DiscoveryItemLibraryProvenanceRecord,
     DiscoveryItemRecord, DiscoveryItemsPageRecord, DiscoveryItemsStorageQuery,
-    DiscoveryNeighborCacheRecord, DiscoveryPendingContextChangeRecord, DiscoveryPruneReport,
-    DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord, DiscoveryRepository,
-    DiscoverySectionRecord, DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord,
-    DiscoverySyncRunRecord, DiscoverySyncStateRecord, LibraryGraphRunRecord,
-    LibraryGraphSnapshotRecord, TitleRatingSummary,
+    DiscoveryNeighborCacheRecord, DiscoveryNeighborItemRecord, DiscoveryPendingContextChangeRecord,
+    DiscoveryPruneReport, DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord,
+    DiscoveryRelatedGroup, DiscoveryRepository, DiscoverySectionRecord, DiscoverySourceTagRecord,
+    DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord, DiscoverySyncStateRecord,
+    LibraryGraphRunRecord, LibraryGraphSnapshotRecord, TitleRatingSummary,
 };
 use scryer_infrastructure_sql::json::{decode_compressed_json, encode_compressed_json};
 use serde_json::Value as JsonValue;
@@ -28,6 +28,50 @@ use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
 };
 use crate::storage::sql::json::opt_json_text;
+
+/// What one discovery neighbour cache row holds: the related titles, each
+/// with its group id, and the groups.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DiscoveryNeighborCachePayload {
+    items: Vec<DiscoveryNeighborCacheItem>,
+    #[serde(default)]
+    groups: Vec<DiscoveryRelatedGroup>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DiscoveryNeighborCacheItem {
+    #[serde(flatten)]
+    item: DiscoveryItemRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group_id: Option<i64>,
+}
+
+/// A neighbour cache row as stored. Rows written before grouping hold a bare
+/// item array and read back ungrouped.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum StoredDiscoveryNeighborCachePayload {
+    Grouped(DiscoveryNeighborCachePayload),
+    Ungrouped(Vec<DiscoveryItemRecord>),
+}
+
+impl From<StoredDiscoveryNeighborCachePayload> for DiscoveryNeighborCachePayload {
+    fn from(stored: StoredDiscoveryNeighborCachePayload) -> Self {
+        match stored {
+            StoredDiscoveryNeighborCachePayload::Grouped(payload) => payload,
+            StoredDiscoveryNeighborCachePayload::Ungrouped(items) => Self {
+                items: items
+                    .into_iter()
+                    .map(|item| DiscoveryNeighborCacheItem {
+                        item,
+                        group_id: None,
+                    })
+                    .collect(),
+                groups: Vec::new(),
+            },
+        }
+    }
+}
 
 const DISCOVERY_SYNC_STATE_COLUMNS: &str = "scope_key, last_success_generation_id,
     last_public_feed_generation_id, last_subject_fingerprint,
@@ -1361,24 +1405,31 @@ impl DiscoveryRepository for DiscoveryStore {
         let Some(payload_blob) = row.opt_bytes("payload_blob")? else {
             return Ok(None);
         };
-        let items = match decode_compressed_json::<Vec<DiscoveryItemRecord>>(&payload_blob) {
-            Ok(items) => items,
-            Err(error) => {
-                tracing::warn!(
-                    target_key,
-                    error = %error,
-                    "skipping invalid discovery neighbor cache payload"
-                );
-                return Ok(None);
-            }
-        };
+        let payload =
+            match decode_compressed_json::<StoredDiscoveryNeighborCachePayload>(&payload_blob) {
+                Ok(payload) => DiscoveryNeighborCachePayload::from(payload),
+                Err(error) => {
+                    tracing::warn!(
+                        target_key,
+                        error = %error,
+                        "skipping invalid discovery neighbor cache payload"
+                    );
+                    return Ok(None);
+                }
+            };
         Ok(Some(DiscoveryNeighborCacheRecord {
             target_key: target_key.to_string(),
             language,
-            items: items
+            items: payload
+                .items
                 .into_iter()
-                .filter(recommendation_item_is_displayable)
+                .filter(|cached| recommendation_item_is_displayable(&cached.item))
+                .map(|cached| DiscoveryNeighborItemRecord {
+                    item: cached.item,
+                    group_id: cached.group_id,
+                })
                 .collect(),
+            groups: payload.groups,
             fetched_at: row.timestamp("fetched_at")?,
         }))
     }
@@ -1389,14 +1440,28 @@ impl DiscoveryRepository for DiscoveryStore {
         expire_before: DateTime<Utc>,
     ) -> AppResult<()> {
         let language = normalize_discovery_language(&record.language);
-        let mut items = record
+        let kept = record
             .items
             .iter()
             .take(TITLE_RECOMMENDATION_CARD_LIMIT)
-            .cloned()
+            .collect::<Vec<_>>();
+        let mut items = kept
+            .iter()
+            .map(|neighbor| neighbor.item.clone())
             .collect::<Vec<_>>();
         enrich_recommendation_items_from_normalized(&self.datastore, &language, &mut items).await?;
-        let payload_blob = encode_compressed_json(&items)?;
+        let payload = DiscoveryNeighborCachePayload {
+            items: items
+                .into_iter()
+                .zip(kept)
+                .map(|(item, neighbor)| DiscoveryNeighborCacheItem {
+                    item,
+                    group_id: neighbor.group_id,
+                })
+                .collect(),
+            groups: record.groups.clone(),
+        };
+        let payload_blob = encode_compressed_json(&payload)?;
         let target_key = record.target_key.clone();
         let fetched_at = record.fetched_at;
         SqlRuntime::run_in_transaction(
@@ -8731,10 +8796,35 @@ mod tests {
                 item
             })
             .collect::<Vec<_>>();
+        let groups = vec![
+            DiscoveryRelatedGroup {
+                id: 0,
+                label_key: Some("canonical:theme:heist".to_string()),
+                label: "Heist".to_string(),
+                medoid: "tmdb:movie:30000".to_string(),
+                size: 15,
+            },
+            DiscoveryRelatedGroup {
+                id: 1,
+                label_key: None,
+                label: "Synthetic Neighbor 1".to_string(),
+                medoid: "tmdb:movie:30001".to_string(),
+                size: 15,
+            },
+        ];
         let record = DiscoveryNeighborCacheRecord {
             target_key: "tmdb:movie:100".to_string(),
             language: "eng".to_string(),
-            items,
+            items: items
+                .into_iter()
+                .enumerate()
+                .map(|(index, item)| DiscoveryNeighborItemRecord {
+                    item,
+                    // The last neighbours come back ungrouped.
+                    group_id: (index < 6).then_some((index % 2) as i64),
+                })
+                .collect(),
+            groups: groups.clone(),
             fetched_at,
         };
         store
@@ -8753,13 +8843,26 @@ mod tests {
             cached
                 .items
                 .iter()
-                .map(|item| item.target_key.as_str())
+                .map(|neighbor| neighbor.item.target_key.as_str())
                 .collect::<Vec<_>>(),
             (0..TITLE_RECOMMENDATION_CARD_LIMIT)
                 .filter(|index| index % 2 == 0)
                 .map(|index| format!("tmdb:movie:{}", 30_000 + index))
                 .collect::<Vec<_>>()
         );
+        // Each kept neighbour keeps its own group id, and the groups survive.
+        assert_eq!(
+            cached
+                .items
+                .iter()
+                .map(|neighbor| neighbor.group_id)
+                .collect::<Vec<_>>(),
+            (0..TITLE_RECOMMENDATION_CARD_LIMIT)
+                .filter(|index| index % 2 == 0)
+                .map(|index| (index < 6).then_some(0))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(cached.groups, groups);
         assert!(
             store
                 .get_discovery_neighbor_cache("tmdb:movie:100", "deu")
@@ -8777,6 +8880,7 @@ mod tests {
                     target_key: "tmdb:movie:200".to_string(),
                     language: "eng".to_string(),
                     items: Vec::new(),
+                    groups: Vec::new(),
                     fetched_at: later,
                 },
                 later - chrono::Duration::hours(24),
@@ -8797,6 +8901,68 @@ mod tests {
                 .expect("fresh entry should read")
                 .is_some()
         );
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_reads_a_neighbor_cache_row_written_before_grouping() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_neighbor_cache_legacy_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let fetched_at = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 2, 0, 0, 0).unwrap();
+        let items = (0..3)
+            .map(|index| {
+                let mut item = discovery_prune_item("neighbors", fetched_at);
+                item.id = format!("neighbor-{index}");
+                item.target_key = format!("tmdb:movie:{}", 40_000 + index);
+                item.display_title = format!("Synthetic Neighbor {index}");
+                item.poster_url = Some(format!("https://images.test/{index}.jpg"));
+                item.sort_index = index;
+                item
+            })
+            .collect::<Vec<_>>();
+        // The earlier payload: a bare array of item records.
+        let payload_blob = encode_compressed_json(&items).expect("legacy payload should encode");
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "insert_legacy_discovery_neighbor_cache",
+            "INSERT INTO discovery_neighbor_cache
+                (target_key, language, payload_version, payload_blob, fetched_at)
+             VALUES ({}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text("tmdb:movie:300".to_string()),
+                SqlArg::Text("eng".to_string()),
+                SqlArg::I32(TITLE_RECOMMENDATION_PAYLOAD_VERSION),
+                SqlArg::OptBytes(Some(payload_blob)),
+                SqlArg::Timestamp(fetched_at),
+            ],
+        )
+        .await
+        .expect("legacy row should insert");
+
+        let cached = store
+            .get_discovery_neighbor_cache("tmdb:movie:300", "eng")
+            .await
+            .expect("legacy row should read")
+            .expect("legacy row should exist");
+        assert_eq!(
+            cached
+                .items
+                .iter()
+                .map(|neighbor| (neighbor.item.target_key.as_str(), neighbor.group_id))
+                .collect::<Vec<_>>(),
+            vec![
+                ("tmdb:movie:40000", None),
+                ("tmdb:movie:40001", None),
+                ("tmdb:movie:40002", None),
+            ]
+        );
+        assert!(cached.groups.is_empty());
         let _ = std::fs::remove_file(db);
     }
 

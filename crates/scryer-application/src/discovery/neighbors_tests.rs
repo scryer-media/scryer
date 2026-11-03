@@ -83,3 +83,63 @@ fn anime_takes_movie_and_series_keys_alike() {
         assert_eq!(subject.facet.as_deref(), Some("anime"));
     }
 }
+
+fn neighbor_group(id: i64, size: i64) -> crate::DiscoveryRelatedGroup {
+    crate::DiscoveryRelatedGroup {
+        id,
+        label_key: None,
+        label: format!("Synthetic Group {id}"),
+        medoid: format!("tmdb:movie:{}", 700 + id),
+        size,
+    }
+}
+
+#[test]
+fn served_groups_keep_only_groups_with_served_items_sized_by_them() {
+    let mut items = [
+        (1, Some(2)),
+        (2, Some(0)),
+        (3, Some(2)),
+        (4, Some(9)),
+        (5, None),
+    ]
+    .into_iter()
+    .map(|(id, group_id)| DiscoveryNeighborItemRecord {
+        item: crate::discovery::tests::test_discovery_item(
+            &format!("tmdb:movie:{id}"),
+            "movie",
+            Some("movie"),
+        ),
+        group_id,
+    })
+    .collect::<Vec<_>>();
+    let groups = vec![
+        neighbor_group(0, 6),
+        neighbor_group(1, 4),
+        neighbor_group(2, 3),
+    ];
+
+    let served = discovery_neighbor_served_groups(&mut items, groups);
+
+    // Gateway order is kept, group 1 has no served member, and sizes count
+    // the served members only.
+    assert_eq!(served, vec![neighbor_group(0, 1), neighbor_group(2, 2)]);
+    // An id the gateway never returned is dropped rather than left dangling.
+    assert_eq!(
+        items
+            .iter()
+            .map(|neighbor| neighbor.group_id)
+            .collect::<Vec<_>>(),
+        vec![Some(2), Some(0), Some(2), None, None]
+    );
+}
+
+#[test]
+fn served_groups_are_empty_when_the_gateway_did_not_group() {
+    let mut items = vec![DiscoveryNeighborItemRecord {
+        item: crate::discovery::tests::test_discovery_item("tmdb:movie:1", "movie", Some("movie")),
+        group_id: None,
+    }];
+    assert!(discovery_neighbor_served_groups(&mut items, Vec::new()).is_empty());
+    assert_eq!(items[0].group_id, None);
+}
