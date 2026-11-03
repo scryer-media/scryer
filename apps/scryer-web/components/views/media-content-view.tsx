@@ -3812,9 +3812,13 @@ export function MediaContentView({
                   catalogSurfacePhase === "content" ||
                   catalogSurfacePhase === "empty";
 
+                // The graph stays up while a picked title resolves: swapping
+                // it out for the loading state would rebuild it and drop the
+                // title it is focused on.
                 if (
                   catalogSurfacePhase === "resolving" ||
-                  overviewTitleResolutionPending ||
+                  (overviewTitleResolutionPending &&
+                    collectionViewMode !== "graph") ||
                   viewModePending
                 ) {
                   titleCollectionView = (
