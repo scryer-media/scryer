@@ -7176,32 +7176,6 @@ type ExternalImportPreviewPayload {
 }
 
 """
-Counts and errors produced by external import execution.
-"""
-type ExternalImportResultPayload {
-	"""
-	Whether selected media paths were saved.
-	"""
-	mediaPathsSaved: Boolean!
-	"""
-	Number of download clients created.
-	"""
-	downloadClientsCreated: Int!
-	"""
-	Number of indexers created.
-	"""
-	indexersCreated: Int!
-	"""
-	Plugin identifiers installed as part of the import.
-	"""
-	pluginsInstalled: [String!]!
-	"""
-	Errors encountered during execution.
-	"""
-	errors: [String!]!
-}
-
-"""
 Root folder reported by an external Arr source.
 """
 type ExternalImportRootFolderPayload {
@@ -21560,17 +21534,6 @@ type MutationRoot {
 		"""
 		key: String!
 	): ExternalImportSourceJobPayload!
-	"""
-	Compatibility operation sharing application source import policy. It waits a
-	bounded time; a longer import continues in the background and is reported in
-	`errors` with its run id.
-	"""
-	executeExternalImport(
-		"""
-		Selected imported clients and indexers plus credentials required to create them.
-		"""
-		input: ExecuteExternalImportInput!
-	): ExternalImportResultPayload!
 	"""
 	Create a post-processing script, enabled unless the input says otherwise, after validating its type, content, and schedule.
 	"""

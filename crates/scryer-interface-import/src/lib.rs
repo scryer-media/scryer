@@ -2515,75 +2515,7 @@ impl ExternalImportMutations {
             .map_err(to_gql_error)?;
         source_import_payload(&app, &actor, run_id.as_str()).await
     }
-
-    /// Compatibility operation sharing application source import policy. It waits a
-    /// bounded time; a longer import continues in the background and is reported in
-    /// `errors` with its run id.
-    async fn execute_external_import(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(
-            desc = "Selected imported clients and indexers plus credentials required to create them."
-        )]
-        input: ExecuteExternalImportInput,
-    ) -> GqlResult<ExternalImportResultPayload> {
-        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
-        let app = app_from_ctx(ctx)?;
-        let selections = source_import_selections(&app, &actor, input)
-            .await
-            .map_err(to_gql_error)?;
-        let (run, progress, settled) = app
-            .execute_source_import(&actor, selections, COMPAT_SOURCE_IMPORT_WAIT)
-            .await
-            .map_err(to_gql_error)?;
-        let mut errors: Vec<String> = progress
-            .items
-            .iter()
-            .filter(|item| item.reason.is_some())
-            .map(|item| {
-                format!(
-                    "failed to import '{}': {}",
-                    item.name,
-                    item.message
-                        .as_deref()
-                        .unwrap_or("Source import interrupted")
-                )
-            })
-            .collect();
-        if !settled {
-            errors.push(format!(
-                "source import {} continues in the background; follow it with externalImportSourceStatus",
-                run.id
-            ));
-        }
-        Ok(ExternalImportResultPayload {
-            media_paths_saved: false,
-            download_clients_created: progress
-                .items
-                .iter()
-                .filter(|item| {
-                    item.kind == "download_client"
-                        && item.state
-                            == scryer_application::source_import::SourceImportState::Succeeded
-                })
-                .count() as i32,
-            indexers_created: progress
-                .items
-                .iter()
-                .filter(|item| {
-                    item.kind == "indexer"
-                        && item.state
-                            == scryer_application::source_import::SourceImportState::Succeeded
-                })
-                .count() as i32,
-            plugins_installed: progress.plugins_installed,
-            errors,
-        })
-    }
 }
-
-/// How long the compatibility mutation holds its request open for a source import.
-const COMPAT_SOURCE_IMPORT_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 async fn source_import_payload(
     app: &scryer_application::AppUseCase,
@@ -2755,12 +2687,8 @@ async fn source_import_selections(
                 .cloned()
                 .filter(|value| !value.trim().is_empty())
                 .or_else(|| external_import::field_str_sensitive(&dc.fields, "apiKey"));
-            if api_key.is_none() {
-                return Err(AppError::validation_refused(
-                    scryer_application::source_import::refusal::CREDENTIAL_REQUIRED,
-                    "selected download client requires an API key",
-                ));
-            }
+            // A missing key does not refuse the batch: the item fails on its own
+            // with a credential reason and can be retried with a correction.
             if let Some(api_key) = api_key {
                 config_obj.insert("api_key".into(), serde_json::Value::String(api_key));
             }
@@ -2774,12 +2702,6 @@ async fn source_import_selections(
                 .cloned()
                 .filter(|value| !value.trim().is_empty())
                 .or_else(|| external_import::field_str_sensitive(&dc.fields, "password"));
-            if scryer_type == "nzbget" && password.is_none() {
-                return Err(AppError::validation_refused(
-                    scryer_application::source_import::refusal::CREDENTIAL_REQUIRED,
-                    "selected download client requires a password",
-                ));
-            }
             if let Some(password) = password {
                 config_obj.insert("password".into(), serde_json::Value::String(password));
             }
@@ -2816,29 +2738,24 @@ async fn source_import_selections(
                     .flatten()
             });
         let name = prowlarr_display_name(&group.base_url);
-        let input = match api_key {
-            Some(api_key) => {
-                scryer_application::source_import::SourceImportInput::Indexer(NewIndexerConfig {
-                    name: name.clone(),
-                    provider_type: "prowlarr".into(),
-                    config_json: Some(prowlarr_parent_config_json(&group.base_url, &api_key)),
-                    rate_limit_seconds: None,
-                    rate_limit_burst: None,
-                    max_queries_per_minute: None,
-                    is_enabled: true,
-                    enable_interactive_search: false,
-                    enable_auto_search: false,
-                    proxy_config_id: None,
-                    download_client_id: None,
-                })
-            }
-            None => {
-                return Err(AppError::validation_refused(
-                    scryer_application::source_import::refusal::CREDENTIAL_REQUIRED,
-                    "selected Prowlarr source requires an API key",
-                ));
-            }
-        };
+        // Without a key the item is still accepted; the run fails it individually.
+        let input =
+            scryer_application::source_import::SourceImportInput::Indexer(NewIndexerConfig {
+                name: name.clone(),
+                provider_type: "prowlarr".into(),
+                config_json: Some(prowlarr_parent_config_json(
+                    &group.base_url,
+                    api_key.as_deref().unwrap_or_default(),
+                )),
+                rate_limit_seconds: None,
+                rate_limit_burst: None,
+                max_queries_per_minute: None,
+                is_enabled: true,
+                enable_interactive_search: false,
+                enable_auto_search: false,
+                proxy_config_id: None,
+                download_client_id: None,
+            });
         selections.push(scryer_application::source_import::SourceImportSelection {
             key,
             name,
@@ -2858,23 +2775,6 @@ async fn source_import_selections(
             .cloned()
             .filter(|value| !value.trim().is_empty())
             .or_else(|| external_import::field_str_sensitive(&idx.fields, "apiKey"));
-        if api_key.is_none()
-            && app
-                .indexer_config_fields_for_provider_type(provider_type)
-                .is_ok_and(|fields| {
-                    fields.iter().any(|field| {
-                        field.required
-                            && (field.key == "api_key"
-                                || (field.field_type == scryer_domain::ConfigFieldType::Password
-                                    && field.key.to_ascii_lowercase().contains("api")))
-                    })
-                })
-        {
-            return Err(AppError::validation_refused(
-                scryer_application::source_import::refusal::CREDENTIAL_REQUIRED,
-                "selected indexer requires an API key",
-            ));
-        }
         selections.push(scryer_application::source_import::SourceImportSelection {
             key,
             name: idx.name.clone(),

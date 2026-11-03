@@ -162,7 +162,7 @@ async fn source_import_shutdown_stops_queued_indexers_and_preserves_the_receipt(
 }
 
 #[tokio::test]
-async fn source_import_missing_download_credential_is_refused_before_acceptance() {
+async fn source_import_missing_download_credential_is_accepted_and_fails_only_that_source() {
     use scryer_application::external_import::ArrDownloadClient;
     use scryer_application::{
         ExternalImportArrSourceKind, ExternalImportArrSourceWarmupResult,
@@ -180,13 +180,92 @@ async fn source_import_missing_download_credential_is_refused_before_acceptance(
         let mut snapshot = begin.snapshot;
         snapshot.status = ExternalImportMonitorWarmupStatus::Completed; snapshot.phase = ExternalImportMonitorWarmupPhase::Ready;
         ctx.app.update_external_import_monitor_warmup_progress(&id, snapshot).await;
+        let key = "sabnzbd:download-fixture.invalid:8080";
         let query = r#"mutation($input: ExecuteExternalImportInput!) { startExternalImportSources(requestKey:"missing-credential",input:$input) { runId } }"#;
-        let input = json!({"sourceWarmupSessionIds":[id],"selectedDownloadClientDedupKeys":["sabnzbd:download-fixture.invalid:8080"],"selectedIndexerDedupKeys":[],"downloadClientApiKeyOverrides":[],"downloadClientPasswordOverrides":[],"indexerApiKeyOverrides":[]});
+        let input = json!({"sourceWarmupSessionIds":[id],"selectedDownloadClientDedupKeys":[key],"selectedIndexerDedupKeys":[],"downloadClientApiKeyOverrides":[],"downloadClientPasswordOverrides":[],"indexerApiKeyOverrides":[]});
         let body = gql(&ctx, query, json!({"input":input})).await;
-        assert_eq!(body["errors"][0]["extensions"]["reason"], scryer_application::source_import::refusal::CREDENTIAL_REQUIRED, "{body}");
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM workflow_private_inputs WHERE actor_user_id = ?").bind(&actor.id).fetch_one(&ctx.db.pool).await.expect("receipt count");
-        assert_eq!(count.0, 0, "missing credentials must not create a background request");
+        assert_no_errors(&body);
+        let run_id = body["data"]["startExternalImportSources"]["runId"].as_str().expect("accepted run").to_owned();
+        let progress = ctx.app.wait_source_import(&actor, &run_id).await.expect("run settles without client I/O");
+        assert_eq!(progress.items.len(), 1);
+        assert_eq!(progress.items[0].state, SourceImportState::Failed);
+        assert_eq!(progress.items[0].reason.as_deref(), Some(scryer_application::source_import::refusal::CREDENTIAL_REQUIRED));
+        assert!(ctx.app.list_download_client_configs(&actor, None).await.expect("clients").is_empty(), "a source without its credential is never saved");
+        // Retrying without a correction fails the same way; the item stays retryable.
+        ctx.app.retry_source_import(&actor, &run_id, Vec::new()).await.expect("retry accepted");
+        let retried = ctx.app.wait_source_import(&actor, &run_id).await.expect("retry settles");
+        assert_eq!(retried.items[0].reason.as_deref(), Some(scryer_application::source_import::refusal::CREDENTIAL_REQUIRED));
+        ctx.app.skip_source_import_item(&actor, &run_id, key).await.expect("explicit skip");
+        ctx.app.require_source_import_resolved(&actor, &run_id).await.expect("skipped source no longer blocks setup");
     }).await.expect("credential scenario failure bound");
+}
+
+#[tokio::test]
+async fn source_import_batch_with_a_missing_credential_imports_the_other_sources() {
+    use scryer_domain::NewDownloadClientConfig;
+    timeout(Duration::from_secs(180), async {
+        let ctx = TestContext::new().await;
+        seed_typed_settings_definitions(&ctx).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("source-mixed-credential"))
+            .await
+            .expect("operator");
+        let sibling = selection(0, false);
+        let missing = SourceImportSelection {
+            key: "nzbget:download-fixture.invalid:6789".into(),
+            name: "Passwordless fixture".into(),
+            input: SourceImportInput::DownloadClient(NewDownloadClientConfig {
+                name: "Passwordless fixture".into(),
+                client_type: "nzbget".into(),
+                config_json: json!({"host":"download-fixture.invalid","port":"6789"}).to_string(),
+                client_priority: 0,
+                is_enabled: true,
+                proxy_config_id: None,
+            }),
+        };
+        let accepted = ctx
+            .app
+            .start_source_import(
+                &actor,
+                "source-mixed-credential",
+                vec![sibling.clone(), missing.clone()],
+            )
+            .await
+            .expect("batch accepted");
+        let progress = ctx
+            .app
+            .wait_source_import(&actor, &accepted.id)
+            .await
+            .expect("batch settles");
+        let state = |key: &str| {
+            progress
+                .items
+                .iter()
+                .find(|item| item.key == key)
+                .expect("item receipt")
+                .clone()
+        };
+        assert_eq!(state(&sibling.key).state, SourceImportState::Succeeded);
+        let failed = state(&missing.key);
+        assert_eq!(failed.state, SourceImportState::Failed);
+        assert_eq!(
+            failed.reason.as_deref(),
+            Some(scryer_application::source_import::refusal::CREDENTIAL_REQUIRED)
+        );
+        assert_eq!(
+            ctx.app
+                .list_indexer_configs(&actor, Some("newznab".into()))
+                .await
+                .expect("configs")
+                .iter()
+                .filter(|config| config.name == sibling.name)
+                .count(),
+            1
+        );
+    })
+    .await
+    .expect("mixed credential scenario failure bound");
 }
 
 struct AutoDefaultProvider {

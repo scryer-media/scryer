@@ -1378,7 +1378,6 @@ export function useExternalImportSetup({
           .find((reason) => typeof reason === "string");
         if (
           reason === "SOURCE_IMPORT_INVALID_REQUEST" ||
-          reason === "SOURCE_IMPORT_CREDENTIAL_REQUIRED" ||
           reason === "SOURCE_IMPORT_SOURCE_NOT_READY"
         )
           setSourceSubmitted(false);
@@ -1971,52 +1970,10 @@ export function useExternalImportSetup({
     );
   }, [preview, connectedArrSessionIds]);
 
-  // Every selected client/indexer that needs an operator-supplied secret has one.
-  const sourcesReady = useMemo(() => {
-    if (!prowlarrWarmupReady) return false;
-    if (!preview) return true;
-    const apiKeyClientTypes = new Set(["sabnzbd", "weaver"]);
-    const dcOk = preview.downloadClients.every((dc) => {
-      if (!selectedDcKeys.has(dc.dedupKey)) return true;
-      const type = dc.scryerClientType?.trim().toLowerCase() ?? null;
-      const needsApiKey =
-        dc.supported &&
-        !dc.apiKeyPresent &&
-        type !== null &&
-        apiKeyClientTypes.has(type);
-      if (needsApiKey && !(dcApiKeyOverrides[dc.dedupKey] ?? "").trim()) {
-        return false;
-      }
-      if (
-        dc.supported &&
-        dc.requiresPasswordOverride &&
-        !(dcPasswordOverrides[dc.dedupKey] ?? "").trim()
-      ) {
-        return false;
-      }
-      return true;
-    });
-    if (!dcOk) return false;
-    return preview.indexers.every((idx) => {
-      if (!selectedIdxKeys.has(idx.dedupKey)) return true;
-      if (
-        idx.supported &&
-        idx.requiresApiKeyOverride &&
-        !(idxApiKeyOverrides[idx.dedupKey] ?? "").trim()
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }, [
-    preview,
-    prowlarrWarmupReady,
-    selectedDcKeys,
-    selectedIdxKeys,
-    dcApiKeyOverrides,
-    dcPasswordOverrides,
-    idxApiKeyOverrides,
-  ]);
+  // Sources can be submitted once discovery is ready. A selected source still
+  // missing its secret is accepted and fails on its own in the summary, where
+  // it can be retried with the secret or skipped.
+  const sourcesReady = prowlarrWarmupReady;
 
   // Persist NON-SENSITIVE user input so a refresh doesn't reset the wizard.
   // Instance API keys are stripped here (secrets live in the server draft);

@@ -244,25 +244,6 @@ impl AppUseCase {
         }
         Ok(providers)
     }
-    /// Starts an import and waits at most `wait` for it inside the caller's request.
-    /// Returns the receipt so far and whether the run settled; an unsettled run keeps
-    /// going in the background.
-    pub async fn execute_source_import(
-        &self,
-        actor: &User,
-        selections: Vec<SourceImportSelection>,
-        wait: std::time::Duration,
-    ) -> AppResult<(JobRunRecord, SourceImportProgress, bool)> {
-        let run = self
-            .start_source_import(actor, &Id::new().0, selections)
-            .await?;
-        if let Some(progress) = self.wait_source_import_for(actor, &run.id, wait).await? {
-            return Ok((run, progress, true));
-        }
-        let (run, progress) = self.source_import_status(actor, &run.id).await?;
-        Ok((run, progress, false))
-    }
-
     pub async fn wait_source_import(
         &self,
         actor: &User,
@@ -279,7 +260,7 @@ impl AppUseCase {
     }
 
     /// Waits up to `wait` for the run to settle; `None` means it is still running.
-    pub async fn wait_source_import_for(
+    async fn wait_source_import_for(
         &self,
         actor: &User,
         run_id: &str,
@@ -808,15 +789,18 @@ impl AppUseCase {
                         .send((index, SourceImportState::Saving, None, None))
                         .await
                         .ok();
-                    let result = app
-                        .create_source_import_download_client(
-                            &actor,
-                            input,
-                            &item.config_id,
-                            item.reuse_existing,
-                        )
-                        .await
-                        .map(|_| ());
+                    let result = match require_download_client_credential(&input) {
+                        Ok(()) => app
+                            .create_source_import_download_client(
+                                &actor,
+                                input,
+                                &item.config_id,
+                                item.reuse_existing,
+                            )
+                            .await
+                            .map(|_| ()),
+                        Err(error) => Err(error),
+                    };
                     states
                         .send((index, SourceImportState::Saving, None, Some(result)))
                         .await
@@ -859,6 +843,7 @@ impl AppUseCase {
                             }
 
                         }
+                        app.require_source_import_indexer_credential(&item.selection.input)?;
                         states.send((index, SourceImportState::Checking, None, None)).await.ok();
                         let config = app.prepare_source_import_indexer(&actor, &item).await?;
                         states.send((index, SourceImportState::Saving, None, None)).await.ok();
@@ -970,6 +955,45 @@ impl AppUseCase {
         Ok(Some(installed.name))
     }
 
+    /// A selected indexer without its required key fails on its own, so the rest
+    /// of the batch still imports and a correction can retry it.
+    fn require_source_import_indexer_credential(&self, input: &SourceImportInput) -> AppResult<()> {
+        let present = match input {
+            // Prowlarr parents always need their key.
+            SourceImportInput::Indexer(input) if input.provider_type == "prowlarr" => {
+                let value: serde_json::Value =
+                    decode(input.config_json.as_deref().unwrap_or("{}"))?;
+                config_has_secret(&value, "api_key")
+            }
+            SourceImportInput::Indexer(_) => true,
+            SourceImportInput::ImportedIndexer {
+                provider_type,
+                api_key,
+                ..
+            } => {
+                api_key
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                    || !self
+                        .indexer_config_fields_for_provider_type(provider_type)
+                        .is_ok_and(|fields| {
+                            fields
+                                .iter()
+                                .any(|field| field.required && is_api_key_field(field))
+                        })
+            }
+            SourceImportInput::DownloadClient(_) => true,
+        };
+        if present {
+            Ok(())
+        } else {
+            Err(refusal(
+                crate::source_import::refusal::CREDENTIAL_REQUIRED,
+                "selected indexer requires an API key",
+            ))
+        }
+    }
+
     async fn prepare_source_import_indexer(
         &self,
         actor: &User,
@@ -1040,6 +1064,38 @@ impl AppUseCase {
         config.id = item.config_id.clone();
         Ok(config)
     }
+}
+
+/// SABnzbd and Weaver need an API key and NZBGet a password; other clients may
+/// connect without one. A missing secret fails only this item.
+fn require_download_client_credential(input: &NewDownloadClientConfig) -> AppResult<()> {
+    let (field, message) = match input.client_type.as_str() {
+        "sabnzbd" | "weaver" => ("api_key", "selected download client requires an API key"),
+        "nzbget" => ("password", "selected download client requires a password"),
+        _ => return Ok(()),
+    };
+    let value: serde_json::Value = decode(&input.config_json)?;
+    if config_has_secret(&value, field) {
+        Ok(())
+    } else {
+        Err(refusal(
+            crate::source_import::refusal::CREDENTIAL_REQUIRED,
+            message,
+        ))
+    }
+}
+
+fn config_has_secret(value: &serde_json::Value, field: &str) -> bool {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|secret| !secret.trim().is_empty())
+}
+
+fn is_api_key_field(field: &scryer_domain::ConfigFieldDef) -> bool {
+    field.key == "api_key"
+        || (field.field_type == scryer_domain::ConfigFieldType::Password
+            && field.key.to_ascii_lowercase().contains("api"))
 }
 
 fn apply_source_import_summary(run: &mut JobRunRecord, progress: &SourceImportProgress) {
@@ -1125,11 +1181,7 @@ pub fn imported_indexer_config_json(
         object.insert(field.key.clone(), base_url.trim().into());
     }
     if let Some(api_key) = api_key.map(str::trim).filter(|value| !value.is_empty())
-        && let Some(field) = fields.iter().find(|field| {
-            field.key == "api_key"
-                || (field.field_type == scryer_domain::ConfigFieldType::Password
-                    && field.key.to_ascii_lowercase().contains("api"))
-        })
+        && let Some(field) = fields.iter().find(|field| is_api_key_field(field))
     {
         object.insert(field.key.clone(), api_key.into());
     }
@@ -1162,6 +1214,40 @@ mod tests {
             None
         );
         assert_eq!(stored_config_base_url(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn download_client_credential_is_checked_per_client_type() {
+        let client = |client_type: &str, config: serde_json::Value| NewDownloadClientConfig {
+            name: "Fixture".into(),
+            client_type: client_type.into(),
+            config_json: config.to_string(),
+            client_priority: 0,
+            is_enabled: true,
+            proxy_config_id: None,
+        };
+        for (client_type, field) in [
+            ("sabnzbd", "api_key"),
+            ("weaver", "api_key"),
+            ("nzbget", "password"),
+        ] {
+            for missing in [serde_json::json!({}), serde_json::json!({ field: "  " })] {
+                assert_eq!(
+                    require_download_client_credential(&client(client_type, missing))
+                        .expect_err("missing secret fails the item")
+                        .validation_reason(),
+                    Some(refusal::CREDENTIAL_REQUIRED),
+                    "{client_type}"
+                );
+            }
+            require_download_client_credential(&client(
+                client_type,
+                serde_json::json!({ field: "synthetic-secret" }),
+            ))
+            .expect("present secret passes");
+        }
+        require_download_client_credential(&client("qbittorrent", serde_json::json!({})))
+            .expect("clients without a required secret pass");
     }
 
     #[test]

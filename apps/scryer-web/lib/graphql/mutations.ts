@@ -3046,16 +3046,6 @@ export const previewExternalImportMutation = `mutation PreviewExternalImport($in
   }
 }`;
 
-export const executeExternalImportMutation = `mutation ExecuteExternalImport($input: ExecuteExternalImportInput!) {
-  executeExternalImport(input: $input) {
-    mediaPathsSaved
-    downloadClientsCreated
-    indexersCreated
-    pluginsInstalled
-    errors
-  }
-}`;
-
 const sourceImportJobFields = `runId active ready updatedAt items { key name configId kind state reason message }`;
 export const startExternalImportSourcesMutation = `mutation StartExternalImportSources($requestKey: String!, $input: ExecuteExternalImportInput!) {
   startExternalImportSources(requestKey: $requestKey, input: $input) { ${sourceImportJobFields} }

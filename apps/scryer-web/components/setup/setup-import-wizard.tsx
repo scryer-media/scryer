@@ -317,8 +317,8 @@ export function SetupImportWizard({
           <SetupImportSourcesView wizard={wizard} t={t} />
         </fieldset>
       );
-      // Block until every selected client/indexer that needs a user-supplied
-      // secret has one (otherwise execute creates non-functional configs).
+      // Block only until discovery is ready. Sources missing a secret are
+      // submitted and fail individually; the summary offers retry and skip.
       primaryDisabled =
         wizard.executing || (!wizard.sourceSubmitted && !wizard.sourcesReady);
       onPrimary = () => void goSourcesContinue();

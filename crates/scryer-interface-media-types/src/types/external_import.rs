@@ -618,21 +618,6 @@ pub struct ExternalImportIndexerPayload {
     pub api_key_help_url: Option<String>,
 }
 
-#[derive(SimpleObject, Clone)]
-/// Counts and errors produced by external import execution.
-pub struct ExternalImportResultPayload {
-    /// Whether selected media paths were saved.
-    pub media_paths_saved: bool,
-    /// Number of download clients created.
-    pub download_clients_created: i32,
-    /// Number of indexers created.
-    pub indexers_created: i32,
-    /// Plugin identifiers installed as part of the import.
-    pub plugins_installed: Vec<String>,
-    /// Errors encountered during execution.
-    pub errors: Vec<String>,
-}
-
 #[derive(SimpleObject)]
 /// Durable receipt for one selected source configuration.
 pub struct ExternalImportSourceItemPayload {
