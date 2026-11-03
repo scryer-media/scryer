@@ -6354,6 +6354,9 @@ const en: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "Recommended",
   "libraryGraph.notBuilt": "The library graph has not been built yet.",
   "libraryGraph.truncated": "This graph covers only part of the library.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "This title can't be explored further.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "This title doesn't match this library's media type, so it can't be explored here.",
   "libraryGraph.moreLikeThis": "More like this",
   "libraryGraph.moreLikeThisEmpty": "Nothing more like this yet.",
   "libraryGraph.notInLibrary": "Not in your library",

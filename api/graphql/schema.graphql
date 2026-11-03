@@ -4686,11 +4686,11 @@ input DiscoveryNeighborsInput {
 	"""
 	targetKey: String!
 	"""
-	Media facet of the anchor.
+	Media facet of the anchor. A movie key fits MOVIE or ANIME, a series key SERIES or ANIME.
 	"""
 	facet: MediaFacetValue!
 	"""
-	Maximum related titles to return; defaults to 24 and clamps to 0 through 100.
+	Maximum related titles to return; defaults to 24, which is also the most ever returned. Values outside 0 through 24 are clamped.
 	"""
 	limit: Int = 24
 }

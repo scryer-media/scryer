@@ -1618,6 +1618,9 @@ const zh_TW: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "推薦",
   "libraryGraph.notBuilt": "媒體庫圖譜尚未建立。",
   "libraryGraph.truncated": "此圖譜僅涵蓋部分媒體庫。",
+  "discovery.refusal.neighborTargetKeyUnsupported": "無法進一步探索此作品。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "此作品與這個媒體庫的媒體類型不符，無法在此探索。",
   "libraryGraph.moreLikeThis": "更多類似",
   "libraryGraph.moreLikeThisEmpty": "目前沒有類似作品。",
   "libraryGraph.notInLibrary": "不在你的媒體庫",

@@ -40,7 +40,7 @@ use scryer_domain::{
     LibraryScanCanceledEventData, LibraryScanCompletedEventData, LibraryScanFailedEventData,
     LibraryScanStartedEventData, MediaFacet, Title, TitleContextSnapshot, TitleUpdatedEventData,
 };
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 
@@ -2593,6 +2593,77 @@ async fn discovery_neighbors_refuses_an_unknown_target_key_with_a_reason_code() 
 }
 
 #[tokio::test]
+async fn discovery_neighbors_gives_an_ungated_viewer_an_empty_list_before_reading_the_key() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let unusable = |facet: MediaFacet| crate::DiscoveryNeighborsQuery {
+        target_key: "plex:movie:100".to_string(),
+        facet,
+        limit: 24,
+    };
+
+    // Request on the series library only: the movie facet is not theirs, so
+    // even an unusable key reads as nothing to show.
+    let series_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let series_viewer = library_permission_user_with_grants(
+        "discovery-neighbors-series-viewer",
+        &[(
+            &series_library_id,
+            &[
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::Request,
+            ],
+        )],
+    );
+    assert!(
+        app.discovery_neighbors(&series_viewer, unusable(MediaFacet::Movie))
+            .await
+            .expect("an ungated viewer is not refused")
+            .is_empty()
+    );
+
+    // Request without View on the movie library: the facet is visible but no
+    // library of it may be read, as for the library graph.
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_only = library_permission_user_with_grants(
+        "discovery-neighbors-request-only",
+        &[(
+            &movie_library_id,
+            &[scryer_domain::LibraryPermission::Request],
+        )],
+    );
+    assert!(
+        app.discovery_neighbors(&request_only, unusable(MediaFacet::Movie))
+            .await
+            .expect("an ungated viewer is not refused")
+            .is_empty()
+    );
+
+    // Personalized discovery off: empty for everyone, the admin included.
+    let settings = settings_with_personalized_discovery(false).await;
+    let (disabled_app, disabled_admin, _titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway.clone(), settings);
+    assert!(
+        disabled_app
+            .discovery_neighbors(&disabled_admin, unusable(MediaFacet::Movie))
+            .await
+            .expect("personalized discovery off is not a refusal")
+            .is_empty()
+    );
+
+    // The same key from a gated viewer is still refused with its code.
+    let error = app
+        .discovery_neighbors(&admin, unusable(MediaFacet::Movie))
+        .await
+        .expect_err("a gated viewer's unusable key is refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_UNSUPPORTED)
+    );
+    assert!(gateway.title_recommendation_inputs.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn title_more_like_this_queues_empty_cache_refresh_off_the_read_path() {
     let gateway = Arc::new(SnapshotMetadataGateway::default());
     let recommendation_gate = Arc::new(Notify::new());
@@ -4086,6 +4157,238 @@ async fn discovery_sync_library_graph_queue_full_is_recorded_as_transient_withou
     // The sync run itself still committed its incremental patch.
     assert_eq!(discovery.incremental_commits.lock().await.len(), 1);
     assert!(discovery.pending_changes.lock().await.is_empty());
+}
+
+/// A library whose context snapshot already landed and that has nothing
+/// pending, so a sync run touches no facet on its own account: whatever
+/// library graph it builds, it builds as a retry.
+async fn quiet_synced_library_with_library_graph(
+    gateway: Arc<SnapshotMetadataGateway>,
+) -> (crate::AppUseCase, Arc<RecordingDiscoveryRepository>) {
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let synced_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-1".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-1".to_string()),
+        last_context_snapshot_completed_at: Some(synced_at),
+        updated_at: synced_at,
+        ..DiscoverySyncStateRecord::default()
+    });
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "Synthetic Movie One",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+    (app, discovery)
+}
+
+async fn run_discovery_sync_at(app: &crate::AppUseCase, now: DateTime<Utc>) {
+    app.runtime.environment.set_fixed_now_for_tests(Some(now));
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should succeed whatever the library graph does");
+}
+
+#[tokio::test]
+async fn discovery_sync_builds_a_library_graph_that_never_landed_without_a_reload() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, discovery) = quiet_synced_library_with_library_graph(gateway.clone()).await;
+    let now = Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
+
+    run_discovery_sync_at(&app, now).await;
+    assert!(discovery.incremental_commits.lock().await.is_empty());
+    assert!(discovery.commits.lock().await.is_empty());
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+    assert_eq!(discovery.library_graph_commits.lock().await.len(), 1);
+
+    // Built: the next quiet run leaves it alone.
+    run_discovery_sync_at(&app, now + chrono::Duration::hours(1)).await;
+    assert!(discovery.commits.lock().await.is_empty());
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn discovery_sync_retries_a_queue_full_library_graph_after_the_gateways_wait() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    *gateway.library_graph_queue_full.lock().await = true;
+    let asked_wait_seconds = 2 * crate::discovery::LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS;
+    *gateway.library_graph_retry_after_seconds.lock().await = Some(asked_wait_seconds as u64);
+    let (app, discovery) = quiet_synced_library_with_library_graph(gateway.clone()).await;
+    let failed_at = Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
+
+    run_discovery_sync_at(&app, failed_at).await;
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+    {
+        let runs = discovery.library_graph_runs.lock().await;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].error_code.as_deref(),
+            Some(crate::error_reasons::library_graph::GATEWAY_QUEUE_FULL)
+        );
+        assert_eq!(runs[0].retry_after_seconds, Some(asked_wait_seconds));
+        assert_eq!(runs[0].completed_at, Some(failed_at));
+    }
+
+    // Inside the floor, then past the floor but inside the gateway's longer
+    // wait: no call either time.
+    *gateway.library_graph_queue_full.lock().await = false;
+    run_discovery_sync_at(&app, failed_at + chrono::Duration::hours(1)).await;
+    run_discovery_sync_at(
+        &app,
+        failed_at
+            + chrono::Duration::seconds(crate::discovery::LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS),
+    )
+    .await;
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+    assert!(discovery.library_graph_commits.lock().await.is_empty());
+
+    // The wait is over: the retry lands.
+    run_discovery_sync_at(
+        &app,
+        failed_at + chrono::Duration::seconds(asked_wait_seconds),
+    )
+    .await;
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 2);
+    assert_eq!(discovery.library_graph_commits.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn discovery_sync_committed_snapshot_rebuilds_every_facet_and_drops_an_empty_ones_graph() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+    {
+        let mut store = titles.store.lock().await;
+        store.push(test_title(
+            "title-movie",
+            "Synthetic Movie One",
+            MediaFacet::Movie,
+            vec![("tmdb_movie", "603")],
+        ));
+        store.push(test_title(
+            "title-series",
+            "Synthetic Series One",
+            MediaFacet::Series,
+            vec![("tvdb", "81189")],
+        ));
+    }
+    // Anime once had a graph and has no owned titles any more.
+    let stale_anime = crate::LibraryGraphSnapshotRecord {
+        run: crate::LibraryGraphRunRecord {
+            id: "library-graph-stale-anime".to_string(),
+            facet: "anime".to_string(),
+            axis: "SEMANTIC".to_string(),
+            status: "complete".to_string(),
+            subject_count: 1,
+            submitted_count: 1,
+            generated_at: None,
+            error_code: None,
+            error_text: None,
+            retry_after_seconds: None,
+            omitted_subject_keys: Vec::new(),
+            started_at: due_at,
+            completed_at: Some(due_at),
+            created_at: due_at,
+            updated_at: due_at,
+        },
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        clusters: Vec::new(),
+    };
+    discovery
+        .commit_library_graph(&stale_anime)
+        .await
+        .expect("seed graph");
+
+    run_discovery_sync_at(&app, Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap()).await;
+
+    assert_eq!(discovery.commits.lock().await.len(), 1);
+    let built = gateway
+        .library_graph_inputs
+        .lock()
+        .await
+        .iter()
+        .map(|input| input.subjects[0].facet.clone().unwrap_or_default())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        built,
+        BTreeSet::from(["movie".to_string(), "series".to_string()])
+    );
+    assert_eq!(
+        discovery.library_graph_deletes.lock().await.as_slice(),
+        ["anime".to_string()]
+    );
+    assert!(
+        discovery
+            .get_latest_library_graph("anime")
+            .await
+            .expect("read")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_failed_snapshot_reload_rebuilds_no_library_graph() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    *gateway.snapshot_status_override.lock().await = Some(failed_snapshot_status("request-1"));
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-previous".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-previous".to_string()),
+        last_context_snapshot_completed_at: Some(due_at),
+        next_context_snapshot_eligible_at: Some(due_at),
+        updated_at: due_at,
+        ..DiscoverySyncStateRecord::default()
+    });
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "Synthetic Movie One",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+    // The facet's graph is in place, so nothing is due for a retry either.
+    let built_at = Utc.with_ymd_and_hms(2026, 3, 1, 11, 0, 0).unwrap();
+    discovery
+        .commit_library_graph(&crate::LibraryGraphSnapshotRecord {
+            run: crate::LibraryGraphRunRecord {
+                id: "library-graph-movie".to_string(),
+                facet: "movie".to_string(),
+                axis: "SEMANTIC".to_string(),
+                status: "complete".to_string(),
+                subject_count: 1,
+                submitted_count: 1,
+                generated_at: None,
+                error_code: None,
+                error_text: None,
+                retry_after_seconds: None,
+                omitted_subject_keys: Vec::new(),
+                started_at: built_at,
+                completed_at: Some(built_at),
+                created_at: built_at,
+                updated_at: built_at,
+            },
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            clusters: Vec::new(),
+        })
+        .await
+        .expect("seed graph");
+
+    run_discovery_sync_at(&app, Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap()).await;
+
+    assert!(discovery.commits.lock().await.is_empty());
+    assert!(gateway.library_graph_inputs.lock().await.is_empty());
+    assert_eq!(discovery.library_graph_commits.lock().await.len(), 1);
+    assert!(discovery.library_graph_deletes.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -5701,6 +6004,8 @@ struct SnapshotMetadataGateway {
     fail_context_changes: Mutex<bool>,
     library_graph_inputs: Mutex<Vec<crate::LibraryGraphGatewayInput>>,
     library_graph_queue_full: Mutex<bool>,
+    // The wait a queue-full answer asks for; five seconds when unset.
+    library_graph_retry_after_seconds: Mutex<Option<u64>>,
 }
 
 #[async_trait]
@@ -5919,10 +6224,15 @@ impl MetadataGateway for SnapshotMetadataGateway {
     ) -> AppResult<crate::LibraryGraphGatewayResult> {
         self.library_graph_inputs.lock().await.push(input.clone());
         if *self.library_graph_queue_full.lock().await {
+            let retry_after = self
+                .library_graph_retry_after_seconds
+                .lock()
+                .await
+                .unwrap_or(5);
             return Err(AppError::temporary_unavailable_reason(
                 crate::error_reasons::metadata_gateway::QUEUE_FULL,
                 "library graph queue is full",
-                Some(std::time::Duration::from_secs(5)),
+                Some(std::time::Duration::from_secs(retry_after)),
             ));
         }
         let nodes = input
@@ -6005,7 +6315,7 @@ struct RecordingDiscoveryRepository {
     library_graph_runs: Mutex<Vec<crate::LibraryGraphRunRecord>>,
     library_graph_commits: Mutex<Vec<crate::LibraryGraphSnapshotRecord>>,
     neighbor_cache: Mutex<Vec<crate::DiscoveryNeighborCacheRecord>>,
-    library_graph_prunes: Mutex<Vec<(String, String, String)>>,
+    library_graph_deletes: Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -6936,18 +7246,29 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
             .cloned())
     }
 
-    async fn prune_library_graph_title(
-        &self,
-        facet: &str,
-        subject_key: &str,
-        title_id: &str,
-    ) -> AppResult<crate::LibraryGraphPruneReport> {
-        self.library_graph_prunes.lock().await.push((
-            facet.to_string(),
-            subject_key.to_string(),
-            title_id.to_string(),
-        ));
-        Ok(crate::LibraryGraphPruneReport::default())
+    async fn has_complete_library_graph(&self, facet: &str) -> AppResult<bool> {
+        Ok(self
+            .library_graph_commits
+            .lock()
+            .await
+            .iter()
+            .any(|snapshot| snapshot.run.facet == facet))
+    }
+
+    async fn delete_library_graph_runs(&self, facet: &str) -> AppResult<()> {
+        self.library_graph_runs
+            .lock()
+            .await
+            .retain(|run| run.facet != facet);
+        self.library_graph_commits
+            .lock()
+            .await
+            .retain(|snapshot| snapshot.run.facet != facet);
+        self.library_graph_deletes
+            .lock()
+            .await
+            .push(facet.to_string());
+        Ok(())
     }
 
     async fn get_discovery_neighbor_cache(

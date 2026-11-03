@@ -1106,6 +1106,9 @@ const zh_CN: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "推荐",
   "libraryGraph.notBuilt": "媒体库图谱尚未生成。",
   "libraryGraph.truncated": "此图谱仅涵盖部分媒体库。",
+  "discovery.refusal.neighborTargetKeyUnsupported": "无法进一步探索此作品。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "此作品与该媒体库的媒体类型不符，无法在此探索。",
   "libraryGraph.moreLikeThis": "更多类似",
   "libraryGraph.moreLikeThisEmpty": "暂无类似作品。",
   "libraryGraph.notInLibrary": "不在你的媒体库中",

@@ -46,11 +46,21 @@ fn run(subject_count: i64, submitted_count: i64) -> LibraryGraphRunRecord {
         generated_at: Some("2026-01-01T00:00:00Z".to_string()),
         error_code: None,
         error_text: None,
+        retry_after_seconds: None,
+        omitted_subject_keys: Vec::new(),
         started_at: at,
         completed_at: Some(at),
         created_at: at,
         updated_at: at,
     }
+}
+
+/// The viewer's visible titles, each named after its id.
+fn visible_titles<'a>(title_ids: &[&'a str]) -> HashMap<&'a str, &'a str> {
+    title_ids
+        .iter()
+        .map(|title_id| (*title_id, *title_id))
+        .collect()
 }
 
 /// Four titles: a, b and c in one cluster with medoid b, d alone in another.
@@ -77,7 +87,7 @@ fn fixture_snapshot() -> LibraryGraphSnapshotRecord {
 #[test]
 fn visibility_pruning_never_leaks_an_edge_or_node_to_a_title_the_viewer_cannot_see() {
     let snapshot = fixture_snapshot();
-    let visible = HashSet::from(["title-a", "title-c"]);
+    let visible = visible_titles(&["title-a", "title-c"]);
     let (nodes, edges, clusters) = prune_library_graph_for_viewer(&snapshot, &visible);
 
     let node_keys = nodes
@@ -112,7 +122,7 @@ fn visibility_pruning_never_leaks_an_edge_or_node_to_a_title_the_viewer_cannot_s
 #[test]
 fn hidden_medoid_is_replaced_by_heaviest_visible_member_then_subject_key() {
     let mut snapshot = fixture_snapshot();
-    let visible = HashSet::from(["title-a", "title-c"]);
+    let visible = visible_titles(&["title-a", "title-c"]);
     // a and c share the only visible edge, so their weights tie: a wins on
     // subject key.
     let (_, _, clusters) = prune_library_graph_for_viewer(&snapshot, &visible);
@@ -127,7 +137,7 @@ fn hidden_medoid_is_replaced_by_heaviest_visible_member_then_subject_key() {
     snapshot
         .edges
         .push(edge("tmdb:movie:3", "tmdb:movie:5", 0.9));
-    let visible = HashSet::from(["title-a", "title-c", "title-e"]);
+    let visible = visible_titles(&["title-a", "title-c", "title-e"]);
     let (_, _, clusters) = prune_library_graph_for_viewer(&snapshot, &visible);
     assert_eq!(clusters[0].medoid, "tmdb:movie:3");
     assert_eq!(clusters[0].size, 3);
@@ -142,7 +152,7 @@ fn visible_medoid_and_unplaced_nodes_are_kept_as_stored() {
         UNPLACED_CLUSTER_ID,
         &["title-f"],
     ));
-    let visible = HashSet::from(["title-a", "title-b", "title-c", "title-d", "title-f"]);
+    let visible = visible_titles(&["title-a", "title-b", "title-c", "title-d", "title-f"]);
     let (nodes, edges, clusters) = prune_library_graph_for_viewer(&snapshot, &visible);
     assert_eq!(nodes.len(), 5);
     assert_eq!(edges.len(), 4);
@@ -181,10 +191,16 @@ fn truncation_keeps_the_newest_subjects_and_records_both_counts() {
     let context =
         build_projected_discovery_library_context(&titles, DiscoveryContextDefaults::default());
     let subjects = library_graph_subjects(&context, &titles, "movie");
-    let (submitted, total) = select_library_graph_subjects(subjects.clone());
+    let (submitted, total, omitted) = select_library_graph_subjects(subjects.clone());
 
     assert_eq!(total, LIBRARY_GRAPH_MAX_SUBJECTS + 3);
     assert_eq!(submitted.len(), LIBRARY_GRAPH_MAX_SUBJECTS);
+    let mut left_out_keys = subjects[LIBRARY_GRAPH_MAX_SUBJECTS..]
+        .iter()
+        .map(|subject| subject.subject_key.clone())
+        .collect::<Vec<_>>();
+    left_out_keys.sort();
+    assert_eq!(omitted, left_out_keys);
     let cutoff = submitted.last().unwrap();
     for left_out in &subjects[LIBRARY_GRAPH_MAX_SUBJECTS..] {
         assert!(
@@ -196,7 +212,7 @@ fn truncation_keeps_the_newest_subjects_and_records_both_counts() {
         );
     }
     // Deterministic: the same library selects the same subjects.
-    let (again, _) =
+    let (again, _, _) =
         select_library_graph_subjects(library_graph_subjects(&context, &titles, "movie"));
     assert_eq!(again, submitted);
     // Each submitted subject names itself so returned nodes map back.
@@ -277,4 +293,102 @@ fn incremental_changes_name_the_facets_to_rebuild() {
         facets.into_iter().collect::<Vec<_>>(),
         vec!["anime".to_string(), "movie".to_string()]
     );
+}
+
+#[test]
+fn a_hidden_medoid_of_an_unkeyed_cluster_takes_its_label_with_it() {
+    let mut snapshot = fixture_snapshot();
+    // Unkeyed: the stored label is the medoid's own title.
+    snapshot.clusters[0].label = "Hidden Synthetic Title B".to_string();
+    snapshot.nodes[0].title_ids = vec!["title-a".to_string(), "title-a0".to_string()];
+    let visible_titles = HashMap::from([
+        ("title-a", "Visible Synthetic Title A"),
+        ("title-c", "Visible Synthetic Title C"),
+    ]);
+    let (nodes, edges, clusters) = prune_library_graph_for_viewer(&snapshot, &visible_titles);
+    assert_eq!(clusters[0].medoid, "tmdb:movie:1");
+    // The new medoid's visible title names the cluster; title-a0 is not
+    // visible, so it cannot lend its name either.
+    assert_eq!(clusters[0].label, "Visible Synthetic Title A");
+    let payload = format!("{nodes:?}{edges:?}{clusters:?}");
+    assert!(!payload.contains("Hidden Synthetic Title B"), "{payload}");
+    assert!(!payload.contains("title-b"), "{payload}");
+
+    // A keyed cluster keeps its label: it names the theme, not a title.
+    snapshot.clusters[0].label_key = Some("canonical:genre:heist".to_string());
+    snapshot.clusters[0].label = "Heist".to_string();
+    let (_, _, clusters) = prune_library_graph_for_viewer(&snapshot, &visible_titles);
+    assert_eq!(clusters[0].label, "Heist");
+}
+
+fn failed_run(code: &str, completed_at: DateTime<Utc>) -> LibraryGraphRunRecord {
+    LibraryGraphRunRecord {
+        status: LIBRARY_GRAPH_RUN_FAILED.to_string(),
+        error_code: Some(code.to_string()),
+        completed_at: Some(completed_at),
+        updated_at: completed_at,
+        ..run(1, 1)
+    }
+}
+
+#[test]
+fn retry_waits_out_the_backoff_or_the_gateways_longer_ask() {
+    let failed_at = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    let floor = chrono::Duration::seconds(LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS);
+    for code in [
+        error_reasons::library_graph::GATEWAY_QUEUE_FULL,
+        error_reasons::library_graph::GATEWAY_UNAVAILABLE,
+    ] {
+        let run = failed_run(code, failed_at);
+        assert!(!library_graph_retry_due(Some(&run), true, failed_at));
+        assert!(!library_graph_retry_due(
+            Some(&run),
+            true,
+            failed_at + floor - chrono::Duration::seconds(1)
+        ));
+        assert!(library_graph_retry_due(Some(&run), true, failed_at + floor));
+
+        // A longer wait from the gateway wins over the floor; a shorter one
+        // does not shorten it.
+        let longer = LibraryGraphRunRecord {
+            retry_after_seconds: Some(LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS * 2),
+            ..run.clone()
+        };
+        assert!(!library_graph_retry_due(
+            Some(&longer),
+            true,
+            failed_at + floor
+        ));
+        assert!(library_graph_retry_due(
+            Some(&longer),
+            true,
+            failed_at + floor * 2
+        ));
+        let shorter = LibraryGraphRunRecord {
+            retry_after_seconds: Some(30),
+            ..run
+        };
+        assert!(!library_graph_retry_due(
+            Some(&shorter),
+            true,
+            failed_at + chrono::Duration::seconds(30)
+        ));
+    }
+}
+
+#[test]
+fn a_permanent_failure_is_retried_only_while_no_graph_is_stored() {
+    let failed_at = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    let later = failed_at + chrono::Duration::seconds(LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS);
+    let run = failed_run(error_reasons::library_graph::GATEWAY_FAILED, failed_at);
+    assert!(!library_graph_retry_due(Some(&run), true, later));
+    assert!(!library_graph_retry_due(Some(&run), false, failed_at));
+    assert!(library_graph_retry_due(Some(&run), false, later));
+}
+
+#[test]
+fn a_facet_never_built_is_due_and_a_built_one_is_not() {
+    let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    assert!(library_graph_retry_due(None, false, now));
+    assert!(!library_graph_retry_due(Some(&run(1, 1)), true, now));
 }

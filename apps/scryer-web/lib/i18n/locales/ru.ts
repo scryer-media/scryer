@@ -1723,6 +1723,9 @@ const ru: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "Рекомендовано",
   "libraryGraph.notBuilt": "Граф библиотеки ещё не построен.",
   "libraryGraph.truncated": "Этот граф охватывает только часть библиотеки.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "Это произведение нельзя исследовать дальше.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Это произведение не соответствует типу медиа этой библиотеки, поэтому его нельзя исследовать здесь.",
   "libraryGraph.moreLikeThis": "Похожие",
   "libraryGraph.moreLikeThisEmpty": "Похожих пока нет.",
   "libraryGraph.notInLibrary": "Нет в вашей библиотеке",

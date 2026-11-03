@@ -2779,16 +2779,23 @@ impl AppUseCase {
 
         // A committed full snapshot rebuilds every facet's library graph; a
         // committed incremental reload rebuilds the facets its changes
-        // touched. Graph failures are recorded per facet and never fail
-        // this run.
-        let library_graph_facets = if context_snapshot
+        // touched. Any run also rebuilds a facet whose graph never landed or
+        // whose last build failed, once its backoff has passed. Graph
+        // failures are recorded per facet and never fail this run.
+        let owned_graph_facets = library_context
+            .subject_provenance
+            .iter()
+            .map(|subject| subject.facet.clone())
+            .collect::<BTreeSet<_>>();
+        let mut library_graph_facets = if context_snapshot
             .as_ref()
             .is_some_and(|snapshot| snapshot.committed)
         {
-            library_context
-                .subject_provenance
+            // Every facet, so one left with no owned titles drops its graph.
+            [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime]
                 .iter()
-                .map(|subject| subject.facet.clone())
+                .map(|facet| facet.as_str().to_string())
+                .chain(owned_graph_facets.iter().cloned())
                 .collect::<BTreeSet<_>>()
         } else if context_incremental
             .as_ref()
@@ -2798,6 +2805,19 @@ impl AppUseCase {
         } else {
             BTreeSet::new()
         };
+        if personalized_discovery_enabled
+            && !scans_active
+            && state.last_success_generation_id.is_some()
+        {
+            let unscheduled = owned_graph_facets
+                .difference(&library_graph_facets)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            library_graph_facets.extend(
+                self.library_graph_facets_due_for_retry(&unscheduled, now)
+                    .await,
+            );
+        }
         let library_graphs = if library_graph_facets.is_empty() {
             Vec::new()
         } else {

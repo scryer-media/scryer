@@ -2,8 +2,8 @@
 //! build's nodes, edges and clusters keyed by the run id.
 
 use scryer_application::{
-    AppResult, LibraryGraphClusterRecord, LibraryGraphEdgeRecord, LibraryGraphNodeRecord,
-    LibraryGraphPruneReport, LibraryGraphRunRecord, LibraryGraphSnapshotRecord,
+    AppError, AppResult, LibraryGraphClusterRecord, LibraryGraphEdgeRecord, LibraryGraphNodeRecord,
+    LibraryGraphRunRecord, LibraryGraphSnapshotRecord, error_reasons,
 };
 use std::sync::Arc;
 
@@ -24,6 +24,8 @@ const RUN_COLUMNS: &[&str] = &[
     "generated_at",
     "error_code",
     "error_text",
+    "retry_after_seconds",
+    "omitted_subject_keys_json",
     "started_at",
     "completed_at",
     "created_at",
@@ -59,8 +61,8 @@ fn insert_prefix(table: &str, columns: &[&str]) -> String {
     format!("INSERT INTO {table} ({})", columns.join(", "))
 }
 
-fn run_args(run: &LibraryGraphRunRecord) -> Vec<SqlArg> {
-    vec![
+fn run_args(run: &LibraryGraphRunRecord) -> AppResult<Vec<SqlArg>> {
+    Ok(vec![
         SqlArg::Text(run.id.clone()),
         SqlArg::Text(run.facet.clone()),
         SqlArg::Text(run.axis.clone()),
@@ -70,11 +72,13 @@ fn run_args(run: &LibraryGraphRunRecord) -> Vec<SqlArg> {
         SqlArg::OptText(run.generated_at.clone()),
         SqlArg::OptText(run.error_code.clone()),
         SqlArg::OptText(run.error_text.clone()),
+        SqlArg::OptI64(run.retry_after_seconds),
+        SqlArg::Text(string_list_json(&run.omitted_subject_keys)?),
         SqlArg::Timestamp(run.started_at),
         SqlArg::OptTimestamp(run.completed_at),
         SqlArg::Timestamp(run.created_at),
         SqlArg::Timestamp(run.updated_at),
-    ]
+    ])
 }
 
 fn run_from_row(row: &SqlRow) -> AppResult<LibraryGraphRunRecord> {
@@ -88,6 +92,8 @@ fn run_from_row(row: &SqlRow) -> AppResult<LibraryGraphRunRecord> {
         generated_at: row.opt_text("generated_at")?,
         error_code: row.opt_text("error_code")?,
         error_text: row.opt_text("error_text")?,
+        retry_after_seconds: row.opt_i64("retry_after_seconds")?,
+        omitted_subject_keys: string_list_from_json(&row.text("omitted_subject_keys_json")?)?,
         started_at: row.timestamp("started_at")?,
         completed_at: row.opt_timestamp("completed_at")?,
         created_at: row.timestamp("created_at")?,
@@ -139,7 +145,7 @@ async fn insert_run_tx(tx: &mut SqlTx<'_>, run: &LibraryGraphRunRecord) -> AppRe
         tx,
         &insert_prefix("discovery_library_graph_runs", RUN_COLUMNS),
         RUN_COLUMNS.len(),
-        vec![run_args(run)],
+        vec![run_args(run)?],
         "",
     )
     .await?;
@@ -325,9 +331,92 @@ pub(crate) async fn get_latest_library_graph(
     datastore: &StoreDatastore,
     facet: &str,
 ) -> AppResult<Option<LibraryGraphSnapshotRecord>> {
-    let Some(run) = latest_run(datastore, facet, Some(LIBRARY_GRAPH_RUN_COMPLETE)).await? else {
-        return Ok(None);
-    };
+    read_latest_library_graph(datastore, facet, || async {}).await
+}
+
+pub(crate) async fn has_complete_library_graph(
+    datastore: &StoreDatastore,
+    facet: &str,
+) -> AppResult<bool> {
+    Ok(
+        latest_run(datastore, facet, Some(LIBRARY_GRAPH_RUN_COMPLETE))
+            .await?
+            .is_some(),
+    )
+}
+
+pub(crate) async fn delete_library_graph_runs(
+    datastore: &StoreDatastore,
+    facet: &str,
+) -> AppResult<()> {
+    let facet: Arc<str> = Arc::from(facet);
+    SqlRuntime::run_in_transaction(datastore, "delete_library_graph_runs", move |tx| {
+        let facet = Arc::clone(&facet);
+        Box::pin(async move {
+            let args = [SqlArg::Text(facet.to_string())];
+            for table in CHILD_TABLES {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    &format!(
+                        "DELETE FROM {table} WHERE run_id IN \
+                         (SELECT id FROM discovery_library_graph_runs WHERE facet = {{}})"
+                    ),
+                    &args,
+                )
+                .await?;
+            }
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "DELETE FROM discovery_library_graph_runs WHERE facet = {}",
+                &args,
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
+}
+
+/// Reads the newest complete graph of a facet without a transaction, so a
+/// commit can replace the run between the run read and the child reads.
+/// After the child reads the newest complete run id is read again; when it
+/// changed, the whole read is repeated once. `between_reads` runs after each
+/// attempt's child reads, which is where tests land a concurrent commit.
+async fn read_latest_library_graph<F, Fut>(
+    datastore: &StoreDatastore,
+    facet: &str,
+    between_reads: F,
+) -> AppResult<Option<LibraryGraphSnapshotRecord>>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    const ATTEMPTS: usize = 2;
+    for _ in 0..ATTEMPTS {
+        let Some(run) = latest_run(datastore, facet, Some(LIBRARY_GRAPH_RUN_COMPLETE)).await?
+        else {
+            return Ok(None);
+        };
+        let snapshot = read_library_graph_children(datastore, run).await?;
+        between_reads().await;
+        let current = latest_run(datastore, facet, Some(LIBRARY_GRAPH_RUN_COMPLETE))
+            .await?
+            .map(|run| run.id);
+        if current.as_deref() == Some(snapshot.run.id.as_str()) {
+            return Ok(Some(snapshot));
+        }
+    }
+    Err(AppError::temporary_unavailable_reason(
+        error_reasons::library_graph::READ_SUPERSEDED,
+        "the library graph was replaced while it was being read; try again",
+        None,
+    ))
+}
+
+async fn read_library_graph_children(
+    datastore: &StoreDatastore,
+    run: LibraryGraphRunRecord,
+) -> AppResult<LibraryGraphSnapshotRecord> {
     let args = [SqlArg::Text(run.id.clone())];
     let nodes = SqlRuntime::fetch_all(
         datastore.read_exec(),
@@ -359,138 +448,12 @@ pub(crate) async fn get_latest_library_graph(
     .iter()
     .map(cluster_from_row)
     .collect::<AppResult<Vec<_>>>()?;
-    Ok(Some(LibraryGraphSnapshotRecord {
+    Ok(LibraryGraphSnapshotRecord {
         run,
         nodes,
         edges,
         clusters,
-    }))
-}
-
-pub(crate) async fn prune_library_graph_title(
-    datastore: &StoreDatastore,
-    facet: &str,
-    subject_key: &str,
-    title_id: &str,
-) -> AppResult<LibraryGraphPruneReport> {
-    let facet: Arc<str> = Arc::from(facet);
-    let subject_key: Arc<str> = Arc::from(subject_key);
-    let title_id: Arc<str> = Arc::from(title_id);
-    SqlRuntime::run_in_transaction(datastore, "prune_library_graph_title", move |tx| {
-        let facet = Arc::clone(&facet);
-        let subject_key = Arc::clone(&subject_key);
-        let title_id = Arc::clone(&title_id);
-        Box::pin(async move {
-            let mut report = LibraryGraphPruneReport::default();
-            let Some(run_row) = SqlRuntime::fetch_optional(
-                SqlExec::Tx(tx),
-                "SELECT id FROM discovery_library_graph_runs WHERE facet = {} AND status = {} \
-                 ORDER BY started_at DESC, id DESC LIMIT 1",
-                &[
-                    SqlArg::Text(facet.to_string()),
-                    SqlArg::Text(LIBRARY_GRAPH_RUN_COMPLETE.to_string()),
-                ],
-            )
-            .await?
-            else {
-                return Ok(report);
-            };
-            let run_id = run_row.text("id")?;
-            let Some(node_row) = SqlRuntime::fetch_optional(
-                SqlExec::Tx(tx),
-                "SELECT subject_key, target_key, cluster_id, title_ids_json \
-                 FROM discovery_library_graph_nodes WHERE run_id = {} AND subject_key = {}",
-                &[
-                    SqlArg::Text(run_id.clone()),
-                    SqlArg::Text(subject_key.to_string()),
-                ],
-            )
-            .await?
-            else {
-                return Ok(report);
-            };
-            let node = node_from_row(&node_row)?;
-            let remaining = node
-                .title_ids
-                .iter()
-                .filter(|id| id.as_str() != title_id.as_ref())
-                .cloned()
-                .collect::<Vec<_>>();
-            if !remaining.is_empty() {
-                // Another owned title still stands for this subject.
-                if remaining.len() != node.title_ids.len() {
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "UPDATE discovery_library_graph_nodes SET title_ids_json = {} \
-                         WHERE run_id = {} AND subject_key = {}",
-                        &[
-                            SqlArg::Text(string_list_json(&remaining)?),
-                            SqlArg::Text(run_id.clone()),
-                            SqlArg::Text(node.subject_key.clone()),
-                        ],
-                    )
-                    .await?;
-                }
-                return Ok(report);
-            }
-
-            report.removed_nodes = SqlRuntime::execute(
-                SqlExec::Tx(tx),
-                "DELETE FROM discovery_library_graph_nodes WHERE run_id = {} AND subject_key = {}",
-                &[
-                    SqlArg::Text(run_id.clone()),
-                    SqlArg::Text(node.subject_key.clone()),
-                ],
-            )
-            .await?;
-
-            if node.cluster_id >= 0 {
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "UPDATE discovery_library_graph_clusters SET size = size - 1 \
-                     WHERE run_id = {} AND cluster_id = {} AND size > 0",
-                    &[SqlArg::Text(run_id.clone()), SqlArg::I64(node.cluster_id)],
-                )
-                .await?;
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "DELETE FROM discovery_library_graph_clusters \
-                     WHERE run_id = {} AND cluster_id = {} AND size <= 0",
-                    &[SqlArg::Text(run_id.clone()), SqlArg::I64(node.cluster_id)],
-                )
-                .await?;
-            }
-
-            // Edges join targets, not subjects: they stay while another node
-            // still resolves to the same target.
-            let target_still_present = SqlRuntime::fetch_optional(
-                SqlExec::Tx(tx),
-                "SELECT subject_key FROM discovery_library_graph_nodes \
-                 WHERE run_id = {} AND target_key = {} LIMIT 1",
-                &[
-                    SqlArg::Text(run_id.clone()),
-                    SqlArg::Text(node.target_key.clone()),
-                ],
-            )
-            .await?
-            .is_some();
-            if !target_still_present {
-                report.removed_edges = SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "DELETE FROM discovery_library_graph_edges \
-                     WHERE run_id = {} AND (from_key = {} OR to_key = {})",
-                    &[
-                        SqlArg::Text(run_id.clone()),
-                        SqlArg::Text(node.target_key.clone()),
-                        SqlArg::Text(node.target_key.clone()),
-                    ],
-                )
-                .await?;
-            }
-            Ok(report)
-        })
     })
-    .await
 }
 
 #[cfg(test)]
@@ -503,6 +466,13 @@ mod tests {
     use crate::discovery::store::DiscoveryStore;
 
     async fn sqlite_store(name: &str) -> (DiscoveryStore, std::path::PathBuf) {
+        let (store, _, path) = sqlite_store_and_datastore(name).await;
+        (store, path)
+    }
+
+    async fn sqlite_store_and_datastore(
+        name: &str,
+    ) -> (DiscoveryStore, StoreDatastore, std::path::PathBuf) {
         let path = std::env::temp_dir().join(format!(
             "scryer_library_graph_{name}_{}.db",
             uuid::Uuid::new_v4()
@@ -510,7 +480,11 @@ mod tests {
         let services = SqliteServices::new(path.to_string_lossy())
             .await
             .expect("sqlite services should initialize");
-        (DiscoveryStore::new(services.datastore()), path)
+        (
+            DiscoveryStore::new(services.datastore()),
+            services.datastore(),
+            path,
+        )
     }
 
     fn run(id: &str, facet: &str, status: &str, minute: i64) -> LibraryGraphRunRecord {
@@ -525,6 +499,8 @@ mod tests {
             generated_at: Some("2026-01-01T00:00:00Z".to_string()),
             error_code: None,
             error_text: None,
+            retry_after_seconds: None,
+            omitted_subject_keys: vec!["tmdb:movie:7".to_string(), "tmdb:movie:8".to_string()],
             started_at: at,
             completed_at: Some(at),
             created_at: at,
@@ -598,6 +574,8 @@ mod tests {
         failed.generated_at = None;
         failed.error_code = Some("LIBRARY_GRAPH_GATEWAY_QUEUE_FULL".to_string());
         failed.error_text = Some("at capacity".to_string());
+        failed.retry_after_seconds = Some(900);
+        failed.omitted_subject_keys = Vec::new();
         store
             .record_failed_library_graph_run(&failed)
             .await
@@ -634,78 +612,99 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn incremental_change_updates_one_subjects_edges_without_touching_the_rest() {
-        let (store, path) = sqlite_store("prune").await;
-        let original = snapshot("library-graph-prune", 0);
-        store.commit_library_graph(&original).await.expect("commit");
-
-        // One of two titles behind a subject goes: the node stays.
-        let report = store
-            .prune_library_graph_title("movie", "tmdb:movie:2", "title-b2")
-            .await
-            .expect("prune");
-        assert_eq!(report, LibraryGraphPruneReport::default());
-        let after_first = store
-            .get_latest_library_graph("movie")
-            .await
-            .expect("read")
-            .expect("graph");
-        assert_eq!(after_first.edges, original.edges);
-        assert_eq!(after_first.nodes[1].title_ids, vec!["title-b".to_string()]);
-
-        // The last title behind subject 1 goes: its node and edges go, its
-        // cluster shrinks, everything else is untouched.
-        let report = store
-            .prune_library_graph_title("movie", "tmdb:movie:1", "title-a")
-            .await
-            .expect("prune");
-        assert_eq!(report.removed_nodes, 1);
-        assert_eq!(report.removed_edges, 2);
-        let after = store
-            .get_latest_library_graph("movie")
-            .await
-            .expect("read")
-            .expect("graph");
-        assert_eq!(after.run, original.run);
-        assert_eq!(after.nodes, after_first.nodes[1..].to_vec());
-        assert_eq!(after.edges, vec![original.edges[2].clone()]);
-        assert_eq!(after.clusters[0].size, 1);
-        assert_eq!(after.clusters[1], original.clusters[1]);
-
-        // The last member of a cluster goes: the cluster goes with it.
+    async fn completeness_and_facet_deletion_follow_the_stored_runs() {
+        let (store, path) = sqlite_store("delete").await;
+        assert!(
+            !store
+                .has_complete_library_graph("movie")
+                .await
+                .expect("read")
+        );
+        let mut failed = run("library-graph-failed", "movie", "failed", 0);
+        failed.generated_at = None;
         store
-            .prune_library_graph_title("movie", "tmdb:movie:3", "title-c")
+            .record_failed_library_graph_run(&failed)
             .await
-            .expect("prune");
-        let after = store
-            .get_latest_library_graph("movie")
-            .await
-            .expect("read")
-            .expect("graph");
-        assert_eq!(
-            after
-                .clusters
-                .iter()
-                .map(|cluster| cluster.cluster_id)
-                .collect::<Vec<_>>(),
-            vec![0]
+            .expect("record failure");
+        assert!(
+            !store
+                .has_complete_library_graph("movie")
+                .await
+                .expect("read")
         );
-        assert!(after.edges.is_empty());
+        store
+            .commit_library_graph(&snapshot("library-graph-movie", 5))
+            .await
+            .expect("commit");
+        let mut anime = snapshot("library-graph-anime", 5);
+        anime.run.facet = "anime".to_string();
+        store.commit_library_graph(&anime).await.expect("commit");
+        assert!(
+            store
+                .has_complete_library_graph("movie")
+                .await
+                .expect("read")
+        );
 
-        // An unknown subject or facet is a no-op.
-        assert_eq!(
-            store
-                .prune_library_graph_title("movie", "tmdb:movie:99", "title-z")
+        store
+            .delete_library_graph_runs("movie")
+            .await
+            .expect("delete");
+        assert!(
+            !store
+                .has_complete_library_graph("movie")
                 .await
-                .expect("prune"),
-            LibraryGraphPruneReport::default()
+                .expect("read")
         );
         assert_eq!(
             store
-                .prune_library_graph_title("anime", "tmdb:movie:2", "title-b")
+                .get_latest_library_graph_run("movie")
                 .await
-                .expect("prune"),
-            LibraryGraphPruneReport::default()
+                .expect("read"),
+            None
+        );
+        // Another facet's graph is untouched.
+        assert_eq!(
+            store.get_latest_library_graph("anime").await.expect("read"),
+            Some(anime)
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn a_graph_replaced_mid_read_is_read_again_from_the_new_run() {
+        let (store, datastore, path) = sqlite_store_and_datastore("torn_read").await;
+        let first = snapshot("library-graph-first", 0);
+        store.commit_library_graph(&first).await.expect("commit");
+        let mut second = snapshot("library-graph-second", 10);
+        second.edges.truncate(1);
+
+        // The first attempt's child reads land, then a commit replaces the
+        // run: the read starts over and returns the new graph whole.
+        let committed = std::sync::atomic::AtomicBool::new(false);
+        let read = read_latest_library_graph(&datastore, "movie", || async {
+            if !committed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                store.commit_library_graph(&second).await.expect("commit");
+            }
+        })
+        .await
+        .expect("read");
+        assert_eq!(read, Some(second.clone()));
+
+        // Replaced on every attempt: a coded refusal, never a torn graph.
+        let minute = std::sync::atomic::AtomicI64::new(20);
+        let error = read_latest_library_graph(&datastore, "movie", || async {
+            let at = minute.fetch_add(10, std::sync::atomic::Ordering::SeqCst);
+            store
+                .commit_library_graph(&snapshot(&format!("library-graph-{at}"), at))
+                .await
+                .expect("commit");
+        })
+        .await
+        .expect_err("a graph replaced on every attempt cannot be read");
+        assert_eq!(
+            error.reason(),
+            Some(error_reasons::library_graph::READ_SUPERSEDED)
         );
         let _ = std::fs::remove_file(path);
     }

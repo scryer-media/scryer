@@ -313,6 +313,11 @@ pub struct LibraryGraphRunRecord {
     pub generated_at: Option<String>,
     pub error_code: Option<String>,
     pub error_text: Option<String>,
+    /// How long the gateway asked Scryer to wait before trying a failed
+    /// build again, when it said.
+    pub retry_after_seconds: Option<i64>,
+    /// Subject keys left out because the facet was over the per-call cap.
+    pub omitted_subject_keys: Vec<String>,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -355,13 +360,6 @@ pub struct LibraryGraphSnapshotRecord {
     pub nodes: Vec<LibraryGraphNodeRecord>,
     pub edges: Vec<LibraryGraphEdgeRecord>,
     pub clusters: Vec<LibraryGraphClusterRecord>,
-}
-
-/// What removing one title did to a facet's stored library graph.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LibraryGraphPruneReport {
-    pub removed_nodes: u64,
-    pub removed_edges: u64,
 }
 
 /// The related titles the gateway last returned for one discovery target
@@ -1097,15 +1095,10 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         facet: &str,
     ) -> AppResult<Option<LibraryGraphRunRecord>>;
-    /// Drops one removed title from the facet's complete graph. The node goes
-    /// once no title stands for it any more; its edges go when no remaining
-    /// node shares its target, and its cluster shrinks by one.
-    async fn prune_library_graph_title(
-        &self,
-        facet: &str,
-        subject_key: &str,
-        title_id: &str,
-    ) -> AppResult<LibraryGraphPruneReport>;
+    /// Whether the facet has a complete graph stored.
+    async fn has_complete_library_graph(&self, facet: &str) -> AppResult<bool>;
+    /// Deletes every run of a facet, with its graph.
+    async fn delete_library_graph_runs(&self, facet: &str) -> AppResult<()>;
 
     /// The cached related titles of `target_key` in `language`, whatever
     /// their age.

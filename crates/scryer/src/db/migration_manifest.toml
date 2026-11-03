@@ -3714,6 +3714,23 @@ file = "postgres/migrations/0323_discovery_neighbor_cache.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 324
+description = "discovery library graph retry"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0324_discovery_library_graph_retry.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0324_discovery_library_graph_retry.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

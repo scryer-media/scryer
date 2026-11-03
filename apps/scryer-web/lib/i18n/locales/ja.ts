@@ -1185,6 +1185,9 @@ const ja: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "おすすめ",
   "libraryGraph.notBuilt": "ライブラリグラフはまだ作成されていません。",
   "libraryGraph.truncated": "このグラフはライブラリの一部のみを対象としています。",
+  "discovery.refusal.neighborTargetKeyUnsupported": "この作品はこれ以上探索できません。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "この作品はこのライブラリのメディアの種類と一致しないため、ここでは探索できません。",
   "libraryGraph.moreLikeThis": "似た作品",
   "libraryGraph.moreLikeThisEmpty": "似た作品はまだありません。",
   "libraryGraph.notInLibrary": "ライブラリにありません",

@@ -1551,6 +1551,9 @@ const nl: LocaleDictionary = {
   "libraryGraph.notBuilt": "De bibliotheekgraaf is nog niet opgebouwd.",
   "libraryGraph.truncated":
     "Deze graaf omvat maar een deel van de bibliotheek.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "Deze titel kan niet verder worden verkend.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Deze titel past niet bij het mediatype van deze bibliotheek en kan hier niet worden verkend.",
   "libraryGraph.moreLikeThis": "Meer zoals dit",
   "libraryGraph.moreLikeThisEmpty": "Nog niets vergelijkbaars.",
   "libraryGraph.notInLibrary": "Niet in je bibliotheek",
