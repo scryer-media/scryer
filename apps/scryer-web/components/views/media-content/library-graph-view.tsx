@@ -40,6 +40,7 @@ import {
   joinLibraryGraphToTitles,
   libraryGraphEdgeKindLabels,
   libraryGraphGroupName,
+  libraryGraphNamedClusterIds,
   neighborReason,
   neighborReasonLines,
   nodeSizesByTitleId,
@@ -174,15 +175,16 @@ type Hover =
       lines: string[];
     };
 
+/**
+ * A named neighbourhood's colour, by its place in `order`. Any other title,
+ * in no named neighbourhood, takes the plain unplaced colour.
+ */
 function clusterColor(clusterId: number, order: readonly number[]): string {
-  if (clusterId === UNPLACED_CLUSTER_ID) {
+  const position = order.indexOf(clusterId);
+  if (position < 0) {
     return UNPLACED_COLOR;
   }
-  const position = order.indexOf(clusterId);
-  const index = position < 0 ? clusterId : position;
-  // An id the order does not know may be negative; wrap it into range.
-  const count = CLUSTER_COLORS.length;
-  return CLUSTER_COLORS[((index % count) + count) % count];
+  return CLUSTER_COLORS[position % CLUSTER_COLORS.length];
 }
 
 // The camera at rest: unzoomed and centred on the layout's origin, where
@@ -671,22 +673,30 @@ export default function LibraryGraphView({
   React.useEffect(() => {
     recommendationBandsRef.current = recommendationBands;
   }, [recommendationBands]);
-  // Every cluster of the whole graph, before filtering, so layout centres hold
-  // still when a filter empties a cluster. The unplaced group takes a slot on
-  // the ring only when the graph has unplaced titles, so a single
-  // neighbourhood sits on the origin.
-  const allClusterIds = React.useMemo(() => {
-    const ids = (result?.clusters ?? []).map((cluster) => cluster.id);
-    return result?.nodes.some((node) => node.clusterId === UNPLACED_CLUSTER_ID)
-      ? [UNPLACED_CLUSTER_ID, ...ids]
-      : ids;
-  }, [result]);
+  // The neighbourhoods drawn as such: named, and big enough. Every other
+  // cluster's titles, and unplaced ones, are only titles: no ring spot,
+  // outline, name or colour of their own.
+  const namedClusterIds = React.useMemo(
+    () => libraryGraphNamedClusterIds(result?.clusters ?? []),
+    [result],
+  );
+  const namedClusterIdsRef = React.useRef(namedClusterIds);
+  React.useEffect(() => {
+    namedClusterIdsRef.current = namedClusterIds;
+  }, [namedClusterIds]);
+  // Every named neighbourhood of the whole graph, before filtering, so layout
+  // centres hold still when a filter empties one.
+  const allClusterIds = React.useMemo(
+    () => Array.from(namedClusterIds),
+    [namedClusterIds],
+  );
   const clusterOrder = React.useMemo(
     () =>
       (join?.graph.clusters ?? [])
         .map((cluster) => cluster.id)
+        .filter((id) => namedClusterIds.has(id))
         .sort((a, b) => a - b),
-    [join],
+    [join, namedClusterIds],
   );
   const groups = React.useMemo(() => {
     if (!join) {
@@ -706,6 +716,7 @@ export default function LibraryGraphView({
         t,
       ),
       color: clusterColor(id, clusterOrder),
+      named: namedClusterIds.has(id),
     })).sort((a, b) =>
       a.id === UNPLACED_CLUSTER_ID
         ? 1
@@ -713,11 +724,17 @@ export default function LibraryGraphView({
           ? -1
           : a.id - b.id,
     );
-  }, [clusterOrder, join, t]);
+  }, [clusterOrder, join, namedClusterIds, t]);
+  // The groups shown by name: the named neighbourhoods, and the unplaced
+  // titles when there are any.
+  const shownGroups = React.useMemo(
+    () =>
+      groups.filter((group) => group.named || group.id === UNPLACED_CLUSTER_ID),
+    [groups],
+  );
   // Neighbourhoods are named and outlined only when there are several; one
   // neighbourhood is the whole library.
-  const showsNeighbourhoods =
-    groups.filter((group) => group.id !== UNPLACED_CLUSTER_ID).length > 1;
+  const showsNeighbourhoods = groups.filter((group) => group.named).length > 1;
   const showsNeighbourhoodsRef = React.useRef(showsNeighbourhoods);
   React.useEffect(() => {
     showsNeighbourhoodsRef.current = showsNeighbourhoods;
@@ -837,6 +854,7 @@ export default function LibraryGraphView({
       if (
         focusCenter !== null ||
         !showsNeighbourhoodsRef.current ||
+        !group.named ||
         !points ||
         points.length === 0
       ) {
@@ -1478,6 +1496,8 @@ export default function LibraryGraphView({
         displayed.nodes.map((node) => ({
           key: node.subjectKey,
           clusterId: node.clusterId,
+          // Ghosts never stretch an outline, so they keep to their links too.
+          free: node.ghost || !namedClusterIdsRef.current.has(node.clusterId),
         })),
         displayed.edges,
         // New ghosts start beside the node that reached them, so exploring
@@ -2209,7 +2229,7 @@ export default function LibraryGraphView({
           aria-label={t("libraryGraph.clustersLabel")}
           className="flex gap-1.5 overflow-x-auto pb-1"
         >
-          {(showsNeighbourhoods ? groups : []).map((group) => (
+          {(showsNeighbourhoods ? shownGroups : []).map((group) => (
             <span key={group.id} className="flex shrink-0 items-center gap-0.5">
               <button
                 type="button"
@@ -2344,7 +2364,7 @@ export default function LibraryGraphView({
           className="pointer-events-none absolute left-0 top-0"
         />
         {groups
-          .filter((group) => group.id !== UNPLACED_CLUSTER_ID)
+          .filter((group) => group.named)
           .map((group) => (
             <button
               key={group.id}

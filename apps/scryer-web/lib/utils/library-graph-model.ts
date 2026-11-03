@@ -424,6 +424,28 @@ export function libraryGraphClusterName(
   return cluster.label;
 }
 
+/** The fewest titles a neighbourhood needs to be named and outlined. */
+export const LIBRARY_GRAPH_MIN_NAMED_CLUSTER_SIZE = 3;
+
+/**
+ * The clusters drawn as neighbourhoods: those with a label and at least
+ * `LIBRARY_GRAPH_MIN_NAMED_CLUSTER_SIZE` titles. The rest are only titles,
+ * with no outline, name or spot of their own.
+ */
+export function libraryGraphNamedClusterIds(
+  clusters: readonly LibraryGraphCluster[],
+): Set<number> {
+  return new Set(
+    clusters
+      .filter(
+        (cluster) =>
+          cluster.labelKey !== null &&
+          cluster.size >= LIBRARY_GRAPH_MIN_NAMED_CLUSTER_SIZE,
+      )
+      .map((cluster) => cluster.id),
+  );
+}
+
 /** The name of the group unplaced nodes collapse into. */
 export function libraryGraphGroupName(
   clusterId: number,

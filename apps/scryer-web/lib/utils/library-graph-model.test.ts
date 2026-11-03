@@ -24,6 +24,7 @@ import {
   libraryGraphEdgeKindLabel,
   libraryGraphEdgeKindLabels,
   libraryGraphGroupName,
+  libraryGraphNamedClusterIds,
   neighborReason,
   neighborReasonLines,
   recommendationSectionName,
@@ -700,4 +701,33 @@ test("tag grouping applies when no server neighbourhood holds a recommendation",
       ["Sports", ["r:1", "r:3"]],
     ],
   );
+});
+
+test("only labelled clusters of three or more titles are named neighbourhoods", () => {
+  const named = libraryGraphNamedClusterIds([
+    {
+      id: 0,
+      labelKey: "genre:fixture-alpha",
+      label: "A",
+      medoid: "s:a",
+      size: 12,
+    },
+    {
+      id: 1,
+      labelKey: "genre:fixture-bravo",
+      label: "B",
+      medoid: "s:b",
+      size: 3,
+    },
+    {
+      id: 2,
+      labelKey: "genre:fixture-gamma",
+      label: "C",
+      medoid: "s:c",
+      size: 2,
+    },
+    { id: 3, labelKey: null, label: "Synthetic One", medoid: "s:d", size: 1 },
+    { id: 4, labelKey: null, label: "Synthetic Many", medoid: "s:e", size: 9 },
+  ]);
+  assert.deepEqual([...named].sort(), [0, 1]);
 });

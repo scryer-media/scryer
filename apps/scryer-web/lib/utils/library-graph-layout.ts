@@ -9,6 +9,12 @@ export type LayoutPoint = { x: number; y: number };
 export type LayoutNodeInput = {
   key: string;
   clusterId: number;
+  /**
+   * A title in no named neighbourhood. It takes no spot on the ring and keeps
+   * to its own links instead, so it never drags a ring spot of its own out
+   * past the named neighbourhoods.
+   */
+  free?: boolean;
 };
 
 export type LayoutEdgeInput = {
@@ -20,12 +26,18 @@ export type LayoutEdgeInput = {
 export type LayoutState = {
   keys: string[];
   clusterIds: number[];
+  /** 1 for a title in no named neighbourhood; see `LayoutNodeInput.free`. */
+  free: Uint8Array;
   x: Float64Array;
   y: Float64Array;
   centers: Map<number, LayoutPoint>;
   edges: Array<{ a: number; b: number; weight: number }>;
   /** Cooling factor: how far a node may move in one step. */
   temperature: number;
+  /** Steps run so far, which paces the nearest-linked search. */
+  steps: number;
+  /** For each unlinked title, the linked title it rests beside, or -1. */
+  nearestLinked: Int32Array;
 };
 
 const CLUSTER_RING_RADIUS = 260;
@@ -37,9 +49,30 @@ const REPULSION = 900;
 const SPRING_LENGTH = 34;
 const SPRING = 0.04;
 /** Pull toward the cluster's own titles, so a weakly linked one stays near. */
-const CLUSTER_GRAVITY = 0.03;
+const CLUSTER_GRAVITY = 0.04;
 /** Pull toward the cluster's spot on the ring, keeping clusters apart. */
 const RING_GRAVITY = 0.012;
+/**
+ * How much a link between two named neighbourhoods pulls, against a link
+ * inside one. A few links across would otherwise drag two neighbourhoods into
+ * one another.
+ */
+const CROSS_CLUSTER_SPRING = 0.25;
+/** Pull on a free title toward the titles it links to. */
+const FREE_GRAVITY = 0.05;
+/** A faint pull on every free title toward the middle of the graph. */
+const CENTRE_GRAVITY = 0.004;
+/**
+ * Room kept between a neighbourhood's outline and any title not in it, in
+ * layout units; the drawn outline is padded past its outer titles.
+ */
+const HULL_MARGIN = 22;
+/** How hard a title inside another neighbourhood's outline is pushed out. */
+const HULL_PUSH = 0.35;
+/** Steps between fresh searches for an unlinked title's nearest linked one. */
+const NEAREST_LINKED_REFRESH_STEPS = 10;
+/** Grid cell size for finding the outlines near a title. */
+const OUTLINE_CELL = 120;
 const START_TEMPERATURE = 24;
 const SETTLE_TEMPERATURE = 6;
 const COOLING = 0.97;
@@ -99,18 +132,20 @@ export function createLayout(
   previous: ReadonlyMap<string, LayoutPoint> = new Map(),
   allClusterIds: Iterable<number> = [],
 ): LayoutState {
+  // Only named neighbourhoods take a spot on the ring.
   const centers = clusterCenters([
     ...allClusterIds,
-    ...nodes.map((node) => node.clusterId),
+    ...nodes.filter((node) => !node.free).map((node) => node.clusterId),
   ]);
   const keys = nodes.map((node) => node.key);
   const clusterIds = nodes.map((node) => node.clusterId);
+  const free = Uint8Array.from(nodes, (node) => (node.free ? 1 : 0));
   const x = new Float64Array(nodes.length);
   const y = new Float64Array(nodes.length);
   const indexByKey = new Map<string, number>();
   let kept = 0;
-  // A title with no links starts in the middle rather than on its ring spot,
-  // which is too far to travel before the layout cools.
+  // A title with no links, or in no named neighbourhood, starts in the middle:
+  // it has no ring spot, or one too far to travel before the layout cools.
   const present = new Set(keys);
   const linkedKeys = new Set<string>();
   for (const edge of edges) {
@@ -133,7 +168,7 @@ export function createLayout(
       return;
     }
     const center =
-      linkedKeys.size > 0 && !linkedKeys.has(node.key)
+      node.free || (linkedKeys.size > 0 && !linkedKeys.has(node.key))
         ? { x: 0, y: 0 }
         : (centers.get(node.clusterId) ?? { x: 0, y: 0 });
     const hash = hashString(node.key);
@@ -156,11 +191,14 @@ export function createLayout(
   return {
     keys,
     clusterIds,
+    free,
     x,
     y,
     centers,
     edges: layoutEdges,
     temperature: settling ? SETTLE_TEMPERATURE : START_TEMPERATURE,
+    steps: 0,
+    nearestLinked: new Int32Array(nodes.length).fill(-1),
   };
 }
 
@@ -198,6 +236,20 @@ export function stepLayout(state: LayoutState, iterations: number): number {
   const count = state.keys.length;
   const dx = new Float64Array(count);
   const dy = new Float64Array(count);
+  const neighbourX = new Float64Array(count);
+  const neighbourY = new Float64Array(count);
+  const neighbourWeight = new Float64Array(count);
+  const linked = new Uint8Array(count);
+  for (const edge of state.edges) {
+    linked[edge.a] = 1;
+    linked[edge.b] = 1;
+  }
+  const linkedIndexes: number[] = [];
+  for (let index = 0; index < count; index += 1) {
+    if (linked[index]) {
+      linkedIndexes.push(index);
+    }
+  }
   let ran = 0;
   // The forces act in a space squeezed across by the ring's width, so the
   // layout they settle is round there and comes out that much wider than
@@ -264,7 +316,15 @@ export function stepLayout(state: LayoutState, iterations: number): number {
       const ddx = state.x[edge.b] - state.x[edge.a];
       const ddy = state.y[edge.b] - state.y[edge.a];
       const distance = Math.sqrt(ddx * ddx + ddy * ddy) || 0.01;
-      const force = SPRING * edge.weight * (distance - SPRING_LENGTH);
+      const across =
+        !state.free[edge.a] &&
+        !state.free[edge.b] &&
+        state.clusterIds[edge.a] !== state.clusterIds[edge.b];
+      const force =
+        SPRING *
+        edge.weight *
+        (across ? CROSS_CLUSTER_SPRING : 1) *
+        (distance - SPRING_LENGTH);
       const fx = (ddx / distance) * force;
       const fy = (ddy / distance) * force;
       dx[edge.a] += fx;
@@ -274,61 +334,181 @@ export function stepLayout(state: LayoutState, iterations: number): number {
     }
 
     // A title with no links at all is drawn to the nearest linked title
-    // rather than to its ring spot, which the linked titles have been pulled
+    // rather than to a ring spot, which the linked titles have been pulled
     // well inside of, so it rests on the edge of the graph instead of off on
-    // its own.
-    const linked = new Uint8Array(count);
-    for (const edge of state.edges) {
-      linked[edge.a] = 1;
-      linked[edge.b] = 1;
-    }
-    const nearestLinked = (index: number): LayoutPoint | null => {
-      let best: LayoutPoint | null = null;
-      let bestDistance = Number.POSITIVE_INFINITY;
-      for (let other = 0; other < count; other += 1) {
-        if (!linked[other]) {
+    // its own. The search is linear, so it reruns only every few steps.
+    if (state.steps % NEAREST_LINKED_REFRESH_STEPS === 0) {
+      for (let index = 0; index < count; index += 1) {
+        if (linked[index]) {
           continue;
         }
-        const distance =
-          (state.x[other] - state.x[index]) ** 2 +
-          (state.y[other] - state.y[index]) ** 2;
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          best = { x: state.x[other], y: state.y[other] };
+        let best = -1;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (const other of linkedIndexes) {
+          const distance =
+            (state.x[other] - state.x[index]) ** 2 +
+            (state.y[other] - state.y[index]) ** 2;
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = other;
+          }
         }
+        state.nearestLinked[index] = best;
       }
-      return best;
-    };
+    }
 
-    // Each cluster's middle this step. A title drawn only to a fixed ring
-    // spot would park there whenever its few links are weak, far from the
-    // rest of its cluster.
-    const middles = new Map<number, { x: number; y: number; n: number }>();
+    // Where each free title's links pull it: the weighted middle of the
+    // titles it links to.
+    neighbourX.fill(0);
+    neighbourY.fill(0);
+    neighbourWeight.fill(0);
+    for (const edge of state.edges) {
+      const weight = edge.weight + 0.01;
+      if (state.free[edge.a]) {
+        neighbourX[edge.a] += state.x[edge.b] * weight;
+        neighbourY[edge.a] += state.y[edge.b] * weight;
+        neighbourWeight[edge.a] += weight;
+      }
+      if (state.free[edge.b]) {
+        neighbourX[edge.b] += state.x[edge.a] * weight;
+        neighbourY[edge.b] += state.y[edge.a] * weight;
+        neighbourWeight[edge.b] += weight;
+      }
+    }
+
+    // Each named neighbourhood's middle and reach this step. A title drawn
+    // only to a fixed ring spot would park there whenever its few links are
+    // weak, far from the rest of its neighbourhood.
+    const middles = new Map<
+      number,
+      { x: number; y: number; n: number; reach: number; members: number[] }
+    >();
     for (let index = 0; index < count; index += 1) {
+      if (state.free[index]) {
+        continue;
+      }
       const id = state.clusterIds[index];
       const middle = middles.get(id);
       if (middle) {
         middle.x += state.x[index];
         middle.y += state.y[index];
         middle.n += 1;
+        middle.members.push(index);
       } else {
-        middles.set(id, { x: state.x[index], y: state.y[index], n: 1 });
+        middles.set(id, {
+          x: state.x[index],
+          y: state.y[index],
+          n: 1,
+          reach: 0,
+          members: [index],
+        });
       }
     }
-    for (let index = 0; index < count; index += 1) {
-      const ring = state.centers.get(state.clusterIds[index]);
-      const anchor = linked[index] === 0 ? nearestLinked(index) : null;
-      const center =
-        anchor ??
-        (ring ? { x: ring.x / CLUSTER_RING_WIDTH, y: ring.y } : { x: 0, y: 0 });
-      const pull = anchor ? CLUSTER_GRAVITY : RING_GRAVITY;
-      const middle = middles.get(state.clusterIds[index]);
-      if (middle && middle.n > 1) {
-        dx[index] += (middle.x / middle.n - state.x[index]) * CLUSTER_GRAVITY;
-        dy[index] += (middle.y / middle.n - state.y[index]) * CLUSTER_GRAVITY;
+    for (const middle of middles.values()) {
+      middle.x /= middle.n;
+      middle.y /= middle.n;
+      for (const member of middle.members) {
+        middle.reach = Math.max(
+          middle.reach,
+          Math.hypot(state.x[member] - middle.x, state.y[member] - middle.y),
+        );
       }
-      dx[index] += (center.x - state.x[index]) * pull;
-      dy[index] += (center.y - state.y[index]) * pull;
+    }
+
+    // No title sits inside another neighbourhood's outline. The outline lies
+    // within the circle round the neighbourhood's middle out to its farthest
+    // title, so a title inside that circle, plus a margin, is pushed out,
+    // and the neighbourhood is pushed back as much, spread over its titles.
+    // The circles are found through a grid, so this stays near linear.
+    const outlineGrid = new Map<string, number[]>();
+    const outlines = [...middles.entries()];
+    outlines.forEach(([, middle], outline) => {
+      const limit = middle.reach + HULL_MARGIN;
+      const minX = Math.floor((middle.x - limit) / OUTLINE_CELL);
+      const maxX = Math.floor((middle.x + limit) / OUTLINE_CELL);
+      const minY = Math.floor((middle.y - limit) / OUTLINE_CELL);
+      const maxY = Math.floor((middle.y + limit) / OUTLINE_CELL);
+      for (let cx = minX; cx <= maxX; cx += 1) {
+        for (let cy = minY; cy <= maxY; cy += 1) {
+          const cell = `${cx}:${cy}`;
+          const bucket = outlineGrid.get(cell);
+          if (bucket) {
+            bucket.push(outline);
+          } else {
+            outlineGrid.set(cell, [outline]);
+          }
+        }
+      }
+    });
+    for (let index = 0; index < count; index += 1) {
+      const bucket = outlineGrid.get(
+        `${Math.floor(state.x[index] / OUTLINE_CELL)}:${Math.floor(state.y[index] / OUTLINE_CELL)}`,
+      );
+      if (!bucket) {
+        continue;
+      }
+      for (const outline of bucket) {
+        const [id, middle] = outlines[outline];
+        if (!state.free[index] && state.clusterIds[index] === id) {
+          continue;
+        }
+        let ddx = state.x[index] - middle.x;
+        let ddy = state.y[index] - middle.y;
+        let distance = Math.sqrt(ddx * ddx + ddy * ddy);
+        const limit = middle.reach + HULL_MARGIN;
+        if (distance >= limit) {
+          continue;
+        }
+        if (distance === 0) {
+          ddx = 0.01 * (1 + (index % 7));
+          ddy = 0.01 * (1 + (outline % 5));
+          distance = Math.sqrt(ddx * ddx + ddy * ddy);
+        }
+        const push = (limit - distance) * HULL_PUSH;
+        const fx = (ddx / distance) * push;
+        const fy = (ddy / distance) * push;
+        dx[index] += fx;
+        dy[index] += fy;
+        for (const member of middle.members) {
+          dx[member] -= fx / middle.n;
+          dy[member] -= fy / middle.n;
+        }
+      }
+    }
+
+    for (let index = 0; index < count; index += 1) {
+      const nearest = linked[index] ? -1 : state.nearestLinked[index];
+      if (state.free[index]) {
+        // A free title keeps to its links, or beside the nearest linked
+        // title, and drifts faintly toward the middle of the graph.
+        if (neighbourWeight[index] > 0) {
+          const towardX = neighbourX[index] / neighbourWeight[index];
+          const towardY = neighbourY[index] / neighbourWeight[index];
+          dx[index] += (towardX - state.x[index]) * FREE_GRAVITY;
+          dy[index] += (towardY - state.y[index]) * FREE_GRAVITY;
+        } else if (nearest >= 0) {
+          dx[index] += (state.x[nearest] - state.x[index]) * CLUSTER_GRAVITY;
+          dy[index] += (state.y[nearest] - state.y[index]) * CLUSTER_GRAVITY;
+        }
+        dx[index] -= state.x[index] * CENTRE_GRAVITY;
+        dy[index] -= state.y[index] * CENTRE_GRAVITY;
+      } else {
+        const ring = state.centers.get(state.clusterIds[index]);
+        const center =
+          nearest >= 0
+            ? { x: state.x[nearest], y: state.y[nearest] }
+            : ring
+              ? { x: ring.x / CLUSTER_RING_WIDTH, y: ring.y }
+              : { x: 0, y: 0 };
+        const pull = nearest >= 0 ? CLUSTER_GRAVITY : RING_GRAVITY;
+        const middle = middles.get(state.clusterIds[index]);
+        if (middle && middle.n > 1) {
+          dx[index] += (middle.x - state.x[index]) * CLUSTER_GRAVITY;
+          dy[index] += (middle.y - state.y[index]) * CLUSTER_GRAVITY;
+        }
+        dx[index] += (center.x - state.x[index]) * pull;
+        dy[index] += (center.y - state.y[index]) * pull;
+      }
       const length = Math.sqrt(dx[index] ** 2 + dy[index] ** 2);
       if (length > 0) {
         const limited = Math.min(length, state.temperature);
@@ -336,6 +516,7 @@ export function stepLayout(state: LayoutState, iterations: number): number {
         state.y[index] += (dy[index] / length) * limited;
       }
     }
+    state.steps += 1;
     state.temperature *= COOLING;
     ran += 1;
   }
