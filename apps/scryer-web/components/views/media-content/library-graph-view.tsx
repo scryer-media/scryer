@@ -104,6 +104,10 @@ const LAYOUT_STEPS_PER_FRAME = 6;
 const MAX_POSTERS_PER_FRAME = 240;
 const MIN_POSTER_RADIUS_PX = 9;
 const HULL_PADDING_PX = 18;
+// How far a neighbourhood name may wander from its titles to find a spot
+// that covers none of them: rings this far apart, this many rings.
+const HULL_LABEL_SEARCH_STEP_PX = 14;
+const HULL_LABEL_SEARCH_RINGS = 10;
 /** How many neighbours one expansion asks for. */
 const NEIGHBOR_LIMIT = 24;
 const GHOST_NODE_SIZE = LIBRARY_GRAPH_MIN_NODE_SIZE + 1;
@@ -180,9 +184,51 @@ function clusterColor(clusterId: number, order: readonly number[]): string {
 
 // The camera at rest: unzoomed and centred on the layout's origin, where
 // cluster rings and focused views are centred.
+/** How far titles away from the hovered one fade. */
+const HOVER_FADE_ALPHA = 0.18;
+
+/** Room around the titles when the overview is fitted to them. */
+const OVERVIEW_FIT_PADDING = 1.25;
+
 function restCamera(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
   const origin = sigma.graphToFramedGraph({ x: 0, y: 0 });
   return { x: origin.x, y: origin.y, ratio: 1, angle: 0 };
+}
+
+// The camera framing the nodes `include` keeps, with `padding` around them,
+// or null when it keeps none.
+function framingCamera(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  graph: LibraryGraphStore,
+  include: (attributes: NodeAttributes) => boolean,
+  padding: number,
+) {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  graph.forEachNode((_key, attributes) => {
+    if (!include(attributes)) {
+      return;
+    }
+    const point = sigma.graphToFramedGraph({
+      x: attributes.x as number,
+      y: attributes.y as number,
+    });
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  });
+  if (!Number.isFinite(minX)) {
+    return null;
+  }
+  const span = Math.max(maxX - minX, maxY - minY);
+  return {
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+    ratio: Math.min(1, Math.max(0.08, span * padding)),
+  };
 }
 
 function withAlpha(hex: string, alpha: number): string {
@@ -271,12 +317,21 @@ export default function LibraryGraphView({
   // The focused node the camera last came to rest for; undefined before the
   // first drawing.
   const cameraCenterRef = React.useRef<string | null | undefined>(undefined);
+  // Whether the overview fits its titles once its layout settles.
+  const fitWhenSettledRef = React.useRef(false);
   // Bumped when a focused view's frame changes size, so its rings refit.
   const [focusFrameVersion, setFocusFrameVersion] = React.useState(0);
   // Restarts the layout loop after it paused for a hidden container.
   const resumeLayoutRef = React.useRef<() => void>(() => {});
   const positionsRef = React.useRef(new Map<string, LayoutPoint>());
   const posterCacheRef = React.useRef(new Map<string, HTMLImageElement>());
+  // The title under the pointer and the titles one link from it, which stay
+  // bright while the rest of the graph fades.
+  const hoverFocusRef = React.useRef<{
+    key: string;
+    near: ReadonlySet<string>;
+    accent: string;
+  } | null>(null);
   const selectedTitleIdRef = React.useRef(selectedTitleId);
   const titlesByIdRef = React.useRef(new Map<string, TitleRecord>());
   const onSelectTitleRef = React.useRef(onSelectTitle);
@@ -728,12 +783,19 @@ export default function LibraryGraphView({
 
     const pointsByCluster = new Map<number, LayoutPoint[]>();
     const viewportByNode = new Map<string, LayoutPoint>();
+    // Every drawn title, so neighbourhood names can keep off them.
+    const nodeDiscs: { x: number; y: number; r: number }[] = [];
     graph.forEachNode((key, attributes) => {
       const point = sigma.graphToViewport({
         x: attributes.x as number,
         y: attributes.y as number,
       });
       viewportByNode.set(key, point);
+      nodeDiscs.push({
+        x: point.x,
+        y: point.y,
+        r: sigma.scaleSize(attributes.size as number),
+      });
       // Ghosts are not in the library, so they never stretch a cluster hull.
       if (attributes.collapsedClusterId !== undefined || attributes.ghost) {
         return;
@@ -754,6 +816,9 @@ export default function LibraryGraphView({
     context.lineJoin = "round";
     context.lineCap = "round";
     const focusCenter = focusCenterRef.current;
+    // Neighbourhood names already placed this frame, so later ones step aside.
+    const placedHullLabels: { x: number; y: number; w: number; h: number }[] =
+      [];
     for (const group of groupsRef.current) {
       const label = hullLabelRefs.current.get(group.id);
       const points = pointsByCluster.get(group.id);
@@ -795,17 +860,69 @@ export default function LibraryGraphView({
         context.stroke();
       }
       if (label) {
-        const top = hull.reduce(
-          (best, point) => (point.y < best.y ? point : best),
-          hull[0],
-        );
-        const centerX =
-          hull.reduce((total, point) => total + point.x, 0) / hull.length;
-        const x = Math.min(Math.max(centerX, 60), width - 60);
-        const y = Math.min(
-          Math.max(top.y - HULL_PADDING_PX - 14, 14),
-          height - 14,
-        );
+        // The name sits where the neighbourhood's titles are, at their
+        // median, not on the hull's rim: hulls stretch far past their
+        // core and overlap each other.
+        const median = (values: number[]) => {
+          const sorted = [...values].sort((a, b) => a - b);
+          return sorted[sorted.length >> 1];
+        };
+        const w = label.offsetWidth || 80;
+        const h = label.offsetHeight || 22;
+        const clampX = (value: number) =>
+          Math.min(Math.max(value, w / 2 + 4), width - w / 2 - 4);
+        const clampY = (value: number) =>
+          Math.min(Math.max(value, h / 2 + 4), height - h / 2 - 4);
+        const baseX = median(points.map((point) => point.x));
+        const baseY = median(points.map((point) => point.y));
+        // A spot is clear when the name covers no title and no other name.
+        const coversTitle = (cx: number, cy: number) =>
+          nodeDiscs.some((disc) => {
+            const dx = Math.max(Math.abs(disc.x - cx) - w / 2, 0);
+            const dy = Math.max(Math.abs(disc.y - cy) - h / 2, 0);
+            return dx * dx + dy * dy < (disc.r + 3) * (disc.r + 3);
+          });
+        const coversName = (cx: number, cy: number) =>
+          placedHullLabels.some(
+            (other) =>
+              Math.abs(other.x - cx) < (other.w + w) / 2 + 4 &&
+              Math.abs(other.y - cy) < (other.h + h) / 2 + 4,
+          );
+        // Search outward from the middle of the titles, rings of growing
+        // radius, trying above first, for the nearest clear spot.
+        let x = clampX(baseX);
+        let y = clampY(baseY);
+        let fallback: { x: number; y: number } | null = null;
+        search: for (let ring = 0; ring <= HULL_LABEL_SEARCH_RINGS; ring += 1) {
+          const spots = ring === 0 ? 1 : 16;
+          for (let spot = 0; spot < spots; spot += 1) {
+            const angle = -Math.PI / 2 + (spot * Math.PI * 2) / spots;
+            const cx = clampX(
+              baseX + Math.cos(angle) * ring * HULL_LABEL_SEARCH_STEP_PX,
+            );
+            const cy = clampY(
+              baseY + Math.sin(angle) * ring * HULL_LABEL_SEARCH_STEP_PX,
+            );
+            if (coversName(cx, cy)) {
+              continue;
+            }
+            fallback ??= { x: cx, y: cy };
+            if (!coversTitle(cx, cy)) {
+              x = cx;
+              y = cy;
+              break search;
+            }
+          }
+          if (ring === HULL_LABEL_SEARCH_RINGS && fallback) {
+            // Nowhere clear nearby: at least keep off the other names.
+            x = fallback.x;
+            y = fallback.y;
+          }
+        }
+        x = Math.round(x);
+        y = Math.round(y);
+        placedHullLabels.push({ x, y, w, h });
+        label.style.borderColor = withAlpha(group.color, 0.85);
         label.style.visibility = "visible";
         label.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
       }
@@ -924,6 +1041,10 @@ export default function LibraryGraphView({
       context.save();
       if (attributes.ghost) {
         context.globalAlpha = 0.55;
+      }
+      const hoverFocus = hoverFocusRef.current;
+      if (hoverFocus && !hoverFocus.near.has(key)) {
+        context.globalAlpha = HOVER_FADE_ALPHA;
       }
       context.beginPath();
       context.arc(point.x, point.y, radius, 0, Math.PI * 2);
@@ -1153,6 +1274,39 @@ export default function LibraryGraphView({
         enableEdgeEvents: true,
         autoRescale: false,
         gestureTarget: "graph",
+        // Small, quick steps per wheel or trackpad event, so zooming reads
+        // as one smooth motion rather than a jump between fixed levels.
+        zoomingRatio: 1.1,
+        zoomDuration: 90,
+      },
+      nodeReducer: (key, attributes, node) => {
+        const focus = hoverFocusRef.current;
+        if (!focus) {
+          return attributes;
+        }
+        return focus.near.has(key)
+          ? { ...attributes, zIndex: 1 }
+          : {
+              ...attributes,
+              color: withAlpha(node.baseColor, HOVER_FADE_ALPHA),
+              zIndex: 0,
+            };
+      },
+      edgeReducer: (edge, attributes) => {
+        const focus = hoverFocusRef.current;
+        if (!focus) {
+          return attributes;
+        }
+        const [from, to] = graph.extremities(edge);
+        if (from === focus.key || to === focus.key) {
+          return {
+            ...attributes,
+            color: withAlpha(focus.accent, 0.9),
+            size: attributes.size + 1,
+            zIndex: 1,
+          };
+        }
+        return { ...attributes, color: "rgba(0, 0, 0, 0)", zIndex: 0 };
       },
     });
     graphRef.current = graph;
@@ -1164,6 +1318,12 @@ export default function LibraryGraphView({
     });
     sigma.on("enterNode", ({ node, event }) => {
       const attributes = graph.getNodeAttributes(node);
+      hoverFocusRef.current = {
+        key: node,
+        near: new Set([node, ...graph.neighbors(node)]),
+        accent: readCssColor(container, "--scry-accent", "#5b64ff"),
+      };
+      sigma.refresh({ skipIndexation: true });
       setHover({
         kind: "node",
         key: node,
@@ -1174,6 +1334,8 @@ export default function LibraryGraphView({
       container.style.cursor = "pointer";
     });
     sigma.on("leaveNode", () => {
+      hoverFocusRef.current = null;
+      sigma.refresh({ skipIndexation: true });
       setHover(null);
       container.style.cursor = "";
     });
@@ -1436,6 +1598,22 @@ export default function LibraryGraphView({
         { width: container.offsetWidth, height: container.offsetHeight },
         running,
       );
+      if (decision === "done") {
+        // The overview just opened has settled: fit what it drew.
+        if (fitWhenSettledRef.current && focusCenterRef.current === null) {
+          fitWhenSettledRef.current = false;
+          const camera = framingCamera(
+            sigma,
+            graph,
+            () => true,
+            OVERVIEW_FIT_PADDING,
+          );
+          if (camera) {
+            void sigma.getCamera().animate(camera, { duration: 400 });
+          }
+        }
+        return;
+      }
       if (decision !== "step") {
         // Paused while hidden: the next non-zero size resumes it.
         return;
@@ -1490,6 +1668,7 @@ export default function LibraryGraphView({
     // the rings are sized for the camera at rest.
     if (cameraCenterRef.current !== focusCenterKey || focusCenterKey !== null) {
       cameraCenterRef.current = focusCenterKey;
+      fitWhenSettledRef.current = focusCenterKey === null;
       void sigma
         .getCamera()
         .animate(restCamera(sigma), { duration: FOCUS_TWEEN_MS });
@@ -1534,42 +1713,32 @@ export default function LibraryGraphView({
     }
     // The arrow keys then cycle through this cluster.
     setFocusedKey(firstNodeInCluster(keyboardNodesRef.current, clusterId));
-    let minX = Number.POSITIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-    graph.forEachNode((_key, attributes) => {
-      if (attributes.clusterId !== clusterId) {
-        return;
-      }
-      const point = sigma.graphToFramedGraph({
-        x: attributes.x as number,
-        y: attributes.y as number,
-      });
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    });
-    if (!Number.isFinite(minX)) {
-      return;
-    }
-    const span = Math.max(maxX - minX, maxY - minY);
-    void sigma.getCamera().animate(
-      {
-        x: (minX + maxX) / 2,
-        y: (minY + maxY) / 2,
-        ratio: Math.min(1, Math.max(0.08, span * 1.5)),
-      },
-      { duration: 400 },
+    const camera = framingCamera(
+      sigma,
+      graph,
+      (attributes) => attributes.clusterId === clusterId,
+      1.5,
     );
+    if (camera) {
+      void sigma.getCamera().animate(camera, { duration: 400 });
+    }
   }, []);
 
+  // A focused view rests on its rings; the overview fits its titles, which
+  // the layout gathers well inside the frame around the cluster ring.
   const resetCamera = React.useCallback(() => {
     const sigma = sigmaRef.current;
-    if (sigma) {
-      void sigma.getCamera().animate(restCamera(sigma), { duration: 300 });
+    const graph = graphRef.current;
+    if (!sigma) {
+      return;
     }
+    const camera =
+      focusCenterRef.current === null && graph
+        ? framingCamera(sigma, graph, () => true, OVERVIEW_FIT_PADDING)
+        : null;
+    void sigma
+      .getCamera()
+      .animate(camera ?? restCamera(sigma), { duration: 300 });
   }, []);
 
   // The node picked in the graph, while it is still drawn.
@@ -2168,7 +2337,7 @@ export default function LibraryGraphView({
               }}
               onClick={() => focusGroup(group.id)}
               style={{ visibility: "hidden" }}
-              className="absolute left-0 top-0 max-w-[14rem] truncate rounded-full border bg-[var(--scry-card2)]/90 px-2.5 py-0.5 text-[11px] font-semibold text-[var(--scry-ink2)] shadow-sm backdrop-blur-sm"
+              className="absolute left-0 top-0 max-w-[14rem] truncate rounded-full border-2 bg-[var(--scry-card2)] px-3 py-1 text-[13px] font-bold text-[var(--scry-ink)] shadow-[0_2px_10px_rgba(0,0,0,0.6)]"
             >
               <span
                 aria-hidden="true"
