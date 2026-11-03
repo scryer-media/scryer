@@ -2834,7 +2834,7 @@ impl AppUseCase {
                     .await,
             );
         }
-        // Debug builds only, set by `cargo xtask serve --rebuild-library-graphs`:
+        // Debug builds only, set by `cargo xtask serve`:
         // every sync rebuilds every owned facet's graph, past the cooldowns,
         // backoffs and scan gate above. Release builds never compile it.
         #[cfg(debug_assertions)]
