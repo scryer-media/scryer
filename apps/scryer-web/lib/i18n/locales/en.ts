@@ -11811,6 +11811,7 @@ const en: LocaleDictionary = {
   "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Held: the media server shows a play newer than the stored watch history.",
   "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Held: the media server's history shows a play by an account the watch history does not count.",
   "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Held: the media server could not confirm the watch history before acting.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
   "settings.refMaintFactsWatchedByAnyone": "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",
   "settings.refMaintFactsLastWatchedByAnyoneAt": "When anyone with an account on a connected media server last played the subject",
   "settings.refMaintFactsWatchedByAnyoneValue": "True when any account on an enabled media server has played it, whether or not the account is linked to a Scryer user; for seasons and shows, any aired episode counts. Unknown with reason audience_not_read until a sync in the last 48 hours has read every account on every enabled connection, and with the usual watch-fact reasons whenever watch facts are unknown.",

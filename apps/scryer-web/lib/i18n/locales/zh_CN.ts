@@ -3445,6 +3445,7 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "已暂缓：媒体服务器显示有比已存观看记录更新的播放。",
   "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "已暂缓：媒体服务器的历史记录显示有观看记录未计入的账户播放。",
   "settings.maintenanceExecutionReason.watchRecheckUnavailable": "已暂缓：执行前媒体服务器无法确认观看记录。",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "已暂缓：已连接的媒体服务器没有匹配的项目，执行前无法确认观看记录。",
   "settings.refMaintFactsWatchedByAnyone": "已连接媒体服务器上的任何账户是否播放过该项目,无论是否关联 Scryer;不指明具体是谁",
   "settings.refMaintFactsLastWatchedByAnyoneAt": "已连接媒体服务器上的任何账户最后一次播放该项目的时间",
   "settings.refMaintFactsWatchedByAnyoneValue": "当已启用媒体服务器上的任何账户播放过它时为 true,无论该账户是否关联到 Scryer 用户;对于季和剧集,任何已播出的单集都算。在过去 48 小时内的同步读取每个已启用连接上的所有账户之前,以原因 audience_not_read 视为未知;观看事实未知时,以常规原因视为未知。",

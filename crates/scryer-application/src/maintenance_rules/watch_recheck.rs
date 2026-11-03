@@ -13,7 +13,7 @@
 //! (the playback mapping each connection keeps from title and episode to the
 //! server's item) and read the same way. A subject with files that some
 //! observed connection has no mapped item for cannot be re-checked there, and
-//! holds.
+//! holds with its own reason, apart from a read that failed.
 //!
 //! Times are compared to the whole second. The servers report finer than the
 //! stores keep (.NET ticks are 100 ns; Postgres keeps microseconds), so an
@@ -41,6 +41,9 @@ pub(crate) enum WatchRecheck {
     UncreditedPlay,
     /// An item or account could not be read back.
     Unavailable,
+    /// An observed connection has no mapped item for the subject, so no
+    /// read was attempted there.
+    Unmapped,
 }
 
 impl WatchRecheck {
@@ -51,6 +54,7 @@ impl WatchRecheck {
             Self::NewerPlay => Some(execution_reason::WATCH_RECHECK_NEWER_PLAY),
             Self::UncreditedPlay => Some(execution_reason::WATCH_RECHECK_UNCREDITED_PLAY),
             Self::Unavailable => Some(execution_reason::WATCH_RECHECK_UNAVAILABLE),
+            Self::Unmapped => Some(execution_reason::WATCH_RECHECK_UNMAPPED),
         }
     }
 }
@@ -72,37 +76,46 @@ fn whole_seconds(at: Option<chrono::DateTime<chrono::Utc>>) -> Option<i64> {
 }
 
 /// The catalog entities whose server items a re-check must read: the movie,
-/// or each in-scope episode with a file. `None` when a file cannot be placed
-/// on an entity the mapping knows (an episode file with no episode), so the
-/// subject's items cannot all be found.
+/// or each of the subject's episodes one of its files is linked to. `None`
+/// when a file cannot be placed on an entity the mapping knows (a series file
+/// the episode inventory does not link to any episode), so the subject's items
+/// cannot all be found.
 ///
 /// A subject with no files has nothing on any server to play, so nothing
 /// needs finding; its stored rows are still re-checked.
 pub(crate) fn recheck_entities(
     facet: &MediaFacet,
     title_id: &str,
-    subject_kind: MaintenanceRuleSubjectKind,
-    files: &[crate::TitleMediaFile],
-    episode_ids: Option<&HashSet<String>>,
+    subject: &super::subjects::MaintenanceSubject,
 ) -> Option<Vec<(MediaServerPlaybackEntityKind, String)>> {
-    if files.is_empty() {
+    if subject.files.is_empty() {
         return Some(Vec::new());
     }
-    if *facet == MediaFacet::Movie && subject_kind == MaintenanceRuleSubjectKind::Title {
+    if *facet == MediaFacet::Movie && subject.kind == MaintenanceRuleSubjectKind::Title {
         return Some(vec![(
             MediaServerPlaybackEntityKind::Title,
             title_id.to_string(),
         )]);
     }
+    // Episode links come from the inventory: a file row read for a season or
+    // episode scope carries no episode id of its own.
+    let inventory = subject.inventory.as_ref()?;
+    let in_subject: HashSet<&str> = subject
+        .episodes
+        .iter()
+        .map(|episode| episode.id.as_str())
+        .collect();
     let mut entities = Vec::new();
-    for file in files {
-        let episode_id = file.episode_id.as_ref()?;
-        if episode_ids.is_some_and(|ids| !ids.contains(episode_id)) {
-            continue;
+    for file in &subject.files {
+        let linked = inventory.file_episode_ids(&file.id)?;
+        if linked.is_empty() {
+            return None;
         }
-        let entity = (MediaServerPlaybackEntityKind::Episode, episode_id.clone());
-        if !entities.contains(&entity) {
-            entities.push(entity);
+        for episode_id in linked.iter().filter(|id| in_subject.contains(id.as_str())) {
+            let entity = (MediaServerPlaybackEntityKind::Episode, episode_id.clone());
+            if !entities.contains(&entity) {
+                entities.push(entity);
+            }
         }
     }
     Some(entities)
@@ -188,9 +201,10 @@ impl AppUseCase {
     /// is a subject whose items cannot all be found). Each connection's items
     /// are read together, for every account the gate counts there.
     ///
-    /// Any read that cannot be made, any item with no id to read it by, any
-    /// entity an observed connection has no mapped item for, and a gate that
-    /// is not open are all [`WatchRecheck::Unavailable`].
+    /// Any read that cannot be made, any item with no id to read it by, and
+    /// a gate that is not open are [`WatchRecheck::Unavailable`]. An entity
+    /// an observed connection has no mapped item for is
+    /// [`WatchRecheck::Unmapped`], decided before any read.
     pub(crate) async fn maintenance_watch_recheck(
         &self,
         context: &MaintenanceWatchContext,
@@ -261,7 +275,7 @@ impl AppUseCase {
             })
         });
         if !resolved {
-            return WatchRecheck::Unavailable;
+            return WatchRecheck::Unmapped;
         }
 
         let roster = match self

@@ -12,7 +12,7 @@ use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
 use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
 use crate::lib_tests::media_server_signals::{
     CONNECTION_ID, InMemorySignalRepo, StubExternalAccounts, StubSignalConnections,
-    jellyfin_connection,
+    jellyfin_connection, named_jellyfin_connection,
 };
 use crate::maintenance_rules::{
     MaintenanceActionKind, MaintenanceActionSpec, MaintenanceRuleDraft, execution_reason,
@@ -136,6 +136,8 @@ struct RecheckFixture {
     asked: Arc<std::sync::Mutex<Vec<String>>>,
     connections: Arc<StubSignalConnections>,
     media_files: Arc<MockMediaFileRepo>,
+    /// When the viewer's stored play happened.
+    stored_at: DateTime<Utc>,
 }
 
 /// What the title looks like when the rule is evaluated.
@@ -176,18 +178,36 @@ fn viewer_link() -> UserExternalAccount {
 }
 
 fn recheck_app(answer: Result<ProviderItemRecheck, SignalReadFailure>) -> RecheckFixture {
+    recheck_app_with(
+        answer,
+        vec![jellyfin_connection(true)],
+        vec![viewer_link()],
+        &[viewer_link()],
+    )
+}
+
+/// As [`recheck_app`], over `connections`, with `accounts` linked and only
+/// `swept` among them read by a sweep.
+fn recheck_app_with(
+    answer: Result<ProviderItemRecheck, SignalReadFailure>,
+    connections: Vec<MediaServerConnection>,
+    accounts: Vec<UserExternalAccount>,
+    swept: &[UserExternalAccount],
+) -> RecheckFixture {
     let (app, user) = bootstrap();
-    let accounts = vec![viewer_link()];
-    let signals = Arc::new(InMemorySignalRepo::swept(&accounts));
+    let signals = Arc::new(InMemorySignalRepo::swept(swept));
     let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
     let rechecks = Arc::new(AtomicUsize::new(0));
     let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
     let connections = Arc::new(StubSignalConnections {
-        connections: vec![jellyfin_connection(true)],
+        connections,
         fail_list: false,
         ..Default::default()
     });
-    let media_files = Arc::new(MockMediaFileRepo::default());
+    let media_files = Arc::new(MockMediaFileRepo {
+        scoped_rows_without_episode_id: true,
+        ..Default::default()
+    });
     let job_runs = Arc::new(RecordingJobRunRepo::with_maintenance_action_job_receipts(
         evaluation.action_job_receipts.clone(),
     ));
@@ -196,6 +216,7 @@ fn recheck_app(answer: Result<ProviderItemRecheck, SignalReadFailure>) -> Rechec
             .with_maintenance_rule_set_store(Arc::new(InMemoryMaintenanceRuleRepo::default()))
             .with_maintenance_evaluation_store(evaluation.clone())
             .with_media_files(media_files.clone())
+            .with_shows(Arc::new(MockShowRepo::default()))
             .with_job_runs(job_runs.clone())
             .with_media_server_connection_store(connections.clone())
             .with_external_account_store(Arc::new(StubExternalAccounts { accounts }))
@@ -216,6 +237,7 @@ fn recheck_app(answer: Result<ProviderItemRecheck, SignalReadFailure>) -> Rechec
         asked,
         connections,
         media_files,
+        stored_at: hours_ago(48),
     }
 }
 
@@ -236,11 +258,17 @@ fn live(account: &str, played: bool, last_played_at: Option<DateTime<Utc>>) -> P
 }
 
 impl RecheckFixture {
-    /// A clean, current sweep of the connection.
+    /// A clean, current sweep of every connection.
     async fn swept(&self, signal_count: i64) {
+        for connection in &self.connections.connections {
+            self.swept_connection(&connection.id, signal_count).await;
+        }
+    }
+
+    async fn swept_connection(&self, connection_id: &str, signal_count: i64) {
         self.signals
             .upsert_signal_sync_state(&MediaServerSignalSyncState {
-                connection_id: CONNECTION_ID.to_string(),
+                connection_id: connection_id.to_string(),
                 provider: MediaServerProvider::Jellyfin,
                 enabled: true,
                 last_started_at: Some(Utc::now()),
@@ -320,7 +348,7 @@ impl RecheckFixture {
             .await
             .expect("create title");
         if seed.stored_play {
-            self.stored_play(&title.id, hours_ago(48)).await;
+            self.stored_play(&title.id, self.stored_at).await;
         } else {
             self.swept(0).await;
         }
@@ -348,13 +376,165 @@ impl RecheckFixture {
                     last_seen_at: Utc::now(),
                 });
         }
+        self.arm_and_evaluate(scryer_domain::MaintenanceRuleSubjectKind::Title, matcher)
+            .await;
+        let before = self.stored_facts(&title.id).await;
+        self.app
+            .run_lifecycle_action_handling_job()
+            .await
+            .expect("handler pass");
+        (title.id, before)
+    }
+
+    /// Map `entity` to `provider_item_id` on `connection_id`.
+    fn map_item(
+        &self,
+        connection_id: &str,
+        entity_kind: MediaServerPlaybackEntityKind,
+        entity_id: &str,
+        provider_item_id: String,
+    ) {
+        self.connections
+            .playback_items
+            .lock()
+            .expect("playback items")
+            .push(MediaServerPlaybackItem {
+                connection_id: connection_id.to_string(),
+                entity_kind,
+                entity_id: entity_id.to_string(),
+                provider_item_id,
+                last_seen_at: Utc::now(),
+            });
+    }
+
+    /// A monitored series with one season of two episodes, each with its own
+    /// file and a swept, unplayed watch row, the connection's mapping knowing
+    /// each episode's item. Arms an
+    /// unmonitor rule with `matcher` over `scope`, evaluates, and runs one
+    /// handler pass. Returns the episodes.
+    async fn run_scoped(
+        &self,
+        scope: scryer_domain::MaintenanceRuleSubjectKind,
+        matcher: &str,
+    ) -> Vec<scryer_domain::Episode> {
+        let title = self
+            .app
+            .add_title(
+                &self.user,
+                NewTitle {
+                    name: "Synthetic Series".to_string(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![],
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+        self.swept(0).await;
+        let season = self
+            .app
+            .create_collection(
+                &self.user,
+                title.id.clone(),
+                "season".into(),
+                "1".into(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("season");
+        let mut episodes = Vec::new();
+        for number in 1..=2 {
+            let episode = self
+                .app
+                .create_episode(
+                    &self.user,
+                    title.id.clone(),
+                    Some(season.id.clone()),
+                    "standard".into(),
+                    Some(number.to_string()),
+                    Some("1".into()),
+                    None,
+                    Some(format!("Episode {number}")),
+                    Some("2020-01-01".into()),
+                    None,
+                    false,
+                    false,
+                )
+                .await
+                .expect("episode");
+            let file_id = self
+                .media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/media/{}/s01e{number:02}.mkv", title.id),
+                    size_bytes: 1_000,
+                    ..Default::default()
+                })
+                .await
+                .expect("insert media file");
+            self.media_files
+                .store
+                .lock()
+                .await
+                .iter_mut()
+                .find(|row| row.id == file_id)
+                .expect("seeded file")
+                .episode_id = Some(episode.id.clone());
+            self.map_item(
+                CONNECTION_ID,
+                MediaServerPlaybackEntityKind::Episode,
+                &episode.id,
+                item_id(&episode.id),
+            );
+            episodes.push(episode);
+        }
+        // The sweep read every episode and found it unplayed.
+        let unplayed: Vec<NewUserMediaSignal> = episodes
+            .iter()
+            .map(|episode| NewUserMediaSignal {
+                provider: MediaServerProvider::Jellyfin,
+                scryer_user_id: Some(VIEWER.to_string()),
+                provider_item_id: item_id(&episode.id),
+                kind: MediaServerSignalKind::Episode,
+                scryer_title_id: Some(title.id.clone()),
+                scryer_episode_id: Some(episode.id.clone()),
+                played: false,
+                play_count: 0,
+                last_played_at: None,
+                is_favorite: false,
+                observed_at: Utc::now(),
+            })
+            .collect();
+        self.signals
+            .replace_participant_signals(CONNECTION_ID, VIEWER_EXTERNAL_ID, &unplayed, None)
+            .await
+            .expect("record unplayed episodes");
+        self.arm_and_evaluate(scope, matcher).await;
+        self.app
+            .run_lifecycle_action_handling_job()
+            .await
+            .expect("handler pass");
+        episodes
+    }
+
+    /// Arm an unmonitor rule with `matcher` over `scope` and evaluate.
+    async fn arm_and_evaluate(
+        &self,
+        scope: scryer_domain::MaintenanceRuleSubjectKind,
+        matcher: &str,
+    ) {
         let created = self
             .app
             .create_maintenance_rule_set(
                 &self.user,
                 MaintenanceRuleDraft {
-                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                    name: "Watched movies".to_string(),
+                    subject_kind: scope,
+                    name: "Watched subjects".to_string(),
                     description: String::new(),
                     rego_source: matcher.to_string(),
                     action_definition:
@@ -392,12 +572,17 @@ impl RecheckFixture {
             .run_maintenance_rule_evaluation_job()
             .await
             .expect("evaluation pass");
-        let before = self.stored_facts(&title.id).await;
+    }
+
+    /// Arm a title rule with `matcher`, evaluate, and run one handler pass
+    /// over a title the test has already seeded.
+    async fn arm_and_run(&self, _title_id: &str, matcher: &str) {
+        self.arm_and_evaluate(scryer_domain::MaintenanceRuleSubjectKind::Title, matcher)
+            .await;
         self.app
             .run_lifecycle_action_handling_job()
             .await
             .expect("handler pass");
-        (title.id, before)
     }
 
     async fn monitored(&self, title_id: &str) -> bool {
@@ -567,7 +752,7 @@ async fn a_title_with_no_mapped_item_is_held() {
 
     assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 0);
     fixture
-        .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNAVAILABLE)
+        .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNMAPPED)
         .await;
 }
 
@@ -612,4 +797,199 @@ async fn a_failed_read_of_a_title_with_no_stored_plays_holds_the_action() {
     fixture
         .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNAVAILABLE)
         .await;
+}
+
+/// A second server whose library mapping has no item for the title: the
+/// title cannot be shown unplayed there, so it holds, under its own reason
+/// rather than as a failed read.
+#[tokio::test]
+async fn a_second_server_without_the_title_holds_it_as_unmapped() {
+    const OTHER_CONNECTION_ID: &str = "conn-jellyfin-second";
+    let fixture = recheck_app_with(
+        Ok(ProviderItemRecheck {
+            participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
+            history: Vec::new(),
+        }),
+        vec![
+            jellyfin_connection(true),
+            named_jellyfin_connection(OTHER_CONNECTION_ID, true),
+        ],
+        vec![viewer_link()],
+        &[viewer_link()],
+    );
+    let (title_id, _) = fixture
+        .run_with(
+            NOBODY_WATCHED_MATCHER,
+            Seed {
+                stored_play: false,
+                file: true,
+                mapped: true,
+            },
+        )
+        .await;
+
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 0);
+    fixture
+        .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNMAPPED)
+        .await;
+}
+
+// ── Season and episode subjects ─────────────────────────────────────────────
+
+/// A season's file rows carry no episode of their own; the episodes come
+/// from the inventory's links, so the season's mapped items are read and an
+/// unplayed answer lets the action run.
+#[tokio::test]
+async fn a_season_subject_is_rechecked_through_its_episodes_items() {
+    let fixture = recheck_app(Ok(ProviderItemRecheck {
+        participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
+        history: Vec::new(),
+    }));
+    let episodes = fixture
+        .run_scoped(
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            NOBODY_WATCHED_MATCHER,
+        )
+        .await;
+
+    let mut asked = fixture.asked.lock().unwrap().clone();
+    asked.sort();
+    let mut expected: Vec<String> = episodes
+        .iter()
+        .map(|episode| item_id(&episode.id))
+        .collect();
+    expected.sort();
+    assert_eq!(asked, expected);
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    assert_eq!(
+        candidates[0].state,
+        MaintenanceCandidateState::Succeeded,
+        "{candidates:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_episode_subject_is_rechecked_through_its_own_item() {
+    let fixture = recheck_app(Ok(ProviderItemRecheck {
+        participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
+        history: Vec::new(),
+    }));
+    let episodes = fixture
+        .run_scoped(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            NOBODY_WATCHED_MATCHER,
+        )
+        .await;
+
+    // One candidate per episode, each reading only its own item.
+    let mut asked = fixture.asked.lock().unwrap().clone();
+    asked.sort();
+    let mut expected: Vec<String> = episodes
+        .iter()
+        .map(|episode| item_id(&episode.id))
+        .collect();
+    expected.sort();
+    assert_eq!(asked, expected);
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), episodes.len());
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates.len(), episodes.len(), "{candidates:?}");
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.state == MaintenanceCandidateState::Succeeded),
+        "{candidates:?}"
+    );
+}
+
+// ── The per-user gate closed, the audience open ─────────────────────────────
+
+/// Matches a title someone, anyone, has played: an anonymous fact only.
+const ANYONE_WATCHED_MATCHER: &str = "package whatever\n\
+     import rego.v1\n\n\
+     match if {\n\
+     \tinput.facts.watched_by_anyone\n\
+     }\n";
+
+/// A link no sweep has read closes the per-user facts, but a rule on the
+/// anonymous facts still runs. The re-check compares against what the sweep
+/// stored for the accounts it did read: an old play is not a new one.
+#[tokio::test]
+async fn an_old_stored_play_is_not_a_newer_play_while_a_link_awaits_its_sweep() {
+    let played_at = Utc::now() - chrono::Duration::days(200);
+    let late = UserExternalAccount {
+        id: "link-user-late".to_string(),
+        user_id: "user-late".to_string(),
+        external_user_id: Some("jf-viewer-late".to_string()),
+        username: "viewer-late".to_string(),
+        ..viewer_link()
+    };
+    let mut fixture = recheck_app_with(
+        Ok(ProviderItemRecheck {
+            participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(played_at))],
+            history: vec![live(VIEWER_EXTERNAL_ID, true, Some(played_at))],
+        }),
+        vec![jellyfin_connection(true)],
+        vec![viewer_link(), late],
+        &[viewer_link()],
+    );
+    fixture.stored_at = played_at;
+    // The audience read, every account's plays, is current.
+    let title = fixture
+        .app
+        .add_title(
+            &fixture.user,
+            NewTitle {
+                name: "Synthetic Feature".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    fixture
+        .signals
+        .replace_connection_audience(
+            CONNECTION_ID,
+            &[crate::ports::AudiencePlay {
+                connection_id: CONNECTION_ID.to_string(),
+                external_account_id: VIEWER_EXTERNAL_ID.to_string(),
+                provider_item_id: item_id(&title.id),
+                kind: MediaServerSignalKind::Movie,
+                scryer_title_id: Some(title.id.clone()),
+                scryer_episode_id: None,
+                play_count: 1,
+                last_played_at: Some(played_at),
+            }],
+            Utc::now(),
+        )
+        .await
+        .expect("record audience");
+    fixture.stored_play(&title.id, played_at).await;
+    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    assert_eq!(
+        context.freshness,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::maintenance_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
+        )
+    );
+    assert_eq!(
+        context.audience,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+    );
+
+    fixture.arm_and_run(&title.id, ANYONE_WATCHED_MATCHER).await;
+
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 1);
+    let runs = fixture.evaluation.all_action_runs().await;
+    assert!(
+        runs.iter()
+            .all(|run| run.hold_reason.as_deref()
+                != Some(execution_reason::WATCH_RECHECK_NEWER_PLAY)),
+        "{runs:?}"
+    );
+    assert!(!fixture.monitored(&title.id).await, "the action ran");
 }

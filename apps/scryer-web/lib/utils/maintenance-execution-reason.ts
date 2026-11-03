@@ -16,6 +16,8 @@ export const MAINTENANCE_EXECUTION_REASON_KEYS: Readonly<
     "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay",
   watch_recheck_unavailable:
     "settings.maintenanceExecutionReason.watchRecheckUnavailable",
+  watch_recheck_unmapped:
+    "settings.maintenanceExecutionReason.watchRecheckUnmapped",
 };
 
 /** A hold or state reason for display: translated when known, else as given. */

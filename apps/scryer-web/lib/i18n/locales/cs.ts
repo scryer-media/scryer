@@ -7189,6 +7189,7 @@ const cs: LocaleDictionary = {
   "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Pozdrženo: mediální server ukazuje přehrání novější než uložená historie sledování.",
   "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Pozdrženo: historie mediálního serveru ukazuje přehrání účtem, který historie sledování nezapočítává.",
   "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
   "settings.refMaintFactsWatchedByAnyone": "Zda položku přehrál kdokoli s účtem na připojeném mediálním serveru, ať je propojen se Scryerem, nebo ne; nikoho nejmenuje",
   "settings.refMaintFactsLastWatchedByAnyoneAt": "Kdy položku naposledy přehrál kdokoli s účtem na připojeném mediálním serveru",
   "settings.refMaintFactsWatchedByAnyoneValue": "True, když ji přehrál jakýkoli účet na povoleném mediálním serveru, bez ohledu na propojení s uživatelem Scryeru; u sérií a seriálů stačí kterákoli odvysílaná epizoda. Neznámé s důvodem audience_not_read, dokud synchronizace za posledních 48 hodin nepřečte všechny účty na všech povolených připojeních, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",

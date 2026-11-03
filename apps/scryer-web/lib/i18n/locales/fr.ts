@@ -3911,6 +3911,7 @@ const fr: LocaleDictionary = {
   "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "En attente : le serveur multimédia indique une lecture plus récente que l'historique enregistré.",
   "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "En attente : l'historique du serveur multimédia indique une lecture par un compte que l'historique de visionnage ne compte pas.",
   "settings.maintenanceExecutionReason.watchRecheckUnavailable": "En attente : le serveur multimédia n'a pas pu confirmer l'historique de visionnage avant d'agir.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "En attente : un serveur multimédia connecté n'a aucun élément correspondant, l'historique de visionnage n'a donc pas pu être vérifié avant d'agir.",
   "settings.refMaintFactsWatchedByAnyone": "Si quelqu'un ayant un compte sur un serveur multimédia connecté l'a lu, lié à Scryer ou non ; ne nomme personne",
   "settings.refMaintFactsLastWatchedByAnyoneAt": "Quand quelqu'un ayant un compte sur un serveur multimédia connecté l'a lu pour la dernière fois",
   "settings.refMaintFactsWatchedByAnyoneValue": "True lorsqu'un compte quelconque d'un serveur multimédia activé l'a lu, que ce compte soit lié ou non à un utilisateur Scryer ; pour les saisons et les séries, tout épisode diffusé compte. Inconnu avec le motif audience_not_read tant qu'une synchronisation des dernières 48 heures n'a pas lu tous les comptes de toutes les connexions activées, et avec les motifs habituels chaque fois que les faits de visionnage sont inconnus.",

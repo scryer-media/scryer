@@ -197,6 +197,10 @@ pub mod execution_reason {
     /// The subject's items could not be read back from the media server
     /// before acting on a watch fact.
     pub const WATCH_RECHECK_UNAVAILABLE: &str = "watch_recheck_unavailable";
+    /// A connected media server's library mapping has no item for the
+    /// subject (or one of its episodes with a file), so it could not be read
+    /// back there and no read was attempted.
+    pub const WATCH_RECHECK_UNMAPPED: &str = "watch_recheck_unmapped";
     /// The title has a grab, download, or import in flight.
     pub const ACTIVE_ACQUISITION: &str = "active_acquisition";
     /// Acquisition activity could not be ruled out.
@@ -255,6 +259,7 @@ pub mod execution_reason {
         WATCH_RECHECK_NEWER_PLAY,
         WATCH_RECHECK_UNCREDITED_PLAY,
         WATCH_RECHECK_UNAVAILABLE,
+        WATCH_RECHECK_UNMAPPED,
         ACTIVE_ACQUISITION,
         ACQUISITION_UNKNOWN,
         STORAGE_DELETION_IN_PROGRESS,
@@ -295,7 +300,7 @@ pub mod execution_reason {
                     "{reason} has a stray underscore"
                 );
             }
-            assert_eq!(ALL.len(), 24);
+            assert_eq!(ALL.len(), 25);
         }
     }
 }
@@ -2409,20 +2414,29 @@ impl AppUseCase {
                         .map(|episode| episode.id.clone())
                         .collect::<HashSet<_>>()
                 });
-            let entities = super::watch_recheck::recheck_entities(
-                &title.facet,
-                &title.id,
-                subject.kind,
-                &subject.files,
-                episode_ids.as_ref(),
-            );
+            let entities =
+                super::watch_recheck::recheck_entities(&title.facet, &title.id, &subject);
+            // The comparison baseline is what the sweep stored, whether or
+            // not the per-user gate lets those rows be used as facts: with
+            // the gate closed the rule ran on the anonymous facts alone, and
+            // an old play a swept account already had is not a new one.
+            let baseline = if watch_context.freshness == super::facts::WatchSignalFreshness::Fresh {
+                signals_by_title.get(&title.id).cloned().unwrap_or_default()
+            } else {
+                match self
+                    .maintenance_stored_watch_signals_for_titles(std::slice::from_ref(&title))
+                    .await
+                {
+                    Ok(mut stored) => stored.remove(&title.id).unwrap_or_default(),
+                    Err(_) => {
+                        return SafetyDecision::Hold(execution_reason::WATCH_RECHECK_UNAVAILABLE);
+                    }
+                }
+            };
             let recheck = self
                 .maintenance_watch_recheck(
                     &watch_context,
-                    signals_by_title
-                        .get(&title.id)
-                        .map(Vec::as_slice)
-                        .unwrap_or_default(),
+                    &baseline,
                     audience_by_title
                         .get(&title.id)
                         .map(Vec::as_slice)

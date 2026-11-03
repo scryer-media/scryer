@@ -105,6 +105,16 @@ impl MaintenanceTitleEpisodeInventory {
         ranks
     }
 
+    /// The episodes a tracked file is linked to, or `None` for a file this
+    /// inventory does not hold. File rows read for a scope carry no episode
+    /// of their own; their links live here.
+    pub(crate) fn file_episode_ids(&self, file_id: &str) -> Option<&[String]> {
+        self.scoped_files
+            .iter()
+            .find(|scoped| scoped.media_file.id == file_id)
+            .map(|scoped| scoped.episode_ids.as_slice())
+    }
+
     /// File ids are captured in the durable deletion journal before unlinking.
     /// Only a currently present, unambiguous file that contributed to a rank
     /// may restore its episode when that same journal later resumes.

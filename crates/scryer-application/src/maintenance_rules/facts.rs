@@ -921,7 +921,10 @@ fn watch_observations(
         return WatchObservations::all_unknown(unknown_reason::SHOW_WATCH_ROLLUP_UNAVAILABLE);
     }
     if let Some(reason) = watch.context.unavailable_reason() {
-        return WatchObservations::all_unknown(reason);
+        // The anonymous pair has its own gate: the audience read is every
+        // account's, so it can stand while the per-user facts cannot.
+        return WatchObservations::all_unknown(reason)
+            .with_audience(movie_anyone_observations(watch));
     }
 
     // Before anything is read off a row: only the connections this run actually
@@ -1284,9 +1287,6 @@ fn scoped_watch_observations(
     requesters: Option<&[String]>,
     watch: MaintenanceTitleWatch<'_>,
 ) -> WatchObservations {
-    if let Some(reason) = watch.context.unavailable_reason() {
-        return WatchObservations::all_unknown(reason);
-    }
     let mut episodes = Vec::new();
     for episode in &subject.episodes {
         if matches!(
@@ -1317,6 +1317,10 @@ fn scoped_watch_observations(
         .map(|&episode| episode.id.as_str())
         .collect();
     let anyone = scoped_anyone_observations(watch, &episode_ids);
+    // The per-user facts need the watch gate; the anonymous pair has its own.
+    if let Some(reason) = watch.context.unavailable_reason() {
+        return WatchObservations::all_unknown(reason).with_audience(anyone);
+    }
     // Empty seasons are never vacuously completed.
     if episodes.is_empty() {
         return WatchObservations {

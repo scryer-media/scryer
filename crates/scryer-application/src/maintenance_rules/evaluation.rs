@@ -2228,6 +2228,17 @@ impl AppUseCase {
         if context.freshness != WatchSignalFreshness::Fresh {
             return Ok(HashMap::new());
         }
+        self.maintenance_stored_watch_signals_for_titles(titles)
+            .await
+    }
+
+    /// Every stored watch row for `titles`, whatever the watch gate says.
+    /// Only the live re-check reads these past a closed gate, as the baseline
+    /// a live answer is compared against; facts never come from them then.
+    pub(crate) async fn maintenance_stored_watch_signals_for_titles(
+        &self,
+        titles: &[Title],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
         let title_ids: Vec<String> = titles
             .iter()
             .filter(|title| title.facet == scryer_domain::MediaFacet::Movie)

@@ -4510,6 +4510,7 @@ const nl: LocaleDictionary = {
   "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Aangehouden: de mediaserver toont een weergave die nieuwer is dan de opgeslagen kijkgeschiedenis.",
   "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Aangehouden: de geschiedenis van de mediaserver toont een weergave door een account dat de kijkgeschiedenis niet meetelt.",
   "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Aangehouden: de mediaserver kon de kijkgeschiedenis niet bevestigen voordat er werd gehandeld.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Aangehouden: een verbonden mediaserver heeft geen overeenkomend item, dus de kijkgeschiedenis kon niet worden gecontroleerd voordat er werd gehandeld.",
   "settings.refMaintFactsWatchedByAnyone": "Of iemand met een account op een verbonden mediaserver het heeft afgespeeld, gekoppeld aan Scryer of niet; noemt niemand",
   "settings.refMaintFactsLastWatchedByAnyoneAt": "Wanneer iemand met een account op een verbonden mediaserver het voor het laatst heeft afgespeeld",
   "settings.refMaintFactsWatchedByAnyoneValue": "True wanneer een willekeurig account op een ingeschakelde mediaserver het heeft afgespeeld, ongeacht of het account aan een Scryer-gebruiker is gekoppeld; bij seizoenen en series telt elke uitgezonden aflevering. Onbekend met reden audience_not_read totdat een synchronisatie in de afgelopen 48 uur elk account op elke ingeschakelde verbinding heeft gelezen, en met de gebruikelijke redenen wanneer kijkfeiten onbekend zijn.",

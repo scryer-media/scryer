@@ -259,6 +259,7 @@ struct PlexPager {
     start: usize,
     pages: usize,
     first_total: Option<i64>,
+    last_total: Option<i64>,
     done: bool,
 }
 
@@ -270,6 +271,7 @@ impl PlexPager {
             start: 0,
             pages: 0,
             first_total: None,
+            last_total: None,
             done: false,
         }
     }
@@ -309,6 +311,7 @@ impl PlexPager {
         }
         self.start += page_len;
         self.first_total = self.first_total.or(total);
+        self.last_total = total.or(self.last_total);
         if past_reported_total(self.start, self.first_total) {
             return Err(paging_not_honoured());
         }
@@ -353,18 +356,29 @@ fn past_reported_total(read: usize, first_total: Option<i64>) -> bool {
 
 /// One Plex history row as a play: its item, time and account. Rows repeat an
 /// item by design, one per play, but never one play. History is read oldest
-/// first, so a play landing mid-read joins the end of the listing; a play
-/// removed mid-read shifts later rows back, and the row the next page then
-/// repeats is skipped as already seen. A page made only of rows already seen
-/// was answered from elsewhere, and fails. Hashed, so a long history's
-/// placement costs eight bytes a row; a collision can only skip a row that
-/// is still counted once, or fail a read as paging, never invent a play.
+/// first, so a play landing mid-read joins the end of the listing. A row
+/// inserted before the cursor shifts later rows forward, and the row the next
+/// page then repeats is skipped as already seen; a row removed before the
+/// cursor shifts later rows back, and the next page silently passes one over.
+/// Either way fewer distinct rows are read than the listing last reported,
+/// which [`history_read_short_of_total`] fails. A page made only of rows
+/// already seen was answered from elsewhere, and fails too. Hashed, so a long
+/// history's placement costs eight bytes a row; a collision can only skip a
+/// row, which the distinct count then fails as paging, never invent a play.
 fn plex_play_fingerprint(entry: &Value) -> u64 {
     let mut hasher = DefaultHasher::new();
     for key in ["ratingKey", "viewedAt", "accountID"] {
         entry.get(key).and_then(scalar_string).hash(&mut hasher);
     }
     hasher.finish()
+}
+
+/// Whether a whole history read came up with fewer distinct plays than the
+/// listing last reported. Rows shifted by a play that came or went before the
+/// cursor, or two plays sharing a time that swap places between requests,
+/// leave a play unread while every page still looks well formed.
+fn history_read_short_of_total(distinct: usize, last_total: Option<i64>) -> bool {
+    last_total.is_some_and(|total| (distinct as i64) < total)
 }
 
 /// A listing that reached [`SIGNAL_PAGE_CEILING`] without the server
@@ -935,6 +949,9 @@ impl HttpMediaServerSignalSource {
                 }
             }
         }
+        if history_read_short_of_total(seen_plays.len(), pager.last_total) {
+            return Err(paging_not_honoured());
+        }
 
         let mut items = Vec::with_capacity(plays.len());
         let mut gone = 0_usize;
@@ -971,12 +988,12 @@ impl HttpMediaServerSignalSource {
         auth: SignalAuth<'_>,
         offset_required: bool,
         mut consume: impl FnMut(Vec<Value>) -> ReadResult<()>,
-    ) -> ReadResult<()> {
+    ) -> ReadResult<Option<i64>> {
         let mut pager = PlexPager::new(url, offset_required);
         while let Some(entries) = pager.next_page(self, auth).await? {
             consume(entries)?;
         }
-        Ok(())
+        Ok(pager.last_total)
     }
 
     /// Metadata rows for a batch of rating keys. A batch the server refuses as
@@ -1069,9 +1086,9 @@ impl HttpMediaServerSignalSource {
     /// read with the owner's token for a pre-action re-check. Organic plays
     /// only, as for the sweep's history read.
     ///
-    /// Read oldest first, with a repeated row skipped and a page of nothing
-    /// but repeats failing, exactly as [`Self::fetch_plex_history_plays`]
-    /// reads. The owner's local account `1` is reported as `owner_id`.
+    /// Read oldest first, with a repeated row skipped, and a page of nothing
+    /// but repeats or a read of fewer distinct rows than the last reported
+    /// total failing, exactly as [`Self::fetch_plex_history_plays`] reads. The owner's local account `1` is reported as `owner_id`.
     ///
     /// A row for another item means the item filter was not applied, and a
     /// row that names no account or no time cannot be credited to anyone;
@@ -1089,40 +1106,44 @@ impl HttpMediaServerSignalSource {
             .append_pair("sort", "viewedAt:asc");
         let mut plays = Vec::new();
         let mut seen_plays: HashSet<u64> = HashSet::new();
-        self.for_each_plex_page(url, auth, false, |entries| {
-            let page_len = entries.len();
-            let entries: Vec<Value> = entries
-                .into_iter()
-                .filter(|entry| seen_plays.insert(plex_play_fingerprint(entry)))
-                .collect();
-            if page_len > 0 && entries.is_empty() {
-                return Err(paging_not_honoured());
-            }
-            for entry in &entries {
-                if entry
-                    .get("ratingKey")
-                    .and_then(scalar_string)
-                    .is_some_and(|row_key| row_key != rating_key)
-                {
-                    return Err(SignalReadFailure::new(
-                        reasons::FILTER_NOT_HONOURED,
-                        "item history: the item filter was not applied",
-                    ));
+        let last_total = self
+            .for_each_plex_page(url, auth, false, |entries| {
+                let page_len = entries.len();
+                let entries: Vec<Value> = entries
+                    .into_iter()
+                    .filter(|entry| seen_plays.insert(plex_play_fingerprint(entry)))
+                    .collect();
+                if page_len > 0 && entries.is_empty() {
+                    return Err(paging_not_honoured());
                 }
-                let account = entry.get("accountID").and_then(scalar_string);
-                let viewed_at = entry.get("viewedAt").and_then(epoch_timestamp);
-                let (Some(account), Some(viewed_at)) = (account, viewed_at) else {
-                    return Err(unreadable_items());
-                };
-                plays.push(ProviderItemPlay {
-                    external_user_id: plex_history_account(account, Some(owner_id)),
-                    played: true,
-                    last_played_at: Some(viewed_at),
-                });
-            }
-            Ok(())
-        })
-        .await?;
+                for entry in &entries {
+                    if entry
+                        .get("ratingKey")
+                        .and_then(scalar_string)
+                        .is_some_and(|row_key| row_key != rating_key)
+                    {
+                        return Err(SignalReadFailure::new(
+                            reasons::FILTER_NOT_HONOURED,
+                            "item history: the item filter was not applied",
+                        ));
+                    }
+                    let account = entry.get("accountID").and_then(scalar_string);
+                    let viewed_at = entry.get("viewedAt").and_then(epoch_timestamp);
+                    let (Some(account), Some(viewed_at)) = (account, viewed_at) else {
+                        return Err(unreadable_items());
+                    };
+                    plays.push(ProviderItemPlay {
+                        external_user_id: plex_history_account(account, Some(owner_id)),
+                        played: true,
+                        last_played_at: Some(viewed_at),
+                    });
+                }
+                Ok(())
+            })
+            .await?;
+        if history_read_short_of_total(seen_plays.len(), last_total) {
+            return Err(paging_not_honoured());
+        }
         Ok(plays)
     }
 
@@ -5422,10 +5443,11 @@ mod tests {
         assert_eq!(items.len(), initial + 1);
     }
 
-    /// A row a later page repeats (a play removed mid-read shifts the rows
-    /// after it back) is skipped as already seen, not taken as a failure.
+    /// A row a later page repeats, from a page that starts one row early, is
+    /// read once: the distinct rows still reach the reported total, so the
+    /// read completes without the repeat counting as a second play.
     #[tokio::test]
-    async fn a_plex_history_row_repeated_across_pages_is_skipped() {
+    async fn a_plex_history_row_a_later_page_repeats_is_read_once() {
         let total = SIGNAL_PAGE_SIZE + 100;
         let server = wiremock::MockServer::start().await;
         let overlapping = move |request: &Request| {
@@ -5449,5 +5471,130 @@ mod tests {
             .expect("an overlap between pages is not a failed read");
         assert_eq!(items.len(), total);
         assert!(items.iter().all(|item| item.play_count == 1));
+    }
+
+    /// A play inserted before the cursor mid-read shifts the rows after it
+    /// forward: the next page repeats one row, and the inserted play is never
+    /// read. The distinct rows fall short of the grown total, so the read
+    /// fails rather than passing that play over.
+    #[tokio::test]
+    async fn a_plex_play_inserted_before_the_cursor_fails_the_read() {
+        let initial = SIGNAL_PAGE_SIZE + 100;
+        let mut backfilled = history_play(initial);
+        backfilled["viewedAt"] = json!(1_600_000_000);
+        let server = wiremock::MockServer::start().await;
+        let failure = read_history_of(
+            &server,
+            LiveHistory {
+                plays: std::sync::Mutex::new((0..initial).map(history_play).collect()),
+                arrivals: std::sync::Mutex::new(vec![backfilled]),
+                requests: std::sync::atomic::AtomicUsize::new(0),
+            },
+        )
+        .await
+        .expect_err("a play the read passed over is not a complete history");
+        assert_eq!(failure.reason, reasons::PAGING_NOT_HONOURED);
+    }
+
+    /// History rows in `viewedAt` order, except that the two rows either side
+    /// of the first page boundary share a time and swap places after the
+    /// first request, as a server free to order ties either way may.
+    struct SwappingHistory {
+        rows: Vec<Value>,
+        requests: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SwappingHistory {
+        fn new(rows: Vec<Value>) -> Self {
+            let mut rows = rows;
+            let tie = rows[SIGNAL_PAGE_SIZE - 1]["viewedAt"].clone();
+            rows[SIGNAL_PAGE_SIZE]["viewedAt"] = tie;
+            Self {
+                rows,
+                requests: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl wiremock::Respond for SwappingHistory {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let call = self
+                .requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut rows = self.rows.clone();
+            if call > 0 {
+                rows.swap(SIGNAL_PAGE_SIZE - 1, SIGNAL_PAGE_SIZE);
+            }
+            let start = request
+                .headers
+                .get("X-Plex-Container-Start")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let page = rows
+                .iter()
+                .skip(start)
+                .take(SIGNAL_PAGE_SIZE)
+                .cloned()
+                .collect::<Vec<_>>();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "MediaContainer": {
+                    "size": page.len(),
+                    "totalSize": rows.len(),
+                    "offset": start,
+                    "Metadata": page
+                }
+            }))
+        }
+    }
+
+    /// Two plays sharing a time at the page boundary swap order between
+    /// requests: the second page repeats one and the other is never read.
+    /// Every page is well formed, but the distinct rows fall one short of the
+    /// reported total, and the read fails.
+    #[tokio::test]
+    async fn plex_plays_swapping_places_at_a_page_boundary_fail_the_read() {
+        let total = SIGNAL_PAGE_SIZE + 100;
+        let server = wiremock::MockServer::start().await;
+        let failure = read_history_of(
+            &server,
+            SwappingHistory::new((0..total).map(history_play).collect()),
+        )
+        .await
+        .expect_err("a play passed over at the boundary is not a complete history");
+        assert_eq!(failure.reason, reasons::PAGING_NOT_HONOURED);
+    }
+
+    /// The same swap in one item's history fails the pre-action re-check.
+    #[tokio::test]
+    async fn plex_item_plays_swapping_places_at_a_page_boundary_fail_the_recheck() {
+        use wiremock::Mock;
+        use wiremock::matchers::{method, path, query_param};
+
+        let total = SIGNAL_PAGE_SIZE + 100;
+        let server = wiremock::MockServer::start().await;
+        mount_plex_owner(&server).await;
+        mount_plex_item_metadata(&server, PLEX_TOKEN, plex_movie(1, 1_756_100_000)).await;
+        let rows = (0..total)
+            .map(|index| {
+                json!({
+                    "ratingKey": "101",
+                    "type": "movie",
+                    "accountID": 9009,
+                    "viewedAt": 1_700_000_000 + index as i64
+                })
+            })
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/status/sessions/history/all"))
+            .and(query_param("metadataItemID", "101"))
+            .respond_with(SwappingHistory::new(rows))
+            .mount(&server)
+            .await;
+
+        let failure = plex_recheck(&server, &["101"], &[PLEX_OWNER_ID])
+            .await
+            .expect_err("a play passed over at the boundary cannot clear the item");
+        assert_eq!(failure.reason, reasons::PAGING_NOT_HONOURED);
     }
 }

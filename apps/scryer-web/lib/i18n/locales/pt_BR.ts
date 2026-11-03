@@ -3809,6 +3809,7 @@ const pt_BR: LocaleDictionary = {
   "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Em espera: o servidor de mídia mostra uma reprodução mais recente que o histórico salvo.",
   "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Em espera: o histórico do servidor de mídia mostra uma reprodução por uma conta que o histórico de exibição não conta.",
   "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Em espera: o servidor de mídia não pôde confirmar o histórico de exibição antes de agir.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Em espera: um servidor de mídia conectado não tem um item correspondente, então o histórico de exibição não pôde ser verificado antes de agir.",
   "settings.refMaintFactsWatchedByAnyone": "Se alguém com conta em um servidor de mídia conectado reproduziu o item, vinculado ao Scryer ou não; não identifica ninguém",
   "settings.refMaintFactsLastWatchedByAnyoneAt": "Quando alguém com conta em um servidor de mídia conectado reproduziu o item pela última vez",
   "settings.refMaintFactsWatchedByAnyoneValue": "True quando qualquer conta em um servidor de mídia habilitado o reproduziu, esteja ou não vinculada a um usuário do Scryer; para temporadas e séries, qualquer episódio exibido conta. Desconhecido com o motivo audience_not_read até que uma sincronização nas últimas 48 horas tenha lido todas as contas de todas as conexões habilitadas, e com os motivos habituais sempre que os fatos de exibição forem desconhecidos.",

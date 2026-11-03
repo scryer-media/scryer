@@ -3828,6 +3828,7 @@ const it: LocaleDictionary = {
   "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "In attesa: il server multimediale mostra una riproduzione più recente della cronologia salvata.",
   "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "In attesa: la cronologia del server multimediale mostra una riproduzione da un account che la cronologia di visione non conta.",
   "settings.maintenanceExecutionReason.watchRecheckUnavailable": "In attesa: il server multimediale non ha potuto confermare la cronologia di visione prima di agire.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "In attesa: un server multimediale collegato non ha un elemento corrispondente, quindi non è stato possibile confermare la cronologia di visione prima di agire.",
   "settings.refMaintFactsWatchedByAnyone": "Se qualcuno con un account su un media server collegato lo ha riprodotto, collegato a Scryer o no; non nomina nessuno",
   "settings.refMaintFactsLastWatchedByAnyoneAt": "Quando qualcuno con un account su un media server collegato lo ha riprodotto l'ultima volta",
   "settings.refMaintFactsWatchedByAnyoneValue": "True quando un qualsiasi account su un media server abilitato lo ha riprodotto, che l'account sia collegato o meno a un utente Scryer; per stagioni e serie conta qualsiasi episodio trasmesso. Sconosciuto con il motivo audience_not_read finché una sincronizzazione nelle ultime 48 ore non ha letto ogni account su ogni connessione abilitata, e con i soliti motivi ogni volta che i dati di visione sono sconosciuti.",

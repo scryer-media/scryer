@@ -5615,6 +5615,7 @@ const zh_TW: LocaleDictionary = {
   "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "已暫緩：媒體伺服器顯示有比已存觀看紀錄更新的播放。",
   "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "已暫緩：媒體伺服器的歷史紀錄顯示有觀看紀錄未計入的帳戶播放。",
   "settings.maintenanceExecutionReason.watchRecheckUnavailable": "已暫緩：執行前媒體伺服器無法確認觀看紀錄。",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "已暫緩：已連線的媒體伺服器沒有相符的項目，執行前無法確認觀看紀錄。",
   "settings.refMaintFactsWatchedByAnyone": "已連線媒體伺服器上的任何帳號是否播放過該項目,無論是否連結 Scryer;不指明具體是誰",
   "settings.refMaintFactsLastWatchedByAnyoneAt": "已連線媒體伺服器上的任何帳號最後一次播放該項目的時間",
   "settings.refMaintFactsWatchedByAnyoneValue": "當已啟用媒體伺服器上的任何帳號播放過它時為 true,無論該帳號是否連結到 Scryer 使用者;對於季和影集,任何已播出的單集都算。在過去 48 小時內的同步讀取每個已啟用連線上的所有帳號之前,以原因 audience_not_read 視為未知;觀看事實未知時,以一般原因視為未知。",
