@@ -36,7 +36,7 @@ struct SeedNode<'a> {
 }
 
 /// Stores a complete movie graph run with the given children, as the sync
-/// job's commit would.
+/// job's commit does.
 async fn seed_graph_run(
     ctx: &TestContext,
     run_id: &str,
@@ -45,69 +45,69 @@ async fn seed_graph_run(
     clusters: &[(i64, Option<&str>, &str, &str, i64)],
     omitted_subject_keys: &[&str],
 ) {
-    let stamp = "2026-06-25T00:00:00Z";
-    sqlx::query(
-        "INSERT INTO discovery_library_graph_runs
-            (id, facet, axis, status, subject_count, submitted_count, generated_at,
-             omitted_subject_keys_json, started_at, completed_at, created_at, updated_at)
-         VALUES (?, 'movie', 'SEMANTIC', 'complete', ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(run_id)
-    .bind((nodes.len() + omitted_subject_keys.len()) as i64)
-    .bind(nodes.len() as i64)
-    .bind("2026-06-25T00:00:01Z")
-    .bind(json!(omitted_subject_keys).to_string())
-    .bind(stamp)
-    .bind(stamp)
-    .bind(stamp)
-    .bind(stamp)
-    .execute(ctx.db.pool())
-    .await
-    .expect("seed library graph run");
-    for node in nodes {
-        sqlx::query(
-            "INSERT INTO discovery_library_graph_nodes
-                (run_id, subject_key, target_key, cluster_id, title_ids_json)
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(run_id)
-        .bind(node.key)
-        .bind(node.key)
-        .bind(node.cluster_id)
-        .bind(json!(node.title_ids).to_string())
-        .execute(ctx.db.pool())
+    use scryer_application::{
+        DiscoveryRepository, LibraryGraphClusterRecord, LibraryGraphEdgeRecord,
+        LibraryGraphNodeRecord, LibraryGraphRunRecord, LibraryGraphSnapshotRecord,
+    };
+    let stamp = chrono::DateTime::parse_from_rfc3339("2026-06-25T00:00:00Z")
+        .expect("stamp")
+        .with_timezone(&chrono::Utc);
+    let snapshot = LibraryGraphSnapshotRecord {
+        run: LibraryGraphRunRecord {
+            id: run_id.to_string(),
+            facet: "movie".to_string(),
+            axis: "SEMANTIC".to_string(),
+            status: "complete".to_string(),
+            subject_count: (nodes.len() + omitted_subject_keys.len()) as i64,
+            submitted_count: nodes.len() as i64,
+            generated_at: Some("2026-06-25T00:00:01Z".to_string()),
+            error_code: None,
+            error_text: None,
+            retry_after_seconds: None,
+            omitted_subject_keys: omitted_subject_keys
+                .iter()
+                .map(|key| key.to_string())
+                .collect(),
+            started_at: stamp,
+            completed_at: Some(stamp),
+            created_at: stamp,
+            updated_at: stamp,
+        },
+        nodes: nodes
+            .iter()
+            .map(|node| LibraryGraphNodeRecord {
+                subject_key: node.key.to_string(),
+                target_key: node.key.to_string(),
+                cluster_id: node.cluster_id,
+                title_ids: node.title_ids.iter().map(|id| id.to_string()).collect(),
+            })
+            .collect(),
+        edges: edges
+            .iter()
+            .map(|(from_key, to_key, weight)| LibraryGraphEdgeRecord {
+                from_key: from_key.to_string(),
+                to_key: to_key.to_string(),
+                weight: *weight,
+                kinds: vec!["semantic".to_string()],
+            })
+            .collect(),
+        clusters: clusters
+            .iter()
+            .map(
+                |(cluster_id, label_key, label, medoid, size)| LibraryGraphClusterRecord {
+                    cluster_id: *cluster_id,
+                    label_key: label_key.map(str::to_string),
+                    label: label.to_string(),
+                    medoid: medoid.to_string(),
+                    size: *size,
+                },
+            )
+            .collect(),
+    };
+    DiscoveryStore::new(ctx.db.datastore())
+        .commit_library_graph(&snapshot)
         .await
-        .expect("seed library graph node");
-    }
-    for (from_key, to_key, weight) in edges {
-        sqlx::query(
-            "INSERT INTO discovery_library_graph_edges (run_id, from_key, to_key, weight, kinds_json)
-             VALUES (?, ?, ?, ?, '[\"semantic\"]')",
-        )
-        .bind(run_id)
-        .bind(from_key)
-        .bind(to_key)
-        .bind(weight)
-        .execute(ctx.db.pool())
-        .await
-        .expect("seed library graph edge");
-    }
-    for (cluster_id, label_key, label, medoid, size) in clusters {
-        sqlx::query(
-            "INSERT INTO discovery_library_graph_clusters
-                (run_id, cluster_id, label_key, label, medoid, size)
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(run_id)
-        .bind(cluster_id)
-        .bind(label_key)
-        .bind(label)
-        .bind(medoid)
-        .bind(size)
-        .execute(ctx.db.pool())
-        .await
-        .expect("seed library graph cluster");
-    }
+        .expect("seed library graph run");
 }
 
 async fn seed_movie_graph(ctx: &TestContext, owned_title_id: &str) {

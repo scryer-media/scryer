@@ -7380,3 +7380,105 @@ async fn migration_0325_adds_an_empty_signal_roster_beside_existing_signals() {
     .await
     .expect_err("a roster row must name the link it read through");
 }
+
+#[tokio::test]
+async fn migration_0326_drops_stored_graphs_and_keeps_failed_runs_for_their_retry_wait() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("library-graph-0326.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("library graph connection");
+
+    // Return the schema to its pre-0326 shape with one complete graph and one
+    // failed run on record, then replay the migration over them.
+    sqlx::raw_sql(
+        "DROP TABLE discovery_library_graph_payloads;
+         CREATE TABLE discovery_library_graph_nodes (
+             run_id TEXT NOT NULL REFERENCES discovery_library_graph_runs(id) ON DELETE CASCADE,
+             subject_key TEXT NOT NULL,
+             target_key TEXT NOT NULL,
+             cluster_id INTEGER NOT NULL,
+             title_ids_json TEXT NOT NULL DEFAULT '[]',
+             PRIMARY KEY (run_id, subject_key)
+         );
+         CREATE TABLE discovery_library_graph_edges (
+             run_id TEXT NOT NULL REFERENCES discovery_library_graph_runs(id) ON DELETE CASCADE,
+             from_key TEXT NOT NULL,
+             to_key TEXT NOT NULL,
+             weight REAL NOT NULL,
+             kinds_json TEXT NOT NULL DEFAULT '[]',
+             PRIMARY KEY (run_id, from_key, to_key)
+         );
+         CREATE TABLE discovery_library_graph_clusters (
+             run_id TEXT NOT NULL REFERENCES discovery_library_graph_runs(id) ON DELETE CASCADE,
+             cluster_id INTEGER NOT NULL,
+             label_key TEXT,
+             label TEXT NOT NULL,
+             medoid TEXT NOT NULL,
+             size INTEGER NOT NULL,
+             PRIMARY KEY (run_id, cluster_id)
+         );
+         INSERT INTO discovery_library_graph_runs
+             (id, facet, axis, status, started_at, completed_at)
+         VALUES ('graph-complete', 'movie', 'SEMANTIC', 'complete',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z');
+         INSERT INTO discovery_library_graph_runs
+             (id, facet, axis, status, error_code, retry_after_seconds, started_at, completed_at)
+         VALUES ('graph-failed', 'movie', 'SEMANTIC', 'failed', 'LIBRARY_GRAPH_GATEWAY_QUEUE_FULL',
+                 21600, '2026-01-02T00:00:00Z', '2026-01-02T00:01:00Z');
+         INSERT INTO discovery_library_graph_nodes (run_id, subject_key, target_key, cluster_id)
+         VALUES ('graph-complete', 'tmdb:movie:1', 'tmdb:movie:1', 0);
+         INSERT INTO discovery_library_graph_edges (run_id, from_key, to_key, weight)
+         VALUES ('graph-complete', 'tmdb:movie:1', 'tmdb:movie:2', 0.9);
+         INSERT INTO discovery_library_graph_clusters (run_id, cluster_id, label, medoid, size)
+         VALUES ('graph-complete', 0, 'Synthetic Cluster', 'tmdb:movie:1', 1);",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("restore the pre-0326 shape");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0326_discovery_library_graph_payload.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0326 should apply");
+
+    // The complete run went with its graph, so the next sync builds the
+    // facet; the failure still carries the gateway's wait.
+    let runs: Vec<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT id, retry_after_seconds FROM discovery_library_graph_runs ORDER BY id",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("read runs");
+    assert_eq!(runs, vec![("graph-failed".to_string(), Some(21600))]);
+    let (old_tables,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
+         ('discovery_library_graph_nodes', 'discovery_library_graph_edges',
+          'discovery_library_graph_clusters')",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .expect("list tables");
+    assert_eq!(old_tables, 0);
+    let (payloads,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM discovery_library_graph_payloads")
+            .fetch_one(&mut *conn)
+            .await
+            .expect("count payloads");
+    assert_eq!(payloads, 0);
+    sqlx::query(
+        "INSERT INTO discovery_library_graph_payloads (run_id, payload)
+         VALUES ('graph-missing', x'00')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect_err("a payload belongs to a stored run");
+}

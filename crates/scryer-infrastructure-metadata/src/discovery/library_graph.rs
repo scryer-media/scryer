@@ -1,12 +1,15 @@
 //! Storage for the per-facet library graph: one run row per build, with the
-//! build's nodes, edges and clusters keyed by the run id.
+//! build's nodes, edges and clusters in one compressed payload keyed by the
+//! run id (see [`super::library_graph_payload`]).
+//!
+//! A facet keeps at most two runs: its newest complete run and, after it, the
+//! newest failed one. Committing a graph removes every other run of the facet
+//! together with its payload.
 
-use scryer_application::{
-    AppError, AppResult, LibraryGraphClusterRecord, LibraryGraphEdgeRecord, LibraryGraphNodeRecord,
-    LibraryGraphRunRecord, LibraryGraphSnapshotRecord, error_reasons,
-};
+use scryer_application::{AppError, AppResult, LibraryGraphRunRecord, LibraryGraphSnapshotRecord};
 use std::sync::Arc;
 
+use super::library_graph_payload::{decode_library_graph_payload, encode_library_graph_payload};
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
 };
@@ -30,31 +33,6 @@ const RUN_COLUMNS: &[&str] = &[
     "completed_at",
     "created_at",
     "updated_at",
-];
-
-const NODE_COLUMNS: &[&str] = &[
-    "run_id",
-    "subject_key",
-    "target_key",
-    "cluster_id",
-    "title_ids_json",
-];
-
-const EDGE_COLUMNS: &[&str] = &["run_id", "from_key", "to_key", "weight", "kinds_json"];
-
-const CLUSTER_COLUMNS: &[&str] = &[
-    "run_id",
-    "cluster_id",
-    "label_key",
-    "label",
-    "medoid",
-    "size",
-];
-
-const CHILD_TABLES: &[&str] = &[
-    "discovery_library_graph_nodes",
-    "discovery_library_graph_edges",
-    "discovery_library_graph_clusters",
 ];
 
 fn insert_prefix(table: &str, columns: &[&str]) -> String {
@@ -112,34 +90,6 @@ fn string_list_from_json(raw: &str) -> AppResult<Vec<String>> {
     serde_json::from_str(raw).map_err(repo_err)
 }
 
-fn node_from_row(row: &SqlRow) -> AppResult<LibraryGraphNodeRecord> {
-    Ok(LibraryGraphNodeRecord {
-        subject_key: row.text("subject_key")?,
-        target_key: row.text("target_key")?,
-        cluster_id: row.i64("cluster_id")?,
-        title_ids: string_list_from_json(&row.text("title_ids_json")?)?,
-    })
-}
-
-fn edge_from_row(row: &SqlRow) -> AppResult<LibraryGraphEdgeRecord> {
-    Ok(LibraryGraphEdgeRecord {
-        from_key: row.text("from_key")?,
-        to_key: row.text("to_key")?,
-        weight: row.opt_f64("weight")?.unwrap_or_default(),
-        kinds: string_list_from_json(&row.text("kinds_json")?)?,
-    })
-}
-
-fn cluster_from_row(row: &SqlRow) -> AppResult<LibraryGraphClusterRecord> {
-    Ok(LibraryGraphClusterRecord {
-        cluster_id: row.i64("cluster_id")?,
-        label_key: row.opt_text("label_key")?,
-        label: row.text("label")?,
-        medoid: row.text("medoid")?,
-        size: row.i64("size")?,
-    })
-}
-
 async fn insert_run_tx(tx: &mut SqlTx<'_>, run: &LibraryGraphRunRecord) -> AppResult<()> {
     SqlRuntime::execute_batch_insert(
         tx,
@@ -152,39 +102,29 @@ async fn insert_run_tx(tx: &mut SqlTx<'_>, run: &LibraryGraphRunRecord) -> AppRe
     Ok(())
 }
 
-/// Deletes every run for `facet` other than `keep_run_id` that matches
-/// `status_filter` (all statuses when `None`), children first.
-async fn delete_other_runs_tx(
+/// Deletes the runs of `facet` that `run_filter` selects (a SQL condition on
+/// the run row with its own placeholders, bound from `filter_args`), payloads
+/// first.
+async fn delete_runs_tx(
     tx: &mut SqlTx<'_>,
     facet: &str,
-    keep_run_id: &str,
-    status_filter: Option<&str>,
+    run_filter: &str,
+    filter_args: Vec<SqlArg>,
 ) -> AppResult<()> {
-    let (status_clause, status_args) = match status_filter {
-        Some(status) => (" AND status = {}", vec![SqlArg::Text(status.to_string())]),
-        None => ("", Vec::new()),
-    };
-    let mut args = vec![
-        SqlArg::Text(facet.to_string()),
-        SqlArg::Text(keep_run_id.to_string()),
-    ];
-    args.extend(status_args);
-    for table in CHILD_TABLES {
-        SqlRuntime::execute(
-            SqlExec::Tx(tx),
-            &format!(
-                "DELETE FROM {table} WHERE run_id IN (SELECT id FROM discovery_library_graph_runs \
-                 WHERE facet = {{}} AND id <> {{}}{status_clause})"
-            ),
-            &args,
-        )
-        .await?;
-    }
+    let mut args = vec![SqlArg::Text(facet.to_string())];
+    args.extend(filter_args);
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         &format!(
-            "DELETE FROM discovery_library_graph_runs WHERE facet = {{}} AND id <> {{}}{status_clause}"
+            "DELETE FROM discovery_library_graph_payloads WHERE run_id IN \
+             (SELECT id FROM discovery_library_graph_runs WHERE facet = {{}}{run_filter})"
         ),
+        &args,
+    )
+    .await?;
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        &format!("DELETE FROM discovery_library_graph_runs WHERE facet = {{}}{run_filter}"),
         &args,
     )
     .await?;
@@ -200,12 +140,15 @@ pub(crate) async fn record_failed_library_graph_run(
         let run = Arc::clone(&run);
         Box::pin(async move {
             // Only the newest failure is worth keeping next to the last
-            // complete graph.
-            delete_other_runs_tx(tx, &run.facet, &run.id, Some(&run.status)).await?;
-            SqlRuntime::execute(
-                SqlExec::Tx(tx),
-                "DELETE FROM discovery_library_graph_runs WHERE id = {}",
-                &[SqlArg::Text(run.id.clone())],
+            // complete graph; a rewrite of this run replaces it.
+            delete_runs_tx(
+                tx,
+                &run.facet,
+                " AND (status = {} OR id = {})",
+                vec![
+                    SqlArg::Text(run.status.clone()),
+                    SqlArg::Text(run.id.clone()),
+                ],
             )
             .await?;
             insert_run_tx(tx, &run).await
@@ -218,131 +161,110 @@ pub(crate) async fn commit_library_graph(
     datastore: &StoreDatastore,
     snapshot: &LibraryGraphSnapshotRecord,
 ) -> AppResult<()> {
-    let snapshot = Arc::new(snapshot.clone());
+    let payload =
+        encode_library_graph_payload(&snapshot.nodes, &snapshot.edges, &snapshot.clusters)?;
+    let run = Arc::new(snapshot.run.clone());
+    let payload = Arc::new(payload);
     SqlRuntime::run_in_transaction(datastore, "commit_library_graph", move |tx| {
-        let snapshot = Arc::clone(&snapshot);
+        let run = Arc::clone(&run);
+        let payload = Arc::clone(&payload);
         Box::pin(async move {
-            let run_id = snapshot.run.id.clone();
-            insert_run_tx(tx, &snapshot.run).await?;
-
-            let mut node_rows = Vec::with_capacity(snapshot.nodes.len());
-            for node in &snapshot.nodes {
-                node_rows.push(vec![
-                    SqlArg::Text(run_id.clone()),
-                    SqlArg::Text(node.subject_key.clone()),
-                    SqlArg::Text(node.target_key.clone()),
-                    SqlArg::I64(node.cluster_id),
-                    SqlArg::Text(string_list_json(&node.title_ids)?),
-                ]);
-            }
-            SqlRuntime::execute_batch_insert(
-                tx,
-                &insert_prefix("discovery_library_graph_nodes", NODE_COLUMNS),
-                NODE_COLUMNS.len(),
-                node_rows,
-                "ON CONFLICT DO NOTHING",
-            )
-            .await?;
-
-            let mut edge_rows = Vec::with_capacity(snapshot.edges.len());
-            for edge in &snapshot.edges {
-                edge_rows.push(vec![
-                    SqlArg::Text(run_id.clone()),
-                    SqlArg::Text(edge.from_key.clone()),
-                    SqlArg::Text(edge.to_key.clone()),
-                    SqlArg::F64(edge.weight),
-                    SqlArg::Text(string_list_json(&edge.kinds)?),
-                ]);
-            }
-            SqlRuntime::execute_batch_insert(
-                tx,
-                &insert_prefix("discovery_library_graph_edges", EDGE_COLUMNS),
-                EDGE_COLUMNS.len(),
-                edge_rows,
-                "ON CONFLICT DO NOTHING",
-            )
-            .await?;
-
-            let cluster_rows = snapshot
-                .clusters
-                .iter()
-                .map(|cluster| {
-                    vec![
-                        SqlArg::Text(run_id.clone()),
-                        SqlArg::I64(cluster.cluster_id),
-                        SqlArg::OptText(cluster.label_key.clone()),
-                        SqlArg::Text(cluster.label.clone()),
-                        SqlArg::Text(cluster.medoid.clone()),
-                        SqlArg::I64(cluster.size),
-                    ]
-                })
-                .collect();
-            SqlRuntime::execute_batch_insert(
-                tx,
-                &insert_prefix("discovery_library_graph_clusters", CLUSTER_COLUMNS),
-                CLUSTER_COLUMNS.len(),
-                cluster_rows,
-                "ON CONFLICT DO NOTHING",
-            )
-            .await?;
-
-            // The new graph is in place; everything older for the facet goes,
+            // The new graph replaces everything older for the facet,
             // including any failure recorded since the last complete build.
-            delete_other_runs_tx(tx, &snapshot.run.facet, &run_id, None).await
+            delete_runs_tx(tx, &run.facet, "", Vec::new()).await?;
+            insert_run_tx(tx, &run).await?;
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "INSERT INTO discovery_library_graph_payloads (run_id, payload) VALUES ({}, {})",
+                &[
+                    SqlArg::Text(run.id.clone()),
+                    SqlArg::OptBytes(Some(payload.as_ref().clone())),
+                ],
+            )
+            .await?;
+            Ok(())
         })
     })
     .await
-}
-
-async fn latest_run(
-    datastore: &StoreDatastore,
-    facet: &str,
-    status: Option<&str>,
-) -> AppResult<Option<LibraryGraphRunRecord>> {
-    let mut args = vec![SqlArg::Text(facet.to_string())];
-    let status_clause = match status {
-        Some(status) => {
-            args.push(SqlArg::Text(status.to_string()));
-            " AND status = {}"
-        }
-        None => "",
-    };
-    let row = SqlRuntime::fetch_optional(
-        datastore.read_exec(),
-        &format!(
-            "SELECT {} FROM discovery_library_graph_runs WHERE facet = {{}}{status_clause} \
-             ORDER BY started_at DESC, id DESC LIMIT 1",
-            RUN_COLUMNS.join(", ")
-        ),
-        &args,
-    )
-    .await?;
-    row.as_ref().map(run_from_row).transpose()
 }
 
 pub(crate) async fn get_latest_library_graph_run(
     datastore: &StoreDatastore,
     facet: &str,
 ) -> AppResult<Option<LibraryGraphRunRecord>> {
-    latest_run(datastore, facet, None).await
+    let row = SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        &format!(
+            "SELECT {} FROM discovery_library_graph_runs WHERE facet = {{}} \
+             ORDER BY started_at DESC, id DESC LIMIT 1",
+            RUN_COLUMNS.join(", ")
+        ),
+        &[SqlArg::Text(facet.to_string())],
+    )
+    .await?;
+    row.as_ref().map(run_from_row).transpose()
 }
 
+/// The newest complete graph of a facet. The run row and its payload are read
+/// in one statement, so a commit landing alongside cannot pair a run with
+/// another run's graph.
 pub(crate) async fn get_latest_library_graph(
     datastore: &StoreDatastore,
     facet: &str,
 ) -> AppResult<Option<LibraryGraphSnapshotRecord>> {
-    read_latest_library_graph(datastore, facet, || async {}).await
+    let columns = RUN_COLUMNS
+        .iter()
+        .map(|column| format!("r.{column}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let row = SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        &format!(
+            "SELECT {columns}, p.payload FROM discovery_library_graph_runs r \
+             JOIN discovery_library_graph_payloads p ON p.run_id = r.id \
+             WHERE r.facet = {{}} AND r.status = {{}} \
+             ORDER BY r.started_at DESC, r.id DESC LIMIT 1"
+        ),
+        &[
+            SqlArg::Text(facet.to_string()),
+            SqlArg::Text(LIBRARY_GRAPH_RUN_COMPLETE.to_string()),
+        ],
+    )
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let run = run_from_row(&row)?;
+    let payload = row
+        .opt_bytes("payload")?
+        .ok_or_else(|| AppError::Repository("library graph payload is missing".to_string()))?;
+    let payload = decode_library_graph_payload(&payload)?;
+    Ok(Some(LibraryGraphSnapshotRecord {
+        run,
+        nodes: payload.nodes,
+        edges: payload.edges,
+        clusters: payload.clusters,
+    }))
 }
 
+/// Whether the facet has a complete graph stored: a complete run together
+/// with its payload.
 pub(crate) async fn has_complete_library_graph(
     datastore: &StoreDatastore,
     facet: &str,
 ) -> AppResult<bool> {
-    Ok(
-        latest_run(datastore, facet, Some(LIBRARY_GRAPH_RUN_COMPLETE))
-            .await?
-            .is_some(),
+    let row = SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        "SELECT r.id FROM discovery_library_graph_runs r \
+         JOIN discovery_library_graph_payloads p ON p.run_id = r.id \
+         WHERE r.facet = {} AND r.status = {} LIMIT 1",
+        &[
+            SqlArg::Text(facet.to_string()),
+            SqlArg::Text(LIBRARY_GRAPH_RUN_COMPLETE.to_string()),
+        ],
     )
+    .await?;
+    Ok(row.is_some())
 }
 
 pub(crate) async fn delete_library_graph_runs(
@@ -352,115 +274,19 @@ pub(crate) async fn delete_library_graph_runs(
     let facet: Arc<str> = Arc::from(facet);
     SqlRuntime::run_in_transaction(datastore, "delete_library_graph_runs", move |tx| {
         let facet = Arc::clone(&facet);
-        Box::pin(async move {
-            let args = [SqlArg::Text(facet.to_string())];
-            for table in CHILD_TABLES {
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    &format!(
-                        "DELETE FROM {table} WHERE run_id IN \
-                         (SELECT id FROM discovery_library_graph_runs WHERE facet = {{}})"
-                    ),
-                    &args,
-                )
-                .await?;
-            }
-            SqlRuntime::execute(
-                SqlExec::Tx(tx),
-                "DELETE FROM discovery_library_graph_runs WHERE facet = {}",
-                &args,
-            )
-            .await?;
-            Ok(())
-        })
+        Box::pin(async move { delete_runs_tx(tx, &facet, "", Vec::new()).await })
     })
     .await
-}
-
-/// Reads the newest complete graph of a facet without a transaction, so a
-/// commit can replace the run between the run read and the child reads.
-/// After the child reads the newest complete run id is read again; when it
-/// changed, the whole read is repeated once. `between_reads` runs after each
-/// attempt's child reads, which is where tests land a concurrent commit.
-async fn read_latest_library_graph<F, Fut>(
-    datastore: &StoreDatastore,
-    facet: &str,
-    between_reads: F,
-) -> AppResult<Option<LibraryGraphSnapshotRecord>>
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
-    const ATTEMPTS: usize = 2;
-    for _ in 0..ATTEMPTS {
-        let Some(run) = latest_run(datastore, facet, Some(LIBRARY_GRAPH_RUN_COMPLETE)).await?
-        else {
-            return Ok(None);
-        };
-        let snapshot = read_library_graph_children(datastore, run).await?;
-        between_reads().await;
-        let current = latest_run(datastore, facet, Some(LIBRARY_GRAPH_RUN_COMPLETE))
-            .await?
-            .map(|run| run.id);
-        if current.as_deref() == Some(snapshot.run.id.as_str()) {
-            return Ok(Some(snapshot));
-        }
-    }
-    Err(AppError::temporary_unavailable_reason(
-        error_reasons::library_graph::READ_SUPERSEDED,
-        "the library graph was replaced while it was being read; try again",
-        None,
-    ))
-}
-
-async fn read_library_graph_children(
-    datastore: &StoreDatastore,
-    run: LibraryGraphRunRecord,
-) -> AppResult<LibraryGraphSnapshotRecord> {
-    let args = [SqlArg::Text(run.id.clone())];
-    let nodes = SqlRuntime::fetch_all(
-        datastore.read_exec(),
-        "SELECT subject_key, target_key, cluster_id, title_ids_json \
-         FROM discovery_library_graph_nodes WHERE run_id = {} ORDER BY subject_key",
-        &args,
-    )
-    .await?
-    .iter()
-    .map(node_from_row)
-    .collect::<AppResult<Vec<_>>>()?;
-    let edges = SqlRuntime::fetch_all(
-        datastore.read_exec(),
-        "SELECT from_key, to_key, weight, kinds_json \
-         FROM discovery_library_graph_edges WHERE run_id = {} ORDER BY from_key, to_key",
-        &args,
-    )
-    .await?
-    .iter()
-    .map(edge_from_row)
-    .collect::<AppResult<Vec<_>>>()?;
-    let clusters = SqlRuntime::fetch_all(
-        datastore.read_exec(),
-        "SELECT cluster_id, label_key, label, medoid, size \
-         FROM discovery_library_graph_clusters WHERE run_id = {} ORDER BY cluster_id",
-        &args,
-    )
-    .await?
-    .iter()
-    .map(cluster_from_row)
-    .collect::<AppResult<Vec<_>>>()?;
-    Ok(LibraryGraphSnapshotRecord {
-        run,
-        nodes,
-        edges,
-        clusters,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::{Duration, TimeZone, Utc};
-    use scryer_application::DiscoveryRepository;
+    use scryer_application::{
+        DiscoveryRepository, LibraryGraphClusterRecord, LibraryGraphEdgeRecord,
+        LibraryGraphNodeRecord,
+    };
     use scryer_infrastructure_datastore::SqliteServices;
 
     use crate::discovery::store::DiscoveryStore;
@@ -671,40 +497,215 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    async fn count(datastore: &StoreDatastore, sql: &str) -> i64 {
+        SqlRuntime::fetch_optional(datastore.read_exec(), sql, &[])
+            .await
+            .expect("count")
+            .expect("row")
+            .i64("n")
+            .expect("n")
+    }
+
     #[tokio::test]
-    async fn a_graph_replaced_mid_read_is_read_again_from_the_new_run() {
-        let (store, datastore, path) = sqlite_store_and_datastore("torn_read").await;
-        let first = snapshot("library-graph-first", 0);
-        store.commit_library_graph(&first).await.expect("commit");
-        let mut second = snapshot("library-graph-second", 10);
-        second.edges.truncate(1);
-
-        // The first attempt's child reads land, then a commit replaces the
-        // run: the read starts over and returns the new graph whole.
-        let committed = std::sync::atomic::AtomicBool::new(false);
-        let read = read_latest_library_graph(&datastore, "movie", || async {
-            if !committed.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                store.commit_library_graph(&second).await.expect("commit");
-            }
-        })
-        .await
-        .expect("read");
-        assert_eq!(read, Some(second.clone()));
-
-        // Replaced on every attempt: a coded refusal, never a torn graph.
-        let minute = std::sync::atomic::AtomicI64::new(20);
-        let error = read_latest_library_graph(&datastore, "movie", || async {
-            let at = minute.fetch_add(10, std::sync::atomic::Ordering::SeqCst);
+    async fn a_facet_keeps_only_its_newest_graph_and_newest_failure() {
+        let (store, datastore, path) = sqlite_store_and_datastore("retention").await;
+        for (index, minute) in [0, 10, 20].into_iter().enumerate() {
             store
-                .commit_library_graph(&snapshot(&format!("library-graph-{at}"), at))
+                .commit_library_graph(&snapshot(&format!("library-graph-{index}"), minute))
                 .await
                 .expect("commit");
+            let mut failed = run(
+                &format!("library-graph-failed-{index}"),
+                "movie",
+                "failed",
+                minute + 5,
+            );
+            failed.generated_at = None;
+            store
+                .record_failed_library_graph_run(&failed)
+                .await
+                .expect("record failure");
+            // Recording the same failure again replaces it.
+            store
+                .record_failed_library_graph_run(&failed)
+                .await
+                .expect("record failure again");
+        }
+        assert_eq!(
+            count(
+                &datastore,
+                "SELECT COUNT(*) AS n FROM discovery_library_graph_runs"
+            )
+            .await,
+            2
+        );
+        assert_eq!(
+            count(
+                &datastore,
+                "SELECT COUNT(*) AS n FROM discovery_library_graph_payloads"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            store
+                .get_latest_library_graph("movie")
+                .await
+                .expect("read")
+                .map(|graph| graph.run.id),
+            Some("library-graph-2".to_string())
+        );
+        store
+            .delete_library_graph_runs("movie")
+            .await
+            .expect("delete");
+        assert_eq!(
+            count(
+                &datastore,
+                "SELECT COUNT(*) AS n FROM discovery_library_graph_payloads"
+            )
+            .await,
+            0
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn a_complete_run_without_its_graph_reads_as_no_graph_so_it_is_rebuilt() {
+        let (store, datastore, path) = sqlite_store_and_datastore("no_payload").await;
+        let orphan = run(
+            "library-graph-orphan",
+            "movie",
+            LIBRARY_GRAPH_RUN_COMPLETE,
+            0,
+        );
+        let orphan = Arc::new(orphan);
+        SqlRuntime::run_in_transaction(&datastore, "seed_orphan_run", move |tx| {
+            let orphan = Arc::clone(&orphan);
+            Box::pin(async move { insert_run_tx(tx, &orphan).await })
         })
         .await
-        .expect_err("a graph replaced on every attempt cannot be read");
+        .expect("seed run");
         assert_eq!(
-            error.reason(),
-            Some(error_reasons::library_graph::READ_SUPERSEDED)
+            store.get_latest_library_graph("movie").await.expect("read"),
+            None
+        );
+        assert!(
+            !store
+                .has_complete_library_graph("movie")
+                .await
+                .expect("read")
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Deterministic synthetic graph of `subjects` nodes, each linked to
+    /// `neighbors` others, with kind mixes shaped like the gateway's.
+    fn synthetic_large_graph(
+        run_id: &str,
+        subjects: u32,
+        neighbors: u32,
+    ) -> LibraryGraphSnapshotRecord {
+        let mut state: u64 = 0x5eed_1234_abcd_ef01;
+        let mut next = move || {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        let key = |n: u32| format!("tmdb:movie:{}", 100_000 + n * 37);
+        let structural = (0..48u128)
+            .map(|i| format!("structure:{}", uuid::Uuid::from_u128((1 << 120) + i)))
+            .collect::<Vec<_>>();
+        let themes = (0..64)
+            .map(|i| format!("affinity:theme:synthetic-theme-{i}"))
+            .collect::<Vec<_>>();
+        let nodes = (0..subjects)
+            .map(|n| LibraryGraphNodeRecord {
+                subject_key: key(n),
+                target_key: key(n),
+                cluster_id: if n % 23 == 0 { -1 } else { i64::from(n % 180) },
+                title_ids: vec![uuid::Uuid::from_u128(u128::from(n) * 7919 + 1).to_string()],
+            })
+            .collect::<Vec<_>>();
+        let mut seen = std::collections::HashSet::new();
+        let mut edges = Vec::new();
+        for from in 0..subjects {
+            for _ in 0..neighbors {
+                let to = (next() % u64::from(subjects)) as u32;
+                if to == from {
+                    continue;
+                }
+                let (a, b) = (key(from), key(to));
+                let (a, b) = if a <= b { (a, b) } else { (b, a) };
+                if !seen.insert((a.clone(), b.clone())) {
+                    continue;
+                }
+                let roll = next() % 100;
+                let mut kinds = vec!["semantic".to_string()];
+                if roll < 20 {
+                    kinds.push("relation:list".to_string());
+                }
+                if roll % 3 == 0 {
+                    kinds.push(themes[(next() % 64) as usize].clone());
+                }
+                if roll % 7 == 0 {
+                    kinds.push("relation:recommendation".to_string());
+                }
+                if roll % 11 == 0 {
+                    kinds.push(structural[(next() % 48) as usize].clone());
+                }
+                let weight = 0.55 + (next() % 1_000_000_000) as f64 / 1_000_000_000.0 * 0.45;
+                edges.push(LibraryGraphEdgeRecord {
+                    from_key: a,
+                    to_key: b,
+                    weight,
+                    kinds,
+                });
+            }
+        }
+        let clusters = (0..180)
+            .map(|c| LibraryGraphClusterRecord {
+                cluster_id: c,
+                label_key: (c % 2 == 0).then(|| format!("canonical:genre:synthetic-{c}")),
+                label: format!("Synthetic Cluster {c}"),
+                medoid: key((c as u32 + 1) % subjects),
+                size: 50,
+            })
+            .collect();
+        let mut graph = snapshot(run_id, 0);
+        graph.nodes = nodes;
+        graph.edges = edges;
+        graph.clusters = clusters;
+        graph
+    }
+
+    #[tokio::test]
+    async fn a_full_size_graph_round_trips_in_key_order_within_a_small_payload() {
+        let (store, datastore, path) = sqlite_store_and_datastore("full_size").await;
+        let graph = synthetic_large_graph("library-graph-full-size", 10_000, 8);
+        store.commit_library_graph(&graph).await.expect("commit");
+
+        let mut expected = graph.clone();
+        expected
+            .nodes
+            .sort_by(|left, right| left.subject_key.cmp(&right.subject_key));
+        expected.edges.sort_by(|left, right| {
+            (&left.from_key, &left.to_key).cmp(&(&right.from_key, &right.to_key))
+        });
+        assert_eq!(
+            store.get_latest_library_graph("movie").await.expect("read"),
+            Some(expected)
+        );
+        let payload_bytes = count(
+            &datastore,
+            "SELECT LENGTH(payload) AS n FROM discovery_library_graph_payloads",
+        )
+        .await;
+        assert!(
+            payload_bytes < 2 * 1024 * 1024,
+            "a 10,000-subject graph should store in under 2 MiB, took {payload_bytes} bytes"
         );
         let _ = std::fs::remove_file(path);
     }
