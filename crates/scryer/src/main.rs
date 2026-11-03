@@ -1215,12 +1215,11 @@ async fn run_application() {
                 tracing::error!(%error, "failed to hand the listener to TLS");
                 std::process::exit(1);
             });
-            let server = axum_server::from_tcp_rustls(listener, rustls_config).unwrap_or_else(
-                |error| {
+            let server =
+                axum_server::from_tcp_rustls(listener, rustls_config).unwrap_or_else(|error| {
                     tracing::error!(%error, "failed to start the TLS listener");
                     std::process::exit(1);
-                },
-            );
+                });
             if let Err(error) = server
                 .handle(handle)
                 .serve(splash_app.into_make_service_with_connect_info::<SocketAddr>())
@@ -2937,7 +2936,9 @@ fn extract_port(args: &mut Vec<String>) -> Result<Option<u16>, String> {
     let raw = raw.to_string_lossy();
     match raw.trim().parse::<u16>() {
         Ok(port) if port != 0 => Ok(Some(port)),
-        _ => Err(format!("--port requires a port number from 1 to 65535, not {raw:?}")),
+        _ => Err(format!(
+            "--port requires a port number from 1 to 65535, not {raw:?}"
+        )),
     }
 }
 
@@ -3446,10 +3447,7 @@ async fn resolve_startup_bind(
     };
     let resolution = network_bind::resolve_bind(
         environment.as_deref(),
-        saved
-            .as_ref()
-            .map(Option::as_deref)
-            .map_err(String::as_str),
+        saved.as_ref().map(Option::as_deref).map_err(String::as_str),
         port,
     )
     .unwrap_or_else(|error| {

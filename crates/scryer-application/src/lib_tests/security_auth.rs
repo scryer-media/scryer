@@ -2671,9 +2671,18 @@ async fn a_saved_listening_host_asks_for_a_restart_until_it_matches_startup() {
     assert!(!settings.public_url.addressing.bind.restart_required());
 
     for (change, reason) in [
-        (bind_change(Some("media.home"), false), network::BIND_HOST_INVALID),
-        (bind_change(Some("0.0.0.0:9000"), false), network::BIND_HOST_INVALID),
-        (bind_change(Some("0.0.0.0"), true), network::BIND_SAVE_AND_RESET),
+        (
+            bind_change(Some("media.home"), false),
+            network::BIND_HOST_INVALID,
+        ),
+        (
+            bind_change(Some("0.0.0.0:9000"), false),
+            network::BIND_HOST_INVALID,
+        ),
+        (
+            bind_change(Some("0.0.0.0"), true),
+            network::BIND_SAVE_AND_RESET,
+        ),
     ] {
         let error = app
             .update_service_settings(&admin, change)
@@ -2703,16 +2712,17 @@ async fn a_listening_address_pinned_by_the_environment_is_read_only() {
     let mut addressing = (*app.public_url_runtime().addressing()).clone();
     addressing.bind.source = crate::public_url::ConfigValueSource::Environment;
     addressing.bind.pinned_by = Some(crate::network_bind::BindPin::Container);
-    app.install_public_url(
-        (*app.public_url_runtime().snapshot()).clone(),
-        addressing,
-    );
+    app.install_public_url((*app.public_url_runtime().snapshot()).clone(), addressing);
     for change in [bind_change(Some("0.0.0.0"), false), bind_change(None, true)] {
         let error = app
             .update_service_settings(&admin, change)
             .await
             .expect_err("pinned");
-        assert_eq!(error.validation_reason(), Some(network::BIND_ENV_PINNED), "{error}");
+        assert_eq!(
+            error.validation_reason(),
+            Some(network::BIND_ENV_PINNED),
+            "{error}"
+        );
     }
     let outcome = app
         .apply_initial_network_access(crate::network_bind::InitialNetworkAccess::OtherComputers)

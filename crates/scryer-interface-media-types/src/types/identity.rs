@@ -302,7 +302,9 @@ pub enum InitialNetworkAccess {
 impl InitialNetworkAccess {
     pub fn to_application(self) -> scryer_application::network_bind::InitialNetworkAccess {
         match self {
-            Self::ThisComputer => scryer_application::network_bind::InitialNetworkAccess::ThisComputer,
+            Self::ThisComputer => {
+                scryer_application::network_bind::InitialNetworkAccess::ThisComputer
+            }
             Self::OtherComputers => {
                 scryer_application::network_bind::InitialNetworkAccess::OtherComputers
             }
