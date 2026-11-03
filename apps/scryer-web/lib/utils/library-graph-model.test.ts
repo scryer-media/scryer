@@ -24,6 +24,8 @@ import {
   libraryGraphEdgeKindLabel,
   libraryGraphEdgeKindLabels,
   libraryGraphGroupName,
+  neighborReason,
+  neighborReasonLines,
   nodeSizesByTitleId,
   targetKeyMatchKeys,
   titleForTargetKey,
@@ -508,4 +510,64 @@ test("the table's catalog query carries no ids, so it cannot feed the graph", ()
     rows,
   );
   assert.equal(graph.nodes.length, 0);
+});
+
+function tag(
+  key: string,
+  category: string,
+  name: string,
+  extra: { confidence?: number; isSpoiler?: boolean } = {},
+) {
+  return {
+    key,
+    category,
+    name,
+    confidence: extra.confidence ?? null,
+    sources: [],
+    sourceTagKeys: [],
+    isAdult: false,
+    isSpoiler: extra.isSpoiler ?? false,
+  };
+}
+
+test("a neighbour's reason names its services and the genres and themes both titles share", () => {
+  const anchor = [
+    tag("canonical:genre:anime", "genre", "Anime"),
+    tag("canonical:genre:drama", "genre", "Drama"),
+    tag("canonical:theme:time-loop", "theme", "Time Loop"),
+    tag("canonical:theme:twist", "theme", "Twist", { isSpoiler: true }),
+    tag("canonical:content:violence", "content", "Violence"),
+  ];
+  const reason = neighborReason(
+    anchor,
+    {
+      sources: ["mal", "trakt", "mal", " ", "zz-service"],
+      canonicalTags: [
+        tag("canonical:genre:anime", "genre", "Anime"),
+        tag("canonical:genre:drama", "genre", "Drama", { confidence: 0.9 }),
+        tag("canonical:theme:time-loop", "theme", "Time Loop"),
+        tag("canonical:theme:twist", "theme", "Twist"),
+        tag("canonical:content:violence", "content", "Violence"),
+        tag("canonical:genre:comedy", "genre", "Comedy"),
+      ],
+    },
+    ["relation:recommendation", "relation:sequel"],
+  );
+  assert.deepEqual(reason, {
+    relations: ["relation:sequel"],
+    sources: ["MyAnimeList", "Trakt", "zz-service"],
+    // Themes first; the facet's own genre, spoilers, content tags and
+    // unshared tags explain nothing.
+    shared: ["Time Loop", "Drama"],
+  });
+  const lines = neighborReasonLines(reason, t);
+  assert.equal(lines.length, 3);
+  assert.equal(lines[1], "Recommended on MyAnimeList, Trakt, zz-service");
+  assert.equal(lines[2], "In common: Time Loop, Drama");
+});
+
+test("a plain recommendation with nothing shared has no reason lines", () => {
+  const reason = neighborReason(null, {}, ["relation:recommendation"]);
+  assert.deepEqual(reason, { relations: [], sources: [], shared: [] });
+  assert.deepEqual(neighborReasonLines(reason, t), []);
 });

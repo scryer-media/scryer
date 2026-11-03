@@ -3,6 +3,7 @@
 // sizes from a chosen metric, collapsed clusters above a size limit, and the
 // localized names of clusters and edge kinds.
 
+import type { CanonicalMediaTag } from "../types/canonical-tags.ts";
 import type { Facet, TitleRecord } from "../types/titles.ts";
 import {
   UNPLACED_CLUSTER_ID,
@@ -447,4 +448,121 @@ export function libraryGraphEdgeKindLabels(
   return Array.from(
     new Set(kinds.map((kind) => libraryGraphEdgeKindLabel(kind, t))),
   );
+}
+
+/** At most this many shared genres and themes explain one link. */
+export const NEIGHBOR_REASON_TERM_LIMIT = 4;
+
+/** Every title of the anime facet carries this genre, so it explains nothing. */
+const UNINFORMATIVE_TERM_KEYS = new Set(["canonical:genre:anime"]);
+
+const SOURCE_NAMES: Record<string, string> = {
+  anilist: "AniList",
+  anidb: "AniDB",
+  imdb: "IMDb",
+  kitsu: "Kitsu",
+  mal: "MyAnimeList",
+  simkl: "Simkl",
+  tmdb: "TMDB",
+  trakt: "Trakt",
+  tvdb: "TVDB",
+};
+
+/** Why a More Like This result sits next to the title it was found from. */
+export type NeighborReason = {
+  /** The relation edge kinds, other than a plain recommendation. */
+  relations: string[];
+  /** The services that recommend it, by display name. */
+  sources: string[];
+  /** Genre and theme names both titles carry, themes first. */
+  shared: string[];
+};
+
+type ReasonItem = {
+  sources?: readonly string[] | null;
+  canonicalTags?: readonly CanonicalMediaTag[] | null;
+};
+
+/** A source id's display name; an unknown id shows as given. */
+export function discoverySourceName(source: string): string {
+  const id = source.trim().toLowerCase();
+  return SOURCE_NAMES[id] ?? source.trim();
+}
+
+/**
+ * Why `item` is a neighbour of a title carrying `anchorTags`: how it is
+ * related, which services recommend it, and the genres and themes the two
+ * share. Spoiler tags never explain a link.
+ */
+export function neighborReason(
+  anchorTags: readonly CanonicalMediaTag[] | null | undefined,
+  item: ReasonItem,
+  kinds: readonly string[],
+): NeighborReason {
+  const anchorKeys = new Set(
+    (anchorTags ?? []).filter((tag) => !tag.isSpoiler).map((tag) => tag.key),
+  );
+  const rank = (tag: CanonicalMediaTag) => (tag.category === "theme" ? 0 : 1);
+  const shared = (item.canonicalTags ?? [])
+    .filter(
+      (tag) =>
+        !tag.isSpoiler &&
+        (tag.category === "theme" || tag.category === "genre") &&
+        anchorKeys.has(tag.key) &&
+        !UNINFORMATIVE_TERM_KEYS.has(tag.key),
+    )
+    .sort(
+      (a, b) =>
+        rank(a) - rank(b) ||
+        (b.confidence ?? 0) - (a.confidence ?? 0) ||
+        a.name.localeCompare(b.name),
+    );
+  const names: string[] = [];
+  for (const tag of shared) {
+    const name = tag.name.trim();
+    if (name && !names.includes(name)) {
+      names.push(name);
+    }
+    if (names.length >= NEIGHBOR_REASON_TERM_LIMIT) {
+      break;
+    }
+  }
+  return {
+    relations: kinds.filter(
+      (kind) => kind.trim().split(":")[1] !== "recommendation",
+    ),
+    sources: Array.from(
+      new Set(
+        (item.sources ?? [])
+          .filter((source) => source.trim() !== "")
+          .map(discoverySourceName),
+      ),
+    ),
+    shared: names,
+  };
+}
+
+/** A neighbour reason as tooltip lines in the viewer's language. */
+export function neighborReasonLines(
+  reason: NeighborReason,
+  t: Translate,
+): string[] {
+  const lines: string[] = [];
+  const relations = libraryGraphEdgeKindLabels(reason.relations, t);
+  if (relations.length > 0) {
+    lines.push(relations.join(", "));
+  }
+  if (reason.sources.length > 0) {
+    lines.push(
+      t("libraryGraph.reason.recommendedBy", {
+        sources: reason.sources.join(", "),
+      }),
+    );
+  }
+  if (reason.shared.length > 0) {
+    lines.push(
+      t("libraryGraph.reason.shares", { terms: reason.shared.join(", ") }),
+    );
+  }
+  return lines;
 }

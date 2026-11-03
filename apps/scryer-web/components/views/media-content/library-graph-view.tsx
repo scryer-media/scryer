@@ -2,7 +2,7 @@ import * as React from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { useClient } from "urql";
-import { Maximize2, Minimize2, Sparkles, Undo2, X } from "lucide-react";
+import { Maximize2, Minimize2, Undo2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -25,6 +25,9 @@ import {
   type LibraryGraphResult,
 } from "@/lib/types/library-graph";
 import {
+  edgePairKey,
+  egoGraphState,
+  egoRingGroups,
   toggleClusterExpanded,
   type GraphNode,
 } from "@/lib/utils/library-graph-merge";
@@ -36,19 +39,23 @@ import {
   joinLibraryGraphToTitles,
   libraryGraphEdgeKindLabels,
   libraryGraphGroupName,
+  neighborReason,
+  neighborReasonLines,
   nodeSizesByTitleId,
   titleIndexByMatchKey,
   titleMatchKeys,
   titleTargetKey,
-  type LibraryGraphJoin,
   type LibraryGraphSizeMetric,
+  type NeighborReason,
 } from "@/lib/utils/library-graph-model";
 import {
   convexHull,
   createLayout,
+  egoLayout,
   layoutLoopDecision,
   layoutPositions,
   stepLayout,
+  tweenPositions,
   type LayoutPoint,
   type LayoutState,
 } from "@/lib/utils/library-graph-layout";
@@ -59,14 +66,17 @@ import {
   emptyTraversal,
   expandTraversal,
   firstNodeInCluster,
+  ghostSubjectKey,
   invalidateExpansions,
   isCurrentExpansion,
   isGhostSubjectKey,
   isLibraryItem,
   itemMatchKeys,
+  moreLikeThisEdgeKinds,
   neighborTargetKey,
   nextNodeInCluster,
   ownedNodeIndex,
+  ownedSubjectForItem,
   stampGhostTitle,
   uncoveredKeyboardGroups,
   seedGhostPositions,
@@ -94,6 +104,20 @@ const HULL_PADDING_PX = 18;
 /** How many neighbours one expansion asks for. */
 const NEIGHBOR_LIMIT = 24;
 const GHOST_NODE_SIZE = LIBRARY_GRAPH_MIN_NODE_SIZE + 1;
+/** How long nodes take to move between the overview and a focused node. */
+const FOCUS_TWEEN_MS = 450;
+/** The outer ring of a focused node's neighbours, as a share of the frame. */
+const FOCUS_OUTER_RADIUS_SHARE = 0.78;
+/** The least on-screen gap between neighbours on one ring. */
+const FOCUS_RING_SPACING_PX = 40;
+/** Room left beside the outer ring for its labels. */
+const FOCUS_LABEL_ROOM_PX = 130;
+const FOCUS_MIN_OUTER_RADIUS_PX = 90;
+const FOCUS_CENTER_SIZE = 16;
+const FOCUS_NEIGHBOR_MIN_SIZE = 10;
+const FOCUS_NEIGHBOR_MAX_SIZE = 14;
+/** Focused-view labels longer than this are cut short. */
+const FOCUS_LABEL_MAX_CHARS = 28;
 
 const METRIC_LABEL_KEYS: Record<LibraryGraphSizeMetric, string> = {
   ratingEvidence: "libraryGraph.sizeBy.ratingEvidence",
@@ -151,6 +175,13 @@ function clusterColor(clusterId: number, order: readonly number[]): string {
   return CLUSTER_COLORS[((index % count) + count) % count];
 }
 
+// The camera at rest: unzoomed and centred on the layout's origin, where
+// cluster rings and focused views are centred.
+function restCamera(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
+  const origin = sigma.graphToFramedGraph({ x: 0, y: 0 });
+  return { x: origin.x, y: origin.y, ratio: 1, angle: 0 };
+}
+
 function withAlpha(hex: string, alpha: number): string {
   const value = Number.parseInt(hex.slice(1), 16);
   return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
@@ -177,19 +208,6 @@ export type LibraryGraphViewProps = {
   /** Refreshes the catalog listing after a title is added or requested. */
   onCatalogChanged?: () => Promise<void> | void;
 };
-
-// The local title a node picked in the graph stands for, if any.
-function pickedTitleId(
-  key: string,
-  join: LibraryGraphJoin | null,
-  traversal: TraversalState<DiscoveryItem>,
-): string | null {
-  const item = traversal.ghostItems.get(key);
-  if (item) {
-    return item.resolvedTitleId?.trim() || null;
-  }
-  return join?.titleBySubjectKey.get(key)?.id ?? null;
-}
 
 // The catalog listing's title an explored item names: the title Scryer
 // resolved it to, else the first title one of its keys names.
@@ -244,6 +262,14 @@ export default function LibraryGraphView({
   const graphRef = React.useRef<LibraryGraphStore | null>(null);
   const layoutRef = React.useRef<LayoutState | null>(null);
   const frameRef = React.useRef<number | null>(null);
+  const tweenFrameRef = React.useRef<number | null>(null);
+  // The overview frame's half-width in layout units; focused rings share it.
+  const extentRef = React.useRef(220);
+  // The focused node the camera last came to rest for; undefined before the
+  // first drawing.
+  const cameraCenterRef = React.useRef<string | null | undefined>(undefined);
+  // Bumped when a focused view's frame changes size, so its rings refit.
+  const [focusFrameVersion, setFocusFrameVersion] = React.useState(0);
   // Restarts the layout loop after it paused for a hidden container.
   const resumeLayoutRef = React.useRef<() => void>(() => {});
   const positionsRef = React.useRef(new Map<string, LayoutPoint>());
@@ -255,6 +281,8 @@ export default function LibraryGraphView({
   // rests on; the overlay reads both while it draws.
   const selectedKeyRef = React.useRef<string | null>(null);
   const focusedKeyRef = React.useRef<string | null>(null);
+  // The node a focused view is centred on, while the view is focused.
+  const focusCenterRef = React.useRef<string | null>(null);
   const activateNodeRef = React.useRef<(key: string) => void>(() => {});
   const ownedIndexRef = React.useRef<OwnedNodeIndex>(ownedNodeIndex([]));
   const expandTokenRef = React.useRef(0);
@@ -299,6 +327,14 @@ export default function LibraryGraphView({
   >(() => emptyTraversal<DiscoveryItem>());
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
   const [focusedKey, setFocusedKey] = React.useState<string | null>(null);
+  // Why each explored result sits next to the title it was found from, by
+  // the pair of nodes their link joins.
+  const [reasonsByPair, setReasonsByPair] = React.useState<
+    ReadonlyMap<string, NeighborReason>
+  >(() => new Map());
+  // Replies already read this session, by facet and target key, so going
+  // back to a title does not ask again.
+  const neighborCacheRef = React.useRef(new Map<string, DiscoveryItem[]>());
   const [expandingKey, setExpandingKey] = React.useState<string | null>(null);
   const [expandNotice, setExpandNotice] = React.useState<ExpandNotice | null>(
     null,
@@ -368,6 +404,7 @@ export default function LibraryGraphView({
     // Cluster ids belong to one graph.
     setExpandedClusterIds(new Set());
     setTraversal(emptyTraversal<DiscoveryItem>());
+    setReasonsByPair(new Map());
     setSelectedKey(null);
     setFocusedKey(null);
     setExpandingKey(null);
@@ -377,6 +414,8 @@ export default function LibraryGraphView({
   // focus, and retires any "More like this" reply still on its way.
   const resetExploration = React.useCallback(() => {
     invalidateExpansions(expandTokenRef);
+    neighborCacheRef.current.clear();
+    setReasonsByPair(new Map());
     setExpandedClusterIds(new Set());
     setTraversal(emptyTraversal<DiscoveryItem>());
     setSelectedKey(null);
@@ -488,25 +527,23 @@ export default function LibraryGraphView({
   ) {
     setFocusedKey(null);
   }
-  // The side panel moving to another title, or closing, ends a pick made in
-  // the graph unless it is that same title.
-  const [seenSelectedTitleId, setSeenSelectedTitleId] =
-    React.useState(selectedTitleId);
-  if (seenSelectedTitleId !== selectedTitleId) {
-    setSeenSelectedTitleId(selectedTitleId);
-    if (
-      selectedKey !== null &&
-      selectedTitleId !== pickedTitleId(selectedKey, join, traversal)
-    ) {
-      setSelectedKey(null);
-    }
-  }
   const explored = React.useMemo(
     () => (join ? traversalGraphState(join.graph, traversal) : null),
     [join, traversal],
   );
+  const exploredNodesByKey = React.useMemo(
+    () =>
+      new Map((explored?.nodes ?? []).map((node) => [node.subjectKey, node])),
+    [explored],
+  );
+  // The picked node, while it is in the graph, is the one the view focuses
+  // on: only it and what it links to are drawn.
+  const focusCenterKey =
+    selectedKey !== null && exploredNodesByKey.has(selectedKey)
+      ? selectedKey
+      : null;
   // Collapsing follows the library's own size; explored ghosts never tip it.
-  const displayed = React.useMemo(
+  const overview = React.useMemo(
     () =>
       explored && join
         ? displayedLibraryGraph(
@@ -518,15 +555,23 @@ export default function LibraryGraphView({
         : null,
     [expandedClusterIds, explored, join],
   );
-  // Every cluster of the whole graph, before filtering, so layout centres hold
-  // still when a filter empties a cluster.
-  const allClusterIds = React.useMemo(
-    () => [
-      UNPLACED_CLUSTER_ID,
-      ...(result?.clusters ?? []).map((cluster) => cluster.id),
-    ],
-    [result],
+  const displayed = React.useMemo(
+    () =>
+      explored && focusCenterKey !== null
+        ? (egoGraphState(explored, focusCenterKey) ?? overview)
+        : overview,
+    [explored, focusCenterKey, overview],
   );
+  // Every cluster of the whole graph, before filtering, so layout centres hold
+  // still when a filter empties a cluster. The unplaced group takes a slot on
+  // the ring only when the graph has unplaced titles, so a single
+  // neighbourhood sits on the origin.
+  const allClusterIds = React.useMemo(() => {
+    const ids = (result?.clusters ?? []).map((cluster) => cluster.id);
+    return result?.nodes.some((node) => node.clusterId === UNPLACED_CLUSTER_ID)
+      ? [UNPLACED_CLUSTER_ID, ...ids]
+      : ids;
+  }, [result]);
   const clusterOrder = React.useMemo(
     () =>
       (join?.graph.clusters ?? [])
@@ -597,10 +642,11 @@ export default function LibraryGraphView({
     () =>
       (displayed?.nodes ?? []).map((node) => ({
         key: node.subjectKey,
-        clusterId: node.clusterId,
+        // A focused view's arrow keys cycle through everything it shows.
+        clusterId: focusCenterKey !== null ? 0 : node.clusterId,
         label: nodeLabel(node),
       })),
-    [displayed, nodeLabel],
+    [displayed, focusCenterKey, nodeLabel],
   );
 
   const drawOverlay = React.useCallback(() => {
@@ -655,10 +701,12 @@ export default function LibraryGraphView({
     // Cluster hulls, padded by stroking the hull with a wide round pen.
     context.lineJoin = "round";
     context.lineCap = "round";
+    const focusCenter = focusCenterRef.current;
     for (const group of groupsRef.current) {
       const label = hullLabelRefs.current.get(group.id);
       const points = pointsByCluster.get(group.id);
-      if (!points || points.length === 0) {
+      // A focused view draws no cluster hulls.
+      if (focusCenter !== null || !points || points.length === 0) {
         if (label) {
           label.style.visibility = "hidden";
         }
@@ -801,6 +849,110 @@ export default function LibraryGraphView({
     });
     context.restore();
 
+    // A focused view names the nodes it shows, each label pointing away
+    // from the centre so the ring stays clear. Labels are placed centre
+    // first, then the keyboard-focused node, then outward; one that would
+    // overlap a placed label is left off, and the hover card names it.
+    const centerPoint =
+      focusCenter !== null ? viewportByNode.get(focusCenter) : undefined;
+    if (centerPoint) {
+      context.save();
+      context.textBaseline = "middle";
+      context.lineJoin = "round";
+      context.lineWidth = 3;
+      context.strokeStyle = readCssColor(canvas, "--scry-surfD", "#0b0e15");
+      context.fillStyle = readCssColor(canvas, "--scry-ink2", "#e6e8ef");
+      const keyboardKey = focusedKeyRef.current;
+      const order: string[] = [];
+      graph.forEachNode((key) => {
+        if (viewportByNode.has(key)) {
+          order.push(key);
+        }
+      });
+      const rank = (key: string) =>
+        key === focusCenter ? 0 : key === keyboardKey ? 1 : 2;
+      const distance = (key: string) => {
+        const point = viewportByNode.get(key);
+        return point
+          ? Math.hypot(point.x - centerPoint.x, point.y - centerPoint.y)
+          : 0;
+      };
+      order.sort(
+        (a, b) =>
+          rank(a) - rank(b) ||
+          distance(a) - distance(b) ||
+          (a < b ? -1 : a > b ? 1 : 0),
+      );
+      const placed: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+      }[] = [];
+      for (const key of order) {
+        const point = viewportByNode.get(key);
+        const raw = graph.getNodeAttribute(key, "label");
+        if (!point || !raw) {
+          continue;
+        }
+        const text =
+          raw.length > FOCUS_LABEL_MAX_CHARS
+            ? `${raw.slice(0, FOCUS_LABEL_MAX_CHARS - 1).trimEnd()}\u2026`
+            : raw;
+        const isCenter = key === focusCenter;
+        context.font = isCenter
+          ? "600 13px system-ui, sans-serif"
+          : "500 11px system-ui, sans-serif";
+        const lineHeight = isCenter ? 15 : 13;
+        const textWidth = context.measureText(text).width;
+        const radius = sigma.scaleSize(
+          graph.getNodeAttribute(key, "size") as number,
+        );
+        const dx = point.x - centerPoint.x;
+        const dy = point.y - centerPoint.y;
+        let x = point.x;
+        let y = point.y;
+        let left: number;
+        if (isCenter || Math.abs(dx) < radius) {
+          // The centre, and nodes straight above or below it, carry their
+          // label under (or over) them.
+          context.textAlign = "center";
+          y += (dy < 0 ? -1 : 1) * (radius + 10);
+          left = x - textWidth / 2;
+        } else {
+          context.textAlign = dx > 0 ? "left" : "right";
+          x += (dx > 0 ? 1 : -1) * (radius + 5);
+          left = dx > 0 ? x : x - textWidth;
+        }
+        const box = {
+          left: left - 2,
+          top: y - lineHeight / 2,
+          right: left + textWidth + 2,
+          bottom: y + lineHeight / 2,
+        };
+        if (
+          !isCenter &&
+          (box.left < 0 ||
+            box.right > width ||
+            box.top < 0 ||
+            box.bottom > height ||
+            placed.some(
+              (other) =>
+                box.left < other.right &&
+                box.right > other.left &&
+                box.top < other.bottom &&
+                box.bottom > other.top,
+            ))
+        ) {
+          continue;
+        }
+        placed.push(box);
+        context.strokeText(text, x, y);
+        context.fillText(text, x, y);
+      }
+      context.restore();
+    }
+
     // The keyboard focus ring.
     const focused = focusedKeyRef.current;
     const focusPoint = focused ? viewportByNode.get(focused) : undefined;
@@ -883,6 +1035,9 @@ export default function LibraryGraphView({
       sigma.resize();
       sigma.refresh();
       resumeLayoutRef.current();
+      if (focusCenterRef.current !== null) {
+        setFocusFrameVersion((version) => version + 1);
+      }
     });
     resizeObserver.observe(container);
 
@@ -894,13 +1049,19 @@ export default function LibraryGraphView({
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
       }
+      if (tweenFrameRef.current !== null) {
+        window.cancelAnimationFrame(tweenFrameRef.current);
+        tweenFrameRef.current = null;
+      }
       sigma.kill();
       sigmaRef.current = null;
       graphRef.current = null;
     };
   }, [drawOverlay]);
 
-  // Sync the drawn graph and let the layout settle from the last positions.
+  // Sync the drawn graph. The overview lets its force layout settle from the
+  // last positions; a focused view sets the focused node's neighbours on
+  // rings round it. Either way nodes already drawn glide to their new place.
   React.useEffect(() => {
     const sigma = sigmaRef.current;
     const graph = graphRef.current;
@@ -908,6 +1069,8 @@ export default function LibraryGraphView({
       return;
     }
     titlesByIdRef.current = titlesById;
+    focusCenterRef.current = focusCenterKey;
+    const focusing = focusCenterKey !== null;
     const sizes = nodeSizesByTitleId(Array.from(titlesById.values()), metric);
     const mutedEdge = readCssColor(
       sigma.getContainer(),
@@ -915,6 +1078,11 @@ export default function LibraryGraphView({
       "#7a8499",
     );
 
+    // Where each drawn node is now, so it can glide from there.
+    const current = new Map<string, LayoutPoint>();
+    graph.forEachNode((key, attributes) => {
+      current.set(key, { x: attributes.x, y: attributes.y });
+    });
     const keep = new Set(displayed.nodes.map((node) => node.subjectKey));
     graph.forEachNode((key) => {
       if (!keep.has(key)) {
@@ -922,22 +1090,85 @@ export default function LibraryGraphView({
       }
     });
     graph.clearEdges();
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    if (tweenFrameRef.current !== null) {
+      window.cancelAnimationFrame(tweenFrameRef.current);
+      tweenFrameRef.current = null;
+    }
 
-    const layout = createLayout(
-      displayed.nodes.map((node) => ({
-        key: node.subjectKey,
-        clusterId: node.clusterId,
-      })),
-      displayed.edges,
-      // New ghosts start beside the node that reached them, so exploring
-      // settles the layout rather than restarting it.
-      seedGhostPositions(positionsRef.current, traversal.expansions),
-      allClusterIds,
-    );
-    const start = layoutPositions(layout);
+    let layout: LayoutState | null = null;
+    let targets: Map<string, LayoutPoint>;
+    if (focusCenterKey !== null) {
+      // The rings share the overview's frame, so nodes glide in one space.
+      // They are sized in screen pixels for the camera at rest on the
+      // origin, leaving room beside the outer ring for labels.
+      const rest = restCamera(sigma);
+      const unit = 1000;
+      const origin = sigma.graphToViewport(
+        { x: 0, y: 0 },
+        { cameraState: rest },
+      );
+      const along = sigma.graphToViewport(
+        { x: unit, y: 0 },
+        { cameraState: rest },
+      );
+      const pixelsPerUnit = Math.max(1e-6, Math.abs(along.x - origin.x) / unit);
+      const { width, height } = sigma.getDimensions();
+      const outerPixels = Math.max(
+        FOCUS_MIN_OUTER_RADIUS_PX,
+        Math.min(
+          // A narrow canvas gives up label room before ring room; labels
+          // that do not fit are left off.
+          Math.max(width / 2 - FOCUS_LABEL_ROOM_PX, (width / 2) * 0.8),
+          (height / 2) * FOCUS_OUTER_RADIUS_SHARE,
+        ),
+      );
+      targets = egoLayout(
+        focusCenterKey,
+        egoRingGroups(displayed, focusCenterKey),
+        outerPixels / pixelsPerUnit,
+        FOCUS_RING_SPACING_PX / pixelsPerUnit,
+      );
+    } else {
+      layout = createLayout(
+        displayed.nodes.map((node) => ({
+          key: node.subjectKey,
+          clusterId: node.clusterId,
+        })),
+        displayed.edges,
+        // New ghosts start beside the node that reached them, so exploring
+        // settles the layout rather than restarting it.
+        seedGhostPositions(positionsRef.current, traversal.expansions),
+        allClusterIds,
+      );
+      targets = layoutPositions(layout);
+      // A fixed frame around the cluster ring keeps the camera still while
+      // the layout moves nodes.
+      let extent = 0;
+      for (const center of layout.centers.values()) {
+        extent = Math.max(extent, Math.abs(center.x), Math.abs(center.y));
+      }
+      extent += 220;
+      extentRef.current = extent;
+      sigma.setCustomBBox({ x: [-extent, extent], y: [-extent, extent] });
+      positionsRef.current = targets;
+    }
+    // A node new to the drawing starts where it goes, or in a focused view
+    // at the focused node, so its neighbours fan out from it.
+    const fanFrom =
+      focusCenterKey !== null
+        ? (current.get(focusCenterKey) ?? targets.get(focusCenterKey))
+        : undefined;
+    const from = new Map<string, LayoutPoint>();
+    for (const [key, target] of targets) {
+      from.set(key, current.get(key) ?? fanFrom ?? target);
+    }
 
     for (const node of displayed.nodes) {
-      const position = start.get(node.subjectKey) ?? { x: 0, y: 0 };
+      const position = from.get(node.subjectKey) ?? { x: 0, y: 0 };
       const color = clusterColor(node.clusterId, clusterOrder);
       let attributes: NodeAttributes;
       if (node.collapsedClusterId !== undefined) {
@@ -955,11 +1186,17 @@ export default function LibraryGraphView({
       } else if (node.ghost) {
         const item = traversal.ghostItems.get(node.subjectKey);
         const ghostColor = withAlpha(color, 0.35);
+        const size =
+          node.subjectKey === focusCenterKey
+            ? FOCUS_CENTER_SIZE
+            : focusing
+              ? FOCUS_NEIGHBOR_MIN_SIZE
+              : GHOST_NODE_SIZE;
         attributes = {
           ...position,
-          size: GHOST_NODE_SIZE,
+          size,
           color: ghostColor,
-          baseSize: GHOST_NODE_SIZE,
+          baseSize: size,
           baseColor: ghostColor,
           label: nodeLabel(node),
           posterUrl: selectPosterVariantUrl(item?.posterUrl, "w70") ?? null,
@@ -968,7 +1205,16 @@ export default function LibraryGraphView({
         };
       } else {
         const title = join.titleBySubjectKey.get(node.subjectKey);
-        const size = title ? (sizes.get(title.id) ?? 4) : 4;
+        const metricSize = title ? (sizes.get(title.id) ?? 4) : 4;
+        const size =
+          node.subjectKey === focusCenterKey
+            ? FOCUS_CENTER_SIZE
+            : focusing
+              ? Math.min(
+                  FOCUS_NEIGHBOR_MAX_SIZE,
+                  Math.max(FOCUS_NEIGHBOR_MIN_SIZE, metricSize),
+                )
+              : metricSize;
         attributes = {
           ...position,
           size,
@@ -994,10 +1240,13 @@ export default function LibraryGraphView({
       const toGhost =
         graph.getNodeAttribute(edge.from, "ghost") === true ||
         graph.getNodeAttribute(edge.to, "ghost") === true;
-      const alpha =
-        (0.18 + Math.min(1, edge.weight) * 0.4) * (toGhost ? 0.6 : 1);
+      const weight = Math.min(1, Math.max(0, edge.weight));
+      // A focused view draws few links, so they can be bolder.
+      const alpha = focusing
+        ? (0.3 + weight * 0.4) * (toGhost ? 0.7 : 1)
+        : (0.18 + weight * 0.4) * (toGhost ? 0.6 : 1);
       const attributes: EdgeAttributes = {
-        size: 0.4 + Math.min(1, Math.max(0, edge.weight)) * 2.2,
+        size: 0.4 + weight * 2.2,
         color: mutedEdge.startsWith("#")
           ? withAlpha(mutedEdge, alpha)
           : mutedEdge,
@@ -1006,37 +1255,24 @@ export default function LibraryGraphView({
       graph.addUndirectedEdge(edge.from, edge.to, attributes);
     }
 
-    // A fixed frame around the cluster ring keeps the camera still while the
-    // layout moves nodes.
-    let extent = 0;
-    for (const center of layout.centers.values()) {
-      extent = Math.max(extent, Math.abs(center.x), Math.abs(center.y));
-    }
-    extent += 220;
-    sigma.setCustomBBox({ x: [-extent, extent], y: [-extent, extent] });
-
     layoutRef.current = layout;
-    if (frameRef.current !== null) {
-      window.cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
     const container = sigma.getContainer();
     const tick = () => {
       frameRef.current = null;
-      const current = layoutRef.current;
-      if (current !== layout) {
+      const running = layoutRef.current;
+      if (!layout || running !== layout) {
         return;
       }
       const decision = layoutLoopDecision(
         { width: container.offsetWidth, height: container.offsetHeight },
-        current,
+        running,
       );
       if (decision !== "step") {
         // Paused while hidden: the next non-zero size resumes it.
         return;
       }
-      stepLayout(current, LAYOUT_STEPS_PER_FRAME);
-      const positions = layoutPositions(current);
+      stepLayout(running, LAYOUT_STEPS_PER_FRAME);
+      const positions = layoutPositions(running);
       positionsRef.current = positions;
       graph.updateEachNodeAttributes((key, attributes) => {
         const point = positions.get(key);
@@ -1045,11 +1281,49 @@ export default function LibraryGraphView({
       frameRef.current = window.requestAnimationFrame(tick);
     };
     resumeLayoutRef.current = () => {
-      if (frameRef.current === null && layoutRef.current === layout) {
+      if (
+        layout &&
+        frameRef.current === null &&
+        tweenFrameRef.current === null &&
+        layoutRef.current === layout
+      ) {
         frameRef.current = window.requestAnimationFrame(tick);
       }
     };
-    positionsRef.current = start;
+
+    const moving = Array.from(targets).some(([key, target]) => {
+      const start = from.get(key);
+      return (
+        start !== undefined && (start.x !== target.x || start.y !== target.y)
+      );
+    });
+    if (moving) {
+      let started: number | null = null;
+      const glide = (now: number) => {
+        tweenFrameRef.current = null;
+        started ??= now;
+        const progress = Math.min(1, (now - started) / FOCUS_TWEEN_MS);
+        const positions = tweenPositions(from, targets, progress);
+        graph.updateEachNodeAttributes((key, attributes) => {
+          const point = positions.get(key);
+          return point ? { ...attributes, x: point.x, y: point.y } : attributes;
+        });
+        if (progress < 1) {
+          tweenFrameRef.current = window.requestAnimationFrame(glide);
+        } else {
+          resumeLayoutRef.current();
+        }
+      };
+      tweenFrameRef.current = window.requestAnimationFrame(glide);
+    }
+    // Entering, moving or leaving focus brings the camera back to rest on
+    // the frame, where the rings fit.
+    if (cameraCenterRef.current !== focusCenterKey) {
+      cameraCenterRef.current = focusCenterKey;
+      void sigma
+        .getCamera()
+        .animate(restCamera(sigma), { duration: FOCUS_TWEEN_MS });
+    }
     applySelection();
     sigma.refresh();
     resumeLayoutRef.current();
@@ -1058,6 +1332,8 @@ export default function LibraryGraphView({
     applySelection,
     clusterOrder,
     displayed,
+    focusCenterKey,
+    focusFrameVersion,
     join,
     metric,
     nodeLabel,
@@ -1119,9 +1395,10 @@ export default function LibraryGraphView({
   }, []);
 
   const resetCamera = React.useCallback(() => {
-    void sigmaRef.current
-      ?.getCamera()
-      .animate({ x: 0.5, y: 0.5, ratio: 1, angle: 0 }, { duration: 300 });
+    const sigma = sigmaRef.current;
+    if (sigma) {
+      void sigma.getCamera().animate(restCamera(sigma), { duration: 300 });
+    }
   }, []);
 
   // The node picked in the graph, while it is still drawn.
@@ -1148,33 +1425,6 @@ export default function LibraryGraphView({
     focusedKeyRef.current = shownFocusedKey;
     sigmaRef.current?.scheduleRender();
   }, [shownFocusedKey]);
-
-  const activateNode = React.useCallback((key: string) => {
-    const graph = graphRef.current;
-    if (!graph || !graph.hasNode(key)) {
-      return;
-    }
-    const attributes = graph.getNodeAttributes(key);
-    if (attributes.collapsedClusterId !== undefined) {
-      const clusterId = attributes.collapsedClusterId;
-      setExpandedClusterIds((current) =>
-        toggleClusterExpanded(current, clusterId),
-      );
-      return;
-    }
-    setSelectedKey(key);
-    setFocusedKey(key);
-    setExpandNotice(null);
-    const title = attributes.titleId
-      ? titlesByIdRef.current.get(attributes.titleId)
-      : undefined;
-    if (title) {
-      onSelectTitleRef.current(title);
-    }
-  }, []);
-  React.useEffect(() => {
-    activateNodeRef.current = activateNode;
-  }, [activateNode]);
 
   // What a node's neighbours are asked for by: an owned node's graph target
   // key in the graph's facet, or an explored title's first key in the
@@ -1213,30 +1463,54 @@ export default function LibraryGraphView({
         return;
       }
       const label = nodeLabel(node);
+      const anchorTags = node.ghost
+        ? traversal.ghostItems.get(key)?.canonicalTags
+        : join?.titleBySubjectKey.get(key)?.canonicalTags;
       const token = beginExpansion(expandTokenRef);
       setExpandingKey(key);
       setExpandNotice(null);
       try {
-        const { data, error } = await client
-          .query<NeighborsData>(
-            discoveryNeighborsQuery,
-            { input: { ...anchor, limit: NEIGHBOR_LIMIT } },
-            // A title added or requested since an earlier read must not come
-            // back from the cache as still addable.
-            { requestPolicy: "network-only" },
-          )
-          .toPromise();
-        if (error) {
-          throw error;
+        const cacheKey = `${anchor.facet}|${anchor.targetKey}`;
+        let items = neighborCacheRef.current.get(cacheKey);
+        if (!items) {
+          const { data, error } = await client
+            .query<NeighborsData>(
+              discoveryNeighborsQuery,
+              { input: { ...anchor, limit: NEIGHBOR_LIMIT } },
+              // A title added or requested since an earlier read must not
+              // come back from the cache as still addable.
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+          if (error) {
+            throw error;
+          }
+          items = data?.discoveryNeighbors ?? [];
+          neighborCacheRef.current.set(cacheKey, items);
         }
         if (!isCurrentExpansion(expandTokenRef, token)) {
           return;
         }
-        const items = data?.discoveryNeighbors ?? [];
         if (items.length === 0) {
           setExpandNotice({ key, kind: "empty" });
           return;
         }
+        const found = items;
+        setReasonsByPair((current) => {
+          const next = new Map(current);
+          for (const item of found) {
+            const target =
+              ownedSubjectForItem(item, ownedIndexRef.current) ??
+              ghostSubjectKey(item);
+            if (target && target !== key) {
+              next.set(
+                edgePairKey(key, target),
+                neighborReason(anchorTags, item, moreLikeThisEdgeKinds(item)),
+              );
+            }
+          }
+          return next;
+        });
         setAnchorLabels((current) =>
           current.get(key) === label
             ? current
@@ -1255,8 +1529,74 @@ export default function LibraryGraphView({
         }
       }
     },
-    [client, neighborAnchor, nodeLabel, setGlobalStatus, t],
+    [
+      client,
+      join,
+      neighborAnchor,
+      nodeLabel,
+      setGlobalStatus,
+      t,
+      traversal.ghostItems,
+    ],
   );
+
+  // Leaves the focused view for the library overview, dropping what was
+  // explored from it.
+  const exitFocus = React.useCallback(() => {
+    invalidateExpansions(expandTokenRef);
+    setTraversal(emptyTraversal<DiscoveryItem>());
+    setReasonsByPair(new Map());
+    setSelectedKey(null);
+    setFocusedKey(null);
+    setExpandingKey(null);
+    setExpandNotice(null);
+  }, []);
+
+  // Picking a node focuses the view on it and brings in more like it. The
+  // trail follows the focus: a node already on it cuts the trail back to it,
+  // and any other node is explored from.
+  const activateNode = React.useCallback(
+    (key: string) => {
+      const graph = graphRef.current;
+      if (!graph || !graph.hasNode(key)) {
+        return;
+      }
+      const attributes = graph.getNodeAttributes(key);
+      if (attributes.collapsedClusterId !== undefined) {
+        const clusterId = attributes.collapsedClusterId;
+        setExpandedClusterIds((current) =>
+          toggleClusterExpanded(current, clusterId),
+        );
+        return;
+      }
+      invalidateExpansions(expandTokenRef);
+      setExpandingKey(null);
+      setExpandNotice(null);
+      setSelectedKey(key);
+      setFocusedKey(key);
+      const title = attributes.titleId
+        ? titlesByIdRef.current.get(attributes.titleId)
+        : undefined;
+      if (title) {
+        onSelectTitleRef.current(title);
+      }
+      const position = traversal.expansions.findIndex(
+        (expansion) => expansion.anchor === key,
+      );
+      if (position >= 0) {
+        setTraversal((current) => collapseTraversalToCrumb(current, position));
+        return;
+      }
+      const node = exploredNodesByKey.get(key);
+      if (node) {
+        void expandNode(node);
+      }
+    },
+    [expandNode, exploredNodesByKey, traversal.expansions],
+  );
+  React.useEffect(() => {
+    activateNodeRef.current = activateNode;
+  }, [activateNode]);
 
   const actedGhostKeyRef = React.useRef<string | null>(null);
   const onCatalogChangedRef = React.useRef(onCatalogChanged);
@@ -1271,17 +1611,30 @@ export default function LibraryGraphView({
           stampGhostTitle(current, acted, addedTitleId),
         );
       }
+      // Replies read before the change may offer the title as addable.
+      neighborCacheRef.current.clear();
       // The listing catches up in the background; the dialog does not wait.
       void onCatalogChangedRef.current?.();
     };
   }, []);
 
-  const collapseToCrumb = React.useCallback((index: number) => {
-    invalidateExpansions(expandTokenRef);
-    setExpandingKey(null);
-    setExpandNotice(null);
-    setTraversal((current) => collapseTraversalToCrumb(current, index));
-  }, []);
+  // A crumb focuses its node again, cutting the trail back to it.
+  const collapseToCrumb = React.useCallback(
+    (index: number) => {
+      const anchor = traversal.expansions[index]?.anchor;
+      if (!anchor) {
+        exitFocus();
+        return;
+      }
+      invalidateExpansions(expandTokenRef);
+      setExpandingKey(null);
+      setExpandNotice(null);
+      setTraversal((current) => collapseTraversalToCrumb(current, index));
+      setSelectedKey(anchor);
+      setFocusedKey(anchor);
+    },
+    [exitFocus, traversal.expansions],
+  );
 
   const handleCanvasKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1311,10 +1664,12 @@ export default function LibraryGraphView({
           return;
         }
         case "Escape": {
-          if (shownFocusedKey || selectedNode) {
+          if (selectedNode) {
+            event.preventDefault();
+            exitFocus();
+          } else if (shownFocusedKey) {
             event.preventDefault();
             setFocusedKey(null);
-            setSelectedKey(null);
           }
           return;
         }
@@ -1322,7 +1677,7 @@ export default function LibraryGraphView({
           return;
       }
     },
-    [activateNode, keyboardNodes, selectedNode, shownFocusedKey],
+    [activateNode, exitFocus, keyboardNodes, selectedNode, shownFocusedKey],
   );
 
   // A hovered node or edge that a filter removed has no tooltip.
@@ -1337,10 +1692,28 @@ export default function LibraryGraphView({
       : displayedKeys.has(hover.from) && displayedKeys.has(hover.to))
       ? hover
       : null;
-  const hoverLines =
+  // Why a hovered result is a neighbour: from its link, or for a node in a
+  // focused view, from its link to the focused node.
+  const hoverReasonPair =
     shownHover?.kind === "edge"
-      ? libraryGraphEdgeKindLabels(shownHover.lines, t)
-      : shownHover?.lines;
+      ? edgePairKey(shownHover.from, shownHover.to)
+      : shownHover?.kind === "node" &&
+          focusCenterKey !== null &&
+          shownHover.key !== focusCenterKey
+        ? edgePairKey(focusCenterKey, shownHover.key)
+        : null;
+  const hoverReason =
+    hoverReasonPair !== null ? reasonsByPair.get(hoverReasonPair) : undefined;
+  const hoverReasonLines = hoverReason
+    ? neighborReasonLines(hoverReason, t)
+    : [];
+  // An edge with no reason falls back to naming its kinds.
+  const hoverKindsOnly =
+    shownHover?.kind === "edge" && hoverReasonLines.length === 0;
+  const hoverTitle = shownHover?.kind === "node" ? shownHover.lines : [];
+  const hoverLines = hoverKindsOnly
+    ? libraryGraphEdgeKindLabels(shownHover.lines, t)
+    : hoverReasonLines;
   const visibleNodeCount = join?.graph.nodes.length ?? 0;
   // Above the threshold clusters start collapsed; an expanded one can fold
   // back from its chip.
@@ -1376,8 +1749,6 @@ export default function LibraryGraphView({
     selectedNode?.ghost === true
       ? (traversal.ghostItems.get(selectedNode.subjectKey) ?? null)
       : null;
-  const selectedExpandable =
-    selectedNode !== null && neighborAnchor(selectedNode) !== null;
   const { canAddItem, canRequestItem, onAction, onOpenResolved } =
     moreLikeThisActions.stripProps;
   // A ghost that is one of the viewer's titles, though not drawn as a
@@ -1468,7 +1839,7 @@ export default function LibraryGraphView({
           <span className="max-sm:sr-only">{t("libraryGraph.resetView")}</span>
         </Button>
       </div>
-      {groups.length > 0 ? (
+      {groups.length > 0 && focusCenterKey === null ? (
         <nav
           aria-label={t("libraryGraph.clustersLabel")}
           className="flex gap-1.5 overflow-x-auto pb-1"
@@ -1530,7 +1901,7 @@ export default function LibraryGraphView({
           {t("libraryGraph.truncated")}
         </p>
       ) : null}
-      {crumbs.length > 0 ? (
+      {focusCenterKey !== null ? (
         <nav
           aria-label={t("libraryGraph.trailLabel")}
           className="flex flex-wrap items-center gap-1.5"
@@ -1557,11 +1928,11 @@ export default function LibraryGraphView({
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => collapseToCrumb(-1)}
+            onClick={exitFocus}
             className="ml-auto h-7 gap-1.5 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 text-[12px] shadow-none"
           >
             <Undo2 className="h-3.5 w-3.5" />
-            {t("libraryGraph.collapseToLibrary")}
+            {t("libraryGraph.backToOverview")}
           </Button>
         </nav>
       ) : null}
@@ -1608,7 +1979,7 @@ export default function LibraryGraphView({
               {group.name}
             </button>
           ))}
-        {shownHover && hoverLines && hoverLines.length > 0 ? (
+        {shownHover && hoverTitle.length + hoverLines.length > 0 ? (
           <div
             role="tooltip"
             className="pointer-events-none absolute z-10 max-w-[16rem] rounded-[8px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] px-2.5 py-1.5 text-[12px] text-[var(--scry-ink2)] shadow-lg"
@@ -1617,13 +1988,25 @@ export default function LibraryGraphView({
               top: shownHover.y + 12,
             }}
           >
-            {shownHover.kind === "edge" ? (
+            {hoverKindsOnly ? (
               <div className="mb-0.5 text-[11px] text-[var(--scry-muted2)]">
                 {t("libraryGraph.linkedBy")}
               </div>
             ) : null}
+            {hoverTitle.map((line) => (
+              <div key={`title:${line}`} className="font-semibold">
+                {line}
+              </div>
+            ))}
             {hoverLines.map((line) => (
-              <div key={line}>{line}</div>
+              <div
+                key={`why:${line}`}
+                className={
+                  hoverTitle.length > 0 ? "text-[var(--scry-muted2)]" : ""
+                }
+              >
+                {line}
+              </div>
             ))}
           </div>
         ) : null}
@@ -1680,30 +2063,15 @@ export default function LibraryGraphView({
               </div>
               <button
                 type="button"
-                onClick={() => setSelectedKey(null)}
-                aria-label={t("label.close")}
-                title={t("label.close")}
+                onClick={exitFocus}
+                aria-label={t("libraryGraph.backToOverview")}
+                title={t("libraryGraph.backToOverview")}
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)]"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
-              {selectedExpandable ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={expandingKey === selectedNode.subjectKey}
-                  onClick={() => void expandNode(selectedNode)}
-                  className="h-7 gap-1.5 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 text-[12px] shadow-none"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  {expandingKey === selectedNode.subjectKey
-                    ? t("label.loading")
-                    : t("libraryGraph.moreLikeThis")}
-                </Button>
-              ) : null}
               {selectedResolved && openSelected ? (
                 <Button
                   type="button"
@@ -1730,6 +2098,11 @@ export default function LibraryGraphView({
                 </Button>
               ) : null}
             </div>
+            {expandingKey === selectedNode.subjectKey ? (
+              <p role="status" className="text-[var(--scry-muted2)]">
+                {t("libraryGraph.findingMoreLikeThis")}
+              </p>
+            ) : null}
             {expandNotice?.key === selectedNode.subjectKey &&
             expandNotice.kind === "empty" ? (
               <p role="status" className="text-[var(--scry-muted2)]">

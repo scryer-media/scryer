@@ -7,6 +7,8 @@ import {
   clustersToCollapse,
   collapseClusters,
   edgePairKey,
+  egoGraphState,
+  egoRingGroups,
   graphStateFromResult,
   mergeLibraryGraphResult,
   pruneLeastRecentlyUsed,
@@ -301,4 +303,53 @@ test("ghosts with blank target keys stay separate", () => {
   );
   assert.ok(edgeBetween(merged, "x:blank-1", "s:a"));
   assert.ok(edgeBetween(merged, "x:blank-2", "s:c"));
+});
+
+test("a focused view keeps one node, its neighbours and only their links to it", () => {
+  const graph = owned();
+  const ego = egoGraphState(graph, "s:a");
+  assert.ok(ego);
+  assert.deepEqual(ego.nodes.map((node) => node.subjectKey).sort(), [
+    "s:a",
+    "s:b",
+  ]);
+  // The b-c link does not touch a, so it and c are left out.
+  assert.equal(ego.edges.length, 1);
+  assert.equal(egoGraphState(graph, "s:missing"), null);
+
+  const fromB = egoGraphState(graph, "s:b");
+  assert.ok(fromB);
+  assert.deepEqual(fromB.nodes.map((node) => node.subjectKey).sort(), [
+    "s:a",
+    "s:b",
+    "s:c",
+  ]);
+});
+
+test("focused rings put library titles inside explored ones, heaviest link first", () => {
+  const graph: GraphState = {
+    nodes: [
+      { subjectKey: "s:hub", targetKey: "t:hub", clusterId: 0, ghost: false },
+      { subjectKey: "s:light", targetKey: "t:1", clusterId: 0, ghost: false },
+      { subjectKey: "s:heavy", targetKey: "t:2", clusterId: 0, ghost: false },
+      { subjectKey: "s:ghost-b", targetKey: "t:3", clusterId: 0, ghost: true },
+      { subjectKey: "s:ghost-a", targetKey: "t:4", clusterId: 0, ghost: true },
+    ],
+    edges: [
+      { from: "s:hub", to: "s:light", weight: 0.2, kinds: [] },
+      { from: "s:heavy", to: "s:hub", weight: 0.9, kinds: [] },
+      { from: "s:hub", to: "s:ghost-b", weight: 0.5, kinds: [] },
+      { from: "s:hub", to: "s:ghost-a", weight: 0.5, kinds: [] },
+    ],
+    clusters: [],
+  };
+  assert.deepEqual(egoRingGroups(graph, "s:hub"), [
+    ["s:heavy", "s:light"],
+    ["s:ghost-a", "s:ghost-b"],
+  ]);
+  // With no explored neighbours there is only the library ring.
+  const libraryOnly = { ...graph, edges: graph.edges.slice(0, 2) };
+  assert.deepEqual(egoRingGroups(libraryOnly, "s:hub"), [
+    ["s:heavy", "s:light"],
+  ]);
 });

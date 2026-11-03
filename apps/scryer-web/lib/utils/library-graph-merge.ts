@@ -375,3 +375,61 @@ export function pruneLeastRecentlyUsed(
   );
   return { graph: pruneToVisible(graph, kept), evicted };
 }
+
+/**
+ * One node and everything one link from it, with only the links that leave
+ * that node. Null when the node is not in the graph.
+ */
+export function egoGraphState(
+  graph: GraphState,
+  center: string,
+): GraphState | null {
+  if (!graph.nodes.some((node) => node.subjectKey === center)) {
+    return null;
+  }
+  const edges = graph.edges.filter(
+    (edge) => edge.from === center || edge.to === center,
+  );
+  const keep = new Set<string>([center]);
+  for (const edge of edges) {
+    keep.add(edge.from);
+    keep.add(edge.to);
+  }
+  const nodes = graph.nodes.filter((node) => keep.has(node.subjectKey));
+  return {
+    nodes,
+    edges: edges.filter((edge) => keep.has(edge.from) && keep.has(edge.to)),
+    clusters: withClusterSizes(graph.clusters, nodes),
+  };
+}
+
+/**
+ * The neighbours of `center` in rings: library titles first, then explored
+ * titles, each heaviest link first and then by subject key. Empty rings are
+ * left out.
+ */
+export function egoRingGroups(ego: GraphState, center: string): string[][] {
+  const weights = new Map<string, number>();
+  for (const edge of ego.edges) {
+    const other =
+      edge.from === center ? edge.to : edge.to === center ? edge.from : null;
+    if (other && other !== center) {
+      weights.set(other, Math.max(weights.get(other) ?? 0, edge.weight));
+    }
+  }
+  const order = (a: GraphNode, b: GraphNode) => {
+    const byWeight =
+      (weights.get(b.subjectKey) ?? 0) - (weights.get(a.subjectKey) ?? 0);
+    if (byWeight !== 0) {
+      return byWeight;
+    }
+    return a.subjectKey < b.subjectKey ? -1 : 1;
+  };
+  const neighbours = ego.nodes.filter((node) => weights.has(node.subjectKey));
+  return [
+    neighbours.filter((node) => !node.ghost).sort(order),
+    neighbours.filter((node) => node.ghost).sort(order),
+  ]
+    .filter((ring) => ring.length > 0)
+    .map((ring) => ring.map((node) => node.subjectKey));
+}
