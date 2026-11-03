@@ -124,6 +124,22 @@ fn job_run_library_id(run: &JobRunRecord) -> Option<&str> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// Set to a true value in a debug build to have every discovery sync rebuild
+/// each owned facet's library graph, so a new gateway build shows at once.
+#[cfg(debug_assertions)]
+const DEV_LIBRARY_GRAPH_REBUILD_ENV: &str = "SCRYER_DEV_LIBRARY_GRAPH_REBUILD";
+
+/// Whether the development rebuild override's value asks for a rebuild.
+#[cfg(debug_assertions)]
+fn dev_library_graph_rebuild_requested(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 fn background_library_refresh_enabled() -> bool {
     std::env::var("SCRYER_BACKGROUND_LIBRARY_REFRESH")
         .map(|value| {
@@ -2818,6 +2834,15 @@ impl AppUseCase {
                     .await,
             );
         }
+        // Debug builds only, set by `cargo xtask serve --rebuild-library-graphs`:
+        // every sync rebuilds every owned facet's graph, past the cooldowns,
+        // backoffs and scan gate above. Release builds never compile it.
+        #[cfg(debug_assertions)]
+        if dev_library_graph_rebuild_requested(
+            std::env::var(DEV_LIBRARY_GRAPH_REBUILD_ENV).ok().as_deref(),
+        ) {
+            library_graph_facets.extend(owned_graph_facets.iter().cloned());
+        }
         let library_graphs = if library_graph_facets.is_empty() {
             Vec::new()
         } else {
@@ -4523,5 +4548,17 @@ mod tests {
         assert_eq!(first, second);
         assert_ne!(first, different_stream);
         assert!((0..4 * 60 * 60).contains(&first));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn dev_library_graph_rebuild_reads_only_true_values() {
+        for value in ["1", "true", " TRUE ", "yes", "on"] {
+            assert!(dev_library_graph_rebuild_requested(Some(value)), "{value}");
+        }
+        for value in ["", "0", "false", "off", "rebuild"] {
+            assert!(!dev_library_graph_rebuild_requested(Some(value)), "{value}");
+        }
+        assert!(!dev_library_graph_rebuild_requested(None));
     }
 }

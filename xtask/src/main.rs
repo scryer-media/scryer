@@ -257,6 +257,11 @@ struct ServeArgs {
     postgres: bool,
     #[arg(long, help = "Reset the selected datastore before starting Scryer")]
     clean: bool,
+    #[arg(
+        long,
+        help = "Rebuild every library graph on each discovery sync, past the cooldowns"
+    )]
+    rebuild_library_graphs: bool,
 }
 
 #[derive(Args)]
@@ -1332,6 +1337,9 @@ fn serve_local_scryer(ctx: &TaskContext, args: ServeArgs, mode: ServeMode) -> Re
         .env("RUST_MIN_STACK", &backend_rust_min_stack)
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err));
+    if args.rebuild_library_graphs {
+        serve.env("SCRYER_DEV_LIBRARY_GRAPH_REBUILD", "1");
+    }
     let mut backend = serve.spawn()?;
     let signal_forwarder = install_signal_forwarder(&[backend.id()])?;
     match wait_for_local_backend(&mut backend, backend_port, &backend_log, &signal_forwarder) {
