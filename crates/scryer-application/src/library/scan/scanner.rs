@@ -426,6 +426,29 @@ pub struct DiscoveryRelatedResult {
     pub generated_at: String,
     #[serde(default)]
     pub results: Vec<DiscoveryTitle>,
+    /// Neighbourhoods the gateway found among `results`; each result names
+    /// its group in [`DiscoveryTitle::group_id`]. Empty when the gateway
+    /// skipped grouping.
+    #[serde(default)]
+    pub groups: Vec<DiscoveryRelatedGroup>,
+}
+
+/// One neighbourhood among a title's related results, as the gateway grouped
+/// them from the semantic and relation links between the results.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveryRelatedGroup {
+    /// Group id, matching [`DiscoveryTitle::group_id`].
+    pub id: i64,
+    /// Canonical genre or theme tag key that names the group, or `None` when
+    /// the group is named after its medoid.
+    #[serde(default)]
+    pub label_key: Option<String>,
+    /// Display label of the group.
+    pub label: String,
+    /// Target key of the result that best represents the group.
+    pub medoid: String,
+    /// Number of results in the group.
+    pub size: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -652,6 +675,11 @@ pub struct DiscoveryTitle {
     pub change_subject_keys: Vec<String>,
     #[serde(default)]
     pub removed_subject_keys: Vec<String>,
+    /// The [`DiscoveryRelatedGroup`] this related result belongs to. Only the
+    /// title recommendations document requests it; every other document
+    /// leaves it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<i64>,
 }
 
 impl DiscoveryTitle {

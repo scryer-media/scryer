@@ -133,6 +133,14 @@ query TitleRecommendations(
       source_subject_count
       rank_score
       best_source
+      group_id
+    }
+    groups {
+      id
+      label_key
+      label
+      medoid
+      size
     }
   }
 }

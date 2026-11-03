@@ -38,7 +38,7 @@ use scryer_interface_media::mappers::{
     from_dashboard_activity_stats, from_delete_episode_files_preview, from_delete_preview,
     from_delete_titles_preview, from_discovery_home, from_discovery_home_cards,
     from_discovery_home_filter_options, from_discovery_item, from_discovery_items_result,
-    from_domain_event, from_download_queue_item, from_episode,
+    from_discovery_neighbors, from_domain_event, from_download_queue_item, from_episode,
     from_external_import_monitor_warmup_progress, from_job_definition, from_job_run, from_library,
     from_library_graph, from_library_scan_session, from_library_settings, from_linked_account,
     from_location_operation, from_location_operation_asset_listing, from_location_retry_selection,
@@ -2946,23 +2946,20 @@ impl JobAndDownloadQueries {
         Ok(from_catalog_discovery(&app, result))
     }
 
-    /// Titles related to one anchor, owned or not. Owned results carry resolvedTitleId; nothing is filtered out for being in the library.
+    /// Titles related to one anchor, owned or not, and the neighbourhoods they fall into. Owned results carry resolvedTitleId; nothing is filtered out for being in the library.
     async fn discovery_neighbors(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Anchor whose related titles are returned.")]
         input: DiscoveryNeighborsInput,
-    ) -> GqlResult<Vec<DiscoveryItemPayload>> {
+    ) -> GqlResult<DiscoveryNeighborsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let items = app
+        let neighbors = app
             .discovery_neighbors(&actor, discovery_neighbors_query_from_input(input))
             .await
             .map_err(to_gql_error)?;
-        Ok(items
-            .into_iter()
-            .map(|item| from_discovery_item(&app, item))
-            .collect())
+        Ok(from_discovery_neighbors(&app, neighbors))
     }
 
     /// Return a facet's library graph: how the viewer's owned titles relate,

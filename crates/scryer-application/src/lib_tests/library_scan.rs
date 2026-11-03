@@ -756,6 +756,7 @@ impl MetadataGateway for CountingRecommendationMetadataGateway {
             query: String::new(),
             generated_at: "2026-01-01T00:00:00Z".to_string(),
             results: Vec::new(),
+            groups: Vec::new(),
         })
     }
 }

@@ -709,6 +709,34 @@ pub fn from_discovery_item(app: &AppUseCase, item: DiscoveryItemRecord) -> Disco
         person_ids: item.person_ids,
         facet_terms: item.facet_terms,
         context_terms: item.context_terms,
+        group_id: None,
+    }
+}
+
+pub fn from_discovery_neighbors(
+    app: &AppUseCase,
+    view: scryer_application::DiscoveryNeighborsView,
+) -> DiscoveryNeighborsPayload {
+    DiscoveryNeighborsPayload {
+        items: view
+            .items
+            .into_iter()
+            .map(|neighbor| DiscoveryItemPayload {
+                group_id: neighbor.group_id.map(graph_int),
+                ..from_discovery_item(app, neighbor.item)
+            })
+            .collect(),
+        groups: view
+            .groups
+            .into_iter()
+            .map(|group| DiscoveryNeighborGroup {
+                id: graph_int(group.id),
+                label_key: group.label_key,
+                label: group.label,
+                medoid: group.medoid,
+                size: graph_int(group.size),
+            })
+            .collect(),
     }
 }
 

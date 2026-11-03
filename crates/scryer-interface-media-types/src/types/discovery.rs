@@ -621,6 +621,8 @@ pub struct DiscoveryItemPayload {
     pub facet_terms: Vec<String>,
     /// Context terms extracted from the source.
     pub context_terms: Vec<String>,
+    /// The `DiscoveryNeighborGroup` this related title belongs to; set only on `discoveryNeighbors` items, and null there when the related titles were not grouped.
+    pub group_id: Option<i32>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -646,6 +648,30 @@ pub struct DiscoveryNeighborsInput {
     /// Maximum related titles to return; defaults to 24, which is also the most ever returned. Values outside 0 through 24 are clamped.
     #[graphql(default = 24)]
     pub limit: Option<i32>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One neighbourhood among an anchor's related titles, found by the metadata gateway from the semantic and relation links between them.
+pub struct DiscoveryNeighborGroup {
+    /// Group ID, matching `DiscoveryItemPayload.groupId`.
+    pub id: i32,
+    /// Label key of the genre or theme that names the group, or null when the group is named after its medoid.
+    pub label_key: Option<String>,
+    /// Display label of the group.
+    pub label: String,
+    /// Target key of the related title that best represents the group.
+    pub medoid: String,
+    /// Number of returned related titles in the group.
+    pub size: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// An anchor's related titles and the neighbourhoods they fall into.
+pub struct DiscoveryNeighborsPayload {
+    /// Related titles, best first.
+    pub items: Vec<DiscoveryItemPayload>,
+    /// Groups holding at least one returned item, in the order the metadata gateway ranked them (largest first before the returned items were chosen); empty when the related titles were not grouped.
+    pub groups: Vec<DiscoveryNeighborGroup>,
 }
 
 #[derive(InputObject, Clone)]

@@ -4565,6 +4565,10 @@ type DiscoveryItemPayload {
 	Context terms extracted from the source.
 	"""
 	contextTerms: [String!]!
+	"""
+	The `DiscoveryNeighborGroup` this related title belongs to; set only on `discoveryNeighbors` items, and null there when the related titles were not grouped.
+	"""
+	groupId: Int
 }
 
 """
@@ -4678,6 +4682,32 @@ type DiscoveryItemsPayload {
 }
 
 """
+One neighbourhood among an anchor's related titles, found by the metadata gateway from the semantic and relation links between them.
+"""
+type DiscoveryNeighborGroup {
+	"""
+	Group ID, matching `DiscoveryItemPayload.groupId`.
+	"""
+	id: Int!
+	"""
+	Label key of the genre or theme that names the group, or null when the group is named after its medoid.
+	"""
+	labelKey: String
+	"""
+	Display label of the group.
+	"""
+	label: String!
+	"""
+	Target key of the related title that best represents the group.
+	"""
+	medoid: String!
+	"""
+	Number of returned related titles in the group.
+	"""
+	size: Int!
+}
+
+"""
 One anchor whose related titles are returned, owned or not.
 """
 input DiscoveryNeighborsInput {
@@ -4693,6 +4723,20 @@ input DiscoveryNeighborsInput {
 	Maximum related titles to return; defaults to 24, which is also the most ever returned. Values outside 0 through 24 are clamped.
 	"""
 	limit: Int = 24
+}
+
+"""
+An anchor's related titles and the neighbourhoods they fall into.
+"""
+type DiscoveryNeighborsPayload {
+	"""
+	Related titles, best first.
+	"""
+	items: [DiscoveryItemPayload!]!
+	"""
+	Groups holding at least one returned item, in the order the metadata gateway ranked them (largest first before the returned items were chosen); empty when the related titles were not grouped.
+	"""
+	groups: [DiscoveryNeighborGroup!]!
 }
 
 """
@@ -25488,14 +25532,14 @@ type QueryRoot {
 		input: CatalogDiscoveryInput!
 	): CatalogDiscoveryPayload!
 	"""
-	Titles related to one anchor, owned or not. Owned results carry resolvedTitleId; nothing is filtered out for being in the library.
+	Titles related to one anchor, owned or not, and the neighbourhoods they fall into. Owned results carry resolvedTitleId; nothing is filtered out for being in the library.
 	"""
 	discoveryNeighbors(
 		"""
 		Anchor whose related titles are returned.
 		"""
 		input: DiscoveryNeighborsInput!
-	): [DiscoveryItemPayload!]!
+	): DiscoveryNeighborsPayload!
 	"""
 	Return a facet's library graph: how the viewer's owned titles relate,
 	limited to titles the viewer can see. Null when personalized discovery

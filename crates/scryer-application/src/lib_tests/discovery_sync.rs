@@ -2467,10 +2467,32 @@ async fn discovery_neighbors_returns_owned_neighbors_with_their_title_while_more
         .lock()
         .await
         .extend([source_title, owned_title]);
+    let grouped = |target_key: &str, display_title: &str, group_id: i64| DiscoveryTitle {
+        group_id: Some(group_id),
+        ..neighbor_discovery_title(target_key, display_title)
+    };
     *gateway.title_recommendation_results.lock().await = vec![
-        neighbor_discovery_title("tmdb:movie:100", "Synthetic Source Movie"),
-        neighbor_discovery_title("tmdb:movie:603", "Synthetic Owned Movie"),
-        neighbor_discovery_title("tmdb:movie:605", "Synthetic Fresh Movie"),
+        grouped("tmdb:movie:100", "Synthetic Source Movie", 1),
+        grouped("tmdb:movie:603", "Synthetic Owned Movie", 0),
+        grouped("tmdb:movie:605", "Synthetic Fresh Movie", 0),
+    ];
+    // Group 1 holds only the anchor, which is never served, and the gateway's
+    // sizes count results the neighbours screen out.
+    *gateway.title_recommendation_groups.lock().await = vec![
+        crate::DiscoveryRelatedGroup {
+            id: 0,
+            label_key: Some("canonical:theme:heist".to_string()),
+            label: "Heist".to_string(),
+            medoid: "tmdb:movie:603".to_string(),
+            size: 3,
+        },
+        crate::DiscoveryRelatedGroup {
+            id: 1,
+            label_key: None,
+            label: "Synthetic Source Movie".to_string(),
+            medoid: "tmdb:movie:100".to_string(),
+            size: 1,
+        },
     ];
 
     let query = crate::DiscoveryNeighborsQuery {
@@ -2487,13 +2509,29 @@ async fn discovery_neighbors_returns_owned_neighbors_with_their_title_while_more
     // its title id.
     assert_eq!(
         neighbors
+            .items
             .iter()
-            .map(|item| (item.target_key.as_str(), item.resolved_title_id.as_deref()))
+            .map(|neighbor| (
+                neighbor.item.target_key.as_str(),
+                neighbor.item.resolved_title_id.as_deref(),
+                neighbor.group_id,
+            ))
             .collect::<Vec<_>>(),
         vec![
-            ("tmdb:movie:603", Some("owned-title")),
-            ("tmdb:movie:605", None),
+            ("tmdb:movie:603", Some("owned-title"), Some(0)),
+            ("tmdb:movie:605", None, Some(0)),
         ]
+    );
+    // Only groups with a served member remain, sized by what is served.
+    assert_eq!(
+        neighbors.groups,
+        vec![crate::DiscoveryRelatedGroup {
+            id: 0,
+            label_key: Some("canonical:theme:heist".to_string()),
+            label: "Heist".to_string(),
+            medoid: "tmdb:movie:603".to_string(),
+            size: 2,
+        }]
     );
     let inputs = gateway.title_recommendation_inputs.lock().await.clone();
     assert_eq!(inputs.len(), 1);
@@ -2619,6 +2657,7 @@ async fn discovery_neighbors_gives_an_ungated_viewer_an_empty_list_before_readin
         app.discovery_neighbors(&series_viewer, unusable(MediaFacet::Movie))
             .await
             .expect("an ungated viewer is not refused")
+            .items
             .is_empty()
     );
 
@@ -2636,6 +2675,7 @@ async fn discovery_neighbors_gives_an_ungated_viewer_an_empty_list_before_readin
         app.discovery_neighbors(&request_only, unusable(MediaFacet::Movie))
             .await
             .expect("an ungated viewer is not refused")
+            .items
             .is_empty()
     );
 
@@ -2648,6 +2688,7 @@ async fn discovery_neighbors_gives_an_ungated_viewer_an_empty_list_before_readin
             .discovery_neighbors(&disabled_admin, unusable(MediaFacet::Movie))
             .await
             .expect("personalized discovery off is not a refusal")
+            .items
             .is_empty()
     );
 
@@ -5991,6 +6032,7 @@ struct SnapshotMetadataGateway {
     public_feed_inputs: Mutex<Vec<DiscoveryPublicFeedInput>>,
     title_recommendation_inputs: Mutex<Vec<TitleRecommendationsInput>>,
     title_recommendation_results: Mutex<Vec<DiscoveryTitle>>,
+    title_recommendation_groups: Mutex<Vec<crate::DiscoveryRelatedGroup>>,
     title_recommendation_gate: Mutex<Option<Arc<Notify>>>,
     title_recommendation_started: Notify,
     status_requests: Mutex<Vec<String>>,
@@ -6077,6 +6119,7 @@ impl MetadataGateway for SnapshotMetadataGateway {
             query: input.query.clone(),
             generated_at: "2026-06-25T00:00:04Z".to_string(),
             results: self.title_recommendation_results.lock().await.clone(),
+            groups: self.title_recommendation_groups.lock().await.clone(),
         })
     }
 
@@ -8181,6 +8224,7 @@ fn test_discovery_title() -> DiscoveryTitle {
         context_terms: Vec::new(),
         change_subject_keys: Vec::new(),
         removed_subject_keys: Vec::new(),
+        group_id: None,
     }
 }
 
