@@ -276,7 +276,18 @@ impl AppUseCase {
         for conflict in conflicts {
             match self.cancel_conflict_in_client(&conflict).await {
                 Ok(()) => {
-                    self.settle_cancelled_conflict(&conflict).await?;
+                    // The client took the cancel, so the download is gone
+                    // whatever happens locally. A failed local settle leaves
+                    // the submission row for the tracker to reconcile; it must
+                    // not abort the remaining cancels or the grab.
+                    if let Err(error) = self.settle_cancelled_conflict(&conflict).await {
+                        tracing::warn!(
+                            error = %error,
+                            client_type = conflict.download_client_type.as_str(),
+                            item_id = conflict.download_client_item_id.as_str(),
+                            "standby: cancelled download could not be settled locally"
+                        );
+                    }
                     cancelled.push(conflict);
                 }
                 Err(error) => {

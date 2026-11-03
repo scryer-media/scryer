@@ -268,6 +268,134 @@ async fn source_import_batch_with_a_missing_credential_imports_the_other_sources
     .expect("mixed credential scenario failure bound");
 }
 
+#[tokio::test]
+async fn source_import_prowlarr_parent_without_its_key_fails_alone_and_retries_with_a_correction() {
+    timeout(Duration::from_secs(180), async {
+        // The parent's provider is installed, as in production, so the
+        // credential gate is what fails the item rather than a plugin install.
+        let ctx = TestContext::new_with_indexer_provider(Arc::new(ParentProvider {
+            base: Arc::new(scryer_plugins::build_indexer_plugin_provider(&[], &[])),
+        }))
+        .await;
+        seed_typed_settings_definitions(&ctx).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("source-parent-credential"))
+            .await
+            .expect("operator");
+        let sibling = selection(0, false);
+        let parent_name = "Keyless parent fixture".to_owned();
+        let parent = SourceImportSelection {
+            key: "prowlarr:https://parent-fixture.example.test".into(),
+            name: parent_name.clone(),
+            input: SourceImportInput::Indexer(NewIndexerConfig {
+                name: parent_name.clone(),
+                provider_type: "prowlarr".into(),
+                config_json: Some(
+                    json!({"base_url":"https://parent-fixture.example.test"}).to_string(),
+                ),
+                rate_limit_seconds: None,
+                rate_limit_burst: None,
+                max_queries_per_minute: None,
+                is_enabled: false,
+                enable_interactive_search: true,
+                enable_auto_search: true,
+                proxy_config_id: None,
+                download_client_id: None,
+            }),
+        };
+        let accepted = ctx
+            .app
+            .start_source_import(
+                &actor,
+                "source-parent-credential",
+                vec![sibling.clone(), parent.clone()],
+            )
+            .await
+            .expect("batch accepted");
+        let progress = ctx
+            .app
+            .wait_source_import(&actor, &accepted.id)
+            .await
+            .expect("batch settles");
+        let item = |progress: &scryer_application::source_import::SourceImportProgress,
+                    key: &str| {
+            progress
+                .items
+                .iter()
+                .find(|item| item.key == key)
+                .expect("item receipt")
+                .clone()
+        };
+        assert_eq!(
+            item(&progress, &sibling.key).state,
+            SourceImportState::Succeeded
+        );
+        let failed = item(&progress, &parent.key);
+        assert_eq!(failed.state, SourceImportState::Failed);
+        assert_eq!(
+            failed.reason.as_deref(),
+            Some(scryer_application::source_import::refusal::CREDENTIAL_REQUIRED)
+        );
+        assert!(
+            ctx.app
+                .list_indexer_configs(&actor, Some("prowlarr".into()))
+                .await
+                .expect("parent configs")
+                .is_empty(),
+            "a parent without its key is never saved"
+        );
+        // A correction supplies the key: the refusal clears and the item moves
+        // past the credential gate on retry.
+        ctx.app
+            .retry_source_import(
+                &actor,
+                &accepted.id,
+                vec![(parent.key.clone(), "corrected-synthetic-secret".into())],
+            )
+            .await
+            .expect("correction accepted");
+        let retried = ctx
+            .app
+            .wait_source_import(&actor, &accepted.id)
+            .await
+            .expect("retry settles");
+        assert_eq!(
+            item(&retried, &sibling.key).state,
+            SourceImportState::Succeeded
+        );
+        assert_ne!(
+            item(&retried, &parent.key).reason.as_deref(),
+            Some(scryer_application::source_import::refusal::CREDENTIAL_REQUIRED),
+            "the corrected key clears the credential refusal"
+        );
+    })
+    .await
+    .expect("parent credential scenario failure bound");
+}
+
+/// The base provider with a Prowlarr parent type available and no live client.
+struct ParentProvider {
+    base: Arc<dyn IndexerPluginProvider>,
+}
+impl IndexerPluginProvider for ParentProvider {
+    fn client_for_provider(&self, _: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+        None
+    }
+    fn available_provider_types(&self) -> Vec<String> {
+        vec!["newznab".into(), "prowlarr".into()]
+    }
+    fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+        Vec::new()
+    }
+    fn config_fields_for_provider(&self, provider: &str) -> Vec<ConfigFieldDef> {
+        self.base.config_fields_for_provider(provider)
+    }
+    fn default_base_url_for_provider(&self, provider: &str) -> Option<String> {
+        self.base.default_base_url_for_provider(provider)
+    }
+}
+
 struct AutoDefaultProvider {
     base: Arc<dyn IndexerPluginProvider>,
 }
