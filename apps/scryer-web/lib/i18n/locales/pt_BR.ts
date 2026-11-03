@@ -1241,6 +1241,9 @@ const pt_BR: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "Recomendado",
   "libraryGraph.notBuilt": "O grafo da biblioteca ainda não foi gerado.",
   "libraryGraph.truncated": "Este grafo cobre apenas parte da biblioteca.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "Este título não pode ser explorado mais.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Este título não corresponde ao tipo de mídia desta biblioteca, então não pode ser explorado aqui.",
   "libraryGraph.moreLikeThisEmpty": "Ainda não há nada parecido.",
   "libraryGraph.backToOverview": "Voltar à visão geral",
   "libraryGraph.findingMoreLikeThis": "Buscando títulos parecidos…",

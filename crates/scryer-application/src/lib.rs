@@ -8,9 +8,12 @@ mod contracts;
 pub mod delete_refusal;
 mod discovery;
 pub use discovery::{
-    DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery, LIBRARY_GRAPH_AXIS,
-    LIBRARY_GRAPH_MAX_SUBJECTS, LIBRARY_GRAPH_MIN_COSINE, LIBRARY_GRAPH_NEIGHBORS_PER_NODE,
-    LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
+    DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery, LibraryGraphCluster,
+    LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
+};
+#[cfg(test)]
+pub(crate) use discovery::{
+    LIBRARY_GRAPH_AXIS, LIBRARY_GRAPH_MIN_COSINE, LIBRARY_GRAPH_NEIGHBORS_PER_NODE,
 };
 mod download_client_config;
 mod download_client_path_mappings;
@@ -218,8 +221,8 @@ pub use ports::{
     DiscoverySectionRecord, DiscoverySectionResult, DiscoverySectionSort, DiscoverySourceTagRecord,
     DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord, DiscoverySyncStateRecord,
     DiscoverySyncStatus, EpisodeImageUrlUpdate, LibraryGraphClusterRecord, LibraryGraphEdgeRecord,
-    LibraryGraphNodeRecord, LibraryGraphPruneReport, LibraryGraphRunRecord,
-    LibraryGraphSnapshotRecord, MediaRequestQualityProfileReferenceCounts, MediaRequestResolution,
+    LibraryGraphNodeRecord, LibraryGraphRunRecord, LibraryGraphSnapshotRecord,
+    MediaRequestQualityProfileReferenceCounts, MediaRequestResolution,
     MediaRequestResolutionResult, MediaRequestSubmissionResult, MediaRequestUpdateResult,
     SeriesMovieExternalIdLookupMatch, SubtitleSyncClient, SubtitleSyncJob, TitleArtworkUrlUpdate,
     TitleDeletePreviewInfo, TitleExternalIdLookup, TitleExternalIdLookupMatch,

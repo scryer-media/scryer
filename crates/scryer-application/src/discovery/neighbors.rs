@@ -17,12 +17,16 @@ pub struct DiscoveryNeighborsQuery {
     /// The anchor's discovery target key, such as `tmdb:movie:<id>`.
     pub target_key: String,
     pub facet: MediaFacet,
+    /// Most neighbours to return. The gateway is asked for at most
+    /// [`DISCOVERY_NEIGHBORS_DEFAULT_LIMIT`] (24), so a larger limit serves no
+    /// more than that.
     pub limit: i64,
 }
 
 /// The anchor's target key in canonical form and the gateway subject that
 /// names it. Refuses a key outside the vocabulary discovery keys targets on,
-/// and a movie or series key that contradicts `facet`.
+/// and a movie or series key that contradicts `facet`. Anime takes both:
+/// anime series are series targets and anime films are movie targets.
 pub(super) fn discovery_neighbor_subject(
     target_key: &str,
     facet: &MediaFacet,
@@ -51,7 +55,7 @@ pub(super) fn discovery_neighbor_subject(
     }
     .ok_or_else(unsupported)?;
     let facet_agrees = match kind.as_str() {
-        "movie" => *facet == MediaFacet::Movie,
+        "movie" => matches!(facet, MediaFacet::Movie | MediaFacet::Anime),
         "series" => matches!(facet, MediaFacet::Series | MediaFacet::Anime),
         _ => true,
     };
@@ -90,18 +94,32 @@ impl AppUseCase {
     /// `resolved_title_id`; nothing is dropped for being owned. The
     /// gateway's answer is cached per anchor and metadata language on the
     /// same schedule as a title's more-like-this rows.
+    ///
+    /// The gate matches the library graph's and runs before the key is
+    /// checked: with personalized discovery off, the facet not visible, or no
+    /// library of the facet the actor may view, the answer is an empty list
+    /// and never a refusal.
     pub async fn discovery_neighbors(
         &self,
         actor: &User,
         query: DiscoveryNeighborsQuery,
     ) -> AppResult<Vec<DiscoveryItemRecord>> {
-        let (target_key, subject) = discovery_neighbor_subject(&query.target_key, &query.facet)?;
-        let requested_limit = query.limit.clamp(0, 100) as usize;
-        if requested_limit == 0 {
-            return Ok(Vec::new());
-        }
         let visibility = self.discovery_visibility(actor).await?;
         if !visibility.allows_facet(&query.facet) {
+            return Ok(Vec::new());
+        }
+        let effective_library_ids = self
+            .discovery_effective_library_ids(actor, &query.facet, &[])
+            .await?;
+        if effective_library_ids.is_empty() || !self.personalized_discovery_enabled().await? {
+            return Ok(Vec::new());
+        }
+        let (target_key, subject) = discovery_neighbor_subject(&query.target_key, &query.facet)?;
+        let requested_limit = query
+            .limit
+            .clamp(0, TITLE_MORE_LIKE_THIS_HYDRATION_LIMIT as i64)
+            as usize;
+        if requested_limit == 0 {
             return Ok(Vec::new());
         }
 
@@ -190,11 +208,23 @@ impl AppUseCase {
             return Ok(record.items);
         }
         // Read the entry back so a first expansion serves exactly what a
-        // cached one will: the store enriches and screens what it keeps.
-        Ok(discovery
+        // cached one will: the store enriches and screens what it keeps. A
+        // failed read-back still serves the gateway's answer as mapped.
+        match discovery
             .get_discovery_neighbor_cache(target_key, &record.language)
-            .await?
-            .map_or(record.items, |cached| cached.items))
+            .await
+        {
+            Ok(Some(cached)) => Ok(cached.items),
+            Ok(None) => Ok(record.items),
+            Err(error) => {
+                warn!(
+                    target_key,
+                    error = %error,
+                    "failed to read back cached discovery neighbors"
+                );
+                Ok(record.items)
+            }
+        }
     }
 }
 

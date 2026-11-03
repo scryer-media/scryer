@@ -10,8 +10,8 @@ use scryer_application::{
     DiscoveryNeighborCacheRecord, DiscoveryPendingContextChangeRecord, DiscoveryPruneReport,
     DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord, DiscoveryRepository,
     DiscoverySectionRecord, DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord,
-    DiscoverySyncRunRecord, DiscoverySyncStateRecord, LibraryGraphPruneReport,
-    LibraryGraphRunRecord, LibraryGraphSnapshotRecord, TitleRatingSummary,
+    DiscoverySyncRunRecord, DiscoverySyncStateRecord, LibraryGraphRunRecord,
+    LibraryGraphSnapshotRecord, TitleRatingSummary,
 };
 use scryer_infrastructure_sql::json::{decode_compressed_json, encode_compressed_json};
 use serde_json::Value as JsonValue;
@@ -1325,19 +1325,12 @@ impl DiscoveryRepository for DiscoveryStore {
         super::library_graph::get_latest_library_graph_run(&self.datastore, facet).await
     }
 
-    async fn prune_library_graph_title(
-        &self,
-        facet: &str,
-        subject_key: &str,
-        title_id: &str,
-    ) -> AppResult<LibraryGraphPruneReport> {
-        super::library_graph::prune_library_graph_title(
-            &self.datastore,
-            facet,
-            subject_key,
-            title_id,
-        )
-        .await
+    async fn has_complete_library_graph(&self, facet: &str) -> AppResult<bool> {
+        super::library_graph::has_complete_library_graph(&self.datastore, facet).await
+    }
+
+    async fn delete_library_graph_runs(&self, facet: &str) -> AppResult<()> {
+        super::library_graph::delete_library_graph_runs(&self.datastore, facet).await
     }
 
     async fn get_discovery_neighbor_cache(

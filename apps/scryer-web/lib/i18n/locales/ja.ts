@@ -1198,6 +1198,9 @@ const ja: LocaleDictionary = {
   "libraryGraph.notBuilt": "ライブラリグラフはまだ作成されていません。",
   "libraryGraph.truncated":
     "このグラフはライブラリの一部のみを対象としています。",
+  "discovery.refusal.neighborTargetKeyUnsupported": "この作品はこれ以上探索できません。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "この作品はこのライブラリのメディアの種類と一致しないため、ここでは探索できません。",
   "libraryGraph.moreLikeThisEmpty": "似た作品はまだありません。",
   "libraryGraph.backToOverview": "概要に戻る",
   "libraryGraph.findingMoreLikeThis": "似た作品を探しています…",

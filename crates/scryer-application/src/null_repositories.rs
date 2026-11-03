@@ -670,13 +670,12 @@ impl DiscoveryRepository for NullDiscoveryRepository {
         Ok(None)
     }
 
-    async fn prune_library_graph_title(
-        &self,
-        _facet: &str,
-        _subject_key: &str,
-        _title_id: &str,
-    ) -> AppResult<crate::LibraryGraphPruneReport> {
-        Ok(crate::LibraryGraphPruneReport::default())
+    async fn has_complete_library_graph(&self, _facet: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn delete_library_graph_runs(&self, _facet: &str) -> AppResult<()> {
+        Ok(())
     }
 
     async fn get_discovery_neighbor_cache(

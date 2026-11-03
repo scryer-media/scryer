@@ -3,10 +3,11 @@
 //! that viewer may see.
 //!
 //! A facet is rebuilt by the discovery sync job after a full context snapshot
-//! commits (every facet with owned titles) or after an incremental reload
-//! commits (the facets its pending changes touched). A removed title is
-//! dropped from the stored graph as soon as its removal event lands, without
-//! a gateway call.
+//! commits (every facet) or after an incremental reload commits (the facets
+//! its pending changes touched). Every sync run also rebuilds a facet with
+//! owned titles whose build never landed or last failed for a transient
+//! reason, once [`library_graph_retry_due`] says the backoff has passed. A
+//! facet left with no owned titles loses its stored graph.
 
 use super::*;
 use crate::error_reasons;
@@ -19,28 +20,32 @@ use crate::ports::{
 /// The embedding space every library graph is built in. This is the one place
 /// a future per-instance choice of axis would hang off; nothing else in Scryer
 /// names an axis.
-pub const LIBRARY_GRAPH_AXIS: LibraryGraphAxis = LibraryGraphAxis::Semantic;
+pub(crate) const LIBRARY_GRAPH_AXIS: LibraryGraphAxis = LibraryGraphAxis::Semantic;
 
 /// Nearest owned neighbours each subject contributes to the graph.
-pub const LIBRARY_GRAPH_NEIGHBORS_PER_NODE: i32 = 8;
+pub(crate) const LIBRARY_GRAPH_NEIGHBORS_PER_NODE: i32 = 8;
 
 /// Cosine floor below which two titles get no semantic edge.
-pub const LIBRARY_GRAPH_MIN_COSINE: f64 = 0.55;
+pub(crate) const LIBRARY_GRAPH_MIN_COSINE: f64 = 0.55;
 
 /// Most subjects one gateway call carries.
 ///
 /// A facet with more owned subjects than this submits a deterministic subset:
 /// the most recently added subjects first (a subject's added time is the
 /// newest `created_at` among the titles that share it), ties broken by subject
-/// key ascending. The run records both counts so readers can tell the graph
-/// is truncated.
-pub const LIBRARY_GRAPH_MAX_SUBJECTS: usize = 5_000;
+/// key ascending. The run records both counts and the subject keys it left
+/// out, so a reader can tell whether its own titles are missing.
+pub(crate) const LIBRARY_GRAPH_MAX_SUBJECTS: usize = 5_000;
 
 const LIBRARY_GRAPH_RUN_COMPLETE: &str = "complete";
 const LIBRARY_GRAPH_RUN_FAILED: &str = "failed";
 
 /// The cluster id of a node the gateway did not place in a cluster.
 const UNPLACED_CLUSTER_ID: i64 = -1;
+
+/// The shortest wait before a failed build is tried again: the sync's own
+/// incremental cadence. A longer wait the gateway asked for wins.
+pub(crate) const LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS: i64 = 4 * 60 * 60;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LibraryGraphQuery {
@@ -82,8 +87,8 @@ pub struct LibraryGraphView {
     pub clusters: Vec<LibraryGraphCluster>,
     /// Owned subjects of the facet in the libraries this read covers.
     pub subject_count: i64,
-    /// True when the build left subjects out because the facet was over
-    /// [`LIBRARY_GRAPH_MAX_SUBJECTS`].
+    /// True when the build left out at least one subject this read covers
+    /// because the facet was over [`LIBRARY_GRAPH_MAX_SUBJECTS`].
     pub truncated: bool,
 }
 
@@ -186,13 +191,69 @@ fn library_graph_subject_input(
 }
 
 /// Keeps the first [`LIBRARY_GRAPH_MAX_SUBJECTS`] of `subjects`, which are
-/// already in submission order. Returns the kept subjects and the total.
+/// already in submission order. Returns the kept subjects, the total and the
+/// keys of the subjects left out, sorted.
 pub(super) fn select_library_graph_subjects(
     mut subjects: Vec<LibraryGraphSubject>,
-) -> (Vec<LibraryGraphSubject>, usize) {
+) -> (Vec<LibraryGraphSubject>, usize, Vec<String>) {
     let total = subjects.len();
-    subjects.truncate(LIBRARY_GRAPH_MAX_SUBJECTS);
-    (subjects, total)
+    let mut omitted = subjects
+        .split_off(subjects.len().min(LIBRARY_GRAPH_MAX_SUBJECTS))
+        .into_iter()
+        .map(|subject| subject.subject_key)
+        .collect::<Vec<_>>();
+    omitted.sort();
+    (subjects, total, omitted)
+}
+
+/// How long the gateway asked Scryer to wait, when it said.
+fn library_graph_retry_after_seconds(error: &AppError) -> Option<i64> {
+    match error {
+        AppError::TemporaryUnavailable {
+            retry_after: Some(retry_after),
+            ..
+        } => Some(i64::try_from(retry_after.as_secs()).unwrap_or(i64::MAX)),
+        _ => None,
+    }
+}
+
+/// Whether a sync run should rebuild a facet that has owned subjects, given
+/// the facet's newest run and whether a complete graph is stored.
+///
+/// A facet with no run at all is built. A failed run is retried once the
+/// backoff from its completion has passed, the longer of
+/// [`LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS`] and what the gateway asked for: a
+/// transient failure always, any other failure only while the facet has no
+/// complete graph to serve.
+pub(crate) fn library_graph_retry_due(
+    latest: Option<&LibraryGraphRunRecord>,
+    has_complete: bool,
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(run) = latest else {
+        return !has_complete;
+    };
+    if run.status != LIBRARY_GRAPH_RUN_FAILED {
+        return !has_complete;
+    }
+    let transient = matches!(
+        run.error_code.as_deref(),
+        Some(
+            error_reasons::library_graph::GATEWAY_QUEUE_FULL
+                | error_reasons::library_graph::GATEWAY_UNAVAILABLE
+        )
+    );
+    if !transient && has_complete {
+        return false;
+    }
+    let backoff_seconds = run
+        .retry_after_seconds
+        .unwrap_or_default()
+        .max(LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS);
+    let failed_at = run.completed_at.unwrap_or(run.updated_at);
+    failed_at
+        .checked_add_signed(chrono::Duration::seconds(backoff_seconds))
+        .is_some_and(|retry_at| now >= retry_at)
 }
 
 /// The run-level code a failed build records.
@@ -280,10 +341,14 @@ pub(super) fn library_graph_snapshot_record(
 /// to visible nodes. Cluster sizes are recounted over visible nodes and empty
 /// clusters are dropped. When a cluster's medoid is no longer visible, the
 /// visible member with the highest total incident edge weight stands in, ties
-/// broken by subject key.
+/// broken by subject key. A cluster without a label key is labelled with its
+/// medoid's title, so a replaced medoid also replaces the label with the name
+/// of a visible title behind the new medoid.
+///
+/// `visible_titles` maps each visible title id to its name.
 pub(super) fn prune_library_graph_for_viewer(
     snapshot: &LibraryGraphSnapshotRecord,
-    visible_title_ids: &HashSet<&str>,
+    visible_titles: &HashMap<&str, &str>,
 ) -> (
     Vec<LibraryGraphNode>,
     Vec<LibraryGraphEdge>,
@@ -295,7 +360,7 @@ pub(super) fn prune_library_graph_for_viewer(
         .filter(|node| {
             node.title_ids
                 .iter()
-                .any(|title_id| visible_title_ids.contains(title_id.as_str()))
+                .any(|title_id| visible_titles.contains_key(title_id.as_str()))
         })
         .collect::<Vec<_>>();
     let visible_targets = visible_nodes
@@ -342,34 +407,48 @@ pub(super) fn prune_library_graph_for_viewer(
             let medoid_visible = members
                 .iter()
                 .any(|member| member.target_key == cluster.medoid);
-            let medoid = if medoid_visible {
-                cluster.medoid.clone()
+            if medoid_visible {
+                return Some(LibraryGraphCluster {
+                    id: cluster.cluster_id,
+                    label_key: cluster.label_key.clone(),
+                    label: cluster.label.clone(),
+                    medoid: cluster.medoid.clone(),
+                    size: members.len() as i64,
+                });
+            }
+            let replacement = members.iter().max_by(|left, right| {
+                let left_weight = incident_weight
+                    .get(left.target_key.as_str())
+                    .copied()
+                    .unwrap_or_default();
+                let right_weight = incident_weight
+                    .get(right.target_key.as_str())
+                    .copied()
+                    .unwrap_or_default();
+                left_weight
+                    .total_cmp(&right_weight)
+                    // Lower subject key wins a tie, so it must
+                    // compare as the greater one here.
+                    .then_with(|| right.subject_key.cmp(&left.subject_key))
+            })?;
+            // The stored label of an unkeyed cluster is the hidden medoid's
+            // title; it must not reach this viewer.
+            let label = if cluster.label_key.is_some() {
+                cluster.label.clone()
             } else {
-                members
+                replacement
+                    .title_ids
                     .iter()
-                    .max_by(|left, right| {
-                        let left_weight = incident_weight
-                            .get(left.target_key.as_str())
-                            .copied()
-                            .unwrap_or_default();
-                        let right_weight = incident_weight
-                            .get(right.target_key.as_str())
-                            .copied()
-                            .unwrap_or_default();
-                        left_weight
-                            .total_cmp(&right_weight)
-                            // Lower subject key wins a tie, so it must
-                            // compare as the greater one here.
-                            .then_with(|| right.subject_key.cmp(&left.subject_key))
-                    })?
-                    .target_key
-                    .clone()
+                    .filter_map(|title_id| visible_titles.get_key_value(title_id.as_str()))
+                    .min_by(|left, right| left.0.cmp(right.0))
+                    .map(|(_, name)| (*name).to_string())
+                    .unwrap_or_default()
             };
             Some(LibraryGraphCluster {
                 id: cluster.cluster_id,
                 label_key: cluster.label_key.clone(),
-                label: cluster.label.clone(),
-                medoid,
+                label,
+                medoid: replacement.target_key.clone(),
                 size: members.len() as i64,
             })
         })
@@ -436,11 +515,11 @@ impl AppUseCase {
                 title.facet == query.facet && effective_library_ids.contains(&title.library_id)
             })
             .collect::<Vec<_>>();
-        let visible_title_ids = visible_titles
+        let visible_title_names = visible_titles
             .iter()
-            .map(|title| title.id.as_str())
-            .collect::<HashSet<_>>();
-        let subject_count = visible_titles
+            .map(|title| (title.id.as_str(), title.name.as_str()))
+            .collect::<HashMap<_, _>>();
+        let visible_subject_keys = visible_titles
             .iter()
             .filter_map(|title| {
                 build_discovery_subject_parts(
@@ -449,26 +528,69 @@ impl AppUseCase {
                 )
             })
             .map(|parts| parts.subject_key)
-            .collect::<HashSet<_>>()
-            .len() as i64;
+            .collect::<HashSet<_>>();
+        // Only the viewer's own subjects count: a hidden library pushing the
+        // facet over the cap is not this viewer's business.
+        let truncated = snapshot
+            .run
+            .omitted_subject_keys
+            .iter()
+            .any(|subject_key| visible_subject_keys.contains(subject_key));
 
         let (nodes, edges, clusters) =
-            prune_library_graph_for_viewer(&snapshot, &visible_title_ids);
+            prune_library_graph_for_viewer(&snapshot, &visible_title_names);
         Ok(Some(LibraryGraphView {
             generated_at: snapshot.run.generated_at.clone().unwrap_or_default(),
             nodes,
             edges,
             clusters,
-            subject_count,
-            truncated: snapshot.run.submitted_count < snapshot.run.subject_count,
+            subject_count: visible_subject_keys.len() as i64,
+            truncated,
         }))
     }
 
+    /// The facets among `owned_facets` whose graph a sync run should rebuild
+    /// although nothing in the run touched them: see
+    /// [`library_graph_retry_due`]. A facet whose runs cannot be read is
+    /// skipped and logged.
+    pub(crate) async fn library_graph_facets_due_for_retry(
+        &self,
+        owned_facets: &BTreeSet<String>,
+        now: DateTime<Utc>,
+    ) -> BTreeSet<String> {
+        let discovery = &self.services.library.discovery;
+        let mut due = BTreeSet::new();
+        for facet in owned_facets {
+            let latest = match discovery.get_latest_library_graph_run(facet).await {
+                Ok(latest) => latest,
+                Err(error) => {
+                    warn!(facet = facet.as_str(), error = %error, "library graph runs could not be read");
+                    continue;
+                }
+            };
+            let has_complete = match latest.as_ref() {
+                Some(run) if run.status == LIBRARY_GRAPH_RUN_COMPLETE => true,
+                _ => match discovery.has_complete_library_graph(facet).await {
+                    Ok(has_complete) => has_complete,
+                    Err(error) => {
+                        warn!(facet = facet.as_str(), error = %error, "library graph runs could not be read");
+                        continue;
+                    }
+                },
+            };
+            if library_graph_retry_due(latest.as_ref(), has_complete, now) {
+                due.insert(facet.clone());
+            }
+        }
+        due
+    }
+
     /// Rebuilds the library graph of each facet in `facets` that has owned
-    /// subjects. A failure is logged and recorded on that facet's run and
-    /// never returned: the sync run that asked for the rebuild carries on.
-    /// Each facet is asked for once; a gateway at capacity is not retried
-    /// within the run.
+    /// subjects, and deletes the stored runs of each one that has none left.
+    /// A failure is logged and recorded on that facet's run and never
+    /// returned: the sync run that asked for the rebuild carries on. Each
+    /// facet is asked for once; a gateway at capacity is retried by a later
+    /// sync run, see [`library_graph_retry_due`].
     pub(crate) async fn rebuild_library_graphs(
         &self,
         titles: &[DiscoveryContextTitle],
@@ -479,6 +601,19 @@ impl AppUseCase {
         for facet in facets {
             let subjects = library_graph_subjects(context, titles, facet);
             if subjects.is_empty() {
+                if let Err(error) = self
+                    .services
+                    .library
+                    .discovery
+                    .delete_library_graph_runs(facet)
+                    .await
+                {
+                    warn!(
+                        facet = facet.as_str(),
+                        error = %error,
+                        "library graph of a facet with no owned titles could not be deleted"
+                    );
+                }
                 continue;
             }
             summaries.push(self.rebuild_library_graph_facet(facet, subjects).await);
@@ -492,7 +627,8 @@ impl AppUseCase {
         subjects: Vec<LibraryGraphSubject>,
     ) -> LibraryGraphRebuildSummary {
         let started_at = self.runtime.environment.now();
-        let (submitted, subject_count) = select_library_graph_subjects(subjects);
+        let (submitted, subject_count, omitted_subject_keys) =
+            select_library_graph_subjects(subjects);
         let run_id = format!("library-graph-{}", uuid::Uuid::new_v4());
         let mut run = LibraryGraphRunRecord {
             id: run_id.clone(),
@@ -504,6 +640,8 @@ impl AppUseCase {
             generated_at: None,
             error_code: None,
             error_text: None,
+            retry_after_seconds: None,
+            omitted_subject_keys,
             started_at,
             completed_at: None,
             created_at: started_at,
@@ -597,6 +735,7 @@ impl AppUseCase {
         run.status = LIBRARY_GRAPH_RUN_FAILED.to_string();
         run.error_code = Some(code.to_string());
         run.error_text = Some(error.to_string());
+        run.retry_after_seconds = library_graph_retry_after_seconds(error);
         run.completed_at = Some(failed_at);
         run.updated_at = failed_at;
         summary.status = LIBRARY_GRAPH_RUN_FAILED.to_string();
@@ -616,49 +755,6 @@ impl AppUseCase {
                 error = %record_error,
                 "library graph failure could not be recorded"
             );
-        }
-    }
-
-    /// Drops a removed title from its facet's stored library graph. Errors
-    /// are logged: the next rebuild corrects whatever this misses.
-    pub(crate) async fn prune_library_graph_for_event(&self, event: &DomainEvent) {
-        if !matches!(event.payload, DomainEventPayload::TitleDeleted(_)) {
-            return;
-        }
-        let change =
-            match pending_context_change_from_domain_event(DISCOVERY_DEFAULT_SCOPE_KEY, event) {
-                Ok(Some(change)) => change,
-                Ok(None) => return,
-                Err(error) => {
-                    warn!(error = %error, "library graph removal could not read the removed title");
-                    return;
-                }
-            };
-        let (Some(facet), Some(subject_key), Some(title_id)) = (
-            change.library_facet.as_deref(),
-            change.subject_key.as_deref(),
-            change.title_id.as_deref(),
-        ) else {
-            return;
-        };
-        match self
-            .services
-            .library
-            .discovery
-            .prune_library_graph_title(facet, subject_key, title_id)
-            .await
-        {
-            Ok(report) => debug!(
-                facet,
-                removed_nodes = report.removed_nodes,
-                removed_edges = report.removed_edges,
-                "library graph pruned a removed title"
-            ),
-            Err(error) => warn!(
-                facet,
-                error = %error,
-                "library graph could not drop a removed title"
-            ),
         }
     }
 }

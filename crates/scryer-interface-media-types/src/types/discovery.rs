@@ -641,9 +641,9 @@ pub struct DiscoveryFacetPayload {
 pub struct DiscoveryNeighborsInput {
     /// The discovery target key of the anchor, in the server's own vocabulary (tvdb:series:<id>, tmdb:movie:<id>, tmdb:series:<id>, imdb:title:<tt>, mal:anime:<id>, anidb:anime:<id>, anilist:anime:<id>).
     pub target_key: String,
-    /// Media facet of the anchor.
+    /// Media facet of the anchor. A movie key fits MOVIE or ANIME, a series key SERIES or ANIME.
     pub facet: MediaFacetValue,
-    /// Maximum related titles to return; defaults to 24 and clamps to 0 through 100.
+    /// Maximum related titles to return; defaults to 24, which is also the most ever returned. Values outside 0 through 24 are clamped.
     #[graphql(default = 24)]
     pub limit: Option<i32>,
 }

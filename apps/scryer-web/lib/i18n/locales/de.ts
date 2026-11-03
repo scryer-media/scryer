@@ -1222,6 +1222,9 @@ const de: LocaleDictionary = {
   "libraryGraph.notBuilt": "Der Bibliotheksgraph wurde noch nicht erstellt.",
   "libraryGraph.truncated":
     "Dieser Graph umfasst nur einen Teil der Bibliothek.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "Dieser Titel kann nicht weiter erkundet werden.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Dieser Titel passt nicht zum Medientyp dieser Bibliothek und kann hier nicht erkundet werden.",
   "libraryGraph.moreLikeThisEmpty": "Noch nichts Ähnliches gefunden.",
   "libraryGraph.backToOverview": "Zurück zur Übersicht",
   "libraryGraph.findingMoreLikeThis": "Suche ähnliche Titel…",

@@ -13,6 +13,7 @@ import { useAuth } from "@/lib/hooks/use-auth";
 import { useTitleMoreLikeThisActions } from "@/lib/hooks/use-title-more-like-this-actions";
 import type { DiscoveryItem } from "@/lib/types/discovery";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
+import { discoveryErrorMessage } from "@/lib/utils/discovery-error-message";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
 import {
   LIBRARY_PERMISSIONS,
@@ -1689,9 +1690,12 @@ export default function LibraryGraphView({
         setTraversal((current) =>
           expandTraversal(current, key, items, ownedIndexRef.current),
         );
-      } catch {
+      } catch (error) {
         if (isCurrentExpansion(expandTokenRef, token)) {
-          setGlobalStatus(t("status.apiError"), { level: "ERROR" });
+          setGlobalStatus(
+            discoveryErrorMessage(error, t, t("status.apiError")),
+            { level: "ERROR" },
+          );
         }
       } finally {
         if (isCurrentExpansion(expandTokenRef, token)) {

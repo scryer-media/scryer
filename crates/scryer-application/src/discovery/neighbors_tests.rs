@@ -73,3 +73,13 @@ fn movie_and_series_keys_must_agree_with_the_facet() {
         );
     }
 }
+
+#[test]
+fn anime_takes_movie_and_series_keys_alike() {
+    for target_key in ["tmdb:movie:129", "tvdb:movie:129", "tmdb:series:1396"] {
+        let (key, subject) = discovery_neighbor_subject(target_key, &MediaFacet::Anime)
+            .expect("an anime anchor may be a film or a series");
+        assert_eq!(key, target_key);
+        assert_eq!(subject.facet.as_deref(), Some("anime"));
+    }
+}

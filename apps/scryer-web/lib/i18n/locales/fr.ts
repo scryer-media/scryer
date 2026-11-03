@@ -1308,6 +1308,9 @@ const fr: LocaleDictionary = {
     "Le graphe de la bibliothèque n'a pas encore été construit.",
   "libraryGraph.truncated":
     "Ce graphe ne couvre qu'une partie de la bibliothèque.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "Ce titre ne peut pas être exploré davantage.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Ce titre ne correspond pas au type de média de cette bibliothèque et ne peut pas être exploré ici.",
   "libraryGraph.moreLikeThisEmpty": "Aucun titre similaire pour l'instant.",
   "libraryGraph.backToOverview": "Retour à la vue d'ensemble",
   "libraryGraph.findingMoreLikeThis": "Recherche de titres similaires…",

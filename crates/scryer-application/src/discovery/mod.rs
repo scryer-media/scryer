@@ -264,10 +264,13 @@ pub(crate) use context::{
     incremental_item_records, pending_context_change_from_domain_event, public_feed_item_records,
     public_feed_section_records, snapshot_item_records,
 };
+#[cfg(test)]
+pub(crate) use library_graph::{
+    LIBRARY_GRAPH_AXIS, LIBRARY_GRAPH_MIN_COSINE, LIBRARY_GRAPH_NEIGHBORS_PER_NODE,
+    LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS,
+};
 pub use library_graph::{
-    LIBRARY_GRAPH_AXIS, LIBRARY_GRAPH_MAX_SUBJECTS, LIBRARY_GRAPH_MIN_COSINE,
-    LIBRARY_GRAPH_NEIGHBORS_PER_NODE, LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode,
-    LibraryGraphQuery, LibraryGraphView,
+    LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
 };
 pub(crate) use library_graph::{LibraryGraphRebuildSummary, library_graph_facets_for_changes};
 pub use neighbors::{DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery};

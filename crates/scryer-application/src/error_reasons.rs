@@ -4754,20 +4754,25 @@ pub mod discovery {
 }
 
 pub mod library_graph {
-    /// The gateway was at capacity for library graphs; the next sync retries.
+    /// The gateway was at capacity for library graphs; a later sync run
+    /// retries once the backoff, or the wait the gateway asked for, has passed.
     pub const GATEWAY_QUEUE_FULL: &str = "LIBRARY_GRAPH_GATEWAY_QUEUE_FULL";
-    /// The gateway was temporarily unreachable or unavailable.
+    /// The gateway was temporarily unreachable or unavailable; retried like
+    /// [`GATEWAY_QUEUE_FULL`].
     pub const GATEWAY_UNAVAILABLE: &str = "LIBRARY_GRAPH_GATEWAY_UNAVAILABLE";
     /// The gateway answered the library graph request with an error.
     pub const GATEWAY_FAILED: &str = "LIBRARY_GRAPH_GATEWAY_FAILED";
     /// The graph came back but could not be stored.
     pub const STORE_FAILED: &str = "LIBRARY_GRAPH_STORE_FAILED";
+    /// A newer graph replaced the stored one twice while it was being read.
+    pub const READ_SUPERSEDED: &str = "LIBRARY_GRAPH_READ_SUPERSEDED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         GATEWAY_QUEUE_FULL,
         GATEWAY_UNAVAILABLE,
         GATEWAY_FAILED,
         STORE_FAILED,
+        READ_SUPERSEDED,
     ];
 }
 

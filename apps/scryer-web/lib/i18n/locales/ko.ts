@@ -1181,6 +1181,9 @@ const ko: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "추천",
   "libraryGraph.notBuilt": "라이브러리 그래프가 아직 생성되지 않았습니다.",
   "libraryGraph.truncated": "이 그래프는 라이브러리의 일부만 포함합니다.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "이 작품은 더 이상 탐색할 수 없습니다.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "이 작품은 이 라이브러리의 미디어 유형과 일치하지 않아 여기에서 탐색할 수 없습니다.",
   "libraryGraph.moreLikeThisEmpty": "아직 비슷한 작품이 없습니다.",
   "libraryGraph.backToOverview": "개요로 돌아가기",
   "libraryGraph.findingMoreLikeThis": "비슷한 작품을 찾는 중…",
