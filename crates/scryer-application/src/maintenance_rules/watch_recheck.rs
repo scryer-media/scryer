@@ -7,13 +7,26 @@
 //! the item is read too. Anything the stored facts do not account for holds
 //! the action; a clean re-check only lets it proceed. Nothing read here is
 //! stored: the next sweep remains the one writer of watch facts.
+//!
+//! A subject nobody had played at the sweep has no stored rows to name its
+//! items, so its items are found through the media-server library mapping
+//! (the playback mapping each connection keeps from title and episode to the
+//! server's item) and read the same way. A subject with files that some
+//! observed connection has no mapped item for cannot be re-checked there, and
+//! holds.
+//!
+//! Times are compared to the whole second. The servers report finer than the
+//! stores keep (.NET ticks are 100 ns; Postgres keeps microseconds), so an
+//! exact compare would read every round-tripped time as a newer play.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use scryer_domain::UserMediaSignal;
+use scryer_domain::{
+    MaintenanceRuleSubjectKind, MediaFacet, MediaServerPlaybackEntityKind, UserMediaSignal,
+};
 
-use super::facts::{MaintenanceWatchContext, WatchSignalFreshness};
 use super::action_execution::execution_reason;
+use super::facts::{MaintenanceWatchContext, WatchSignalFreshness};
 use crate::AppUseCase;
 use crate::ports::{AudiencePlay, ProviderItemRecheck};
 
@@ -53,6 +66,48 @@ pub(crate) fn rule_reads_watch_facts(rego_source: &str, rule_set_id: &str) -> bo
     }
 }
 
+/// A play time to the whole second, the precision every store keeps.
+fn whole_seconds(at: Option<chrono::DateTime<chrono::Utc>>) -> Option<i64> {
+    at.map(|at| at.timestamp())
+}
+
+/// The catalog entities whose server items a re-check must read: the movie,
+/// or each in-scope episode with a file. `None` when a file cannot be placed
+/// on an entity the mapping knows (an episode file with no episode), so the
+/// subject's items cannot all be found.
+///
+/// A subject with no files has nothing on any server to play, so nothing
+/// needs finding; its stored rows are still re-checked.
+pub(crate) fn recheck_entities(
+    facet: &MediaFacet,
+    title_id: &str,
+    subject_kind: MaintenanceRuleSubjectKind,
+    files: &[crate::TitleMediaFile],
+    episode_ids: Option<&HashSet<String>>,
+) -> Option<Vec<(MediaServerPlaybackEntityKind, String)>> {
+    if files.is_empty() {
+        return Some(Vec::new());
+    }
+    if *facet == MediaFacet::Movie && subject_kind == MaintenanceRuleSubjectKind::Title {
+        return Some(vec![(
+            MediaServerPlaybackEntityKind::Title,
+            title_id.to_string(),
+        )]);
+    }
+    let mut entities = Vec::new();
+    for file in files {
+        let episode_id = file.episode_id.as_ref()?;
+        if episode_ids.is_some_and(|ids| !ids.contains(episode_id)) {
+            continue;
+        }
+        let entity = (MediaServerPlaybackEntityKind::Episode, episode_id.clone());
+        if !entities.contains(&entity) {
+            entities.push(entity);
+        }
+    }
+    Some(entities)
+}
+
 /// Compare one item's live state with what is stored for it on its connection.
 ///
 /// `stored` holds this item's rows on this connection, one per account that
@@ -88,7 +143,9 @@ pub(crate) fn fold_item_recheck(
         }
         match stored_for(participant).filter(|signal| signal.played) {
             None => return WatchRecheck::NewerPlay,
-            Some(signal) if live.last_played_at > signal.last_played_at => {
+            Some(signal)
+                if whole_seconds(live.last_played_at) > whole_seconds(signal.last_played_at) =>
+            {
                 return WatchRecheck::NewerPlay;
             }
             Some(_) => {}
@@ -97,18 +154,18 @@ pub(crate) fn fold_item_recheck(
     let covers = |stored_at: Option<chrono::DateTime<chrono::Utc>>,
                   played_at: Option<chrono::DateTime<chrono::Utc>>| {
         match (stored_at, played_at) {
-            (Some(stored_at), Some(played_at)) => stored_at >= played_at,
+            (Some(stored_at), Some(played_at)) => stored_at.timestamp() >= played_at.timestamp(),
             (_, None) => true,
             (None, Some(_)) => false,
         }
     };
     for play in &recheck.history {
-        let credited = stored_for(&play.external_user_id)
-            .is_some_and(|signal| signal.played && covers(signal.last_played_at, play.last_played_at))
-            || audience.iter().any(|row| {
-                row.external_account_id == play.external_user_id
-                    && covers(row.last_played_at, play.last_played_at)
-            });
+        let credited = stored_for(&play.external_user_id).is_some_and(|signal| {
+            signal.played && covers(signal.last_played_at, play.last_played_at)
+        }) || audience.iter().any(|row| {
+            row.external_account_id == play.external_user_id
+                && covers(row.last_played_at, play.last_played_at)
+        });
         if credited {
             continue;
         }
@@ -122,30 +179,46 @@ pub(crate) fn fold_item_recheck(
 }
 
 impl AppUseCase {
-    /// Read the subject's watched items back from their servers.
+    /// Read the subject's items back from their servers.
     ///
     /// `signals` are the title's stored rows and `audience` its audience
     /// rows; `episode_ids`, when given, narrows both to a season or episode
-    /// subject. Every item either names is read. Each item is read on
-    /// its own connection for every account the gate counts there. Any read
-    /// that cannot be made, any item with no id to read it by, and a gate
-    /// that is not open are all [`WatchRecheck::Unavailable`].
+    /// subject. Every item either names is read, and so is every item the
+    /// library mapping holds for `entities` (see [`recheck_entities`]; `None`
+    /// is a subject whose items cannot all be found). Each connection's items
+    /// are read together, for every account the gate counts there.
+    ///
+    /// Any read that cannot be made, any item with no id to read it by, any
+    /// entity an observed connection has no mapped item for, and a gate that
+    /// is not open are all [`WatchRecheck::Unavailable`].
     pub(crate) async fn maintenance_watch_recheck(
         &self,
         context: &MaintenanceWatchContext,
         signals: &[UserMediaSignal],
         audience: &[AudiencePlay],
         episode_ids: Option<&HashSet<String>>,
+        entities: Option<&[(MediaServerPlaybackEntityKind, String)]>,
     ) -> WatchRecheck {
-        if context.freshness != WatchSignalFreshness::Fresh {
+        // The anonymous facts can be open while the per-user ones are not
+        // (no linked user yet); either open gate is a picture to re-check.
+        if context.freshness != WatchSignalFreshness::Fresh
+            && context.audience_unavailable_reason().is_some()
+        {
             return WatchRecheck::Unavailable;
         }
+        let Some(entities) = entities else {
+            return WatchRecheck::Unavailable;
+        };
         let in_scope = |episode_id: Option<&String>| {
             episode_ids.is_none_or(|ids| episode_id.is_some_and(|id| ids.contains(id)))
         };
         let relevant: Vec<&UserMediaSignal> = signals
             .iter()
-            .filter(|signal| context.enabled_connection_ids.contains(&signal.connection_id))
+            .filter(|signal| {
+                context
+                    .enabled_connection_ids
+                    .contains(&signal.connection_id)
+            })
             .filter(|signal| in_scope(signal.scryer_episode_id.as_ref()))
             .collect();
         let relevant_audience: Vec<&AudiencePlay> = audience
@@ -153,13 +226,41 @@ impl AppUseCase {
             .filter(|play| context.enabled_connection_ids.contains(&play.connection_id))
             .filter(|play| in_scope(play.scryer_episode_id.as_ref()))
             .collect();
-        if relevant.is_empty() && relevant_audience.is_empty() {
-            return WatchRecheck::Clear;
-        }
         if relevant
             .iter()
             .any(|signal| signal.provider_item_id.trim().is_empty())
         {
+            return WatchRecheck::Unavailable;
+        }
+
+        // The subject's items on every observed connection, from the library
+        // mapping: a title nobody played at the sweep has no stored row to
+        // name them.
+        let mapped = if entities.is_empty() {
+            Vec::new()
+        } else {
+            match self
+                .services
+                .integrations
+                .media_server_connections
+                .list_playback_items_for_entities(entities)
+                .await
+            {
+                Ok(mapped) => mapped,
+                Err(_) => return WatchRecheck::Unavailable,
+            }
+        };
+        let resolved = context.enabled_connection_ids.iter().all(|connection_id| {
+            entities.iter().all(|(kind, id)| {
+                mapped.iter().any(|item| {
+                    item.connection_id == *connection_id
+                        && item.entity_kind == *kind
+                        && item.entity_id == *id
+                        && !item.provider_item_id.trim().is_empty()
+                })
+            })
+        });
+        if !resolved {
             return WatchRecheck::Unavailable;
         }
 
@@ -206,6 +307,15 @@ impl AppUseCase {
                 .1
                 .push(play);
         }
+        for item in &mapped {
+            if context.enabled_connection_ids.contains(&item.connection_id) {
+                items
+                    .entry(item.connection_id.as_str())
+                    .or_default()
+                    .entry(item.provider_item_id.trim())
+                    .or_default();
+            }
+        }
 
         for (connection_id, connection_items) in items {
             let connection = match self
@@ -232,12 +342,16 @@ impl AppUseCase {
                 .get(connection_id)
                 .cloned()
                 .unwrap_or_default();
+            let item_ids: Vec<String> = connection_items.keys().map(|id| id.to_string()).collect();
+            let answers = match reader.recheck_items(&item_ids, &participants).await {
+                Ok(answers) => answers,
+                Err(_) => return WatchRecheck::Unavailable,
+            };
             for (item_id, (stored, audience)) in connection_items {
-                let recheck = match reader.recheck_item(item_id, &participants).await {
-                    Ok(recheck) => recheck,
-                    Err(_) => return WatchRecheck::Unavailable,
+                let Some(recheck) = answers.get(item_id) else {
+                    return WatchRecheck::Unavailable;
                 };
-                let outcome = fold_item_recheck(&stored, &audience, &participants, &recheck);
+                let outcome = fold_item_recheck(&stored, &audience, &participants, recheck);
                 if outcome != WatchRecheck::Clear {
                     return outcome;
                 }
@@ -281,7 +395,11 @@ mod tests {
         }
     }
 
-    fn live(account: &str, played: bool, last_played_at: Option<DateTime<Utc>>) -> ProviderItemPlay {
+    fn live(
+        account: &str,
+        played: bool,
+        last_played_at: Option<DateTime<Utc>>,
+    ) -> ProviderItemPlay {
         ProviderItemPlay {
             external_user_id: account.to_string(),
             played,
@@ -306,11 +424,62 @@ mod tests {
         );
     }
 
+    /// Jellyfin and Emby report seven fractional digits (.NET ticks); the
+    /// store keeps microseconds. The same play read back must not look newer.
+    #[test]
+    fn a_play_read_back_finer_than_the_store_keeps_is_the_same_play() {
+        let server_time = DateTime::parse_from_rfc3339("2026-10-30T08:15:42.1234567Z")
+            .expect("seven fractional digits parse")
+            .with_timezone(&Utc);
+        let stored_time = DateTime::parse_from_rfc3339("2026-10-30T08:15:42.123456Z")
+            .expect("microseconds parse")
+            .with_timezone(&Utc);
+        assert!(
+            server_time > stored_time,
+            "the fixture must differ below a second"
+        );
+        let row = stored("100", Some(stored_time));
+        let audience_row = AudiencePlay {
+            connection_id: "conn-example".to_string(),
+            external_account_id: "900".to_string(),
+            provider_item_id: "item-1".to_string(),
+            kind: MediaServerSignalKind::Movie,
+            scryer_title_id: Some("title-1".to_string()),
+            scryer_episode_id: None,
+            play_count: 1,
+            last_played_at: Some(stored_time),
+        };
+        let recheck = ProviderItemRecheck {
+            participants: vec![live("100", true, Some(server_time))],
+            history: vec![
+                live("100", true, Some(server_time)),
+                live("900", true, Some(server_time)),
+            ],
+        };
+        assert_eq!(
+            fold_item_recheck(&[&row], &[&audience_row], &accounts(&["100"]), &recheck),
+            WatchRecheck::Clear
+        );
+
+        // A play one second later is a newer play.
+        let later = ProviderItemRecheck {
+            participants: vec![live("100", true, Some(server_time + Duration::seconds(1)))],
+            history: Vec::new(),
+        };
+        assert_eq!(
+            fold_item_recheck(&[&row], &[], &accounts(&["100"]), &later),
+            WatchRecheck::NewerPlay
+        );
+    }
+
     #[test]
     fn a_first_play_since_the_sweep_is_a_newer_play() {
         let row = stored("100", Some(at(48)));
         let recheck = ProviderItemRecheck {
-            participants: vec![live("100", true, Some(at(48))), live("200", true, Some(at(1)))],
+            participants: vec![
+                live("100", true, Some(at(48))),
+                live("200", true, Some(at(1))),
+            ],
             history: Vec::new(),
         };
         assert_eq!(
@@ -363,7 +532,10 @@ mod tests {
         let row = stored("100", Some(at(48)));
         let recheck = ProviderItemRecheck {
             participants: vec![live("100", true, Some(at(48)))],
-            history: vec![live("100", true, Some(at(48))), live("900", true, Some(at(200)))],
+            history: vec![
+                live("100", true, Some(at(48))),
+                live("900", true, Some(at(200))),
+            ],
         };
         assert_eq!(
             fold_item_recheck(&[&row], &[], &accounts(&["100"]), &recheck),
@@ -378,7 +550,10 @@ mod tests {
         let row = stored("300", Some(at(48)));
         let recheck = ProviderItemRecheck {
             participants: vec![live("300", true, Some(at(48)))],
-            history: vec![live("300", true, Some(at(2))), live("300", true, Some(at(48)))],
+            history: vec![
+                live("300", true, Some(at(2))),
+                live("300", true, Some(at(48))),
+            ],
         };
         assert_eq!(
             fold_item_recheck(&[&row], &[], &accounts(&["300"]), &recheck),
@@ -414,7 +589,10 @@ mod tests {
         };
         let recheck = ProviderItemRecheck {
             participants: vec![live("100", true, Some(at(48)))],
-            history: vec![live("100", true, Some(at(48))), live("900", true, Some(at(200)))],
+            history: vec![
+                live("100", true, Some(at(48))),
+                live("900", true, Some(at(200))),
+            ],
         };
         assert_eq!(
             fold_item_recheck(&[&row], &[&audience_row], &accounts(&["100"]), &recheck),

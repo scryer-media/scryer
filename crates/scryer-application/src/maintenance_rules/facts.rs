@@ -344,8 +344,18 @@ impl MaintenanceWatchContext {
 
     /// The anonymous facts' gate: the watch gate first, then the audience
     /// read.
-    fn audience_unavailable_reason(&self) -> Option<&'static str> {
-        self.unavailable_reason().or(match self.audience {
+    ///
+    /// A watch gate closed only because no linked user's plays have been
+    /// read does not close this one: the audience read is every account's,
+    /// linked or not, so "anyone watched it" stands without a linked user.
+    pub(crate) fn audience_unavailable_reason(&self) -> Option<&'static str> {
+        let watch_gate = match self.unavailable_reason() {
+            Some(
+                unknown_reason::NO_LINKED_PARTICIPANTS | unknown_reason::PARTICIPANTS_NOT_YET_SWEPT,
+            ) => None,
+            other => other,
+        };
+        watch_gate.or(match self.audience {
             WatchSignalFreshness::Fresh => None,
             WatchSignalFreshness::Unavailable(reason) => Some(reason),
         })
@@ -1302,7 +1312,10 @@ fn scoped_watch_observations(
     }
     // The anonymous pair covers every aired episode in scope, whatever the
     // per-person rollup below concludes about them.
-    let episode_ids: HashSet<&str> = episodes.iter().map(|&episode| episode.id.as_str()).collect();
+    let episode_ids: HashSet<&str> = episodes
+        .iter()
+        .map(|&episode| episode.id.as_str())
+        .collect();
     let anyone = scoped_anyone_observations(watch, &episode_ids);
     // Empty seasons are never vacuously completed.
     if episodes.is_empty() {
@@ -2779,7 +2792,10 @@ pub(crate) mod tests {
             "2024-06-01T00:00:00+00:00"
         );
         // The person-targeted facts still answer from linked plays alone.
-        assert_eq!(doc["facts"]["watched_by_user_ids"], serde_json::json!(["alice"]));
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!(["alice"])
+        );
         assert_eq!(doc["facts"]["last_watched_at"], "2024-05-01T00:00:00+00:00");
     }
 
@@ -2818,7 +2834,10 @@ pub(crate) mod tests {
                 "{fact}"
             );
         }
-        assert_eq!(doc["facts"]["watched_by_user_ids"], serde_json::json!(["alice"]));
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!(["alice"])
+        );
     }
 
     #[test]
@@ -2833,7 +2852,12 @@ pub(crate) mod tests {
 
     #[test]
     fn an_untimed_audience_play_still_counts_but_hides_the_latest_time() {
-        let audience = [audience_row(ENABLED_CONNECTION, "account-unlinked", None, None)];
+        let audience = [audience_row(
+            ENABLED_CONNECTION,
+            "account-unlinked",
+            None,
+            None,
+        )];
 
         let doc = audience_document(&fresh_context(&["alice"]), None, Some(&audience));
 

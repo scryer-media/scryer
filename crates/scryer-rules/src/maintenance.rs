@@ -185,10 +185,17 @@ pub struct MaintenanceFactsDoc {
     /// Whether any account on any enabled media server has played the
     /// subject, linked to a Scryer user or not, and when the most recent such
     /// play was. Anonymous: they say a play happened, never whose. Behind the
-    /// same gate as the facts above, and also unknown until every enabled
-    /// connection's full audience has been read recently. For a season or a
-    /// show they cover every aired episode in scope: one play of one episode
-    /// is enough for `watched_by_anyone`.
+    /// same sweep gate as the facts above, except that they do not wait for a
+    /// linked user, and also unknown until every enabled connection's full
+    /// audience has been read recently. For a season or a show they cover
+    /// every aired episode in scope: one play of one episode is enough for
+    /// `watched_by_anyone`.
+    ///
+    /// On Jellyfin and Emby the audience is every user's own played state,
+    /// marks included. On Plex it is the owner's own played state, marks
+    /// included, and the server's history for every other account, which
+    /// holds organic plays only: an item another account marked watched, or
+    /// scrobbled, without playing it is not a play here.
     pub watched_by_anyone: Observation<bool>,
     pub last_watched_by_anyone_at: Observation<String>,
     /// Lifecycle claims (spec 0003 FR-041..FR-044). A claim is what a request

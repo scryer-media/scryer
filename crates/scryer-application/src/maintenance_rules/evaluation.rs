@@ -2175,13 +2175,21 @@ impl AppUseCase {
         // A user is observed only when every one of their links was read.
         linked_user_ids.retain(|user_id| !unswept_user_ids.contains(user_id));
 
+        // The audience read is every account's, linked or not, so it is
+        // judged on its own and stands whatever the links' state.
+        let audience = self.maintenance_audience_freshness(&connections, now).await;
+
         // A fresh sweep over nobody is not a watch picture. With no verified
         // link on any enabled connection, every subject would come back "no
         // plays recorded" — which reads as "nobody watched it" while Scryer is
-        // in fact observing nobody at all. Links that exist but that no sweep
-        // has read yet are the same gap with a different remedy: wait for the
-        // next sweep rather than link an account.
-        if linked_user_ids.is_empty() {
+        // in fact observing nobody at all.
+        //
+        // A link no sweep has read yet is the same gap with a different
+        // remedy (wait for the next sweep). It closes the per-user facts even
+        // beside links that were read: that person's plays have never been
+        // seen, so "nobody watched it" and every watcher list would leave
+        // them out while reading as complete.
+        if linked_user_ids.is_empty() || !unswept_user_ids.is_empty() {
             let reason = if unswept_user_ids.is_empty() {
                 unknown_reason::NO_LINKED_PARTICIPANTS
             } else {
@@ -2192,11 +2200,10 @@ impl AppUseCase {
                 linked_user_ids,
                 unswept_user_ids,
                 enabled_connection_ids,
-                audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
+                audience,
             });
         }
 
-        let audience = self.maintenance_audience_freshness(&connections, now).await;
         Ok(MaintenanceWatchContext {
             freshness: WatchSignalFreshness::Fresh,
             linked_user_ids,
@@ -2313,9 +2320,7 @@ impl AppUseCase {
                 ..context.clone()
             })
         };
-        if context.freshness != WatchSignalFreshness::Fresh
-            || context.audience != WatchSignalFreshness::Fresh
-        {
+        if context.audience_unavailable_reason().is_some() {
             return (std::borrow::Cow::Borrowed(context), HashMap::new());
         }
         let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();

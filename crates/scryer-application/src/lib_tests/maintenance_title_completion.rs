@@ -810,6 +810,7 @@ async fn whole_show_watch_preview_requires_one_verified_person_for_all_aired_epi
             .with_media_server_connection_store(Arc::new(StubSignalConnections {
                 connections: vec![jellyfin_connection(true)],
                 fail_list: false,
+                ..Default::default()
             }))
             .with_external_account_store(Arc::new(StubExternalAccounts { accounts }))
             .with_media_server_signal_store(signals.clone())

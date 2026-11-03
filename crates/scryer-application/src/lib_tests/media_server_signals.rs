@@ -263,6 +263,9 @@ fn two_episodes_at_the_same_coordinates_stay_unmapped() {
 pub(super) struct StubSignalConnections {
     pub(super) connections: Vec<MediaServerConnection>,
     pub(super) fail_list: bool,
+    /// The library mapping: each connection's server item for a title or
+    /// episode.
+    pub(super) playback_items: std::sync::Mutex<Vec<MediaServerPlaybackItem>>,
 }
 
 #[async_trait]
@@ -304,10 +307,17 @@ impl MediaServerConnectionRepository for StubSignalConnections {
 
     async fn list_playback_items_for_entity(
         &self,
-        _: MediaServerPlaybackEntityKind,
-        _: &str,
+        entity_kind: MediaServerPlaybackEntityKind,
+        entity_id: &str,
     ) -> AppResult<Vec<MediaServerPlaybackItem>> {
-        Ok(Vec::new())
+        Ok(self
+            .playback_items
+            .lock()
+            .expect("playback items")
+            .iter()
+            .filter(|item| item.entity_kind == entity_kind && item.entity_id == entity_id)
+            .cloned()
+            .collect())
     }
 
     async fn replace_playback_items_for_connection(
@@ -495,6 +505,8 @@ impl MediaServerSignalReader for StubSignalReader {
 #[derive(Default)]
 pub(super) struct InMemorySignalRepo {
     fail_state_reads: std::sync::atomic::AtomicBool,
+    /// Stands in for a store failure while removing an audience read marker.
+    fail_audience_clear: std::sync::atomic::AtomicBool,
     rows: Mutex<Vec<UserMediaSignal>>,
     states: Mutex<Vec<MediaServerSignalSyncState>>,
     generations: Mutex<HashMap<(String, String), i64>>,
@@ -677,6 +689,12 @@ impl MediaServerSignalRepository for InMemorySignalRepo {
     }
 
     async fn clear_audience_read(&self, connection_id: &str) -> AppResult<()> {
+        if self
+            .fail_audience_clear
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository("audience marker write failed".into()));
+        }
         self.audience_reads
             .lock()
             .await
@@ -699,7 +717,10 @@ impl MediaServerSignalRepository for InMemorySignalRepo {
                 .as_ref()
                 .filter(|title_id| title_ids.contains(title_id))
             {
-                grouped.entry(title_id.clone()).or_default().push(play.clone());
+                grouped
+                    .entry(title_id.clone())
+                    .or_default()
+                    .push(play.clone());
             }
         }
         Ok(grouped)
@@ -759,6 +780,7 @@ fn sync_app(
             .with_media_server_connection_store(Arc::new(StubSignalConnections {
                 connections,
                 fail_list: false,
+                ..Default::default()
             }))
             .with_external_account_store(Arc::new(StubExternalAccounts { accounts }))
             .with_media_server_signal_source(source.clone())
@@ -951,6 +973,7 @@ fn gate_app(accounts: Vec<UserExternalAccount>, signals: Arc<InMemorySignalRepo>
             .with_media_server_connection_store(Arc::new(StubSignalConnections {
                 connections: vec![jellyfin_connection(true)],
                 fail_list: false,
+                ..Default::default()
             }))
             .with_external_account_store(Arc::new(StubExternalAccounts { accounts }))
             .with_media_server_signal_store(signals)
@@ -988,7 +1011,8 @@ async fn a_sweep_records_each_link_it_read_in_the_roster() {
 
 /// The commit-order race: a link stamped before the sweep started, but
 /// written after the sweep listed its participants, was never read. Its
-/// timestamps say "swept"; only the roster knows better.
+/// timestamps say "swept"; only the roster knows better. Its plays are
+/// unknown, so no watch fact is an answer until a sweep reads it.
 #[tokio::test]
 async fn a_link_the_sweep_did_not_read_is_unobserved_whatever_its_timestamp() {
     let fixture = sync_app(
@@ -1011,7 +1035,9 @@ async fn a_link_the_sweep_did_not_read_is_unobserved_whatever_its_timestamp() {
 
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::maintenance_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
+        )
     );
     assert!(context.linked_user_ids.contains(PARTICIPANT_SCRYER_ID));
     assert!(!context.linked_user_ids.contains("scryer-user-late"));
@@ -1896,16 +1922,115 @@ async fn the_audience_gate_opens_only_when_every_enabled_connection_was_read() {
         .await
         .expect("sweep");
     let context = fixture.app.maintenance_watch_context().await.unwrap();
-    assert_eq!(context.freshness, crate::maintenance_rules::facts::WatchSignalFreshness::Fresh);
-    assert_eq!(context.audience, crate::maintenance_rules::facts::WatchSignalFreshness::Fresh);
+    assert_eq!(
+        context.freshness,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+    );
+    assert_eq!(
+        context.audience,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+    );
 
-    fixture.signals.clear_audience_read(CONNECTION_ID).await.unwrap();
+    fixture
+        .signals
+        .clear_audience_read(CONNECTION_ID)
+        .await
+        .unwrap();
     let context = fixture.app.maintenance_watch_context().await.unwrap();
-    assert_eq!(context.freshness, crate::maintenance_rules::facts::WatchSignalFreshness::Fresh);
+    assert_eq!(
+        context.freshness,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+    );
     assert_eq!(
         context.audience,
         crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
             crate::maintenance_rules::facts::unknown_reason::AUDIENCE_NOT_READ
         )
+    );
+}
+
+/// The audience is every account on the server, so it is read even when no
+/// Scryer user is linked: the anonymous facts stand without one.
+#[tokio::test]
+async fn a_sweep_with_nobody_linked_still_reads_the_audience() {
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        Vec::new(),
+        StubSignalSource {
+            audience: Some(Ok(vec![audience_play(
+                "jf-user-unlinked",
+                played_movie("jf-movie-1", "603"),
+            )])),
+            ..Default::default()
+        },
+    );
+    seed_movie_title(&fixture.app, "title-movie", "603").await;
+
+    fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+
+    let audience = fixture.signals.audience.lock().await.clone();
+    assert_eq!(audience.len(), 1);
+    assert_eq!(audience[0].external_account_id, "jf-user-unlinked");
+    assert_eq!(audience[0].scryer_title_id.as_deref(), Some("title-movie"));
+    assert_eq!(fixture.signals.audience_reads.lock().await.len(), 1);
+    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    assert_eq!(
+        context.audience,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+    );
+    assert_eq!(
+        context.freshness,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::maintenance_rules::facts::unknown_reason::NO_LINKED_PARTICIPANTS
+        )
+    );
+}
+
+/// A failed audience read whose marker cannot be removed would leave the
+/// last good read standing for it, so the sweep records the connection as
+/// failed and every watch fact holds.
+#[tokio::test]
+async fn an_audience_marker_that_cannot_be_cleared_fails_the_sweep() {
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        vec![verified_account()],
+        StubSignalSource {
+            audience: Some(Err(SignalReadFailure::new(
+                reasons::REQUEST_FAILED,
+                "connection reset",
+            ))),
+            ..Default::default()
+        },
+    );
+    // An earlier good read left its marker.
+    fixture
+        .signals
+        .replace_connection_audience(CONNECTION_ID, &[], Utc::now())
+        .await
+        .unwrap();
+    fixture
+        .signals
+        .fail_audience_clear
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+
+    let state = fixture.signals.state_for(CONNECTION_ID).await.unwrap();
+    assert_eq!(
+        state.last_error_code.as_deref(),
+        Some(reasons::STORE_FAILED)
+    );
+    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    assert_ne!(
+        context.freshness,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
     );
 }

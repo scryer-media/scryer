@@ -91,9 +91,19 @@ fn watch_app(
     connections: Vec<MediaServerConnection>,
     accounts: Vec<UserExternalAccount>,
 ) -> WatchFixture {
-    let (app, user) = bootstrap();
     // Every fixture link stands for one a sweep has read.
-    let signals = Arc::new(InMemorySignalRepo::swept(&accounts));
+    let swept = accounts.clone();
+    watch_app_swept(connections, accounts, &swept)
+}
+
+/// As [`watch_app`], with only `swept` among the links read by a sweep.
+fn watch_app_swept(
+    connections: Vec<MediaServerConnection>,
+    accounts: Vec<UserExternalAccount>,
+    swept: &[UserExternalAccount],
+) -> WatchFixture {
+    let (app, user) = bootstrap();
+    let signals = Arc::new(InMemorySignalRepo::swept(swept));
     let media_requests = Arc::new(MockMediaRequestRepo::default());
     let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
     let app = app.with_test_overrides(|services| {
@@ -105,6 +115,7 @@ fn watch_app(
             .with_media_server_connection_store(Arc::new(StubSignalConnections {
                 connections,
                 fail_list: false,
+                ..Default::default()
             }))
             .with_external_account_store(Arc::new(StubExternalAccounts { accounts }))
             .with_media_server_signal_store(signals.clone())
@@ -520,6 +531,51 @@ async fn one_linked_participant_opens_the_gate() {
         assert_eq!(outcome, Some(MaintenanceOutcome::Match), "{fact}");
         assert!(reasons.is_empty(), "{fact}: {reasons:?}");
     }
+}
+
+/// A link no sweep has read yet is a viewer whose plays are unknown, so no
+/// watch fact can be an answer until one does: a fresh link never lets a
+/// "nobody watched it" rule through.
+#[tokio::test]
+async fn a_link_no_sweep_has_read_holds_every_watch_fact() {
+    let viewer = link("user-viewer", CONNECTION_ID, VIEWER_EXTERNAL_ID);
+    let fixture = watch_app_swept(vec![jellyfin_connection(true)], vec![viewer], &[]);
+    let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
+    record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
+
+    for (fact, matcher) in [
+        ("watched_by_user_ids", NOBODY_WATCHED_MATCHER),
+        ("last_watched_at", NEVER_WATCHED_MATCHER),
+    ] {
+        let (outcome, reasons) = fixture.decide(matcher, &title.id).await;
+
+        assert_eq!(outcome, Some(MaintenanceOutcome::Unknown), "{fact}");
+        assert_eq!(
+            reasons,
+            vec!["participants_not_yet_swept".to_string()],
+            "{fact}"
+        );
+    }
+}
+
+/// One read link beside one unread link is still a partial picture: the
+/// unread viewer may be the one who watched it.
+#[tokio::test]
+async fn an_unread_link_beside_a_read_one_holds_every_watch_fact() {
+    let read = link("user-viewer", CONNECTION_ID, VIEWER_EXTERNAL_ID);
+    let unread = link("user-other", CONNECTION_ID, OTHER_VIEWER_EXTERNAL_ID);
+    let fixture = watch_app_swept(
+        vec![jellyfin_connection(true)],
+        vec![read.clone(), unread],
+        std::slice::from_ref(&read),
+    );
+    let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
+    record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
+
+    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+
+    assert_eq!(outcome, Some(MaintenanceOutcome::Unknown));
+    assert_eq!(reasons, vec!["participants_not_yet_swept".to_string()]);
 }
 
 // ── Requester rollups end to end ────────────────────────────────────────────

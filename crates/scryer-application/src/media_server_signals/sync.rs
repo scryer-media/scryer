@@ -49,8 +49,8 @@ use crate::media_server_signals::mapping::{
 };
 use crate::media_server_signals::reasons;
 use crate::ports::{
-    AudiencePlay, MediaServerSignalReader, ProviderPlayedItem, SignalReadFailure,
-    SignalRosterLink, TitleExternalIdLookup,
+    AudiencePlay, MediaServerSignalReader, ProviderPlayedItem, SignalReadFailure, SignalRosterLink,
+    TitleExternalIdLookup,
 };
 use crate::{AppResult, AppUseCase};
 
@@ -326,9 +326,9 @@ impl AppUseCase {
             outcome.record_error(store_failure("could not retire participant signals", error));
             return outcome;
         }
-        if identities.is_empty() {
-            return outcome;
-        }
+        // No early return when nobody is linked: the audience read below is
+        // every account's on the server, and the anonymous facts it feeds
+        // stand without a linked user.
 
         // Opened once for every participant: whatever the provider needs per
         // connection (the server to talk to, who owns it) is read once a sweep.
@@ -406,8 +406,12 @@ impl AppUseCase {
             }
         }
 
-        self.sync_connection_audience(connection, reader.as_ref(), library, started_at)
-            .await;
+        if let Some(failure) = self
+            .sync_connection_audience(connection, reader.as_ref(), library, started_at)
+            .await
+        {
+            outcome.record_error(failure);
+        }
 
         outcome
     }
@@ -416,22 +420,27 @@ impl AppUseCase {
     /// rows with them.
     ///
     /// Only the anonymous "anyone watched it" facts read these rows, so a
-    /// failure here is not the connection's failure: it is logged, and the
+    /// failed read is not the connection's failure: it is logged, and the
     /// connection's read marker is removed so those two facts go unknown
     /// until a read succeeds. The rows already stored are kept, exactly as a
     /// failed participant read keeps that participant's rows.
+    ///
+    /// A marker that cannot be removed would leave the failed read looking
+    /// like the last good one, so that failure is returned for the
+    /// connection's state: the sweep is then incomplete, and every watch
+    /// fact holds until a sweep succeeds.
     async fn sync_connection_audience(
         &self,
         connection: &MediaServerConnection,
         reader: &dyn MediaServerSignalReader,
         library: &ScryerLibraryPaths,
         started_at: chrono::DateTime<Utc>,
-    ) {
+    ) -> Option<SignalReadFailure> {
         let result = self
             .read_connection_audience(connection, reader, library, started_at)
             .await;
         let Err(failure) = result else {
-            return;
+            return None;
         };
         warn!(
             connection_id = connection.id.as_str(),
@@ -449,9 +458,14 @@ impl AppUseCase {
             warn!(
                 connection_id = connection.id.as_str(),
                 error = %error,
-                "could not clear the audience read marker"
+                "could not clear the audience read marker; the sweep is recorded as incomplete"
             );
+            return Some(store_failure(
+                "could not clear the audience read marker after a failed audience read",
+                error,
+            ));
         }
+        None
     }
 
     async fn read_connection_audience(

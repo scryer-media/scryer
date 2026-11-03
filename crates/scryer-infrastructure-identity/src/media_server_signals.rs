@@ -106,8 +106,13 @@
 //! # Malformed items
 //!
 //! An item without an id, or a played-set item with a type that is neither a
-//! movie nor an episode, makes the read incomplete. Publishing a partial
-//! history could turn an omitted played item into a false "never watched"
+//! movie nor an episode, makes the read incomplete, as
+//! `WATCH_SYNC_ITEMS_UNREADABLE`; so does a history row with no account, no
+//! item or no type, and an item whose metadata cannot be read.
+//! `WATCH_SYNC_FILTER_NOT_HONOURED` is kept for a listing whose filter was
+//! visibly ignored: an unplayed row in a watched-set listing, or a filtered
+//! history row naming another account or item. Publishing a partial history
+//! could turn an omitted played item into a false "never watched"
 //! maintenance fact.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -116,6 +121,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, TryStreamExt};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
@@ -148,6 +154,27 @@ pub const SIGNAL_PAGE_SIZE: usize = 500;
 /// Series and item metadata lookups are batched; this bounds one batch's id
 /// list so the request line stays a sane length.
 const LOOKUP_BATCH: usize = 100;
+
+/// The most pages one listing may take before the read gives up on it.
+///
+/// Every pager otherwise ends only when the server says so: its reported
+/// total is reached, or, when it reports none, a page comes back short. A
+/// server that reports no total and keeps answering full pages would never
+/// end, so a listing that reaches this many pages without the server
+/// signalling its end fails as [`reasons::PAGING_NOT_HONOURED`]. At
+/// [`SIGNAL_PAGE_SIZE`] rows a page this is two million rows, far past any
+/// real watch history, so only a server that is not paging as asked meets it.
+const SIGNAL_PAGE_CEILING: usize = 4_000;
+
+/// How many single-item requests a live re-check keeps in flight where the
+/// provider cannot answer for several items at once (Plex history is read per
+/// item). Batched reads need no bound: their count is already the item count
+/// over [`LOOKUP_BATCH`].
+const RECHECK_CONCURRENCY: usize = 4;
+
+/// The account id Plex server history gives the server's owner: the server's
+/// own local account, never the owner's plex.tv id.
+const PLEX_LOCAL_OWNER_ACCOUNT: &str = "1";
 
 /// The `Fields` list is deliberately short: it may name only real members of
 /// Jellyfin's `ItemFields` enum, and a value that is not one is not "extra data"
@@ -230,6 +257,7 @@ struct PlexPager {
     url: Url,
     offset_required: bool,
     start: usize,
+    pages: usize,
     first_total: Option<i64>,
     done: bool,
 }
@@ -240,6 +268,7 @@ impl PlexPager {
             url,
             offset_required,
             start: 0,
+            pages: 0,
             first_total: None,
             done: false,
         }
@@ -284,6 +313,10 @@ impl PlexPager {
             return Err(paging_not_honoured());
         }
         self.done = !another_page_remains(self.start, page_len, total)?;
+        self.pages += 1;
+        if !self.done && self.pages >= source.page_ceiling {
+            return Err(page_ceiling_reached());
+        }
         Ok(Some(entries))
     }
 }
@@ -319,16 +352,28 @@ fn past_reported_total(read: usize, first_total: Option<i64>) -> bool {
 }
 
 /// One Plex history row as a play: its item, time and account. Rows repeat an
-/// item by design, one per play, but never one play, so the same fingerprint
-/// twice means a page was answered from elsewhere. Hashed, so a long history's
-/// placement costs eight bytes a row; a collision can only fail a read as
-/// paging, never pass one.
+/// item by design, one per play, but never one play. History is read oldest
+/// first, so a play landing mid-read joins the end of the listing; a play
+/// removed mid-read shifts later rows back, and the row the next page then
+/// repeats is skipped as already seen. A page made only of rows already seen
+/// was answered from elsewhere, and fails. Hashed, so a long history's
+/// placement costs eight bytes a row; a collision can only skip a row that
+/// is still counted once, or fail a read as paging, never invent a play.
 fn plex_play_fingerprint(entry: &Value) -> u64 {
     let mut hasher = DefaultHasher::new();
     for key in ["ratingKey", "viewedAt", "accountID"] {
         entry.get(key).and_then(scalar_string).hash(&mut hasher);
     }
     hasher.finish()
+}
+
+/// A listing that reached [`SIGNAL_PAGE_CEILING`] without the server
+/// signalling its end.
+fn page_ceiling_reached() -> SignalReadFailure {
+    SignalReadFailure::new(
+        reasons::PAGING_NOT_HONOURED,
+        "incomplete played history: the server never signalled the end of the listing",
+    )
 }
 
 fn unreadable_items() -> SignalReadFailure {
@@ -353,6 +398,8 @@ fn unreadable_listing() -> SignalReadFailure {
 pub struct HttpMediaServerSignalSource {
     client: reqwest::Client,
     plex_service_url: Url,
+    /// [`SIGNAL_PAGE_CEILING`], lowered only by tests.
+    page_ceiling: usize,
 }
 
 impl Default for HttpMediaServerSignalSource {
@@ -366,6 +413,7 @@ impl HttpMediaServerSignalSource {
         Self {
             client: generic_reqwest_client(),
             plex_service_url: Url::parse(PLEX_SERVICE_URL).expect("valid Plex service URL"),
+            page_ceiling: SIGNAL_PAGE_CEILING,
         }
     }
 
@@ -374,7 +422,14 @@ impl HttpMediaServerSignalSource {
         Self {
             client: generic_reqwest_client(),
             plex_service_url,
+            page_ceiling: SIGNAL_PAGE_CEILING,
         }
+    }
+
+    #[cfg(test)]
+    fn with_page_ceiling(mut self, page_ceiling: usize) -> Self {
+        self.page_ceiling = page_ceiling;
+        self
     }
 
     /// One authenticated read, with the provider's own credential header.
@@ -435,6 +490,7 @@ impl HttpMediaServerSignalSource {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut skipped = 0_usize;
         let mut start_index = 0_usize;
+        let mut pages = 0_usize;
         let mut first_total: Option<i64> = None;
 
         loop {
@@ -474,6 +530,10 @@ impl HttpMediaServerSignalSource {
             }
             if !another_page_remains(start_index, page.len(), total)? {
                 break;
+            }
+            pages += 1;
+            if pages >= self.page_ceiling {
+                return Err(page_ceiling_reached());
             }
         }
 
@@ -754,7 +814,7 @@ impl HttpMediaServerSignalSource {
         account_id: &str,
     ) -> ReadResult<Vec<ProviderPlayedItem>> {
         Ok(self
-            .fetch_plex_history_plays(connection, base, auth, Some(account_id))
+            .fetch_plex_history_plays(connection, base, auth, Some(account_id), None)
             .await?
             .into_iter()
             .map(|(_, item)| item)
@@ -764,17 +824,30 @@ impl HttpMediaServerSignalSource {
     /// Server history read with the owner's token, folded per (account, item)
     /// into a count and the newest `viewedAt`, each item described by its
     /// library metadata. `account` filters to one account; `None` reads every
-    /// account the server has.
+    /// account the server has. History holds organic plays only: an item
+    /// marked watched, or scrobbled, without being played is not in it.
+    ///
+    /// `owner_id`, when given, is the owner's plex.tv id: history names the
+    /// owner as the server's local account `1`, and their plays are folded
+    /// under the plex.tv id the owner's linked user and watched set use.
+    ///
+    /// Read oldest first, so a play that lands mid-read joins the end of the
+    /// listing rather than shifting every later page; see
+    /// [`plex_play_fingerprint`] for how a repeated row is placed.
     ///
     /// Items are looked up page by page as they first appear, so only the
-    /// distinct items are held, never the rows. A row that names no account,
-    /// no item or no type cannot be credited and fails the read.
+    /// distinct items are held, never the rows. A row that names no item or
+    /// no type, or no account on an unfiltered read, cannot be credited and
+    /// fails the read as `WATCH_SYNC_ITEMS_UNREADABLE`. On a read filtered to
+    /// one account, a row naming no account or another one shows the filter
+    /// did not hold, and fails as `WATCH_SYNC_FILTER_NOT_HONOURED`.
     async fn fetch_plex_history_plays(
         &self,
         connection: &MediaServerConnection,
         base: &Url,
         auth: SignalAuth<'_>,
         account: Option<&str>,
+        owner_id: Option<&str>,
     ) -> ReadResult<Vec<(String, ProviderPlayedItem)>> {
         let mut url = plex_url(base, "status/sessions/history/all")?;
         {
@@ -782,7 +855,7 @@ impl HttpMediaServerSignalSource {
             if let Some(account_id) = account {
                 query.append_pair("accountID", account_id);
             }
-            query.append_pair("sort", "viewedAt:desc");
+            query.append_pair("sort", "viewedAt:asc");
         }
 
         let mut plays: BTreeMap<(String, String), PlexPlays> = BTreeMap::new();
@@ -812,13 +885,17 @@ impl HttpMediaServerSignalSource {
                     "incomplete played history: the account filter was not applied",
                 ));
             }
-            if entries
-                .iter()
-                .any(|entry| !seen_plays.insert(plex_play_fingerprint(entry)))
-            {
+            let page_len = entries.len();
+            let entries: Vec<Value> = entries
+                .into_iter()
+                .filter(|entry| seen_plays.insert(plex_play_fingerprint(entry)))
+                .collect();
+            if page_len > 0 && entries.is_empty() {
+                // Every row already seen: the page was answered from
+                // elsewhere, not shifted by a play that came or went.
                 return Err(paging_not_honoured());
             }
-            let skipped = fold_plex_history_into(&entries, &mut plays);
+            let skipped = fold_plex_history_into(&entries, &mut plays, owner_id);
             if skipped > 0 {
                 warn!(
                     connection_id = connection.id.as_str(),
@@ -912,6 +989,22 @@ impl HttpMediaServerSignalSource {
         auth: SignalAuth<'_>,
         keys: &[String],
     ) -> ReadResult<Vec<Value>> {
+        match self.plex_metadata_typed(base, auth, keys).await {
+            Ok(entries) => Ok(entries),
+            Err(MetadataFailure::Read(failure)) => Err(failure),
+            Err(MetadataFailure::Fetch(failure)) => Err(failure.into_failure()),
+        }
+    }
+
+    /// [`Self::plex_metadata`] with a refusal still typed, for the re-check of
+    /// a shared user, where a refusal is that user's answer and not the
+    /// connection's failure.
+    async fn plex_metadata_typed(
+        &self,
+        base: &Url,
+        auth: SignalAuth<'_>,
+        keys: &[String],
+    ) -> Result<Vec<Value>, MetadataFailure> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -919,7 +1012,7 @@ impl HttpMediaServerSignalSource {
             .request_json(plex_metadata_url(base, keys)?, auth, None)
             .await
         {
-            Ok(body) => plex_metadata_entries(&body),
+            Ok(body) => Ok(plex_metadata_entries(&body)?),
             Err(FetchFailure::Status(StatusCode::NOT_FOUND)) if keys.len() > 1 => {
                 let mut entries = Vec::new();
                 for key in keys {
@@ -927,18 +1020,58 @@ impl HttpMediaServerSignalSource {
                     match self.request_json(url, auth, None).await {
                         Ok(body) => entries.extend(plex_metadata_entries(&body)?),
                         Err(FetchFailure::Status(StatusCode::NOT_FOUND)) => {}
-                        Err(failure) => return Err(failure.into_failure()),
+                        Err(failure) => return Err(MetadataFailure::Fetch(failure)),
                     }
                 }
                 Ok(entries)
             }
             Err(FetchFailure::Status(StatusCode::NOT_FOUND)) => Ok(Vec::new()),
-            Err(failure) => Err(failure.into_failure()),
+            Err(failure) => Err(MetadataFailure::Fetch(failure)),
         }
     }
 
+    /// Each key's item as `auth`'s account sees it, read in batches of
+    /// [`LOOKUP_BATCH`]. A key the account cannot see is absent. A refusal of
+    /// a whole batch (404 or 403) is `refused` for every key in it when
+    /// `refusal_is_unplayed`; otherwise it fails the read.
+    async fn plex_item_states(
+        &self,
+        base: &Url,
+        auth: SignalAuth<'_>,
+        keys: &[String],
+        refusal_is_unplayed: bool,
+    ) -> ReadResult<BTreeMap<String, ProviderPlayedItem>> {
+        let mut states = BTreeMap::new();
+        for chunk in keys.chunks(LOOKUP_BATCH) {
+            let entries = match self.plex_metadata_typed(base, auth, chunk).await {
+                Ok(entries) => entries,
+                Err(MetadataFailure::Fetch(FetchFailure::Status(
+                    StatusCode::NOT_FOUND | StatusCode::FORBIDDEN,
+                ))) if refusal_is_unplayed => continue,
+                Err(MetadataFailure::Read(failure)) => return Err(failure),
+                Err(MetadataFailure::Fetch(failure)) => return Err(failure.into_failure()),
+            };
+            for entry in &entries {
+                let item = normalize_plex_item(entry).ok_or_else(unreadable_items)?;
+                if !chunk.contains(&item.provider_item_id) {
+                    return Err(SignalReadFailure::new(
+                        reasons::FILTER_NOT_HONOURED,
+                        "item re-check: the server answered for an item not asked about",
+                    ));
+                }
+                states.insert(item.provider_item_id.clone(), item);
+            }
+        }
+        Ok(states)
+    }
+
     /// Every play the server's history holds for one item, for any account,
-    /// read with the owner's token for a pre-action re-check.
+    /// read with the owner's token for a pre-action re-check. Organic plays
+    /// only, as for the sweep's history read.
+    ///
+    /// Read oldest first, with a repeated row skipped and a page of nothing
+    /// but repeats failing, exactly as [`Self::fetch_plex_history_plays`]
+    /// reads. The owner's local account `1` is reported as `owner_id`.
     ///
     /// A row for another item means the item filter was not applied, and a
     /// row that names no account or no time cannot be credited to anyone;
@@ -948,14 +1081,23 @@ impl HttpMediaServerSignalSource {
         base: &Url,
         auth: SignalAuth<'_>,
         rating_key: &str,
+        owner_id: &str,
     ) -> ReadResult<Vec<ProviderItemPlay>> {
         let mut url = plex_url(base, "status/sessions/history/all")?;
         url.query_pairs_mut()
             .append_pair("metadataItemID", rating_key)
-            .append_pair("sort", "viewedAt:desc");
+            .append_pair("sort", "viewedAt:asc");
         let mut plays = Vec::new();
-        let mut seen_plays: HashSet<(String, String)> = HashSet::new();
+        let mut seen_plays: HashSet<u64> = HashSet::new();
         self.for_each_plex_page(url, auth, false, |entries| {
+            let page_len = entries.len();
+            let entries: Vec<Value> = entries
+                .into_iter()
+                .filter(|entry| seen_plays.insert(plex_play_fingerprint(entry)))
+                .collect();
+            if page_len > 0 && entries.is_empty() {
+                return Err(paging_not_honoured());
+            }
             for entry in &entries {
                 if entry
                     .get("ratingKey")
@@ -972,11 +1114,8 @@ impl HttpMediaServerSignalSource {
                 let (Some(account), Some(viewed_at)) = (account, viewed_at) else {
                     return Err(unreadable_items());
                 };
-                if !seen_plays.insert((account.clone(), viewed_at.to_rfc3339())) {
-                    return Err(paging_not_honoured());
-                }
                 plays.push(ProviderItemPlay {
-                    external_user_id: account,
+                    external_user_id: plex_history_account(account, Some(owner_id)),
                     played: true,
                     last_played_at: Some(viewed_at),
                 });
@@ -985,36 +1124,6 @@ impl HttpMediaServerSignalSource {
         })
         .await?;
         Ok(plays)
-    }
-
-    /// One item's played state as the token's account sees it, from
-    /// `/library/metadata/{ratingKey}`. An item the server no longer lists
-    /// fails: it cannot be shown unplayed.
-    async fn plex_item_state(
-        &self,
-        base: &Url,
-        auth: SignalAuth<'_>,
-        rating_key: &str,
-        external_user_id: &str,
-    ) -> ReadResult<ProviderItemPlay> {
-        let entries = self
-            .plex_metadata(base, auth, &[rating_key.to_string()])
-            .await?;
-        let item = entries
-            .iter()
-            .filter_map(normalize_plex_item)
-            .find(|item| item.provider_item_id == rating_key)
-            .ok_or_else(|| {
-                SignalReadFailure::new(
-                    reasons::RESPONSE_UNREADABLE,
-                    "the item is not on the server any more",
-                )
-            })?;
-        Ok(ProviderItemPlay {
-            external_user_id: external_user_id.to_string(),
-            played: item.played,
-            last_played_at: item.last_played_at,
-        })
     }
 
     /// Plex's series ids, from the shows' own metadata. Not fatal, exactly as
@@ -1113,6 +1222,21 @@ struct UserItemsReader {
 }
 
 impl UserItemsReader {
+    /// Every user the admin key can list (`GET /Users`), as an array or an
+    /// `Items` wrapper. A user the list cannot name fails the read: their
+    /// plays would otherwise be missing from an answer that looks complete.
+    async fn list_user_ids(&self) -> ReadResult<Vec<String>> {
+        let (auth, _) = self.auth_and_fields();
+        let url = self.base.join("Users").map_err(|_| invalid_base_url())?;
+        let body = self.source.fetch_json(url, auth, None).await?;
+        body.as_array()
+            .or_else(|| field(&body, "Items").and_then(Value::as_array))
+            .ok_or_else(unreadable_listing)?
+            .iter()
+            .map(|user| string_field(user, "Id").ok_or_else(unreadable_listing))
+            .collect()
+    }
+
     /// The admin key's credential header and the item fields this provider
     /// is asked for.
     fn auth_and_fields(&self) -> (SignalAuth<'_>, &'static str) {
@@ -1149,16 +1273,8 @@ impl MediaServerSignalReader for UserItemsReader {
     /// from an answer that looks complete.
     async fn fetch_audience_plays(&self) -> Result<Vec<ProviderAudiencePlay>, SignalReadFailure> {
         let (auth, fields) = self.auth_and_fields();
-        let url = self.base.join("Users").map_err(|_| invalid_base_url())?;
-        let body = self.source.fetch_json(url, auth, None).await?;
-        let users = body
-            .as_array()
-            .or_else(|| field(&body, "Items").and_then(Value::as_array))
-            .cloned()
-            .ok_or_else(unreadable_listing)?;
         let mut plays = Vec::new();
-        for user in &users {
-            let user_id = string_field(user, "Id").ok_or_else(unreadable_listing)?;
+        for user_id in self.list_user_ids().await? {
             let items = self
                 .source
                 .fetch_user_items(&self.connection, &self.base, auth, fields, &user_id)
@@ -1171,25 +1287,118 @@ impl MediaServerSignalReader for UserItemsReader {
         Ok(plays)
     }
 
-    /// Each participant's own user data for the item, from
-    /// `/Users/{userId}/Items/{itemId}`. Neither server keeps a server-wide
-    /// play history to read alongside it.
-    async fn recheck_item(
+    /// Each item's user data for every user the admin key can list
+    /// (`GET /Users`) and every participant, read per user in batches of
+    /// [`LOOKUP_BATCH`] ids through `/Users/{userId}/Items?Ids=`. Neither
+    /// server keeps a server-wide play history, so every listed user's own
+    /// state is what stands in for one: each user who has played an item is
+    /// one of its history plays, and a play no stored fact credits holds the
+    /// action exactly as a Plex history row does.
+    ///
+    /// A user the server refuses (404 or 403) or who cannot see an item has
+    /// no plays of it. A refusal of every read is the admin key's, not the
+    /// users', and fails; so does an item no user can see, because a stored
+    /// id the server no longer knows cannot be shown unplayed.
+    async fn recheck_items(
         &self,
-        provider_item_id: &str,
+        provider_item_ids: &[String],
         participants: &[String],
-    ) -> Result<ProviderItemRecheck, SignalReadFailure> {
-        let (auth, _) = self.auth_and_fields();
-        let mut recheck = ProviderItemRecheck::default();
+    ) -> Result<BTreeMap<String, ProviderItemRecheck>, SignalReadFailure> {
+        let (auth, fields) = self.auth_and_fields();
+        let ids = recheck_item_ids(provider_item_ids)?;
+        let users = self.list_user_ids().await?;
+        let mut readers: Vec<String> = users.clone();
         for participant in participants {
-            let external_user_id = participant_id(participant)?;
-            let url = user_item_url(&self.base, external_user_id, provider_item_id)?;
-            let body = self.source.fetch_json(url, auth, None).await?;
-            recheck
-                .participants
-                .push(user_item_state(&body, external_user_id)?);
+            let participant = participant_id(participant)?.to_string();
+            if !readers.contains(&participant) {
+                readers.push(participant);
+            }
         }
-        Ok(recheck)
+
+        let source = &self.source;
+        let base = &self.base;
+        let jobs: Vec<(String, Vec<String>)> = readers
+            .iter()
+            .flat_map(|user| {
+                ids.chunks(LOOKUP_BATCH)
+                    .map(move |chunk| (user.clone(), chunk.to_vec()))
+            })
+            .collect();
+        let reads = jobs.into_iter().map(|(user, chunk)| async move {
+            let url = items_by_id_url(base, &user, &chunk, fields)?;
+            let entries = match source.request_json(url, auth, None).await {
+                Ok(body) => field(&body, "Items")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .ok_or_else(unreadable_listing)?,
+                Err(FetchFailure::Status(StatusCode::NOT_FOUND | StatusCode::FORBIDDEN)) => {
+                    return Ok::<_, SignalReadFailure>((user, None));
+                }
+                Err(failure) => return Err(failure.into_failure()),
+            };
+            let mut states = Vec::with_capacity(entries.len());
+            for entry in &entries {
+                let id = string_field(entry, "Id").ok_or_else(unreadable_items)?;
+                if !chunk.contains(&id) {
+                    return Err(SignalReadFailure::new(
+                        reasons::FILTER_NOT_HONOURED,
+                        "item re-check: the server answered for an item not asked about",
+                    ));
+                }
+                states.push((id, user_item_state(entry, &user)?));
+            }
+            Ok((user, Some(states)))
+        });
+        let answers: Vec<(String, Option<Vec<(String, ProviderItemPlay)>>)> =
+            futures_util::stream::iter(reads)
+                .buffer_unordered(RECHECK_CONCURRENCY)
+                .try_collect()
+                .await?;
+        if !answers.is_empty() && answers.iter().all(|(_, states)| states.is_none()) {
+            return Err(SignalReadFailure::new(
+                reasons::ACCESS_DENIED,
+                "item re-check: every user read was refused",
+            ));
+        }
+
+        let mut states: BTreeMap<(String, String), ProviderItemPlay> = BTreeMap::new();
+        for (user, answer) in answers {
+            for (id, state) in answer.into_iter().flatten() {
+                states.insert((user.clone(), id), state);
+            }
+        }
+        let mut rechecks = BTreeMap::new();
+        for id in ids {
+            if !states.keys().any(|(_, seen)| *seen == id) {
+                return Err(SignalReadFailure::new(
+                    reasons::RESPONSE_UNREADABLE,
+                    "the item is not on the server any more",
+                ));
+            }
+            let state_of = |user: &str| {
+                states
+                    .get(&(user.to_string(), id.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| ProviderItemPlay {
+                        external_user_id: user.to_string(),
+                        played: false,
+                        last_played_at: None,
+                    })
+            };
+            let recheck = ProviderItemRecheck {
+                participants: participants
+                    .iter()
+                    .map(|participant| state_of(participant.trim()))
+                    .collect(),
+                history: users
+                    .iter()
+                    .map(|user| state_of(user))
+                    .filter(|state| state.played)
+                    .collect(),
+            };
+            rechecks.insert(id, recheck);
+        }
+        Ok(rechecks)
     }
 }
 
@@ -1345,12 +1554,14 @@ impl MediaServerSignalReader for PlexReader {
 
     /// Every account's plays: the owner's own library listing, keyed by the
     /// owner's plex.tv id, and the server's history across every account,
-    /// keyed by the account id history names (the owner appears there as
-    /// the server's local account). Both are read with the owner's token.
+    /// keyed by the account id history names. History names the owner as the
+    /// server's local account `1`; those plays are folded under the owner's
+    /// plex.tv id, so the owner's plays from both sources are one account's.
+    /// Both are read with the owner's token.
     ///
-    /// History keeps organic plays only, so an item a shared or managed user
-    /// marked watched without playing is not here; the owner's marks are,
-    /// from the listing.
+    /// History keeps organic plays only: no marks and no scrobbles. An item a
+    /// shared or managed user marked watched without playing is therefore not
+    /// in the audience; the owner's marks are, from the listing.
     async fn fetch_audience_plays(&self) -> Result<Vec<ProviderAudiencePlay>, SignalReadFailure> {
         let owner_auth = SignalAuth::Plex(&self.owner_token);
         let source = &self.source;
@@ -1365,7 +1576,13 @@ impl MediaServerSignalReader for PlexReader {
             .into_iter()
             .map(|item| (owner_id.clone(), item));
         let history = source
-            .fetch_plex_history_plays(&self.connection, &self.base, owner_auth, None)
+            .fetch_plex_history_plays(
+                &self.connection,
+                &self.base,
+                owner_auth,
+                None,
+                Some(&owner_id),
+            )
             .await?;
         for (account, item) in listing.chain(history) {
             match merged.entry((account, item.provider_item_id.clone())) {
@@ -1399,40 +1616,80 @@ impl MediaServerSignalReader for PlexReader {
             .collect())
     }
 
-    /// The server's history for the item, read with the owner's token so it
-    /// names every account's plays, and each participant's own state: from
-    /// the item's metadata with the owner's or the shared user's token, or,
-    /// for a user read from history, from that same history.
-    async fn recheck_item(
+    /// The server's history for each item, read with the owner's token so it
+    /// names every account's plays (organic plays only; history holds no
+    /// marks or scrobbles), and each participant's own state.
+    ///
+    /// History takes one request per item, kept to [`RECHECK_CONCURRENCY`]
+    /// in flight. Item state is read in batches through
+    /// `/library/metadata/{keys}`: with the owner's token for the owner, and
+    /// to prove every item is still on the server; with a shared user's own
+    /// token for them, where a refusal or an item hidden from them is no play;
+    /// and, for a user read from history, from that same history.
+    async fn recheck_items(
         &self,
-        provider_item_id: &str,
+        provider_item_ids: &[String],
         participants: &[String],
-    ) -> Result<ProviderItemRecheck, SignalReadFailure> {
-        let rating_key = provider_item_id.trim();
-        if rating_key.is_empty() {
+    ) -> Result<BTreeMap<String, ProviderItemRecheck>, SignalReadFailure> {
+        let keys = recheck_item_ids(provider_item_ids)?;
+        let source = &self.source;
+        let base = &self.base;
+        let owner_auth = SignalAuth::Plex(&self.owner_token);
+        let owner_id = self.owner_ids.first().cloned().ok_or_else(|| {
+            SignalReadFailure::new(reasons::RESPONSE_UNREADABLE, "unreadable Plex account")
+        })?;
+
+        let owner_states = source
+            .plex_item_states(base, owner_auth, &keys, false)
+            .await?;
+        if keys.iter().any(|key| !owner_states.contains_key(key)) {
             return Err(SignalReadFailure::new(
                 reasons::RESPONSE_UNREADABLE,
-                "the stored item has no rating key",
+                "the item is not on the server any more",
             ));
         }
-        let source = &self.source;
-        let owner_auth = SignalAuth::Plex(&self.owner_token);
-        let history = source
-            .fetch_plex_item_history(&self.base, owner_auth, rating_key)
+        let owner_id_ref = owner_id.as_str();
+        let histories: Vec<(String, Vec<ProviderItemPlay>)> =
+            futures_util::stream::iter(keys.clone().into_iter().map(|key| async move {
+                let history = source
+                    .fetch_plex_item_history(base, owner_auth, &key, owner_id_ref)
+                    .await?;
+                Ok::<_, SignalReadFailure>((key, history))
+            }))
+            .buffer_unordered(RECHECK_CONCURRENCY)
+            .try_collect()
             .await?;
+        let mut rechecks: BTreeMap<String, ProviderItemRecheck> = histories
+            .into_iter()
+            .map(|(key, history)| {
+                (
+                    key,
+                    ProviderItemRecheck {
+                        participants: Vec::with_capacity(participants.len()),
+                        history,
+                    },
+                )
+            })
+            .collect();
 
-        let mut recheck = ProviderItemRecheck {
-            participants: Vec::with_capacity(participants.len()),
-            history,
-        };
         for participant in participants {
             let external_user_id = participant_id(participant)?;
+            let unplayed = || ProviderItemPlay {
+                external_user_id: external_user_id.to_string(),
+                played: false,
+                last_played_at: None,
+            };
+            let as_state = |item: &ProviderPlayedItem| ProviderItemPlay {
+                external_user_id: external_user_id.to_string(),
+                played: item.played,
+                last_played_at: item.last_played_at,
+            };
             if self.owner_ids.iter().any(|id| id == external_user_id) {
-                recheck.participants.push(
-                    source
-                        .plex_item_state(&self.base, owner_auth, rating_key, external_user_id)
-                        .await?,
-                );
+                for (key, recheck) in &mut rechecks {
+                    recheck
+                        .participants
+                        .push(owner_states.get(key).map_or_else(unplayed, as_state));
+                }
                 continue;
             }
             if !external_user_id.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -1441,34 +1698,35 @@ impl MediaServerSignalReader for PlexReader {
                     "Plex account id is not a server account id",
                 ));
             }
-            let state = match self.shared_token(external_user_id).await? {
+            match self.shared_token(external_user_id).await? {
                 Some(token) => {
-                    source
-                        .plex_item_state(
-                            &self.base,
-                            SignalAuth::Plex(&token),
-                            rating_key,
-                            external_user_id,
-                        )
-                        .await?
-                }
-                None => {
-                    let last_played_at = recheck
-                        .history
-                        .iter()
-                        .filter(|play| play.external_user_id == external_user_id)
-                        .filter_map(|play| play.last_played_at)
-                        .max();
-                    ProviderItemPlay {
-                        external_user_id: external_user_id.to_string(),
-                        played: last_played_at.is_some(),
-                        last_played_at,
+                    let states = source
+                        .plex_item_states(base, SignalAuth::Plex(&token), &keys, true)
+                        .await?;
+                    for (key, recheck) in &mut rechecks {
+                        recheck
+                            .participants
+                            .push(states.get(key).map_or_else(unplayed, as_state));
                     }
                 }
-            };
-            recheck.participants.push(state);
+                None => {
+                    for recheck in rechecks.values_mut() {
+                        let last_played_at = recheck
+                            .history
+                            .iter()
+                            .filter(|play| play.external_user_id == external_user_id)
+                            .filter_map(|play| play.last_played_at)
+                            .max();
+                        recheck.participants.push(ProviderItemPlay {
+                            external_user_id: external_user_id.to_string(),
+                            played: last_played_at.is_some(),
+                            last_played_at,
+                        });
+                    }
+                }
+            }
         }
-        Ok(recheck)
+        Ok(rechecks)
     }
 }
 
@@ -1669,17 +1927,33 @@ struct PlexPlays {
 /// of a type this adapter does not record (music, photos) is not a movie or
 /// episode play at all, so it is passed over rather than counted.
 #[cfg(test)]
-fn fold_plex_history(entries: &[Value]) -> (BTreeMap<(String, String), PlexPlays>, usize) {
+fn fold_plex_history(
+    entries: &[Value],
+    owner_id: Option<&str>,
+) -> (BTreeMap<(String, String), PlexPlays>, usize) {
     let mut plays = BTreeMap::new();
-    let skipped = fold_plex_history_into(entries, &mut plays);
+    let skipped = fold_plex_history_into(entries, &mut plays, owner_id);
     (plays, skipped)
 }
 
-/// Fold one page of history entries into `plays`. Returns how many were
+/// The account a history row's play belongs to. History names the server's
+/// owner as the local account `1`; with the owner's plex.tv id known, that
+/// play is the owner's, under the id their linked user and watched set use.
+/// Every other account id is kept as history gives it.
+fn plex_history_account(account: String, owner_id: Option<&str>) -> String {
+    match owner_id {
+        Some(owner_id) if account == PLEX_LOCAL_OWNER_ACCOUNT => owner_id.to_string(),
+        _ => account,
+    }
+}
+
+/// Fold one page of history entries into `plays`, the owner's local account
+/// read as `owner_id` (see [`plex_history_account`]). Returns how many were
 /// unreadable.
 fn fold_plex_history_into(
     entries: &[Value],
     plays: &mut BTreeMap<(String, String), PlexPlays>,
+    owner_id: Option<&str>,
 ) -> usize {
     let mut skipped = 0_usize;
     for entry in entries {
@@ -1699,6 +1973,7 @@ fn fold_plex_history_into(
             }
         }
         let viewed_at = entry.get("viewedAt").and_then(epoch_timestamp);
+        let account_id = plex_history_account(account_id, owner_id);
         let play = plays.entry((account_id, rating_key)).or_default();
         play.count += 1;
         if viewed_at > play.last_viewed_at {
@@ -1877,20 +2152,44 @@ fn played_items_url(
     Ok(url)
 }
 
-/// `/Users/{userId}/Items/{itemId}`, each id one encoded path segment.
-fn user_item_url(base: &Url, external_user_id: &str, item_id: &str) -> ReadResult<Url> {
-    let item_id = item_id.trim();
-    if item_id.is_empty() {
-        return Err(SignalReadFailure::new(
-            reasons::RESPONSE_UNREADABLE,
-            "the stored item has no id",
-        ));
+/// The distinct, trimmed ids a re-check was asked about. A blank id is a
+/// stored item with nothing to read it by.
+fn recheck_item_ids(provider_item_ids: &[String]) -> ReadResult<Vec<String>> {
+    let mut ids: Vec<String> = Vec::with_capacity(provider_item_ids.len());
+    for id in provider_item_ids {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(SignalReadFailure::new(
+                reasons::RESPONSE_UNREADABLE,
+                "the stored item has no id",
+            ));
+        }
+        if !ids.iter().any(|seen| seen == id) {
+            ids.push(id.to_string());
+        }
     }
+    Ok(ids)
+}
+
+/// One user's view of a batch of items by id, with their user data.
+/// `Recursive=true` for the same reason as [`series_lookup_url`].
+fn items_by_id_url(
+    base: &Url,
+    external_user_id: &str,
+    ids: &[String],
+    fields: &str,
+) -> ReadResult<Url> {
     let mut url = base.clone();
     url.path_segments_mut()
         .map_err(|_| invalid_base_url())?
         .pop_if_empty()
-        .extend(["Users", external_user_id, "Items", item_id]);
+        .extend(["Users", external_user_id, "Items"]);
+    url.query_pairs_mut()
+        .append_pair("Recursive", "true")
+        .append_pair("Ids", &ids.join(","))
+        .append_pair("Fields", fields)
+        .append_pair("EnableUserData", "true")
+        .append_pair("Limit", &ids.len().to_string());
     Ok(url)
 }
 
@@ -1976,6 +2275,20 @@ impl FetchFailure {
                 SignalReadFailure::new(reasons::RESPONSE_UNREADABLE, "unreadable response")
             }
         }
+    }
+}
+
+/// Why a metadata read failed: a request the caller may still classify, or an
+/// answer that was already judged unreadable.
+#[derive(Debug)]
+enum MetadataFailure {
+    Fetch(FetchFailure),
+    Read(SignalReadFailure),
+}
+
+impl From<SignalReadFailure> for MetadataFailure {
+    fn from(failure: SignalReadFailure) -> Self {
+        Self::Read(failure)
     }
 }
 
@@ -2843,19 +3156,22 @@ mod tests {
 
     #[test]
     fn folds_plex_history_into_plays_per_account_and_item() {
-        let (plays, skipped) = fold_plex_history(&[
-            json!({ "ratingKey": "101", "type": "movie", "accountID": 2002, "viewedAt": 1_700_000_000 }),
-            json!({ "ratingKey": "101", "type": "movie", "accountID": 2002, "viewedAt": 1_700_500_000 }),
-            // The same item played by another account is that account's play.
-            json!({ "ratingKey": "101", "type": "movie", "accountID": "3003", "viewedAt": 1_700_200_000 }),
-            json!({ "ratingKey": 201, "type": "episode", "accountID": 2002, "viewedAt": "1700100000" }),
-            // Music is not a movie or episode play: passed over, not unreadable.
-            json!({ "ratingKey": "301", "type": "track", "accountID": 2002, "viewedAt": 1_700_000_000 }),
-            // No rating key, no type, and no account: all unreadable.
-            json!({ "type": "movie", "accountID": 2002, "viewedAt": 1_700_000_000 }),
-            json!({ "ratingKey": "102", "accountID": 2002, "viewedAt": 1_700_000_000 }),
-            json!({ "ratingKey": "103", "type": "movie", "viewedAt": 1_700_000_000 }),
-        ]);
+        let (plays, skipped) = fold_plex_history(
+            &[
+                json!({ "ratingKey": "101", "type": "movie", "accountID": 2002, "viewedAt": 1_700_000_000 }),
+                json!({ "ratingKey": "101", "type": "movie", "accountID": 2002, "viewedAt": 1_700_500_000 }),
+                // The same item played by another account is that account's play.
+                json!({ "ratingKey": "101", "type": "movie", "accountID": "3003", "viewedAt": 1_700_200_000 }),
+                json!({ "ratingKey": 201, "type": "episode", "accountID": 2002, "viewedAt": "1700100000" }),
+                // Music is not a movie or episode play: passed over, not unreadable.
+                json!({ "ratingKey": "301", "type": "track", "accountID": 2002, "viewedAt": 1_700_000_000 }),
+                // No rating key, no type, and no account: all unreadable.
+                json!({ "type": "movie", "accountID": 2002, "viewedAt": 1_700_000_000 }),
+                json!({ "ratingKey": "102", "accountID": 2002, "viewedAt": 1_700_000_000 }),
+                json!({ "ratingKey": "103", "type": "movie", "viewedAt": 1_700_000_000 }),
+            ],
+            None,
+        );
         let key = |account: &str, item: &str| (account.to_string(), item.to_string());
         assert_eq!(skipped, 3);
         assert_eq!(plays.len(), 3);
@@ -2873,6 +3189,47 @@ mod tests {
         assert_eq!(
             plays.get(&key("2002", "201")).map(|play| play.count),
             Some(1)
+        );
+    }
+
+    /// History names the server owner as the local account `1`. With the
+    /// owner's plex.tv id known, those rows are the owner's plays under that
+    /// id; every other account keeps its own id, and without an owner id
+    /// nothing is renamed.
+    #[test]
+    fn plex_history_folds_the_local_owner_account_into_the_owners_plex_id() {
+        let rows = [
+            json!({ "ratingKey": "101", "type": "movie", "accountID": 1, "viewedAt": 1_700_000_000 }),
+            json!({ "ratingKey": "101", "type": "movie", "accountID": "1001", "viewedAt": 1_700_100_000 }),
+            json!({ "ratingKey": "101", "type": "movie", "accountID": 2002, "viewedAt": 1_700_200_000 }),
+        ];
+        let key = |account: &str| (account.to_string(), "101".to_string());
+
+        let (plays, _) = fold_plex_history(&rows, Some(PLEX_OWNER_ID));
+        assert_eq!(plays.len(), 2);
+        assert_eq!(
+            plays.get(&key(PLEX_OWNER_ID)).map(|play| play.count),
+            Some(2)
+        );
+        assert_eq!(
+            plays.get(&key(PLEX_SHARED_ID)).map(|play| play.count),
+            Some(1)
+        );
+        assert!(!plays.contains_key(&key("1")));
+
+        let (plays, _) = fold_plex_history(&rows, None);
+        assert_eq!(plays.get(&key("1")).map(|play| play.count), Some(1));
+        assert_eq!(
+            plays.get(&key(PLEX_OWNER_ID)).map(|play| play.count),
+            Some(1)
+        );
+        assert_eq!(
+            plex_history_account("2002".into(), Some(PLEX_OWNER_ID)),
+            "2002"
+        );
+        assert_eq!(
+            plex_history_account("1".into(), Some(PLEX_OWNER_ID)),
+            PLEX_OWNER_ID
         );
     }
 
@@ -3361,7 +3718,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/status/sessions/history/all"))
             .and(query_param_is_missing("accountID"))
-            .and(query_param("sort", "viewedAt:desc"))
+            .and(query_param("sort", "viewedAt:asc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(history))
             .mount(server)
             .await;
@@ -3412,7 +3769,8 @@ mod tests {
         assert_eq!(
             summary,
             vec![
-                ("1", "101", 1, Some(1_756_000_100)),
+                // The owner's history row (local account `1`) merges into
+                // the owner's listing.
                 (PLEX_OWNER_ID, "101", 2, Some(1_756_588_445)),
                 (PLEX_SHARED_ID, "201", 1, Some(1_756_000_200)),
                 ("3003", "101", 2, Some(1_756_000_400)),
@@ -4349,6 +4707,14 @@ mod tests {
 
     // ── Live re-check before an action ──────────────────────────────────────
 
+    fn query_value(request: &Request, key: &str) -> Option<String> {
+        request
+            .url
+            .query_pairs()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.into_owned())
+    }
+
     /// Plex history for one item: the owner, a shared user, a user read from
     /// history, and an account no one has linked.
     async fn mount_plex_item_history(server: &wiremock::MockServer, rows: Value) {
@@ -4357,7 +4723,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/status/sessions/history/all"))
             .and(query_param("metadataItemID", "101"))
-            .and(query_param("sort", "viewedAt:desc"))
+            .and(query_param("sort", "viewedAt:asc"))
             .and(header("X-Plex-Token", PLEX_TOKEN))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "MediaContainer": {
@@ -4385,47 +4751,58 @@ mod tests {
             .await;
     }
 
-    #[tokio::test]
-    async fn a_plex_recheck_reads_history_for_every_account_and_each_participants_own_state() {
+    async fn mount_shared_token(server: &wiremock::MockServer, token: &str) {
         use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer};
-
-        let server = MockServer::start().await;
-        mount_plex_owner(&server).await;
+        use wiremock::{Mock, ResponseTemplate};
         Mock::given(method("GET"))
             .and(path("/api/servers/plex-machine-1/shared_servers"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"<MediaContainer size="1"><SharedServer userID="2002" accessToken="shared-token-b" /></MediaContainer>"#,
-            ))
-            .mount(&server)
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                r#"<MediaContainer size="1"><SharedServer userID="2002" accessToken="{token}" /></MediaContainer>"#
+            )))
+            .mount(server)
             .await;
+    }
+
+    async fn plex_recheck(
+        server: &wiremock::MockServer,
+        items: &[&str],
+        participants: &[&str],
+    ) -> ReadResult<BTreeMap<String, ProviderItemRecheck>> {
+        plex_source(server)
+            .open(&plex_connection(server.uri()))
+            .await?
+            .recheck_items(
+                &items.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+                &participants
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_plex_recheck_reads_history_for_every_account_and_each_participants_own_state() {
+        let server = wiremock::MockServer::start().await;
+        mount_plex_owner(&server).await;
+        mount_shared_token(&server, "shared-token-b").await;
         mount_plex_item_history(
             &server,
             json!([
-                { "ratingKey": "101", "type": "movie", "accountID": 3003, "viewedAt": 1_756_300_000 },
+                { "ratingKey": "101", "type": "movie", "accountID": 1, "viewedAt": 1_756_100_000 },
                 { "ratingKey": "101", "type": "movie", "accountID": 9009, "viewedAt": 1_756_200_000 },
-                { "ratingKey": "101", "type": "movie", "accountID": 1001, "viewedAt": 1_756_100_000 }
+                { "ratingKey": "101", "type": "movie", "accountID": 3003, "viewedAt": 1_756_300_000 }
             ]),
         )
         .await;
         mount_plex_item_metadata(&server, PLEX_TOKEN, plex_movie(1, 1_756_100_000)).await;
         mount_plex_item_metadata(&server, "shared-token-b", plex_movie(0, 0)).await;
 
-        let reader = plex_source(&server)
-            .open(&plex_connection(server.uri()))
-            .await
-            .expect("opens");
-        let recheck = reader
-            .recheck_item(
-                "101",
-                &[
-                    PLEX_OWNER_ID.to_string(),
-                    PLEX_SHARED_ID.to_string(),
-                    "3003".to_string(),
-                ],
-            )
-            .await
-            .expect("the item re-checks");
+        let mut rechecks =
+            plex_recheck(&server, &["101"], &[PLEX_OWNER_ID, PLEX_SHARED_ID, "3003"])
+                .await
+                .expect("the item re-checks");
+        let recheck = rechecks.remove("101").expect("the item is answered");
 
         let at = |seconds| DateTime::from_timestamp(seconds, 0);
         assert_eq!(
@@ -4449,30 +4826,28 @@ mod tests {
                 },
             ]
         );
+        // History names the owner as the local account `1`; the play is the
+        // owner's, under the plex.tv id their linked user carries.
         let history_accounts = recheck
             .history
             .iter()
             .map(|play| play.external_user_id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(history_accounts, ["3003", "9009", "1001"]);
+        assert_eq!(history_accounts, [PLEX_OWNER_ID, "9009", "3003"]);
     }
 
     #[tokio::test]
     async fn a_plex_item_history_naming_another_item_is_not_honouring_the_filter() {
         let server = wiremock::MockServer::start().await;
         mount_plex_owner(&server).await;
+        mount_plex_item_metadata(&server, PLEX_TOKEN, plex_movie(1, 1_756_100_000)).await;
         mount_plex_item_history(
             &server,
             json!([{ "ratingKey": "555", "type": "movie", "accountID": 1001, "viewedAt": 1_756_100_000 }]),
         )
         .await;
 
-        let reader = plex_source(&server)
-            .open(&plex_connection(server.uri()))
-            .await
-            .expect("opens");
-        let failure = reader
-            .recheck_item("101", &[PLEX_OWNER_ID.to_string()])
+        let failure = plex_recheck(&server, &["101"], &[PLEX_OWNER_ID])
             .await
             .expect_err("rows for another item are not this item's history");
         assert_eq!(failure.reason, reasons::FILTER_NOT_HONOURED);
@@ -4482,18 +4857,14 @@ mod tests {
     async fn a_plex_history_row_without_an_account_fails_the_recheck() {
         let server = wiremock::MockServer::start().await;
         mount_plex_owner(&server).await;
+        mount_plex_item_metadata(&server, PLEX_TOKEN, plex_movie(1, 1_756_100_000)).await;
         mount_plex_item_history(
             &server,
             json!([{ "ratingKey": "101", "type": "movie", "viewedAt": 1_756_100_000 }]),
         )
         .await;
 
-        let reader = plex_source(&server)
-            .open(&plex_connection(server.uri()))
-            .await
-            .expect("opens");
-        let failure = reader
-            .recheck_item("101", &[PLEX_OWNER_ID.to_string()])
+        let failure = plex_recheck(&server, &["101"], &[PLEX_OWNER_ID])
             .await
             .expect_err("a play no one can be credited with cannot be cleared");
         assert_eq!(failure.reason, reasons::ITEMS_UNREADABLE);
@@ -4506,65 +4877,240 @@ mod tests {
 
         let server = MockServer::start().await;
         mount_plex_owner(&server).await;
-        mount_plex_item_history(&server, json!([])).await;
         Mock::given(method("GET"))
             .and(path("/library/metadata/101"))
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
 
-        let reader = plex_source(&server)
-            .open(&plex_connection(server.uri()))
-            .await
-            .expect("opens");
-        let failure = reader
-            .recheck_item("101", &[PLEX_OWNER_ID.to_string()])
+        let failure = plex_recheck(&server, &["101"], &[PLEX_OWNER_ID])
             .await
             .expect_err("an item the server no longer lists cannot read as unplayed");
         assert_eq!(failure.reason, reasons::RESPONSE_UNREADABLE);
     }
 
+    /// A shared user the server now refuses for the item, whether as gone
+    /// (404) or as forbidden (403, a library no longer shared), has no plays
+    /// of it: their answer is "unplayed", and the re-check stands.
     #[tokio::test]
-    async fn an_emby_recheck_reads_each_participants_user_data_for_the_item() {
+    async fn a_plex_shared_user_the_server_refuses_reads_as_unplayed() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer};
+
+        for status in [404, 403] {
+            let server = MockServer::start().await;
+            mount_plex_owner(&server).await;
+            mount_shared_token(&server, "shared-token-b").await;
+            mount_plex_item_history(&server, json!([])).await;
+            mount_plex_item_metadata(&server, PLEX_TOKEN, plex_movie(0, 0)).await;
+            Mock::given(method("GET"))
+                .and(path("/library/metadata/101"))
+                .and(header("X-Plex-Token", "shared-token-b"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+
+            let recheck = plex_recheck(&server, &["101"], &[PLEX_SHARED_ID])
+                .await
+                .unwrap_or_else(|failure| panic!("status {status}: {failure}"))
+                .remove("101")
+                .expect("the item is answered");
+            assert_eq!(
+                recheck.participants,
+                vec![ProviderItemPlay {
+                    external_user_id: PLEX_SHARED_ID.into(),
+                    played: false,
+                    last_played_at: None,
+                }],
+                "status {status}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plex_shared_user_read_that_fails_on_the_server_fails_the_recheck() {
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer};
 
         let server = MockServer::start().await;
+        mount_plex_owner(&server).await;
+        mount_shared_token(&server, "shared-token-b").await;
+        mount_plex_item_history(&server, json!([])).await;
+        mount_plex_item_metadata(&server, PLEX_TOKEN, plex_movie(0, 0)).await;
         Mock::given(method("GET"))
-            .and(path("/emby/Users/emby-user-1/Items/emby-item-7"))
-            .and(header("X-Emby-Token", "api-key"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "Id": "emby-item-7",
-                "Type": "Movie",
-                "UserData": { "Played": true, "PlayCount": 2, "LastPlayedDate": "2026-10-30T08:15:00.0000000Z" }
-            })))
-            .expect(1)
+            .and(path("/library/metadata/101"))
+            .and(header("X-Plex-Token", "shared-token-b"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let failure = plex_recheck(&server, &["101"], &[PLEX_SHARED_ID])
+            .await
+            .expect_err("a server error is not an answer");
+        assert_eq!(failure.reason, reasons::REQUEST_REJECTED);
+    }
+
+    /// A whole series is re-checked in a bounded number of requests: item
+    /// state in batches of `LOOKUP_BATCH`, and history one request per item,
+    /// since Plex history filters on a single item.
+    #[tokio::test]
+    async fn a_plex_series_recheck_batches_its_state_reads() {
+        use wiremock::matchers::{method, path, path_regex};
+        use wiremock::{Mock, MockServer};
+
+        const EPISODES: usize = 200;
+        let server = MockServer::start().await;
+        mount_plex_owner(&server).await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/library/metadata/[0-9,]+$"))
+            .respond_with(GeneratedMetadata)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/emby/Users/emby-user-2/Items/emby-item-7"))
-            .and(header("X-Emby-Token", "api-key"))
+            .and(path("/status/sessions/history/all"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "Id": "emby-item-7",
-                "Type": "Movie",
-                "userData": { "played": false, "playCount": 0 }
+                "MediaContainer": { "size": 0, "totalSize": 0, "Metadata": [] }
             })))
-            .expect(1)
             .mount(&server)
             .await;
+
+        let keys: Vec<String> = (1..=EPISODES).map(|key| key.to_string()).collect();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        let rechecks = plex_recheck(&server, &key_refs, &[PLEX_OWNER_ID])
+            .await
+            .expect("the series re-checks");
+        assert_eq!(rechecks.len(), EPISODES);
+
+        let requests = server.received_requests().await.expect("recorded");
+        let metadata = requests
+            .iter()
+            .filter(|request| request.url.path().starts_with("/library/metadata/"))
+            .count();
+        let history = requests
+            .iter()
+            .filter(|request| request.url.path() == "/status/sessions/history/all")
+            .count();
+        assert_eq!(metadata, EPISODES.div_ceil(LOOKUP_BATCH));
+        assert_eq!(history, EPISODES);
+    }
+
+    /// `/Users/{id}/Items?Ids=…` for a Jellyfin or Emby user: each id asked for
+    /// that the user can see, played when `played` names it.
+    fn items_by_id(
+        played: &'static [(&'static str, &'static str)],
+        hidden: &'static [&'static str],
+    ) -> impl Fn(&Request) -> ResponseTemplate + Send + Sync {
+        move |request: &Request| {
+            let items = query_value(request, "Ids")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|id| !id.is_empty() && !hidden.contains(id))
+                .map(
+                    |id| match played.iter().find(|(played_id, _)| *played_id == id) {
+                        Some((_, at)) => json!({
+                            "Id": id,
+                            "Type": "Episode",
+                            "UserData": { "Played": true, "PlayCount": 1, "LastPlayedDate": at }
+                        }),
+                        None => json!({
+                            "Id": id,
+                            "Type": "Episode",
+                            "UserData": { "Played": false, "PlayCount": 0 }
+                        }),
+                    },
+                )
+                .collect::<Vec<_>>();
+            ResponseTemplate::new(200).set_body_json(json!({ "Items": items }))
+        }
+    }
+
+    async fn mount_users(server: &wiremock::MockServer, prefix: &str, users: &[&str]) {
+        use wiremock::Mock;
+        use wiremock::matchers::{method, path};
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/Users")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(
+                users.iter().map(|id| json!({ "Id": id })).collect::<Vec<_>>()
+            )))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_user_items(
+        server: &wiremock::MockServer,
+        prefix: &str,
+        user: &str,
+        responder: impl wiremock::Respond + 'static,
+    ) {
+        use wiremock::Mock;
+        use wiremock::matchers::{method, path};
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/Users/{user}/Items")))
+            .respond_with(responder)
+            .mount(server)
+            .await;
+    }
+
+    async fn jellyfin_recheck(
+        server: &wiremock::MockServer,
+        items: &[&str],
+        participants: &[&str],
+    ) -> ReadResult<BTreeMap<String, ProviderItemRecheck>> {
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+        HttpMediaServerSignalSource::new()
+            .open(&connection)
+            .await?
+            .recheck_items(
+                &items.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+                &participants
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .await
+    }
+
+    /// Emby keeps no server history, so every listed user's own state stands
+    /// in for one: an unlinked user's play is one of the item's plays.
+    #[tokio::test]
+    async fn an_emby_recheck_reads_every_users_state_for_the_item() {
+        let server = wiremock::MockServer::start().await;
+        mount_users(
+            &server,
+            "/emby",
+            &["emby-user-1", "emby-user-2", "emby-user-3"],
+        )
+        .await;
+        mount_user_items(
+            &server,
+            "/emby",
+            "emby-user-1",
+            items_by_id(&[("emby-item-7", "2026-10-30T08:15:00.0000000Z")], &[]),
+        )
+        .await;
+        mount_user_items(&server, "/emby", "emby-user-2", items_by_id(&[], &[])).await;
+        mount_user_items(
+            &server,
+            "/emby",
+            "emby-user-3",
+            items_by_id(&[("emby-item-7", "2026-10-31T21:00:00.0000000Z")], &[]),
+        )
+        .await;
 
         let recheck = HttpMediaServerSignalSource::new()
             .open(&emby_connection(format!("{}/emby", server.uri())))
             .await
             .expect("opens")
-            .recheck_item(
-                "emby-item-7",
+            .recheck_items(
+                &["emby-item-7".to_string()],
                 &["emby-user-1".to_string(), "emby-user-2".to_string()],
             )
             .await
-            .expect("the item re-checks");
+            .expect("the item re-checks")
+            .remove("emby-item-7")
+            .expect("the item is answered");
 
-        assert!(recheck.history.is_empty(), "Emby keeps no server history");
         assert_eq!(
             recheck.participants,
             vec![
@@ -4580,54 +5126,328 @@ mod tests {
                 },
             ]
         );
+        assert_eq!(
+            recheck.history,
+            vec![
+                ProviderItemPlay {
+                    external_user_id: "emby-user-1".into(),
+                    played: true,
+                    last_played_at: parse_timestamp("2026-10-30T08:15:00Z"),
+                },
+                ProviderItemPlay {
+                    external_user_id: "emby-user-3".into(),
+                    played: true,
+                    last_played_at: parse_timestamp("2026-10-31T21:00:00Z"),
+                },
+            ]
+        );
     }
 
     #[tokio::test]
     async fn an_emby_item_answer_without_user_data_fails_the_recheck() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/emby/Users/emby-user-1/Items/emby-item-7"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "Id": "emby-item-7",
-                "Type": "Movie"
-            })))
-            .mount(&server)
-            .await;
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "/emby", &["emby-user-1"]).await;
+        mount_user_items(&server, "/emby", "emby-user-1", |_: &Request| {
+            ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{ "Id": "emby-item-7", "Type": "Movie" }]
+            }))
+        })
+        .await;
 
         let failure = HttpMediaServerSignalSource::new()
             .open(&emby_connection(format!("{}/emby", server.uri())))
             .await
             .expect("opens")
-            .recheck_item("emby-item-7", &["emby-user-1".to_string()])
+            .recheck_items(&["emby-item-7".to_string()], &["emby-user-1".to_string()])
             .await
             .expect_err("no user data is no evidence the item is unplayed");
         assert_eq!(failure.reason, reasons::RESPONSE_UNREADABLE);
     }
 
     #[tokio::test]
-    async fn a_jellyfin_item_the_server_no_longer_has_fails_the_recheck() {
+    async fn a_jellyfin_item_no_user_can_see_fails_the_recheck() {
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1"]).await;
+        mount_user_items(&server, "", "jf-user-1", items_by_id(&[], &["jf-item-9"])).await;
+
+        let failure = jellyfin_recheck(&server, &["jf-item-9"], &["jf-user-1"])
+            .await
+            .expect_err("an item the server no longer has cannot be shown unplayed");
+        assert_eq!(failure.reason, reasons::RESPONSE_UNREADABLE);
+    }
+
+    /// A user the server refuses for the items (removed: 404; a library they
+    /// may no longer see: 403) has no plays of them. Only a refusal of every
+    /// read is the admin key's own, and fails.
+    #[tokio::test]
+    async fn a_jellyfin_user_the_server_refuses_reads_as_unplayed() {
+        for status in [404, 403] {
+            let server = wiremock::MockServer::start().await;
+            mount_users(&server, "", &["jf-user-1", "jf-user-2"]).await;
+            mount_user_items(&server, "", "jf-user-1", items_by_id(&[], &[])).await;
+            mount_user_items(&server, "", "jf-user-2", ResponseTemplate::new(status)).await;
+
+            let recheck = jellyfin_recheck(&server, &["jf-item-9"], &["jf-user-1", "jf-user-2"])
+                .await
+                .unwrap_or_else(|failure| panic!("status {status}: {failure}"))
+                .remove("jf-item-9")
+                .expect("the item is answered");
+            assert!(
+                recheck.participants.iter().all(|state| !state.played),
+                "status {status}: {:?}",
+                recheck.participants
+            );
+            assert_eq!(recheck.participants.len(), 2);
+            assert!(recheck.history.is_empty());
+        }
+
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1", "jf-user-2"]).await;
+        mount_user_items(&server, "", "jf-user-1", ResponseTemplate::new(403)).await;
+        mount_user_items(&server, "", "jf-user-2", ResponseTemplate::new(403)).await;
+        let failure = jellyfin_recheck(&server, &["jf-item-9"], &["jf-user-1"])
+            .await
+            .expect_err("every read refused is the credential's refusal");
+        assert_eq!(failure.reason, reasons::ACCESS_DENIED);
+    }
+
+    /// Any user's read failing for another reason fails the re-check, even a
+    /// user no Scryer user is linked to: their plays count for the anonymous
+    /// facts.
+    #[tokio::test]
+    async fn a_jellyfin_user_read_that_fails_on_the_server_fails_the_recheck() {
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1", "jf-unlinked"]).await;
+        mount_user_items(&server, "", "jf-user-1", items_by_id(&[], &[])).await;
+        mount_user_items(&server, "", "jf-unlinked", ResponseTemplate::new(500)).await;
+
+        let failure = jellyfin_recheck(&server, &["jf-item-9"], &["jf-user-1"])
+            .await
+            .expect_err("a server error is not an answer");
+        assert_eq!(failure.reason, reasons::REQUEST_REJECTED);
+    }
+
+    #[tokio::test]
+    async fn a_jellyfin_series_recheck_batches_its_reads_per_user() {
+        const EPISODES: usize = 200;
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1", "jf-user-2"]).await;
+        mount_user_items(&server, "", "jf-user-1", items_by_id(&[], &[])).await;
+        mount_user_items(&server, "", "jf-user-2", items_by_id(&[], &[])).await;
+
+        let ids: Vec<String> = (0..EPISODES)
+            .map(|index| format!("jf-ep-{index}"))
+            .collect();
+        let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let rechecks = jellyfin_recheck(&server, &id_refs, &["jf-user-1"])
+            .await
+            .expect("the series re-checks");
+        assert_eq!(rechecks.len(), EPISODES);
+
+        let requests = server.received_requests().await.expect("recorded").len();
+        // The user list, then each user's items in batches.
+        assert_eq!(requests, 1 + 2 * EPISODES.div_ceil(LOOKUP_BATCH));
+    }
+
+    // ── Paging that never ends, and history that moves ──────────────────────
+
+    #[tokio::test]
+    async fn a_listing_that_never_signals_its_end_fails_at_the_page_ceiling() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer};
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/Users/jf-user-1/Items/jf-item-9"))
-            .respond_with(ResponseTemplate::new(404))
+            .and(path("/Users/user-123/Items"))
+            .respond_with(GeneratedPages {
+                plex: false,
+                total: usize::MAX,
+                report_total: false,
+                page_limit: SIGNAL_PAGE_SIZE,
+                distinct_keys: None,
+                growing_total: false,
+            })
+            .expect(3)
+            .mount(&server)
+            .await;
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+
+        let failure = HttpMediaServerSignalSource::new()
+            .with_page_ceiling(3)
+            .read_played(&connection, "user-123")
+            .await
+            .expect_err("a listing with no end is not a complete read");
+        assert_eq!(failure.reason, reasons::PAGING_NOT_HONOURED);
+    }
+
+    #[tokio::test]
+    async fn a_plex_history_that_never_signals_its_end_fails_at_the_page_ceiling() {
+        use wiremock::matchers::{method, path, path_regex};
+        use wiremock::{Mock, MockServer};
+
+        let server = MockServer::start().await;
+        mount_plex_owner(&server).await;
+        mount_no_shared_server_tokens(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/status/sessions/history/all"))
+            .respond_with(GeneratedPages {
+                plex: true,
+                total: usize::MAX,
+                report_total: false,
+                page_limit: SIGNAL_PAGE_SIZE,
+                distinct_keys: None,
+                growing_total: false,
+            })
+            .expect(3)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/library/metadata/[0-9,]+$"))
+            .respond_with(GeneratedMetadata)
             .mount(&server)
             .await;
 
-        let mut connection = connection_fixture();
-        connection.base_url = server.uri();
-        let failure = HttpMediaServerSignalSource::new()
-            .open(&connection)
+        let failure = plex_source(&server)
+            .with_page_ceiling(3)
+            .read_played(&plex_connection(server.uri()), PLEX_SHARED_ID)
             .await
-            .expect("opens")
-            .recheck_item("jf-item-9", &["jf-user-1".to_string()])
+            .expect_err("a history with no end is not a complete read");
+        assert_eq!(failure.reason, reasons::PAGING_NOT_HONOURED);
+    }
+
+    #[test]
+    fn the_page_ceiling_is_far_past_any_real_history() {
+        assert!(SIGNAL_PAGE_CEILING * SIGNAL_PAGE_SIZE >= 1_000_000);
+    }
+
+    /// A Plex history the server sorts as asked, serving plays as they stand
+    /// at each request. `arrivals` are played between the first page and the
+    /// second, the newest plays on the server.
+    struct LiveHistory {
+        plays: std::sync::Mutex<Vec<Value>>,
+        arrivals: std::sync::Mutex<Vec<Value>>,
+        requests: std::sync::atomic::AtomicUsize,
+    }
+
+    impl wiremock::Respond for LiveHistory {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let call = self
+                .requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut plays = self.plays.lock().expect("plays");
+            if call == 1 {
+                plays.append(&mut self.arrivals.lock().expect("arrivals"));
+            }
+            let header = |name: &str| {
+                request
+                    .headers
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<usize>().ok())
+            };
+            let start = header("X-Plex-Container-Start").unwrap_or(0);
+            let size = header("X-Plex-Container-Size").unwrap_or(usize::MAX);
+            let mut sorted = plays.clone();
+            sorted.sort_by_key(|play| play["viewedAt"].as_i64());
+            if query_value(request, "sort").as_deref() == Some("viewedAt:desc") {
+                sorted.reverse();
+            }
+            let page = sorted
+                .iter()
+                .skip(start)
+                .take(size)
+                .cloned()
+                .collect::<Vec<_>>();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "MediaContainer": {
+                    "size": page.len(),
+                    "totalSize": sorted.len(),
+                    "offset": start,
+                    "Metadata": page
+                }
+            }))
+        }
+    }
+
+    fn history_play(index: usize) -> Value {
+        json!({
+            "ratingKey": (index + 1).to_string(),
+            "type": "movie",
+            "accountID": 2002,
+            "viewedAt": 1_700_000_000 + index as i64
+        })
+    }
+
+    async fn read_history_of(
+        server: &wiremock::MockServer,
+        history: impl wiremock::Respond + 'static,
+    ) -> ReadResult<Vec<ProviderPlayedItem>> {
+        use wiremock::Mock;
+        use wiremock::matchers::{method, path, path_regex};
+
+        mount_plex_owner(server).await;
+        mount_no_shared_server_tokens(server).await;
+        Mock::given(method("GET"))
+            .and(path("/status/sessions/history/all"))
+            .respond_with(history)
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/library/metadata/[0-9,]+$"))
+            .respond_with(GeneratedMetadata)
+            .mount(server)
+            .await;
+        plex_source(server)
+            .read_played(&plex_connection(server.uri()), PLEX_SHARED_ID)
             .await
-            .expect_err("a missing item cannot be shown unplayed");
-        assert_eq!(failure.reason, reasons::REQUEST_REJECTED);
+    }
+
+    /// A play that lands between two pages joins the end of an oldest-first
+    /// listing: the read completes with every play, the new one included.
+    #[tokio::test]
+    async fn a_plex_play_arriving_mid_read_is_read_with_the_rest() {
+        let initial = SIGNAL_PAGE_SIZE + 100;
+        let server = wiremock::MockServer::start().await;
+        let items = read_history_of(
+            &server,
+            LiveHistory {
+                plays: std::sync::Mutex::new((0..initial).map(history_play).collect()),
+                arrivals: std::sync::Mutex::new(vec![history_play(initial)]),
+                requests: std::sync::atomic::AtomicUsize::new(0),
+            },
+        )
+        .await
+        .expect("a play landing mid-read does not break the read");
+        assert_eq!(items.len(), initial + 1);
+    }
+
+    /// A row a later page repeats (a play removed mid-read shifts the rows
+    /// after it back) is skipped as already seen, not taken as a failure.
+    #[tokio::test]
+    async fn a_plex_history_row_repeated_across_pages_is_skipped() {
+        let total = SIGNAL_PAGE_SIZE + 100;
+        let server = wiremock::MockServer::start().await;
+        let overlapping = move |request: &Request| {
+            let start = request
+                .headers
+                .get("X-Plex-Container-Start")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            // The second page starts one row early.
+            let from = if start == 0 { 0 } else { start - 1 };
+            let rows = (from..total.min(from + SIGNAL_PAGE_SIZE))
+                .map(history_play)
+                .collect::<Vec<_>>();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "MediaContainer": { "size": rows.len(), "totalSize": total, "Metadata": rows }
+            }))
+        };
+        let items = read_history_of(&server, overlapping)
+            .await
+            .expect("an overlap between pages is not a failed read");
+        assert_eq!(items.len(), total);
+        assert!(items.iter().all(|item| item.play_count == 1));
     }
 }

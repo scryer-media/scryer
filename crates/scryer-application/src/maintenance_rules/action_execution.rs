@@ -169,6 +169,11 @@ pub(crate) fn title_rule_action_not_executable(kind: MaintenanceActionKind) -> S
 
 /// Stable `hold_reason` / `state_reason` values the executor writes. Part of
 /// the operator-visible contract, like `candidate_reason` on the evaluator.
+///
+/// These are stored on candidate and action-run rows and read by the web
+/// client, and they shipped as lower snake case before the area-prefixed
+/// SCREAMING_SNAKE convention existed. A released code is never renamed, so
+/// this module keeps that one shape, and its test holds every code to it.
 pub mod execution_reason {
     /// The rule was disarmed, disabled, left observe mode, or its gate went
     /// down between selection and execution.
@@ -236,6 +241,63 @@ pub mod execution_reason {
     /// operator asked for, and that is an authoring mistake to surface rather
     /// than a race to resolve.
     pub const TAG_PATCH_CONFLICT: &str = "tag_patch_conflict";
+    /// A high-risk action on a season or episode subject whose files cannot
+    /// all be placed on that subject's episodes.
+    pub const AMBIGUOUS_EPISODE_FILE_COVERAGE: &str = "ambiguous_episode_file_coverage";
+
+    /// Every code above.
+    pub const ALL: &[&str] = &[
+        RULE_NOT_ELIGIBLE,
+        NO_MATCH_AT_EXECUTION,
+        UNKNOWN_AT_EXECUTION,
+        PLAYBACK_HOLD,
+        PLAYBACK_UNKNOWN,
+        WATCH_RECHECK_NEWER_PLAY,
+        WATCH_RECHECK_UNCREDITED_PLAY,
+        WATCH_RECHECK_UNAVAILABLE,
+        ACTIVE_ACQUISITION,
+        ACQUISITION_UNKNOWN,
+        STORAGE_DELETION_IN_PROGRESS,
+        ACTION_NOT_FULLY_SUPPORTED,
+        TITLE_MISSING,
+        LOCATION_OPERATION_HOLD,
+        PASS_ACTION_STEP_BUDGET,
+        PASS_HIGH_RISK_STEP_BUDGET,
+        ACTION_SUCCEEDED,
+        ALREADY_SATISFIED,
+        RETRY_PENDING,
+        ACTION_FAILED,
+        LEASE_RECLAIMED,
+        TAG_NOT_DEFINED,
+        TAG_PATCH_CONFLICT,
+        AMBIGUOUS_EPISODE_FILE_COVERAGE,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        use super::ALL;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn reasons_are_distinct_and_keep_the_stored_snake_case_shape() {
+            let distinct = ALL.iter().collect::<BTreeSet<_>>();
+            assert_eq!(distinct.len(), ALL.len(), "a reason is listed twice");
+            for reason in ALL {
+                assert!(!reason.is_empty());
+                assert!(
+                    reason
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                    "{reason} is not lower snake case"
+                );
+                assert!(
+                    !reason.starts_with('_') && !reason.ends_with('_') && !reason.contains("__"),
+                    "{reason} has a stray underscore"
+                );
+            }
+            assert_eq!(ALL.len(), 24);
+        }
+    }
 }
 
 /// Job report for [`JobKey::LifecycleActionHandling`], serialized onto the run.
@@ -1979,7 +2041,7 @@ impl AppUseCase {
             return SafetyDecision::Excluded;
         }
         if high_risk && candidate.subject_kind != "title" && subject.ambiguous_files {
-            return SafetyDecision::Hold("ambiguous_episode_file_coverage");
+            return SafetyDecision::Hold(execution_reason::AMBIGUOUS_EPISODE_FILE_COVERAGE);
         }
         let sequence_delete_files_step_id = sequence.and_then(|sequence| {
             sequence
@@ -2033,7 +2095,7 @@ impl AppUseCase {
                     Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
                 }
             } else if subject.ambiguous_files {
-                return SafetyDecision::Hold("ambiguous_episode_file_coverage");
+                return SafetyDecision::Hold(execution_reason::AMBIGUOUS_EPISODE_FILE_COVERAGE);
             } else {
                 subject.files.clone()
             };
@@ -2347,6 +2409,13 @@ impl AppUseCase {
                         .map(|episode| episode.id.clone())
                         .collect::<HashSet<_>>()
                 });
+            let entities = super::watch_recheck::recheck_entities(
+                &title.facet,
+                &title.id,
+                subject.kind,
+                &subject.files,
+                episode_ids.as_ref(),
+            );
             let recheck = self
                 .maintenance_watch_recheck(
                     &watch_context,
@@ -2359,6 +2428,7 @@ impl AppUseCase {
                         .map(Vec::as_slice)
                         .unwrap_or_default(),
                     episode_ids.as_ref(),
+                    entities.as_deref(),
                 )
                 .await;
             if let Some(reason) = recheck.hold_reason() {

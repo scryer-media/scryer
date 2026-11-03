@@ -12833,17 +12833,26 @@ pub trait MediaServerSignalReader: Send + Sync {
         external_user_id: &str,
     ) -> Result<Vec<ProviderPlayedItem>, SignalReadFailure>;
 
-    /// One item's played state as the server reports it now, read just before
-    /// an action that a watch fact allowed. Nothing is stored from it.
+    /// Items' played state as the server reports it now, read just before an
+    /// action that a watch fact allowed. Nothing is stored from it.
     ///
-    /// `participants` names the accounts whose state is wanted; the answer
-    /// must carry every one of them, or it fails. An `Err` (including an item
-    /// the server no longer knows) is a re-check that could not be made.
-    async fn recheck_item(
+    /// The answer is keyed by provider item id and must carry every item
+    /// asked for; the caller treats a missing item as a re-check that could
+    /// not be made. `participants` names the accounts whose own state is
+    /// wanted, and each item's answer must carry every one of them.
+    /// Implementations read items in batches where the provider allows it,
+    /// and bound how many requests are in flight where it does not.
+    ///
+    /// An account the server refuses for one item (404 or 403: the user was
+    /// removed, or the item sits in a library hidden from them) has no plays
+    /// of it, so it reads as unplayed. An `Err` is a re-check that could not
+    /// be made: a transport failure, a 5xx, a refusal of the connection's own
+    /// credential, or an item the server no longer knows.
+    async fn recheck_items(
         &self,
-        _provider_item_id: &str,
+        _provider_item_ids: &[String],
         _participants: &[String],
-    ) -> Result<ProviderItemRecheck, SignalReadFailure> {
+    ) -> Result<std::collections::BTreeMap<String, ProviderItemRecheck>, SignalReadFailure> {
         Err(SignalReadFailure::new(
             crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
             "this media server cannot re-check an item",
@@ -12911,9 +12920,12 @@ pub struct ProviderItemPlay {
 pub struct ProviderItemRecheck {
     /// Each requested participant's own state for the item.
     pub participants: Vec<ProviderItemPlay>,
-    /// Plays the server's own history names for the item, one per play and
-    /// for any account, where the provider keeps such a history (Plex). Empty
-    /// for providers that do not.
+    /// Plays by any account, linked or not. On Plex these are the server's
+    /// own history rows for the item, one per organic play (history holds no
+    /// marks or scrobbles; the owner's marks arrive through the owner's own
+    /// state). On Jellyfin and Emby, which keep no server-wide history, they
+    /// are every listed user's own state for the item, one entry per user who
+    /// has played it.
     pub history: Vec<ProviderItemPlay>,
 }
 

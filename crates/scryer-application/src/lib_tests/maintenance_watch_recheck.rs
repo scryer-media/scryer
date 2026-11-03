@@ -26,7 +26,8 @@ use crate::ports::{
 };
 use scryer_domain::{
     ExternalAccountProvider, ExternalAccountStatus, MaintenanceCandidateState,
-    MaintenanceEffectArming, MaintenanceRuleState, MediaServerConnection, MediaServerProvider,
+    MaintenanceEffectArming, MaintenanceRuleState, MediaServerConnection,
+    MediaServerPlaybackEntityKind, MediaServerPlaybackItem, MediaServerProvider,
     MediaServerSignalKind, MediaServerSignalSyncState, NewUserMediaSignal, UserExternalAccount,
 };
 
@@ -35,6 +36,13 @@ const SOMEONE_WATCHED_MATCHER: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tcount(input.facts.watched_by_user_ids) > 0\n\
+     }\n";
+
+/// Matches a movie nobody has played: the rule a missed play would delete.
+const NOBODY_WATCHED_MATCHER: &str = "package whatever\n\
+     import rego.v1\n\n\
+     match if {\n\
+     \tcount(input.facts.watched_by_user_ids) == 0\n\
      }\n";
 
 /// Reads no watch fact, so no re-check is due.
@@ -64,15 +72,18 @@ impl MediaServerPlaybackProbe for IdlePlayback {
     }
 }
 
-/// A server whose live re-check answer the test sets, counting the reads.
+/// A server whose live re-check answer the test sets for every item asked
+/// about, counting the reads and recording the items.
 struct LiveServer {
     answer: Result<ProviderItemRecheck, SignalReadFailure>,
     rechecks: Arc<AtomicUsize>,
+    asked: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 struct LiveReader {
     answer: Result<ProviderItemRecheck, SignalReadFailure>,
     rechecks: Arc<AtomicUsize>,
+    asked: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 #[async_trait]
@@ -84,6 +95,7 @@ impl MediaServerSignalSource for LiveServer {
         Ok(Box::new(LiveReader {
             answer: self.answer.clone(),
             rechecks: self.rechecks.clone(),
+            asked: self.asked.clone(),
         }))
     }
 }
@@ -97,13 +109,21 @@ impl MediaServerSignalReader for LiveReader {
         Ok(Vec::new())
     }
 
-    async fn recheck_item(
+    async fn recheck_items(
         &self,
-        _: &str,
+        provider_item_ids: &[String],
         _: &[String],
-    ) -> Result<ProviderItemRecheck, SignalReadFailure> {
+    ) -> Result<std::collections::BTreeMap<String, ProviderItemRecheck>, SignalReadFailure> {
         self.rechecks.fetch_add(1, Ordering::SeqCst);
-        self.answer.clone()
+        self.asked
+            .lock()
+            .expect("asked")
+            .extend(provider_item_ids.iter().cloned());
+        let answer = self.answer.clone()?;
+        Ok(provider_item_ids
+            .iter()
+            .map(|id| (id.clone(), answer.clone()))
+            .collect())
     }
 }
 
@@ -113,6 +133,28 @@ struct RecheckFixture {
     signals: Arc<InMemorySignalRepo>,
     evaluation: Arc<InMemoryMaintenanceEvaluationRepo>,
     rechecks: Arc<AtomicUsize>,
+    asked: Arc<std::sync::Mutex<Vec<String>>>,
+    connections: Arc<StubSignalConnections>,
+    media_files: Arc<MockMediaFileRepo>,
+}
+
+/// What the title looks like when the rule is evaluated.
+#[derive(Clone, Copy)]
+struct Seed {
+    /// The sweep stored a play of it by the viewer.
+    stored_play: bool,
+    /// It has a file on disk.
+    file: bool,
+    /// The library mapping knows its item on the connection.
+    mapped: bool,
+}
+
+impl Seed {
+    const STORED_PLAY: Self = Self {
+        stored_play: true,
+        file: false,
+        mapped: false,
+    };
 }
 
 fn viewer_link() -> UserExternalAccount {
@@ -139,6 +181,13 @@ fn recheck_app(answer: Result<ProviderItemRecheck, SignalReadFailure>) -> Rechec
     let signals = Arc::new(InMemorySignalRepo::swept(&accounts));
     let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
     let rechecks = Arc::new(AtomicUsize::new(0));
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let connections = Arc::new(StubSignalConnections {
+        connections: vec![jellyfin_connection(true)],
+        fail_list: false,
+        ..Default::default()
+    });
+    let media_files = Arc::new(MockMediaFileRepo::default());
     let job_runs = Arc::new(RecordingJobRunRepo::with_maintenance_action_job_receipts(
         evaluation.action_job_receipts.clone(),
     ));
@@ -146,17 +195,15 @@ fn recheck_app(answer: Result<ProviderItemRecheck, SignalReadFailure>) -> Rechec
         services
             .with_maintenance_rule_set_store(Arc::new(InMemoryMaintenanceRuleRepo::default()))
             .with_maintenance_evaluation_store(evaluation.clone())
-            .with_media_files(Arc::new(MockMediaFileRepo::default()))
+            .with_media_files(media_files.clone())
             .with_job_runs(job_runs.clone())
-            .with_media_server_connection_store(Arc::new(StubSignalConnections {
-                connections: vec![jellyfin_connection(true)],
-                fail_list: false,
-            }))
+            .with_media_server_connection_store(connections.clone())
             .with_external_account_store(Arc::new(StubExternalAccounts { accounts }))
             .with_media_server_signal_store(signals.clone())
             .with_media_server_signal_source(Arc::new(LiveServer {
                 answer,
                 rechecks: rechecks.clone(),
+                asked: asked.clone(),
             }))
             .with_media_server_playback_probe(Arc::new(IdlePlayback))
     });
@@ -166,6 +213,9 @@ fn recheck_app(answer: Result<ProviderItemRecheck, SignalReadFailure>) -> Rechec
         signals,
         evaluation,
         rechecks,
+        asked,
+        connections,
+        media_files,
     }
 }
 
@@ -186,9 +236,8 @@ fn live(account: &str, played: bool, last_played_at: Option<DateTime<Utc>>) -> P
 }
 
 impl RecheckFixture {
-    /// A clean, current sweep that stored one play of `title_id` by the
-    /// viewer, `played_at`.
-    async fn stored_play(&self, title_id: &str, played_at: DateTime<Utc>) {
+    /// A clean, current sweep of the connection.
+    async fn swept(&self, signal_count: i64) {
         self.signals
             .upsert_signal_sync_state(&MediaServerSignalSyncState {
                 connection_id: CONNECTION_ID.to_string(),
@@ -199,11 +248,17 @@ impl RecheckFixture {
                 last_error: None,
                 last_error_code: None,
                 participant_count: 1,
-                signal_count: 1,
+                signal_count,
                 updated_at: Utc::now(),
             })
             .await
             .expect("record sync state");
+    }
+
+    /// A clean, current sweep that stored one play of `title_id` by the
+    /// viewer, `played_at`.
+    async fn stored_play(&self, title_id: &str, played_at: DateTime<Utc>) {
+        self.swept(1).await;
         self.signals
             .replace_participant_signals(
                 CONNECTION_ID,
@@ -240,6 +295,15 @@ impl RecheckFixture {
     /// pass over a seeded, monitored movie. Returns the title id and its
     /// stored watch facts as they were just before the handler ran.
     async fn run(&self, matcher: &str) -> (String, Vec<scryer_domain::UserMediaSignal>) {
+        self.run_with(matcher, Seed::STORED_PLAY).await
+    }
+
+    /// As [`Self::run`], over a title seeded as `seed` describes.
+    async fn run_with(
+        &self,
+        matcher: &str,
+        seed: Seed,
+    ) -> (String, Vec<scryer_domain::UserMediaSignal>) {
         let title = self
             .app
             .add_title(
@@ -255,7 +319,35 @@ impl RecheckFixture {
             )
             .await
             .expect("create title");
-        self.stored_play(&title.id, hours_ago(48)).await;
+        if seed.stored_play {
+            self.stored_play(&title.id, hours_ago(48)).await;
+        } else {
+            self.swept(0).await;
+        }
+        if seed.file {
+            self.media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/media/{}.mkv", title.id),
+                    size_bytes: 1_000,
+                    ..Default::default()
+                })
+                .await
+                .expect("insert media file");
+        }
+        if seed.mapped {
+            self.connections
+                .playback_items
+                .lock()
+                .expect("playback items")
+                .push(MediaServerPlaybackItem {
+                    connection_id: CONNECTION_ID.to_string(),
+                    entity_kind: MediaServerPlaybackEntityKind::Title,
+                    entity_id: title.id.clone(),
+                    provider_item_id: item_id(&title.id),
+                    last_seen_at: Utc::now(),
+                });
+        }
         let created = self
             .app
             .create_maintenance_rule_set(
@@ -399,4 +491,125 @@ async fn a_rule_that_reads_no_watch_fact_is_not_rechecked() {
 
     assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 0);
     assert!(!fixture.monitored(&title_id).await, "the action ran");
+}
+
+// ── A subject nobody had played at the sweep ────────────────────────────────
+
+/// No stored row names the movie's item, so the re-check finds it through the
+/// library mapping and reads it: a play since the sweep holds the action.
+#[tokio::test]
+async fn a_title_with_no_stored_plays_is_rechecked_through_the_library_mapping() {
+    let fixture = recheck_app(Ok(ProviderItemRecheck {
+        participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(1)))],
+        history: Vec::new(),
+    }));
+    let (title_id, before) = fixture
+        .run_with(
+            NOBODY_WATCHED_MATCHER,
+            Seed {
+                stored_play: false,
+                file: true,
+                mapped: true,
+            },
+        )
+        .await;
+
+    assert!(before.is_empty(), "the sweep stored no play of it");
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 1);
+    assert_eq!(*fixture.asked.lock().unwrap(), vec![item_id(&title_id)]);
+    fixture
+        .assert_held(&title_id, execution_reason::WATCH_RECHECK_NEWER_PLAY)
+        .await;
+}
+
+/// Someone no Scryer user is linked to played it since the sweep: the
+/// server's own record of that play holds the action too.
+#[tokio::test]
+async fn an_unlinked_accounts_play_of_a_title_with_no_stored_plays_holds_the_action() {
+    let fixture = recheck_app(Ok(ProviderItemRecheck {
+        participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
+        history: vec![live(STRANGER_EXTERNAL_ID, true, Some(hours_ago(1)))],
+    }));
+    let (title_id, _) = fixture
+        .run_with(
+            NOBODY_WATCHED_MATCHER,
+            Seed {
+                stored_play: false,
+                file: true,
+                mapped: true,
+            },
+        )
+        .await;
+
+    fixture
+        .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNCREDITED_PLAY)
+        .await;
+}
+
+/// A title with a file but no item the mapping can find on the connection
+/// cannot be shown unplayed there, so it is held without a read.
+#[tokio::test]
+async fn a_title_with_no_mapped_item_is_held() {
+    let fixture = recheck_app(Ok(ProviderItemRecheck {
+        participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
+        history: Vec::new(),
+    }));
+    let (title_id, _) = fixture
+        .run_with(
+            NOBODY_WATCHED_MATCHER,
+            Seed {
+                stored_play: false,
+                file: true,
+                mapped: false,
+            },
+        )
+        .await;
+
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 0);
+    fixture
+        .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNAVAILABLE)
+        .await;
+}
+
+#[tokio::test]
+async fn a_mapped_title_still_unplayed_lets_the_action_run() {
+    let fixture = recheck_app(Ok(ProviderItemRecheck {
+        participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
+        history: Vec::new(),
+    }));
+    let (title_id, _) = fixture
+        .run_with(
+            NOBODY_WATCHED_MATCHER,
+            Seed {
+                stored_play: false,
+                file: true,
+                mapped: true,
+            },
+        )
+        .await;
+
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 1);
+    assert!(!fixture.monitored(&title_id).await, "the action ran");
+}
+
+#[tokio::test]
+async fn a_failed_read_of_a_title_with_no_stored_plays_holds_the_action() {
+    let fixture = recheck_app(Err(SignalReadFailure::new(
+        reasons::REQUEST_FAILED,
+        "one user's read timed out",
+    )));
+    let (title_id, _) = fixture
+        .run_with(
+            NOBODY_WATCHED_MATCHER,
+            Seed {
+                stored_play: false,
+                file: true,
+                mapped: true,
+            },
+        )
+        .await;
+
+    fixture
+        .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNAVAILABLE)
+        .await;
 }
