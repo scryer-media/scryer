@@ -268,6 +268,29 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
 }
 
+/**
+ * The shortest arc that covers every angle, as a start and an end at or
+ * after it. A band's titles can sit either side of wherever angles wrap.
+ */
+function coveringArc(angles: readonly number[]): {
+  start: number;
+  end: number;
+} {
+  const sorted = [...angles].sort((left, right) => left - right);
+  let start = sorted[0] ?? 0;
+  let largestGap = -1;
+  for (let index = 0; index < sorted.length; index += 1) {
+    const current = sorted[index];
+    const next =
+      index + 1 < sorted.length ? sorted[index + 1] : sorted[0] + Math.PI * 2;
+    if (next - current > largestGap) {
+      largestGap = next - current;
+      start = next;
+    }
+  }
+  return { start, end: start + Math.max(0, Math.PI * 2 - largestGap) };
+}
+
 function readCssColor(element: Element, name: string, fallback: string) {
   const value = getComputedStyle(element).getPropertyValue(name).trim();
   return value || fallback;
@@ -404,7 +427,9 @@ export default function LibraryGraphView({
   const focusedKeyRef = React.useRef<string | null>(null);
   // The node a focused view is centred on, while the view is focused.
   const focusCenterRef = React.useRef<string | null>(null);
-  const activateNodeRef = React.useRef<(key: string) => void>(() => {});
+  const activateNodeRef = React.useRef<
+    (key: string, openTitle: boolean) => void
+  >(() => {});
   const ownedIndexRef = React.useRef<OwnedNodeIndex>(ownedNodeIndex([]));
   const expandTokenRef = React.useRef(0);
   const client = useClient();
@@ -1071,9 +1096,8 @@ export default function LibraryGraphView({
       for (const band of recommendationBandsRef.current) {
         let inner = Infinity;
         let outer = 0;
-        let start = Infinity;
-        let end = -Infinity;
         let pad = 0;
+        const angles: number[] = [];
         for (const key of band.keys) {
           const point = viewportByNode.get(key);
           if (!point || !graph.hasNode(key)) {
@@ -1083,26 +1107,20 @@ export default function LibraryGraphView({
             point.x - bandCenter.x,
             point.y - bandCenter.y,
           );
-          // Angles run clockwise from straight up, as the rings lay out.
-          let angle = Math.atan2(
-            point.y - bandCenter.y,
-            point.x - bandCenter.x,
+          angles.push(
+            Math.atan2(point.y - bandCenter.y, point.x - bandCenter.x),
           );
-          if (angle < -Math.PI / 2) {
-            angle += Math.PI * 2;
-          }
           const size = sigma.scaleSize(
             graph.getNodeAttribute(key, "size") as number,
           );
           inner = Math.min(inner, radius);
           outer = Math.max(outer, radius);
-          start = Math.min(start, angle);
-          end = Math.max(end, angle);
           pad = Math.max(pad, size + 6);
         }
         if (outer === 0) {
           continue;
         }
+        const { start, end } = coveringArc(angles);
         const spread = pad / Math.max(outer, 1);
         context.beginPath();
         context.arc(
@@ -1448,8 +1466,14 @@ export default function LibraryGraphView({
     sigmaRef.current = sigma;
 
     sigma.on("afterRender", drawOverlay);
-    sigma.on("clickNode", ({ node }) => {
-      activateNodeRef.current(node);
+    // Ctrl-click (Cmd-click on a Mac) also opens the title's panel; a plain
+    // click only focuses the graph on it.
+    sigma.on("clickNode", ({ node, event }) => {
+      const original = event.original;
+      activateNodeRef.current(
+        node,
+        "ctrlKey" in original && (original.ctrlKey || original.metaKey),
+      );
     });
     sigma.on("enterNode", ({ node, event }) => {
       const attributes = graph.getNodeAttributes(node);
@@ -2060,7 +2084,7 @@ export default function LibraryGraphView({
   // trail follows the focus: a node already on it cuts the trail back to it,
   // and any other node is explored from.
   const activateNode = React.useCallback(
-    (key: string) => {
+    (key: string, openTitle: boolean) => {
       const graph = graphRef.current;
       if (!graph || !graph.hasNode(key)) {
         return;
@@ -2086,7 +2110,7 @@ export default function LibraryGraphView({
         window.clearTimeout(previous.timer);
         pendingSelectRef.current = null;
       }
-      if (title) {
+      if (title && openTitle) {
         // Opened when the glide lands; the timer covers a glide that never
         // starts or is cut short.
         pendingSelectRef.current = {
@@ -2176,7 +2200,7 @@ export default function LibraryGraphView({
         case " ": {
           if (shownFocusedKey) {
             event.preventDefault();
-            activateNode(shownFocusedKey);
+            activateNode(shownFocusedKey, event.ctrlKey || event.metaKey);
           }
           return;
         }
