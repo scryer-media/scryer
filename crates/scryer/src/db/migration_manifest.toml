@@ -3664,36 +3664,36 @@ engine = "postgres"
 scope = "all"
 
 [[migration]]
-version = 321
+version = 322
 description = "discovery library graph"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0321_discovery_library_graph.sql"
+file = "migrations/0322_discovery_library_graph.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0321_discovery_library_graph.sql"
+file = "postgres/migrations/0322_discovery_library_graph.sql"
 engine = "postgres"
 scope = "all"
 
 [[migration]]
-version = 322
+version = 323
 description = "discovery neighbor cache"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0322_discovery_neighbor_cache.sql"
+file = "migrations/0323_discovery_neighbor_cache.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0322_discovery_neighbor_cache.sql"
+file = "postgres/migrations/0323_discovery_neighbor_cache.sql"
 engine = "postgres"
 scope = "all"
 
