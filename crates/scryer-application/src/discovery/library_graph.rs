@@ -35,7 +35,7 @@ pub(crate) const LIBRARY_GRAPH_MIN_COSINE: f64 = 0.55;
 /// newest `created_at` among the titles that share it), ties broken by subject
 /// key ascending. The run records both counts and the subject keys it left
 /// out, so a reader can tell whether its own titles are missing.
-pub(crate) const LIBRARY_GRAPH_MAX_SUBJECTS: usize = 5_000;
+pub(crate) const LIBRARY_GRAPH_MAX_SUBJECTS: usize = 10_000;
 
 const LIBRARY_GRAPH_RUN_COMPLETE: &str = "complete";
 const LIBRARY_GRAPH_RUN_FAILED: &str = "failed";

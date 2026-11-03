@@ -6,10 +6,11 @@
 //! roots (`discoverPublicFeed`, `titleRecommendations`, and
 //! `collectionCompletions`) share a combined limit of 10 root fields.
 //!
-//! Synchronous discovery subject lists are capped at 5,000. Snapshot and
-//! context operations retain their configured 30,000-subject and
-//! 250-changed-subject limits. `sectionTypes` is capped at the schema's current
-//! raw enum count of 21 before deduplication. `metadataBulk` remains capped at
+//! Synchronous discovery subject lists are capped at 5,000, except the
+//! library graph, which carries up to 10,000 subjects. Snapshot and context
+//! operations retain their configured 30,000-subject and 250-changed-subject
+//! limits. `sectionTypes` is capped at the schema's current raw enum count of
+//! 21 before deduplication. `metadataBulk` remains capped at
 //! 50 items.
 //!
 //! These are shape limits, so do not add operation-name or query-hash
