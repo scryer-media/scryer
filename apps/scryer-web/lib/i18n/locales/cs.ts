@@ -7126,6 +7126,41 @@ const cs: LocaleDictionary = {
     "Přesun souboru pod novým názvem se nezdařil. Soubor i jeho epizody zůstaly beze změny.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Číslování epizod je nejednoznačné",
+  "setup.sourceImportProgress": "Import zdrojů",
+  "setup.sourceImportInvalidRequest":
+    "Vybraný zdroj není dostupný. Obnovte vyhledávání zdrojů a vyberte ho znovu.",
+  "setup.sourceImportSelectionChanged":
+    "Odeslaný výběr zdrojů nelze změnit. Neúspěšné zdroje zopakujte v Souhrnu.",
+  "setup.sourceImportNotOwned":
+    "Tento import zdrojů není pro váš účet dostupný.",
+  "setup.sourceImportQueueFull":
+    "Kapacita importu zdrojů je plná. Zkuste to znovu, až skončí jiný import.",
+  "setup.sourceImportActive": "Tento import zdrojů stále probíhá.",
+  "setup.sourceImportNotRetryable":
+    "Zopakovat nebo přeskočit lze pouze neúspěšné nebo přerušené zdroje.",
+  "setup.sourceImportUnresolved":
+    "Před dokončením nastavení zopakujte nebo výslovně přeskočte nevyřešené zdroje.",
+  "setup.sourceImportCredentialRequired":
+    "Před pokračováním zadejte přihlašovací údaj zdroje.",
+  "setup.sourceImportConfigConflict":
+    "Rezervovaná konfigurace se změnila. Před opakováním zdroj zkontrolujte.",
+  "setup.sourceImportSourceNotReady":
+    "Před pokračováním počkejte na dokončení vyhledávání zdrojů.",
+  "setup.sourceImportResume": "Znovu připojit k průběhu",
+  "setup.sourceImportLoading": "Načítání průběhu importu zdrojů",
+  "setup.sourceImportCredential": "Opravený přihlašovací údaj pro {{name}}",
+  "setup.sourceImportRetry": "Zopakovat neúspěšné zdroje",
+  "setup.sourceImportSkip": "Přeskočit tento zdroj",
+  "setup.sourceImportItemFailed":
+    "Zkontrolujte připojení a přihlašovací údaje, poté zopakujte nebo přeskočte.",
+  "setup.sourceImportState.queued": "Ve frontě",
+  "setup.sourceImportState.installing": "Instalace poskytovatele",
+  "setup.sourceImportState.checking": "Kontrola připojení",
+  "setup.sourceImportState.saving": "Ukládání konfigurace",
+  "setup.sourceImportState.succeeded": "Importováno",
+  "setup.sourceImportState.failed": "Selhalo",
+  "setup.sourceImportState.interrupted": "Přerušeno",
+  "setup.sourceImportState.skipped": "Přeskočeno",
 };
 
 export default cs;

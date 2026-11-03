@@ -3739,6 +3739,42 @@ const it: LocaleDictionary = {
     "Lo spostamento del file al nuovo nome non è riuscito. Il file e i suoi episodi sono rimasti invariati.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numerazione degli episodi ambigua",
+  "setup.sourceImportProgress": "Importazione delle sorgenti",
+  "setup.sourceImportInvalidRequest":
+    "Una sorgente selezionata non è disponibile. Aggiorna il rilevamento delle sorgenti e selezionala di nuovo.",
+  "setup.sourceImportSelectionChanged":
+    "Le sorgenti inviate non possono essere modificate. Riprova le sorgenti non riuscite dal Riepilogo.",
+  "setup.sourceImportNotOwned":
+    "Questa importazione di sorgenti non è disponibile per il tuo account.",
+  "setup.sourceImportQueueFull":
+    "La capacità di importazione delle sorgenti è esaurita. Riprova al termine di un’altra importazione.",
+  "setup.sourceImportActive":
+    "Questa importazione di sorgenti è ancora in corso.",
+  "setup.sourceImportNotRetryable":
+    "Solo le sorgenti non riuscite o interrotte possono essere riprovate o saltate.",
+  "setup.sourceImportUnresolved":
+    "Riprova o salta esplicitamente le sorgenti in sospeso prima di completare la configurazione.",
+  "setup.sourceImportCredentialRequired":
+    "Inserisci la credenziale della sorgente prima di continuare.",
+  "setup.sourceImportConfigConflict":
+    "La configurazione riservata è cambiata. Controlla la sorgente prima di riprovare.",
+  "setup.sourceImportSourceNotReady":
+    "Attendi il completamento del rilevamento delle sorgenti prima di continuare.",
+  "setup.sourceImportResume": "Riconnetti all’avanzamento",
+  "setup.sourceImportLoading": "Caricamento dell’avanzamento dell’importazione",
+  "setup.sourceImportCredential": "Credenziale corretta per {{name}}",
+  "setup.sourceImportRetry": "Riprova le sorgenti non riuscite",
+  "setup.sourceImportSkip": "Salta questa sorgente",
+  "setup.sourceImportItemFailed":
+    "Controlla la connessione e le credenziali, poi riprova o salta.",
+  "setup.sourceImportState.queued": "In coda",
+  "setup.sourceImportState.installing": "Installazione del provider",
+  "setup.sourceImportState.checking": "Verifica della connessione",
+  "setup.sourceImportState.saving": "Salvataggio della configurazione",
+  "setup.sourceImportState.succeeded": "Importata",
+  "setup.sourceImportState.failed": "Non riuscita",
+  "setup.sourceImportState.interrupted": "Interrotta",
+  "setup.sourceImportState.skipped": "Saltata",
 };
 
 export default it;

@@ -2290,6 +2290,7 @@ pub struct AppRuntimeImportState {
     pub active_streams: ActiveImportStreamTracker,
     pub external_import_warmup_orchestrator: ExternalImportMonitorWarmupOrchestrator,
     pub external_import_apply_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) source_import: Arc<crate::source_import::SourceImportRuntime>,
     pub external_import_source_chunk_cleanup_done: Arc<tokio::sync::Mutex<bool>>,
     pub(crate) same_path_upgrade_guard_lock: Arc<tokio::sync::Mutex<()>>,
 }
@@ -2472,6 +2473,7 @@ where
 
 #[derive(Clone)]
 pub struct AppRuntimeIntegrationState {
+    pub(crate) routing_settings_write_lock: Arc<tokio::sync::Mutex<()>>,
     pub managed_indexer_sync_lock: Arc<tokio::sync::Mutex<()>>,
     /// Managed children whose caps a pass asked for and did not get, so the
     /// next passes wait before asking again. In memory on purpose: a restart
@@ -2685,6 +2687,7 @@ impl AppRuntimeState {
                 external_import_warmup_orchestrator:
                     ExternalImportMonitorWarmupOrchestrator::default(),
                 external_import_apply_lock: Arc::new(tokio::sync::Mutex::new(())),
+                source_import: Default::default(),
                 external_import_source_chunk_cleanup_done: Arc::new(tokio::sync::Mutex::new(false)),
                 same_path_upgrade_guard_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
@@ -2737,6 +2740,7 @@ impl AppRuntimeState {
                 subtitle_providers_on_probation: Arc::default(),
             },
             integrations: AppRuntimeIntegrationState {
+                routing_settings_write_lock: Default::default(),
                 managed_indexer_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
                 managed_caps_unanswered: Arc::default(),
                 navigation_badge_facts: NavigationBadgeFactsCache::default(),

@@ -885,8 +885,22 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
             "missing mutation {name}"
         );
     }
+    // Durable source imports add acceptance, status, retry, and explicit skip,
+    // and drop the compatibility `executeExternalImport`: 288->291.
+    for name in [
+        "startExternalImportSources",
+        "externalImportSourceStatus",
+        "retryExternalImportSources",
+        "skipExternalImportSource",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
+    assert!(!mutation_field_names.contains(&"executeExternalImport"));
     assert_eq!(
-        mutation_field_count, 288,
+        mutation_field_count, 291,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1321,14 +1335,24 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Durable source imports add a job progress object and per-item receipt
+    // object, and dropping `executeExternalImport` removes its result payload:
+    // public types 1007->1008, OBJECT 543->544.
+    for name in [
+        "ExternalImportSourceJobPayload",
+        "ExternalImportSourceItemPayload",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert!(!public_type_names.contains(&"ExternalImportResultPayload"));
     // The library graph catalog view is a GRAPH value on the existing catalog
     // view mode enum, so every count below is unchanged.
     assert_eq!(
         public_types.len(),
-        1007,
+        1008,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 543);
+    assert_eq!(kind_count("OBJECT"), 544);
     assert_eq!(kind_count("INPUT_OBJECT"), 245);
     assert_eq!(kind_count("ENUM"), 207);
     assert_eq!(kind_count("SCALAR"), 10);

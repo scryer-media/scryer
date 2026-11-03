@@ -3591,6 +3591,41 @@ const ko: LocaleDictionary = {
     "파일을 새 이름으로 옮기지 못했습니다. 파일과 에피소드는 그대로 유지되었습니다.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "에피소드 번호가 모호합니다",
+  "setup.sourceImportProgress": "소스 가져오는 중",
+  "setup.sourceImportInvalidRequest":
+    "선택한 소스를 사용할 수 없습니다. 소스 검색을 새로 고친 후 다시 선택하세요.",
+  "setup.sourceImportSelectionChanged":
+    "제출된 소스 선택은 변경할 수 없습니다. 실패한 소스는 요약에서 다시 시도하세요.",
+  "setup.sourceImportNotOwned":
+    "이 소스 가져오기는 현재 계정에서 사용할 수 없습니다.",
+  "setup.sourceImportQueueFull":
+    "소스 가져오기 용량이 가득 찼습니다. 다른 가져오기가 끝난 후 다시 시도하세요.",
+  "setup.sourceImportActive": "이 소스 가져오기는 아직 실행 중입니다.",
+  "setup.sourceImportNotRetryable":
+    "실패하거나 중단된 소스만 다시 시도하거나 건너뛸 수 있습니다.",
+  "setup.sourceImportUnresolved":
+    "설정을 완료하기 전에 해결되지 않은 소스를 다시 시도하거나 명시적으로 건너뛰세요.",
+  "setup.sourceImportCredentialRequired":
+    "계속하기 전에 소스 자격 증명을 입력하세요.",
+  "setup.sourceImportConfigConflict":
+    "예약된 구성이 변경되었습니다. 다시 시도하기 전에 소스를 검토하세요.",
+  "setup.sourceImportSourceNotReady":
+    "계속하기 전에 소스 검색이 끝날 때까지 기다리세요.",
+  "setup.sourceImportResume": "진행 상황에 다시 연결",
+  "setup.sourceImportLoading": "소스 가져오기 진행 상황을 불러오는 중",
+  "setup.sourceImportCredential": "{{name}}의 수정된 자격 증명",
+  "setup.sourceImportRetry": "실패한 소스 다시 시도",
+  "setup.sourceImportSkip": "이 소스 건너뛰기",
+  "setup.sourceImportItemFailed":
+    "연결과 자격 증명을 확인한 후 다시 시도하거나 건너뛰세요.",
+  "setup.sourceImportState.queued": "대기 중",
+  "setup.sourceImportState.installing": "공급자 설치 중",
+  "setup.sourceImportState.checking": "연결 확인 중",
+  "setup.sourceImportState.saving": "구성 저장 중",
+  "setup.sourceImportState.succeeded": "가져옴",
+  "setup.sourceImportState.failed": "실패",
+  "setup.sourceImportState.interrupted": "중단됨",
+  "setup.sourceImportState.skipped": "건너뜀",
 };
 
 export default ko;

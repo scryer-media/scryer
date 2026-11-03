@@ -3665,6 +3665,41 @@ const ja: LocaleDictionary = {
     "ファイルを新しい名前へ移動できませんでした。ファイルとエピソードは元のままです。",
   "pendingImports.reason.anime_numbering_ambiguous":
     "エピソード番号があいまいです",
+  "setup.sourceImportProgress": "ソースをインポート中",
+  "setup.sourceImportInvalidRequest":
+    "選択したソースを利用できません。ソースの検出を更新して、もう一度選択してください。",
+  "setup.sourceImportSelectionChanged":
+    "送信したソースの選択は変更できません。失敗したソースは概要から再試行してください。",
+  "setup.sourceImportNotOwned":
+    "このソースのインポートはお使いのアカウントでは利用できません。",
+  "setup.sourceImportQueueFull":
+    "ソースのインポート容量がいっぱいです。他のインポートが完了してから再試行してください。",
+  "setup.sourceImportActive": "このソースのインポートはまだ実行中です。",
+  "setup.sourceImportNotRetryable":
+    "再試行またはスキップできるのは、失敗または中断したソースのみです。",
+  "setup.sourceImportUnresolved":
+    "セットアップを完了する前に、未解決のソースを再試行するか明示的にスキップしてください。",
+  "setup.sourceImportCredentialRequired":
+    "続行する前にソースの認証情報を入力してください。",
+  "setup.sourceImportConfigConflict":
+    "予約された設定が変更されました。再試行する前にソースを確認してください。",
+  "setup.sourceImportSourceNotReady":
+    "続行する前にソースの検出が完了するまでお待ちください。",
+  "setup.sourceImportResume": "進行状況に再接続",
+  "setup.sourceImportLoading": "ソースのインポート進行状況を読み込み中",
+  "setup.sourceImportCredential": "{{name}} の修正済み認証情報",
+  "setup.sourceImportRetry": "失敗したソースを再試行",
+  "setup.sourceImportSkip": "このソースをスキップ",
+  "setup.sourceImportItemFailed":
+    "接続と認証情報を確認してから、再試行またはスキップしてください。",
+  "setup.sourceImportState.queued": "待機中",
+  "setup.sourceImportState.installing": "プロバイダーをインストール中",
+  "setup.sourceImportState.checking": "接続を確認中",
+  "setup.sourceImportState.saving": "設定を保存中",
+  "setup.sourceImportState.succeeded": "インポート済み",
+  "setup.sourceImportState.failed": "失敗",
+  "setup.sourceImportState.interrupted": "中断",
+  "setup.sourceImportState.skipped": "スキップ済み",
 };
 
 export default ja;

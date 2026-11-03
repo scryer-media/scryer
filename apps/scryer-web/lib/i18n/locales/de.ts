@@ -3726,6 +3726,41 @@ const de: LocaleDictionary = {
     "Das Verschieben der Datei unter ihren neuen Namen ist fehlgeschlagen. Datei und Episoden blieben unverändert.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episodennummerierung ist mehrdeutig",
+  "setup.sourceImportProgress": "Quellen werden importiert",
+  "setup.sourceImportInvalidRequest":
+    "Eine ausgewählte Quelle ist nicht verfügbar. Aktualisieren Sie die Quellensuche und wählen Sie sie erneut aus.",
+  "setup.sourceImportSelectionChanged":
+    "Übermittelte Quellenauswahlen sind festgelegt. Wiederholen Sie fehlgeschlagene Quellen in der Zusammenfassung.",
+  "setup.sourceImportNotOwned":
+    "Dieser Quellenimport ist für Ihr Konto nicht verfügbar.",
+  "setup.sourceImportQueueFull":
+    "Die Kapazität für Quellenimporte ist ausgeschöpft. Versuchen Sie es erneut, wenn ein anderer Import abgeschlossen ist.",
+  "setup.sourceImportActive": "Dieser Quellenimport läuft noch.",
+  "setup.sourceImportNotRetryable":
+    "Nur fehlgeschlagene oder unterbrochene Quellen können wiederholt oder übersprungen werden.",
+  "setup.sourceImportUnresolved":
+    "Wiederholen oder überspringen Sie offene Quellen ausdrücklich, bevor Sie die Einrichtung abschließen.",
+  "setup.sourceImportCredentialRequired":
+    "Geben Sie die Zugangsdaten der Quelle ein, bevor Sie fortfahren.",
+  "setup.sourceImportConfigConflict":
+    "Die reservierte Konfiguration hat sich geändert. Prüfen Sie die Quelle vor dem Wiederholen.",
+  "setup.sourceImportSourceNotReady":
+    "Warten Sie, bis die Quellensuche abgeschlossen ist, bevor Sie fortfahren.",
+  "setup.sourceImportResume": "Erneut mit dem Fortschritt verbinden",
+  "setup.sourceImportLoading": "Fortschritt des Quellenimports wird geladen",
+  "setup.sourceImportCredential": "Korrigierte Zugangsdaten für {{name}}",
+  "setup.sourceImportRetry": "Fehlgeschlagene Quellen wiederholen",
+  "setup.sourceImportSkip": "Diese Quelle überspringen",
+  "setup.sourceImportItemFailed":
+    "Prüfen Sie Verbindung und Zugangsdaten und wiederholen oder überspringen Sie dann.",
+  "setup.sourceImportState.queued": "In Warteschlange",
+  "setup.sourceImportState.installing": "Anbieter wird installiert",
+  "setup.sourceImportState.checking": "Verbindung wird geprüft",
+  "setup.sourceImportState.saving": "Konfiguration wird gespeichert",
+  "setup.sourceImportState.succeeded": "Importiert",
+  "setup.sourceImportState.failed": "Fehlgeschlagen",
+  "setup.sourceImportState.interrupted": "Unterbrochen",
+  "setup.sourceImportState.skipped": "Übersprungen",
 };
 
 export default de;

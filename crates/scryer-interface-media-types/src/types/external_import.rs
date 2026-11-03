@@ -242,6 +242,8 @@ pub struct ExternalImportSourceLibraryMappingInput {
 #[derive(InputObject)]
 /// Warmup sessions and root mappings to finalize as an external import.
 pub struct FinalizeExternalImportInput {
+    /// Accepted source import to require resolved before applying library mappings.
+    pub source_import_run_id: Option<ID>,
     /// Source warmup session IDs to finalize.
     pub source_warmup_session_ids: Vec<ID>,
     /// Root-to-library mappings selected for import.
@@ -616,17 +618,36 @@ pub struct ExternalImportIndexerPayload {
     pub api_key_help_url: Option<String>,
 }
 
-#[derive(SimpleObject, Clone)]
-/// Counts and errors produced by external import execution.
-pub struct ExternalImportResultPayload {
-    /// Whether selected media paths were saved.
-    pub media_paths_saved: bool,
-    /// Number of download clients created.
-    pub download_clients_created: i32,
-    /// Number of indexers created.
-    pub indexers_created: i32,
-    /// Plugin identifiers installed as part of the import.
-    pub plugins_installed: Vec<String>,
-    /// Errors encountered during execution.
-    pub errors: Vec<String>,
+#[derive(SimpleObject)]
+/// Durable receipt for one selected source configuration.
+pub struct ExternalImportSourceItemPayload {
+    /// Stable source identity used for retries and explicit skips.
+    pub key: String,
+    /// Source display name.
+    pub name: String,
+    /// Reserved configuration identity, retained across interruption and retry.
+    pub config_id: ID,
+    /// Configuration kind: indexer or download_client.
+    pub kind: String,
+    /// Current phase: queued, installing, checking, saving, succeeded, failed, interrupted, or skipped.
+    pub state: String,
+    /// Stable failure reason code, or null for an item without a failure.
+    pub reason: Option<String>,
+    /// The server's own failure sentence with URL credentials masked: the fallback for an unrecognized reason and the detail behind SOURCE_IMPORT_ITEM_FAILED.
+    pub message: Option<String>,
+}
+
+#[derive(SimpleObject)]
+/// Authorized progress of an accepted background source import.
+pub struct ExternalImportSourceJobPayload {
+    /// Durable workflow run identity.
+    pub run_id: ID,
+    /// Last persisted update time, used to reject stale progress responses.
+    pub updated_at: String,
+    /// Whether the current attempt still has work scheduled.
+    pub active: bool,
+    /// Whether every selected source succeeded or was explicitly skipped.
+    pub ready: bool,
+    /// Receipts for the fixed submitted selections, without credentials.
+    pub items: Vec<ExternalImportSourceItemPayload>,
 }

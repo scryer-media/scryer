@@ -4443,6 +4443,41 @@ const nl: LocaleDictionary = {
     "Het verplaatsen van het bestand naar de nieuwe naam is mislukt. Het bestand en de afleveringen zijn ongewijzigd gebleven.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Afleveringsnummering is dubbelzinnig",
+  "setup.sourceImportProgress": "Bronnen importeren",
+  "setup.sourceImportInvalidRequest":
+    "Een geselecteerde bron is niet beschikbaar. Vernieuw de bronnendetectie en selecteer de bron opnieuw.",
+  "setup.sourceImportSelectionChanged":
+    "Verzonden bronselecties liggen vast. Probeer mislukte bronnen opnieuw vanuit Samenvatting.",
+  "setup.sourceImportNotOwned":
+    "Deze bronimport is niet beschikbaar voor je account.",
+  "setup.sourceImportQueueFull":
+    "De capaciteit voor bronimports is vol. Probeer het opnieuw zodra een andere import klaar is.",
+  "setup.sourceImportActive": "Deze bronimport loopt nog.",
+  "setup.sourceImportNotRetryable":
+    "Alleen mislukte of onderbroken bronnen kunnen opnieuw worden geprobeerd of overgeslagen.",
+  "setup.sourceImportUnresolved":
+    "Probeer onopgeloste bronnen opnieuw of sla ze expliciet over voordat je de installatie voltooit.",
+  "setup.sourceImportCredentialRequired":
+    "Voer de inloggegevens van de bron in voordat je doorgaat.",
+  "setup.sourceImportConfigConflict":
+    "De gereserveerde configuratie is gewijzigd. Controleer de bron voordat je het opnieuw probeert.",
+  "setup.sourceImportSourceNotReady":
+    "Wacht tot de bronnendetectie klaar is voordat je doorgaat.",
+  "setup.sourceImportResume": "Opnieuw verbinden met voortgang",
+  "setup.sourceImportLoading": "Voortgang van bronimport laden",
+  "setup.sourceImportCredential": "Gecorrigeerde inloggegevens voor {{name}}",
+  "setup.sourceImportRetry": "Mislukte bronnen opnieuw proberen",
+  "setup.sourceImportSkip": "Deze bron overslaan",
+  "setup.sourceImportItemFailed":
+    "Controleer de verbinding en inloggegevens en probeer het daarna opnieuw of sla over.",
+  "setup.sourceImportState.queued": "In wachtrij",
+  "setup.sourceImportState.installing": "Provider installeren",
+  "setup.sourceImportState.checking": "Verbinding controleren",
+  "setup.sourceImportState.saving": "Configuratie opslaan",
+  "setup.sourceImportState.succeeded": "Geïmporteerd",
+  "setup.sourceImportState.failed": "Mislukt",
+  "setup.sourceImportState.interrupted": "Onderbroken",
+  "setup.sourceImportState.skipped": "Overgeslagen",
 };
 
 export default nl;

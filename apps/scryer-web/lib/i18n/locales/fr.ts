@@ -3813,6 +3813,43 @@ const fr: LocaleDictionary = {
     "Le déplacement du fichier vers son nouveau nom a échoué. Le fichier et ses épisodes sont restés inchangés.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numérotation des épisodes ambiguë",
+  "setup.sourceImportProgress": "Importation des sources",
+  "setup.sourceImportInvalidRequest":
+    "Une source sélectionnée est indisponible. Actualisez la découverte des sources et sélectionnez-la à nouveau.",
+  "setup.sourceImportSelectionChanged":
+    "Les sources envoyées ne peuvent plus être modifiées. Relancez les sources en échec depuis le Récapitulatif.",
+  "setup.sourceImportNotOwned":
+    "Cette importation de sources n’est pas disponible pour votre compte.",
+  "setup.sourceImportQueueFull":
+    "La capacité d’importation des sources est atteinte. Réessayez lorsqu’une autre importation sera terminée.",
+  "setup.sourceImportActive":
+    "Cette importation de sources est toujours en cours.",
+  "setup.sourceImportNotRetryable":
+    "Seules les sources en échec ou interrompues peuvent être relancées ou ignorées.",
+  "setup.sourceImportUnresolved":
+    "Relancez ou ignorez explicitement les sources non résolues avant de terminer la configuration.",
+  "setup.sourceImportCredentialRequired":
+    "Saisissez l’identifiant de la source avant de continuer.",
+  "setup.sourceImportConfigConflict":
+    "La configuration réservée a changé. Vérifiez la source avant de relancer.",
+  "setup.sourceImportSourceNotReady":
+    "Attendez la fin de la découverte des sources avant de continuer.",
+  "setup.sourceImportResume": "Se reconnecter à la progression",
+  "setup.sourceImportLoading":
+    "Chargement de la progression de l’importation des sources",
+  "setup.sourceImportCredential": "Identifiant corrigé pour {{name}}",
+  "setup.sourceImportRetry": "Relancer les sources en échec",
+  "setup.sourceImportSkip": "Ignorer cette source",
+  "setup.sourceImportItemFailed":
+    "Vérifiez la connexion et les identifiants, puis relancez ou ignorez.",
+  "setup.sourceImportState.queued": "En file d’attente",
+  "setup.sourceImportState.installing": "Installation du fournisseur",
+  "setup.sourceImportState.checking": "Vérification de la connexion",
+  "setup.sourceImportState.saving": "Enregistrement de la configuration",
+  "setup.sourceImportState.succeeded": "Importée",
+  "setup.sourceImportState.failed": "Échec",
+  "setup.sourceImportState.interrupted": "Interrompue",
+  "setup.sourceImportState.skipped": "Ignorée",
 };
 
 export default fr;

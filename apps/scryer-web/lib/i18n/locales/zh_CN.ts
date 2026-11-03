@@ -3384,6 +3384,33 @@ const zh_CN: LocaleDictionary = {
   "episodeAssign.refusal.renameFailed":
     "将文件移动到新名称失败。文件及其剧集保持原样。",
   "pendingImports.reason.anime_numbering_ambiguous": "剧集编号不明确",
+  "setup.sourceImportProgress": "正在导入来源",
+  "setup.sourceImportInvalidRequest":
+    "所选来源不可用。请刷新来源发现后重新选择。",
+  "setup.sourceImportSelectionChanged":
+    "已提交的来源选择无法更改。请在摘要中重试失败的来源。",
+  "setup.sourceImportNotOwned": "此来源导入对你的账户不可用。",
+  "setup.sourceImportQueueFull": "来源导入容量已满。请在其他导入完成后重试。",
+  "setup.sourceImportActive": "此来源导入仍在进行中。",
+  "setup.sourceImportNotRetryable": "只有失败或中断的来源才能重试或跳过。",
+  "setup.sourceImportUnresolved": "完成设置前，请重试或明确跳过未解决的来源。",
+  "setup.sourceImportCredentialRequired": "继续之前请输入来源凭据。",
+  "setup.sourceImportConfigConflict": "预留的配置已更改。重试前请检查该来源。",
+  "setup.sourceImportSourceNotReady": "继续之前请等待来源发现完成。",
+  "setup.sourceImportResume": "重新连接进度",
+  "setup.sourceImportLoading": "正在加载来源导入进度",
+  "setup.sourceImportCredential": "{{name}} 的更正凭据",
+  "setup.sourceImportRetry": "重试失败的来源",
+  "setup.sourceImportSkip": "跳过此来源",
+  "setup.sourceImportItemFailed": "请检查连接和凭据，然后重试或跳过。",
+  "setup.sourceImportState.queued": "排队中",
+  "setup.sourceImportState.installing": "正在安装提供程序",
+  "setup.sourceImportState.checking": "正在检查连接",
+  "setup.sourceImportState.saving": "正在保存配置",
+  "setup.sourceImportState.succeeded": "已导入",
+  "setup.sourceImportState.failed": "失败",
+  "setup.sourceImportState.interrupted": "已中断",
+  "setup.sourceImportState.skipped": "已跳过",
 };
 
 export default zh_CN;

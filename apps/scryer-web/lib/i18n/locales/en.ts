@@ -8861,6 +8861,41 @@ const en: LocaleDictionary = {
   "setup.summaryPathsRemappedDetail": "Provenance kept for monitored status",
   "setup.summaryClientsMerged": "Merged across instances",
   "setup.summaryIndexersEnabled": "Supported & enabled",
+  "setup.sourceImportProgress": "Importing sources",
+  "setup.sourceImportInvalidRequest":
+    "A selected source is unavailable. Refresh source discovery and select it again.",
+  "setup.sourceImportSelectionChanged":
+    "Submitted source selections are fixed. Retry failed sources from Summary.",
+  "setup.sourceImportNotOwned":
+    "This source import is unavailable to your account.",
+  "setup.sourceImportQueueFull":
+    "Source import capacity is full. Try again after another import finishes.",
+  "setup.sourceImportActive": "This source import is still running.",
+  "setup.sourceImportNotRetryable":
+    "Only failed or interrupted sources can be retried or skipped.",
+  "setup.sourceImportUnresolved":
+    "Retry or explicitly skip unresolved sources before finishing setup.",
+  "setup.sourceImportCredentialRequired":
+    "Enter the source credential before continuing.",
+  "setup.sourceImportConfigConflict":
+    "The reserved configuration changed. Review the source before retrying.",
+  "setup.sourceImportSourceNotReady":
+    "Wait for source discovery to finish before continuing.",
+  "setup.sourceImportResume": "Reconnect to progress",
+  "setup.sourceImportLoading": "Loading source import progress",
+  "setup.sourceImportCredential": "Corrected credential for {{name}}",
+  "setup.sourceImportRetry": "Retry failed sources",
+  "setup.sourceImportSkip": "Skip this source",
+  "setup.sourceImportItemFailed":
+    "Check the connection and credentials, then retry or skip.",
+  "setup.sourceImportState.queued": "Queued",
+  "setup.sourceImportState.installing": "Installing provider",
+  "setup.sourceImportState.checking": "Checking connection",
+  "setup.sourceImportState.saving": "Saving configuration",
+  "setup.sourceImportState.succeeded": "Imported",
+  "setup.sourceImportState.failed": "Failed",
+  "setup.sourceImportState.interrupted": "Interrupted",
+  "setup.sourceImportState.skipped": "Skipped",
   "setup.fetchingMonitoredStatus": "Fetching monitored status…",
   "setup.fetchingMonitoredStatusDetail":
     "Pulling each title’s monitored state from your instances in the background.",

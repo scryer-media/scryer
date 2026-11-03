@@ -5562,6 +5562,33 @@ const zh_HK: LocaleDictionary = {
   "episodeAssign.refusal.renameFailed":
     "將檔案移至新名稱失敗。檔案及其劇集維持原狀。",
   "pendingImports.reason.anime_numbering_ambiguous": "劇集編號不明確",
+  "setup.sourceImportProgress": "正在匯入來源",
+  "setup.sourceImportInvalidRequest":
+    "所選來源無法使用。請重新整理來源偵測後再選擇。",
+  "setup.sourceImportSelectionChanged":
+    "已提交的來源選擇無法更改。請在摘要中重試失敗的來源。",
+  "setup.sourceImportNotOwned": "此來源匯入不適用於你的帳戶。",
+  "setup.sourceImportQueueFull": "來源匯入容量已滿。請在其他匯入完成後重試。",
+  "setup.sourceImportActive": "此來源匯入仍在進行中。",
+  "setup.sourceImportNotRetryable": "只有失敗或中斷的來源才能重試或略過。",
+  "setup.sourceImportUnresolved": "完成設定前，請重試或明確略過未解決的來源。",
+  "setup.sourceImportCredentialRequired": "繼續之前請輸入來源憑證。",
+  "setup.sourceImportConfigConflict": "預留的設定已更改。重試前請檢查該來源。",
+  "setup.sourceImportSourceNotReady": "繼續之前請等待來源偵測完成。",
+  "setup.sourceImportResume": "重新連接進度",
+  "setup.sourceImportLoading": "正在載入來源匯入進度",
+  "setup.sourceImportCredential": "{{name}} 的更正憑證",
+  "setup.sourceImportRetry": "重試失敗的來源",
+  "setup.sourceImportSkip": "略過此來源",
+  "setup.sourceImportItemFailed": "請檢查連線和憑證，然後重試或略過。",
+  "setup.sourceImportState.queued": "排隊中",
+  "setup.sourceImportState.installing": "正在安裝提供者",
+  "setup.sourceImportState.checking": "正在檢查連線",
+  "setup.sourceImportState.saving": "正在儲存設定",
+  "setup.sourceImportState.succeeded": "已匯入",
+  "setup.sourceImportState.failed": "失敗",
+  "setup.sourceImportState.interrupted": "已中斷",
+  "setup.sourceImportState.skipped": "已略過",
 };
 
 export default zh_HK;

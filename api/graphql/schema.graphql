@@ -7176,32 +7176,6 @@ type ExternalImportPreviewPayload {
 }
 
 """
-Counts and errors produced by external import execution.
-"""
-type ExternalImportResultPayload {
-	"""
-	Whether selected media paths were saved.
-	"""
-	mediaPathsSaved: Boolean!
-	"""
-	Number of download clients created.
-	"""
-	downloadClientsCreated: Int!
-	"""
-	Number of indexers created.
-	"""
-	indexersCreated: Int!
-	"""
-	Plugin identifiers installed as part of the import.
-	"""
-	pluginsInstalled: [String!]!
-	"""
-	Errors encountered during execution.
-	"""
-	errors: [String!]!
-}
-
-"""
 Root folder reported by an external Arr source.
 """
 type ExternalImportRootFolderPayload {
@@ -7329,6 +7303,66 @@ type ExternalImportSetupSecretDraftStatusPayload {
 	Draft update time in UTC, or null when no draft exists.
 	"""
 	updatedAt: DateTime
+}
+
+"""
+Durable receipt for one selected source configuration.
+"""
+type ExternalImportSourceItemPayload {
+	"""
+	Stable source identity used for retries and explicit skips.
+	"""
+	key: String!
+	"""
+	Source display name.
+	"""
+	name: String!
+	"""
+	Reserved configuration identity, retained across interruption and retry.
+	"""
+	configId: ID!
+	"""
+	Configuration kind: indexer or download_client.
+	"""
+	kind: String!
+	"""
+	Current phase: queued, installing, checking, saving, succeeded, failed, interrupted, or skipped.
+	"""
+	state: String!
+	"""
+	Stable failure reason code, or null for an item without a failure.
+	"""
+	reason: String
+	"""
+	The server's own failure sentence with URL credentials masked: the fallback for an unrecognized reason and the detail behind SOURCE_IMPORT_ITEM_FAILED.
+	"""
+	message: String
+}
+
+"""
+Authorized progress of an accepted background source import.
+"""
+type ExternalImportSourceJobPayload {
+	"""
+	Durable workflow run identity.
+	"""
+	runId: ID!
+	"""
+	Last persisted update time, used to reject stale progress responses.
+	"""
+	updatedAt: String!
+	"""
+	Whether the current attempt still has work scheduled.
+	"""
+	active: Boolean!
+	"""
+	Whether every selected source succeeded or was explicitly skipped.
+	"""
+	ready: Boolean!
+	"""
+	Receipts for the fixed submitted selections, without credentials.
+	"""
+	items: [ExternalImportSourceItemPayload!]!
 }
 
 """
@@ -7649,6 +7683,10 @@ enum FillerPolicyValue {
 Warmup sessions and root mappings to finalize as an external import.
 """
 input FinalizeExternalImportInput {
+	"""
+	Accepted source import to require resolved before applying library mappings.
+	"""
+	sourceImportRunId: ID
 	"""
 	Source warmup session IDs to finalize.
 	"""
@@ -10049,6 +10087,10 @@ enum JobKeyValue {
 	Location operation: a root move, transfer, or other placement change.
 	"""
 	LOCATION_OPERATION
+	"""
+	Background import of selected indexers and download clients.
+	"""
+	SOURCE_IMPORT
 	"""
 	A user-defined scheduled script; each script is told apart by its
 	`customJobId`.
@@ -20154,7 +20196,12 @@ type MutationRoot {
 	"""
 	Mark the setup wizard as complete.
 	"""
-	completeSetup: CompleteSetupPayload!
+	completeSetup(
+		"""
+		Accepted source import that must be owned and resolved before setup completes; omitted for manual setup.
+		"""
+		sourceImportRunId: ID
+	): CompleteSetupPayload!
 	"""
 	Creates a user with normalized app and library permissions after checking the manage-users permission.
 	"""
@@ -21457,14 +21504,53 @@ type MutationRoot {
 		input: FinalizeExternalImportInput!
 	): FinalizeExternalImportPayload!
 	"""
-	Re-connect to Sonarr/Radarr, fetch configs, and create selected items in Scryer.
+	Accept selected sources durably before starting connection checks.
 	"""
-	executeExternalImport(
+	startExternalImportSources(
 		"""
-		Selected imported clients and indexers plus any credentials needed to create them.
+		Stable caller-generated request identity reused when a response is lost.
+		"""
+		requestKey: String!,
+		"""
+		Fixed selected clients and indexers with the discovery snapshots and credentials required to import them.
 		"""
 		input: ExecuteExternalImportInput!
-	): ExternalImportResultPayload!
+	): ExternalImportSourceJobPayload!
+	"""
+	Read the caller-owned durable source import and its per-item receipts.
+	"""
+	externalImportSourceStatus(
+		"""
+		Accepted source import workflow run identity.
+		"""
+		runId: ID!
+	): ExternalImportSourceJobPayload!
+	"""
+	Retry only failed or interrupted sources, retaining successful configuration identities.
+	"""
+	retryExternalImportSources(
+		"""
+		Caller-owned terminal source import to retry.
+		"""
+		runId: ID!,
+		"""
+		Optional corrected credentials for unresolved sources, keyed by their stable source identities.
+		"""
+		corrections: [IndexerApiKeyOverrideInput!]!
+	): ExternalImportSourceJobPayload!
+	"""
+	Explicitly skip one unresolved terminal source so it no longer blocks finishing setup.
+	"""
+	skipExternalImportSource(
+		"""
+		Caller-owned terminal source import containing the item.
+		"""
+		runId: ID!,
+		"""
+		Stable identity of the failed or interrupted source to skip.
+		"""
+		key: String!
+	): ExternalImportSourceJobPayload!
 	"""
 	Create a post-processing script, enabled unless the input says otherwise, after validating its type, content, and schedule.
 	"""
