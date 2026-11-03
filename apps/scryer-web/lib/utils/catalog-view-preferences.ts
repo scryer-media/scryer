@@ -1,4 +1,5 @@
 import type {
+  InstanceFeatures,
   SetMyCatalogViewInput,
   UiCatalogViewMode,
   UiDeviceClass,
@@ -12,15 +13,20 @@ export type CatalogTableViewMode = "COMPACT" | "POSTER_TABLE";
 export type CatalogColumnsInput = NonNullable<SetMyCatalogViewInput["columns"]>;
 
 /**
- * Whether the catalog offers the graph view. It stays off until the server
- * serves the library graph; while it is off the view-mode selector leaves the
- * graph out and a saved graph preference shows the poster grid instead.
+ * Whether the catalog offers the graph view: only on an instance that has
+ * turned experimental features on. While it is off the view-mode selector
+ * leaves the graph out and a saved graph preference shows the poster grid
+ * instead.
  */
-export const DISCOVERY_GRAPH_VIEW_ENABLED = false;
+export function graphViewEnabled(
+  features: Pick<InstanceFeatures, "experimentalFeaturesEnabled">,
+): boolean {
+  return features.experimentalFeaturesEnabled;
+}
 
 /** The view modes the selector offers, in display order. */
 export function catalogViewModeOptions(
-  graphEnabled: boolean = DISCOVERY_GRAPH_VIEW_ENABLED,
+  graphEnabled: boolean,
 ): CatalogContentViewMode[] {
   return graphEnabled
     ? ["compact", "poster-table", "poster", "graph"]
@@ -30,9 +36,21 @@ export function catalogViewModeOptions(
 /** The view mode to show for a chosen one: the graph falls back to posters while it is off. */
 export function availableCatalogViewMode(
   mode: CatalogContentViewMode,
-  graphEnabled: boolean = DISCOVERY_GRAPH_VIEW_ENABLED,
+  graphEnabled: boolean,
 ): CatalogContentViewMode {
   return mode === "graph" && !graphEnabled ? "poster" : mode;
+}
+
+/**
+ * Whether a chosen view mode cannot be settled yet: a graph choice waits for
+ * the instance's switches, since showing posters first would load the
+ * poster listing and then swap views once the graph turns out to be on.
+ */
+export function catalogViewModePending(
+  mode: CatalogContentViewMode,
+  featuresLoaded: boolean,
+): boolean {
+  return mode === "graph" && !featuresLoaded;
 }
 
 /** The column choices both table layouts share, in display order. */

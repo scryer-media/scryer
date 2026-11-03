@@ -1934,6 +1934,38 @@ ${DISCOVERY_ITEM_DETAIL_FIELDS}
   }
 }`;
 
+export const discoveryNeighborsQuery = `query DiscoveryNeighbors($input: DiscoveryNeighborsInput!) {
+  discoveryNeighbors(input: $input) {
+${DISCOVERY_ITEM_DETAIL_FIELDS}
+  }
+}`;
+
+export const libraryGraphQuery = `query LibraryGraph($input: LibraryGraphInput!) {
+  libraryGraph(input: $input) {
+    generatedAt
+    nodes {
+      subjectKey
+      targetKey
+      clusterId
+    }
+    edges {
+      from
+      to
+      weight
+      kinds
+    }
+    clusters {
+      id
+      labelKey
+      label
+      medoid
+      size
+    }
+    subjectCount
+    truncated
+  }
+}`;
+
 type ReactiveRefreshVariableValue = string | number | null;
 
 export type TitleSidePanelOverviewProjection = "MOVIE" | "SERIES";

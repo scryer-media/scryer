@@ -1547,6 +1547,21 @@ const nl: LocaleDictionary = {
   "libraryGraph.edgeKind.affinity": "Gedeelde interesse: {{label}}",
   "libraryGraph.edgeKind.sharedTaste": "Gedeelde interesse",
   "libraryGraph.edgeKind.other": "Gekoppeld",
+  "libraryGraph.edgeKind.recommendation": "Aanbevolen",
+  "libraryGraph.notBuilt": "De bibliotheekgraaf is nog niet opgebouwd.",
+  "libraryGraph.truncated":
+    "Deze graaf omvat maar een deel van de bibliotheek.",
+  "libraryGraph.moreLikeThis": "Meer zoals dit",
+  "libraryGraph.moreLikeThisEmpty": "Nog niets vergelijkbaars.",
+  "libraryGraph.notInLibrary": "Niet in je bibliotheek",
+  "libraryGraph.inLibrary": "In je bibliotheek",
+  "libraryGraph.openTitle": "Titel openen",
+  "libraryGraph.exploredGroup": "Verkend",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, niet in je bibliotheek",
+  "libraryGraph.trailLabel": "Verkend",
+  "libraryGraph.collapseToLibrary": "Terug naar bibliotheek",
+  "libraryGraph.canvasLabel":
+    "Bibliotheekgraaf. Gebruik de pijltjestoetsen om tussen titels in een cluster te wisselen en Enter om er een te openen.",
   "title.bulkSelectionCount": "{{count}} geselecteerd",
   "title.bulkSelectionPanelTitle": "Bulkselectie",
   "title.bulkSelectionPanelHint":

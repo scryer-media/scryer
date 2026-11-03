@@ -1,27 +1,46 @@
 import * as React from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { useClient } from "urql";
+import { Maximize2, Minimize2, Sparkles, Undo2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
+import { discoveryNeighborsQuery } from "@/lib/graphql/queries";
+import { useAuth } from "@/lib/hooks/use-auth";
+import { useTitleMoreLikeThisActions } from "@/lib/hooks/use-title-more-like-this-actions";
+import type { DiscoveryItem } from "@/lib/types/discovery";
+import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
+import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
+import {
+  LIBRARY_PERMISSIONS,
+  hasAnyLibraryPermission,
+} from "@/lib/utils/permissions";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import type { Facet, TitleRecord } from "@/lib/types/titles";
 import {
   UNPLACED_CLUSTER_ID,
   type LibraryGraphResult,
 } from "@/lib/types/library-graph";
-import { toggleClusterExpanded } from "@/lib/utils/library-graph-merge";
+import {
+  toggleClusterExpanded,
+  type GraphNode,
+} from "@/lib/utils/library-graph-merge";
 import {
   LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
+  LIBRARY_GRAPH_MIN_NODE_SIZE,
   LIBRARY_GRAPH_SIZE_METRICS,
   displayedLibraryGraph,
   joinLibraryGraphToTitles,
   libraryGraphEdgeKindLabels,
   libraryGraphGroupName,
   nodeSizesByTitleId,
+  titleIndexByMatchKey,
+  titleMatchKeys,
   titleTargetKey,
+  type LibraryGraphJoin,
   type LibraryGraphSizeMetric,
 } from "@/lib/utils/library-graph-model";
 import {
@@ -34,6 +53,28 @@ import {
   type LayoutState,
 } from "@/lib/utils/library-graph-layout";
 import { libraryGraphSourceForCatalog } from "@/lib/utils/library-graph-source";
+import {
+  beginExpansion,
+  collapseTraversalToCrumb,
+  emptyTraversal,
+  expandTraversal,
+  firstNodeInCluster,
+  invalidateExpansions,
+  isCurrentExpansion,
+  isGhostSubjectKey,
+  isLibraryItem,
+  itemMatchKeys,
+  neighborTargetKey,
+  nextNodeInCluster,
+  ownedNodeIndex,
+  stampGhostTitle,
+  uncoveredKeyboardGroups,
+  seedGhostPositions,
+  traversalGraphState,
+  type KeyboardNode,
+  type OwnedNodeIndex,
+  type TraversalState,
+} from "@/lib/utils/library-graph-traversal";
 
 const CLUSTER_COLORS = [
   "#5b64ff",
@@ -50,6 +91,9 @@ const LAYOUT_STEPS_PER_FRAME = 6;
 const MAX_POSTERS_PER_FRAME = 240;
 const MIN_POSTER_RADIUS_PX = 9;
 const HULL_PADDING_PX = 18;
+/** How many neighbours one expansion asks for. */
+const NEIGHBOR_LIMIT = 24;
+const GHOST_NODE_SIZE = LIBRARY_GRAPH_MIN_NODE_SIZE + 1;
 
 const METRIC_LABEL_KEYS: Record<LibraryGraphSizeMetric, string> = {
   ratingEvidence: "libraryGraph.sizeBy.ratingEvidence",
@@ -69,7 +113,13 @@ type NodeAttributes = {
   posterUrl?: string | null;
   collapsedClusterId?: number;
   clusterId: number;
+  /** A title reached by exploring, not in the library. */
+  ghost?: boolean;
 };
+
+type GraphLoadStatus = "pending" | "loaded" | "notBuilt" | "failed";
+
+type ExpandNotice = { key: string; kind: "empty" };
 
 type EdgeAttributes = {
   size: number;
@@ -124,6 +174,48 @@ export type LibraryGraphViewProps = {
   selectedTitleId: string | null;
   contextPanelId?: string;
   onSelectTitle: (title: TitleRecord) => void;
+  /** Refreshes the catalog listing after a title is added or requested. */
+  onCatalogChanged?: () => Promise<void> | void;
+};
+
+// The local title a node picked in the graph stands for, if any.
+function pickedTitleId(
+  key: string,
+  join: LibraryGraphJoin | null,
+  traversal: TraversalState<DiscoveryItem>,
+): string | null {
+  const item = traversal.ghostItems.get(key);
+  if (item) {
+    return item.resolvedTitleId?.trim() || null;
+  }
+  return join?.titleBySubjectKey.get(key)?.id ?? null;
+}
+
+// The catalog listing's title an explored item names: the title Scryer
+// resolved it to, else the first title one of its keys names.
+function catalogTitleForItem(
+  item: DiscoveryItem,
+  catalogIndex: ReadonlyMap<string, TitleRecord>,
+  titles: readonly TitleRecord[],
+): TitleRecord | null {
+  const resolved = item.resolvedTitleId?.trim();
+  const byId = resolved
+    ? titles.find((title) => title.id === resolved)
+    : undefined;
+  if (byId) {
+    return byId;
+  }
+  for (const key of itemMatchKeys(item)) {
+    const title = catalogIndex.get(key);
+    if (title) {
+      return title;
+    }
+  }
+  return null;
+}
+
+type NeighborsData = {
+  discoveryNeighbors?: DiscoveryItem[] | null;
 };
 
 /**
@@ -140,6 +232,7 @@ export default function LibraryGraphView({
   selectedTitleId,
   contextPanelId,
   onSelectTitle,
+  onCatalogChanged,
 }: LibraryGraphViewProps) {
   const t = useTranslate();
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -158,6 +251,38 @@ export default function LibraryGraphView({
   const selectedTitleIdRef = React.useRef(selectedTitleId);
   const titlesByIdRef = React.useRef(new Map<string, TitleRecord>());
   const onSelectTitleRef = React.useRef(onSelectTitle);
+  // The node picked in the graph (owned or ghost) and the node keyboard focus
+  // rests on; the overlay reads both while it draws.
+  const selectedKeyRef = React.useRef<string | null>(null);
+  const focusedKeyRef = React.useRef<string | null>(null);
+  const activateNodeRef = React.useRef<(key: string) => void>(() => {});
+  const ownedIndexRef = React.useRef<OwnedNodeIndex>(ownedNodeIndex([]));
+  const expandTokenRef = React.useRef(0);
+  const client = useClient();
+  const auth = useAuth();
+  const setGlobalStatus = useGlobalStatus();
+  // After an Add, the acted-on ghost is marked as the title it became, and
+  // the catalog listing is refreshed either way.
+  const catalogChangedRef = React.useRef<
+    (change: { addedTitleId: string | null }) => void
+  >(() => {});
+  const handleCatalogChanged = React.useCallback(
+    (change: { addedTitleId: string | null }) => {
+      catalogChangedRef.current(change);
+    },
+    [],
+  );
+  const moreLikeThisActions = useTitleMoreLikeThisActions({
+    onCatalogChanged: handleCatalogChanged,
+    canAddItems: hasAnyLibraryPermission(
+      auth.user,
+      LIBRARY_PERMISSIONS.manageTitles,
+    ),
+    canRequestItems: hasAnyLibraryPermission(
+      auth.user,
+      LIBRARY_PERMISSIONS.request,
+    ),
+  });
 
   const [titles, setTitles] = React.useState<readonly TitleRecord[] | null>(
     titlesComplete ? currentTitles : null,
@@ -166,6 +291,18 @@ export default function LibraryGraphView({
     setTitles(currentTitles);
   }
   const [result, setResult] = React.useState<LibraryGraphResult | null>(null);
+  const [loadStatus, setLoadStatus] =
+    React.useState<GraphLoadStatus>("pending");
+  // What has been explored from the library this session; never persisted.
+  const [traversal, setTraversal] = React.useState<
+    TraversalState<DiscoveryItem>
+  >(() => emptyTraversal<DiscoveryItem>());
+  const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+  const [focusedKey, setFocusedKey] = React.useState<string | null>(null);
+  const [expandingKey, setExpandingKey] = React.useState<string | null>(null);
+  const [expandNotice, setExpandNotice] = React.useState<ExpandNotice | null>(
+    null,
+  );
   const [metric, setMetric] =
     React.useState<LibraryGraphSizeMetric>("ratingEvidence");
   const [expandedClusterIds, setExpandedClusterIds] = React.useState<
@@ -181,9 +318,12 @@ export default function LibraryGraphView({
     }
     const accent = readCssColor(container, "--scry-accent", "#5b64ff");
     const selected = selectedTitleIdRef.current;
-    graph.updateEachNodeAttributes((_key, attributes) => {
+    const selectedKey = selectedKeyRef.current;
+    graph.updateEachNodeAttributes((key, attributes) => {
       const isSelected =
-        attributes.titleId !== undefined && attributes.titleId === selected;
+        selectedKey !== null
+          ? key === selectedKey
+          : attributes.titleId !== undefined && attributes.titleId === selected;
       return {
         ...attributes,
         color: isSelected ? accent : attributes.baseColor,
@@ -208,28 +348,52 @@ export default function LibraryGraphView({
         .sort(),
     [titles],
   );
-  const catalogTargetKeysRef = React.useRef(catalogTargetKeys);
-  React.useEffect(() => {
-    catalogTargetKeysRef.current = catalogTargetKeys;
-  }, [catalogTargetKeys]);
   const hasTitles = catalogTargetKeys.length > 0;
   const libraryIdSignature = [...libraryIds].sort().join(",");
 
   // The graph covers the facet's selected libraries; filters only prune it.
   // It loads once per facet and library set, so a filter change keeps every
   // node where it was, and a filter that leaves no titles and is then cleared
-  // does not load it again. The fixture names its nodes after the titles
-  // loaded when it was built.
+  // does not load it again. A new facet or library set starts exploring
+  // afresh.
+  const sourceKey = `${facet}|${libraryIdSignature}`;
+  // A new facet or library set drops what was explored from the old one,
+  // including a "More like this" still waiting on its reply.
+  const [exploredSourceKey, setExploredSourceKey] = React.useState(sourceKey);
+  if (exploredSourceKey !== sourceKey) {
+    setExploredSourceKey(sourceKey);
+    // The old graph is not joined to the new listing while the new one loads.
+    setResult(null);
+    setLoadStatus("pending");
+    // Cluster ids belong to one graph.
+    setExpandedClusterIds(new Set());
+    setTraversal(emptyTraversal<DiscoveryItem>());
+    setSelectedKey(null);
+    setFocusedKey(null);
+    setExpandingKey(null);
+    setExpandNotice(null);
+  }
+  // Starts the exploration over: drops the explored titles, the pick and
+  // focus, and retires any "More like this" reply still on its way.
+  const resetExploration = React.useCallback(() => {
+    invalidateExpansions(expandTokenRef);
+    setExpandedClusterIds(new Set());
+    setTraversal(emptyTraversal<DiscoveryItem>());
+    setSelectedKey(null);
+    setFocusedKey(null);
+    setExpandingKey(null);
+    setExpandNotice(null);
+  }, []);
   const loadedSourceKeyRef = React.useRef<string | null>(null);
   React.useEffect(() => {
-    const sourceKey = `${facet}|${libraryIdSignature}`;
     if (!hasTitles || loadedSourceKeyRef.current === sourceKey) {
       return;
     }
     loadedSourceKeyRef.current = sourceKey;
+    invalidateExpansions(expandTokenRef);
     let cancelled = false;
     let settled = false;
-    void libraryGraphSourceForCatalog(catalogTargetKeysRef.current)
+    void libraryGraphSourceForCatalog(client)
       .load({
         facet,
         libraryIds: libraryIdSignature ? libraryIdSignature.split(",") : [],
@@ -238,12 +402,16 @@ export default function LibraryGraphView({
         settled = true;
         if (!cancelled) {
           setResult(loaded);
+          setLoadStatus(loaded ? "loaded" : "notBuilt");
+          resetExploration();
         }
       })
       .catch(() => {
         settled = true;
         if (!cancelled) {
           setResult(null);
+          setLoadStatus("failed");
+          resetExploration();
         }
       });
     return () => {
@@ -253,7 +421,14 @@ export default function LibraryGraphView({
         loadedSourceKeyRef.current = null;
       }
     };
-  }, [facet, hasTitles, libraryIdSignature]);
+  }, [
+    client,
+    facet,
+    hasTitles,
+    libraryIdSignature,
+    resetExploration,
+    sourceKey,
+  ]);
 
   const join = React.useMemo(
     () => (result && titles ? joinLibraryGraphToTitles(result, titles) : null),
@@ -266,9 +441,82 @@ export default function LibraryGraphView({
     }
     return byId;
   }, [join]);
+  // Every key a title of the catalog listing is known by.
+  const catalogIndex = React.useMemo(
+    () => titleIndexByMatchKey(titles ?? []),
+    [titles],
+  );
+  // Every node of the built graph by its target key, and each node whose
+  // title is in the current listing by every key that title is known by: an
+  // explored result that matches links to the node instead of joining as a
+  // ghost. A node filtered out of the listing is known only by its target
+  // key, so a result naming it another way, or a title added after the graph
+  // was built, still joins as a ghost; such a ghost carries the local title it
+  // resolved to and the card treats it as owned.
+  const ownedIndex = React.useMemo(
+    () =>
+      ownedNodeIndex(
+        (result?.nodes ?? []).map((node) => {
+          const title = join?.titleBySubjectKey.get(node.subjectKey);
+          return {
+            subjectKey: node.subjectKey,
+            targetKey: node.targetKey,
+            titleId: title?.id ?? null,
+            matchKeys: title ? titleMatchKeys(title) : [],
+          };
+        }),
+      ),
+    [join, result],
+  );
+  React.useEffect(() => {
+    ownedIndexRef.current = ownedIndex;
+  }, [ownedIndex]);
+  // A ghost dropped from the exploration (cut back on the trail, or pruned at
+  // the cap) is no longer picked or focused, so reaching it again later does
+  // not reopen its card.
+  if (
+    selectedKey !== null &&
+    isGhostSubjectKey(selectedKey) &&
+    !traversal.ghostItems.has(selectedKey)
+  ) {
+    setSelectedKey(null);
+  }
+  if (
+    focusedKey !== null &&
+    isGhostSubjectKey(focusedKey) &&
+    !traversal.ghostItems.has(focusedKey)
+  ) {
+    setFocusedKey(null);
+  }
+  // The side panel moving to another title, or closing, ends a pick made in
+  // the graph unless it is that same title.
+  const [seenSelectedTitleId, setSeenSelectedTitleId] =
+    React.useState(selectedTitleId);
+  if (seenSelectedTitleId !== selectedTitleId) {
+    setSeenSelectedTitleId(selectedTitleId);
+    if (
+      selectedKey !== null &&
+      selectedTitleId !== pickedTitleId(selectedKey, join, traversal)
+    ) {
+      setSelectedKey(null);
+    }
+  }
+  const explored = React.useMemo(
+    () => (join ? traversalGraphState(join.graph, traversal) : null),
+    [join, traversal],
+  );
+  // Collapsing follows the library's own size; explored ghosts never tip it.
   const displayed = React.useMemo(
-    () => (join ? displayedLibraryGraph(join.graph, expandedClusterIds) : null),
-    [expandedClusterIds, join],
+    () =>
+      explored && join
+        ? displayedLibraryGraph(
+            explored,
+            expandedClusterIds,
+            LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
+            join.graph,
+          )
+        : null,
+    [expandedClusterIds, explored, join],
   );
   // Every cluster of the whole graph, before filtering, so layout centres hold
   // still when a filter empties a cluster.
@@ -317,6 +565,44 @@ export default function LibraryGraphView({
     groupsRef.current = groups;
   }, [groups]);
 
+  const nodeLabel = React.useCallback(
+    (node: GraphNode): string => {
+      if (node.collapsedClusterId !== undefined) {
+        return t("libraryGraph.collapsedCluster", {
+          name: libraryGraphGroupName(
+            node.collapsedClusterId,
+            join?.graph.clusters ?? [],
+            join?.titleBySubjectKey ?? new Map(),
+            t,
+          ),
+          count: node.memberCount ?? 1,
+        });
+      }
+      const item = node.ghost
+        ? traversal.ghostItems.get(node.subjectKey)
+        : undefined;
+      if (item) {
+        const name = discoveryItemDisplayTitle(item);
+        return item.year ? `${name} (${item.year})` : name;
+      }
+      const title = join?.titleBySubjectKey.get(node.subjectKey);
+      if (title) {
+        return title.year ? `${title.name} (${title.year})` : title.name;
+      }
+      return node.targetKey;
+    },
+    [join, t, traversal.ghostItems],
+  );
+  const keyboardNodes = React.useMemo<KeyboardNode[]>(
+    () =>
+      (displayed?.nodes ?? []).map((node) => ({
+        key: node.subjectKey,
+        clusterId: node.clusterId,
+        label: nodeLabel(node),
+      })),
+    [displayed, nodeLabel],
+  );
+
   const drawOverlay = React.useCallback(() => {
     const sigma = sigmaRef.current;
     const graph = graphRef.current;
@@ -350,7 +636,8 @@ export default function LibraryGraphView({
         y: attributes.y as number,
       });
       viewportByNode.set(key, point);
-      if (attributes.collapsedClusterId !== undefined) {
+      // Ghosts are not in the library, so they never stretch a cluster hull.
+      if (attributes.collapsedClusterId !== undefined || attributes.ghost) {
         return;
       }
       const clusterId = attributes.clusterId as number;
@@ -452,6 +739,9 @@ export default function LibraryGraphView({
         return;
       }
       context.save();
+      if (attributes.ghost) {
+        context.globalAlpha = 0.55;
+      }
       context.beginPath();
       context.arc(point.x, point.y, radius, 0, Math.PI * 2);
       context.clip();
@@ -470,8 +760,10 @@ export default function LibraryGraphView({
       );
       context.restore();
       if (
-        attributes.titleId &&
-        attributes.titleId === selectedTitleIdRef.current
+        selectedKeyRef.current !== null
+          ? key === selectedKeyRef.current
+          : attributes.titleId &&
+            attributes.titleId === selectedTitleIdRef.current
       ) {
         context.beginPath();
         context.arc(point.x, point.y, radius + 2, 0, Math.PI * 2);
@@ -481,6 +773,47 @@ export default function LibraryGraphView({
       }
       drawn += 1;
     });
+
+    // Ghosts wear a dashed ring so they read apart from library titles.
+    const muted = readCssColor(canvas, "--scry-muted2", UNPLACED_COLOR);
+    context.save();
+    context.setLineDash([3, 3]);
+    context.lineWidth = 1.5;
+    context.strokeStyle = muted;
+    graph.forEachNode((key, attributes) => {
+      if (!attributes.ghost) {
+        return;
+      }
+      const point = viewportByNode.get(key);
+      const radius = sigma.scaleSize(attributes.size as number);
+      if (
+        !point ||
+        point.x < -radius ||
+        point.y < -radius ||
+        point.x > width + radius ||
+        point.y > height + radius
+      ) {
+        return;
+      }
+      context.beginPath();
+      context.arc(point.x, point.y, radius + 2, 0, Math.PI * 2);
+      context.stroke();
+    });
+    context.restore();
+
+    // The keyboard focus ring.
+    const focused = focusedKeyRef.current;
+    const focusPoint = focused ? viewportByNode.get(focused) : undefined;
+    if (focused && focusPoint && graph.hasNode(focused)) {
+      const radius = sigma.scaleSize(
+        graph.getNodeAttribute(focused, "size") as number,
+      );
+      context.beginPath();
+      context.arc(focusPoint.x, focusPoint.y, radius + 5, 0, Math.PI * 2);
+      context.lineWidth = 2;
+      context.strokeStyle = readCssColor(canvas, "--scry-ink2", "#e6e8ef");
+      context.stroke();
+    }
   }, []);
 
   // One renderer for the life of the view.
@@ -510,20 +843,7 @@ export default function LibraryGraphView({
 
     sigma.on("afterRender", drawOverlay);
     sigma.on("clickNode", ({ node }) => {
-      const attributes = graph.getNodeAttributes(node);
-      if (attributes.collapsedClusterId !== undefined) {
-        const clusterId = attributes.collapsedClusterId;
-        setExpandedClusterIds((current) =>
-          toggleClusterExpanded(current, clusterId),
-        );
-        return;
-      }
-      const title = attributes.titleId
-        ? titlesByIdRef.current.get(attributes.titleId)
-        : undefined;
-      if (title) {
-        onSelectTitleRef.current(title);
-      }
+      activateNodeRef.current(node);
     });
     sigma.on("enterNode", ({ node, event }) => {
       const attributes = graph.getNodeAttributes(node);
@@ -609,7 +929,9 @@ export default function LibraryGraphView({
         clusterId: node.clusterId,
       })),
       displayed.edges,
-      positionsRef.current,
+      // New ghosts start beside the node that reached them, so exploring
+      // settles the layout rather than restarting it.
+      seedGhostPositions(positionsRef.current, traversal.expansions),
       allClusterIds,
     );
     const start = layoutPositions(layout);
@@ -619,12 +941,6 @@ export default function LibraryGraphView({
       const color = clusterColor(node.clusterId, clusterOrder);
       let attributes: NodeAttributes;
       if (node.collapsedClusterId !== undefined) {
-        const name = libraryGraphGroupName(
-          node.collapsedClusterId,
-          join.graph.clusters,
-          join.titleBySubjectKey,
-          t,
-        );
         const size = Math.min(36, 10 + Math.sqrt(node.memberCount ?? 1));
         attributes = {
           ...position,
@@ -632,12 +948,23 @@ export default function LibraryGraphView({
           color,
           baseSize: size,
           baseColor: color,
-          label: t("libraryGraph.collapsedCluster", {
-            name,
-            count: node.memberCount ?? 1,
-          }),
+          label: nodeLabel(node),
           collapsedClusterId: node.collapsedClusterId,
           clusterId: node.clusterId,
+        };
+      } else if (node.ghost) {
+        const item = traversal.ghostItems.get(node.subjectKey);
+        const ghostColor = withAlpha(color, 0.35);
+        attributes = {
+          ...position,
+          size: GHOST_NODE_SIZE,
+          color: ghostColor,
+          baseSize: GHOST_NODE_SIZE,
+          baseColor: ghostColor,
+          label: nodeLabel(node),
+          posterUrl: selectPosterVariantUrl(item?.posterUrl, "w70") ?? null,
+          clusterId: node.clusterId,
+          ghost: true,
         };
       } else {
         const title = join.titleBySubjectKey.get(node.subjectKey);
@@ -648,11 +975,7 @@ export default function LibraryGraphView({
           color,
           baseSize: size,
           baseColor: color,
-          label: title
-            ? title.year
-              ? `${title.name} (${title.year})`
-              : title.name
-            : node.targetKey,
+          label: nodeLabel(node),
           titleId: title?.id,
           posterUrl: selectPosterVariantUrl(title?.posterUrl, "w70") ?? null,
           clusterId: node.clusterId,
@@ -668,10 +991,15 @@ export default function LibraryGraphView({
       if (graph.hasEdge(edge.from, edge.to)) {
         continue;
       }
+      const toGhost =
+        graph.getNodeAttribute(edge.from, "ghost") === true ||
+        graph.getNodeAttribute(edge.to, "ghost") === true;
+      const alpha =
+        (0.18 + Math.min(1, edge.weight) * 0.4) * (toGhost ? 0.6 : 1);
       const attributes: EdgeAttributes = {
         size: 0.4 + Math.min(1, Math.max(0, edge.weight)) * 2.2,
         color: mutedEdge.startsWith("#")
-          ? withAlpha(mutedEdge, 0.18 + Math.min(1, edge.weight) * 0.4)
+          ? withAlpha(mutedEdge, alpha)
           : mutedEdge,
         kinds: edge.kinds,
       };
@@ -732,16 +1060,33 @@ export default function LibraryGraphView({
     displayed,
     join,
     metric,
-    t,
+    nodeLabel,
     titlesById,
+    traversal,
   ]);
 
+  // Explored titles that settled in no library cluster get a chip of their
+  // own, so the keyboard can reach them.
+  const exploredGroups = React.useMemo(
+    () =>
+      uncoveredKeyboardGroups(
+        keyboardNodes,
+        new Set(groups.map((group) => group.id)),
+      ),
+    [groups, keyboardNodes],
+  );
+  const keyboardNodesRef = React.useRef(keyboardNodes);
+  React.useEffect(() => {
+    keyboardNodesRef.current = keyboardNodes;
+  }, [keyboardNodes]);
   const focusGroup = React.useCallback((clusterId: number) => {
     const sigma = sigmaRef.current;
     const graph = graphRef.current;
     if (!sigma || !graph) {
       return;
     }
+    // The arrow keys then cycle through this cluster.
+    setFocusedKey(firstNodeInCluster(keyboardNodesRef.current, clusterId));
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
@@ -779,6 +1124,207 @@ export default function LibraryGraphView({
       .animate({ x: 0.5, y: 0.5, ratio: 1, angle: 0 }, { duration: 300 });
   }, []);
 
+  // The node picked in the graph, while it is still drawn.
+  const displayedNodesByKey = React.useMemo(
+    () =>
+      new Map((displayed?.nodes ?? []).map((node) => [node.subjectKey, node])),
+    [displayed],
+  );
+  const selectedNode =
+    selectedKey !== null
+      ? (displayedNodesByKey.get(selectedKey) ?? null)
+      : null;
+  const shownFocusedKey =
+    focusedKey !== null && displayedNodesByKey.has(focusedKey)
+      ? focusedKey
+      : null;
+
+  React.useEffect(() => {
+    selectedKeyRef.current = selectedNode?.subjectKey ?? null;
+    applySelection();
+    sigmaRef.current?.refresh();
+  }, [applySelection, selectedNode]);
+  React.useEffect(() => {
+    focusedKeyRef.current = shownFocusedKey;
+    sigmaRef.current?.scheduleRender();
+  }, [shownFocusedKey]);
+
+  const activateNode = React.useCallback((key: string) => {
+    const graph = graphRef.current;
+    if (!graph || !graph.hasNode(key)) {
+      return;
+    }
+    const attributes = graph.getNodeAttributes(key);
+    if (attributes.collapsedClusterId !== undefined) {
+      const clusterId = attributes.collapsedClusterId;
+      setExpandedClusterIds((current) =>
+        toggleClusterExpanded(current, clusterId),
+      );
+      return;
+    }
+    setSelectedKey(key);
+    setFocusedKey(key);
+    setExpandNotice(null);
+    const title = attributes.titleId
+      ? titlesByIdRef.current.get(attributes.titleId)
+      : undefined;
+    if (title) {
+      onSelectTitleRef.current(title);
+    }
+  }, []);
+  React.useEffect(() => {
+    activateNodeRef.current = activateNode;
+  }, [activateNode]);
+
+  // What a node's neighbours are asked for by: an owned node's graph target
+  // key in the graph's facet, or an explored title's first key in the
+  // discovery vocabulary in its own facet.
+  const neighborAnchor = React.useCallback(
+    (node: GraphNode): { targetKey: string; facet: Facet } | null => {
+      if (node.collapsedClusterId !== undefined) {
+        return null;
+      }
+      const item = node.ghost
+        ? traversal.ghostItems.get(node.subjectKey)
+        : undefined;
+      if (item) {
+        const targetKey = neighborTargetKey(item);
+        return targetKey
+          ? { targetKey, facet: discoveryItemFacet(item) ?? facet }
+          : null;
+      }
+      const targetKey = node.targetKey.trim();
+      return targetKey ? { targetKey, facet } : null;
+    },
+    [facet, traversal.ghostItems],
+  );
+
+  // Labels of expanded nodes as they read when expanded, so the trail can
+  // still name an anchor that a filter has since hidden.
+  const [anchorLabels, setAnchorLabels] = React.useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+
+  const expandNode = React.useCallback(
+    async (node: GraphNode) => {
+      const key = node.subjectKey;
+      const anchor = neighborAnchor(node);
+      if (!anchor) {
+        return;
+      }
+      const label = nodeLabel(node);
+      const token = beginExpansion(expandTokenRef);
+      setExpandingKey(key);
+      setExpandNotice(null);
+      try {
+        const { data, error } = await client
+          .query<NeighborsData>(
+            discoveryNeighborsQuery,
+            { input: { ...anchor, limit: NEIGHBOR_LIMIT } },
+            // A title added or requested since an earlier read must not come
+            // back from the cache as still addable.
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+        if (!isCurrentExpansion(expandTokenRef, token)) {
+          return;
+        }
+        const items = data?.discoveryNeighbors ?? [];
+        if (items.length === 0) {
+          setExpandNotice({ key, kind: "empty" });
+          return;
+        }
+        setAnchorLabels((current) =>
+          current.get(key) === label
+            ? current
+            : new Map(current).set(key, label),
+        );
+        setTraversal((current) =>
+          expandTraversal(current, key, items, ownedIndexRef.current),
+        );
+      } catch {
+        if (isCurrentExpansion(expandTokenRef, token)) {
+          setGlobalStatus(t("status.apiError"), { level: "ERROR" });
+        }
+      } finally {
+        if (isCurrentExpansion(expandTokenRef, token)) {
+          setExpandingKey(null);
+        }
+      }
+    },
+    [client, neighborAnchor, nodeLabel, setGlobalStatus, t],
+  );
+
+  const actedGhostKeyRef = React.useRef<string | null>(null);
+  const onCatalogChangedRef = React.useRef(onCatalogChanged);
+  React.useEffect(() => {
+    onCatalogChangedRef.current = onCatalogChanged;
+  }, [onCatalogChanged]);
+  React.useEffect(() => {
+    catalogChangedRef.current = ({ addedTitleId }) => {
+      const acted = actedGhostKeyRef.current;
+      if (acted && addedTitleId) {
+        setTraversal((current) =>
+          stampGhostTitle(current, acted, addedTitleId),
+        );
+      }
+      // The listing catches up in the background; the dialog does not wait.
+      void onCatalogChangedRef.current?.();
+    };
+  }, []);
+
+  const collapseToCrumb = React.useCallback((index: number) => {
+    invalidateExpansions(expandTokenRef);
+    setExpandingKey(null);
+    setExpandNotice(null);
+    setTraversal((current) => collapseTraversalToCrumb(current, index));
+  }, []);
+
+  const handleCanvasKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      switch (event.key) {
+        case "ArrowRight":
+        case "ArrowDown":
+        case "ArrowLeft":
+        case "ArrowUp": {
+          event.preventDefault();
+          const step =
+            event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+          setFocusedKey(
+            nextNodeInCluster(
+              keyboardNodes,
+              shownFocusedKey ?? selectedNode?.subjectKey ?? null,
+              shownFocusedKey ? step : 0,
+            ),
+          );
+          return;
+        }
+        case "Enter":
+        case " ": {
+          if (shownFocusedKey) {
+            event.preventDefault();
+            activateNode(shownFocusedKey);
+          }
+          return;
+        }
+        case "Escape": {
+          if (shownFocusedKey || selectedNode) {
+            event.preventDefault();
+            setFocusedKey(null);
+            setSelectedKey(null);
+          }
+          return;
+        }
+        default:
+          return;
+      }
+    },
+    [activateNode, keyboardNodes, selectedNode, shownFocusedKey],
+  );
+
   // A hovered node or edge that a filter removed has no tooltip.
   const displayedKeys = React.useMemo(
     () => new Set(displayed?.nodes.map((node) => node.subjectKey) ?? []),
@@ -803,15 +1349,74 @@ export default function LibraryGraphView({
     selectedTitleId !== null && titlesById.has(selectedTitleId);
   // Titles still paging, or the graph still loading for them, show as
   // loading; a finished listing with nothing to draw shows as empty.
-  const graphStatus: "loading" | "empty" | "ready" = !titlesComplete
-    ? "loading"
-    : !hasTitles
-      ? "empty"
-      : result === null
-        ? "loading"
-        : visibleNodeCount === 0
-          ? "empty"
-          : "ready";
+  const graphStatus: "loading" | "empty" | "notBuilt" | "failed" | "ready" =
+    !titlesComplete
+      ? "loading"
+      : !hasTitles
+        ? "empty"
+        : loadStatus === "pending"
+          ? "loading"
+          : loadStatus === "notBuilt"
+            ? "notBuilt"
+            : loadStatus === "failed"
+              ? "failed"
+              : visibleNodeCount === 0
+                ? "empty"
+                : "ready";
+
+  const crumbs = React.useMemo(
+    () =>
+      traversal.expansions.map((expansion) => ({
+        anchor: expansion.anchor,
+        label: anchorLabels.get(expansion.anchor) ?? expansion.anchor,
+      })),
+    [anchorLabels, traversal.expansions],
+  );
+  const selectedItem =
+    selectedNode?.ghost === true
+      ? (traversal.ghostItems.get(selectedNode.subjectKey) ?? null)
+      : null;
+  const selectedExpandable =
+    selectedNode !== null && neighborAnchor(selectedNode) !== null;
+  const { canAddItem, canRequestItem, onAction, onOpenResolved } =
+    moreLikeThisActions.stripProps;
+  // A ghost that is one of the viewer's titles, though not drawn as a
+  // library node, opens instead of offering Add or Request: through the
+  // listing when it is there, else through the title Scryer resolved.
+  const selectedResolved =
+    selectedItem !== null && isLibraryItem(selectedItem, catalogIndex);
+  const selectedCatalogTitle = selectedItem
+    ? catalogTitleForItem(selectedItem, catalogIndex, titles ?? [])
+    : null;
+  const openSelected = selectedCatalogTitle
+    ? () => onSelectTitle(selectedCatalogTitle)
+    : selectedItem?.resolvedTitleId?.trim() && onOpenResolved
+      ? () => void onOpenResolved(selectedItem)
+      : null;
+  const selectedAddable =
+    selectedItem !== null &&
+    !selectedResolved &&
+    !selectedItem.ownedInInput &&
+    (canAddItem?.(selectedItem) ?? false);
+  const selectedRequestable =
+    selectedItem !== null &&
+    !selectedResolved &&
+    !selectedItem.ownedInInput &&
+    !selectedAddable &&
+    (canRequestItem?.(selectedItem) ?? false);
+  const focusedNode = shownFocusedKey
+    ? (displayedNodesByKey.get(shownFocusedKey) ?? null)
+    : null;
+  const focusedItem = focusedNode?.ghost
+    ? (traversal.ghostItems.get(focusedNode.subjectKey) ?? null)
+    : null;
+  const focusedLabel = focusedNode
+    ? focusedItem && !isLibraryItem(focusedItem, catalogIndex)
+      ? t("libraryGraph.focusedOutsideLibrary", {
+          title: nodeLabel(focusedNode),
+        })
+      : nodeLabel(focusedNode)
+    : "";
 
   return (
     <section
@@ -904,14 +1509,75 @@ export default function LibraryGraphView({
               ) : null}
             </span>
           ))}
+          {exploredGroups.map((group) => (
+            <button
+              key={`explored-${group.id}`}
+              type="button"
+              onClick={() => focusGroup(group.id)}
+              className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 py-1 text-[12px] text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)]"
+            >
+              <span>{t("libraryGraph.exploredGroup")}</span>
+              <span className="text-[var(--scry-muted2)]">{group.count}</span>
+            </button>
+          ))}
+        </nav>
+      ) : null}
+      {result?.truncated ? (
+        <p
+          className="text-[12px] text-[var(--scry-muted2)]"
+          data-testid="library-graph-truncated"
+        >
+          {t("libraryGraph.truncated")}
+        </p>
+      ) : null}
+      {crumbs.length > 0 ? (
+        <nav
+          aria-label={t("libraryGraph.trailLabel")}
+          className="flex flex-wrap items-center gap-1.5"
+          data-testid="library-graph-trail"
+        >
+          {crumbs.map((crumb, index) => (
+            <React.Fragment key={crumb.anchor}>
+              {index > 0 ? (
+                <span aria-hidden="true" className="text-[var(--scry-muted2)]">
+                  ›
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => collapseToCrumb(index)}
+                aria-current={index === crumbs.length - 1 ? "step" : undefined}
+                className="max-w-[12rem] truncate rounded-full border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 py-0.5 text-[12px] text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)] aria-[current=step]:border-[var(--scry-accent)]"
+              >
+                {crumb.label}
+              </button>
+            </React.Fragment>
+          ))}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => collapseToCrumb(-1)}
+            className="ml-auto h-7 gap-1.5 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 text-[12px] shadow-none"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+            {t("libraryGraph.collapseToLibrary")}
+          </Button>
         </nav>
       ) : null}
       <div className="relative min-h-[20rem] flex-1 overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]">
         <div
           ref={containerRef}
-          className="absolute inset-0 touch-none"
+          tabIndex={0}
+          role="application"
+          aria-label={t("libraryGraph.canvasLabel")}
+          onKeyDown={handleCanvasKeyDown}
+          className="absolute inset-0 touch-none outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)]"
           data-testid="library-graph-canvas"
         />
+        <div aria-live="polite" className="sr-only">
+          {focusedLabel}
+        </div>
         <canvas
           ref={overlayRef}
           aria-hidden="true"
@@ -968,12 +1634,112 @@ export default function LibraryGraphView({
           >
             {t("label.loading")}
           </div>
-        ) : graphStatus === "empty" ? (
-          <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-[13px] text-[var(--scry-muted2)]">
-            {t("libraryGraph.empty")}
+        ) : graphStatus === "empty" ||
+          graphStatus === "notBuilt" ||
+          graphStatus === "failed" ? (
+          <div
+            className="absolute inset-0 flex items-center justify-center p-6 text-center text-[13px] text-[var(--scry-muted2)]"
+            data-testid="library-graph-status"
+          >
+            {graphStatus === "notBuilt"
+              ? t("libraryGraph.notBuilt")
+              : graphStatus === "failed"
+                ? t("status.apiError")
+                : t("libraryGraph.empty")}
+          </div>
+        ) : null}
+        {selectedNode && selectedNode.collapsedClusterId === undefined ? (
+          <div
+            role="region"
+            aria-label={nodeLabel(selectedNode)}
+            data-testid="library-graph-selection"
+            data-ghost={selectedNode.ghost ? "true" : "false"}
+            className="absolute bottom-3 left-3 z-10 flex w-[min(20rem,calc(100%-1.5rem))] flex-col gap-2 rounded-[12px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] p-3 text-[12px] text-[var(--scry-ink2)] shadow-lg"
+          >
+            <div className="flex items-start gap-2">
+              {selectedItem?.posterUrl ? (
+                <img
+                  src={
+                    selectPosterVariantUrl(selectedItem.posterUrl, "w70") ?? ""
+                  }
+                  alt=""
+                  className="h-14 w-10 shrink-0 rounded-[4px] border border-dashed border-[var(--scry-muted2)] object-cover opacity-80"
+                />
+              ) : null}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-semibold">
+                  {nodeLabel(selectedNode)}
+                </div>
+                {selectedItem ? (
+                  <div className="text-[var(--scry-muted2)]">
+                    {selectedResolved
+                      ? t("libraryGraph.inLibrary")
+                      : t("libraryGraph.notInLibrary")}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedKey(null)}
+                aria-label={t("label.close")}
+                title={t("label.close")}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)]"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {selectedExpandable ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={expandingKey === selectedNode.subjectKey}
+                  onClick={() => void expandNode(selectedNode)}
+                  className="h-7 gap-1.5 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 text-[12px] shadow-none"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {expandingKey === selectedNode.subjectKey
+                    ? t("label.loading")
+                    : t("libraryGraph.moreLikeThis")}
+                </Button>
+              ) : null}
+              {selectedResolved && openSelected ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={openSelected}
+                  className="h-7 rounded-[8px] px-2.5 text-[12px]"
+                >
+                  {t("libraryGraph.openTitle")}
+                </Button>
+              ) : null}
+              {selectedItem && (selectedAddable || selectedRequestable) ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    actedGhostKeyRef.current = selectedNode.subjectKey;
+                    void onAction?.(selectedItem);
+                  }}
+                  className="h-7 rounded-[8px] px-2.5 text-[12px]"
+                >
+                  {selectedAddable
+                    ? t("discovery.add")
+                    : t("discovery.request")}
+                </Button>
+              ) : null}
+            </div>
+            {expandNotice?.key === selectedNode.subjectKey &&
+            expandNotice.kind === "empty" ? (
+              <p role="status" className="text-[var(--scry-muted2)]">
+                {t("libraryGraph.moreLikeThisEmpty")}
+              </p>
+            ) : null}
           </div>
         ) : null}
       </div>
+      {moreLikeThisActions.dialogs}
     </section>
   );
 }

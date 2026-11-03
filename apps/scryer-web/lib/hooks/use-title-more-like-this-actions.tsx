@@ -36,7 +36,13 @@ type TitleRouteTarget = {
 type UseTitleMoreLikeThisActionsOptions = {
   canAddItems?: boolean;
   canRequestItems?: boolean;
-  onCatalogChanged?: () => Promise<void> | void;
+  /**
+   * Runs after an Add or Request went through; an Add names the title it
+   * created.
+   */
+  onCatalogChanged?: (change: {
+    addedTitleId: string | null;
+  }) => Promise<void> | void;
 };
 
 function viewForFacet(facet: string | null | undefined): ViewId | null {
@@ -209,7 +215,7 @@ export function useTitleMoreLikeThisActions({
               options,
             );
             if (titleId) {
-              await onCatalogChanged?.();
+              await onCatalogChanged?.({ addedTitleId: titleId });
             }
             return titleId;
           }}
@@ -234,7 +240,7 @@ export function useTitleMoreLikeThisActions({
               options,
             );
             if (accepted) {
-              await onCatalogChanged?.();
+              await onCatalogChanged?.({ addedTitleId: null });
             }
             return accepted;
           }}

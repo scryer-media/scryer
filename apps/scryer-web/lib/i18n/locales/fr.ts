@@ -1260,6 +1260,22 @@ const fr: LocaleDictionary = {
   "libraryGraph.edgeKind.affinity": "Intérêt commun : {{label}}",
   "libraryGraph.edgeKind.sharedTaste": "Intérêt commun",
   "libraryGraph.edgeKind.other": "Lié",
+  "libraryGraph.edgeKind.recommendation": "Recommandé",
+  "libraryGraph.notBuilt":
+    "Le graphe de la bibliothèque n'a pas encore été construit.",
+  "libraryGraph.truncated":
+    "Ce graphe ne couvre qu'une partie de la bibliothèque.",
+  "libraryGraph.moreLikeThis": "Titres similaires",
+  "libraryGraph.moreLikeThisEmpty": "Aucun titre similaire pour l'instant.",
+  "libraryGraph.notInLibrary": "Absent de votre bibliothèque",
+  "libraryGraph.inLibrary": "Dans votre bibliothèque",
+  "libraryGraph.openTitle": "Ouvrir le titre",
+  "libraryGraph.exploredGroup": "Exploré",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, absent de votre bibliothèque",
+  "libraryGraph.trailLabel": "Exploré",
+  "libraryGraph.collapseToLibrary": "Revenir à la bibliothèque",
+  "libraryGraph.canvasLabel":
+    "Graphe de la bibliothèque. Utilisez les flèches pour passer d'un titre à l'autre dans un groupe et Entrée pour en ouvrir un.",
   "title.seasonMonitored": "Saison surveillée",
   "title.episodeMonitored": "Épisode surveillé",
   "title.seriesMovieMonitored": "Film de série surveillé",
