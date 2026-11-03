@@ -236,6 +236,7 @@ impl AppUseCase {
         // of silently leaving leases dormant.
         self.maybe_activate_lifecycle_claims_for_import(stored)
             .await;
+        self.prune_library_graph_for_event(stored).await;
     }
 
     pub async fn append_domain_events(
@@ -302,6 +303,7 @@ impl AppUseCase {
             self.maybe_accelerate_discovery_sync_for_scan_completion(event)
                 .await;
             self.maybe_activate_lifecycle_claims_for_import(event).await;
+            self.prune_library_graph_for_event(event).await;
         }
         Ok(stored)
     }

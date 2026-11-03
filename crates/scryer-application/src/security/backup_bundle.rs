@@ -639,6 +639,26 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
+        table: "discovery_library_graph_clusters",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_library_graph_edges",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_library_graph_nodes",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_library_graph_runs",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_neighbor_cache",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
         table: "discovery_pending_context_changes",
         classification: BackupTableClassification::ResetOnRestore,
     },

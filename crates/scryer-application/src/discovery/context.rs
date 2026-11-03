@@ -449,7 +449,9 @@ pub(super) fn normalized_supported_external_ids(title: &Title) -> Vec<CanonicalE
     normalize_external_ids(&title.external_ids)
 }
 
-fn normalize_external_ids(external_ids: &[scryer_domain::ExternalId]) -> Vec<CanonicalExternalId> {
+pub(super) fn normalize_external_ids(
+    external_ids: &[scryer_domain::ExternalId],
+) -> Vec<CanonicalExternalId> {
     external_ids
         .iter()
         .filter_map(|external_id| {

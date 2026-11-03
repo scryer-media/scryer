@@ -635,3 +635,80 @@ pub struct DiscoveryFacetPayload {
     /// Local owned-title count, or null when unavailable.
     pub local_count: Option<Long>,
 }
+
+#[derive(InputObject, Clone)]
+/// One anchor whose related titles are returned, owned or not.
+pub struct DiscoveryNeighborsInput {
+    /// The discovery target key of the anchor, in the server's own vocabulary (tvdb:series:<id>, tmdb:movie:<id>, tmdb:series:<id>, imdb:title:<tt>, mal:anime:<id>, anidb:anime:<id>, anilist:anime:<id>).
+    pub target_key: String,
+    /// Media facet of the anchor.
+    pub facet: MediaFacetValue,
+    /// Maximum related titles to return; defaults to 24 and clamps to 0 through 100.
+    #[graphql(default = 24)]
+    pub limit: Option<i32>,
+}
+
+#[derive(InputObject, Clone)]
+/// Selects one facet's library graph and, optionally, the libraries it covers.
+pub struct LibraryGraphInput {
+    /// Media facet whose library graph is returned.
+    pub facet: MediaFacetValue,
+    /// Library IDs to cover; omitted or empty covers every library of the facet the viewer can see. IDs the viewer cannot see are ignored.
+    pub library_ids: Option<Vec<ID>>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One owned title in a library graph.
+pub struct LibraryGraphNode {
+    /// Discovery subject key of the owned title.
+    pub subject_key: String,
+    /// Discovery target key the title resolved to; edges and medoids use this key.
+    pub target_key: String,
+    /// Cluster the node belongs to, or -1 when it was not placed in a cluster.
+    pub cluster_id: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// An undirected similarity link between two owned titles, by target key.
+pub struct LibraryGraphEdge {
+    /// Target key of one endpoint; always sorts before `to`.
+    pub from: String,
+    /// Target key of the other endpoint.
+    pub to: String,
+    /// Link strength from 0 to 1.
+    pub weight: f64,
+    /// Evidence for the link: `semantic`, `relation:<type>`, or `affinity:<family>:<label>`.
+    pub kinds: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A cluster of related owned titles.
+pub struct LibraryGraphCluster {
+    /// Cluster ID, matching `LibraryGraphNode.clusterId`.
+    pub id: i32,
+    /// Label key of the genre or theme that names the cluster, or null when the cluster is named after its medoid.
+    pub label_key: Option<String>,
+    /// Display label of the cluster.
+    pub label: String,
+    /// Target key of the visible title that best represents the cluster.
+    pub medoid: String,
+    /// Number of visible titles in the cluster.
+    pub size: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A facet's library graph, limited to the titles the viewer can see. Layout coordinates are not included.
+pub struct LibraryGraph {
+    /// When the metadata gateway built the graph.
+    pub generated_at: String,
+    /// Owned titles in the graph.
+    pub nodes: Vec<LibraryGraphNode>,
+    /// Similarity links between visible titles.
+    pub edges: Vec<LibraryGraphEdge>,
+    /// Clusters with at least one visible title.
+    pub clusters: Vec<LibraryGraphCluster>,
+    /// Owned titles of the facet in the covered libraries, counted by discovery subject.
+    pub subject_count: i32,
+    /// True when the facet had more titles than one graph covers, so the newest were graphed and the rest left out.
+    pub truncated: bool,
+}

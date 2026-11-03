@@ -1,0 +1,23 @@
+query LibraryGraph($input: LibraryGraphInput!) {
+  libraryGraph(input: $input) {
+    generated_at
+    nodes {
+      subject_key
+      target_key
+      cluster_id
+    }
+    edges {
+      from
+      to
+      weight
+      kinds
+    }
+    clusters {
+      id
+      label_key
+      label
+      medoid
+      size
+    }
+  }
+}

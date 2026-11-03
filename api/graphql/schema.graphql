@@ -4678,6 +4678,24 @@ type DiscoveryItemsPayload {
 }
 
 """
+One anchor whose related titles are returned, owned or not.
+"""
+input DiscoveryNeighborsInput {
+	"""
+	The discovery target key of the anchor, in the server's own vocabulary (tvdb:series:<id>, tmdb:movie:<id>, tmdb:series:<id>, imdb:title:<tt>, mal:anime:<id>, anidb:anime:<id>, anilist:anime:<id>).
+	"""
+	targetKey: String!
+	"""
+	Media facet of the anchor.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Maximum related titles to return; defaults to 24 and clamps to 0 through 100.
+	"""
+	limit: Int = 24
+}
+
+"""
 A discovery section containing a title, origin surface, count, and items.
 """
 type DiscoverySectionPayload {
@@ -10247,6 +10265,116 @@ enum JobTriggerSourceValue {
 	Started internally by the system.
 	"""
 	SYSTEM_INTERNAL
+}
+
+"""
+A facet's library graph, limited to the titles the viewer can see. Layout coordinates are not included.
+"""
+type LibraryGraph {
+	"""
+	When the metadata gateway built the graph.
+	"""
+	generatedAt: String!
+	"""
+	Owned titles in the graph.
+	"""
+	nodes: [LibraryGraphNode!]!
+	"""
+	Similarity links between visible titles.
+	"""
+	edges: [LibraryGraphEdge!]!
+	"""
+	Clusters with at least one visible title.
+	"""
+	clusters: [LibraryGraphCluster!]!
+	"""
+	Owned titles of the facet in the covered libraries, counted by discovery subject.
+	"""
+	subjectCount: Int!
+	"""
+	True when the facet had more titles than one graph covers, so the newest were graphed and the rest left out.
+	"""
+	truncated: Boolean!
+}
+
+"""
+A cluster of related owned titles.
+"""
+type LibraryGraphCluster {
+	"""
+	Cluster ID, matching `LibraryGraphNode.clusterId`.
+	"""
+	id: Int!
+	"""
+	Label key of the genre or theme that names the cluster, or null when the cluster is named after its medoid.
+	"""
+	labelKey: String
+	"""
+	Display label of the cluster.
+	"""
+	label: String!
+	"""
+	Target key of the visible title that best represents the cluster.
+	"""
+	medoid: String!
+	"""
+	Number of visible titles in the cluster.
+	"""
+	size: Int!
+}
+
+"""
+An undirected similarity link between two owned titles, by target key.
+"""
+type LibraryGraphEdge {
+	"""
+	Target key of one endpoint; always sorts before `to`.
+	"""
+	from: String!
+	"""
+	Target key of the other endpoint.
+	"""
+	to: String!
+	"""
+	Link strength from 0 to 1.
+	"""
+	weight: Float!
+	"""
+	Evidence for the link: `semantic`, `relation:<type>`, or `affinity:<family>:<label>`.
+	"""
+	kinds: [String!]!
+}
+
+"""
+Selects one facet's library graph and, optionally, the libraries it covers.
+"""
+input LibraryGraphInput {
+	"""
+	Media facet whose library graph is returned.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Library IDs to cover; omitted or empty covers every library of the facet the viewer can see. IDs the viewer cannot see are ignored.
+	"""
+	libraryIds: [ID!]
+}
+
+"""
+One owned title in a library graph.
+"""
+type LibraryGraphNode {
+	"""
+	Discovery subject key of the owned title.
+	"""
+	subjectKey: String!
+	"""
+	Discovery target key the title resolved to; edges and medoids use this key.
+	"""
+	targetKey: String!
+	"""
+	Cluster the node belongs to, or -1 when it was not placed in a cluster.
+	"""
+	clusterId: Int!
 }
 
 """
@@ -25256,6 +25384,27 @@ type QueryRoot {
 		"""
 		input: CatalogDiscoveryInput!
 	): CatalogDiscoveryPayload!
+	"""
+	Titles related to one anchor, owned or not. Owned results carry resolvedTitleId; nothing is filtered out for being in the library.
+	"""
+	discoveryNeighbors(
+		"""
+		Anchor whose related titles are returned.
+		"""
+		input: DiscoveryNeighborsInput!
+	): [DiscoveryItemPayload!]!
+	"""
+	Return a facet's library graph: how the viewer's owned titles relate,
+	limited to titles the viewer can see. Null when personalized discovery
+	is off, the viewer can see none of the requested libraries, or no graph
+	has been built yet.
+	"""
+	libraryGraph(
+		"""
+		Facet and optional library scope of the graph.
+		"""
+		input: LibraryGraphInput!
+	): LibraryGraph
 	"""
 	Return a bounded download queue page with readiness, revision, staleness, filters, and stable sorting metadata.
 	"""

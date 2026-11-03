@@ -15,12 +15,13 @@ use scryer_application::{
     DiscoveryContextSnapshotPageResult, DiscoveryContextSnapshotStatusResult,
     DiscoveryContextSnapshotSubmitInput, DiscoveryContextSnapshotSubmitResult,
     DiscoveryDashboardResult, DiscoveryPublicFeedInput, DiscoveryRelatedResult, EpisodeArtworkUrls,
-    EpisodeMetadata, MdblistSummary, MetadataGateway, MetadataSearchItem, MetadataSearchQuery,
-    MovieMetadata, MovieTitleBulkResult, MovieTitleRef, MultiMetadataSearchResult,
-    RateLimitCooldownAction, RichMetadataSearchItem, SeasonMetadata, SeriesArtworkUrls,
-    SeriesMetadata, SeriesTitleBulkResult, SeriesTitleRef, SettingsRepository,
-    SmgScryerUpdateNotice, TitleArtworkUrls, TitleAward, TitleCredit, TitleExternalRating,
-    TitleExternalRef, TitleRatingSummary, TitleRecommendationsInput, TitleResolution,
+    EpisodeMetadata, LibraryGraphGatewayInput, LibraryGraphGatewayResult, MdblistSummary,
+    MetadataGateway, MetadataSearchItem, MetadataSearchQuery, MovieMetadata, MovieTitleBulkResult,
+    MovieTitleRef, MultiMetadataSearchResult, RateLimitCooldownAction, RichMetadataSearchItem,
+    SeasonMetadata, SeriesArtworkUrls, SeriesMetadata, SeriesTitleBulkResult, SeriesTitleRef,
+    SettingsRepository, SmgScryerUpdateNotice, TitleArtworkUrls, TitleAward, TitleCredit,
+    TitleExternalRating, TitleExternalRef, TitleRatingSummary, TitleRecommendationsInput,
+    TitleResolution,
 };
 use scryer_domain::{
     AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, CanonicalMediaTag,
@@ -130,6 +131,7 @@ const OP_TITLE_RECOMMENDATIONS: &str = "TitleRecommendations";
 const OP_DISCOVER_PUBLIC_FEED: &str = "DiscoverPublicFeed";
 const OP_COLLECTION_COMPLETIONS: &str = "CollectionCompletions";
 const OP_SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT: &str = "SubmitDiscoveryContextSnapshot";
+const OP_LIBRARY_GRAPH: &str = "LibraryGraph";
 const OP_DISCOVERY_CONTEXT_SNAPSHOT_STATUS: &str = "DiscoveryContextSnapshotStatus";
 const OP_DISCOVERY_CONTEXT_SNAPSHOT_PAGE: &str = "DiscoveryContextSnapshotPage";
 const OP_DISCOVERY_CONTEXT_CHANGES: &str = "DiscoveryContextChanges";
@@ -507,6 +509,7 @@ pub struct MetadataGatewayClient {
     title_recommendations_hash: String,
     collection_completions_hash: String,
     submit_discovery_context_snapshot_hash: String,
+    library_graph_hash: String,
     discovery_context_snapshot_status_hash: String,
     discovery_context_snapshot_page_hash: String,
     discovery_context_changes_hash: String,
@@ -533,6 +536,7 @@ impl MetadataGatewayClient {
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
         let submit_discovery_context_snapshot_hash =
             apq_hash(graphql_docs::SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT_QUERY);
+        let library_graph_hash = apq_hash(graphql_docs::LIBRARY_GRAPH_QUERY);
         let discovery_context_snapshot_status_hash =
             apq_hash(graphql_docs::DISCOVERY_CONTEXT_SNAPSHOT_STATUS_QUERY);
         let discovery_context_snapshot_page_hash =
@@ -562,6 +566,7 @@ impl MetadataGatewayClient {
             %title_recommendations_hash,
             %collection_completions_hash,
             %submit_discovery_context_snapshot_hash,
+            %library_graph_hash,
             %discovery_context_snapshot_status_hash,
             %discovery_context_snapshot_page_hash,
             %discovery_context_changes_hash,
@@ -596,6 +601,7 @@ impl MetadataGatewayClient {
             title_recommendations_hash,
             collection_completions_hash,
             submit_discovery_context_snapshot_hash,
+            library_graph_hash,
             discovery_context_snapshot_status_hash,
             discovery_context_snapshot_page_hash,
             discovery_context_changes_hash,
@@ -627,6 +633,7 @@ impl MetadataGatewayClient {
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
         let submit_discovery_context_snapshot_hash =
             apq_hash(graphql_docs::SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT_QUERY);
+        let library_graph_hash = apq_hash(graphql_docs::LIBRARY_GRAPH_QUERY);
         let discovery_context_snapshot_status_hash =
             apq_hash(graphql_docs::DISCOVERY_CONTEXT_SNAPSHOT_STATUS_QUERY);
         let discovery_context_snapshot_page_hash =
@@ -670,6 +677,7 @@ impl MetadataGatewayClient {
             title_recommendations_hash,
             collection_completions_hash,
             submit_discovery_context_snapshot_hash,
+            library_graph_hash,
             discovery_context_snapshot_status_hash,
             discovery_context_snapshot_page_hash,
             discovery_context_changes_hash,
@@ -1726,6 +1734,10 @@ impl MetadataGatewayClient {
         })?;
 
         if let Some(errors) = parsed.errors {
+            if let Some(error) = errors.iter().find_map(classify_graphql_error) {
+                warn!(error = %error, "metadata gateway refused the request");
+                return Err(error);
+            }
             let message = errors
                 .first()
                 .map(|error| error.message.as_str())
@@ -2698,6 +2710,9 @@ mod tests {
             "submit_discovery_context_snapshot" => {
                 json!({ "input": { "subjects": (1..=30_000).map(|id| json!({ "key": format!("tvdb:series:{id}"), "kind": "series" })).collect::<Vec<_>>(), "region": "US", "language": "eng", "maxItems": 50, "includeOwned": true, "includeUnresolved": false } })
             }
+            "library_graph" => {
+                json!({ "input": { "subjects": (1..=5_000).map(|id| json!({ "key": format!("tvdb:series:{id}"), "kind": "series" })).collect::<Vec<_>>(), "axis": "SEMANTIC", "neighborsPerNode": 8, "minCosine": 0.55 } })
+            }
             "discovery_context_snapshot_status" | "acknowledge_discovery_context_snapshot" => {
                 json!({ "requestId": "fixture-request" })
             }
@@ -2800,6 +2815,11 @@ mod tests {
                 super::OP_ACKNOWLEDGE_DISCOVERY_CONTEXT_SNAPSHOT,
                 graphql_docs::ACKNOWLEDGE_DISCOVERY_CONTEXT_SNAPSHOT_QUERY,
             ),
+            (
+                "library_graph",
+                super::OP_LIBRARY_GRAPH,
+                graphql_docs::LIBRARY_GRAPH_QUERY,
+            ),
         ];
         let mut cases = documents.into_iter().map(|(name, operation_name, query)| json!({ "name": name, "query": query, "operationName": operation_name, "variables": smg_fixture_variables(name) })).collect::<Vec<_>>();
         let movie_ids = (1..=100).collect::<Vec<_>>();
@@ -2819,7 +2839,7 @@ mod tests {
             let encoded = serde_json::to_vec_pretty(&corpus).expect("serialize fixture corpus");
             std::fs::write(path, encoded).expect("write fixture corpus");
         }
-        assert_eq!(corpus.len(), 22);
+        assert_eq!(corpus.len(), 23);
         assert_eq!(
             corpus[5]["variables"]["movieTvdbIds"]
                 .as_array()
@@ -2833,7 +2853,7 @@ mod tests {
             Some(50)
         );
         assert_eq!(
-            corpus[19]["query"]
+            corpus[20]["query"]
                 .as_str()
                 .expect("movie query")
                 .matches(": movie(")
@@ -2841,7 +2861,7 @@ mod tests {
             100
         );
         assert_eq!(
-            corpus[20]["query"]
+            corpus[21]["query"]
                 .as_str()
                 .expect("series query")
                 .matches(": series(")
@@ -2849,18 +2869,46 @@ mod tests {
             100
         );
         assert_eq!(
-            corpus[21]["query"]
+            corpus[22]["query"]
                 .as_str()
                 .expect("combined query")
                 .matches(": movie(")
                 .count()
-                + corpus[21]["query"]
+                + corpus[22]["query"]
                     .as_str()
                     .expect("combined query")
                     .matches(": series(")
                     .count(),
             100
         );
+    }
+
+    #[test]
+    fn queue_full_graphql_error_is_classified_from_its_code() {
+        let error: super::GraphqlError = serde_json::from_value(json!({
+            "message": "libraryGraph is at capacity; retry shortly",
+            "extensions": { "code": "QUEUE_FULL", "retry_after_seconds": 5 }
+        }))
+        .expect("graphql error");
+        let classified = super::classify_graphql_error(&error).expect("queue full is classified");
+        assert_eq!(
+            classified.reason(),
+            Some(scryer_application::error_reasons::metadata_gateway::QUEUE_FULL)
+        );
+        match classified {
+            AppError::TemporaryUnavailable { retry_after, .. } => {
+                assert_eq!(retry_after, Some(Duration::from_secs(5)));
+            }
+            other => panic!("expected temporary unavailable, got {other:?}"),
+        }
+
+        // The same words without the code stay a generic error.
+        let uncoded: super::GraphqlError = serde_json::from_value(json!({
+            "message": "QUEUE_FULL: libraryGraph is at capacity",
+            "extensions": { "code": "INTERNAL" }
+        }))
+        .expect("graphql error");
+        assert!(super::classify_graphql_error(&uncoded).is_none());
     }
 
     #[test]
@@ -5786,6 +5834,33 @@ struct GraphqlError {
     extensions: Option<serde_json::Value>,
 }
 
+/// `extensions.code` the gateway serves when every slot for an operation is
+/// busy, next to `extensions.retry_after_seconds`.
+const GRAPHQL_ERROR_CODE_QUEUE_FULL: &str = "QUEUE_FULL";
+
+/// Maps a GraphQL error the gateway tags with a known `extensions.code` to a
+/// typed error. Errors without a known code stay with the caller's generic
+/// handling.
+fn classify_graphql_error(error: &GraphqlError) -> Option<AppError> {
+    let extensions = error.extensions.as_ref()?;
+    let code = extensions.get("code")?.as_str()?;
+    match code {
+        GRAPHQL_ERROR_CODE_QUEUE_FULL => {
+            let retry_after = extensions
+                .get("retry_after_seconds")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|seconds| *seconds > 0)
+                .map(Duration::from_secs);
+            Some(AppError::temporary_unavailable_reason(
+                scryer_application::error_reasons::metadata_gateway::QUEUE_FULL,
+                error.message.clone(),
+                retry_after,
+            ))
+        }
+        _ => None,
+    }
+}
+
 // --- Discovery types ---
 
 #[derive(Deserialize)]
@@ -5804,6 +5879,12 @@ struct TitleRecommendationsResponse {
 struct CollectionCompletionsResponse {
     #[serde(rename = "collectionCompletions")]
     collection_completions: DiscoveryCollectionCompletionResult,
+}
+
+#[derive(Deserialize)]
+struct LibraryGraphResponse {
+    #[serde(rename = "libraryGraph")]
+    library_graph: LibraryGraphGatewayResult,
 }
 
 #[derive(Deserialize)]
@@ -7792,6 +7873,21 @@ impl MetadataGateway for MetadataGatewayClient {
             item.apply_rating_provenance();
         }
         Ok(result)
+    }
+
+    async fn library_graph(
+        &self,
+        input: &LibraryGraphGatewayInput,
+    ) -> AppResult<LibraryGraphGatewayResult> {
+        let data: LibraryGraphResponse = self
+            .execute_graphql_apq_post(
+                OP_LIBRARY_GRAPH,
+                graphql_docs::LIBRARY_GRAPH_QUERY,
+                &self.library_graph_hash,
+                json!({ "input": input }),
+            )
+            .await?;
+        Ok(data.library_graph)
     }
 
     async fn submit_discovery_context_snapshot(

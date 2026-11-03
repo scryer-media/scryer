@@ -3,7 +3,10 @@
 pub mod metadata_gateway {
     /// The system clock is outside the metadata gateway's request-signing window.
     pub const CLOCK_SKEW: &str = "METADATA_GATEWAY_CLOCK_SKEW";
-    pub const ALL: &[&str] = &[CLOCK_SKEW];
+    /// The gateway refused the request because every slot for that work is
+    /// busy; it is transient and carries a retry hint when the gateway sends one.
+    pub const QUEUE_FULL: &str = "METADATA_GATEWAY_QUEUE_FULL";
+    pub const ALL: &[&str] = &[CLOCK_SKEW, QUEUE_FULL];
 }
 
 pub mod indexer_clients {
@@ -4703,6 +4706,12 @@ pub mod discovery {
     /// Discovery incremental reload resolves to the selected value changed subjects, above SMG limit the selected value.
     pub const INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT: &str =
         "DISCOVERY_INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT";
+    /// A neighbours anchor is not a discovery target key the server knows.
+    pub const NEIGHBOR_TARGET_KEY_UNSUPPORTED: &str = "DISCOVERY_NEIGHBOR_TARGET_KEY_UNSUPPORTED";
+    /// A neighbours anchor names a movie for a series facet, or a series for
+    /// the movie facet.
+    pub const NEIGHBOR_TARGET_KEY_FACET_MISMATCH: &str =
+        "DISCOVERY_NEIGHBOR_TARGET_KEY_FACET_MISMATCH";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         PENDING_DISCOVERY_REMOVAL_MISSING_SUBJECT_KEY,
@@ -4714,6 +4723,26 @@ pub mod discovery {
         CONTEXT_CHANGE_TYPE_UNSUPPORTED,
         HOME_HERO_NOT_FOUND,
         INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT,
+        NEIGHBOR_TARGET_KEY_UNSUPPORTED,
+        NEIGHBOR_TARGET_KEY_FACET_MISMATCH,
+    ];
+}
+
+pub mod library_graph {
+    /// The gateway was at capacity for library graphs; the next sync retries.
+    pub const GATEWAY_QUEUE_FULL: &str = "LIBRARY_GRAPH_GATEWAY_QUEUE_FULL";
+    /// The gateway was temporarily unreachable or unavailable.
+    pub const GATEWAY_UNAVAILABLE: &str = "LIBRARY_GRAPH_GATEWAY_UNAVAILABLE";
+    /// The gateway answered the library graph request with an error.
+    pub const GATEWAY_FAILED: &str = "LIBRARY_GRAPH_GATEWAY_FAILED";
+    /// The graph came back but could not be stored.
+    pub const STORE_FAILED: &str = "LIBRARY_GRAPH_STORE_FAILED";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        GATEWAY_QUEUE_FULL,
+        GATEWAY_UNAVAILABLE,
+        GATEWAY_FAILED,
+        STORE_FAILED,
     ];
 }
 
@@ -5984,6 +6013,7 @@ mod tests {
             ("MEDIA_SERVER_", media_servers::ALL),
             ("INTEGRATION_", integration::ALL),
             ("DISCOVERY_", discovery::ALL),
+            ("LIBRARY_GRAPH_", library_graph::ALL),
             ("APPLICATION_UPGRADE_", application_upgrade::ALL),
             ("SUBTITLES_", subtitles::ALL),
             ("JOB_", jobs::ALL),
