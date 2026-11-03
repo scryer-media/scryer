@@ -1,8 +1,16 @@
 // Where the graph view gets its library graph. The view depends only on
-// LibraryGraphSource; today the fixture source is the only implementation.
+// LibraryGraphSource: the server source in the app, the fixture in tests.
+
+import type { Client } from "@urql/core";
 
 import type { Facet } from "../types/titles.ts";
-import type { LibraryGraphResult } from "../types/library-graph.ts";
+import type {
+  LibraryGraphCluster,
+  LibraryGraphEdge,
+  LibraryGraphNode,
+  LibraryGraphResult,
+} from "../types/library-graph.ts";
+import { libraryGraphQuery } from "../graphql/queries.ts";
 import { libraryGraphFixture } from "./library-graph-fixture.ts";
 
 export type LibraryGraphRequest = {
@@ -12,17 +20,18 @@ export type LibraryGraphRequest = {
 };
 
 export interface LibraryGraphSource {
-  load(request: LibraryGraphRequest): Promise<LibraryGraphResult>;
+  /** The stored graph, or null when none has been built yet. */
+  load(request: LibraryGraphRequest): Promise<LibraryGraphResult | null>;
 }
 
 /**
  * A source that answers every request with the synthetic fixture. Target keys
  * passed in name the first fixture nodes, so the fixture can be drawn over a
- * real catalog.
+ * catalog.
  */
 export function createFixtureLibraryGraphSource(
   targetKeys?: readonly string[],
-): LibraryGraphSource {
+): { load(request: LibraryGraphRequest): Promise<LibraryGraphResult> } {
   return {
     load: (request) =>
       Promise.resolve(
@@ -31,12 +40,86 @@ export function createFixtureLibraryGraphSource(
   };
 }
 
-// The server query that will feed the graph view is not available yet. When
-// it is, it gets its own LibraryGraphSource implementation here, mapping its
-// payload onto LibraryGraphResult, and this factory returns it in place of the
-// fixture. Nothing else in the view changes.
-export function libraryGraphSourceForCatalog(
-  catalogTargetKeys: readonly string[],
+type LibraryGraphPayload = {
+  generatedAt: string;
+  nodes: LibraryGraphNode[];
+  edges: LibraryGraphEdge[];
+  clusters: Array<
+    Omit<LibraryGraphCluster, "labelKey"> & { labelKey?: string | null }
+  >;
+  subjectCount: number;
+  truncated: boolean;
+};
+
+type LibraryGraphQueryData = { libraryGraph?: LibraryGraphPayload | null };
+
+type LibraryGraphQueryVariables = {
+  input: { facet: Facet; libraryIds?: string[] };
+};
+
+/** The server's payload as a library graph result. */
+export function libraryGraphResultFromPayload(
+  payload: LibraryGraphPayload,
+): LibraryGraphResult {
+  return {
+    generatedAt: payload.generatedAt,
+    nodes: payload.nodes.map((node) => ({
+      subjectKey: node.subjectKey,
+      targetKey: node.targetKey,
+      clusterId: node.clusterId,
+    })),
+    edges: payload.edges.map((edge) => ({
+      from: edge.from,
+      to: edge.to,
+      weight: edge.weight,
+      kinds: [...edge.kinds],
+    })),
+    clusters: payload.clusters.map((cluster) => ({
+      id: cluster.id,
+      labelKey: cluster.labelKey?.trim() ? cluster.labelKey : null,
+      label: cluster.label,
+      medoid: cluster.medoid,
+      size: cluster.size,
+    })),
+    subjectCount: payload.subjectCount,
+    truncated: payload.truncated,
+  };
+}
+
+/**
+ * The graph the server built for the facet and libraries. A request error
+ * rejects; a graph that has not been built yet resolves to null.
+ */
+export function createServerLibraryGraphSource(
+  client: Pick<Client, "query">,
 ): LibraryGraphSource {
-  return createFixtureLibraryGraphSource(catalogTargetKeys);
+  return {
+    async load(request) {
+      const libraryIds = [...request.libraryIds];
+      const { data, error } = await client
+        .query<LibraryGraphQueryData, LibraryGraphQueryVariables>(
+          libraryGraphQuery,
+          {
+            input: {
+              facet: request.facet,
+              ...(libraryIds.length > 0 ? { libraryIds } : {}),
+            },
+          },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      if (error) {
+        throw error;
+      }
+      const payload = data?.libraryGraph;
+      return payload ? libraryGraphResultFromPayload(payload) : null;
+    },
+  };
+}
+
+/** The source the catalog's graph view reads from. */
+export function libraryGraphSourceForCatalog(
+  client: Pick<Client, "query">,
+): LibraryGraphSource {
+  return createServerLibraryGraphSource(client);
 }

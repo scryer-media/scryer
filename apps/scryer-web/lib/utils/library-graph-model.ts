@@ -339,15 +339,20 @@ export function joinLibraryGraphToTitles(
   return { graph, titleBySubjectKey };
 }
 
-/** The graph as drawn: clusters collapsed when the graph is too large. */
+/**
+ * The graph as drawn: clusters collapsed when the graph is too large. Whether
+ * it is too large is read from `owned`, the library's own nodes, so explored
+ * titles shown beside them never tip the view into collapsing.
+ */
 export function displayedLibraryGraph(
   graph: GraphState,
   expandedClusterIds: ReadonlySet<number>,
   threshold: number = LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
+  owned: GraphState = graph,
 ): GraphState {
   return collapseClusters(
     graph,
-    clustersToCollapse(graph, threshold, expandedClusterIds),
+    clustersToCollapse(owned, threshold, expandedClusterIds),
   );
 }
 
@@ -408,6 +413,7 @@ const RELATION_KIND_KEYS: Record<string, string> = {
   sequel: "libraryGraph.edgeKind.sequel",
   prequel: "libraryGraph.edgeKind.prequel",
   co_watch: "libraryGraph.edgeKind.coWatch",
+  recommendation: "libraryGraph.edgeKind.recommendation",
 };
 
 /** One edge kind in the viewer's language. */

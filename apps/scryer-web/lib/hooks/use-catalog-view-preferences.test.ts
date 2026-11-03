@@ -10,9 +10,14 @@ import type { useCatalogViewPreferences } from "./use-catalog-view-preferences.t
 
 type PreferencesHook = typeof useCatalogViewPreferences;
 
-// Runs the real hook against the shipped gate, with React, the profile, the
+// Runs the real hook with the experimental-features switch set per test, with React, the profile, the
 // GraphQL client and browser storage stubbed so every save is observable.
-function harness(settings: Pick<UiSettings, "catalogViews" | "tableColumns">) {
+function harness(
+  settings: Pick<UiSettings, "catalogViews" | "tableColumns">,
+  experimentalFeaturesEnabled = false,
+  // Whether the instance's switches have loaded; a test may flip it.
+  instance = { featuresLoaded: true },
+) {
   const slots: unknown[] = [];
   const effects: (() => void)[] = [];
   let cursor = 0;
@@ -79,6 +84,14 @@ function harness(settings: Pick<UiSettings, "catalogViews" | "tableColumns">) {
     urql: { useClient: () => client },
     sonner: { toast: { error() {} } },
     "@/lib/context/ui-settings-context": { useUiSettings: () => uiSettings },
+    "@/lib/context/instance-features-context": {
+      useInstanceFeatures: () => ({
+        apiExplorerEnabled: false,
+        experimentalFeaturesEnabled,
+        personalizedDiscoveryEnabled: true,
+      }),
+      useInstanceFeaturesLoaded: () => instance.featuresLoaded,
+    },
     "@/lib/graphql/mutations": { setMyCatalogViewMutation: "mutation" },
     "@/lib/hooks/use-mobile": { useIsMobile: () => false },
     "@/lib/utils/catalog-view-preferences": preferences,
@@ -155,11 +168,7 @@ function installStorage(t: test.TestContext, stored: Record<string, string>) {
   return storage;
 }
 
-test("a saved graph view shows posters while the graph is off and is never re-saved", async (t) => {
-  if (preferences.DISCOVERY_GRAPH_VIEW_ENABLED) {
-    t.skip("the graph view is enabled in this build");
-    return;
-  }
+test("a saved graph view shows posters while experimental features are off and is never re-saved", async (t) => {
   const storage = installStorage(t, {});
   const h = harness({
     catalogViews: [
@@ -168,30 +177,102 @@ test("a saved graph view shows posters while the graph is off and is never re-sa
     tableColumns: [],
   });
   for (let index = 0; index < 3; index += 1) {
-    assert.equal(h.render().viewMode, "poster");
+    const rendered = h.render();
+    assert.equal(rendered.viewMode, "poster");
+    assert.equal(rendered.graphEnabled, false);
   }
   await Promise.resolve();
   assert.deepEqual(h.mutations, []);
   assert.deepEqual(h.settingsWrites, []);
-  // The saved choice is left as it was, for a build that shows the graph.
+  // The saved choice is left as it was, for when the switch is turned on.
   assert.equal(storage.size, 0);
 });
 
-test("a graph view stored in this browser also shows posters while the graph is off", async (t) => {
-  if (preferences.DISCOVERY_GRAPH_VIEW_ENABLED) {
-    t.skip("the graph view is enabled in this build");
-    return;
+test("a saved graph view shows the graph while experimental features are on", async (t) => {
+  const storage = installStorage(t, {});
+  const h = harness(
+    {
+      catalogViews: [
+        { deviceClass: "DESKTOP", facet: "SERIES", viewMode: "GRAPH" },
+      ],
+      tableColumns: [],
+    },
+    true,
+  );
+  for (let index = 0; index < 3; index += 1) {
+    const rendered = h.render();
+    assert.equal(rendered.viewMode, "graph");
+    assert.equal(rendered.graphEnabled, true);
   }
-  const storage = installStorage(t, {
-    [`${contentViewMode.CONTENT_VIEW_MODE_STORAGE_KEY}:series`]: "graph",
-  });
-  const h = harness({ catalogViews: [], tableColumns: [] });
-  assert.equal(h.render().viewMode, "poster");
-  assert.equal(h.render().viewMode, "poster");
   await Promise.resolve();
   assert.deepEqual(h.mutations, []);
-  assert.equal(
-    storage.get(`${contentViewMode.CONTENT_VIEW_MODE_STORAGE_KEY}:series`),
-    "graph",
-  );
+  assert.deepEqual(h.settingsWrites, []);
+  assert.equal(storage.size, 0);
+});
+
+for (const enabled of [false, true]) {
+  test(`a graph view stored in this browser shows ${enabled ? "the graph" : "posters"} while experimental features are ${enabled ? "on" : "off"}`, async (t) => {
+    const storage = installStorage(t, {
+      [`${contentViewMode.CONTENT_VIEW_MODE_STORAGE_KEY}:series`]: "graph",
+    });
+    const h = harness({ catalogViews: [], tableColumns: [] }, enabled);
+    const expected = enabled ? "graph" : "poster";
+    assert.equal(h.render().viewMode, expected);
+    assert.equal(h.render().viewMode, expected);
+    await Promise.resolve();
+    assert.deepEqual(h.mutations, []);
+    assert.equal(
+      storage.get(`${contentViewMode.CONTENT_VIEW_MODE_STORAGE_KEY}:series`),
+      "graph",
+    );
+  });
+}
+
+test("a saved graph view shows as loading, not posters, until the switches load", async (t) => {
+  installStorage(t, {});
+  const instance = { featuresLoaded: false };
+  const settings = {
+    catalogViews: [
+      {
+        deviceClass: "DESKTOP" as const,
+        facet: "SERIES" as const,
+        viewMode: "GRAPH" as const,
+      },
+    ],
+    tableColumns: [],
+  };
+  // Before the switches load the defaults say experimental features are off.
+  const on = harness(settings, false, instance);
+  const pending = on.render();
+  assert.equal(pending.viewMode, "graph");
+  assert.equal(pending.viewModePending, true);
+
+  // Loaded and on: the graph, no longer pending.
+  const loadedOn = harness(settings, true, { featuresLoaded: true }).render();
+  assert.equal(loadedOn.viewMode, "graph");
+  assert.equal(loadedOn.viewModePending, false);
+
+  // Loaded and off: posters, and nothing is re-saved.
+  instance.featuresLoaded = true;
+  const loadedOff = on.render();
+  assert.equal(loadedOff.viewMode, "poster");
+  assert.equal(loadedOff.viewModePending, false);
+  await Promise.resolve();
+  assert.deepEqual(on.mutations, []);
+});
+
+test("a non-graph choice never waits on the switches", (t) => {
+  installStorage(t, {});
+  const rendered = harness(
+    {
+      catalogViews: [
+        { deviceClass: "DESKTOP", facet: "SERIES", viewMode: "COMPACT" },
+      ],
+      tableColumns: [],
+    },
+    false,
+    { featuresLoaded: false },
+  ).render();
+  assert.equal(rendered.viewMode, "compact");
+  assert.equal(rendered.viewModePending, false);
 });

@@ -2067,7 +2067,11 @@ export function MediaContentView({
     isDeletingCatalogTitleById: Record<string, boolean>;
     isMobile: boolean;
     viewMode: ContentViewMode;
+    /** Whether the view mode waits on the instance's switches; the list shows as loading. */
+    viewModePending: boolean;
     setViewMode: (value: ContentViewMode) => void;
+    /** Whether the view-mode selector offers the graph. */
+    graphViewEnabled: boolean;
     selectedTitleIds: ReadonlySet<string>;
     toggleTitleSelection: (titleId: string) => void;
     toggleAllVisibleTitles: (checked: boolean) => void;
@@ -2270,7 +2274,9 @@ export function MediaContentView({
     deleteCatalogTitle,
     isDeletingCatalogTitleById,
     viewMode,
+    viewModePending,
     setViewMode,
+    graphViewEnabled,
     selectedTitleIds,
     toggleTitleSelection,
     toggleAllVisibleTitles,
@@ -3295,7 +3301,9 @@ export function MediaContentView({
         variant="outline"
         value={effectiveViewMode}
         onValueChange={(v) => {
-          const next = catalogViewModeOptions().find((mode) => mode === v);
+          const next = catalogViewModeOptions(graphViewEnabled).find(
+            (mode) => mode === v,
+          );
           if (next) {
             setViewMode(next);
           }
@@ -3334,7 +3342,7 @@ export function MediaContentView({
         >
           <LayoutGrid className="h-[1.125rem] w-[1.125rem]" />
         </ToggleGroupItem>
-        {catalogViewModeOptions().includes("graph") ? (
+        {catalogViewModeOptions(graphViewEnabled).includes("graph") ? (
           <ToggleGroupItem
             id={titleOverviewViewModeId(view, "graph")}
             value="graph"
@@ -3800,7 +3808,8 @@ export function MediaContentView({
 
                 if (
                   catalogSurfacePhase === "resolving" ||
-                  overviewTitleResolutionPending
+                  overviewTitleResolutionPending ||
+                  viewModePending
                 ) {
                   titleCollectionView = (
                     <div
@@ -3899,6 +3908,7 @@ export function MediaContentView({
                         selectedTitleId={contextPanelSelectedTitleId}
                         contextPanelId={selectedTitleContextPanelId}
                         onSelectTitle={onSelectTitleForContextPanel}
+                        onCatalogChanged={refreshTitles}
                       />
                     </React.Suspense>
                   );

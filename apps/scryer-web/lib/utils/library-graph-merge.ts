@@ -303,9 +303,12 @@ export function collapseClusters(
     }
     const key = clusterNodeKey(node.clusterId);
     redirect.set(node.subjectKey, key);
+    // A collapsed cluster counts the library's titles only; explored ones
+    // folded into it are not members.
+    const member = node.ghost ? 0 : 1;
     const existing = collapsed.get(node.clusterId);
     if (existing) {
-      existing.memberCount = (existing.memberCount ?? 0) + 1;
+      existing.memberCount = (existing.memberCount ?? 0) + member;
       continue;
     }
     const cluster = clusterById.get(node.clusterId);
@@ -315,7 +318,7 @@ export function collapseClusters(
       clusterId: node.clusterId,
       ghost: false,
       collapsedClusterId: node.clusterId,
-      memberCount: 1,
+      memberCount: member,
     };
     if (cluster) {
       stand.targetKey =

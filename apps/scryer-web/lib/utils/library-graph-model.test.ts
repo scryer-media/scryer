@@ -11,7 +11,10 @@ import {
   fixtureTargetKey,
   libraryGraphFixture,
 } from "./library-graph-fixture.ts";
-import { clusterNodeKey } from "./library-graph-merge.ts";
+import {
+  clusterNodeKey,
+  mergeLibraryGraphResult,
+} from "./library-graph-merge.ts";
 import {
   LIBRARY_GRAPH_MAX_NODE_SIZE,
   LIBRARY_GRAPH_MIN_NODE_SIZE,
@@ -214,6 +217,48 @@ test("above the threshold every cluster collapses until it is expanded", () => {
   );
 });
 
+test("explored ghosts neither tip the graph into collapsing nor count as cluster members", () => {
+  const { graph: owned } = joinLibraryGraphToTitles(
+    libraryGraphFixture({ facet: "MOVIE" }),
+    catalog(64),
+  );
+  const anchor = owned.nodes.find((node) => node.clusterId === 1);
+  assert.ok(anchor);
+  const explored = mergeLibraryGraphResult(owned, {
+    generatedAt: "2026-01-01T00:00:00Z",
+    nodes: [0, 1, 2, 3].map((index) => ({
+      subjectKey: `ghost:tmdb:movie:${9000 + index}`,
+      targetKey: `tmdb:movie:${9000 + index}`,
+      clusterId: UNPLACED_CLUSTER_ID,
+    })),
+    edges: [0, 1, 2, 3].map((index) => ({
+      from: anchor.subjectKey,
+      to: `ghost:tmdb:movie:${9000 + index}`,
+      weight: 0.5,
+      kinds: ["relation:recommendation"],
+    })),
+    clusters: [],
+  });
+  assert.equal(explored.nodes.length, 68);
+
+  // The library alone sits at the threshold, so nothing collapses even though
+  // the explored graph is over it.
+  const open = displayedLibraryGraph(explored, new Set(), 64, owned);
+  assert.equal(open.nodes.length, 68);
+  assert.ok(open.nodes.every((node) => node.collapsedClusterId === undefined));
+
+  // Over the threshold, the anchor's collapsed cluster counts only owned
+  // titles; the ghosts folded into it are not members.
+  const collapsed = displayedLibraryGraph(explored, new Set(), 60, owned);
+  const stand = collapsed.nodes.find(
+    (node) => node.subjectKey === clusterNodeKey(1),
+  );
+  assert.equal(
+    stand?.memberCount,
+    owned.nodes.filter((node) => node.clusterId === 1).length,
+  );
+});
+
 test("node sizes scale the chosen metric between the size bounds", () => {
   const titles = [
     fixtureTitle(1, {
@@ -301,6 +346,15 @@ test("edge kinds read as localized phrases", () => {
     "Often watched together",
   );
   assert.equal(libraryGraphEdgeKindLabel("relation:remake", t), "Related");
+  // Explored links: a plain recommendation, and a subtype under its type.
+  assert.equal(
+    libraryGraphEdgeKindLabel("relation:recommendation", t),
+    "Recommended",
+  );
+  assert.equal(
+    libraryGraphEdgeKindLabel("relation:sequel:direct", t),
+    "Sequel",
+  );
   assert.equal(
     libraryGraphEdgeKindLabel("affinity:theme:isekai", t),
     "Shared interest: Isekai",
