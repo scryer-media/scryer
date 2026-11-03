@@ -1,6 +1,20 @@
 import type { LocaleDictionary } from "../types";
 
 const cs: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "Uložené vydání se nepodařilo zařadit do fronty. Zůstává dostupné pro další pokus.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Toto vydání je na seznamu blokovaných pro tento titul. Pro zařazení do fronty jej ze seznamu odeberte.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Toto vydání už je ve frontě stahování.",
+  "error.reason.STANDBY_TITLE_BUSY": "Pro tento titul právě probíhá jiné hledání nebo zařazení do fronty. Zkuste to znovu, až skončí.",
+  "wanted.downloadStandby": "Stáhnout",
+  "wanted.downloadStandbyLabel": "Stáhnout {{name}}",
+  "wanted.standbyConflictTitle": "Stahování již probíhá",
+  "wanted.standbyConflictDescription": "Zařadit {{name}} do fronty vedle těchto stahování, nebo je zrušit a zařadit místo nich.",
+  "wanted.standbyQueue": "Zařadit do fronty",
+  "wanted.standbyQueuedRefreshFailed": "Vydání bylo zařazeno do fronty, ale seznam se nepodařilo obnovit. Obnovte stránku, abyste viděli aktuální stav.",
+  "wanted.standbyCancelAndQueue": "Zrušit a zařadit do fronty",
+  "wanted.standbyQueuedCancelFailed": "Vydání bylo zařazeno do fronty, ale {{count}} konfliktních stahování se nepodařilo zrušit a stále běží.",
   "settings.oauthJellyfinCallbackCopied":
     "URL zpětného volání Jellyfin zkopírována.",
   "settings.oauthClientIdCopied": "ID klienta OAuth zkopírováno.",

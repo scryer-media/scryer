@@ -1,6 +1,20 @@
 import type { LocaleDictionary } from "../types";
 
 const nl: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Deze opgeslagen kandidaat bestaat niet meer.",
+  "error.reason.STANDBY_NOT_AVAILABLE": "Deze opgeslagen kandidaat is niet meer beschikbaar. Vernieuw de lijst en probeer het opnieuw.",
+  "error.reason.STANDBY_NOT_QUEUEABLE": "De opgeslagen release kon niet in de wachtrij worden gezet. Hij blijft beschikbaar om opnieuw te proberen.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED": "Deze release staat op de blokkeerlijst van de titel. Verwijder hem van de blokkeerlijst om hem in de wachtrij te zetten.",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "Deze release staat al in de downloadwachtrij.",
+  "error.reason.STANDBY_TITLE_BUSY": "Er loopt al een andere zoekopdracht of wachtrijactie voor deze titel. Probeer het opnieuw zodra die klaar is.",
+  "wanted.downloadStandby": "Downloaden",
+  "wanted.downloadStandbyLabel": "{{name}} downloaden",
+  "wanted.standbyConflictTitle": "Downloads al bezig",
+  "wanted.standbyConflictDescription": "Zet {{name}} naast deze downloads in de wachtrij, of annuleer ze en zet deze in plaats daarvan in de wachtrij.",
+  "wanted.standbyQueue": "In wachtrij",
+  "wanted.standbyQueuedRefreshFailed": "De release is in de wachtrij gezet, maar de lijst kon niet worden vernieuwd. Vernieuw de pagina om de huidige status te zien.",
+  "wanted.standbyCancelAndQueue": "Annuleren en in wachtrij",
+  "wanted.standbyQueuedCancelFailed": "De release is in de wachtrij gezet, maar {{count}} conflicterende download(s) konden niet worden geannuleerd en lopen nog.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin-callback-URL gekopieerd.",
   "settings.oauthClientIdCopied": "OAuth-client-ID gekopieerd.",
   "status.copyFailedSelected":
