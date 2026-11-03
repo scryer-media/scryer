@@ -238,7 +238,9 @@ struct DiscoverySubjectParts {
 mod catalog;
 mod context;
 mod home;
+mod library_graph;
 mod medium;
+mod neighbors;
 mod rail_labels;
 mod records;
 mod section;
@@ -262,11 +264,35 @@ pub(crate) use context::{
     incremental_item_records, pending_context_change_from_domain_event, public_feed_item_records,
     public_feed_section_records, snapshot_item_records,
 };
+#[cfg(test)]
+pub(crate) use library_graph::{
+    LIBRARY_GRAPH_AXIS, LIBRARY_GRAPH_MIN_COSINE, LIBRARY_GRAPH_NEIGHBORS_PER_NODE,
+    LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS,
+};
+pub use library_graph::{
+    LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
+};
+pub(crate) use library_graph::{LibraryGraphRebuildSummary, library_graph_facets_for_changes};
+pub use neighbors::{DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery};
 pub(crate) use records::{
     pending_context_changes_need_snapshot_reconciliation,
     pending_context_changes_resolved_key_count, snapshot_facet_records,
     title_more_like_this_item_records, title_recommendations_subject,
 };
+
+/// How the viewer's library holds one discovery item.
+pub(super) struct DiscoveryItemOwnership {
+    /// A title in a library the viewer can read that stands for the item.
+    pub(super) readable_title_id: Option<String>,
+    /// A readable series holds the item as one of its linked movies.
+    pub(super) owned_by_series_movie: bool,
+}
+
+impl DiscoveryItemOwnership {
+    pub(super) fn is_owned(&self) -> bool {
+        self.readable_title_id.is_some() || self.owned_by_series_movie
+    }
+}
 
 impl AppUseCase {
     pub async fn title_more_like_this(
@@ -303,7 +329,6 @@ impl AppUseCase {
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
-        let readable_library_id_list = sorted_discovery_library_ids(&readable_library_ids);
         let candidate_limit = requested_limit.saturating_mul(4).clamp(24, 100) as i64;
         let mut items = self
             .services
@@ -311,13 +336,42 @@ impl AppUseCase {
             .discovery
             .list_title_more_like_this_items(title_id, candidate_limit)
             .await?;
-        let mut item_lookup_indexes = vec![Vec::<usize>::new(); items.len()];
-        let mut lookups = Vec::new();
-        let mut series_movie_lookups = Vec::new();
         for item in &mut items {
             item.resolved_title_id = None;
             item.owned_in_input = false;
         }
+        let ownership = self
+            .discovery_items_readable_ownership(&items, &readable_library_ids)
+            .await?;
+        let mut filtered_items = Vec::with_capacity(requested_limit.min(items.len()));
+        for (mut item, owned) in items.into_iter().zip(ownership) {
+            if owned.is_owned() {
+                continue;
+            }
+
+            item.resolved = false;
+            item.resolved_title_id = None;
+            item.owned_in_input = false;
+            filtered_items.push(item);
+            if filtered_items.len() >= requested_limit {
+                break;
+            }
+        }
+        Ok(filtered_items)
+    }
+
+    /// Which title in a library the viewer can read stands for each item, if
+    /// any, matched on the item's target key the way the library stores
+    /// external ids. One entry per item, in order.
+    pub(super) async fn discovery_items_readable_ownership(
+        &self,
+        items: &[DiscoveryItemRecord],
+        readable_library_ids: &HashSet<String>,
+    ) -> AppResult<Vec<DiscoveryItemOwnership>> {
+        let readable_library_id_list = sorted_discovery_library_ids(readable_library_ids);
+        let mut item_lookup_indexes = vec![Vec::<usize>::new(); items.len()];
+        let mut lookups = Vec::new();
+        let mut series_movie_lookups = Vec::new();
         for (item_index, item) in items.iter().enumerate() {
             let Some((source, kind, value)) = discovery_target_key_parts(&item.target_key) else {
                 continue;
@@ -365,34 +419,26 @@ impl AppUseCase {
             .into_iter()
             .map(|matched| matched.lookup_index)
             .collect::<HashSet<_>>();
-        let mut filtered_items = Vec::with_capacity(requested_limit.min(items.len()));
-        for (mut item, lookup_indexes) in items.into_iter().zip(item_lookup_indexes) {
-            let readable_local_title = lookup_indexes.iter().find_map(|lookup_index| {
-                matches_by_lookup_index
-                    .get(lookup_index)
-                    .and_then(|titles| {
-                        titles.iter().find(|candidate| {
-                            readable_library_ids.contains(candidate.library_id.as_str())
+        Ok(item_lookup_indexes
+            .into_iter()
+            .map(|lookup_indexes| DiscoveryItemOwnership {
+                readable_title_id: lookup_indexes.iter().find_map(|lookup_index| {
+                    matches_by_lookup_index
+                        .get(lookup_index)
+                        .and_then(|titles| {
+                            titles
+                                .iter()
+                                .find(|candidate| {
+                                    readable_library_ids.contains(candidate.library_id.as_str())
+                                })
+                                .map(|title| title.id.clone())
                         })
-                    })
-            });
-            if readable_local_title.is_some()
-                || lookup_indexes
+                }),
+                owned_by_series_movie: lookup_indexes
                     .iter()
-                    .any(|lookup_index| series_movie_owned_lookup_indexes.contains(lookup_index))
-            {
-                continue;
-            }
-
-            item.resolved = false;
-            item.resolved_title_id = None;
-            item.owned_in_input = false;
-            filtered_items.push(item);
-            if filtered_items.len() >= requested_limit {
-                break;
-            }
-        }
-        Ok(filtered_items)
+                    .any(|lookup_index| series_movie_owned_lookup_indexes.contains(lookup_index)),
+            })
+            .collect())
     }
 
     pub async fn discovery_home(
@@ -1000,26 +1046,9 @@ impl AppUseCase {
             });
         }
 
-        let readable_library_ids = self
-            .authorized_library_ids(actor, Some(query.facet.clone()), LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let requested_library_ids = query
-            .library_ids
-            .iter()
-            .map(|library_id| library_id.trim())
-            .filter(|library_id| !library_id.is_empty())
-            .collect::<HashSet<_>>();
-        let effective_library_ids = if requested_library_ids.is_empty() {
-            readable_library_ids.clone()
-        } else {
-            readable_library_ids
-                .iter()
-                .filter(|library_id| requested_library_ids.contains(library_id.as_str()))
-                .cloned()
-                .collect()
-        };
+        let effective_library_ids = self
+            .discovery_effective_library_ids(actor, &query.facet, &query.library_ids)
+            .await?;
         let can_view_personalized =
             !effective_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let effective_library_id_list = sorted_discovery_library_ids(&effective_library_ids);
@@ -1169,6 +1198,34 @@ impl AppUseCase {
             groups,
             can_view_personalized,
         })
+    }
+
+    /// The libraries of `facet` a personalized discovery read covers: every
+    /// library the actor can view, narrowed to `requested_library_ids` when
+    /// any non-blank id is given. An id the actor cannot view is ignored.
+    async fn discovery_effective_library_ids(
+        &self,
+        actor: &User,
+        facet: &MediaFacet,
+        requested_library_ids: &[String],
+    ) -> AppResult<HashSet<String>> {
+        let readable_library_ids = self
+            .authorized_library_ids(actor, Some(facet.clone()), LibraryPermission::View)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let requested_library_ids = requested_library_ids
+            .iter()
+            .map(|library_id| library_id.trim())
+            .filter(|library_id| !library_id.is_empty())
+            .collect::<HashSet<_>>();
+        if requested_library_ids.is_empty() {
+            return Ok(readable_library_ids);
+        }
+        Ok(readable_library_ids
+            .into_iter()
+            .filter(|library_id| requested_library_ids.contains(library_id.as_str()))
+            .collect())
     }
 
     async fn discovery_visibility(&self, actor: &User) -> AppResult<DiscoveryVisibility> {

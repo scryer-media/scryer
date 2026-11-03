@@ -792,7 +792,20 @@ fn seeding_profile_normalizes_and_validates_goals() {
 
     let mut zero_ratio = base.clone();
     zero_ratio.ratio = Some(0.0);
-    assert!(zero_ratio.validate().is_err());
+    zero_ratio.season_pack_mode = SeasonPackSeedMode::Override;
+    zero_ratio.season_pack_ratio = Some(0.0);
+    assert!(zero_ratio.validate().is_ok());
+    assert_eq!(zero_ratio.effective_ratio(false), Some(0.0));
+    assert_eq!(zero_ratio.effective_ratio(true), Some(0.0));
+
+    for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut invalid_ratio = base.clone();
+        invalid_ratio.ratio = Some(invalid);
+        assert!(invalid_ratio.validate().is_err());
+        invalid_ratio.ratio = None;
+        invalid_ratio.season_pack_ratio = Some(invalid);
+        assert!(invalid_ratio.validate().is_err());
+    }
 
     let mut negative_time = base;
     negative_time.seed_time_minutes = Some(-1);

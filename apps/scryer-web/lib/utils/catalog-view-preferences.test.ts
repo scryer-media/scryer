@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { UiSettings, UiTableColumnSetting } from "../types/settings.ts";
 import {
+  catalogViewModePending,
   availableCatalogViewMode,
   catalogColumnsInput,
   catalogDeviceClass,
   catalogFacetForView,
   catalogViewModeOptions,
   catalogViewModeToProfile,
+  graphViewEnabled,
   savedCatalogViewMode,
   savedCatalogVisibleColumns,
 } from "./catalog-view-preferences.ts";
@@ -206,6 +208,11 @@ test("the graph view mode is saved and read back", () => {
   assert.equal(savedCatalogViewMode(settings, "DESKTOP", "ANIME"), "graph");
 });
 
+test("the graph view follows the experimental-features switch", () => {
+  assert.equal(graphViewEnabled({ experimentalFeaturesEnabled: true }), true);
+  assert.equal(graphViewEnabled({ experimentalFeaturesEnabled: false }), false);
+});
+
 test("the graph view is offered only while its gate is on", () => {
   assert.deepEqual(catalogViewModeOptions(false), [
     "compact",
@@ -221,4 +228,12 @@ test("the graph view is offered only while its gate is on", () => {
   assert.equal(availableCatalogViewMode("graph", false), "poster");
   assert.equal(availableCatalogViewMode("graph", true), "graph");
   assert.equal(availableCatalogViewMode("compact", false), "compact");
+});
+
+test("only a graph choice waits for the instance's switches", () => {
+  assert.equal(catalogViewModePending("graph", false), true);
+  assert.equal(catalogViewModePending("graph", true), false);
+  for (const mode of ["compact", "poster-table", "poster"] as const) {
+    assert.equal(catalogViewModePending(mode, false), false);
+  }
 });

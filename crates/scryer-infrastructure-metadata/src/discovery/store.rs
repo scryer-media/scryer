@@ -7,10 +7,11 @@ use scryer_application::{
     DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeFilters,
     DiscoveryHomeSectionCandidatesRecord, DiscoveryItemLibraryProvenanceRecord,
     DiscoveryItemRecord, DiscoveryItemsPageRecord, DiscoveryItemsStorageQuery,
-    DiscoveryPendingContextChangeRecord, DiscoveryPruneReport, DiscoveryPublicFeedCommit,
-    DiscoveryRankComponentRecord, DiscoveryRepository, DiscoverySectionRecord,
-    DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord,
-    DiscoverySyncStateRecord, TitleRatingSummary,
+    DiscoveryNeighborCacheRecord, DiscoveryPendingContextChangeRecord, DiscoveryPruneReport,
+    DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord, DiscoveryRepository,
+    DiscoverySectionRecord, DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord,
+    DiscoverySyncRunRecord, DiscoverySyncStateRecord, LibraryGraphRunRecord,
+    LibraryGraphSnapshotRecord, TitleRatingSummary,
 };
 use scryer_infrastructure_sql::json::{decode_compressed_json, encode_compressed_json};
 use serde_json::Value as JsonValue;
@@ -1300,6 +1301,141 @@ impl DiscoveryRepository for DiscoveryStore {
         )
         .await?;
         rows.iter().map(facet_from_row).collect()
+    }
+
+    async fn record_failed_library_graph_run(&self, run: &LibraryGraphRunRecord) -> AppResult<()> {
+        super::library_graph::record_failed_library_graph_run(&self.datastore, run).await
+    }
+
+    async fn commit_library_graph(&self, snapshot: &LibraryGraphSnapshotRecord) -> AppResult<()> {
+        super::library_graph::commit_library_graph(&self.datastore, snapshot).await
+    }
+
+    async fn get_latest_library_graph(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<LibraryGraphSnapshotRecord>> {
+        super::library_graph::get_latest_library_graph(&self.datastore, facet).await
+    }
+
+    async fn get_latest_library_graph_run(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<LibraryGraphRunRecord>> {
+        super::library_graph::get_latest_library_graph_run(&self.datastore, facet).await
+    }
+
+    async fn has_complete_library_graph(&self, facet: &str) -> AppResult<bool> {
+        super::library_graph::has_complete_library_graph(&self.datastore, facet).await
+    }
+
+    async fn delete_library_graph_runs(&self, facet: &str) -> AppResult<()> {
+        super::library_graph::delete_library_graph_runs(&self.datastore, facet).await
+    }
+
+    async fn get_discovery_neighbor_cache(
+        &self,
+        target_key: &str,
+        language: &str,
+    ) -> AppResult<Option<DiscoveryNeighborCacheRecord>> {
+        let language = normalize_discovery_language(language);
+        let Some(row) = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT payload_version, payload_blob, fetched_at
+               FROM discovery_neighbor_cache
+              WHERE target_key = {} AND language = {}",
+            &[
+                SqlArg::Text(target_key.to_string()),
+                SqlArg::Text(language.clone()),
+            ],
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        // An entry this build cannot read is a miss, not an error: the next
+        // fetch overwrites it.
+        if row.i32("payload_version")? != TITLE_RECOMMENDATION_PAYLOAD_VERSION {
+            return Ok(None);
+        }
+        let Some(payload_blob) = row.opt_bytes("payload_blob")? else {
+            return Ok(None);
+        };
+        let items = match decode_compressed_json::<Vec<DiscoveryItemRecord>>(&payload_blob) {
+            Ok(items) => items,
+            Err(error) => {
+                tracing::warn!(
+                    target_key,
+                    error = %error,
+                    "skipping invalid discovery neighbor cache payload"
+                );
+                return Ok(None);
+            }
+        };
+        Ok(Some(DiscoveryNeighborCacheRecord {
+            target_key: target_key.to_string(),
+            language,
+            items: items
+                .into_iter()
+                .filter(recommendation_item_is_displayable)
+                .collect(),
+            fetched_at: row.timestamp("fetched_at")?,
+        }))
+    }
+
+    async fn replace_discovery_neighbor_cache(
+        &self,
+        record: &DiscoveryNeighborCacheRecord,
+        expire_before: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let language = normalize_discovery_language(&record.language);
+        let mut items = record
+            .items
+            .iter()
+            .take(TITLE_RECOMMENDATION_CARD_LIMIT)
+            .cloned()
+            .collect::<Vec<_>>();
+        enrich_recommendation_items_from_normalized(&self.datastore, &language, &mut items).await?;
+        let payload_blob = encode_compressed_json(&items)?;
+        let target_key = record.target_key.clone();
+        let fetched_at = record.fetched_at;
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "replace_discovery_neighbor_cache",
+            move |tx| {
+                let target_key = target_key.clone();
+                let language = language.clone();
+                let payload_blob = payload_blob.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM discovery_neighbor_cache WHERE fetched_at < {}",
+                        &[SqlArg::Timestamp(expire_before)],
+                    )
+                    .await?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "INSERT INTO discovery_neighbor_cache
+                            (target_key, language, payload_version, payload_blob, fetched_at)
+                         VALUES ({}, {}, {}, {}, {})
+                         ON CONFLICT(target_key, language) DO UPDATE SET
+                            payload_version = excluded.payload_version,
+                            payload_blob = excluded.payload_blob,
+                            fetched_at = excluded.fetched_at",
+                        &[
+                            SqlArg::Text(target_key),
+                            SqlArg::Text(language),
+                            SqlArg::I32(TITLE_RECOMMENDATION_PAYLOAD_VERSION),
+                            SqlArg::OptBytes(Some(payload_blob)),
+                            SqlArg::Timestamp(fetched_at),
+                        ],
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
 
     async fn prune_discovery_history(
@@ -8567,6 +8703,100 @@ mod tests {
             0
         );
 
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_round_trips_and_expires_discovery_neighbor_cache() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_neighbor_cache_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let fetched_at = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 2, 0, 0, 0).unwrap();
+        let items = (0..30)
+            .map(|index| {
+                let mut item = discovery_prune_item("neighbors", fetched_at);
+                item.id = format!("neighbor-{index}");
+                item.target_key = format!("tmdb:movie:{}", 30_000 + index);
+                item.display_title = format!("Synthetic Neighbor {index}");
+                item.sort_title = Some(item.display_title.clone());
+                // Every other neighbour has no poster, so the read screens it out.
+                item.poster_url =
+                    (index % 2 == 0).then(|| format!("https://images.test/{index}.jpg"));
+                item.sort_index = index;
+                item
+            })
+            .collect::<Vec<_>>();
+        let record = DiscoveryNeighborCacheRecord {
+            target_key: "tmdb:movie:100".to_string(),
+            language: "eng".to_string(),
+            items,
+            fetched_at,
+        };
+        store
+            .replace_discovery_neighbor_cache(&record, fetched_at - chrono::Duration::hours(24))
+            .await
+            .expect("neighbor cache should store");
+
+        let cached = store
+            .get_discovery_neighbor_cache("tmdb:movie:100", "eng")
+            .await
+            .expect("neighbor cache should read")
+            .expect("neighbor cache entry should exist");
+        assert_eq!(cached.fetched_at, fetched_at);
+        // Bounded to the card limit, then screened for displayable cards.
+        assert_eq!(
+            cached
+                .items
+                .iter()
+                .map(|item| item.target_key.as_str())
+                .collect::<Vec<_>>(),
+            (0..TITLE_RECOMMENDATION_CARD_LIMIT)
+                .filter(|index| index % 2 == 0)
+                .map(|index| format!("tmdb:movie:{}", 30_000 + index))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            store
+                .get_discovery_neighbor_cache("tmdb:movie:100", "deu")
+                .await
+                .expect("other language should read")
+                .is_none()
+        );
+
+        // A later write for another anchor drops entries older than its cutoff
+        // and leaves the fresh one alone.
+        let later = fetched_at + chrono::Duration::hours(30);
+        store
+            .replace_discovery_neighbor_cache(
+                &DiscoveryNeighborCacheRecord {
+                    target_key: "tmdb:movie:200".to_string(),
+                    language: "eng".to_string(),
+                    items: Vec::new(),
+                    fetched_at: later,
+                },
+                later - chrono::Duration::hours(24),
+            )
+            .await
+            .expect("second neighbor cache entry should store");
+        assert!(
+            store
+                .get_discovery_neighbor_cache("tmdb:movie:100", "eng")
+                .await
+                .expect("expired entry should read")
+                .is_none()
+        );
+        assert!(
+            store
+                .get_discovery_neighbor_cache("tmdb:movie:200", "eng")
+                .await
+                .expect("fresh entry should read")
+                .is_some()
+        );
         let _ = std::fs::remove_file(db);
     }
 

@@ -352,6 +352,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seeding_profile_zero_ratios_are_persisted_separately_from_unset() {
+        let store = store().await;
+        let mut zero = profile("zero", "Zero goals");
+        zero.ratio = Some(0.0);
+        zero.season_pack_mode = SeasonPackSeedMode::Override;
+        zero.season_pack_ratio = Some(0.0);
+        store.create(zero).await.expect("zero goals insert");
+        let mut loaded = store.get_by_id("zero").await.unwrap().unwrap();
+        assert_eq!(loaded.ratio, Some(0.0));
+        assert_eq!(loaded.season_pack_ratio, Some(0.0));
+        loaded.ratio = None;
+        loaded.season_pack_ratio = None;
+        store.update(loaded).await.expect("zero goals clear");
+        let loaded = store.get_by_id("zero").await.unwrap().unwrap();
+        assert_eq!(loaded.ratio, None);
+        assert_eq!(loaded.season_pack_ratio, None);
+    }
+
+    #[tokio::test]
     async fn seeding_profile_names_are_unique_case_insensitively() {
         let store = store().await;
         store

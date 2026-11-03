@@ -1,6 +1,42 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_CN: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "此已保存的候选版本已不存在。",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "此已保存的候选版本已不可用。请刷新列表后重试。",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "已保存的版本无法加入队列。仍可稍后重试。",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "此版本在该标题的屏蔽列表中。请先从屏蔽列表移除再加入队列。",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "此版本已在下载队列中。",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "该标题正在进行另一项搜索或队列操作。请等其完成后重试。",
+  "wanted.standby": "候选 · {{count}}",
+  "wanted.standbyTooltip":
+    "如果当前抓取失败，将依次尝试 {{count}} 个已保存的候选版本。",
+  "wanted.standbyScopeNote":
+    "统计归属于此范围的行；季度合集计入该季的基准剧集。",
+  "wanted.loadingStandby": "正在加载已保存的候选版本…",
+  "wanted.standbyCandidates": "候选版本 · {{count}}",
+  "wanted.downloadStandby": "下载",
+  "wanted.downloadStandbyLabel": "下载 {{name}}",
+  "wanted.standbyConflictTitle": "已有下载正在进行",
+  "wanted.standbyConflictDescription":
+    "将 {{name}} 与这些下载一同加入队列，或取消它们并改为加入此版本。",
+  "wanted.standbyQueue": "加入队列",
+  "wanted.standbyQueuedRefreshFailed":
+    "该版本已加入队列，但列表无法刷新。请刷新页面以查看当前状态。",
+  "wanted.standbyCancelAndQueue": "取消并加入队列",
+  "wanted.standbyQueuedCancelFailed":
+    "该版本已加入队列，但有 {{count}} 个冲突下载无法取消，仍在运行。",
+  "wanted.standbyRank": "排名 {{rank}}",
+  "wanted.standbyIndexer": "索引器",
+  "wanted.standbySize": "大小",
+  "wanted.standbySeeders": "做种数",
+  "wanted.standbyScore": "评分",
+  "wanted.standbyAge": "发布时间",
+  "wanted.seasonPack": "季度合集",
+  "wanted.noStandbyCandidates": "无候选版本",
   "settings.oauthJellyfinCallbackCopied": "已复制 Jellyfin 回调 URL。",
   "settings.oauthClientIdCopied": "已复制 OAuth 客户端 ID。",
   "status.copyFailedSelected": "无法复制。文本已选中，请按 Ctrl+C 或 ⌘C。",
@@ -1076,6 +1112,26 @@ const zh_CN: LocaleDictionary = {
   "libraryGraph.edgeKind.affinity": "共同兴趣：{{label}}",
   "libraryGraph.edgeKind.sharedTaste": "共同兴趣",
   "libraryGraph.edgeKind.other": "已关联",
+  "libraryGraph.edgeKind.recommendation": "推荐",
+  "libraryGraph.notBuilt": "媒体库图谱尚未生成。",
+  "libraryGraph.truncated": "此图谱仅涵盖部分媒体库。",
+  "discovery.refusal.neighborTargetKeyUnsupported": "无法进一步探索此作品。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "此作品与该媒体库的媒体类型不符，无法在此探索。",
+  "libraryGraph.moreLikeThisEmpty": "暂无类似作品。",
+  "libraryGraph.backToOverview": "返回概览",
+  "libraryGraph.findingMoreLikeThis": "正在查找相似作品…",
+  "libraryGraph.reason.recommendedBy": "{{sources}} 推荐",
+  "libraryGraph.reason.shares": "共同点：{{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "推荐分组",
+  "libraryGraph.notInLibrary": "不在你的媒体库中",
+  "libraryGraph.inLibrary": "在你的媒体库中",
+  "libraryGraph.openTitle": "打开作品",
+  "libraryGraph.exploredGroup": "已探索",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}，不在你的媒体库中",
+  "libraryGraph.trailLabel": "已探索",
+  "libraryGraph.canvasLabel":
+    "媒体库图谱。使用方向键在同一聚类的作品间移动，按 Enter 打开。",
   "title.seasonMonitored": "季度监控中",
   "title.episodeMonitored": "集监控中",
   "title.seriesMovieMonitored": "系列电影监控中",
@@ -3394,6 +3450,33 @@ const zh_CN: LocaleDictionary = {
   "settings.refMaintFactsWatchedByAnyoneValue": "当已启用媒体服务器上的任何账户播放过它时为 true,无论该账户是否关联到 Scryer 用户;对于季和剧集,任何已播出的单集都算。在过去 48 小时内的同步读取每个已启用连接上的所有账户之前,以原因 audience_not_read 视为未知;观看事实未知时,以常规原因视为未知。",
   "settings.refMaintFactsLastWatchedByAnyoneAtValue": "任何账户最近一次播放的 RFC3339 时间戳;无人播放时以原因 never_watched 缺失,播放没有记录时间时以原因 play_time_missing(季和剧集为 episode_play_time_missing)未知,尚未读取所有账户时以 audience_not_read 未知",
   "settings.maintenancePreviewFacts": "规则读取的事实",
+  "setup.sourceImportProgress": "正在导入来源",
+  "setup.sourceImportInvalidRequest":
+    "所选来源不可用。请刷新来源发现后重新选择。",
+  "setup.sourceImportSelectionChanged":
+    "已提交的来源选择无法更改。请在摘要中重试失败的来源。",
+  "setup.sourceImportNotOwned": "此来源导入对你的账户不可用。",
+  "setup.sourceImportQueueFull": "来源导入容量已满。请在其他导入完成后重试。",
+  "setup.sourceImportActive": "此来源导入仍在进行中。",
+  "setup.sourceImportNotRetryable": "只有失败或中断的来源才能重试或跳过。",
+  "setup.sourceImportUnresolved": "完成设置前，请重试或明确跳过未解决的来源。",
+  "setup.sourceImportCredentialRequired": "继续之前请输入来源凭据。",
+  "setup.sourceImportConfigConflict": "预留的配置已更改。重试前请检查该来源。",
+  "setup.sourceImportSourceNotReady": "继续之前请等待来源发现完成。",
+  "setup.sourceImportResume": "重新连接进度",
+  "setup.sourceImportLoading": "正在加载来源导入进度",
+  "setup.sourceImportCredential": "{{name}} 的更正凭据",
+  "setup.sourceImportRetry": "重试失败的来源",
+  "setup.sourceImportSkip": "跳过此来源",
+  "setup.sourceImportItemFailed": "请检查连接和凭据，然后重试或跳过。",
+  "setup.sourceImportState.queued": "排队中",
+  "setup.sourceImportState.installing": "正在安装提供程序",
+  "setup.sourceImportState.checking": "正在检查连接",
+  "setup.sourceImportState.saving": "正在保存配置",
+  "setup.sourceImportState.succeeded": "已导入",
+  "setup.sourceImportState.failed": "失败",
+  "setup.sourceImportState.interrupted": "已中断",
+  "setup.sourceImportState.skipped": "已跳过",
 };
 
 export default zh_CN;

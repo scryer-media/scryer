@@ -3266,6 +3266,17 @@ const en: LocaleDictionary = {
     "The requested value version is not valid semantic version.",
   "error.reason.RULE_VOTES_CANNOT_NEGATIVE": "Votes cannot be negative.",
   "error.reason.SCRIPTS_SCHEDULE_INVALID": "The script schedule is invalid.",
+  "error.reason.STANDBY_NOT_FOUND": "This saved candidate no longer exists.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "This saved candidate is no longer available. Refresh the list and try again.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "The saved release could not be queued. It remains available to retry.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "This release is on the title's blocklist. Remove it from the blocklist to queue it.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "This release is already in the download queue.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Another search or queue action on this title is running. Try again when it finishes.",
   "error.reason.SECURITY_ACCOUNT_NO_PASSWORD_SET":
     "Account has no password set.",
   "error.reason.SECURITY_ACTOR_CAPABILITY_CLAIM_UNKNOWN":
@@ -5493,7 +5504,14 @@ const en: LocaleDictionary = {
     "Leave empty to use the client's own limit",
   "settings.seedingProfileRatioLabel": "Ratio",
   "settings.seedingProfileRatioHelp":
-    "Stop seeding once this share ratio is reached. Empty defers to the download client's own limit.",
+    "Stop seeding once this share ratio is reached. Enter 0.00 for no seeding obligation; honored tracker minimums can raise it. Empty defers to the download client's own limit.",
+  "settings.seedingProfileNameRequired": "Enter a name for this profile.",
+  "settings.seedingProfileRatioInvalid":
+    "Enter a number of zero or more, or leave empty.",
+  "settings.seedingProfileDurationInvalid":
+    "Enter a duration like 90m, 36h, 1d 12h or 2w, or leave empty.",
+  "settings.seedingProfileMinimumSeedersInvalid":
+    "Enter a whole number of 0 or more, or leave empty.",
   "settings.seedingProfileSeedTimeFormatHint":
     "Duration such as 90m, 36h, 1d 12h or 2w. A plain number is minutes.",
   "settings.seedingProfileSeedTimeLabel": "Seed time",
@@ -5533,7 +5551,7 @@ const en: LocaleDictionary = {
   "settings.seedingProfileSeasonPackRatioLabel": "Season pack ratio",
   "settings.seedingProfileSeasonPackSeedTimeLabel": "Season pack seed time",
   "settings.seedingProfileSeasonPackGoalsHelp":
-    "Only used in override mode. An empty field defers that goal to the download client.",
+    "Only used in override mode. A ratio of 0.00 has no seeding obligation; honored tracker minimums can raise it. An empty field defers that goal to the download client.",
   "settings.seedingProfileHonorTrackerMinimumsLabel": "Honor tracker minimums",
   "settings.seedingProfileHonorTrackerMinimumsHelp":
     "Raise the resolved goals to the minimum ratio and seed time a release declares, so private trackers do not record a hit and run.",
@@ -5616,18 +5634,26 @@ const en: LocaleDictionary = {
   "settings.watchHistoryIncomplete": "Last read incomplete",
   "settings.watchHistoryIncompleteHelp":
     "Lifecycle rules treat watch history as unknown until every enabled media server is read in full. Reason: {{reason}}",
-  "settings.watchHistorySignalCount": "{{count}} watched items from {{accounts}} linked accounts",
+  "settings.watchHistorySignalCount":
+    "{{count}} watched items from {{accounts}} linked accounts",
   "settings.watchHistoryDisabled": "Not read while disabled",
   "settings.watchHistoryStale": "Out of date",
   "settings.watchHistoryStaleHelp":
     "Lifecycle rules treat watch history as unknown until every enabled media server has been read in full recently.",
-  "settings.watchSyncReason.credentialMissing": "No API key is saved for this connection.",
-  "settings.watchSyncReason.providerUnsupported": "This media server type does not support reading watch history.",
-  "settings.watchSyncReason.baseUrlInvalid": "The connection's base URL is not a usable address.",
-  "settings.watchSyncReason.plexServerNotSelected": "No Plex server is selected for this connection.",
-  "settings.watchSyncReason.plexServerUnreachable": "The selected Plex server is not listed on the account, or lists no address to reach it at.",
-  "settings.watchSyncReason.plexAccountIdInvalid": "A linked Plex account has an id the server cannot look up.",
-  "settings.watchSyncReason.participantIdMissing": "A linked account has no media server user id.",
+  "settings.watchSyncReason.credentialMissing":
+    "No API key is saved for this connection.",
+  "settings.watchSyncReason.providerUnsupported":
+    "This media server type does not support reading watch history.",
+  "settings.watchSyncReason.baseUrlInvalid":
+    "The connection's base URL is not a usable address.",
+  "settings.watchSyncReason.plexServerNotSelected":
+    "No Plex server is selected for this connection.",
+  "settings.watchSyncReason.plexServerUnreachable":
+    "The selected Plex server is not listed on the account, or lists no address to reach it at.",
+  "settings.watchSyncReason.plexAccountIdInvalid":
+    "A linked Plex account has an id the server cannot look up.",
+  "settings.watchSyncReason.participantIdMissing":
+    "A linked account has no media server user id.",
   "settings.watchSyncReason.accessDenied": "The media server refused access.",
   "settings.watchSyncReason.requestRejected": "The media server refused the request.",
   "settings.watchSyncReason.requestFailed": "The media server could not be reached.",
@@ -6000,14 +6026,18 @@ const en: LocaleDictionary = {
   "discovery.rail.becauseYouLike.horror": "Because you like horror",
   "discovery.rail.becauseYouLike.mystery": "Because you like mysteries",
   "discovery.rail.becauseYouLike.romance": "Because you like romance",
-  "discovery.rail.becauseYouLike.science-fiction": "Because you like science fiction",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Because you like science fiction",
   "discovery.rail.becauseYouLike.thriller": "Because you like thrillers",
   "discovery.rail.becauseYouLike.war": "Because you like war stories",
   "discovery.rail.becauseYouLike.western": "Because you like westerns",
   "discovery.rail.becauseYouLike.sports": "Because you like sports stories",
-  "discovery.rail.becauseYouLike.supernatural": "Because you like the supernatural",
-  "discovery.rail.becauseYouLike.coming-of-age": "Because you like coming-of-age stories",
-  "discovery.rail.becauseYouLike.found-family": "Because you like found families",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Because you like the supernatural",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Because you like coming-of-age stories",
+  "discovery.rail.becauseYouLike.found-family":
+    "Because you like found families",
   "discovery.rail.becauseYouLike.revenge": "Because you like revenge stories",
   "discovery.rail.becauseYouLike.heist": "Because you like heists",
   "discovery.rail.becauseYouLike.time-travel": "Because you like time travel",
@@ -6018,25 +6048,34 @@ const en: LocaleDictionary = {
   "discovery.rail.becauseYouLike.zombie": "Because you like zombies",
   "discovery.rail.becauseYouLike.survival": "Because you like survival stories",
   "discovery.rail.becauseYouLike.space": "Because you like space adventures",
-  "discovery.rail.becauseYouLike.detective": "Because you like detective stories",
-  "discovery.rail.becauseYouLike.organized-crime": "Because you like organized crime",
-  "discovery.rail.becauseYouLike.period-drama": "Because you like period dramas",
-  "discovery.rail.becauseYouLike.psychological": "Because you like psychological stories",
+  "discovery.rail.becauseYouLike.detective":
+    "Because you like detective stories",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Because you like organized crime",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Because you like period dramas",
+  "discovery.rail.becauseYouLike.psychological":
+    "Because you like psychological stories",
   "discovery.rail.becauseYouLike.mythology": "Because you like mythology",
   "discovery.rail.becauseYouLike.isekai": "Because you like isekai",
   "discovery.rail.becauseYouLike.mecha": "Because you like mecha",
   "discovery.rail.becauseYouLike.martial-arts": "Because you like martial arts",
   "discovery.rail.becauseYouLike.music": "Because you like music stories",
-  "discovery.rail.becauseYouLike.workplace": "Because you like workplace stories",
+  "discovery.rail.becauseYouLike.workplace":
+    "Because you like workplace stories",
   "discovery.rail.becauseYouLike.medical": "Because you like medical dramas",
   "discovery.rail.becauseYouLike.military": "Because you like military stories",
   "discovery.rail.becauseYouLike.spy": "Because you like spy stories",
-  "discovery.rail.becauseYouLike.royal-politics": "Because you like royal intrigue",
-  "discovery.rail.becauseYouLike.first-love": "Because you like first-love stories",
-  "discovery.rail.becauseYouLike.forbidden-love": "Because you like forbidden love",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Because you like royal intrigue",
+  "discovery.rail.becauseYouLike.first-love":
+    "Because you like first-love stories",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Because you like forbidden love",
   "discovery.rail.becauseYouLike.lgbtq": "Because you like LGBTQ+ stories",
   "discovery.rail.becauseYouLike.samurai": "Because you like samurai",
-  "discovery.rail.becauseYouLike.magical-girl": "Because you like magical girls",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Because you like magical girls",
   "settings.keepHistoryForever": "Keep history forever",
   "settings.historyRetentionDaysHeader": "Retain history for",
   "settings.historyRetentionDaysSuffix": "days",
@@ -6339,6 +6378,26 @@ const en: LocaleDictionary = {
   "libraryGraph.edgeKind.affinity": "Shared interest: {{label}}",
   "libraryGraph.edgeKind.sharedTaste": "Shared interest",
   "libraryGraph.edgeKind.other": "Linked",
+  "libraryGraph.edgeKind.recommendation": "Recommended",
+  "libraryGraph.notBuilt": "The library graph has not been built yet.",
+  "libraryGraph.truncated": "This graph covers only part of the library.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "This title can't be explored further.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "This title doesn't match this library's media type, so it can't be explored here.",
+  "libraryGraph.moreLikeThisEmpty": "Nothing more like this yet.",
+  "libraryGraph.backToOverview": "Back to overview",
+  "libraryGraph.findingMoreLikeThis": "Finding more like this…",
+  "libraryGraph.reason.recommendedBy": "Recommended on {{sources}}",
+  "libraryGraph.reason.shares": "In common: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Recommendation groups",
+  "libraryGraph.notInLibrary": "Not in your library",
+  "libraryGraph.inLibrary": "In your library",
+  "libraryGraph.openTitle": "Open title",
+  "libraryGraph.exploredGroup": "Explored",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, not in your library",
+  "libraryGraph.trailLabel": "Explored",
+  "libraryGraph.canvasLabel":
+    "Library graph. Use the arrow keys to move between titles in a cluster and Enter to open one.",
   "title.bulkSelectionCount": "{{count}} selected",
   "title.bulkSelectionPanelTitle": "Bulk selection",
   "title.bulkSelectionPanelHint":
@@ -8380,6 +8439,17 @@ const en: LocaleDictionary = {
     "Counts rows keyed to this scope; season packs are counted on the season's anchor episode.",
   "wanted.loadingStandby": "Loading saved candidates…",
   "wanted.standbyCandidates": "Standby candidates · {{count}}",
+  "wanted.downloadStandby": "Download",
+  "wanted.downloadStandbyLabel": "Download {{name}}",
+  "wanted.standbyConflictTitle": "Downloads already in progress",
+  "wanted.standbyConflictDescription":
+    "Queue {{name}} alongside these downloads, or cancel them and queue it instead.",
+  "wanted.standbyQueue": "Queue",
+  "wanted.standbyQueuedRefreshFailed":
+    "The release was queued, but the list could not be refreshed. Refresh the page to see the current status.",
+  "wanted.standbyCancelAndQueue": "Cancel and queue",
+  "wanted.standbyQueuedCancelFailed":
+    "The release was queued, but {{count}} conflicting download(s) could not be cancelled and are still running.",
   "wanted.standbyRank": "Rank {{rank}}",
   "wanted.standbyIndexer": "Indexer",
   "wanted.standbySize": "Size",
@@ -8838,6 +8908,41 @@ const en: LocaleDictionary = {
   "setup.summaryPathsRemappedDetail": "Provenance kept for monitored status",
   "setup.summaryClientsMerged": "Merged across instances",
   "setup.summaryIndexersEnabled": "Supported & enabled",
+  "setup.sourceImportProgress": "Importing sources",
+  "setup.sourceImportInvalidRequest":
+    "A selected source is unavailable. Refresh source discovery and select it again.",
+  "setup.sourceImportSelectionChanged":
+    "Submitted source selections are fixed. Retry failed sources from Summary.",
+  "setup.sourceImportNotOwned":
+    "This source import is unavailable to your account.",
+  "setup.sourceImportQueueFull":
+    "Source import capacity is full. Try again after another import finishes.",
+  "setup.sourceImportActive": "This source import is still running.",
+  "setup.sourceImportNotRetryable":
+    "Only failed or interrupted sources can be retried or skipped.",
+  "setup.sourceImportUnresolved":
+    "Retry or explicitly skip unresolved sources before finishing setup.",
+  "setup.sourceImportCredentialRequired":
+    "Enter the source credential before continuing.",
+  "setup.sourceImportConfigConflict":
+    "The reserved configuration changed. Review the source before retrying.",
+  "setup.sourceImportSourceNotReady":
+    "Wait for source discovery to finish before continuing.",
+  "setup.sourceImportResume": "Reconnect to progress",
+  "setup.sourceImportLoading": "Loading source import progress",
+  "setup.sourceImportCredential": "Corrected credential for {{name}}",
+  "setup.sourceImportRetry": "Retry failed sources",
+  "setup.sourceImportSkip": "Skip this source",
+  "setup.sourceImportItemFailed":
+    "Check the connection and credentials, then retry or skip.",
+  "setup.sourceImportState.queued": "Queued",
+  "setup.sourceImportState.installing": "Installing provider",
+  "setup.sourceImportState.checking": "Checking connection",
+  "setup.sourceImportState.saving": "Saving configuration",
+  "setup.sourceImportState.succeeded": "Imported",
+  "setup.sourceImportState.failed": "Failed",
+  "setup.sourceImportState.interrupted": "Interrupted",
+  "setup.sourceImportState.skipped": "Skipped",
   "setup.fetchingMonitoredStatus": "Fetching monitored status…",
   "setup.fetchingMonitoredStatusDetail":
     "Pulling each title’s monitored state from your instances in the background.",

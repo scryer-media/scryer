@@ -2527,7 +2527,8 @@ impl PostImportTracking {
 pub struct SeedingProfile {
     pub id: String,
     pub name: String,
-    /// Share ratio goal, or null to defer to the client's own limits.
+    /// Share ratio goal. Zero discharges the ratio obligation immediately;
+    /// null defers to the client's own limits.
     pub ratio: Option<f64>,
     /// Seed time goal in minutes, or null to defer to the client's own limits.
     pub seed_time_minutes: Option<i64>,
@@ -2597,8 +2598,7 @@ impl SeedingProfile {
         validate_seed_time_minutes("seed time", self.seed_time_minutes)?;
         validate_seed_ratio("season pack ratio", self.season_pack_ratio)?;
         validate_seed_time_minutes("season pack seed time", self.season_pack_seed_time_minutes)?;
-        // Zero is legal here and means "do not check", unlike the goal fields
-        // above where zero would be indistinguishable from unset.
+        // Zero disables admission filtering; unset inherits the system floor.
         if self.minimum_seeders.is_some_and(|value| value < 0) {
             return Err("seeding profile minimum seeders cannot be negative".to_string());
         }
@@ -2608,9 +2608,9 @@ impl SeedingProfile {
 
 fn validate_seed_ratio(label: &str, value: Option<f64>) -> Result<(), String> {
     match value {
-        Some(value) if !value.is_finite() || value <= 0.0 => {
-            Err(format!("seeding profile {label} must be greater than 0"))
-        }
+        Some(value) if !value.is_finite() || value < 0.0 => Err(format!(
+            "seeding profile {label} must be finite and at least 0"
+        )),
         _ => Ok(()),
     }
 }

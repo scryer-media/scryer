@@ -1,6 +1,44 @@
 import type { LocaleDictionary } from "../types";
 
 const ko: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND":
+    "이 저장된 후보는 더 이상 존재하지 않습니다.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "이 저장된 후보는 더 이상 사용할 수 없습니다. 목록을 새로 고친 뒤 다시 시도하세요.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "저장된 릴리스를 대기열에 추가하지 못했습니다. 다시 시도할 수 있습니다.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "이 릴리스는 타이틀의 차단 목록에 있습니다. 대기열에 추가하려면 차단 목록에서 제거하세요.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "이 릴리스는 이미 다운로드 대기열에 있습니다.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "이 타이틀에 대해 다른 검색 또는 대기열 작업이 실행 중입니다. 완료된 뒤 다시 시도하세요.",
+  "wanted.standby": "대기 · {{count}}",
+  "wanted.standbyTooltip":
+    "현재 가져오기가 실패하면 저장된 후보 {{count}}개를 순서대로 시도합니다.",
+  "wanted.standbyScopeNote":
+    "이 범위에 속한 행을 셉니다. 시즌 팩은 시즌의 기준 에피소드에서 셉니다.",
+  "wanted.loadingStandby": "저장된 후보 불러오는 중…",
+  "wanted.standbyCandidates": "대기 후보 · {{count}}",
+  "wanted.downloadStandby": "다운로드",
+  "wanted.downloadStandbyLabel": "{{name}} 다운로드",
+  "wanted.standbyConflictTitle": "이미 진행 중인 다운로드가 있습니다",
+  "wanted.standbyConflictDescription":
+    "이 다운로드들과 함께 {{name}}을(를) 대기열에 추가하거나, 취소하고 대신 대기열에 추가합니다.",
+  "wanted.standbyQueue": "대기열에 추가",
+  "wanted.standbyQueuedRefreshFailed":
+    "릴리스가 대기열에 추가되었지만 목록을 새로 고치지 못했습니다. 현재 상태를 보려면 페이지를 새로 고치세요.",
+  "wanted.standbyCancelAndQueue": "취소하고 대기열에 추가",
+  "wanted.standbyQueuedCancelFailed":
+    "릴리스가 대기열에 추가되었지만 충돌하는 다운로드 {{count}}개를 취소하지 못해 아직 실행 중입니다.",
+  "wanted.standbyRank": "순위 {{rank}}",
+  "wanted.standbyIndexer": "인덱서",
+  "wanted.standbySize": "크기",
+  "wanted.standbySeeders": "시더",
+  "wanted.standbyScore": "점수",
+  "wanted.standbyAge": "경과 시간",
+  "wanted.seasonPack": "시즌 팩",
+  "wanted.noStandbyCandidates": "대기 후보 없음",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin 콜백 URL을 복사했습니다.",
   "settings.oauthClientIdCopied": "OAuth 클라이언트 ID를 복사했습니다.",
   "status.copyFailedSelected":
@@ -928,7 +966,8 @@ const ko: LocaleDictionary = {
   "discovery.rail.becauseYouLike.sports": "스포츠 이야기를 좋아하는 분께",
   "discovery.rail.becauseYouLike.supernatural": "초자연물을 좋아하는 분께",
   "discovery.rail.becauseYouLike.coming-of-age": "성장 이야기를 좋아하는 분께",
-  "discovery.rail.becauseYouLike.found-family": "유사 가족 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.found-family":
+    "유사 가족 이야기를 좋아하는 분께",
   "discovery.rail.becauseYouLike.revenge": "복수극을 좋아하는 분께",
   "discovery.rail.becauseYouLike.heist": "하이스트물을 좋아하는 분께",
   "discovery.rail.becauseYouLike.time-travel": "시간 여행을 좋아하는 분께",
@@ -940,7 +979,8 @@ const ko: LocaleDictionary = {
   "discovery.rail.becauseYouLike.survival": "생존물을 좋아하는 분께",
   "discovery.rail.becauseYouLike.space": "우주 모험을 좋아하는 분께",
   "discovery.rail.becauseYouLike.detective": "탐정물을 좋아하는 분께",
-  "discovery.rail.becauseYouLike.organized-crime": "조직 범죄물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "조직 범죄물을 좋아하는 분께",
   "discovery.rail.becauseYouLike.period-drama": "시대극을 좋아하는 분께",
   "discovery.rail.becauseYouLike.psychological": "심리극을 좋아하는 분께",
   "discovery.rail.becauseYouLike.mythology": "신화를 좋아하는 분께",
@@ -1138,6 +1178,26 @@ const ko: LocaleDictionary = {
   "libraryGraph.edgeKind.affinity": "공통 관심사: {{label}}",
   "libraryGraph.edgeKind.sharedTaste": "공통 관심사",
   "libraryGraph.edgeKind.other": "연결됨",
+  "libraryGraph.edgeKind.recommendation": "추천",
+  "libraryGraph.notBuilt": "라이브러리 그래프가 아직 생성되지 않았습니다.",
+  "libraryGraph.truncated": "이 그래프는 라이브러리의 일부만 포함합니다.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "이 작품은 더 이상 탐색할 수 없습니다.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "이 작품은 이 라이브러리의 미디어 유형과 일치하지 않아 여기에서 탐색할 수 없습니다.",
+  "libraryGraph.moreLikeThisEmpty": "아직 비슷한 작품이 없습니다.",
+  "libraryGraph.backToOverview": "개요로 돌아가기",
+  "libraryGraph.findingMoreLikeThis": "비슷한 작품을 찾는 중…",
+  "libraryGraph.reason.recommendedBy": "{{sources}}에서 추천",
+  "libraryGraph.reason.shares": "공통점: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "추천 그룹",
+  "libraryGraph.notInLibrary": "라이브러리에 없음",
+  "libraryGraph.inLibrary": "라이브러리에 있음",
+  "libraryGraph.openTitle": "타이틀 열기",
+  "libraryGraph.exploredGroup": "탐색함",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, 라이브러리에 없음",
+  "libraryGraph.trailLabel": "탐색함",
+  "libraryGraph.canvasLabel":
+    "라이브러리 그래프. 화살표 키로 클러스터 안의 작품 사이를 이동하고 Enter 키로 엽니다.",
   "title.seasonMonitored": "시즌 모니터링 중",
   "title.episodeMonitored": "에피소드 모니터링 중",
   "title.deleteFilesOnDisk": "디스크에서 파일 삭제",
@@ -3601,6 +3661,41 @@ const ko: LocaleDictionary = {
   "settings.refMaintFactsWatchedByAnyoneValue": "활성화된 미디어 서버의 어떤 계정이든 재생했으면 true이며, 계정이 Scryer 사용자에 연결되어 있는지는 상관없습니다. 시즌과 시리즈는 방영된 에피소드 중 하나라도 해당됩니다. 최근 48시간 안의 동기화가 모든 활성 연결의 모든 계정을 읽기 전까지는 audience_not_read 사유로 알 수 없으며, 시청 사실을 알 수 없을 때는 일반적인 사유로 알 수 없습니다.",
   "settings.refMaintFactsLastWatchedByAnyoneAtValue": "어떤 계정이든 가장 최근에 재생한 RFC3339 타임스탬프. 아무도 재생하지 않았으면 never_watched 사유로 값이 없고, 재생에 기록된 시각이 없으면 play_time_missing(시즌과 시리즈는 episode_play_time_missing), 모든 계정을 읽지 못했으면 audience_not_read 사유로 알 수 없습니다",
   "settings.maintenancePreviewFacts": "규칙이 읽은 사실",
+  "setup.sourceImportProgress": "소스 가져오는 중",
+  "setup.sourceImportInvalidRequest":
+    "선택한 소스를 사용할 수 없습니다. 소스 검색을 새로 고친 후 다시 선택하세요.",
+  "setup.sourceImportSelectionChanged":
+    "제출된 소스 선택은 변경할 수 없습니다. 실패한 소스는 요약에서 다시 시도하세요.",
+  "setup.sourceImportNotOwned":
+    "이 소스 가져오기는 현재 계정에서 사용할 수 없습니다.",
+  "setup.sourceImportQueueFull":
+    "소스 가져오기 용량이 가득 찼습니다. 다른 가져오기가 끝난 후 다시 시도하세요.",
+  "setup.sourceImportActive": "이 소스 가져오기는 아직 실행 중입니다.",
+  "setup.sourceImportNotRetryable":
+    "실패하거나 중단된 소스만 다시 시도하거나 건너뛸 수 있습니다.",
+  "setup.sourceImportUnresolved":
+    "설정을 완료하기 전에 해결되지 않은 소스를 다시 시도하거나 명시적으로 건너뛰세요.",
+  "setup.sourceImportCredentialRequired":
+    "계속하기 전에 소스 자격 증명을 입력하세요.",
+  "setup.sourceImportConfigConflict":
+    "예약된 구성이 변경되었습니다. 다시 시도하기 전에 소스를 검토하세요.",
+  "setup.sourceImportSourceNotReady":
+    "계속하기 전에 소스 검색이 끝날 때까지 기다리세요.",
+  "setup.sourceImportResume": "진행 상황에 다시 연결",
+  "setup.sourceImportLoading": "소스 가져오기 진행 상황을 불러오는 중",
+  "setup.sourceImportCredential": "{{name}}의 수정된 자격 증명",
+  "setup.sourceImportRetry": "실패한 소스 다시 시도",
+  "setup.sourceImportSkip": "이 소스 건너뛰기",
+  "setup.sourceImportItemFailed":
+    "연결과 자격 증명을 확인한 후 다시 시도하거나 건너뛰세요.",
+  "setup.sourceImportState.queued": "대기 중",
+  "setup.sourceImportState.installing": "공급자 설치 중",
+  "setup.sourceImportState.checking": "연결 확인 중",
+  "setup.sourceImportState.saving": "구성 저장 중",
+  "setup.sourceImportState.succeeded": "가져옴",
+  "setup.sourceImportState.failed": "실패",
+  "setup.sourceImportState.interrupted": "중단됨",
+  "setup.sourceImportState.skipped": "건너뜀",
 };
 
 export default ko;

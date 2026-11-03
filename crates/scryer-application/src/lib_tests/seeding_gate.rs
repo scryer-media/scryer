@@ -1017,6 +1017,72 @@ async fn host_file_cleanup_requires_a_successful_import_for_the_same_canonical_j
 }
 
 #[tokio::test]
+async fn zero_ratio_cleanup_preserves_unimported_payload_and_unrelated_files() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (mut app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let imports = Arc::new(TrackingImportRepo::default());
+    app.services.workflow.imports = imports.clone();
+    let config = create_enabled_download_client_config(&app, &user, "rTorrent", "rtorrent").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Zero ratio payload").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "rtorrent",
+        "zero-ratio-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    observed(
+        DownloadSeedingSnapshot {
+            can_remove: Some(false),
+            can_move_files: Some(true),
+            is_private: Some(true),
+            ..Default::default()
+        },
+        &mut tracked,
+    );
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let (root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let file = payload.join("movie.mkv");
+    let unrelated = root.path().join("unrelated.mkv");
+    std::fs::write(&unrelated, b"unrelated data").unwrap();
+    client.completed_downloads.lock().await[0].dest_dir = file.display().to_string();
+    app.services.workflow.download_submissions = goals_repo(
+        "zero-ratio-job",
+        PersistedSeedGoals {
+            seed_goal_ratio: Some(0.0),
+            ..persisted_goals(false)
+        },
+    );
+    let record = cleanup_record_for(&tracked);
+    let unimported =
+        crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+            .await
+            .unwrap();
+    assert_eq!(
+        unimported.2,
+        TerminalDownloadCleanupOutcome::RetryableFailure
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"media");
+    assert!(client.deleted_requests.lock().await.is_empty());
+
+    record_file_import_ownership(&mut app, &tracked, &file).await;
+    let imported = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(imported.2, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!file.exists());
+    assert_eq!(std::fs::read(&unrelated).unwrap(), b"unrelated data");
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn durable_native_cleanup_recovers_a_lost_response_without_redeleting() {
     let client = Arc::new(StubDownloadClient::default());
     let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());

@@ -641,6 +641,58 @@ impl DiscoveryRepository for NullDiscoveryRepository {
     ) -> AppResult<DiscoveryPruneReport> {
         Ok(DiscoveryPruneReport::default())
     }
+
+    async fn record_failed_library_graph_run(
+        &self,
+        _run: &crate::LibraryGraphRunRecord,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn commit_library_graph(
+        &self,
+        _snapshot: &crate::LibraryGraphSnapshotRecord,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn get_latest_library_graph(
+        &self,
+        _facet: &str,
+    ) -> AppResult<Option<crate::LibraryGraphSnapshotRecord>> {
+        Ok(None)
+    }
+
+    async fn get_latest_library_graph_run(
+        &self,
+        _facet: &str,
+    ) -> AppResult<Option<crate::LibraryGraphRunRecord>> {
+        Ok(None)
+    }
+
+    async fn has_complete_library_graph(&self, _facet: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn delete_library_graph_runs(&self, _facet: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn get_discovery_neighbor_cache(
+        &self,
+        _target_key: &str,
+        _language: &str,
+    ) -> AppResult<Option<crate::DiscoveryNeighborCacheRecord>> {
+        Ok(None)
+    }
+
+    async fn replace_discovery_neighbor_cache(
+        &self,
+        _record: &crate::DiscoveryNeighborCacheRecord,
+        _expire_before: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]

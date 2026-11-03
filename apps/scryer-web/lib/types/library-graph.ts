@@ -41,4 +41,8 @@ export type LibraryGraphResult = {
   nodes: LibraryGraphNode[];
   edges: LibraryGraphEdge[];
   clusters: LibraryGraphCluster[];
+  /** How many titles a built graph was built from; absent on traversal results. */
+  subjectCount?: number;
+  /** Whether a built graph was cut short of every title; absent on traversal results. */
+  truncated?: boolean;
 };

@@ -4678,6 +4678,24 @@ type DiscoveryItemsPayload {
 }
 
 """
+One anchor whose related titles are returned, owned or not.
+"""
+input DiscoveryNeighborsInput {
+	"""
+	The discovery target key of the anchor, in the server's own vocabulary (tvdb:series:<id>, tmdb:movie:<id>, tmdb:series:<id>, imdb:title:<tt>, mal:anime:<id>, anidb:anime:<id>, anilist:anime:<id>).
+	"""
+	targetKey: String!
+	"""
+	Media facet of the anchor. A movie key fits MOVIE or ANIME, a series key SERIES or ANIME.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Maximum related titles to return; defaults to 24, which is also the most ever returned. Values outside 0 through 24 are clamped.
+	"""
+	limit: Int = 24
+}
+
+"""
 A discovery section containing a title, origin surface, count, and items.
 """
 type DiscoverySectionPayload {
@@ -7176,32 +7194,6 @@ type ExternalImportPreviewPayload {
 }
 
 """
-Counts and errors produced by external import execution.
-"""
-type ExternalImportResultPayload {
-	"""
-	Whether selected media paths were saved.
-	"""
-	mediaPathsSaved: Boolean!
-	"""
-	Number of download clients created.
-	"""
-	downloadClientsCreated: Int!
-	"""
-	Number of indexers created.
-	"""
-	indexersCreated: Int!
-	"""
-	Plugin identifiers installed as part of the import.
-	"""
-	pluginsInstalled: [String!]!
-	"""
-	Errors encountered during execution.
-	"""
-	errors: [String!]!
-}
-
-"""
 Root folder reported by an external Arr source.
 """
 type ExternalImportRootFolderPayload {
@@ -7329,6 +7321,66 @@ type ExternalImportSetupSecretDraftStatusPayload {
 	Draft update time in UTC, or null when no draft exists.
 	"""
 	updatedAt: DateTime
+}
+
+"""
+Durable receipt for one selected source configuration.
+"""
+type ExternalImportSourceItemPayload {
+	"""
+	Stable source identity used for retries and explicit skips.
+	"""
+	key: String!
+	"""
+	Source display name.
+	"""
+	name: String!
+	"""
+	Reserved configuration identity, retained across interruption and retry.
+	"""
+	configId: ID!
+	"""
+	Configuration kind: indexer or download_client.
+	"""
+	kind: String!
+	"""
+	Current phase: queued, installing, checking, saving, succeeded, failed, interrupted, or skipped.
+	"""
+	state: String!
+	"""
+	Stable failure reason code, or null for an item without a failure.
+	"""
+	reason: String
+	"""
+	The server's own failure sentence with URL credentials masked: the fallback for an unrecognized reason and the detail behind SOURCE_IMPORT_ITEM_FAILED.
+	"""
+	message: String
+}
+
+"""
+Authorized progress of an accepted background source import.
+"""
+type ExternalImportSourceJobPayload {
+	"""
+	Durable workflow run identity.
+	"""
+	runId: ID!
+	"""
+	Last persisted update time, used to reject stale progress responses.
+	"""
+	updatedAt: String!
+	"""
+	Whether the current attempt still has work scheduled.
+	"""
+	active: Boolean!
+	"""
+	Whether every selected source succeeded or was explicitly skipped.
+	"""
+	ready: Boolean!
+	"""
+	Receipts for the fixed submitted selections, without credentials.
+	"""
+	items: [ExternalImportSourceItemPayload!]!
 }
 
 """
@@ -7649,6 +7701,10 @@ enum FillerPolicyValue {
 Warmup sessions and root mappings to finalize as an external import.
 """
 input FinalizeExternalImportInput {
+	"""
+	Accepted source import to require resolved before applying library mappings.
+	"""
+	sourceImportRunId: ID
 	"""
 	Source warmup session IDs to finalize.
 	"""
@@ -10050,6 +10106,10 @@ enum JobKeyValue {
 	"""
 	LOCATION_OPERATION
 	"""
+	Background import of selected indexers and download clients.
+	"""
+	SOURCE_IMPORT
+	"""
 	A user-defined scheduled script; each script is told apart by its
 	`customJobId`.
 	"""
@@ -10247,6 +10307,116 @@ enum JobTriggerSourceValue {
 	Started internally by the system.
 	"""
 	SYSTEM_INTERNAL
+}
+
+"""
+A facet's library graph, limited to the titles the viewer can see. Layout coordinates are not included.
+"""
+type LibraryGraph {
+	"""
+	When the metadata gateway built the graph.
+	"""
+	generatedAt: String!
+	"""
+	Owned titles in the graph.
+	"""
+	nodes: [LibraryGraphNode!]!
+	"""
+	Similarity links between visible titles.
+	"""
+	edges: [LibraryGraphEdge!]!
+	"""
+	Clusters with at least one visible title.
+	"""
+	clusters: [LibraryGraphCluster!]!
+	"""
+	Owned titles of the facet in the covered libraries, counted by discovery subject.
+	"""
+	subjectCount: Int!
+	"""
+	True when the facet had more titles than one graph covers, so the newest were graphed and the rest left out.
+	"""
+	truncated: Boolean!
+}
+
+"""
+A cluster of related owned titles.
+"""
+type LibraryGraphCluster {
+	"""
+	Cluster ID, matching `LibraryGraphNode.clusterId`.
+	"""
+	id: Int!
+	"""
+	Label key of the genre or theme that names the cluster, or null when the cluster is named after its medoid.
+	"""
+	labelKey: String
+	"""
+	Display label of the cluster.
+	"""
+	label: String!
+	"""
+	Target key of the visible title that best represents the cluster.
+	"""
+	medoid: String!
+	"""
+	Number of visible titles in the cluster.
+	"""
+	size: Int!
+}
+
+"""
+An undirected similarity link between two owned titles, by target key.
+"""
+type LibraryGraphEdge {
+	"""
+	Target key of one endpoint; always sorts before `to`.
+	"""
+	from: String!
+	"""
+	Target key of the other endpoint.
+	"""
+	to: String!
+	"""
+	Link strength from 0 to 1.
+	"""
+	weight: Float!
+	"""
+	Evidence for the link: `semantic`, `relation:<type>`, or `affinity:<family>:<label>`.
+	"""
+	kinds: [String!]!
+}
+
+"""
+Selects one facet's library graph and, optionally, the libraries it covers.
+"""
+input LibraryGraphInput {
+	"""
+	Media facet whose library graph is returned.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Library IDs to cover; omitted or empty covers every library of the facet the viewer can see. IDs the viewer cannot see are ignored.
+	"""
+	libraryIds: [ID!]
+}
+
+"""
+One owned title in a library graph.
+"""
+type LibraryGraphNode {
+	"""
+	Discovery subject key of the owned title.
+	"""
+	subjectKey: String!
+	"""
+	Discovery target key the title resolved to; edges and medoids use this key.
+	"""
+	targetKey: String!
+	"""
+	Cluster the node belongs to, or -1 when it was not placed in a cluster.
+	"""
+	clusterId: Int!
 }
 
 """
@@ -20161,7 +20331,12 @@ type MutationRoot {
 	"""
 	Mark the setup wizard as complete.
 	"""
-	completeSetup: CompleteSetupPayload!
+	completeSetup(
+		"""
+		Accepted source import that must be owned and resolved before setup completes; omitted for manual setup.
+		"""
+		sourceImportRunId: ID
+	): CompleteSetupPayload!
 	"""
 	Creates a user with normalized app and library permissions after checking the manage-users permission.
 	"""
@@ -20661,6 +20836,23 @@ type MutationRoot {
 		"""
 		requestId: ID!
 	): MediaRequestActionPayload!
+	"""
+	Queue a saved candidate as an operator override, confirming title-wide conflicts first.
+	"""
+	queueStandbyRelease(
+		"""
+		The saved standby candidate to queue.
+		"""
+		id: ID!,
+		"""
+		What to do about downloads of this title that are already running.
+		"""
+		choice: StandbyQueueChoiceValue! = CHECK,
+		"""
+		The conflicts the operator saw and confirmed; any other running download is listed again instead.
+		"""
+		confirmed: [StandbyConflictIdentityInput!]! = []
+	): QueueStandbyReleasePayload!
 	"""
 	Reopen title-mismatch scopes after a rematch so acquisition coverage can converge again.
 	"""
@@ -21447,14 +21639,53 @@ type MutationRoot {
 		input: FinalizeExternalImportInput!
 	): FinalizeExternalImportPayload!
 	"""
-	Re-connect to Sonarr/Radarr, fetch configs, and create selected items in Scryer.
+	Accept selected sources durably before starting connection checks.
 	"""
-	executeExternalImport(
+	startExternalImportSources(
 		"""
-		Selected imported clients and indexers plus any credentials needed to create them.
+		Stable caller-generated request identity reused when a response is lost.
+		"""
+		requestKey: String!,
+		"""
+		Fixed selected clients and indexers with the discovery snapshots and credentials required to import them.
 		"""
 		input: ExecuteExternalImportInput!
-	): ExternalImportResultPayload!
+	): ExternalImportSourceJobPayload!
+	"""
+	Read the caller-owned durable source import and its per-item receipts.
+	"""
+	externalImportSourceStatus(
+		"""
+		Accepted source import workflow run identity.
+		"""
+		runId: ID!
+	): ExternalImportSourceJobPayload!
+	"""
+	Retry only failed or interrupted sources, retaining successful configuration identities.
+	"""
+	retryExternalImportSources(
+		"""
+		Caller-owned terminal source import to retry.
+		"""
+		runId: ID!,
+		"""
+		Optional corrected credentials for unresolved sources, keyed by their stable source identities.
+		"""
+		corrections: [IndexerApiKeyOverrideInput!]!
+	): ExternalImportSourceJobPayload!
+	"""
+	Explicitly skip one unresolved terminal source so it no longer blocks finishing setup.
+	"""
+	skipExternalImportSource(
+		"""
+		Caller-owned terminal source import containing the item.
+		"""
+		runId: ID!,
+		"""
+		Stable identity of the failed or interrupted source to skip.
+		"""
+		key: String!
+	): ExternalImportSourceJobPayload!
 	"""
 	Create a post-processing script, enabled unless the input says otherwise, after validating its type, content, and schedule.
 	"""
@@ -25264,6 +25495,27 @@ type QueryRoot {
 		input: CatalogDiscoveryInput!
 	): CatalogDiscoveryPayload!
 	"""
+	Titles related to one anchor, owned or not. Owned results carry resolvedTitleId; nothing is filtered out for being in the library.
+	"""
+	discoveryNeighbors(
+		"""
+		Anchor whose related titles are returned.
+		"""
+		input: DiscoveryNeighborsInput!
+	): [DiscoveryItemPayload!]!
+	"""
+	Return a facet's library graph: how the viewer's owned titles relate,
+	limited to titles the viewer can see. Null when personalized discovery
+	is off, the viewer can see none of the requested libraries, or no graph
+	has been built yet.
+	"""
+	libraryGraph(
+		"""
+		Facet and optional library scope of the graph.
+		"""
+		input: LibraryGraphInput!
+	): LibraryGraph
+	"""
 	Return a bounded download queue page with readiness, revision, staleness, filters, and stable sorting metadata.
 	"""
 	downloadQueuePage(
@@ -26648,6 +26900,30 @@ input QueueManualImportInput {
 	File mappings to enqueue for import.
 	"""
 	files: [ManualImportCandidateMappingInput!]!
+}
+
+"""
+The result of asking to queue a saved standby candidate.
+"""
+type QueueStandbyReleasePayload {
+	"""
+	Whether the release is now queued (or already was).
+	"""
+	grabbed: Boolean!
+	"""
+	Running downloads of this title that still need the operator's choice.
+	"""
+	conflicts: [QueueDownloadConflictPayload!]!
+	"""
+	Conflicts whose client accepted the cancel request. Scryer stops
+	tracking them; a client may still finish a job it was post-processing.
+	"""
+	cancelled: [QueueDownloadConflictPayload!]!
+	"""
+	Conflicts whose cancel request failed. They keep running and stay
+	tracked; the release is queued anyway.
+	"""
+	cancelFailed: [QueueDownloadConflictPayload!]!
 }
 
 """
@@ -29958,6 +30234,44 @@ enum SortDirectionValue {
 	Highest or latest values first.
 	"""
 	DESC
+}
+
+"""
+One conflicting download the operator confirmed, as the client names it.
+"""
+input StandbyConflictIdentityInput {
+	"""
+	The configured download client that holds the job, when known.
+	"""
+	clientId: ID
+	"""
+	The download client's type, such as `sabnzbd` or `weaver`.
+	"""
+	clientType: String!
+	"""
+	The client's own id for the job.
+	"""
+	itemId: String!
+}
+
+"""
+What to do about downloads of the same title that are already running.
+"""
+enum StandbyQueueChoiceValue {
+	"""
+	Queue only when nothing else is downloading; otherwise list the conflicts.
+	"""
+	CHECK
+	"""
+	Queue alongside the confirmed conflicts, leaving them running.
+	"""
+	QUEUE
+	"""
+	Ask the clients to cancel the confirmed conflicts, then queue without
+	waiting for them to act. Cancellation is best effort: a conflict that is
+	already post-processing may still finish.
+	"""
+	CANCEL_AND_QUEUE
 }
 
 """

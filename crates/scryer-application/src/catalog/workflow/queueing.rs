@@ -213,7 +213,7 @@ fn validate_manual_queue_purpose(
 /// client and — unlike a failure — is never cleaned up on its own, so treating
 /// it as absent would leave the operator with two grabs for one release.
 /// Sonarr's `QueueSpecification` skips only `FailedPending` for the same reason.
-fn queue_state_blocks_submission(state: DownloadQueueState) -> bool {
+pub(crate) fn queue_state_blocks_submission(state: DownloadQueueState) -> bool {
     matches!(
         state,
         DownloadQueueState::Queued

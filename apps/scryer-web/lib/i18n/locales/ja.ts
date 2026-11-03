@@ -1,6 +1,43 @@
 import type { LocaleDictionary } from "../types";
 
 const ja: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "この保存済み候補はもう存在しません。",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "この保存済み候補は利用できなくなりました。一覧を更新して再試行してください。",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "保存済みリリースをキューに追加できませんでした。再試行は引き続き可能です。",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "このリリースはタイトルのブロックリストに登録されています。キューに追加するにはブロックリストから削除してください。",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "このリリースはすでにダウンロードキューにあります。",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "このタイトルで別の検索またはキュー操作が実行中です。完了後に再試行してください。",
+  "wanted.standby": "スタンバイ · {{count}}",
+  "wanted.standbyTooltip":
+    "現在の取得が失敗した場合、保存済みの候補 {{count}} 件が順に試されます。",
+  "wanted.standbyScopeNote":
+    "この範囲に紐づく行を数えます。シーズンパックはシーズンの基準エピソードで数えます。",
+  "wanted.loadingStandby": "保存済みの候補を読み込み中…",
+  "wanted.standbyCandidates": "スタンバイ候補 · {{count}}",
+  "wanted.downloadStandby": "ダウンロード",
+  "wanted.downloadStandbyLabel": "{{name}} をダウンロード",
+  "wanted.standbyConflictTitle": "進行中のダウンロードがあります",
+  "wanted.standbyConflictDescription":
+    "これらのダウンロードと並行して {{name}} をキューに追加するか、それらをキャンセルして代わりにキューに追加します。",
+  "wanted.standbyQueue": "キューに追加",
+  "wanted.standbyQueuedRefreshFailed":
+    "リリースはキューに追加されましたが、一覧を更新できませんでした。ページを再読み込みして現在の状態を確認してください。",
+  "wanted.standbyCancelAndQueue": "キャンセルしてキューに追加",
+  "wanted.standbyQueuedCancelFailed":
+    "リリースはキューに追加されましたが、競合するダウンロード {{count}} 件をキャンセルできず、まだ実行中です。",
+  "wanted.standbyRank": "順位 {{rank}}",
+  "wanted.standbyIndexer": "インデクサー",
+  "wanted.standbySize": "サイズ",
+  "wanted.standbySeeders": "シーダー",
+  "wanted.standbyScore": "スコア",
+  "wanted.standbyAge": "経過時間",
+  "wanted.seasonPack": "シーズンパック",
+  "wanted.noStandbyCandidates": "スタンバイ候補なし",
   "settings.oauthJellyfinCallbackCopied":
     "Jellyfin のコールバック URL をコピーしました。",
   "settings.oauthClientIdCopied": "OAuth クライアント ID をコピーしました。",
@@ -929,7 +966,8 @@ const ja: LocaleDictionary = {
   "discovery.rail.becauseYouLike.adventure": "アドベンチャーが好きなあなたへ",
   "discovery.rail.becauseYouLike.comedy": "コメディが好きなあなたへ",
   "discovery.rail.becauseYouLike.crime": "クライムが好きなあなたへ",
-  "discovery.rail.becauseYouLike.documentary": "ドキュメンタリーが好きなあなたへ",
+  "discovery.rail.becauseYouLike.documentary":
+    "ドキュメンタリーが好きなあなたへ",
   "discovery.rail.becauseYouLike.drama": "ドラマが好きなあなたへ",
   "discovery.rail.becauseYouLike.family": "ファミリー向け作品が好きなあなたへ",
   "discovery.rail.becauseYouLike.fantasy": "ファンタジーが好きなあなたへ",
@@ -956,7 +994,8 @@ const ja: LocaleDictionary = {
   "discovery.rail.becauseYouLike.survival": "サバイバルが好きなあなたへ",
   "discovery.rail.becauseYouLike.space": "宇宙ものが好きなあなたへ",
   "discovery.rail.becauseYouLike.detective": "探偵ものが好きなあなたへ",
-  "discovery.rail.becauseYouLike.organized-crime": "組織犯罪ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "組織犯罪ものが好きなあなたへ",
   "discovery.rail.becauseYouLike.period-drama": "時代劇が好きなあなたへ",
   "discovery.rail.becauseYouLike.psychological": "心理劇が好きなあなたへ",
   "discovery.rail.becauseYouLike.mythology": "神話が好きなあなたへ",
@@ -1155,6 +1194,27 @@ const ja: LocaleDictionary = {
   "libraryGraph.edgeKind.affinity": "共通の関心: {{label}}",
   "libraryGraph.edgeKind.sharedTaste": "共通の関心",
   "libraryGraph.edgeKind.other": "つながり",
+  "libraryGraph.edgeKind.recommendation": "おすすめ",
+  "libraryGraph.notBuilt": "ライブラリグラフはまだ作成されていません。",
+  "libraryGraph.truncated":
+    "このグラフはライブラリの一部のみを対象としています。",
+  "discovery.refusal.neighborTargetKeyUnsupported": "この作品はこれ以上探索できません。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "この作品はこのライブラリのメディアの種類と一致しないため、ここでは探索できません。",
+  "libraryGraph.moreLikeThisEmpty": "似た作品はまだありません。",
+  "libraryGraph.backToOverview": "概要に戻る",
+  "libraryGraph.findingMoreLikeThis": "似た作品を探しています…",
+  "libraryGraph.reason.recommendedBy": "{{sources}} でおすすめ",
+  "libraryGraph.reason.shares": "共通点: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "おすすめのグループ",
+  "libraryGraph.notInLibrary": "ライブラリにありません",
+  "libraryGraph.inLibrary": "ライブラリにあります",
+  "libraryGraph.openTitle": "タイトルを開く",
+  "libraryGraph.exploredGroup": "探索済み",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}、ライブラリにありません",
+  "libraryGraph.trailLabel": "探索済み",
+  "libraryGraph.canvasLabel":
+    "ライブラリグラフ。矢印キーでクラスター内の作品を移動し、Enter で開きます。",
   "title.seasonMonitored": "シーズンモニタリング中",
   "title.episodeMonitored": "エピソードモニタリング中",
   "title.deleteFilesOnDisk": "ディスク上のファイルを削除",
@@ -3675,6 +3735,41 @@ const ja: LocaleDictionary = {
   "settings.refMaintFactsWatchedByAnyoneValue": "有効なメディアサーバー上のいずれかのアカウントが再生した場合に true。アカウントが Scryer ユーザーにリンクされているかは問いません。シーズンと番組では放送済みのいずれかのエピソードが対象です。過去 48 時間以内の同期がすべての有効な接続のすべてのアカウントを読み取るまでは理由 audience_not_read で不明となり、視聴ファクトが不明な場合は通常の理由で不明になります。",
   "settings.refMaintFactsLastWatchedByAnyoneAtValue": "いずれかのアカウントによる最新の再生の RFC3339 タイムスタンプ。誰も再生していない場合は理由 never_watched で値なし、再生に記録時刻がない場合は理由 play_time_missing(シーズンと番組では episode_play_time_missing)、すべてのアカウントが読み取られていない場合は audience_not_read で不明になります",
   "settings.maintenancePreviewFacts": "ルールが読み取ったファクト",
+  "setup.sourceImportProgress": "ソースをインポート中",
+  "setup.sourceImportInvalidRequest":
+    "選択したソースを利用できません。ソースの検出を更新して、もう一度選択してください。",
+  "setup.sourceImportSelectionChanged":
+    "送信したソースの選択は変更できません。失敗したソースは概要から再試行してください。",
+  "setup.sourceImportNotOwned":
+    "このソースのインポートはお使いのアカウントでは利用できません。",
+  "setup.sourceImportQueueFull":
+    "ソースのインポート容量がいっぱいです。他のインポートが完了してから再試行してください。",
+  "setup.sourceImportActive": "このソースのインポートはまだ実行中です。",
+  "setup.sourceImportNotRetryable":
+    "再試行またはスキップできるのは、失敗または中断したソースのみです。",
+  "setup.sourceImportUnresolved":
+    "セットアップを完了する前に、未解決のソースを再試行するか明示的にスキップしてください。",
+  "setup.sourceImportCredentialRequired":
+    "続行する前にソースの認証情報を入力してください。",
+  "setup.sourceImportConfigConflict":
+    "予約された設定が変更されました。再試行する前にソースを確認してください。",
+  "setup.sourceImportSourceNotReady":
+    "続行する前にソースの検出が完了するまでお待ちください。",
+  "setup.sourceImportResume": "進行状況に再接続",
+  "setup.sourceImportLoading": "ソースのインポート進行状況を読み込み中",
+  "setup.sourceImportCredential": "{{name}} の修正済み認証情報",
+  "setup.sourceImportRetry": "失敗したソースを再試行",
+  "setup.sourceImportSkip": "このソースをスキップ",
+  "setup.sourceImportItemFailed":
+    "接続と認証情報を確認してから、再試行またはスキップしてください。",
+  "setup.sourceImportState.queued": "待機中",
+  "setup.sourceImportState.installing": "プロバイダーをインストール中",
+  "setup.sourceImportState.checking": "接続を確認中",
+  "setup.sourceImportState.saving": "設定を保存中",
+  "setup.sourceImportState.succeeded": "インポート済み",
+  "setup.sourceImportState.failed": "失敗",
+  "setup.sourceImportState.interrupted": "中断",
+  "setup.sourceImportState.skipped": "スキップ済み",
 };
 
 export default ja;

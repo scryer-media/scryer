@@ -83,7 +83,7 @@ export function seedingProfileToDraft(
 type ParsedGoal = { ok: true; value: number | null } | { ok: false };
 
 /**
- * Unlike the goal fields, zero is meaningful here: it disables the check for
+ * Zero disables the admission check for
  * this profile rather than reading as "unset". Empty still means inherit.
  */
 export function parseMinimumSeeders(raw: string): ParsedGoal {
@@ -104,7 +104,7 @@ function parseOptionalRatio(raw: string): ParsedGoal {
     return { ok: true, value: null };
   }
   const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!Number.isFinite(parsed) || parsed < 0) {
     return { ok: false };
   }
   return { ok: true, value: parsed };
@@ -221,30 +221,27 @@ export function validateSeedingProfileFields(
 ): SeedingProfileFieldErrors {
   const errors: SeedingProfileFieldErrors = {};
   if (!draft.name.trim()) {
-    errors.name = "Enter a name for this profile.";
+    errors.name = "settings.seedingProfileNameRequired";
   }
   if (!parseOptionalRatio(draft.ratio).ok) {
-    errors.ratio = "Enter a number greater than zero, or leave empty.";
+    errors.ratio = "settings.seedingProfileRatioInvalid";
   }
   if (!parseSeedDuration(draft.seedTimeMinutes).ok) {
-    errors.seedTimeMinutes =
-      "Enter a duration like 90m, 36h, 1d 12h or 2w, or leave empty.";
+    errors.seedTimeMinutes = "settings.seedingProfileDurationInvalid";
   }
   // Season-pack goals only exist in override mode, so inherit mode cannot be
   // held back by whatever is sitting in those inputs.
   if (draft.seasonPackMode === "OVERRIDE") {
     if (!parseOptionalRatio(draft.seasonPackRatio).ok) {
-      errors.seasonPackRatio =
-        "Enter a number greater than zero, or leave empty.";
+      errors.seasonPackRatio = "settings.seedingProfileRatioInvalid";
     }
     if (!parseSeedDuration(draft.seasonPackSeedTimeMinutes).ok) {
       errors.seasonPackSeedTimeMinutes =
-        "Enter a duration like 90m, 36h, 1d 12h or 2w, or leave empty.";
+        "settings.seedingProfileDurationInvalid";
     }
   }
   if (!parseMinimumSeeders(draft.minimumSeeders).ok) {
-    errors.minimumSeeders =
-      "Enter a whole number of 0 or more, or leave empty.";
+    errors.minimumSeeders = "settings.seedingProfileMinimumSeedersInvalid";
   }
   return errors;
 }

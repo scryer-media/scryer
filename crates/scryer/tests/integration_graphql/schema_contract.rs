@@ -792,8 +792,13 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"recycledItemHistory"));
     // Folder-conflict resolution adds `pendingImportConflictTask`: 198->199.
     assert!(query_field_names.contains(&"pendingImportConflictTask"));
+    // The library graph adds `libraryGraph`, a facet's stored similarity graph
+    // pruned to what the viewer can see, and `discoveryNeighbors`, which
+    // expands any graph node, owned or not: 199->201.
+    assert!(query_field_names.contains(&"libraryGraph"));
+    assert!(query_field_names.contains(&"discoveryNeighbors"));
     assert_eq!(
-        query_field_count, 199,
+        query_field_count, 201,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -885,8 +890,25 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
             "missing mutation {name}"
         );
     }
+    // Durable source imports add acceptance, status, retry, and explicit skip,
+    // and drop the compatibility `executeExternalImport`: 288->291.
+    for name in [
+        "startExternalImportSources",
+        "externalImportSourceStatus",
+        "retryExternalImportSources",
+        "skipExternalImportSource",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
+    assert!(!mutation_field_names.contains(&"executeExternalImport"));
+    // Queueing a saved standby release with conflict confirmation adds
+    // `queueStandbyRelease`: 291->292.
+    assert!(mutation_field_names.contains(&"queueStandbyRelease"));
     assert_eq!(
-        mutation_field_count, 288,
+        mutation_field_count, 292,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1321,16 +1343,49 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Durable source imports add a job progress object and per-item receipt
+    // object, and dropping `executeExternalImport` removes its result payload:
+    // public types 1007->1008, OBJECT 543->544.
+    for name in [
+        "ExternalImportSourceJobPayload",
+        "ExternalImportSourceItemPayload",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert!(!public_type_names.contains(&"ExternalImportResultPayload"));
+    // Standby queueing adds its payload, the conflict identity input and the
+    // choice enum: public types 1008->1011, OBJECT 544->545,
+    // INPUT_OBJECT 245->246, ENUM 207->208.
+    for name in [
+        "QueueStandbyReleasePayload",
+        "StandbyConflictIdentityInput",
+        "StandbyQueueChoiceValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     // The library graph catalog view is a GRAPH value on the existing catalog
     // view mode enum, so every count below is unchanged.
+    // The library graph read adds the graph, node, edge and cluster objects
+    // and its input, and expanding a node adds the neighbours input: public
+    // types 1007->1013, OBJECT 543->547, INPUT_OBJECT 245->247.
+    for name in [
+        "LibraryGraph",
+        "LibraryGraphNode",
+        "LibraryGraphEdge",
+        "LibraryGraphCluster",
+        "LibraryGraphInput",
+        "DiscoveryNeighborsInput",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1007,
+        1017,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 543);
-    assert_eq!(kind_count("INPUT_OBJECT"), 245);
-    assert_eq!(kind_count("ENUM"), 207);
+    assert_eq!(kind_count("OBJECT"), 549);
+    assert_eq!(kind_count("INPUT_OBJECT"), 248);
+    assert_eq!(kind_count("ENUM"), 208);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

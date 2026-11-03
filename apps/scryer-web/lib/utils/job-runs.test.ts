@@ -5,12 +5,38 @@ import {
   jobInstanceKey,
   mergeLatestJobRun,
   normalizeJobRun,
+  preferJobRunSnapshot,
   parseFullHashBackfillFailures,
   runAwaitingScriptOutput,
   scriptRunForJobRun,
   scriptRunIdOf,
 } from "./job-runs.ts";
 import type { JobRun } from "../types/jobs.ts";
+
+test("source import retries replace terminal snapshots by durable revision", () => {
+  const failed = jobRun({
+    id: "source-run",
+    jobKey: "SOURCE_IMPORT",
+    status: "WARNING",
+    progressJson: { revision: 5 },
+    startedAt: "2026-01-01T00:00:00Z",
+  });
+  const retry = {
+    ...failed,
+    status: "RUNNING" as const,
+    completedAt: null,
+    progressJson: { revision: 6 },
+  };
+  assert.equal(preferJobRunSnapshot(failed, retry), retry);
+  assert.equal(preferJobRunSnapshot(retry, failed), retry);
+  const completed = {
+    ...retry,
+    status: "COMPLETED" as const,
+    progressJson: { revision: 7 },
+  };
+  assert.equal(preferJobRunSnapshot(retry, completed), completed);
+  assert.equal(preferJobRunSnapshot(completed, retry), completed);
+});
 
 test("full-hash backfill failures are read with their path and reason", () => {
   const parsed = parseFullHashBackfillFailures({

@@ -1,6 +1,27 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_HK: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "此已儲存的候選版本已不存在。",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "此已儲存的候選版本已不可用。請重新整理清單後再試。",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "已儲存的版本無法加入佇列。仍可稍後重試。",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "此版本在該標題的封鎖清單中。請先從封鎖清單移除再加入佇列。",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "此版本已在下載佇列中。",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "該標題正在進行另一項搜尋或佇列操作。請待其完成後再試。",
+  "wanted.downloadStandby": "下載",
+  "wanted.downloadStandbyLabel": "下載 {{name}}",
+  "wanted.standbyConflictTitle": "已有下載正在進行",
+  "wanted.standbyConflictDescription":
+    "將 {{name}} 與這些下載一同加入佇列，或取消它們並改為加入此版本。",
+  "wanted.standbyQueue": "加入佇列",
+  "wanted.standbyQueuedRefreshFailed":
+    "該版本已加入佇列，但清單無法重新整理。請重新整理頁面以查看目前狀態。",
+  "wanted.standbyCancelAndQueue": "取消並加入佇列",
+  "wanted.standbyQueuedCancelFailed":
+    "該版本已加入佇列，但有 {{count}} 個衝突下載無法取消，仍在執行。",
   "settings.oauthJellyfinCallbackCopied": "已複製 Jellyfin 回呼 URL。",
   "settings.oauthClientIdCopied": "已複製 OAuth 用戶端 ID。",
   "status.copyFailedSelected": "無法複製。文字已選取，請按 Ctrl+C 或 ⌘C。",
@@ -1600,6 +1621,26 @@ const zh_HK: LocaleDictionary = {
   "libraryGraph.edgeKind.affinity": "共同興趣：{{label}}",
   "libraryGraph.edgeKind.sharedTaste": "共同興趣",
   "libraryGraph.edgeKind.other": "已關聯",
+  "libraryGraph.edgeKind.recommendation": "推薦",
+  "libraryGraph.notBuilt": "媒體庫圖譜尚未建立。",
+  "libraryGraph.truncated": "此圖譜只涵蓋部分媒體庫。",
+  "discovery.refusal.neighborTargetKeyUnsupported": "無法進一步探索此作品。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "此作品與這個媒體庫的媒體類型不符，無法在此探索。",
+  "libraryGraph.moreLikeThisEmpty": "暫時沒有類似作品。",
+  "libraryGraph.backToOverview": "返回總覽",
+  "libraryGraph.findingMoreLikeThis": "正在尋找相似作品…",
+  "libraryGraph.reason.recommendedBy": "{{sources}} 推薦",
+  "libraryGraph.reason.shares": "共同點：{{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "推薦分組",
+  "libraryGraph.notInLibrary": "不在你的媒體庫",
+  "libraryGraph.inLibrary": "在你的媒體庫",
+  "libraryGraph.openTitle": "打開作品",
+  "libraryGraph.exploredGroup": "已探索",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}，不在你的媒體庫",
+  "libraryGraph.trailLabel": "已探索",
+  "libraryGraph.canvasLabel":
+    "媒體庫圖譜。使用方向鍵在同一群組的作品間移動，按 Enter 開啟。",
   "title.bulkSelectionCount": "已選取 {{count}} 部",
   "title.bulkSelectionPanelTitle": "批次選取",
   "title.bulkSelectionPanelHint": "為選取的作品選擇操作，或清除選取。",
@@ -5572,6 +5613,33 @@ const zh_HK: LocaleDictionary = {
   "settings.refMaintFactsWatchedByAnyoneValue": "當已啟用媒體伺服器上的任何帳戶播放過它時為 true,無論該帳戶是否連結到 Scryer 用戶;對於季和劇集,任何已播出的單集都算。在過去 48 小時內的同步讀取每個已啟用連接上的所有帳戶之前,以原因 audience_not_read 視為未知;觀看事實未知時,以一般原因視為未知。",
   "settings.refMaintFactsLastWatchedByAnyoneAtValue": "任何帳戶最近一次播放的 RFC3339 時間戳;無人播放時以原因 never_watched 缺失,播放沒有記錄時間時以原因 play_time_missing(季和劇集為 episode_play_time_missing)未知,尚未讀取所有帳戶時以 audience_not_read 未知",
   "settings.maintenancePreviewFacts": "規則讀取的事實",
+  "setup.sourceImportProgress": "正在匯入來源",
+  "setup.sourceImportInvalidRequest":
+    "所選來源無法使用。請重新整理來源偵測後再選擇。",
+  "setup.sourceImportSelectionChanged":
+    "已提交的來源選擇無法更改。請在摘要中重試失敗的來源。",
+  "setup.sourceImportNotOwned": "此來源匯入不適用於你的帳戶。",
+  "setup.sourceImportQueueFull": "來源匯入容量已滿。請在其他匯入完成後重試。",
+  "setup.sourceImportActive": "此來源匯入仍在進行中。",
+  "setup.sourceImportNotRetryable": "只有失敗或中斷的來源才能重試或略過。",
+  "setup.sourceImportUnresolved": "完成設定前，請重試或明確略過未解決的來源。",
+  "setup.sourceImportCredentialRequired": "繼續之前請輸入來源憑證。",
+  "setup.sourceImportConfigConflict": "預留的設定已更改。重試前請檢查該來源。",
+  "setup.sourceImportSourceNotReady": "繼續之前請等待來源偵測完成。",
+  "setup.sourceImportResume": "重新連接進度",
+  "setup.sourceImportLoading": "正在載入來源匯入進度",
+  "setup.sourceImportCredential": "{{name}} 的更正憑證",
+  "setup.sourceImportRetry": "重試失敗的來源",
+  "setup.sourceImportSkip": "略過此來源",
+  "setup.sourceImportItemFailed": "請檢查連線和憑證，然後重試或略過。",
+  "setup.sourceImportState.queued": "排隊中",
+  "setup.sourceImportState.installing": "正在安裝提供者",
+  "setup.sourceImportState.checking": "正在檢查連線",
+  "setup.sourceImportState.saving": "正在儲存設定",
+  "setup.sourceImportState.succeeded": "已匯入",
+  "setup.sourceImportState.failed": "失敗",
+  "setup.sourceImportState.interrupted": "已中斷",
+  "setup.sourceImportState.skipped": "已略過",
 };
 
 export default zh_HK;

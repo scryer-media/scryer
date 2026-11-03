@@ -39,6 +39,7 @@ pub const TITLE_RECOMMENDATIONS_QUERY: &str =
     include_str!("metadata_gateway/title_recommendations.graphql");
 pub const COLLECTION_COMPLETIONS_QUERY: &str =
     include_str!("metadata_gateway/collection_completions.graphql");
+pub const LIBRARY_GRAPH_QUERY: &str = include_str!("metadata_gateway/library_graph.graphql");
 pub const SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT_QUERY: &str =
     include_str!("metadata_gateway/submit_discovery_context_snapshot.graphql");
 pub const DISCOVERY_CONTEXT_SNAPSHOT_STATUS_QUERY: &str =

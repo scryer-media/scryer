@@ -3,6 +3,7 @@
 // sizes from a chosen metric, collapsed clusters above a size limit, and the
 // localized names of clusters and edge kinds.
 
+import type { CanonicalMediaTag } from "../types/canonical-tags.ts";
 import type { Facet, TitleRecord } from "../types/titles.ts";
 import {
   UNPLACED_CLUSTER_ID,
@@ -339,15 +340,20 @@ export function joinLibraryGraphToTitles(
   return { graph, titleBySubjectKey };
 }
 
-/** The graph as drawn: clusters collapsed when the graph is too large. */
+/**
+ * The graph as drawn: clusters collapsed when the graph is too large. Whether
+ * it is too large is read from `owned`, the library's own nodes, so explored
+ * titles shown beside them never tip the view into collapsing.
+ */
 export function displayedLibraryGraph(
   graph: GraphState,
   expandedClusterIds: ReadonlySet<number>,
   threshold: number = LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
+  owned: GraphState = graph,
 ): GraphState {
   return collapseClusters(
     graph,
-    clustersToCollapse(graph, threshold, expandedClusterIds),
+    clustersToCollapse(owned, threshold, expandedClusterIds),
   );
 }
 
@@ -408,6 +414,7 @@ const RELATION_KIND_KEYS: Record<string, string> = {
   sequel: "libraryGraph.edgeKind.sequel",
   prequel: "libraryGraph.edgeKind.prequel",
   co_watch: "libraryGraph.edgeKind.coWatch",
+  recommendation: "libraryGraph.edgeKind.recommendation",
 };
 
 /** One edge kind in the viewer's language. */
@@ -441,4 +448,233 @@ export function libraryGraphEdgeKindLabels(
   return Array.from(
     new Set(kinds.map((kind) => libraryGraphEdgeKindLabel(kind, t))),
   );
+}
+
+/** At most this many shared genres and themes explain one link. */
+export const NEIGHBOR_REASON_TERM_LIMIT = 4;
+
+/** Every title of the anime facet carries this genre, so it explains nothing. */
+const UNINFORMATIVE_TERM_KEYS = new Set(["canonical:genre:anime"]);
+
+const SOURCE_NAMES: Record<string, string> = {
+  anilist: "AniList",
+  anidb: "AniDB",
+  imdb: "IMDb",
+  kitsu: "Kitsu",
+  mal: "MyAnimeList",
+  simkl: "Simkl",
+  tmdb: "TMDB",
+  trakt: "Trakt",
+  tvdb: "TVDB",
+};
+
+/** Why a More Like This result sits next to the title it was found from. */
+export type NeighborReason = {
+  /** The relation edge kinds, other than a plain recommendation. */
+  relations: string[];
+  /** The services that recommend it, by display name. */
+  sources: string[];
+  /** Genre and theme names both titles carry, themes first. */
+  shared: string[];
+};
+
+type ReasonItem = {
+  sources?: readonly string[] | null;
+  canonicalTags?: readonly CanonicalMediaTag[] | null;
+};
+
+/** A source id's display name; an unknown id shows as given. */
+export function discoverySourceName(source: string): string {
+  const id = source.trim().toLowerCase();
+  return SOURCE_NAMES[id] ?? source.trim();
+}
+
+/**
+ * Why `item` is a neighbour of a title carrying `anchorTags`: how it is
+ * related, which services recommend it, and the genres and themes the two
+ * share. Spoiler tags never explain a link.
+ */
+export function neighborReason(
+  anchorTags: readonly CanonicalMediaTag[] | null | undefined,
+  item: ReasonItem,
+  kinds: readonly string[],
+): NeighborReason {
+  const anchorKeys = new Set(
+    (anchorTags ?? []).filter((tag) => !tag.isSpoiler).map((tag) => tag.key),
+  );
+  const rank = (tag: CanonicalMediaTag) => (tag.category === "theme" ? 0 : 1);
+  const shared = (item.canonicalTags ?? [])
+    .filter(
+      (tag) =>
+        !tag.isSpoiler &&
+        (tag.category === "theme" || tag.category === "genre") &&
+        anchorKeys.has(tag.key) &&
+        !UNINFORMATIVE_TERM_KEYS.has(tag.key),
+    )
+    .sort(
+      (a, b) =>
+        rank(a) - rank(b) ||
+        (b.confidence ?? 0) - (a.confidence ?? 0) ||
+        a.name.localeCompare(b.name),
+    );
+  const names: string[] = [];
+  for (const tag of shared) {
+    const name = tag.name.trim();
+    if (name && !names.includes(name)) {
+      names.push(name);
+    }
+    if (names.length >= NEIGHBOR_REASON_TERM_LIMIT) {
+      break;
+    }
+  }
+  return {
+    relations: kinds.filter(
+      (kind) => kind.trim().split(":")[1] !== "recommendation",
+    ),
+    sources: Array.from(
+      new Set(
+        (item.sources ?? [])
+          .filter((source) => source.trim() !== "")
+          .map(discoverySourceName),
+      ),
+    ),
+    shared: names,
+  };
+}
+
+/** A neighbour reason as tooltip lines in the viewer's language. */
+export function neighborReasonLines(
+  reason: NeighborReason,
+  t: Translate,
+): string[] {
+  const lines: string[] = [];
+  const relations = libraryGraphEdgeKindLabels(reason.relations, t);
+  if (relations.length > 0) {
+    lines.push(relations.join(", "));
+  }
+  if (reason.sources.length > 0) {
+    lines.push(
+      t("libraryGraph.reason.recommendedBy", {
+        sources: reason.sources.join(", "),
+      }),
+    );
+  }
+  if (reason.shared.length > 0) {
+    lines.push(
+      t("libraryGraph.reason.shares", { terms: reason.shared.join(", ") }),
+    );
+  }
+  return lines;
+}
+
+/** The most named sections a focused view splits its recommendations into. */
+export const RECOMMENDATION_SECTION_LIMIT = 5;
+
+/** A run of recommendations that share a genre or theme. */
+export type RecommendationSection = {
+  /** The shared tag's key and name, or null for the ones left over. */
+  tagKey: string | null;
+  name: string | null;
+  keys: string[];
+};
+
+/**
+ * Recommendations grouped by the genre or theme most of them share. Each
+ * round takes the tag that covers the most recommendations not yet grouped,
+ * themes before genres on a tie. A tag carried by more than two thirds of
+ * them, or by only one, does not tell them apart and is skipped. The
+ * rest form a last unnamed section. Order within a section follows the
+ * input. With fewer than two named sections, everything is one unnamed
+ * section.
+ */
+export function recommendationSections(
+  items: readonly {
+    key: string;
+    tags: readonly CanonicalMediaTag[] | null | undefined;
+  }[],
+  limit: number = RECOMMENDATION_SECTION_LIMIT,
+): RecommendationSection[] {
+  const keys = items.map((item) => item.key);
+  const tagsByKey = new Map<string, Map<string, CanonicalMediaTag>>();
+  const carriers = new Map<string, Set<string>>();
+  for (const item of items) {
+    const tags = new Map<string, CanonicalMediaTag>();
+    for (const tag of item.tags ?? []) {
+      if (
+        tag.isSpoiler ||
+        (tag.category !== "theme" && tag.category !== "genre") ||
+        UNINFORMATIVE_TERM_KEYS.has(tag.key) ||
+        !tag.name.trim()
+      ) {
+        continue;
+      }
+      tags.set(tag.key, tag);
+      const set = carriers.get(tag.key) ?? new Set<string>();
+      set.add(item.key);
+      carriers.set(tag.key, set);
+    }
+    tagsByKey.set(item.key, tags);
+  }
+  const tagFor = (tagKey: string) => {
+    for (const tags of tagsByKey.values()) {
+      const tag = tags.get(tagKey);
+      if (tag) {
+        return tag;
+      }
+    }
+    return null;
+  };
+  const unassigned = new Set(keys);
+  const sections: RecommendationSection[] = [];
+  while (sections.length < limit && unassigned.size > 1) {
+    let best: { tag: CanonicalMediaTag; cover: number } | null = null;
+    for (const [tagKey, holders] of carriers) {
+      // A tag most recommendations carry does not tell them apart.
+      if (holders.size > (keys.length * 2) / 3) {
+        continue;
+      }
+      let cover = 0;
+      for (const key of holders) {
+        if (unassigned.has(key)) {
+          cover += 1;
+        }
+      }
+      const tag = tagFor(tagKey);
+      if (cover < 2 || !tag) {
+        continue;
+      }
+      const better =
+        !best ||
+        cover > best.cover ||
+        (cover === best.cover &&
+          ((tag.category === "theme" && best.tag.category !== "theme") ||
+            (tag.category === best.tag.category && tag.key < best.tag.key)));
+      if (better) {
+        best = { tag, cover };
+      }
+    }
+    if (!best) {
+      break;
+    }
+    const holders = carriers.get(best.tag.key) ?? new Set<string>();
+    const members = keys.filter(
+      (key) => unassigned.has(key) && holders.has(key),
+    );
+    for (const key of members) {
+      unassigned.delete(key);
+    }
+    sections.push({
+      tagKey: best.tag.key,
+      name: best.tag.name.trim(),
+      keys: members,
+    });
+  }
+  if (sections.length < 2) {
+    return keys.length > 0 ? [{ tagKey: null, name: null, keys }] : [];
+  }
+  const rest = keys.filter((key) => unassigned.has(key));
+  if (rest.length > 0) {
+    sections.push({ tagKey: null, name: null, keys: rest });
+  }
+  return sections;
 }

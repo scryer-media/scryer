@@ -6,10 +6,12 @@ import {
   clusterCenters,
   convexHull,
   createLayout,
+  egoLayout,
   layoutIsSettled,
   layoutLoopDecision,
   layoutPositions,
   stepLayout,
+  tweenPositions,
 } from "./library-graph-layout.ts";
 
 function fixtureLayoutInput() {
@@ -166,4 +168,80 @@ test("the layout loop pauses while its container has no size and resumes after",
   assert.equal(layoutLoopDecision({ width: 320, height: 480 }, layout), "done");
   assert.equal(layoutLoopDecision({ width: 0, height: 0 }, layout), "done");
   assert.equal(layoutLoopDecision({ width: 320, height: 480 }, null), "done");
+});
+
+test("a focused layout rings each group around the centre, inner groups first", () => {
+  const library = ["n:1", "n:2", "n:3"];
+  const explored = ["x:1", "x:2", "x:3", "x:4"];
+  const positions = egoLayout("c", [[library], [explored]], 200, 10);
+  assert.deepEqual(positions.get("c"), { x: 0, y: 0 });
+  const radius = (key: string) => {
+    const point = positions.get(key);
+    assert.ok(point);
+    return Math.hypot(point.x, point.y);
+  };
+  for (const key of library) {
+    assert.ok(Math.abs(radius(key) - 100) < 1e-9, `${key} at ${radius(key)}`);
+  }
+  for (const key of explored) {
+    assert.ok(Math.abs(radius(key) - 200) < 1e-9, `${key} at ${radius(key)}`);
+  }
+  // The first node of the inner ring sits straight up from the centre.
+  const first = positions.get("n:1");
+  assert.ok(first && Math.abs(first.x) < 1e-9 && first.y < 0);
+});
+
+test("a crowded ring spills onto further rings and never past the outer radius", () => {
+  const many = Array.from({ length: 60 }, (_, index) => `n:${index}`);
+  const positions = egoLayout("c", [[many]], 100, 20);
+  assert.equal(positions.size, 61);
+  const radii = new Set(
+    many.map((key) => {
+      const point = positions.get(key);
+      assert.ok(point);
+      return Math.round(Math.hypot(point.x, point.y));
+    }),
+  );
+  assert.ok(radii.size > 1, "everything landed on one ring");
+  assert.ok(Math.max(...radii) <= 100);
+  // Nothing at all to place leaves the centre alone.
+  assert.equal(egoLayout("c", [[[]], [["c"]]], 100, 20).size, 1);
+});
+
+test("tweening eases each node from where it was to where it goes", () => {
+  const from = new Map([["a", { x: 0, y: 0 }]]);
+  const to = new Map([
+    ["a", { x: 10, y: -10 }],
+    ["b", { x: 5, y: 5 }],
+  ]);
+  assert.deepEqual(tweenPositions(from, to, 0).get("a"), { x: 0, y: 0 });
+  assert.deepEqual(tweenPositions(from, to, 1).get("a"), { x: 10, y: -10 });
+  const half = tweenPositions(from, to, 0.5).get("a");
+  // Ease-out: more than halfway at half time.
+  assert.ok(half && half.x > 5 && half.x < 10);
+  // A node with no start is already where it goes.
+  assert.deepEqual(tweenPositions(from, to, 0.2).get("b"), { x: 5, y: 5 });
+});
+
+test("each section of a ring keeps to its own arc, with a gap between sections", () => {
+  const sections = [
+    ["a:1", "a:2", "a:3"],
+    ["b:1", "b:2"],
+  ];
+  const positions = egoLayout("c", [sections], 100, 5);
+  // Angles clockwise from straight up, in slots of a full turn over the
+  // five nodes and two gaps.
+  const slot = (key: string) => {
+    const point = positions.get(key);
+    assert.ok(point);
+    let angle = Math.atan2(point.y, point.x) + Math.PI / 2;
+    if (angle < 0) {
+      angle += Math.PI * 2;
+    }
+    return Math.round((angle / (Math.PI * 2)) * 7);
+  };
+  assert.deepEqual(
+    ["a:1", "a:2", "a:3", "b:1", "b:2"].map(slot),
+    [0, 1, 2, 4, 5],
+  );
 });

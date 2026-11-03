@@ -665,7 +665,7 @@ impl TitleRepository for TitleStore {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &format!(
-                "SELECT id, library_id, name, facet, external_ids, {genres} AS genres FROM titles"
+                "SELECT id, library_id, name, facet, external_ids, created_at, {genres} AS genres FROM titles"
             ),
             &[],
         )
@@ -682,6 +682,7 @@ impl TitleRepository for TitleStore {
                     facet,
                     external_ids: decode_title_json_or_default(row, "external_ids")?,
                     genres: decode_title_json_or_default(row, "genres")?,
+                    created_at: row.timestamp("created_at")?,
                 })
             })
             .collect()
@@ -6634,12 +6635,12 @@ mod tests {
             .await
             .unwrap();
         // Omit presentation columns and provenance tables: touching either must fail.
-        sqlx::query("CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT, name TEXT, facet TEXT, external_ids TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT, name TEXT, facet TEXT, external_ids TEXT, created_at TEXT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE title_metadata_tags (title_id TEXT, category TEXT, name TEXT)")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(r#"INSERT INTO titles VALUES ('a', NULL, 'A', 'movie', '[{"source":"tmdb","value":"10"}]'), ('b', 'alternate', 'B', 'anime', '[]')"#).execute(&pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO titles VALUES ('a', NULL, 'A', 'movie', '[{"source":"tmdb","value":"10"}]', '2026-01-02T03:04:05Z'), ('b', 'alternate', 'B', 'anime', '[]', '2026-02-03T04:05:06Z')"#).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO title_metadata_tags VALUES ('a', 'GENRE', 'Animation'), ('a', 'genre', 'Drama'), ('a', 'theme', 'Mystery')").execute(&pool).await.unwrap();
         let store = TitleStore::new(StoreDatastore::sqlite(
             pool,
@@ -6658,6 +6659,8 @@ mod tests {
         assert_eq!(rows[1].library_id, "alternate");
         assert!(rows[1].genres.is_empty());
         assert!(rows[1].external_ids.is_empty());
+        assert_eq!(rows[0].created_at.to_rfc3339(), "2026-01-02T03:04:05+00:00");
+        assert_eq!(rows[1].created_at.to_rfc3339(), "2026-02-03T04:05:06+00:00");
     }
 
     /// A title stored as `C:\Media\Show` has to be found when a scan or a move

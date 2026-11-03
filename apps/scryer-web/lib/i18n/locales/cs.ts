@@ -1,6 +1,28 @@
 import type { LocaleDictionary } from "../types";
 
 const cs: LocaleDictionary = {
+  "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "Uložené vydání se nepodařilo zařadit do fronty. Zůstává dostupné pro další pokus.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Toto vydání je na seznamu blokovaných pro tento titul. Pro zařazení do fronty jej ze seznamu odeberte.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Toto vydání už je ve frontě stahování.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Pro tento titul právě probíhá jiné hledání nebo zařazení do fronty. Zkuste to znovu, až skončí.",
+  "wanted.downloadStandby": "Stáhnout",
+  "wanted.downloadStandbyLabel": "Stáhnout {{name}}",
+  "wanted.standbyConflictTitle": "Stahování již probíhá",
+  "wanted.standbyConflictDescription":
+    "Zařadit {{name}} do fronty vedle těchto stahování, nebo je zrušit a zařadit místo nich.",
+  "wanted.standbyQueue": "Zařadit do fronty",
+  "wanted.standbyQueuedRefreshFailed":
+    "Vydání bylo zařazeno do fronty, ale seznam se nepodařilo obnovit. Obnovte stránku, abyste viděli aktuální stav.",
+  "wanted.standbyCancelAndQueue": "Zrušit a zařadit do fronty",
+  "wanted.standbyQueuedCancelFailed":
+    "Vydání bylo zařazeno do fronty, ale {{count}} konfliktních stahování se nepodařilo zrušit a stále běží.",
   "settings.oauthJellyfinCallbackCopied":
     "URL zpětného volání Jellyfin zkopírována.",
   "settings.oauthClientIdCopied": "ID klienta OAuth zkopírováno.",
@@ -1523,38 +1545,54 @@ const cs: LocaleDictionary = {
   "discovery.rail.becauseYouLike.war": "Protože máte rádi válečné příběhy",
   "discovery.rail.becauseYouLike.western": "Protože máte rádi westerny",
   "discovery.rail.becauseYouLike.sports": "Protože máte rádi sportovní příběhy",
-  "discovery.rail.becauseYouLike.supernatural": "Protože máte rádi nadpřirozeno",
-  "discovery.rail.becauseYouLike.coming-of-age": "Protože máte rádi příběhy o dospívání",
-  "discovery.rail.becauseYouLike.found-family": "Protože máte rádi nalezené rodiny",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Protože máte rádi nadpřirozeno",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Protože máte rádi příběhy o dospívání",
+  "discovery.rail.becauseYouLike.found-family":
+    "Protože máte rádi nalezené rodiny",
   "discovery.rail.becauseYouLike.revenge": "Protože máte rádi příběhy o pomstě",
   "discovery.rail.becauseYouLike.heist": "Protože máte rádi loupeže",
-  "discovery.rail.becauseYouLike.time-travel": "Protože máte rádi cestování časem",
+  "discovery.rail.becauseYouLike.time-travel":
+    "Protože máte rádi cestování časem",
   "discovery.rail.becauseYouLike.dystopia": "Protože máte rádi dystopie",
   "discovery.rail.becauseYouLike.cyberpunk": "Protože máte rádi kyberpunk",
   "discovery.rail.becauseYouLike.superhero": "Protože máte rádi superhrdiny",
   "discovery.rail.becauseYouLike.vampire": "Protože máte rádi upíry",
   "discovery.rail.becauseYouLike.zombie": "Protože máte rádi zombie",
-  "discovery.rail.becauseYouLike.survival": "Protože máte rádi příběhy o přežití",
-  "discovery.rail.becauseYouLike.space": "Protože máte rádi vesmírná dobrodružství",
+  "discovery.rail.becauseYouLike.survival":
+    "Protože máte rádi příběhy o přežití",
+  "discovery.rail.becauseYouLike.space":
+    "Protože máte rádi vesmírná dobrodružství",
   "discovery.rail.becauseYouLike.detective": "Protože máte rádi detektivky",
-  "discovery.rail.becauseYouLike.organized-crime": "Protože máte rádi organizovaný zločin",
-  "discovery.rail.becauseYouLike.period-drama": "Protože máte rádi dobová dramata",
-  "discovery.rail.becauseYouLike.psychological": "Protože máte rádi psychologické příběhy",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Protože máte rádi organizovaný zločin",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Protože máte rádi dobová dramata",
+  "discovery.rail.becauseYouLike.psychological":
+    "Protože máte rádi psychologické příběhy",
   "discovery.rail.becauseYouLike.mythology": "Protože máte rádi mytologii",
   "discovery.rail.becauseYouLike.isekai": "Protože máte rádi isekai",
   "discovery.rail.becauseYouLike.mecha": "Protože máte rádi mecha",
-  "discovery.rail.becauseYouLike.martial-arts": "Protože máte rádi bojová umění",
+  "discovery.rail.becauseYouLike.martial-arts":
+    "Protože máte rádi bojová umění",
   "discovery.rail.becauseYouLike.music": "Protože máte rádi hudební příběhy",
-  "discovery.rail.becauseYouLike.workplace": "Protože máte rádi příběhy z pracovního prostředí",
+  "discovery.rail.becauseYouLike.workplace":
+    "Protože máte rádi příběhy z pracovního prostředí",
   "discovery.rail.becauseYouLike.medical": "Protože máte rádi lékařská dramata",
-  "discovery.rail.becauseYouLike.military": "Protože máte rádi vojenské příběhy",
+  "discovery.rail.becauseYouLike.military":
+    "Protože máte rádi vojenské příběhy",
   "discovery.rail.becauseYouLike.spy": "Protože máte rádi špionážní příběhy",
-  "discovery.rail.becauseYouLike.royal-politics": "Protože máte rádi královské intriky",
-  "discovery.rail.becauseYouLike.first-love": "Protože máte rádi příběhy o první lásce",
-  "discovery.rail.becauseYouLike.forbidden-love": "Protože máte rádi zakázanou lásku",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Protože máte rádi královské intriky",
+  "discovery.rail.becauseYouLike.first-love":
+    "Protože máte rádi příběhy o první lásce",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Protože máte rádi zakázanou lásku",
   "discovery.rail.becauseYouLike.lgbtq": "Protože máte rádi LGBTQ+ příběhy",
   "discovery.rail.becauseYouLike.samurai": "Protože máte rádi samuraje",
-  "discovery.rail.becauseYouLike.magical-girl": "Protože máte rádi kouzelné dívky",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Protože máte rádi kouzelné dívky",
   "settings.keepHistoryForever": "Uchovávat historii navždy",
   "settings.historyRetentionDaysHeader": "Uchovávat historii po dobu",
   "settings.historyRetentionDaysSuffix": "dní",
@@ -1857,6 +1895,26 @@ const cs: LocaleDictionary = {
   "libraryGraph.edgeKind.affinity": "Společný zájem: {{label}}",
   "libraryGraph.edgeKind.sharedTaste": "Společný zájem",
   "libraryGraph.edgeKind.other": "Propojeno",
+  "libraryGraph.edgeKind.recommendation": "Doporučeno",
+  "libraryGraph.notBuilt": "Graf knihovny zatím nebyl vytvořen.",
+  "libraryGraph.truncated": "Tento graf pokrývá jen část knihovny.",
+  "discovery.refusal.neighborTargetKeyUnsupported": "Tento titul nelze dále prozkoumat.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Tento titul neodpovídá typu médií této knihovny, proto ho zde nelze prozkoumat.",
+  "libraryGraph.moreLikeThisEmpty": "Zatím nic podobného.",
+  "libraryGraph.backToOverview": "Zpět na přehled",
+  "libraryGraph.findingMoreLikeThis": "Hledám podobné tituly…",
+  "libraryGraph.reason.recommendedBy": "Doporučeno na {{sources}}",
+  "libraryGraph.reason.shares": "Společné: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Skupiny doporučení",
+  "libraryGraph.notInLibrary": "Není ve vaší knihovně",
+  "libraryGraph.inLibrary": "Ve vaší knihovně",
+  "libraryGraph.openTitle": "Otevřít titul",
+  "libraryGraph.exploredGroup": "Prozkoumáno",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, není ve vaší knihovně",
+  "libraryGraph.trailLabel": "Prozkoumáno",
+  "libraryGraph.canvasLabel":
+    "Graf knihovny. Šipkami se pohybujete mezi tituly v clusteru, klávesou Enter titul otevřete.",
   "title.bulkSelectionCount": "Vybráno: {{count}}",
   "title.bulkSelectionPanelTitle": "Hromadný výběr",
   "title.bulkSelectionPanelHint":
@@ -7136,6 +7194,41 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsWatchedByAnyoneValue": "True, když ji přehrál jakýkoli účet na povoleném mediálním serveru, bez ohledu na propojení s uživatelem Scryeru; u sérií a seriálů stačí kterákoli odvysílaná epizoda. Neznámé s důvodem audience_not_read, dokud synchronizace za posledních 48 hodin nepřečte všechny účty na všech povolených připojeních, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
   "settings.refMaintFactsLastWatchedByAnyoneAtValue": "Časové razítko RFC3339 posledního přehrání kterýmkoli účtem; chybí s důvodem never_watched, když ji nikdo nepřehrál, a je neznámé s důvodem play_time_missing (episode_play_time_missing u sérií a seriálů), když přehrání nemá zaznamenaný čas, nebo audience_not_read, když nebyly přečteny všechny účty",
   "settings.maintenancePreviewFacts": "Fakta, která pravidlo četlo",
+  "setup.sourceImportProgress": "Import zdrojů",
+  "setup.sourceImportInvalidRequest":
+    "Vybraný zdroj není dostupný. Obnovte vyhledávání zdrojů a vyberte ho znovu.",
+  "setup.sourceImportSelectionChanged":
+    "Odeslaný výběr zdrojů nelze změnit. Neúspěšné zdroje zopakujte v Souhrnu.",
+  "setup.sourceImportNotOwned":
+    "Tento import zdrojů není pro váš účet dostupný.",
+  "setup.sourceImportQueueFull":
+    "Kapacita importu zdrojů je plná. Zkuste to znovu, až skončí jiný import.",
+  "setup.sourceImportActive": "Tento import zdrojů stále probíhá.",
+  "setup.sourceImportNotRetryable":
+    "Zopakovat nebo přeskočit lze pouze neúspěšné nebo přerušené zdroje.",
+  "setup.sourceImportUnresolved":
+    "Před dokončením nastavení zopakujte nebo výslovně přeskočte nevyřešené zdroje.",
+  "setup.sourceImportCredentialRequired":
+    "Před pokračováním zadejte přihlašovací údaj zdroje.",
+  "setup.sourceImportConfigConflict":
+    "Rezervovaná konfigurace se změnila. Před opakováním zdroj zkontrolujte.",
+  "setup.sourceImportSourceNotReady":
+    "Před pokračováním počkejte na dokončení vyhledávání zdrojů.",
+  "setup.sourceImportResume": "Znovu připojit k průběhu",
+  "setup.sourceImportLoading": "Načítání průběhu importu zdrojů",
+  "setup.sourceImportCredential": "Opravený přihlašovací údaj pro {{name}}",
+  "setup.sourceImportRetry": "Zopakovat neúspěšné zdroje",
+  "setup.sourceImportSkip": "Přeskočit tento zdroj",
+  "setup.sourceImportItemFailed":
+    "Zkontrolujte připojení a přihlašovací údaje, poté zopakujte nebo přeskočte.",
+  "setup.sourceImportState.queued": "Ve frontě",
+  "setup.sourceImportState.installing": "Instalace poskytovatele",
+  "setup.sourceImportState.checking": "Kontrola připojení",
+  "setup.sourceImportState.saving": "Ukládání konfigurace",
+  "setup.sourceImportState.succeeded": "Importováno",
+  "setup.sourceImportState.failed": "Selhalo",
+  "setup.sourceImportState.interrupted": "Přerušeno",
+  "setup.sourceImportState.skipped": "Přeskočeno",
 };
 
 export default cs;

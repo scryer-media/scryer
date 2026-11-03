@@ -1,8 +1,9 @@
 use super::*;
 use crate::discovery::{
-    DiscoveryContextDefaults, DiscoveryLibraryContext, build_projected_discovery_library_context,
-    coalesce_pending_context_change, discovery_library_growth_warrants_snapshot,
-    incremental_item_records, pending_context_change_from_domain_event,
+    DiscoveryContextDefaults, DiscoveryLibraryContext, LibraryGraphRebuildSummary,
+    build_projected_discovery_library_context, coalesce_pending_context_change,
+    discovery_library_growth_warrants_snapshot, incremental_item_records,
+    library_graph_facets_for_changes, pending_context_change_from_domain_event,
     pending_context_changes_need_snapshot_reconciliation, public_feed_item_records,
     public_feed_section_records, snapshot_facet_records, snapshot_item_records,
 };
@@ -538,6 +539,9 @@ struct DiscoverySyncRunSummary {
     context_snapshot: Option<DiscoveryContextSnapshotRunSummary>,
     context_incremental: Option<DiscoveryContextIncrementalRunSummary>,
     public_feed: Option<DiscoveryPublicFeedRunSummary>,
+    /// Library graph rebuilds this run asked for; empty when none was due.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    library_graphs: Vec<LibraryGraphRebuildSummary>,
     next_run_at: String,
     next_incremental_reload_eligible_at: String,
     next_context_snapshot_eligible_at: String,
@@ -2235,6 +2239,10 @@ impl AppUseCase {
                 crate::error_reasons::jobs::LOCATION_OPERATIONS_INVALID,
                 "location operations must be started from the location operation mutation",
             )),
+            JobKey::SourceImport => Err(AppError::validation_refused(
+                crate::source_import::refusal::INVALID_REQUEST,
+                "source imports must be started from setup",
+            )),
         }
     }
 
@@ -2769,6 +2777,54 @@ impl AppUseCase {
         self.set_job_next_run_at(JobKey::DiscoverySync, next_run_at)
             .await;
 
+        // A committed full snapshot rebuilds every facet's library graph; a
+        // committed incremental reload rebuilds the facets its changes
+        // touched. Any run also rebuilds a facet whose graph never landed or
+        // whose last build failed, once its backoff has passed. Graph
+        // failures are recorded per facet and never fail this run.
+        let owned_graph_facets = library_context
+            .subject_provenance
+            .iter()
+            .map(|subject| subject.facet.clone())
+            .collect::<BTreeSet<_>>();
+        let mut library_graph_facets = if context_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.committed)
+        {
+            // Every facet, so one left with no owned titles drops its graph.
+            [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime]
+                .iter()
+                .map(|facet| facet.as_str().to_string())
+                .chain(owned_graph_facets.iter().cloned())
+                .collect::<BTreeSet<_>>()
+        } else if context_incremental
+            .as_ref()
+            .is_some_and(|incremental| incremental.committed)
+        {
+            library_graph_facets_for_changes(&pending_changes)
+        } else {
+            BTreeSet::new()
+        };
+        if personalized_discovery_enabled
+            && !scans_active
+            && state.last_success_generation_id.is_some()
+        {
+            let unscheduled = owned_graph_facets
+                .difference(&library_graph_facets)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            library_graph_facets.extend(
+                self.library_graph_facets_due_for_retry(&unscheduled, now)
+                    .await,
+            );
+        }
+        let library_graphs = if library_graph_facets.is_empty() {
+            Vec::new()
+        } else {
+            self.rebuild_library_graphs(&titles, &library_context, &library_graph_facets)
+                .await
+        };
+
         let summary = DiscoverySyncRunSummary {
             state_created,
             personalized_discovery_enabled,
@@ -2780,6 +2836,7 @@ impl AppUseCase {
             context_snapshot,
             context_incremental,
             public_feed,
+            library_graphs,
             next_run_at: next_run_at.to_rfc3339(),
             next_incremental_reload_eligible_at: effective_next_incremental.to_rfc3339(),
             next_context_snapshot_eligible_at: effective_next_context.to_rfc3339(),

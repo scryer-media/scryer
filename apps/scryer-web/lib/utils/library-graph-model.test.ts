@@ -11,7 +11,10 @@ import {
   fixtureTargetKey,
   libraryGraphFixture,
 } from "./library-graph-fixture.ts";
-import { clusterNodeKey } from "./library-graph-merge.ts";
+import {
+  clusterNodeKey,
+  mergeLibraryGraphResult,
+} from "./library-graph-merge.ts";
 import {
   LIBRARY_GRAPH_MAX_NODE_SIZE,
   LIBRARY_GRAPH_MIN_NODE_SIZE,
@@ -21,6 +24,9 @@ import {
   libraryGraphEdgeKindLabel,
   libraryGraphEdgeKindLabels,
   libraryGraphGroupName,
+  neighborReason,
+  neighborReasonLines,
+  recommendationSections,
   nodeSizesByTitleId,
   targetKeyMatchKeys,
   titleForTargetKey,
@@ -214,6 +220,48 @@ test("above the threshold every cluster collapses until it is expanded", () => {
   );
 });
 
+test("explored ghosts neither tip the graph into collapsing nor count as cluster members", () => {
+  const { graph: owned } = joinLibraryGraphToTitles(
+    libraryGraphFixture({ facet: "MOVIE" }),
+    catalog(64),
+  );
+  const anchor = owned.nodes.find((node) => node.clusterId === 1);
+  assert.ok(anchor);
+  const explored = mergeLibraryGraphResult(owned, {
+    generatedAt: "2026-01-01T00:00:00Z",
+    nodes: [0, 1, 2, 3].map((index) => ({
+      subjectKey: `ghost:tmdb:movie:${9000 + index}`,
+      targetKey: `tmdb:movie:${9000 + index}`,
+      clusterId: UNPLACED_CLUSTER_ID,
+    })),
+    edges: [0, 1, 2, 3].map((index) => ({
+      from: anchor.subjectKey,
+      to: `ghost:tmdb:movie:${9000 + index}`,
+      weight: 0.5,
+      kinds: ["relation:recommendation"],
+    })),
+    clusters: [],
+  });
+  assert.equal(explored.nodes.length, 68);
+
+  // The library alone sits at the threshold, so nothing collapses even though
+  // the explored graph is over it.
+  const open = displayedLibraryGraph(explored, new Set(), 64, owned);
+  assert.equal(open.nodes.length, 68);
+  assert.ok(open.nodes.every((node) => node.collapsedClusterId === undefined));
+
+  // Over the threshold, the anchor's collapsed cluster counts only owned
+  // titles; the ghosts folded into it are not members.
+  const collapsed = displayedLibraryGraph(explored, new Set(), 60, owned);
+  const stand = collapsed.nodes.find(
+    (node) => node.subjectKey === clusterNodeKey(1),
+  );
+  assert.equal(
+    stand?.memberCount,
+    owned.nodes.filter((node) => node.clusterId === 1).length,
+  );
+});
+
 test("node sizes scale the chosen metric between the size bounds", () => {
   const titles = [
     fixtureTitle(1, {
@@ -301,6 +349,15 @@ test("edge kinds read as localized phrases", () => {
     "Often watched together",
   );
   assert.equal(libraryGraphEdgeKindLabel("relation:remake", t), "Related");
+  // Explored links: a plain recommendation, and a subtype under its type.
+  assert.equal(
+    libraryGraphEdgeKindLabel("relation:recommendation", t),
+    "Recommended",
+  );
+  assert.equal(
+    libraryGraphEdgeKindLabel("relation:sequel:direct", t),
+    "Sequel",
+  );
   assert.equal(
     libraryGraphEdgeKindLabel("affinity:theme:isekai", t),
     "Shared interest: Isekai",
@@ -454,4 +511,101 @@ test("the table's catalog query carries no ids, so it cannot feed the graph", ()
     rows,
   );
   assert.equal(graph.nodes.length, 0);
+});
+
+function tag(
+  key: string,
+  category: string,
+  name: string,
+  extra: { confidence?: number; isSpoiler?: boolean } = {},
+) {
+  return {
+    key,
+    category,
+    name,
+    confidence: extra.confidence ?? null,
+    sources: [],
+    sourceTagKeys: [],
+    isAdult: false,
+    isSpoiler: extra.isSpoiler ?? false,
+  };
+}
+
+test("a neighbour's reason names its services and the genres and themes both titles share", () => {
+  const anchor = [
+    tag("canonical:genre:anime", "genre", "Anime"),
+    tag("canonical:genre:drama", "genre", "Drama"),
+    tag("canonical:theme:time-loop", "theme", "Time Loop"),
+    tag("canonical:theme:twist", "theme", "Twist", { isSpoiler: true }),
+    tag("canonical:content:violence", "content", "Violence"),
+  ];
+  const reason = neighborReason(
+    anchor,
+    {
+      sources: ["mal", "trakt", "mal", " ", "zz-service"],
+      canonicalTags: [
+        tag("canonical:genre:anime", "genre", "Anime"),
+        tag("canonical:genre:drama", "genre", "Drama", { confidence: 0.9 }),
+        tag("canonical:theme:time-loop", "theme", "Time Loop"),
+        tag("canonical:theme:twist", "theme", "Twist"),
+        tag("canonical:content:violence", "content", "Violence"),
+        tag("canonical:genre:comedy", "genre", "Comedy"),
+      ],
+    },
+    ["relation:recommendation", "relation:sequel"],
+  );
+  assert.deepEqual(reason, {
+    relations: ["relation:sequel"],
+    sources: ["MyAnimeList", "Trakt", "zz-service"],
+    // Themes first; the facet's own genre, spoilers, content tags and
+    // unshared tags explain nothing.
+    shared: ["Time Loop", "Drama"],
+  });
+  const lines = neighborReasonLines(reason, t);
+  assert.equal(lines.length, 3);
+  assert.equal(lines[1], "Recommended on MyAnimeList, Trakt, zz-service");
+  assert.equal(lines[2], "In common: Time Loop, Drama");
+});
+
+test("a plain recommendation with nothing shared has no reason lines", () => {
+  const reason = neighborReason(null, {}, ["relation:recommendation"]);
+  assert.deepEqual(reason, { relations: [], sources: [], shared: [] });
+  assert.deepEqual(neighborReasonLines(reason, t), []);
+});
+
+test("recommendations group by the genre or theme most of them share", () => {
+  const sports = tag("canonical:genre:sports", "genre", "Sports");
+  const team = tag("canonical:theme:team", "theme", "Team");
+  const magic = tag("canonical:theme:magic", "theme", "Magic");
+  const action = tag("canonical:genre:action", "genre", "Action");
+  const sections = recommendationSections([
+    { key: "r:1", tags: [sports, team, action] },
+    { key: "r:2", tags: [magic, action] },
+    { key: "r:3", tags: [sports, team, action] },
+    { key: "r:4", tags: [magic, action] },
+    { key: "r:5", tags: [sports, action] },
+    { key: "r:6", tags: null },
+  ]);
+  // Action is on too many to tell them apart; Sports covers three, Magic two.
+  assert.deepEqual(
+    sections.map((section) => [section.name, section.keys]),
+    [
+      ["Sports", ["r:1", "r:3", "r:5"]],
+      ["Magic", ["r:2", "r:4"]],
+      [null, ["r:6"]],
+    ],
+  );
+});
+
+test("recommendations with nothing that splits them stay one section", () => {
+  const drama = tag("canonical:genre:drama", "genre", "Drama");
+  const sections = recommendationSections([
+    { key: "r:1", tags: [drama] },
+    { key: "r:2", tags: [drama] },
+    { key: "r:3", tags: [] },
+  ]);
+  assert.deepEqual(sections, [
+    { tagKey: null, name: null, keys: ["r:1", "r:2", "r:3"] },
+  ]);
+  assert.deepEqual(recommendationSections([]), []);
 });

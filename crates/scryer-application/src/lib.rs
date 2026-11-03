@@ -7,6 +7,14 @@ pub mod challenge_solver;
 mod contracts;
 pub mod delete_refusal;
 mod discovery;
+pub use discovery::{
+    DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery, LibraryGraphCluster,
+    LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
+};
+#[cfg(test)]
+pub(crate) use discovery::{
+    LIBRARY_GRAPH_AXIS, LIBRARY_GRAPH_MIN_COSINE, LIBRARY_GRAPH_NEIGHBORS_PER_NODE,
+};
 mod download_client_config;
 mod download_client_path_mappings;
 mod download_identity;
@@ -54,6 +62,7 @@ mod folder_ownership;
 pub mod fs_integrity;
 pub mod fs_safety;
 pub mod grabbed_file_names;
+pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
 mod helpers;
@@ -206,16 +215,18 @@ pub use ports::{
     DiscoveryHomeQuery, DiscoveryHomeResult, DiscoveryHomeSectionCandidatesRecord,
     DiscoveryItemDetailQuery, DiscoveryItemLibraryProvenanceRecord, DiscoveryItemRecord,
     DiscoveryItemsPageRecord, DiscoveryItemsQuery, DiscoveryItemsResult,
-    DiscoveryItemsStorageQuery, DiscoveryPendingContextChangeRecord, DiscoveryPruneReport,
-    DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord, DiscoveryRepository,
-    DiscoverySectionItemsQuery, DiscoverySectionItemsRecord, DiscoverySectionRecord,
-    DiscoverySectionResult, DiscoverySectionSort, DiscoverySourceTagRecord,
+    DiscoveryItemsStorageQuery, DiscoveryNeighborCacheRecord, DiscoveryPendingContextChangeRecord,
+    DiscoveryPruneReport, DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord,
+    DiscoveryRepository, DiscoverySectionItemsQuery, DiscoverySectionItemsRecord,
+    DiscoverySectionRecord, DiscoverySectionResult, DiscoverySectionSort, DiscoverySourceTagRecord,
     DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord, DiscoverySyncStateRecord,
-    DiscoverySyncStatus, EpisodeImageUrlUpdate, MediaRequestQualityProfileReferenceCounts,
-    MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
-    MediaRequestUpdateResult, SeriesMovieExternalIdLookupMatch, SubtitleSyncClient,
-    SubtitleSyncJob, TitleArtworkUrlUpdate, TitleDeletePreviewInfo, TitleExternalIdLookup,
-    TitleExternalIdLookupMatch, UserUiSettingsRepository,
+    DiscoverySyncStatus, EpisodeImageUrlUpdate, LibraryGraphClusterRecord, LibraryGraphEdgeRecord,
+    LibraryGraphNodeRecord, LibraryGraphRunRecord, LibraryGraphSnapshotRecord,
+    MediaRequestQualityProfileReferenceCounts, MediaRequestResolution,
+    MediaRequestResolutionResult, MediaRequestSubmissionResult, MediaRequestUpdateResult,
+    SeriesMovieExternalIdLookupMatch, SubtitleSyncClient, SubtitleSyncJob, TitleArtworkUrlUpdate,
+    TitleDeletePreviewInfo, TitleExternalIdLookup, TitleExternalIdLookupMatch,
+    UserUiSettingsRepository,
 };
 pub(crate) mod normalize;
 pub use acquisition::submission::describe_acquisition_metrics;
@@ -267,8 +278,9 @@ pub use services::{
     ActiveImportStream, ActiveImportStreamHandle, ActiveImportStreamPhase, ActiveImportStreamSync,
     DownloadClientCategoryAdmissionSnapshot, DownloadClientCategorySnapshotStore,
     DownloadQueueSync, ImportCancellation, PluginInstallInProgressError,
-    PluginInstallOperationKind, PluginInstallProgressSnapshot, PluginInstallState, RuntimeFeature,
-    RuntimePerformanceClass, RuntimePerformanceSnapshot, describe_download_queue_metrics,
+    PluginInstallOperationKind, PluginInstallOrchestrator, PluginInstallProgressSnapshot,
+    PluginInstallState, RuntimeFeature, RuntimePerformanceClass, RuntimePerformanceSnapshot,
+    describe_download_queue_metrics,
 };
 pub use types::canonicalize_jellyfin_user_id;
 pub use upstream_scheduler::{
@@ -384,10 +396,11 @@ pub use contracts::{
     PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
     PreparedIndexerArtifact, ProxyConfigUpdate, ProxyTestResult, QueueDownloadOutcome,
     QueuedDownloadResult, QueuedManualImport, QueuedReleaseSelection, ReleaseDecisionsQuery,
-    ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate, StagedNzbRef, StorageRootUsage,
-    SubmissionConflictPolicy, SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
-    SubtitleProviderConfigUpdate, SubtitleProviderValidationResult, SubtitleStreamDetail,
-    SuccessfulGrabCommit, TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
+    ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate, StagedNzbRef, StandbyQueueChoice,
+    StandbyQueueOutcome, StorageRootUsage, SubmissionConflictPolicy, SubmissionScope,
+    SubmissionScopeConflict, SubtitleGenerationInput, SubtitleProviderConfigUpdate,
+    SubtitleProviderValidationResult, SubtitleStreamDetail, SuccessfulGrabCommit,
+    TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
     UnconfirmedDownloadSubmission, WantedSearchOutcome, indexer_search_eligibility,
 };
 pub use domain_events::DomainEventActor;
@@ -568,6 +581,8 @@ pub use library_scan::{
     DiscoveryRelatedResult, DiscoverySnapshotFacetGroup, DiscoverySnapshotFacetValue,
     DiscoverySubjectInput, DiscoveryTitle, EpisodeArtworkUrls, EpisodeMetadata,
     LibraryDirectoryScanResult, LibraryFile, LibraryFileBatch, LibraryFileBatchReceiver,
+    LibraryGraphAxis, LibraryGraphGatewayCluster, LibraryGraphGatewayEdge,
+    LibraryGraphGatewayInput, LibraryGraphGatewayNode, LibraryGraphGatewayResult,
     LibraryScanSummary, LibraryScanner, MetadataGateway, MetadataSearchItem, MetadataSearchQuery,
     MovieMetadata, MovieTitleBulkResult, MovieTitleRef, MultiMetadataSearchResult,
     RichMetadataSearchItem, SeasonMetadata, SeriesArtworkUrls, SeriesMetadata,

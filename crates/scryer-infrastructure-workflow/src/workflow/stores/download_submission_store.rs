@@ -3933,6 +3933,38 @@ mod seed_goal_tests {
     }
 
     #[tokio::test]
+    async fn frozen_zero_ratio_survives_persistence_and_batch_loading() {
+        let store = store().await;
+        let download_id = DownloadId::new();
+        let zero = PersistedSeedGoals {
+            seed_goal_seconds: None,
+            ..goals(0.0, None)
+        };
+        store
+            .record_submission_with_identity(
+                submission(download_id, "job-1", "title-1"),
+                submission_identity(download_id),
+                Some(zero.clone()),
+            )
+            .await
+            .expect("zero ratio persists");
+        assert_eq!(
+            store
+                .get_seed_goals_by_canonical_download_id(&download_id)
+                .await
+                .unwrap(),
+            Some(zero.clone())
+        );
+        let loaded = store
+            .list_seed_goals_for_client_items(&[identity()])
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].1, zero);
+        assert!(loaded[0].1.has_goals());
+    }
+
+    #[tokio::test]
     async fn seed_goals_load_in_one_batch_for_the_queue_projection() {
         let store = store().await;
         let first_id = DownloadId::new();

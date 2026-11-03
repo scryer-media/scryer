@@ -24,10 +24,14 @@ mod episode_file_reassign;
 mod external_import_finalize;
 #[path = "integration_graphql/external_import_secret_drafts.rs"]
 mod external_import_secret_drafts;
+#[path = "integration_graphql/external_import_sources.rs"]
+mod external_import_sources;
 #[path = "integration_graphql/folder_match.rs"]
 mod folder_match;
 #[path = "integration_graphql/indexer_configs.rs"]
 mod indexer_configs;
+#[path = "integration_graphql/library_graph.rs"]
+mod library_graph;
 #[path = "integration_graphql/library_scan.rs"]
 mod library_scan;
 #[path = "integration_graphql/location_conflicts.rs"]

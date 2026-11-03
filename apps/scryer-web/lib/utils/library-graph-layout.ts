@@ -308,3 +308,124 @@ export function convexHull(points: readonly LayoutPoint[]): LayoutPoint[] {
   upper.pop();
   return [...lower, ...upper];
 }
+
+/** The most rings a focused view spreads its neighbours over. */
+const MAX_EGO_RINGS = 6;
+
+/**
+ * Positions for a focused node and its neighbours: the node at the origin and
+ * each group around it, inner groups first, in the order given. A group is a
+ * list of sections; each section keeps to one arc of the circle, with an empty
+ * slot between sections. A group too crowded for one ring at `minSpacing`
+ * apart spreads over several, its nodes stepping between them, and every
+ * group starts on a ring of its own. Rings are evenly spaced out to
+ * `outerRadius`; with more neighbours than the rings can hold at that
+ * spacing, the outermost ring takes the rest.
+ */
+export function egoLayout(
+  center: string,
+  groups: readonly (readonly (readonly string[])[])[],
+  outerRadius: number,
+  minSpacing: number,
+): Map<string, LayoutPoint> {
+  const positions = new Map<string, LayoutPoint>([[center, { x: 0, y: 0 }]]);
+  const placed = groups
+    .map((sections) =>
+      sections
+        .map((section) => section.filter((key) => key !== center))
+        .filter((section) => section.length > 0),
+    )
+    .filter((sections) => sections.length > 0);
+  if (placed.length === 0) {
+    return positions;
+  }
+  // Slots per group: its nodes and one gap after each section, when it has
+  // more than one.
+  const slotsOf = (sections: readonly (readonly string[])[]) =>
+    sections.reduce((total, section) => total + section.length, 0) +
+    (sections.length > 1 ? sections.length : 0);
+  const slots = placed.map(slotsOf);
+  // The fewest rings that hold every group at the spacing asked for.
+  let ringsPerGroup: number[] = [];
+  let totalRings = 0;
+  for (let count = placed.length; count <= MAX_EGO_RINGS; count += 1) {
+    const step = outerRadius / count;
+    ringsPerGroup = [];
+    let ring = 0;
+    for (const size of slots) {
+      let room = 0;
+      let used = 0;
+      while (room < size) {
+        ring += 1;
+        used += 1;
+        // Only at the most rings allowed does the outer ring take the rest.
+        room +=
+          ring >= count && count >= MAX_EGO_RINGS
+            ? size
+            : Math.max(
+                1,
+                Math.floor(
+                  (2 * Math.PI * step * ring) / Math.max(1, minSpacing),
+                ),
+              );
+      }
+      ringsPerGroup.push(used);
+    }
+    totalRings = ring;
+    if (ring <= count) {
+      break;
+    }
+  }
+  const step = outerRadius / Math.max(1, totalRings);
+  let firstRing = 0;
+  placed.forEach((sections, groupIndex) => {
+    const rings = ringsPerGroup[groupIndex];
+    const size = slots[groupIndex];
+    // Alternate groups start half a slot round, so their nodes interleave.
+    const offset = groupIndex % 2 === 0 ? 0 : Math.PI / size;
+    let slot = 0;
+    for (const section of sections) {
+      for (const key of section) {
+        const radius = step * (firstRing + 1 + (slot % rings));
+        const angle = -Math.PI / 2 + offset + (2 * Math.PI * slot) / size;
+        positions.set(key, {
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        });
+        slot += 1;
+      }
+      if (sections.length > 1) {
+        slot += 1;
+      }
+    }
+    firstRing += rings;
+  });
+  return positions;
+}
+
+/** Ease-out cubic over [0, 1]. */
+export function easeOutCubic(progress: number): number {
+  const clamped = Math.min(1, Math.max(0, progress));
+  return 1 - (1 - clamped) ** 3;
+}
+
+/**
+ * Each target point a fraction of the way from its start, eased. A target
+ * with no start is already there.
+ */
+export function tweenPositions(
+  from: ReadonlyMap<string, LayoutPoint>,
+  to: ReadonlyMap<string, LayoutPoint>,
+  progress: number,
+): Map<string, LayoutPoint> {
+  const eased = easeOutCubic(progress);
+  const positions = new Map<string, LayoutPoint>();
+  for (const [key, target] of to) {
+    const start = from.get(key) ?? target;
+    positions.set(key, {
+      x: start.x + (target.x - start.x) * eased,
+      y: start.y + (target.y - start.y) * eased,
+    });
+  }
+  return positions;
+}

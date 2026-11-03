@@ -373,7 +373,10 @@ mod tests {
         );
         assert_eq!(state.listening, addr("127.0.0.1:7000"));
         assert!(!state.restart_required());
-        assert_eq!(state.fallback.unwrap().code, reasons::BIND_FALLBACK_UNBINDABLE);
+        assert_eq!(
+            state.fallback.unwrap().code,
+            reasons::BIND_FALLBACK_UNBINDABLE
+        );
     }
 
     #[test]

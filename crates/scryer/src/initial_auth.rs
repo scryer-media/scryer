@@ -1273,7 +1273,10 @@ mod tests {
         for raw in [None, Some(""), Some("  ")] {
             for host in [loopback, loopback_v6, mapped_loopback] {
                 assert!(!setup_code_required(raw, host, false), "{raw:?} {host}");
-                assert!(setup_code_required(raw, host, true), "{raw:?} {host} proxied");
+                assert!(
+                    setup_code_required(raw, host, true),
+                    "{raw:?} {host} proxied"
+                );
             }
             for host in [wide, wide_v6, lan] {
                 assert!(setup_code_required(raw, host, false), "{raw:?} {host}");
@@ -1282,7 +1285,10 @@ mod tests {
         // Forced off wins over exposure.
         for raw in ["0", "false"] {
             for (host, proxied) in [(loopback, false), (wide, false), (loopback, true)] {
-                assert!(!setup_code_required(Some(raw), host, proxied), "{raw} {host}");
+                assert!(
+                    !setup_code_required(Some(raw), host, proxied),
+                    "{raw} {host}"
+                );
             }
         }
         // Forced on, or an unrecognized value, keeps it on even on loopback.
@@ -1369,7 +1375,8 @@ mod tests {
             let context = fixture().await;
             let mut addressing = scryer_application::public_url::InstanceAddressing::default();
             if pinned {
-                addressing.bind.source = scryer_application::public_url::ConfigValueSource::Environment;
+                addressing.bind.source =
+                    scryer_application::public_url::ConfigValueSource::Environment;
                 addressing.bind.pinned_by =
                     Some(scryer_application::network_bind::BindPin::Environment);
             }
@@ -1389,8 +1396,7 @@ mod tests {
             )
             .await;
             assert_eq!(
-                metadata["data"]["authRuntimeState"]["bindEditable"],
-                !pinned,
+                metadata["data"]["authRuntimeState"]["bindEditable"], !pinned,
                 "{metadata}"
             );
             assert_eq!(

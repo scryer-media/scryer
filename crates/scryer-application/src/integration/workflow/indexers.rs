@@ -790,6 +790,16 @@ impl AppUseCase {
         actor: &User,
         input: NewIndexerConfig,
     ) -> AppResult<IndexerConfig> {
+        let config = self.prepare_indexer_config(actor, input).await?;
+        self.save_prepared_indexer_config(actor, config).await
+    }
+
+    /// Validate and probe without changing persisted configuration or routing.
+    pub(crate) async fn prepare_indexer_config(
+        &self,
+        actor: &User,
+        input: NewIndexerConfig,
+    ) -> AppResult<IndexerConfig> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
 
@@ -853,7 +863,7 @@ impl AppUseCase {
             None
         };
 
-        let mut config = IndexerConfig {
+        let config = IndexerConfig {
             id: Id::new().0,
             name,
             provider_type,
@@ -904,12 +914,28 @@ impl AppUseCase {
                 })?;
             self.validate_indexer_download_client_mapping(&config, &client)?;
         }
-        let proxy_assignment = self
-            .services
-            .integrations
-            .proxy_assignment_lock
-            .lock()
-            .await;
+        Ok(config)
+    }
+
+    /// Commit a previously checked configuration and repair routing on retry.
+    pub(crate) async fn save_prepared_indexer_config(
+        &self,
+        actor: &User,
+        mut config: IndexerConfig,
+    ) -> AppResult<IndexerConfig> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let proxy_assignment = if config.proxy_config_id.is_some() {
+            Some(
+                self.services
+                    .integrations
+                    .proxy_assignment_lock
+                    .lock()
+                    .await,
+            )
+        } else {
+            None
+        };
         if let Some(proxy_config_id) = config.proxy_config_id.clone() {
             config.proxy_config_id = Some(
                 self.validate_enabled_proxy_config_id_for_provider(
@@ -919,13 +945,25 @@ impl AppUseCase {
                 .await?,
             );
         }
-        let created = self
+        let created = match self
             .services
             .integrations
             .indexer_configs
-            .create(config)
-            .await?;
+            .get_by_id(&config.id)
+            .await?
+        {
+            Some(existing) => existing,
+            None => {
+                self.services
+                    .integrations
+                    .indexer_configs
+                    .create(config)
+                    .await?
+            }
+        };
         drop(proxy_assignment);
+        let management_capabilities =
+            self.indexer_management_capabilities_for_provider_type(&created.provider_type);
         self.ensure_indexer_routing_entry_for_indexer(actor, &created.id)
             .await?;
         if management_capabilities.supports_managed_children_sync && created.is_enabled {

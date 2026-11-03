@@ -639,6 +639,26 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
+        table: "discovery_library_graph_clusters",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_library_graph_edges",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_library_graph_nodes",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_library_graph_runs",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_neighbor_cache",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
         table: "discovery_pending_context_changes",
         classification: BackupTableClassification::ResetOnRestore,
     },
@@ -1372,6 +1392,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     BackupTableCatalogEntry {
         table: "workflow_operations",
         classification: BackupTableClassification::Export,
+    },
+    // Short-lived encrypted source credentials; the configurations an import
+    // saved carry their own copies, so a backup never needs these.
+    BackupTableCatalogEntry {
+        table: "workflow_private_inputs",
+        classification: BackupTableClassification::Ignore,
     },
 ];
 
@@ -2456,6 +2482,15 @@ mod tests {
 
             assert_eq!(classification, Some(expected), "{table}");
         }
+    }
+
+    #[test]
+    fn backup_table_catalog_never_exports_source_import_credentials() {
+        let classification = BACKUP_TABLE_CATALOG
+            .iter()
+            .find(|entry| entry.table == "workflow_private_inputs")
+            .map(|entry| entry.classification);
+        assert_eq!(classification, Some(BackupTableClassification::Ignore));
     }
 
     #[test]
