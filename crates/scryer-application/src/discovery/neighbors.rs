@@ -160,6 +160,12 @@ impl AppUseCase {
     /// The anchor's related titles from the cache while it is fresh, else
     /// from the gateway, which then refreshes the cache. A failed cache write
     /// is logged and the caller gets the gateway's answer as mapped.
+    ///
+    /// An entry with related titles but no groups stays fresh only until the
+    /// next read: the gateway groups whenever it can, so such an answer is
+    /// one whose grouping was skipped (or one cached before grouping). The
+    /// next read asks the gateway again, and serves the cached entry if that
+    /// ask fails.
     async fn discovery_neighbor_items(
         &self,
         target_key: &str,
@@ -168,6 +174,7 @@ impl AppUseCase {
         let language = self.metadata_language().await;
         let now = self.runtime.environment.now();
         let ttl = chrono::Duration::hours(TITLE_MORE_LIKE_THIS_BACKGROUND_REFRESH_HOURS);
+        let mut ungrouped = None;
         if let Some(cached) = self
             .services
             .library
@@ -176,7 +183,10 @@ impl AppUseCase {
             .await?
             && now.signed_duration_since(cached.fetched_at) < ttl
         {
-            return Ok(cached);
+            if !discovery_neighbor_cache_ungrouped(&cached) {
+                return Ok(cached);
+            }
+            ungrouped = Some(cached);
         }
 
         let input = crate::TitleRecommendationsInput {
@@ -186,12 +196,26 @@ impl AppUseCase {
             language: language.clone(),
             include_unresolved: true,
         };
-        let recommendations = self
+        let recommendations = match self
             .services
             .library
             .metadata_gateway
             .title_recommendations(&input)
-            .await?;
+            .await
+        {
+            Ok(recommendations) => recommendations,
+            Err(error) => match ungrouped {
+                Some(cached) => {
+                    warn!(
+                        target_key,
+                        error = %error,
+                        "failed to refresh ungrouped discovery neighbors; serving the cached entry"
+                    );
+                    return Ok(cached);
+                }
+                None => return Err(error),
+            },
+        };
         let mut items = title_more_like_this_item_records(
             target_key,
             &[target_key.to_string()],
@@ -255,6 +279,11 @@ impl AppUseCase {
             }
         }
     }
+}
+
+/// Whether a cache entry has related titles but no groups to place them in.
+fn discovery_neighbor_cache_ungrouped(record: &DiscoveryNeighborCacheRecord) -> bool {
+    !record.items.is_empty() && record.groups.is_empty()
 }
 
 /// The groups that hold at least one served item, in the gateway's order,
