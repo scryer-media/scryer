@@ -568,15 +568,14 @@ impl AppUseCase {
                     continue;
                 }
             };
-            let has_complete = match latest.as_ref() {
-                Some(run) if run.status == LIBRARY_GRAPH_RUN_COMPLETE => true,
-                _ => match discovery.has_complete_library_graph(facet).await {
-                    Ok(has_complete) => has_complete,
-                    Err(error) => {
-                        warn!(facet = facet.as_str(), error = %error, "library graph runs could not be read");
-                        continue;
-                    }
-                },
+            // A complete run counts only with its stored graph: a run row
+            // without one reads as no graph, so the facet must be rebuilt.
+            let has_complete = match discovery.has_complete_library_graph(facet).await {
+                Ok(has_complete) => has_complete,
+                Err(error) => {
+                    warn!(facet = facet.as_str(), error = %error, "library graph runs could not be read");
+                    continue;
+                }
             };
             if library_graph_retry_due(latest.as_ref(), has_complete, now) {
                 due.insert(facet.clone());

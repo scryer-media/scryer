@@ -7,9 +7,12 @@ use scryer_application::{AppError, AppResult};
 
 use super::runtime::repo_err;
 
-/// Compresses `bytes` into one zstd frame at `level`.
+/// Compresses `bytes` into one zstd frame at `level`, with the frame's
+/// content checksum on so a damaged value is refused rather than misread.
 pub fn compress_blob(bytes: &[u8], level: i32) -> AppResult<Vec<u8>> {
-    zstd::bulk::compress(bytes, level).map_err(repo_err)
+    let mut compressor = zstd::bulk::Compressor::new(level).map_err(repo_err)?;
+    compressor.include_checksum(true).map_err(repo_err)?;
+    compressor.compress(bytes).map_err(repo_err)
 }
 
 /// Decompresses one zstd frame, refusing output larger than `max_bytes`.
@@ -45,5 +48,9 @@ mod tests {
         );
         assert!(decompress_blob(&encoded, bytes.len() - 1).is_err());
         assert!(decompress_blob(b"not a zstd frame", 1024).is_err());
+        let mut damaged = encoded.clone();
+        let last = damaged.len() - 8;
+        damaged[last] ^= 0x55;
+        assert!(decompress_blob(&damaged, bytes.len()).is_err());
     }
 }

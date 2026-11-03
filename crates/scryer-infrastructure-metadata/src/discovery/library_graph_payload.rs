@@ -213,7 +213,7 @@ fn decode_raw(raw: &[u8]) -> AppResult<LibraryGraphPayload> {
         return Err(corrupt(&format!("unknown format {format}")));
     }
     let string_count = input.len()?;
-    let mut strings = Vec::with_capacity(string_count);
+    let mut strings = Vec::new();
     for _ in 0..string_count {
         let length = input.len()?;
         let bytes = input.bytes(length)?;
@@ -232,13 +232,13 @@ fn decode_raw(raw: &[u8]) -> AppResult<LibraryGraphPayload> {
     };
 
     let node_count = input.len()?;
-    let mut nodes = Vec::with_capacity(node_count);
+    let mut nodes = Vec::new();
     for _ in 0..node_count {
         let subject_key = string(input.varint()?)?;
         let target_key = string(input.varint()?)?;
         let cluster_id = input.zigzag()?;
         let title_count = input.len()?;
-        let mut title_ids = Vec::with_capacity(title_count);
+        let mut title_ids = Vec::new();
         for _ in 0..title_count {
             title_ids.push(string(input.varint()?)?);
         }
@@ -251,10 +251,10 @@ fn decode_raw(raw: &[u8]) -> AppResult<LibraryGraphPayload> {
     }
 
     let kind_list_count = input.len()?;
-    let mut kind_lists = Vec::with_capacity(kind_list_count);
+    let mut kind_lists = Vec::new();
     for _ in 0..kind_list_count {
         let length = input.len()?;
-        let mut kinds = Vec::with_capacity(length);
+        let mut kinds = Vec::new();
         for _ in 0..length {
             kinds.push(string(input.varint()?)?);
         }
@@ -299,7 +299,7 @@ fn decode_raw(raw: &[u8]) -> AppResult<LibraryGraphPayload> {
     }
 
     let cluster_count = input.len()?;
-    let mut clusters = Vec::with_capacity(cluster_count);
+    let mut clusters = Vec::new();
     for _ in 0..cluster_count {
         let cluster_id = input.zigzag()?;
         let label_key = match input.varint()? {
@@ -391,8 +391,9 @@ impl<'a> Reader<'a> {
         Err(corrupt("a varint is too long"))
     }
 
-    /// A count, bounded by the bytes left so a corrupt count cannot ask for
-    /// a huge allocation.
+    /// A count, bounded by the bytes left. Collections grow as elements are
+    /// read rather than being presized, so a corrupt count cannot ask for a
+    /// huge allocation up front either.
     fn len(&mut self) -> AppResult<usize> {
         usize::try_from(self.varint()?)
             .ok()
