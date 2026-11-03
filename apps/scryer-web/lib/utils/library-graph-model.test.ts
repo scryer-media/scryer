@@ -291,6 +291,21 @@ test("node sizes scale the chosen metric between the size bounds", () => {
   assert.equal(popularity.get("title-2"), LIBRARY_GRAPH_MAX_NODE_SIZE);
   assert.equal(popularity.get("title-1"), LIBRARY_GRAPH_MIN_NODE_SIZE);
 
+  // Popularity sizes by rank, so one huge outlier does not flatten the rest.
+  const skewed = nodeSizesByTitleId(
+    [1, 2, 3, 4, 1_000_000].map((popularity, index) =>
+      fixtureTitle(index + 1, { popularity }),
+    ),
+    "popularity",
+  );
+  const span = LIBRARY_GRAPH_MAX_NODE_SIZE - LIBRARY_GRAPH_MIN_NODE_SIZE;
+  assert.equal(skewed.get("title-2"), LIBRARY_GRAPH_MIN_NODE_SIZE + span / 4);
+  assert.equal(
+    skewed.get("title-4"),
+    LIBRARY_GRAPH_MIN_NODE_SIZE + (span * 3) / 4,
+  );
+  assert.equal(skewed.get("title-5"), LIBRARY_GRAPH_MAX_NODE_SIZE);
+
   // One rated title alone sits at the midpoint.
   const single = nodeSizesByTitleId([titles[0]], "rating");
   assert.equal(

@@ -104,6 +104,10 @@ const LAYOUT_STEPS_PER_FRAME = 6;
 const MAX_POSTERS_PER_FRAME = 240;
 const MIN_POSTER_RADIUS_PX = 9;
 const HULL_PADDING_PX = 18;
+// How far a neighbourhood name may wander from its titles to find a spot
+// that covers none of them: rings this far apart, this many rings.
+const HULL_LABEL_SEARCH_STEP_PX = 14;
+const HULL_LABEL_SEARCH_RINGS = 10;
 /** How many neighbours one expansion asks for. */
 const NEIGHBOR_LIMIT = 24;
 const GHOST_NODE_SIZE = LIBRARY_GRAPH_MIN_NODE_SIZE + 1;
@@ -180,6 +184,9 @@ function clusterColor(clusterId: number, order: readonly number[]): string {
 
 // The camera at rest: unzoomed and centred on the layout's origin, where
 // cluster rings and focused views are centred.
+/** How far titles away from the hovered one fade. */
+const HOVER_FADE_ALPHA = 0.18;
+
 /** Room around the titles when the overview is fitted to them. */
 const OVERVIEW_FIT_PADDING = 1.25;
 
@@ -318,6 +325,13 @@ export default function LibraryGraphView({
   const resumeLayoutRef = React.useRef<() => void>(() => {});
   const positionsRef = React.useRef(new Map<string, LayoutPoint>());
   const posterCacheRef = React.useRef(new Map<string, HTMLImageElement>());
+  // The title under the pointer and the titles one link from it, which stay
+  // bright while the rest of the graph fades.
+  const hoverFocusRef = React.useRef<{
+    key: string;
+    near: ReadonlySet<string>;
+    accent: string;
+  } | null>(null);
   const selectedTitleIdRef = React.useRef(selectedTitleId);
   const titlesByIdRef = React.useRef(new Map<string, TitleRecord>());
   const onSelectTitleRef = React.useRef(onSelectTitle);
@@ -769,12 +783,19 @@ export default function LibraryGraphView({
 
     const pointsByCluster = new Map<number, LayoutPoint[]>();
     const viewportByNode = new Map<string, LayoutPoint>();
+    // Every drawn title, so neighbourhood names can keep off them.
+    const nodeDiscs: { x: number; y: number; r: number }[] = [];
     graph.forEachNode((key, attributes) => {
       const point = sigma.graphToViewport({
         x: attributes.x as number,
         y: attributes.y as number,
       });
       viewportByNode.set(key, point);
+      nodeDiscs.push({
+        x: point.x,
+        y: point.y,
+        r: sigma.scaleSize(attributes.size as number),
+      });
       // Ghosts are not in the library, so they never stretch a cluster hull.
       if (attributes.collapsedClusterId !== undefined || attributes.ghost) {
         return;
@@ -848,30 +869,54 @@ export default function LibraryGraphView({
         };
         const w = label.offsetWidth || 80;
         const h = label.offsetHeight || 22;
-        let x = Math.min(
-          Math.max(median(points.map((point) => point.x)), w / 2 + 4),
-          width - w / 2 - 4,
-        );
-        let y = Math.min(
-          Math.max(median(points.map((point) => point.y)), h / 2 + 4),
-          height - h / 2 - 4,
-        );
-        // Step down, then up, past any name already placed on this spot.
-        const overlaps = (cx: number, cy: number) =>
+        const clampX = (value: number) =>
+          Math.min(Math.max(value, w / 2 + 4), width - w / 2 - 4);
+        const clampY = (value: number) =>
+          Math.min(Math.max(value, h / 2 + 4), height - h / 2 - 4);
+        const baseX = median(points.map((point) => point.x));
+        const baseY = median(points.map((point) => point.y));
+        // A spot is clear when the name covers no title and no other name.
+        const coversTitle = (cx: number, cy: number) =>
+          nodeDiscs.some((disc) => {
+            const dx = Math.max(Math.abs(disc.x - cx) - w / 2, 0);
+            const dy = Math.max(Math.abs(disc.y - cy) - h / 2, 0);
+            return dx * dx + dy * dy < (disc.r + 3) * (disc.r + 3);
+          });
+        const coversName = (cx: number, cy: number) =>
           placedHullLabels.some(
             (other) =>
               Math.abs(other.x - cx) < (other.w + w) / 2 + 4 &&
               Math.abs(other.y - cy) < (other.h + h) / 2 + 4,
           );
-        for (let step = 1; overlaps(x, y) && step <= 8; step += 1) {
-          const offset = Math.ceil(step / 2) * (h + 6) * (step % 2 ? 1 : -1);
-          const candidate = Math.min(
-            Math.max(y + offset, h / 2 + 4),
-            height - h / 2 - 4,
-          );
-          if (!overlaps(x, candidate)) {
-            y = candidate;
-            break;
+        // Search outward from the middle of the titles, rings of growing
+        // radius, trying above first, for the nearest clear spot.
+        let x = clampX(baseX);
+        let y = clampY(baseY);
+        let fallback: { x: number; y: number } | null = null;
+        search: for (let ring = 0; ring <= HULL_LABEL_SEARCH_RINGS; ring += 1) {
+          const spots = ring === 0 ? 1 : 16;
+          for (let spot = 0; spot < spots; spot += 1) {
+            const angle = -Math.PI / 2 + (spot * Math.PI * 2) / spots;
+            const cx = clampX(
+              baseX + Math.cos(angle) * ring * HULL_LABEL_SEARCH_STEP_PX,
+            );
+            const cy = clampY(
+              baseY + Math.sin(angle) * ring * HULL_LABEL_SEARCH_STEP_PX,
+            );
+            if (coversName(cx, cy)) {
+              continue;
+            }
+            fallback ??= { x: cx, y: cy };
+            if (!coversTitle(cx, cy)) {
+              x = cx;
+              y = cy;
+              break search;
+            }
+          }
+          if (ring === HULL_LABEL_SEARCH_RINGS && fallback) {
+            // Nowhere clear nearby: at least keep off the other names.
+            x = fallback.x;
+            y = fallback.y;
           }
         }
         x = Math.round(x);
@@ -996,6 +1041,10 @@ export default function LibraryGraphView({
       context.save();
       if (attributes.ghost) {
         context.globalAlpha = 0.55;
+      }
+      const hoverFocus = hoverFocusRef.current;
+      if (hoverFocus && !hoverFocus.near.has(key)) {
+        context.globalAlpha = HOVER_FADE_ALPHA;
       }
       context.beginPath();
       context.arc(point.x, point.y, radius, 0, Math.PI * 2);
@@ -1230,6 +1279,35 @@ export default function LibraryGraphView({
         zoomingRatio: 1.1,
         zoomDuration: 90,
       },
+      nodeReducer: (key, attributes, node) => {
+        const focus = hoverFocusRef.current;
+        if (!focus) {
+          return attributes;
+        }
+        return focus.near.has(key)
+          ? { ...attributes, zIndex: 1 }
+          : {
+              ...attributes,
+              color: withAlpha(node.baseColor, HOVER_FADE_ALPHA),
+              zIndex: 0,
+            };
+      },
+      edgeReducer: (edge, attributes) => {
+        const focus = hoverFocusRef.current;
+        if (!focus) {
+          return attributes;
+        }
+        const [from, to] = graph.extremities(edge);
+        if (from === focus.key || to === focus.key) {
+          return {
+            ...attributes,
+            color: withAlpha(focus.accent, 0.9),
+            size: attributes.size + 1,
+            zIndex: 1,
+          };
+        }
+        return { ...attributes, color: "rgba(0, 0, 0, 0)", zIndex: 0 };
+      },
     });
     graphRef.current = graph;
     sigmaRef.current = sigma;
@@ -1240,6 +1318,12 @@ export default function LibraryGraphView({
     });
     sigma.on("enterNode", ({ node, event }) => {
       const attributes = graph.getNodeAttributes(node);
+      hoverFocusRef.current = {
+        key: node,
+        near: new Set([node, ...graph.neighbors(node)]),
+        accent: readCssColor(container, "--scry-accent", "#5b64ff"),
+      };
+      sigma.refresh({ skipIndexation: true });
       setHover({
         kind: "node",
         key: node,
@@ -1250,6 +1334,8 @@ export default function LibraryGraphView({
       container.style.cursor = "pointer";
     });
     sigma.on("leaveNode", () => {
+      hoverFocusRef.current = null;
+      sigma.refresh({ skipIndexation: true });
       setHover(null);
       container.style.cursor = "";
     });

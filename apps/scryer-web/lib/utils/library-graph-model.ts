@@ -276,7 +276,7 @@ export function titleSizeMetricValue(
 
 /**
  * Node sizes for the given titles: the metric scaled between the minimum and
- * maximum node size. A title with no value, or a set where every value is the
+ * maximum node size (popularity by rank, so one outlier cannot flatten it). A title with no value, or a set where every value is the
  * same, sits at the minimum and the midpoint respectively.
  */
 export function nodeSizesByTitleId(
@@ -296,6 +296,36 @@ export function nodeSizesByTitleId(
   }
   const sizes = new Map<string, number>();
   const span = LIBRARY_GRAPH_MAX_NODE_SIZE - LIBRARY_GRAPH_MIN_NODE_SIZE;
+  if (metric === "popularity") {
+    // Popularity is heavy-tailed: one huge title would shrink the rest to
+    // nothing on a straight scale. Size by rank among the shown titles
+    // instead, so a library of popular titles still spreads out.
+    const ranked = [...values.values()]
+      .filter((value): value is number => value !== null)
+      .sort((a, b) => a - b);
+    // Tied values share the middle of their ranks.
+    const rankOf = (value: number) => {
+      let first = 0;
+      while (ranked[first] < value) first += 1;
+      let last = first;
+      while (last + 1 < ranked.length && ranked[last + 1] === value) last += 1;
+      return (first + last) / 2;
+    };
+    for (const [id, value] of values) {
+      if (value === null) {
+        sizes.set(id, LIBRARY_GRAPH_MIN_NODE_SIZE);
+      } else if (ranked[0] === ranked[ranked.length - 1]) {
+        sizes.set(id, LIBRARY_GRAPH_MIN_NODE_SIZE + span / 2);
+      } else {
+        sizes.set(
+          id,
+          LIBRARY_GRAPH_MIN_NODE_SIZE +
+            (span * rankOf(value)) / (ranked.length - 1),
+        );
+      }
+    }
+    return sizes;
+  }
   for (const [id, value] of values) {
     if (value === null) {
       sizes.set(id, LIBRARY_GRAPH_MIN_NODE_SIZE);
