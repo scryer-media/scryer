@@ -58,6 +58,7 @@ mod maintenance_sequence_history;
 mod maintenance_storage_execution;
 mod maintenance_title_completion;
 mod maintenance_watch_facts;
+mod maintenance_watch_recheck;
 mod media_analysis;
 mod media_requests;
 mod media_server_signals;

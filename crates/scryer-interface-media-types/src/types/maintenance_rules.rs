@@ -1,4 +1,4 @@
-use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
+use async_graphql::{Enum, ID, InputObject, Json, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
 // ── Enums ──────────────────────────────────────────────────────────────────
@@ -427,6 +427,11 @@ pub struct MaintenancePreviewTitle {
     pub reason_codes: Vec<String>,
     /// Why evaluation failed for this subject, or null when it succeeded.
     pub error: Option<String>,
+    /// The input document the rule evaluated for this subject: its `facts`
+    /// and their `observations`, with the subject and library. Null unless
+    /// the caller may manage permissions, because the document names who
+    /// watched and who requested the subject.
+    pub facts: Option<Json<serde_json::Value>>,
 }
 
 /// Outcome of running one matcher against a bounded subject selection. Preview

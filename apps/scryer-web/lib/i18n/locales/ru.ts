@@ -5512,13 +5512,13 @@ const ru: LocaleDictionary = {
   "settings.refMaintFactsActiveDownloadsValue":
     "True, когда для субъекта выполняется загрузка",
   "settings.refMaintFactsWatchedByUserIdsValue":
-    "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Факты о просмотрах неизвестны для сериалов (show_watch_rollup_unavailable), когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants) и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
+    "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Факты о просмотрах неизвестны для сериалов (show_watch_rollup_unavailable), когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants), когда привязанные учётные записи есть, но ни одна синхронизация их ещё не прочитала (participants_not_yet_swept), и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
   "settings.refMaintFactsLastWatchedAtValue":
-    "Метка времени RFC3339 последнего просмотра; absent с причиной never_watched, если субъект никто не смотрел",
+    "Метка времени RFC3339 последнего просмотра; absent с причиной never_watched, если субъект никто не смотрел, и unknown с причиной play_time_missing, если у просмотра нет записанного времени",
   "settings.refMaintFactsWatchedByAnyRequesterValue":
-    "True, когда субъект смотрел хотя бы один запросивший; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера",
+    "True, когда субъект смотрел хотя бы один запросивший; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
   "settings.refMaintFactsWatchedByAllRequestersValue":
-    "True, когда субъект смотрели все запросившие; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера",
+    "True, когда субъект смотрели все запросившие; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
   "settings.refMaintFactsRequestLeaseStateValue":
     "none, когда для субъекта никогда не записывалось хранение по запросу; dormant, когда хранение ждёт первого импорта; active, пока хранение действует; expired, когда все сроки истекли. Снятое или заменённое хранение считается отозванным, а не истёкшим, поэтому оно не делает состояние expired. Истечение измеряется относительно времени оценки, поэтому хранение читается как expired в тот же момент, когда закрывается его окно.",
   "settings.refMaintFactsRequestLeaseExpiresAtValue":
@@ -7049,6 +7049,17 @@ const ru: LocaleDictionary = {
     "Не удалось переместить файл под новое имя. Файл и его эпизоды остались без изменений.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Нумерация эпизодов неоднозначна",
+  "settings.maintenanceExecutionReason.playbackHold": "Отложено: на медиасервере идёт воспроизведение.",
+  "settings.maintenanceExecutionReason.playbackUnknown": "Отложено: не удалось узнать у медиасервера, идёт ли воспроизведение.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Отложено: медиасервер показывает просмотр новее сохранённой истории просмотров.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Отложено: в истории медиасервера есть просмотр учётной записью, которую история просмотров не учитывает.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Отложено: медиасервер не смог подтвердить историю просмотров перед действием.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Отложено: на подключённом медиасервере нет соответствующего элемента, поэтому историю просмотров не удалось проверить перед действием.",
+  "settings.refMaintFactsWatchedByAnyone": "Воспроизводил ли субъект кто-либо с учётной записью на подключённом медиасервере, связанной со Scryer или нет; никого не называет",
+  "settings.refMaintFactsLastWatchedByAnyoneAt": "Когда кто-либо с учётной записью на подключённом медиасервере в последний раз воспроизводил субъект",
+  "settings.refMaintFactsWatchedByAnyoneValue": "True, если субъект воспроизвела любая учётная запись на включённом медиасервере, независимо от того, связана ли она с пользователем Scryer; для сезонов и сериалов учитывается любой вышедший эпизод. Неизвестно с причиной audience_not_read, пока синхронизация за последние 48 часов не прочитает все учётные записи на всех включённых подключениях, и с обычными причинами, когда факты просмотра неизвестны.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "Метка времени RFC3339 последнего воспроизведения любой учётной записью; отсутствует с причиной never_watched, если никто не воспроизводил, и неизвестна с причиной play_time_missing (episode_play_time_missing для сезонов и сериалов), если у воспроизведения нет записанного времени, или audience_not_read, если прочитаны не все учётные записи",
+  "settings.maintenancePreviewFacts": "Факты, прочитанные правилом",
   "setup.sourceImportProgress": "Импорт источников",
   "setup.sourceImportInvalidRequest":
     "Выбранный источник недоступен. Обновите обнаружение источников и выберите его снова.",

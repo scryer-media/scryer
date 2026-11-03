@@ -7283,3 +7283,100 @@ async fn migration_0320_adds_discovery_grid_preferences_with_their_defaults() {
     .expect("read preferences");
     assert_eq!(rows, vec![("user-grid-existing".to_string(), 1, 1, 0)]);
 }
+
+#[tokio::test]
+async fn migration_0325_adds_an_empty_signal_roster_beside_existing_signals() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("signal-roster-0325.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("signal roster connection");
+
+    // Return the schema to its pre-0325 shape with a clean sweep and a stored
+    // signal on record, then replay the migration over them.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded rows");
+    sqlx::raw_sql(
+        "DROP TABLE media_server_signal_roster;
+         DROP TABLE media_server_audience_plays;
+         DROP TABLE media_server_audience_reads;",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("restore the pre-0325 shape");
+    sqlx::query(
+        "INSERT INTO media_server_signal_sync_state
+         (connection_id, provider, enabled, last_started_at, last_success_at,
+          participant_count, signal_count, updated_at)
+         VALUES ('connection-synthetic', 'jellyfin', 1, '2026-01-01T00:00:00Z',
+                 '2026-01-01T00:05:00Z', 1, 1, '2026-01-01T00:05:00Z')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a clean sweep");
+    sqlx::query(
+        "INSERT INTO media_server_user_media_signals
+         (id, connection_id, provider, external_user_id, scryer_user_id, provider_item_id,
+          kind, played, play_count)
+         VALUES ('signal-synthetic', 'connection-synthetic', 'jellyfin', 'jf-user-synthetic',
+                 'user-synthetic', 'jf-movie-synthetic', 'movie', 1, 1)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a stored signal");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0325_media_server_signal_roster.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0325 should apply");
+
+    // Nothing is backfilled: no link counts as read until a sweep reads it.
+    let (roster,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM media_server_signal_roster")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("count roster rows");
+    assert_eq!(roster, 0);
+    let (signals,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM media_server_user_media_signals")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("count signal rows");
+    assert_eq!(signals, 1, "existing signals are untouched");
+    // Nor is any audience: the anonymous facts stay unknown until a sweep
+    // reads every account.
+    let (plays,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM media_server_audience_plays")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("count audience plays");
+    let (reads,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM media_server_audience_reads")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("count audience reads");
+    assert_eq!((plays, reads), (0, 0), "the audience starts empty");
+    sqlx::query(
+        "INSERT INTO media_server_audience_plays
+         (connection_id, external_account_id, provider_item_id, kind, play_count)
+         VALUES ('connection-synthetic', 'account-synthetic', 'jf-movie-synthetic', 'show', 1)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect_err("an audience play is a movie or an episode");
+    sqlx::query(
+        "INSERT INTO media_server_signal_roster
+         (connection_id, link_id, external_user_id, scryer_user_id, sweep_started_at, read_at)
+         VALUES ('connection-synthetic', '', 'jf-user-synthetic', 'user-synthetic',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect_err("a roster row must name the link it read through");
+}

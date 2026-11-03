@@ -4367,8 +4367,13 @@ impl crate::ports::MediaServerSignalRepository for NullMediaServerSignalReposito
         _: &str,
         _: &str,
         _: &[scryer_domain::NewUserMediaSignal],
+        _: Option<&crate::ports::SignalRosterLink>,
     ) -> AppResult<u64> {
         Err(AppError::Repository("not configured".into()))
+    }
+
+    async fn signal_roster(&self) -> AppResult<Vec<crate::ports::SignalRosterEntry>> {
+        Ok(Vec::new())
     }
 
     async fn movie_signals_for_titles(

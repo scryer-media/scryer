@@ -12777,6 +12777,32 @@ impl SignalReadFailure {
     }
 }
 
+/// The verified link a sweep read one participant's signals through.
+///
+/// Stored beside that participant's signal rows, in the same write, so the
+/// watch gate can tell a link a sweep actually read from one that was made
+/// after the sweep listed its participants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignalRosterLink {
+    /// The linked account's id ([`scryer_domain::UserExternalAccount::id`]).
+    pub link_id: String,
+    pub scryer_user_id: String,
+    /// The link's `verified_at` as the sweep saw it. Recorded for diagnosis;
+    /// membership is decided by the link and the identity it reads, because a
+    /// login refreshes this without changing whose plays are read.
+    pub link_verified_at: Option<DateTime<Utc>>,
+    /// When the sweep that read the link started.
+    pub sweep_started_at: DateTime<Utc>,
+}
+
+/// One link a sweep read, as the watch gate reads it back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignalRosterEntry {
+    pub connection_id: String,
+    pub external_user_id: String,
+    pub link: SignalRosterLink,
+}
+
 /// Opens one media-server connection for a watch-history sweep.
 ///
 /// Implemented once in infrastructure and dispatched on
@@ -12806,6 +12832,101 @@ pub trait MediaServerSignalReader: Send + Sync {
         &self,
         external_user_id: &str,
     ) -> Result<Vec<ProviderPlayedItem>, SignalReadFailure>;
+
+    /// Items' played state as the server reports it now, read just before an
+    /// action that a watch fact allowed. Nothing is stored from it.
+    ///
+    /// The answer is keyed by provider item id and must carry every item
+    /// asked for; the caller treats a missing item as a re-check that could
+    /// not be made. `participants` names the accounts whose own state is
+    /// wanted, and each item's answer must carry every one of them.
+    /// Implementations read items in batches where the provider allows it,
+    /// and bound how many requests are in flight where it does not.
+    ///
+    /// An account the server refuses for one item (404 or 403: the user was
+    /// removed, or the item sits in a library hidden from them) has no plays
+    /// of it, so it reads as unplayed. An `Err` is a re-check that could not
+    /// be made: a transport failure, a 5xx, a refusal of the connection's own
+    /// credential, or an item the server no longer knows.
+    async fn recheck_items(
+        &self,
+        _provider_item_ids: &[String],
+        _participants: &[String],
+    ) -> Result<std::collections::BTreeMap<String, ProviderItemRecheck>, SignalReadFailure> {
+        Err(SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "this media server cannot re-check an item",
+        ))
+    }
+
+    /// Every play the server records for any of its accounts, linked to a
+    /// Scryer user or not, folded to one entry per account and item.
+    ///
+    /// This is the audience read behind the anonymous "anyone watched it"
+    /// facts. It reads with the connection's own credential, so it sees
+    /// accounts nobody linked. An `Err` is the whole read's failure: a partial
+    /// audience would make "nobody watched this" a guess.
+    async fn fetch_audience_plays(&self) -> Result<Vec<ProviderAudiencePlay>, SignalReadFailure> {
+        Err(SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "this media server cannot list plays for every account",
+        ))
+    }
+}
+
+/// One account's play of one item, from the audience read.
+///
+/// `external_account_id` is the server's own account id. It is stored only to
+/// key the row; nothing reports it, because the facts it feeds name nobody.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderAudiencePlay {
+    pub external_account_id: String,
+    pub item: ProviderPlayedItem,
+}
+
+/// One stored audience play: an account's play of an item, mapped onto Scryer
+/// media where mapping succeeded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudiencePlay {
+    pub connection_id: String,
+    pub external_account_id: String,
+    pub provider_item_id: String,
+    pub kind: scryer_domain::MediaServerSignalKind,
+    pub scryer_title_id: Option<String>,
+    pub scryer_episode_id: Option<String>,
+    pub play_count: i64,
+    pub last_played_at: Option<DateTime<Utc>>,
+}
+
+/// When a connection's audience was last read in full.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudienceRead {
+    pub connection_id: String,
+    pub sweep_started_at: DateTime<Utc>,
+    pub read_at: DateTime<Utc>,
+    pub play_count: i64,
+}
+
+/// One account's state for one item, as a live re-check read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderItemPlay {
+    pub external_user_id: String,
+    pub played: bool,
+    pub last_played_at: Option<DateTime<Utc>>,
+}
+
+/// What a live re-check of one item found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderItemRecheck {
+    /// Each requested participant's own state for the item.
+    pub participants: Vec<ProviderItemPlay>,
+    /// Plays by any account, linked or not. On Plex these are the server's
+    /// own history rows for the item, one per organic play (history holds no
+    /// marks or scrobbles; the owner's marks arrive through the owner's own
+    /// state). On Jellyfin and Emby, which keep no server-wide history, they
+    /// are every listed user's own state for the item, one entry per user who
+    /// has played it.
+    pub history: Vec<ProviderItemPlay>,
 }
 
 /// Durable storage for normalized media-server watch signals.
@@ -12819,15 +12940,31 @@ pub trait MediaServerSignalRepository: Send + Sync {
     /// Returns the number of rows the participant now has. An empty `signals`
     /// is a meaningful write, not a no-op: it means this person has nothing
     /// played any more, and every prior row for them is removed.
+    ///
+    /// `read_through` is the link the sweep read these signals through. It is
+    /// recorded in the signal roster in the same transaction as the swap, so
+    /// the roster never names a link whose signals were not stored, and a
+    /// stored read is never missing from it.
     async fn replace_participant_signals(
         &self,
         connection_id: &str,
         external_user_id: &str,
         signals: &[scryer_domain::NewUserMediaSignal],
+        read_through: Option<&SignalRosterLink>,
     ) -> AppResult<u64>;
 
-    /// Remove stored observations for retired account identities. Each pair is
-    /// `(external_user_id, scryer_user_id)` from a successful verified-account read.
+    /// Every link a sweep has read and that no later sweep has retired. The
+    /// watch gate counts a verified link as observed only through an entry
+    /// here; a link with none has never had its plays read.
+    async fn signal_roster(&self) -> AppResult<Vec<SignalRosterEntry>> {
+        Err(AppError::Repository(
+            "signal roster is not configured".into(),
+        ))
+    }
+
+    /// Remove stored observations, and the roster entries that read them, for
+    /// retired account identities. Each pair is `(external_user_id,
+    /// scryer_user_id)` from a successful verified-account read.
     async fn retain_connection_participants(
         &self,
         _connection_id: &str,
@@ -12853,6 +12990,47 @@ pub trait MediaServerSignalRepository: Send + Sync {
         &self,
         title_ids: &[String],
     ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>>;
+
+    /// Atomically replace one connection's audience plays and record the read
+    /// that produced them. Rows the read did not return are removed: an
+    /// account that no longer has an item played no longer counts.
+    async fn replace_connection_audience(
+        &self,
+        _connection_id: &str,
+        _plays: &[AudiencePlay],
+        _sweep_started_at: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "audience plays are not configured".into(),
+        ))
+    }
+
+    /// Forget that a connection's audience was read, keeping its rows. Called
+    /// when an audience read fails, so the anonymous facts go unknown at once
+    /// rather than answering from the last read until it ages out.
+    async fn clear_audience_read(&self, _connection_id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "audience plays are not configured".into(),
+        ))
+    }
+
+    /// The last complete audience read per connection.
+    async fn audience_reads(&self) -> AppResult<Vec<AudienceRead>> {
+        Err(AppError::Repository(
+            "audience plays are not configured".into(),
+        ))
+    }
+
+    /// Audience plays (movies and episodes) grouped by the owning title id.
+    /// A title with no plays is absent from the map.
+    async fn audience_plays_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<AudiencePlay>>> {
+        Err(AppError::Repository(
+            "audience plays are not configured".into(),
+        ))
+    }
 
     async fn signal_sync_states(&self)
     -> AppResult<Vec<scryer_domain::MediaServerSignalSyncState>>;

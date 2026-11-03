@@ -16006,6 +16006,13 @@ type MaintenancePreviewTitle {
 	Why evaluation failed for this subject, or null when it succeeded.
 	"""
 	error: String
+	"""
+	The input document the rule evaluated for this subject: its `facts`
+	and their `observations`, with the subject and library. Null unless
+	the caller may manage permissions, because the document names who
+	watched and who requested the subject.
+	"""
+	facts: JSON
 }
 
 """

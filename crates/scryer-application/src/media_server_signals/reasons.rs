@@ -42,8 +42,6 @@ pub const PAGING_NOT_HONOURED: &str = "WATCH_SYNC_PAGING_NOT_HONOURED";
 /// The watched-set listing returned unwatched items, so its filter was not
 /// applied and the listing cannot be trusted as a played set.
 pub const FILTER_NOT_HONOURED: &str = "WATCH_SYNC_FILTER_NOT_HONOURED";
-/// One person's played history is larger than a sweep reads.
-pub const ITEM_CAP_REACHED: &str = "WATCH_SYNC_ITEM_CAP_REACHED";
 /// Played movies could not be matched to a Scryer title and nothing showed them
 /// to be outside Scryer (no usable external id, or a file inside a Scryer
 /// library), so a played Scryer title may be among them.
@@ -69,7 +67,6 @@ pub const ALL: &[&str] = &[
     ITEMS_UNREADABLE,
     PAGING_NOT_HONOURED,
     FILTER_NOT_HONOURED,
-    ITEM_CAP_REACHED,
     UNMAPPED_PLAYED_MOVIES,
     STORE_FAILED,
     SOURCE_UNAVAILABLE,
@@ -101,6 +98,6 @@ mod tests {
     /// here means adding it, and its translation, there too.
     #[test]
     fn the_reason_list_is_the_one_the_web_client_mirrors() {
-        assert_eq!(ALL.len(), 18);
+        assert_eq!(ALL.len(), 17);
     }
 }

@@ -5265,13 +5265,13 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsActiveDownloadsValue":
     "True, pokud u subjektu právě probíhá stahování",
   "settings.refMaintFactsWatchedByUserIdsValue":
-    "Identifikátory všech, kdo to přehráli, seřazené a bez duplicit; prázdný seznam znamená, že to nikdo neudělal. Dokončení řady vyžaduje, aby stejná osoba shlédla každou odvysílanou epizodu, včetně chybějících souborů. Budoucí epizody jsou vyloučeny; chybějící historie sledování nebo nevyřešená data vysílání jsou neznámé. Fakty sledování jsou neznámé u titulů v rozsahu seriálu (show_watch_rollup_unavailable), když není připojen žádný mediální server (no_media_server_connection), když se připojení nikdy čistě nesynchronizovalo (signal_sync_never_succeeded), když je poslední čistá synchronizace starší než 48 hodin (signals_stale), když nikdo nemá ověřený propojený účet mediálního serveru (no_linked_participants) a když přehrání nelze přiřadit uživateli Scryer (signal_identity_missing).",
+    "Identifikátory všech, kdo to přehráli, seřazené a bez duplicit; prázdný seznam znamená, že to nikdo neudělal. Dokončení řady vyžaduje, aby stejná osoba shlédla každou odvysílanou epizodu, včetně chybějících souborů. Budoucí epizody jsou vyloučeny; chybějící historie sledování nebo nevyřešená data vysílání jsou neznámé. Fakty sledování jsou neznámé u titulů v rozsahu seriálu (show_watch_rollup_unavailable), když není připojen žádný mediální server (no_media_server_connection), když se připojení nikdy čistě nesynchronizovalo (signal_sync_never_succeeded), když je poslední čistá synchronizace starší než 48 hodin (signals_stale), když nikdo nemá ověřený propojený účet mediálního serveru (no_linked_participants), když propojené účty existují, ale žádná synchronizace je ještě nenačetla (participants_not_yet_swept), a když přehrání nelze přiřadit uživateli Scryer (signal_identity_missing).",
   "settings.refMaintFactsLastWatchedAtValue":
-    "Časové razítko RFC3339 posledního přehrání; chybí s důvodem never_watched, pokud to nikdo nepřehrál",
+    "Časové razítko RFC3339 posledního přehrání; chybí s důvodem never_watched, pokud to nikdo nepřehrál, a unknown s důvodem play_time_missing, pokud přehrání nemá zaznamenaný čas",
   "settings.refMaintFactsWatchedByAnyRequesterValue":
-    "True, pokud to přehrál alespoň jeden žadatel; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru",
+    "True, pokud to přehrál alespoň jeden žadatel; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru, nebo requester_not_yet_swept, pokud propojený účet žadatele ještě žádná synchronizace nenačetla",
   "settings.refMaintFactsWatchedByAllRequestersValue":
-    "True, pokud to přehráli úplně všichni žadatelé; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru",
+    "True, pokud to přehráli úplně všichni žadatelé; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru, nebo requester_not_yet_swept, pokud propojený účet žadatele ještě žádná synchronizace nenačetla",
   "settings.refMaintFactsRequestLeaseStateValue":
     "none, pokud pro subjekt nikdy nebyl zapsán žádný nárok žádosti, dormant, pokud nárok čeká na první import, active, dokud nárok běží, a expired, jakmile vyprší úplně každý nárok. Nárok, který byl uvolněn nebo převeden, je stažen, ne vyčerpán, takže stav expired nezpůsobí. Vypršení se měří vůči času vyhodnocení, takže nárok se jeví jako expired ve chvíli, kdy se jeho okno uzavře.",
   "settings.refMaintFactsRequestLeaseExpiresAtValue":
@@ -7184,6 +7184,17 @@ const cs: LocaleDictionary = {
     "Přesun souboru pod novým názvem se nezdařil. Soubor i jeho epizody zůstaly beze změny.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Číslování epizod je nejednoznačné",
+  "settings.maintenanceExecutionReason.playbackHold": "Pozdrženo: na mediálním serveru se něco přehrává.",
+  "settings.maintenanceExecutionReason.playbackUnknown": "Pozdrženo: mediálního serveru se nepodařilo zjistit, zda se něco přehrává.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Pozdrženo: mediální server ukazuje přehrání novější než uložená historie sledování.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Pozdrženo: historie mediálního serveru ukazuje přehrání účtem, který historie sledování nezapočítává.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
+  "settings.refMaintFactsWatchedByAnyone": "Zda položku přehrál kdokoli s účtem na připojeném mediálním serveru, ať je propojen se Scryerem, nebo ne; nikoho nejmenuje",
+  "settings.refMaintFactsLastWatchedByAnyoneAt": "Kdy položku naposledy přehrál kdokoli s účtem na připojeném mediálním serveru",
+  "settings.refMaintFactsWatchedByAnyoneValue": "True, když ji přehrál jakýkoli účet na povoleném mediálním serveru, bez ohledu na propojení s uživatelem Scryeru; u sérií a seriálů stačí kterákoli odvysílaná epizoda. Neznámé s důvodem audience_not_read, dokud synchronizace za posledních 48 hodin nepřečte všechny účty na všech povolených připojeních, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "Časové razítko RFC3339 posledního přehrání kterýmkoli účtem; chybí s důvodem never_watched, když ji nikdo nepřehrál, a je neznámé s důvodem play_time_missing (episode_play_time_missing u sérií a seriálů), když přehrání nemá zaznamenaný čas, nebo audience_not_read, když nebyly přečteny všechny účty",
+  "settings.maintenancePreviewFacts": "Fakta, která pravidlo četlo",
   "setup.sourceImportProgress": "Import zdrojů",
   "setup.sourceImportInvalidRequest":
     "Vybraný zdroj není dostupný. Obnovte vyhledávání zdrojů a vyberte ho znovu.",

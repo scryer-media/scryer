@@ -49,7 +49,8 @@ use crate::media_server_signals::mapping::{
 };
 use crate::media_server_signals::reasons;
 use crate::ports::{
-    MediaServerSignalReader, ProviderPlayedItem, SignalReadFailure, TitleExternalIdLookup,
+    AudiencePlay, MediaServerSignalReader, ProviderPlayedItem, SignalReadFailure, SignalRosterLink,
+    TitleExternalIdLookup,
 };
 use crate::{AppResult, AppUseCase};
 
@@ -220,7 +221,9 @@ impl AppUseCase {
             }
 
             let library = ScryerLibraryPaths::new(library_roots.clone(), &connection.path_mappings);
-            let outcome = self.sync_one_connection(&connection, &library).await;
+            let outcome = self
+                .sync_one_connection(&connection, &library, started_at)
+                .await;
             report.participants_considered += outcome.participants;
             report.participants_synced += outcome.participants_synced;
             report.participants_failed += outcome.participants_failed;
@@ -271,6 +274,7 @@ impl AppUseCase {
         &self,
         connection: &MediaServerConnection,
         library: &ScryerLibraryPaths,
+        started_at: chrono::DateTime<Utc>,
     ) -> ConnectionOutcome {
         let mut outcome = ConnectionOutcome::default();
 
@@ -322,9 +326,9 @@ impl AppUseCase {
             outcome.record_error(store_failure("could not retire participant signals", error));
             return outcome;
         }
-        if identities.is_empty() {
-            return outcome;
-        }
+        // No early return when nobody is linked: the audience read below is
+        // every account's on the server, and the anonymous facts it feeds
+        // stand without a linked user.
 
         // Opened once for every participant: whatever the provider needs per
         // connection (the server to talk to, who owns it) is read once a sweep.
@@ -367,7 +371,8 @@ impl AppUseCase {
                     reader.as_ref(),
                     library,
                     external_user_id,
-                    participant.user_id.as_str(),
+                    &participant,
+                    started_at,
                 )
                 .await
             {
@@ -401,7 +406,121 @@ impl AppUseCase {
             }
         }
 
+        if let Some(failure) = self
+            .sync_connection_audience(connection, reader.as_ref(), library, started_at)
+            .await
+        {
+            outcome.record_error(failure);
+        }
+
         outcome
+    }
+
+    /// Read every account's plays on the connection and replace its audience
+    /// rows with them.
+    ///
+    /// Only the anonymous "anyone watched it" facts read these rows, so a
+    /// failed read is not the connection's failure: it is logged, and the
+    /// connection's read marker is removed so those two facts go unknown
+    /// until a read succeeds. The rows already stored are kept, exactly as a
+    /// failed participant read keeps that participant's rows.
+    ///
+    /// A marker that cannot be removed would leave the failed read looking
+    /// like the last good one, so that failure is returned for the
+    /// connection's state: the sweep is then incomplete, and every watch
+    /// fact holds until a sweep succeeds.
+    async fn sync_connection_audience(
+        &self,
+        connection: &MediaServerConnection,
+        reader: &dyn MediaServerSignalReader,
+        library: &ScryerLibraryPaths,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Option<SignalReadFailure> {
+        let result = self
+            .read_connection_audience(connection, reader, library, started_at)
+            .await;
+        let Err(failure) = result else {
+            return None;
+        };
+        warn!(
+            connection_id = connection.id.as_str(),
+            reason = failure.reason,
+            error = %failure,
+            "media-server audience read failed; the anonymous watch facts are unknown until one succeeds"
+        );
+        if let Err(error) = self
+            .services
+            .integrations
+            .media_server_signals
+            .clear_audience_read(&connection.id)
+            .await
+        {
+            warn!(
+                connection_id = connection.id.as_str(),
+                error = %error,
+                "could not clear the audience read marker; the sweep is recorded as incomplete"
+            );
+            return Some(store_failure(
+                "could not clear the audience read marker after a failed audience read",
+                error,
+            ));
+        }
+        None
+    }
+
+    async fn read_connection_audience(
+        &self,
+        connection: &MediaServerConnection,
+        reader: &dyn MediaServerSignalReader,
+        library: &ScryerLibraryPaths,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Result<u64, SignalReadFailure> {
+        let (accounts, items): (Vec<String>, Vec<ProviderPlayedItem>) = reader
+            .fetch_audience_plays()
+            .await?
+            .into_iter()
+            .filter(|play| play.item.played)
+            .map(|play| (play.external_account_id, play.item))
+            .unzip();
+        let (subjects, titles) = self
+            .map_played_items(&items)
+            .await
+            .map_err(|error| store_failure("could not map audience plays", error))?;
+
+        let mut plays = Vec::new();
+        let mut incomplete = false;
+        for ((account, item), subject) in accounts.into_iter().zip(&items).zip(subjects) {
+            if !subject.is_mapped() {
+                // As for a participant: a played movie nothing proves foreign
+                // could be a Scryer title the server never identified, and
+                // "nobody watched it" would then be wrong about it.
+                incomplete |= item.kind == MediaServerSignalKind::Movie
+                    && !is_foreign_item(item, &titles, library);
+                continue;
+            }
+            plays.push(AudiencePlay {
+                connection_id: connection.id.clone(),
+                external_account_id: account,
+                provider_item_id: item.provider_item_id.clone(),
+                kind: item.kind,
+                scryer_title_id: subject.title_id,
+                scryer_episode_id: subject.episode_id,
+                play_count: item.play_count,
+                last_played_at: item.last_played_at,
+            });
+        }
+        if incomplete {
+            return Err(SignalReadFailure::new(
+                reasons::UNMAPPED_PLAYED_MOVIES,
+                "played movies could not be matched to a Scryer title; the audience is incomplete",
+            ));
+        }
+        self.services
+            .integrations
+            .media_server_signals
+            .replace_connection_audience(&connection.id, &plays, started_at)
+            .await
+            .map_err(|error| store_failure("could not store audience plays", error))
     }
 
     /// The participant set: verified linked accounts on this connection
@@ -433,8 +552,10 @@ impl AppUseCase {
         reader: &dyn MediaServerSignalReader,
         library: &ScryerLibraryPaths,
         external_user_id: &str,
-        scryer_user_id: &str,
+        participant: &UserExternalAccount,
+        started_at: chrono::DateTime<Utc>,
     ) -> Result<ParticipantOutcome, SignalReadFailure> {
+        let scryer_user_id = participant.user_id.as_str();
         let items = reader.fetch_played_items(external_user_id).await?;
 
         let observed_at = Utc::now();
@@ -475,7 +596,20 @@ impl AppUseCase {
             .services
             .integrations
             .media_server_signals
-            .replace_participant_signals(&connection.id, external_user_id, &signals)
+            .replace_participant_signals(
+                &connection.id,
+                external_user_id,
+                &signals,
+                // The link this read went through joins the roster in the
+                // same write as its signals: the watch gate observes exactly
+                // the links whose plays are stored.
+                Some(&SignalRosterLink {
+                    link_id: participant.id.clone(),
+                    scryer_user_id: scryer_user_id.to_string(),
+                    link_verified_at: participant.verified_at,
+                    sweep_started_at: started_at,
+                }),
+            )
             .await
             .map_err(|error| store_failure("could not store signals", error))?;
 

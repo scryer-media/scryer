@@ -3796,6 +3796,17 @@ const de: LocaleDictionary = {
     "Das Verschieben der Datei unter ihren neuen Namen ist fehlgeschlagen. Datei und Episoden blieben unverändert.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episodennummerierung ist mehrdeutig",
+  "settings.maintenanceExecutionReason.playbackHold": "Angehalten: Auf einem Medienserver wird gerade etwas abgespielt.",
+  "settings.maintenanceExecutionReason.playbackUnknown": "Angehalten: Ein Medienserver konnte nicht gefragt werden, ob gerade etwas abgespielt wird.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Angehalten: Der Medienserver zeigt eine Wiedergabe, die neuer ist als der gespeicherte Wiedergabeverlauf.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Angehalten: Der Verlauf des Medienservers zeigt eine Wiedergabe durch ein Konto, das der Wiedergabeverlauf nicht berücksichtigt.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Angehalten: Der Medienserver konnte den Wiedergabeverlauf vor der Aktion nicht bestätigen.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Angehalten: Ein verbundener Medienserver hat kein passendes Element, daher konnte der Wiedergabeverlauf vor der Aktion nicht geprüft werden.",
+  "settings.refMaintFactsWatchedByAnyone": "Ob irgendjemand mit einem Konto auf einem verbundenen Medienserver den Eintrag abgespielt hat, mit Scryer verknüpft oder nicht; nennt niemanden",
+  "settings.refMaintFactsLastWatchedByAnyoneAt": "Wann irgendjemand mit einem Konto auf einem verbundenen Medienserver den Eintrag zuletzt abgespielt hat",
+  "settings.refMaintFactsWatchedByAnyoneValue": "True, wenn ein beliebiges Konto auf einem aktivierten Medienserver ihn abgespielt hat, unabhängig davon, ob das Konto mit einem Scryer-Benutzer verknüpft ist; bei Staffeln und Serien zählt jede ausgestrahlte Episode. Unbekannt mit Grund audience_not_read, bis eine Synchronisierung in den letzten 48 Stunden jedes Konto auf jeder aktivierten Verbindung gelesen hat, und mit den üblichen Gründen, wann immer Wiedergabe-Fakten unbekannt sind.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "RFC3339-Zeitstempel der letzten Wiedergabe durch ein beliebiges Konto; fehlt mit Grund never_watched, wenn niemand ihn abgespielt hat, und ist unbekannt mit Grund play_time_missing (episode_play_time_missing bei Staffeln und Serien), wenn eine Wiedergabe keine erfasste Zeit hat, oder audience_not_read, wenn nicht alle Konten gelesen wurden",
+  "settings.maintenancePreviewFacts": "Vom Regelwerk gelesene Fakten",
   "setup.sourceImportProgress": "Quellen werden importiert",
   "setup.sourceImportInvalidRequest":
     "Eine ausgewählte Quelle ist nicht verfügbar. Aktualisieren Sie die Quellensuche und wählen Sie sie erneut aus.",

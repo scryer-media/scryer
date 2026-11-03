@@ -4439,13 +4439,13 @@ const zh_HK: LocaleDictionary = {
     "可用容量除以總容量，介於 0 至 100",
   "settings.refMaintFactsActiveDownloadsValue": "主體的下載正在進行中時為 true",
   "settings.refMaintFactsWatchedByUserIdsValue":
-    "播放過它的所有人的標識符，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的分集，包括遺失的文件。未來分集已排除；缺少分集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)，以及播放無法歸屬於 Scryer 用戶 (signal_identity_missing)。",
+    "播放過它的所有人的標識符，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的分集，包括遺失的文件。未來分集已排除；缺少分集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)、已有關聯帳號但尚未有同步讀取它們 (participants_not_yet_swept)，以及播放無法歸屬於 Scryer 用戶 (signal_identity_missing)。",
   "settings.refMaintFactsLastWatchedAtValue":
-    "最近一次播放的 RFC3339 時間戳；若無人播放過則 absent，原因為 never_watched",
+    "最近一次播放的 RFC3339 時間戳；若無人播放過則 absent，原因為 never_watched；若有播放沒有記錄時間則 unknown，原因為 play_time_missing",
   "settings.refMaintFactsWatchedByAnyRequesterValue":
-    "至少有一位請求者播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked",
+    "至少有一位請求者播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
   "settings.refMaintFactsWatchedByAllRequestersValue":
-    "每一位請求者皆播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked",
+    "每一位請求者皆播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
   "settings.refMaintFactsRequestLeaseStateValue":
     "從未為主體寫入請求租約時為 none，租約等待首次匯入時為 dormant，租約有效進行中時為 active，且所有租約皆已用盡時為 expired。已釋放或已轉換的租約視為撤回而非耗盡，因此不會使狀態變為 expired。過期是以評估時間為基準，因此租約在視窗關閉的瞬間即被視為過期。",
   "settings.refMaintFactsRequestLeaseExpiresAtValue":
@@ -5603,6 +5603,17 @@ const zh_HK: LocaleDictionary = {
   "episodeAssign.refusal.renameFailed":
     "將檔案移至新名稱失敗。檔案及其劇集維持原狀。",
   "pendingImports.reason.anime_numbering_ambiguous": "劇集編號不明確",
+  "settings.maintenanceExecutionReason.playbackHold": "已暫緩：媒體伺服器上正在播放內容。",
+  "settings.maintenanceExecutionReason.playbackUnknown": "已暫緩：無法向媒體伺服器確認是否正在播放。",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "已暫緩：媒體伺服器顯示有比已存觀看記錄更新的播放。",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "已暫緩：媒體伺服器的歷史記錄顯示有觀看記錄未計入的帳戶播放。",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "已暫緩：執行前媒體伺服器無法確認觀看記錄。",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "已暫緩：已連線的媒體伺服器沒有相符的項目，執行前無法確認觀看記錄。",
+  "settings.refMaintFactsWatchedByAnyone": "已連接媒體伺服器上的任何帳戶是否播放過該項目,無論是否連結 Scryer;不指明具體是誰",
+  "settings.refMaintFactsLastWatchedByAnyoneAt": "已連接媒體伺服器上的任何帳戶最後一次播放該項目的時間",
+  "settings.refMaintFactsWatchedByAnyoneValue": "當已啟用媒體伺服器上的任何帳戶播放過它時為 true,無論該帳戶是否連結到 Scryer 用戶;對於季和劇集,任何已播出的單集都算。在過去 48 小時內的同步讀取每個已啟用連接上的所有帳戶之前,以原因 audience_not_read 視為未知;觀看事實未知時,以一般原因視為未知。",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "任何帳戶最近一次播放的 RFC3339 時間戳;無人播放時以原因 never_watched 缺失,播放沒有記錄時間時以原因 play_time_missing(季和劇集為 episode_play_time_missing)未知,尚未讀取所有帳戶時以 audience_not_read 未知",
+  "settings.maintenancePreviewFacts": "規則讀取的事實",
   "setup.sourceImportProgress": "正在匯入來源",
   "setup.sourceImportInvalidRequest":
     "所選來源無法使用。請重新整理來源偵測後再選擇。",
