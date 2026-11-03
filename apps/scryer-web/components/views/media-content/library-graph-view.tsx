@@ -117,6 +117,8 @@ const NEIGHBOR_LIMIT = 24;
 const GHOST_NODE_SIZE = LIBRARY_GRAPH_MIN_NODE_SIZE + 1;
 /** How long nodes take to move between the overview and a focused node. */
 const FOCUS_TWEEN_MS = 450;
+// How long past the glide a picked title may wait to open if no glide ends.
+const SELECT_AFTER_GLIDE_SLACK_MS = 80;
 /** The outer ring of a focused node's neighbours, as a share of the frame. */
 const FOCUS_OUTER_RADIUS_SHARE = 0.78;
 /** The least on-screen gap between neighbours on one ring. */
@@ -150,6 +152,11 @@ type NodeAttributes = {
   clusterId: number;
   /** A title reached by exploring, not in the library. */
   ghost?: boolean;
+};
+
+// Layout frames only move nodes, so sigma is told only positions changed.
+const POSITION_HINTS: { attributes: (keyof NodeAttributes)[] } = {
+  attributes: ["x", "y"],
 };
 
 type GraphLoadStatus = "pending" | "loaded" | "notBuilt" | "failed";
@@ -246,6 +253,24 @@ function readCssColor(element: Element, name: string, fallback: string) {
   return value || fallback;
 }
 
+/**
+ * A theme colour read once and kept until the theme changes. Reading one
+ * every frame would recalculate styles after the frame's own DOM writes.
+ */
+function cachedCssColor(
+  cache: Map<string, string>,
+  element: Element,
+  name: string,
+  fallback: string,
+) {
+  let value = cache.get(name);
+  if (value === undefined) {
+    value = readCssColor(element, name, fallback);
+    cache.set(name, value);
+  }
+  return value;
+}
+
 export type LibraryGraphViewProps = {
   facet: Facet;
   titles: readonly TitleRecord[];
@@ -340,6 +365,19 @@ export default function LibraryGraphView({
   const selectedTitleIdRef = React.useRef(selectedTitleId);
   const titlesByIdRef = React.useRef(new Map<string, TitleRecord>());
   const onSelectTitleRef = React.useRef(onSelectTitle);
+  // A title picked in the graph opens once the graph has glided to it, so
+  // the title's panel does not render over the glide.
+  const pendingSelectRef = React.useRef<{
+    title: TitleRecord;
+    timer: number;
+  } | null>(null);
+  // Theme colours the overlay draws with; emptied when the theme changes.
+  const themeColorsRef = React.useRef(new Map<string, string>());
+  // Each neighbourhood name's size, measured once per name rather than every
+  // frame between writes to the other names' positions.
+  const hullLabelSizesRef = React.useRef(
+    new WeakMap<HTMLElement, { text: string; w: number; h: number }>(),
+  );
   // The node picked in the graph (owned or ghost) and the node keyboard focus
   // rests on; the overlay reads both while it draws.
   const selectedKeyRef = React.useRef<string | null>(null);
@@ -438,6 +476,43 @@ export default function LibraryGraphView({
   React.useEffect(() => {
     onSelectTitleRef.current = onSelectTitle;
   }, [onSelectTitle]);
+  const flushPendingSelect = React.useCallback(() => {
+    const pending = pendingSelectRef.current;
+    if (!pending) {
+      return;
+    }
+    pendingSelectRef.current = null;
+    window.clearTimeout(pending.timer);
+    onSelectTitleRef.current(pending.title);
+  }, []);
+  React.useEffect(
+    () => () => {
+      const pending = pendingSelectRef.current;
+      if (pending) {
+        window.clearTimeout(pending.timer);
+        pendingSelectRef.current = null;
+      }
+    },
+    [],
+  );
+  // A theme switch changes the colours the overlay drew with.
+  React.useEffect(() => {
+    const forget = () => {
+      themeColorsRef.current.clear();
+      sigmaRef.current?.scheduleRender();
+    };
+    const observer = new MutationObserver(forget);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme", "style"],
+    });
+    const scheme = window.matchMedia("(prefers-color-scheme: dark)");
+    scheme.addEventListener("change", forget);
+    return () => {
+      observer.disconnect();
+      scheme.removeEventListener("change", forget);
+    };
+  }, []);
 
   const catalogTargetKeys = React.useMemo(
     () =>
@@ -895,8 +970,17 @@ export default function LibraryGraphView({
           const sorted = [...values].sort((a, b) => a - b);
           return sorted[sorted.length >> 1];
         };
-        const w = label.offsetWidth || 80;
-        const h = label.offsetHeight || 22;
+        const text = label.textContent ?? "";
+        let size = hullLabelSizesRef.current.get(label);
+        if (!size || size.text !== text) {
+          size = {
+            text,
+            w: label.offsetWidth || 80,
+            h: label.offsetHeight || 22,
+          };
+          hullLabelSizesRef.current.set(label, size);
+        }
+        const { w, h } = size;
         const clampX = (value: number) =>
           Math.min(Math.max(value, w / 2 + 4), width - w / 2 - 4);
         const clampY = (value: number) =>
@@ -1100,14 +1184,14 @@ export default function LibraryGraphView({
         context.beginPath();
         context.arc(point.x, point.y, radius + 2, 0, Math.PI * 2);
         context.lineWidth = 3;
-        context.strokeStyle = readCssColor(canvas, "--scry-accent", "#5b64ff");
+        context.strokeStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-accent", "#5b64ff");
         context.stroke();
       }
       drawn += 1;
     });
 
     // Ghosts wear a dashed ring so they read apart from library titles.
-    const muted = readCssColor(canvas, "--scry-muted2", UNPLACED_COLOR);
+    const muted = cachedCssColor(themeColorsRef.current, canvas, "--scry-muted2", UNPLACED_COLOR);
     context.save();
     context.setLineDash([3, 3]);
     context.lineWidth = 1.5;
@@ -1144,8 +1228,8 @@ export default function LibraryGraphView({
       context.textBaseline = "middle";
       context.lineJoin = "round";
       context.lineWidth = 3;
-      context.strokeStyle = readCssColor(canvas, "--scry-surfD", "#0b0e15");
-      context.fillStyle = readCssColor(canvas, "--scry-ink2", "#e6e8ef");
+      context.strokeStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-surfD", "#0b0e15");
+      context.fillStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-ink2", "#e6e8ef");
       const keyboardKey = focusedKeyRef.current;
       const order: string[] = [];
       graph.forEachNode((key) => {
@@ -1189,20 +1273,20 @@ export default function LibraryGraphView({
         };
         context.beginPath();
         context.roundRect(box.left, box.top, half * 2, 20, 10);
-        context.fillStyle = readCssColor(canvas, "--scry-surfD", "#0b0e15");
+        context.fillStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-surfD", "#0b0e15");
         context.fill();
         context.fillStyle = withAlpha(label.color, 0.25);
         context.fill();
         context.lineWidth = 1;
         context.strokeStyle = label.color;
         context.stroke();
-        context.fillStyle = readCssColor(canvas, "--scry-ink2", "#e6e8ef");
+        context.fillStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-ink2", "#e6e8ef");
         context.fillText(label.text, x, y);
         placed.push(box);
       }
       context.lineWidth = 3;
-      context.strokeStyle = readCssColor(canvas, "--scry-surfD", "#0b0e15");
-      context.fillStyle = readCssColor(canvas, "--scry-ink2", "#e6e8ef");
+      context.strokeStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-surfD", "#0b0e15");
+      context.fillStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-ink2", "#e6e8ef");
       for (const key of order) {
         const point = viewportByNode.get(key);
         const raw = graph.getNodeAttribute(key, "label");
@@ -1277,7 +1361,7 @@ export default function LibraryGraphView({
       context.beginPath();
       context.arc(focusPoint.x, focusPoint.y, radius + 5, 0, Math.PI * 2);
       context.lineWidth = 2;
-      context.strokeStyle = readCssColor(canvas, "--scry-ink2", "#e6e8ef");
+      context.strokeStyle = cachedCssColor(themeColorsRef.current, canvas, "--scry-ink2", "#e6e8ef");
       context.stroke();
     }
   }, []);
@@ -1653,8 +1737,12 @@ export default function LibraryGraphView({
       positionsRef.current = positions;
       graph.updateEachNodeAttributes((key, attributes) => {
         const point = positions.get(key);
-        return point ? { ...attributes, x: point.x, y: point.y } : attributes;
-      });
+        if (point) {
+          attributes.x = point.x;
+          attributes.y = point.y;
+        }
+        return attributes;
+      }, POSITION_HINTS);
       frameRef.current = window.requestAnimationFrame(tick);
     };
     resumeLayoutRef.current = () => {
@@ -1683,15 +1771,22 @@ export default function LibraryGraphView({
         const positions = tweenPositions(from, targets, progress);
         graph.updateEachNodeAttributes((key, attributes) => {
           const point = positions.get(key);
-          return point ? { ...attributes, x: point.x, y: point.y } : attributes;
-        });
+          if (point) {
+            attributes.x = point.x;
+            attributes.y = point.y;
+          }
+          return attributes;
+        }, POSITION_HINTS);
         if (progress < 1) {
           tweenFrameRef.current = window.requestAnimationFrame(glide);
         } else {
+          flushPendingSelect();
           resumeLayoutRef.current();
         }
       };
       tweenFrameRef.current = window.requestAnimationFrame(glide);
+    } else {
+      flushPendingSelect();
     }
     // Entering, moving or leaving focus brings the camera back to rest on
     // the frame, where the rings fit; so does any new ring layout, since
@@ -1711,6 +1806,7 @@ export default function LibraryGraphView({
     applySelection,
     clusterOrder,
     displayed,
+    flushPendingSelect,
     focusCenterKey,
     focusFrameVersion,
     focusRings,
@@ -1961,8 +2057,21 @@ export default function LibraryGraphView({
       const title = attributes.titleId
         ? titlesByIdRef.current.get(attributes.titleId)
         : undefined;
+      const previous = pendingSelectRef.current;
+      if (previous) {
+        window.clearTimeout(previous.timer);
+        pendingSelectRef.current = null;
+      }
       if (title) {
-        onSelectTitleRef.current(title);
+        // Opened when the glide lands; the timer covers a glide that never
+        // starts or is cut short.
+        pendingSelectRef.current = {
+          title,
+          timer: window.setTimeout(
+            flushPendingSelect,
+            FOCUS_TWEEN_MS + SELECT_AFTER_GLIDE_SLACK_MS,
+          ),
+        };
       }
       const position = traversal.expansions.findIndex(
         (expansion) => expansion.anchor === key,
@@ -1976,7 +2085,7 @@ export default function LibraryGraphView({
         void expandNode(node);
       }
     },
-    [expandNode, exploredNodesByKey, traversal.expansions],
+    [expandNode, exploredNodesByKey, flushPendingSelect, traversal.expansions],
   );
   React.useEffect(() => {
     activateNodeRef.current = activateNode;
