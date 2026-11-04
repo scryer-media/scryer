@@ -1758,7 +1758,8 @@ const ru: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "Рекомендовано",
   "libraryGraph.notBuilt": "Граф библиотеки ещё не построен.",
   "libraryGraph.truncated": "Этот граф охватывает только часть библиотеки.",
-  "discovery.refusal.neighborTargetKeyUnsupported": "Это произведение нельзя исследовать дальше.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "Это произведение нельзя исследовать дальше.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "Это произведение не соответствует типу медиа этой библиотеки, поэтому его нельзя исследовать здесь.",
   "libraryGraph.moreLikeThisEmpty": "Похожих пока нет.",
@@ -6320,16 +6321,26 @@ const ru: LocaleDictionary = {
     "Не удалось переместить файл под новое имя. Файл и его эпизоды остались без изменений.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Нумерация эпизодов неоднозначна",
-  "settings.maintenanceExecutionReason.playbackHold": "Отложено: на медиасервере идёт воспроизведение.",
-  "settings.maintenanceExecutionReason.playbackUnknown": "Отложено: не удалось узнать у медиасервера, идёт ли воспроизведение.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Отложено: медиасервер показывает просмотр новее сохранённой истории просмотров.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Отложено: в истории медиасервера есть просмотр учётной записью, которую история просмотров не учитывает.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Отложено: медиасервер не смог подтвердить историю просмотров перед действием.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Отложено: на подключённом медиасервере нет соответствующего элемента, поэтому историю просмотров не удалось проверить перед действием.",
-  "settings.refMaintFactsWatchedByAnyone": "Воспроизводил ли субъект кто-либо с учётной записью на подключённом медиасервере, связанной со Scryer или нет; никого не называет",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "Когда кто-либо с учётной записью на подключённом медиасервере в последний раз воспроизводил субъект",
-  "settings.refMaintFactsWatchedByAnyoneValue": "True, если субъект воспроизвела любая учётная запись на включённом медиасервере, независимо от того, связана ли она с пользователем Scryer; для сезонов и сериалов учитывается любой вышедший эпизод. Неизвестно с причиной audience_not_read, пока синхронизация за последние 48 часов не прочитает все учётные записи на всех включённых подключениях, и с обычными причинами, когда факты просмотра неизвестны.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "Метка времени RFC3339 последнего воспроизведения любой учётной записью; отсутствует с причиной never_watched, если никто не воспроизводил, и неизвестна с причиной play_time_missing (episode_play_time_missing для сезонов и сериалов), если у воспроизведения нет записанного времени, или audience_not_read, если прочитаны не все учётные записи",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "Отложено: на медиасервере идёт воспроизведение.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "Отложено: не удалось узнать у медиасервера, идёт ли воспроизведение.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "Отложено: медиасервер показывает просмотр новее сохранённой истории просмотров.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "Отложено: в истории медиасервера есть просмотр учётной записью, которую история просмотров не учитывает.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "Отложено: медиасервер не смог подтвердить историю просмотров перед действием.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "Отложено: на подключённом медиасервере нет соответствующего элемента, поэтому историю просмотров не удалось проверить перед действием.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Воспроизводил ли субъект кто-либо с учётной записью на подключённом медиасервере, связанной со Scryer или нет; никого не называет",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "Когда кто-либо с учётной записью на подключённом медиасервере в последний раз воспроизводил субъект",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True, если субъект воспроизвела любая учётная запись на включённом медиасервере, независимо от того, связана ли она с пользователем Scryer; для сезонов и сериалов учитывается любой вышедший эпизод. Неизвестно с причиной audience_not_read, пока синхронизация за последние 48 часов не прочитает все учётные записи на всех включённых подключениях, и с обычными причинами, когда факты просмотра неизвестны.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "Метка времени RFC3339 последнего воспроизведения любой учётной записью; отсутствует с причиной never_watched, если никто не воспроизводил, и неизвестна с причиной play_time_missing (episode_play_time_missing для сезонов и сериалов), если у воспроизведения нет записанного времени, или audience_not_read, если прочитаны не все учётные записи",
   "settings.maintenancePreviewFacts": "Факты, прочитанные правилом",
   "setup.sourceImportProgress": "Импорт источников",
   "setup.sourceImportInvalidRequest":
@@ -12432,7 +12443,6 @@ const ru: LocaleDictionary = {
   "uiText.discoveringProwlarrIndexers": "Обнаружение индексаторов Prowlarr…",
   "uiText.sponsor": "Поддержать проект",
   "uiText.social": "Сообщество",
-  "uiText.bit": " бит",
   "uiText.kbps": "Кбит/с",
   "uiText.forced": "[Принудительно]",
   "uiText.default": "[По умолчанию]",
@@ -12567,7 +12577,6 @@ const ru: LocaleDictionary = {
   "uiText.keepMeSignedIn": "Не выходить из аккаунта",
   "uiText.signInWithEmby": "Войти через Emby",
   "uiText.completingAuthorization": "Завершение авторизации…",
-  "uiText.authorize": "Разрешить доступ",
   "uiText.scopes": "Области доступа",
   "uiText.libraryAccess": "Доступ к библиотеке",
   "uiText.jellyfinAccountLinking": "Привязка аккаунта Jellyfin",
@@ -13028,6 +13037,335 @@ const ru: LocaleDictionary = {
     "Кодирование ожидающих изображений. Ручной запуск не ограничен ночным окном. Ожидание ночного окна.",
   "jobs.artworkWait.scan":
     "Кодирование ожидающих изображений. Ручной запуск не ограничен ночным окном. Ожидание завершения сканирования библиотек.",
+  "auth.mfaVerify": "Подтвердить",
+  "auth.mfaVerifying": "Проверка",
+  "oauth.authorizeClient": "Разрешить доступ для «{{name}}»",
+  "oauth.authorizeIntegration": "Разрешить доступ интеграции",
+  "oauth.ui.ready": "готово",
+  "oauth.ui.exactCallback": "Точный URL обратного вызова: {{url}}",
+  "oauth.ui.editApplication": "Изменить «{{name}}»",
+  "apiKeys.ui.Action": "Действие",
+  "apiKeys.ui.Managed": "Управляемый",
+  "apiKeys.ui.Actor": "Пользователь",
+  "apiKeys.ui.Created": "Создан",
+  "apiKeys.ui.Last_used": "Последнее использование",
+  "apiKeys.ui.revokeDescription":
+    "«{{label}}» немедленно перестанет работать. Это действие нельзя отменить.",
+  "routeError.serverStatusText":
+    "Сервер вернул ошибку ({{status}} {{statusText}}).",
+  "routeError.technicalDetails": "Технические сведения",
+  "routeError.retry": "Повторить",
+  "mediaFile.bitDepthValue": "{{depth}} бит",
+  "pendingImports.conflict.returnToConflicts": "Вернуться к конфликтам папок",
+  "error.reason.LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED":
+    "После переименования этой папки дополнительный файл фильма окажется вне папки тайтла. Оставьте прежнее имя папки или перед переименованием переместите тайтл вместе с его дополнительными файлами.",
+  "pendingImports.conflict.taskMissing":
+    "Эта задача разрешения больше недоступна. Проверьте её операции с расположением в разделе «Активность» или закройте эту панель хода выполнения.",
+  "pendingImports.conflict.hideProgress": "Скрыть ход выполнения",
+  "pendingImports.conflict.showFiles": "Показать файлы",
+  "pendingImports.conflict.sampledFiles":
+    "Показана только выборка путей; счётчики учитывают все файлы.",
+  "pendingImports.conflict.ownershipHelp":
+    "Этому тайтлу уже принадлежит {{folder}}. Просмотрите варианты «Принять все» или «Оставить одну», чтобы упорядочить его папки.",
+  "error.reason.LOCATION_CONFLICT_SELECTION_INVALID":
+    "Выберите ожидающие конфликты папок для разрешения.",
+  "error.reason.LOCATION_CONFLICT_NOT_FOUND":
+    "Выбранный конфликт больше не существует. Обновите страницу.",
+  "error.reason.LOCATION_CONFLICT_UNSUPPORTED":
+    "Этот конфликт нельзя разрешить таким способом.",
+  "error.reason.LOCATION_CONFLICT_FOLDER_UNSAFE":
+    "Папка находится вне разрешённых корневых папок или к ней нельзя безопасно обратиться.",
+  "error.reason.LOCATION_CONFLICT_OWNERSHIP_CHANGED":
+    "Принадлежность папок изменилась. Обновите предпросмотр.",
+  "error.reason.LOCATION_CONFLICT_MEDIA_MISSING":
+    "Медиафайлы, нужные для разрешения этого конфликта, отсутствуют.",
+  "error.reason.LOCATION_CONFLICT_PLAN_CHANGED":
+    "Файлы или принадлежность папок изменились. Обновите предпросмотр перед применением.",
+  "error.reason.LOCATION_CONFLICT_PERMANENT_CONFIRMATION_REQUIRED":
+    "Подтвердите перечисленные безвозвратные удаления, чтобы продолжить.",
+  "error.reason.LOCATION_CONFLICT_FILE_CHANGED":
+    "Файл изменился после предпросмотра. Обновите предпросмотр.",
+  "error.reason.LOCATION_CONFLICT_RECYCLE_UNAVAILABLE":
+    "Корзина недоступна. Восстановите доступ и повторите попытку.",
+  "pendingImports.conflict.select": "Выбрать конфликт",
+  "pendingImports.conflict.adoptAll": "Принять все",
+  "pendingImports.conflict.keepOne": "Оставить одну",
+  "pendingImports.conflict.title": "Разрешение конфликтов папок",
+  "pendingImports.conflict.description":
+    "Предпросмотр разрешения конфликтов ({{count}}). Каждый конфликт выполняется как отдельная операция с расположением в разделе «Активность».",
+  "pendingImports.conflict.policy": "Политика для медиафайлов",
+  "pendingImports.conflict.leftovers": "Остальные файлы",
+  "pendingImports.conflict.adoptHelp":
+    "Переместить все медиафайлы в сохраняемую папку. Лучший файл станет основным, остальные файлы фильма — дополнительными.",
+  "pendingImports.conflict.keepHelp":
+    "Оставить лучший медиафайл в сохраняемой папке, при необходимости переместив его туда. Худшие медиафайлы переместить в корзину.",
+  "pendingImports.conflict.preserveAll": "Сохранить все файлы (по умолчанию)",
+  "pendingImports.conflict.mediaOnly": "Сохранить только медиафайлы",
+  "pendingImports.conflict.preserveHelp":
+    "Переместить остальные файлы в сохраняемую папку, разрешая совпадения имён без перезаписи файлов.",
+  "pendingImports.conflict.mediaOnlyHelp":
+    "Переместить в корзину показанные в предпросмотре немедийные файлы только после того, как медиафайлы благополучно окажутся на месте.",
+  "pendingImports.conflict.preview": "Обновить предпросмотр",
+  "pendingImports.conflict.previewCount":
+    "Конфликтов: {{count}}; показано строк: {{shown}}.",
+  "pendingImports.conflict.sampled":
+    "Это выборка. Счётчики учитывают весь выбор.",
+  "pendingImports.conflict.titleColumn": "Тайтл",
+  "pendingImports.conflict.survivor": "Сохраняемая папка",
+  "pendingImports.conflict.primary": "Основной файл",
+  "pendingImports.conflict.moveBytes": "К перемещению",
+  "pendingImports.conflict.recycleBytes": "В корзину",
+  "pendingImports.conflict.renames": "Переименования из-за совпадений",
+  "pendingImports.conflict.leftoverFiles": "Остальные файлы",
+  "pendingImports.conflict.filesBytes": "Файлов: {{count}} · {{bytes}}",
+  "pendingImports.conflict.apply": "Применить разрешение",
+  "pendingImports.conflict.permanentTitle": "Удалить файлы безвозвратно?",
+  "pendingImports.conflict.permanentDescription":
+    "Корзина не настроена. Показанные в предпросмотре файлы ({{count}}, {{bytes}}) будут удалены безвозвратно. Это действие нельзя отменить.",
+  "pendingImports.conflict.permanentConfirm": "Удалить безвозвратно",
+  "pendingImports.conflict.previewFailed":
+    "Не удалось построить предпросмотр этих конфликтов. Повторите попытку.",
+  "pendingImports.conflict.applyFailed":
+    "Не удалось запустить разрешение конфликтов. Обновите предпросмотр и повторите попытку.",
+  "pendingImports.conflict.progress":
+    "Разрешено конфликтов: {{settled}} из {{total}}; с ошибкой: {{failed}}.",
+  "pendingImports.conflict.completed":
+    "Разрешение завершено: {{settled}} из {{total}}; с ошибкой: {{failed}}.",
+  "pendingImports.conflict.progressUnavailable":
+    "Ход выполнения временно недоступен. Фоновая задача может продолжаться; проверьте раздел «Активность».",
+  "pendingImports.conflict.operation": "Открыть операцию {{id}}",
+  "pendingImports.conflict.selectPage": "Выбрать конфликты на этой странице",
+  "pendingImports.conflict.selected": "Выбрано: {{count}}",
+  "pendingImports.conflict.resolveSelected": "Разрешить выбранные",
+  "move.operationType.FOLDER_CONSOLIDATION": "Объединение папок",
+  "move.operationType.FOLDER_KEEP_ONE": "Сохранение одной папки",
+  "settings.copyVerificationTitle": "Проверка копирования",
+  "settings.copyVerificationScope":
+    "Применяется к импорту из клиентов загрузки и к перемещению библиотек и корневых папок. По умолчанию используется быстрая проверка. Выберите полную, если переносите данные с диска, который собираетесь очистить.",
+  "initialAuth.networkHeading": "Кто может подключаться к Scryer?",
+  "initialAuth.networkLocal": "Только этот компьютер",
+  "initialAuth.networkLocalBody": "Доступен по адресу localhost.",
+  "initialAuth.networkOther": "Другие компьютеры могут подключаться к Scryer",
+  "initialAuth.networkOtherBody":
+    "Другие устройства в вашей сети смогут подключаться к Scryer. Изменение вступит в силу после перезапуска.",
+  "initialAuth.networkContainer":
+    "Сетевой доступ определяется портами, которые публикует ваш контейнер.",
+  "initialAuth.networkEnvironment":
+    "В этой установке адрес Scryer задан переменной SCRYER_BIND.",
+  "initialAuth.noAuthNetworkWarning":
+    "Без аутентификации любой в вашей сети, кто может подключиться к Scryer, получает полные права администратора, а доступ без аутентификации с других компьютеров считается устаревшим. Если Scryer будут пользоваться с других компьютеров, выберите вместо этого «Требовать пароль администратора».",
+  "initialAuth.restartTitle": "Перезапуск Scryer",
+  "initialAuth.restartBody":
+    "Настройки сохранены. Другие компьютеры смогут подключиться к Scryer после его перезапуска.",
+  "initialAuth.restartNow": "Перезапустить сейчас",
+  "initialAuth.restartLater": "Перезапустить позже",
+  "initialAuth.restarting": "Перезапуск Scryer…",
+  "initialAuth.restartUnreachable":
+    "Scryer не отвечает уже 45 секунд. Проверьте вывод сервера, затем перезагрузите эту страницу.",
+  "error.reason.NETWORK_BIND_HOST_INVALID":
+    "Введите IP-адрес без порта, например 127.0.0.1 или 192.168.1.20.",
+  "error.reason.NETWORK_BIND_ENV_PINNED":
+    "В этой установке адрес Scryer задан переменной SCRYER_BIND, поэтому здесь его изменить нельзя.",
+  "error.reason.NETWORK_BIND_SAVE_AND_RESET":
+    "Выберите адрес или значение по умолчанию, но не то и другое одновременно.",
+  "error.reason.NETWORK_RESTART_NOT_REQUIRED":
+    "Scryer уже использует эту сетевую настройку, перезапуск не нужен.",
+  "error.reason.NETWORK_RESTART_UNAVAILABLE":
+    "Scryer не может перезапустить себя в этой среде. Перезапустите его тем же способом, каким запускали.",
+  "error.reason.ACQUISITION_NZBGET_KEEP_HISTORY_DISABLED":
+    "В NZBGet параметр KeepHistory равен 0, поэтому завершённые загрузки удаляются раньше, чем Scryer успевает их импортировать. Установите KeepHistory в NZBGet не меньше 1.",
+  "error.reason.ACQUISITION_NZBGET_VERSION_UNSUPPORTED":
+    "Эта версия NZBGet слишком старая. Scryer требуется NZBGet 12.0 или новее.",
+  "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED":
+    "Проверка подключения к клиенту загрузки не пройдена.",
+  "error.reason.INTERFACE_DISCOVERY_SECTION_BLANK":
+    "Выберите раздел обзора, который нужно открыть.",
+  "settings.publicUrlBindPending": "Адрес прослушивания после перезапуска",
+  "settings.networkGroupTitle": "Сеть",
+  "settings.networkTitle": "Кто может подключаться к Scryer",
+  "settings.networkHelp":
+    "Выберите, кто может открывать Scryer: только этот компьютер или и другие компьютеры в вашей сети. Изменения вступят в силу после перезапуска Scryer.",
+  "settings.networkAdvanced": "Дополнительно",
+  "settings.networkCustom": "Определённый адрес этого компьютера",
+  "settings.networkCustomLabel": "IP-адрес",
+  "settings.networkCustomHelp":
+    "Введите IP-адрес, принадлежащий этому компьютеру, например его адрес в вашей сети. Scryer сохранит текущий порт.",
+  "settings.networkPinnedEnvironment":
+    "В этой установке адрес Scryer задан переменной SCRYER_BIND, поэтому здесь его изменить нельзя.",
+  "settings.networkPinnedContainer":
+    "Сетевой доступ определяется портами, которые публикует ваш контейнер, поэтому здесь его изменить нельзя.",
+  "settings.networkClear": "Использовать значение по умолчанию",
+  "settings.networkSaved": "Настройки сетевого доступа сохранены.",
+  "settings.networkLoadError":
+    "Не удалось загрузить настройки сетевого доступа.",
+  "settings.networkSaveError":
+    "Не удалось сохранить настройки сетевого доступа.",
+  "settings.networkPendingSource": "После перезапуска",
+  "settings.networkRestartPending":
+    "После перезапуска Scryer будет прослушивать адрес {{address}}.",
+  "settings.networkRestartNow": "Перезапустить сейчас",
+  "settings.networkRestarting": "Перезапуск Scryer…",
+  "settings.networkRestartUnreachable":
+    "Scryer не отвечает уже 45 секунд. Если вы изменили, кто может к нему подключаться, откройте его по новому адресу ({{address}}) или проверьте вывод сервера.",
+  "settings.networkRestartFailed": "Не удалось перезапустить Scryer.",
+  "settings.networkFallbackTitle":
+    "Scryer прослушивает адрес {{address}} вместо настроенного.",
+  "settings.networkFallback.unbindable":
+    "Scryer не смог использовать адрес {{address}}, поэтому остался доступен только с этого компьютера. Убедитесь, что адрес принадлежит этому компьютеру, и выберите его снова.",
+  "settings.networkFallback.storedInvalid":
+    "Сохранённый сетевой адрес недействителен, поэтому Scryer использовал адрес по умолчанию. Выберите адрес снова, чтобы заменить его.",
+  "settings.networkFallback.storedUnreadable":
+    "Не удалось прочитать сохранённый сетевой адрес, поэтому Scryer использовал адрес по умолчанию. Выберите адрес снова, чтобы заменить его.",
+  "dashboard.recycleBin": "Ожидают удаления",
+  "dashboard.panel.recycleBinDescription":
+    "Файлы в корзине, которые будут безвозвратно удалены в ближайшие 72 часа, включая просроченные.",
+  "dashboard.recycleBinEmpty": "В ближайшие 72 часа удалять из корзины нечего.",
+  "dashboard.recycleBinWindow": "Ближайшие 72 часа",
+  "dashboard.recycleBinDueNow": "Уже пора",
+  "dashboard.recycleBinDueIn": "Через {{hours}} ч",
+  "settings.seedingProfileNameRequired": "Введите название профиля.",
+  "settings.seedingProfileRatioInvalid":
+    "Введите число не меньше нуля или оставьте поле пустым.",
+  "settings.seedingProfileDurationInvalid":
+    "Введите длительность, например 90m, 36h, 1d 12h или 2w, или оставьте поле пустым.",
+  "settings.seedingProfileMinimumSeedersInvalid":
+    "Введите целое число не меньше 0 или оставьте поле пустым.",
+  "settings.watchHistory": "История просмотров",
+  "settings.watchHistoryNotRead": "Ещё не прочитана",
+  "settings.watchHistoryLastFullRead": "Последнее полное чтение: {{time}}",
+  "settings.watchHistoryIncomplete": "Последнее чтение неполное",
+  "settings.watchHistoryIncompleteHelp":
+    "Правила жизненного цикла считают историю просмотров неизвестной, пока все включённые медиасерверы не будут прочитаны полностью. Причина: {{reason}}",
+  "settings.watchHistorySignalCount":
+    "Просмотренных элементов: {{count}}, связанных аккаунтов: {{accounts}}",
+  "settings.watchHistoryDisabled": "Не читается, пока подключение отключено",
+  "settings.watchHistoryStale": "Устарела",
+  "settings.watchHistoryStaleHelp":
+    "Правила жизненного цикла считают историю просмотров неизвестной, пока все включённые медиасерверы не будут недавно прочитаны полностью.",
+  "settings.watchSyncReason.credentialMissing":
+    "Для этого подключения не сохранён API-ключ.",
+  "settings.watchSyncReason.providerUnsupported":
+    "Этот тип медиасервера не поддерживает чтение истории просмотров.",
+  "settings.watchSyncReason.baseUrlInvalid":
+    "Базовый URL подключения не является пригодным адресом.",
+  "settings.watchSyncReason.plexServerNotSelected":
+    "Для этого подключения не выбран сервер Plex.",
+  "settings.watchSyncReason.plexServerUnreachable":
+    "Выбранного сервера Plex нет в аккаунте, или для него не указан адрес подключения.",
+  "settings.watchSyncReason.plexAccountIdInvalid":
+    "У связанного аккаунта Plex идентификатор, который сервер не может найти.",
+  "settings.watchSyncReason.participantIdMissing":
+    "У связанного аккаунта нет идентификатора пользователя медиасервера.",
+  "settings.watchSyncReason.accessDenied": "Медиасервер отказал в доступе.",
+  "settings.watchSyncReason.requestRejected": "Медиасервер отклонил запрос.",
+  "settings.watchSyncReason.requestFailed":
+    "Не удалось связаться с медиасервером.",
+  "settings.watchSyncReason.responseUnreadable":
+    "Медиасервер прислал ответ, который Scryer не смог прочитать.",
+  "settings.watchSyncReason.itemsUnreadable":
+    "Некоторые просмотренные элементы не удалось прочитать.",
+  "settings.watchSyncReason.pagingNotHonoured":
+    "Медиасервер не вернул историю просмотров постранично, как было запрошено.",
+  "settings.watchSyncReason.filterNotHonoured":
+    "Медиасервер вернул непросмотренные элементы в ответ на запрос просмотренных.",
+  "settings.watchSyncReason.unmappedPlayedMovies":
+    "Некоторые просмотренные фильмы не удалось сопоставить с тайтлами библиотеки.",
+  "settings.watchSyncReason.storeFailed":
+    "Scryer не смог сохранить прочитанную историю просмотров.",
+  "settings.watchSyncReason.sourceUnavailable":
+    "Чтение истории просмотров недоступно в этой сборке.",
+  "discovery.browseBy.action": "Боевики",
+  "discovery.browseBy.adventure": "Приключения",
+  "discovery.browseBy.comedy": "Комедии",
+  "discovery.browseBy.crime": "Криминал",
+  "discovery.browseBy.documentary": "Документальные",
+  "discovery.browseBy.drama": "Драмы",
+  "discovery.browseBy.family": "Семейные",
+  "discovery.browseBy.fantasy": "Фэнтези",
+  "discovery.browseBy.history": "Исторические",
+  "discovery.browseBy.horror": "Ужасы",
+  "discovery.browseBy.mystery": "Детективы и тайны",
+  "discovery.browseBy.romance": "Мелодрамы",
+  "discovery.browseBy.science-fiction": "Научная фантастика",
+  "discovery.browseBy.thriller": "Триллеры",
+  "discovery.browseBy.war": "Военные",
+  "discovery.browseBy.western": "Вестерны",
+  "discovery.browseBy.sports": "Спорт",
+  "discovery.browseBy.supernatural": "Сверхъестественное",
+  "discovery.browseBy.coming-of-age": "Взросление",
+  "discovery.browseBy.found-family": "Обретённая семья",
+  "discovery.browseBy.revenge": "Месть",
+  "discovery.browseBy.heist": "Ограбления",
+  "discovery.browseBy.time-travel": "Путешествия во времени",
+  "discovery.browseBy.dystopia": "Антиутопия",
+  "discovery.browseBy.cyberpunk": "Киберпанк",
+  "discovery.browseBy.superhero": "Супергерои",
+  "discovery.browseBy.vampire": "Вампиры",
+  "discovery.browseBy.zombie": "Зомби",
+  "discovery.browseBy.survival": "Выживание",
+  "discovery.browseBy.space": "Космос",
+  "discovery.browseBy.detective": "Сыщики",
+  "discovery.browseBy.organized-crime": "Организованная преступность",
+  "discovery.browseBy.period-drama": "Костюмные драмы",
+  "discovery.browseBy.psychological": "Психологические",
+  "discovery.browseBy.mythology": "Мифология",
+  "discovery.browseBy.isekai": "Исэкай",
+  "discovery.browseBy.mecha": "Меха",
+  "discovery.browseBy.martial-arts": "Боевые искусства",
+  "discovery.browseBy.music": "Музыка",
+  "discovery.browseBy.workplace": "Работа",
+  "discovery.browseBy.medical": "Медицина",
+  "discovery.browseBy.military": "Армия",
+  "discovery.browseBy.spy": "Шпионы",
+  "discovery.browseBy.royal-politics": "Дворцовые интриги",
+  "discovery.browseBy.first-love": "Первая любовь",
+  "discovery.browseBy.forbidden-love": "Запретная любовь",
+  "discovery.browseBy.lgbtq": "ЛГБТК+",
+  "discovery.browseBy.samurai": "Самураи",
+  "discovery.browseBy.magical-girl": "Девочки-волшебницы",
+  "discovery.browseBy.genreHeading": "Жанры",
+  "discovery.browseBy.themeHeading": "Темы",
+  "discovery.browseBy.titleCount": "Тайтлов: {{count}}",
+  "discovery.railScroll.right": "{{heading}}: прокрутить вправо",
+  "discovery.railScroll.left": "{{heading}}: прокрутить влево",
+  "discovery.section.seeAll": "Показать все",
+  "discovery.section.seeAllLabel": "Показать все: {{section}}",
+  "discovery.section.backToDiscovery": "Назад к обзору",
+  "discovery.section.titleCount": "Тайтлов: {{count}}",
+  "discovery.section.sortLabel": "Сортировка",
+  "discovery.section.sort.relevance": "По релевантности",
+  "discovery.section.sort.popularity": "По популярности",
+  "discovery.section.sort.rating": "По рейтингу",
+  "discovery.section.sort.releaseDate": "По дате выхода",
+  "discovery.section.sort.title": "По названию",
+  "discovery.section.hideOwned": "Скрыть имеющиеся",
+  "discovery.section.hideRequested": "Скрыть запрошенные",
+  "discovery.section.empty": "Нет тайтлов, подходящих под эти фильтры.",
+  "discovery.section.loadMore": "Загрузить ещё",
+  "discovery.section.preferenceSaveFailed":
+    "Не удалось сохранить настройку сетки.",
+  "title.contextReleaseSearchUnroutable.noUsenetClient":
+    "Скрыто релизов Usenet: {{count}}, нет включённого клиента загрузки Usenet: {{names}}",
+  "title.contextReleaseSearchUnroutable.noTorrentClient":
+    "Скрыто торрент-релизов: {{count}}, нет включённого торрент-клиента: {{names}}",
+  "title.contextReleaseSearchUnroutable.noHttpClient":
+    "Скрыто релизов для прямой загрузки: {{count}}, нет включённого HTTP-клиента загрузки: {{names}}",
+  "title.contextReleaseSearchUnroutable.usenetClientPluginUnavailable":
+    "Скрыто релизов Usenet: {{count}}, плагин включённого клиента загрузки не загружен: {{names}}",
+  "title.contextReleaseSearchUnroutable.torrentClientPluginUnavailable":
+    "Скрыто торрент-релизов: {{count}}, плагин включённого клиента загрузки не загружен: {{names}}",
+  "title.contextReleaseSearchUnroutable.httpClientPluginUnavailable":
+    "Скрыто релизов для прямой загрузки: {{count}}, плагин включённого клиента загрузки не загружен: {{names}}",
+  "title.contextReleaseSearchUnroutable.unknown":
+    "Скрыто релизов: {{count}}, их не принимает ни один включённый клиент загрузки: {{names}}",
+  "settings.recycleBinHistory": "История связанного тайтла",
+  "settings.recycleBinHistoryFor": "Показать связанную историю для {{name}}",
+  "settings.recycleBinHistoryHelp":
+    "Захваты, импорты, обновления и удаления, связанные с этим файлом в корзине, в хронологическом порядке.",
+  "settings.recycleBinHistoryEmpty":
+    "В этом экземпляре нет связанной истории. Тайтл или события могут отсутствовать, либо запись может быть старше сохранённых связей файлов и загрузок.",
+  "settings.recycleBinHistoryTruncated":
+    "В этой сводке показано до 50 связанных событий из последних 5000 событий загрузок и файлов тайтла. Более старая связанная история может быть не включена.",
 };
 
 export default ru;

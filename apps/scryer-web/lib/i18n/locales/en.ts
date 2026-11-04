@@ -5657,15 +5657,24 @@ const en: LocaleDictionary = {
   "settings.watchSyncReason.participantIdMissing":
     "A linked account has no media server user id.",
   "settings.watchSyncReason.accessDenied": "The media server refused access.",
-  "settings.watchSyncReason.requestRejected": "The media server refused the request.",
-  "settings.watchSyncReason.requestFailed": "The media server could not be reached.",
-  "settings.watchSyncReason.responseUnreadable": "The media server sent an answer Scryer could not read.",
-  "settings.watchSyncReason.itemsUnreadable": "Some watched items could not be read.",
-  "settings.watchSyncReason.pagingNotHonoured": "The media server did not return its watch history page by page as asked.",
-  "settings.watchSyncReason.filterNotHonoured": "The media server returned unwatched items when asked for watched ones.",
-  "settings.watchSyncReason.unmappedPlayedMovies": "Some watched movies could not be matched to a library title.",
-  "settings.watchSyncReason.storeFailed": "Scryer could not save the watch history it read.",
-  "settings.watchSyncReason.sourceUnavailable": "Watch history reading is not available in this build.",
+  "settings.watchSyncReason.requestRejected":
+    "The media server refused the request.",
+  "settings.watchSyncReason.requestFailed":
+    "The media server could not be reached.",
+  "settings.watchSyncReason.responseUnreadable":
+    "The media server sent an answer Scryer could not read.",
+  "settings.watchSyncReason.itemsUnreadable":
+    "Some watched items could not be read.",
+  "settings.watchSyncReason.pagingNotHonoured":
+    "The media server did not return its watch history page by page as asked.",
+  "settings.watchSyncReason.filterNotHonoured":
+    "The media server returned unwatched items when asked for watched ones.",
+  "settings.watchSyncReason.unmappedPlayedMovies":
+    "Some watched movies could not be matched to a library title.",
+  "settings.watchSyncReason.storeFailed":
+    "Scryer could not save the watch history it read.",
+  "settings.watchSyncReason.sourceUnavailable":
+    "Watch history reading is not available in this build.",
   "settings.apiKeyConfigured": "API key saved",
   "settings.apiKeyMissing": "API key missing",
   "settings.plexServerSelected": "Plex server selected",
@@ -6383,7 +6392,8 @@ const en: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "Recommended",
   "libraryGraph.notBuilt": "The library graph has not been built yet.",
   "libraryGraph.truncated": "This graph covers only part of the library.",
-  "discovery.refusal.neighborTargetKeyUnsupported": "This title can't be explored further.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "This title can't be explored further.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "This title doesn't match this library's media type, so it can't be explored here.",
   "libraryGraph.moreLikeThisEmpty": "Nothing more like this yet.",
@@ -11809,16 +11819,26 @@ const en: LocaleDictionary = {
     "Moving the file to its new name failed. The file and its episodes were left as they were.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episode numbering is ambiguous",
-  "settings.maintenanceExecutionReason.playbackHold": "Held: something is playing on a media server.",
-  "settings.maintenanceExecutionReason.playbackUnknown": "Held: a media server could not be asked whether something is playing.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Held: the media server shows a play newer than the stored watch history.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Held: the media server's history shows a play by an account the watch history does not count.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Held: the media server could not confirm the watch history before acting.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
-  "settings.refMaintFactsWatchedByAnyone": "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "When anyone with an account on a connected media server last played the subject",
-  "settings.refMaintFactsWatchedByAnyoneValue": "True when any account on an enabled media server has played it, whether or not the account is linked to a Scryer user; for seasons and shows, any aired episode counts. Unknown with reason audience_not_read until a sync in the last 48 hours has read every account on every enabled connection, and with the usual watch-fact reasons whenever watch facts are unknown.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "RFC3339 timestamp of the most recent play by any account; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing (episode_play_time_missing for seasons and shows) when a play has no recorded time, or audience_not_read when the accounts have not all been read",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "Held: something is playing on a media server.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "Held: a media server could not be asked whether something is playing.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "Held: the media server shows a play newer than the stored watch history.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "Held: the media server's history shows a play by an account the watch history does not count.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "Held: the media server could not confirm the watch history before acting.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "When anyone with an account on a connected media server last played the subject",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True when any account on an enabled media server has played it, whether or not the account is linked to a Scryer user; for seasons and shows, any aired episode counts. Unknown with reason audience_not_read until a sync in the last 48 hours has read every account on every enabled connection, and with the usual watch-fact reasons whenever watch facts are unknown.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "RFC3339 timestamp of the most recent play by any account; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing (episode_play_time_missing for seasons and shows) when a play has no recorded time, or audience_not_read when the accounts have not all been read",
   "settings.maintenancePreviewFacts": "Facts the rule read",
   "uiText.tables": "Tables",
   "uiText.table": "Table",
@@ -11846,7 +11866,6 @@ const en: LocaleDictionary = {
   "uiText.discoveringProwlarrIndexers": "Discovering Prowlarr indexers…",
   "uiText.sponsor": "Sponsor",
   "uiText.social": "Social",
-  "uiText.bit": "-bit",
   "uiText.kbps": "kbps",
   "uiText.forced": "[Forced]",
   "uiText.default": "[Default]",
@@ -11979,7 +11998,6 @@ const en: LocaleDictionary = {
   "uiText.keepMeSignedIn": "Keep me signed in",
   "uiText.signInWithEmby": "Sign in with Emby",
   "uiText.completingAuthorization": "Completing authorization…",
-  "uiText.authorize": "Authorize",
   "uiText.scopes": "Scopes",
   "uiText.libraryAccess": "Library access",
   "uiText.jellyfinAccountLinking": "Jellyfin account linking",
@@ -12414,6 +12432,25 @@ const en: LocaleDictionary = {
     "Encode pending artwork. Run now overrides the nightly window. Waiting for the nightly window.",
   "jobs.artworkWait.scan":
     "Encode pending artwork. Run now overrides the nightly window. Waiting for library scans.",
+  "auth.mfaVerify": "Verify",
+  "auth.mfaVerifying": "Verifying",
+  "oauth.authorizeClient": "Authorize {{name}}",
+  "oauth.authorizeIntegration": "Authorize integration",
+  "oauth.ui.ready": "ready",
+  "oauth.ui.exactCallback": "Exact callback: {{url}}",
+  "oauth.ui.editApplication": "Edit {{name}}",
+  "apiKeys.ui.Action": "Action",
+  "apiKeys.ui.Managed": "Managed",
+  "apiKeys.ui.Actor": "Actor",
+  "apiKeys.ui.Created": "Created",
+  "apiKeys.ui.Last_used": "Last used",
+  "apiKeys.ui.revokeDescription":
+    "“{{label}}” will stop working immediately. This cannot be undone.",
+  "routeError.serverStatusText":
+    "The server returned an error ({{status}} {{statusText}}).",
+  "routeError.technicalDetails": "Technical details",
+  "routeError.retry": "Retry",
+  "mediaFile.bitDepthValue": "{{depth}}-bit",
 };
 
 export default en;

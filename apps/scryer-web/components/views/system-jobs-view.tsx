@@ -1,4 +1,8 @@
-import { translateNativeJobText } from "@/lib/i18n/native-jobs";
+import {
+  jobDescription,
+  jobDisplayName,
+  jobScheduleDescription,
+} from "@/lib/i18n/native-jobs";
 import { ArrowDown, ArrowUp, Edit, Plus, Power, Trash2 } from "lucide-react";
 import {
   useCallback,
@@ -814,10 +818,10 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         <TableCell className="min-w-0">
           <div className="space-y-1">
             <p className="font-medium text-[var(--scry-ink2)]">
-              {translateNativeJobText(job.key, job.displayName, t)}
+              {jobDisplayName(job, t)}
             </p>
             <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
-              {translateNativeJobText(job.key, job.description, t)}
+              {jobDescription(job, t)}
             </p>
             {job.key === "ARTWORK_ENCODING" && lastRun?.summaryText ? (
               <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
@@ -829,7 +833,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         <TableCell
           className={`w-[14rem] max-w-[14rem] ${JOBS_MUTED_TEXT_CLASS}`}
         >
-          {translateNativeJobText(job.key, job.schedule.description, t)}
+          {jobScheduleDescription(job, t)}
         </TableCell>
         <TableCell
           className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
@@ -1179,10 +1183,10 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">
               <p className="text-sm font-semibold text-[var(--scry-ink2)]">
-                {translateNativeJobText(job.key, job.displayName, t)}
+                {jobDisplayName(job, t)}
               </p>
               <p className={`text-xs leading-relaxed ${JOBS_MUTED_TEXT_CLASS}`}>
-                {translateNativeJobText(job.key, job.description, t)}
+                {jobDescription(job, t)}
               </p>
               {job.key === "ARTWORK_ENCODING" && lastRun?.summaryText ? (
                 <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
@@ -1208,7 +1212,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                 {t("jobs.column.schedule")}
               </p>
               <p className="text-sm text-[var(--scry-ink2)]">
-                {translateNativeJobText(job.key, job.schedule.description, t)}
+                {jobScheduleDescription(job, t)}
               </p>
             </div>
             <div className="space-y-1">

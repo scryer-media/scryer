@@ -466,7 +466,7 @@ export function ApiKeysPanel({
                 aria-hidden="true"
                 className="invisible hidden min-h-5 items-center text-sm font-medium leading-none sm:flex"
               >
-                {t("settings.maintenanceRuleAction")}
+                {t("apiKeys.ui.Action")}
               </span>
               <Button
                 id="settings-profile-api-key-create"
@@ -516,15 +516,13 @@ export function ApiKeysPanel({
                       </span>
                       <Badge tone={keyStatus.tone}>{keyStatus.label}</Badge>
                       {key.provisioningSource === "environment" ? (
-                        <Badge tone="info">
-                          {t("settings.managedIndexerBadge")}
-                        </Badge>
+                        <Badge tone="info">{t("apiKeys.ui.Managed")}</Badge>
                       ) : null}
                     </div>
                     <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
                       <div className="min-w-0">
                         <dt className="text-[var(--scry-muted3)]">
-                          {t("history.actor")}
+                          {t("apiKeys.ui.Actor")}
                         </dt>
                         <dd className="truncate font-[family-name:var(--font-code)] text-[var(--scry-ink2)]">
                           {key.actor}
@@ -532,7 +530,7 @@ export function ApiKeysPanel({
                       </div>
                       <div>
                         <dt className="text-[var(--scry-muted3)]">
-                          {t("settings.externalAccountInviteCreatedAt")}
+                          {t("apiKeys.ui.Created")}
                         </dt>
                         <dd className="text-[var(--scry-ink2)]">
                           {formatTimestamp(key.createdAt, dateTimeFormat)}
@@ -550,7 +548,7 @@ export function ApiKeysPanel({
                       </div>
                       <div>
                         <dt className="text-[var(--scry-muted3)]">
-                          {t("indexerClients.lastUsed")}
+                          {t("apiKeys.ui.Last_used")}
                         </dt>
                         <dd className="text-[var(--scry-ink2)]">
                           {key.lastUsedAt
@@ -595,7 +593,7 @@ export function ApiKeysPanel({
         title={t("uiAttr.Revoke_API_key")}
         description={
           pendingRevoke
-            ? `“${pendingRevoke.label}” will stop working immediately. This cannot be undone.`
+            ? t("apiKeys.ui.revokeDescription", { label: pendingRevoke.label })
             : ""
         }
         confirmLabel={t("uiAttr.Revoke_key")}

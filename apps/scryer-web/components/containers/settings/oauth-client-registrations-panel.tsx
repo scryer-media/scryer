@@ -488,7 +488,7 @@ export function OAuthClientRegistrationsPanel() {
               <p>
                 {t("uiText.oAuthClient")}{" "}
                 {jellyfinClientStatus === "ready"
-                  ? "ready"
+                  ? t("oauth.ui.ready")
                   : jellyfinClientStatus === "reconciling"
                     ? t("oauth.ui.reconciling_the_created_client")
                     : jellyfinClientStatus === "ambiguous"
@@ -500,7 +500,7 @@ export function OAuthClientRegistrationsPanel() {
               <p>
                 {t("uiText.automaticAccountLinking")}{" "}
                 {linkingStatus === "ready"
-                  ? "ready"
+                  ? t("oauth.ui.ready")
                   : linkingStatus === "ambiguous"
                     ? t(
                         "oauth.ui.ambiguous_more_than_one_eligible_Jellyfin_connection_matches_this_public_URL",
@@ -651,7 +651,7 @@ export function OAuthClientRegistrationsPanel() {
                 />
                 <p className="text-xs text-[var(--scry-muted3)]">
                   {previewCallbackUrl
-                    ? `Exact callback: ${previewCallbackUrl}`
+                    ? t("oauth.ui.exactCallback", { url: previewCallbackUrl })
                     : t(
                         "oauth.ui.Enter_a_public_HTTPS_URL_to_derive_the_exact_callback",
                       )}
@@ -840,7 +840,9 @@ export function OAuthClientRegistrationsPanel() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
               {editingClient
-                ? `Edit ${editingClient.displayName}`
+                ? t("oauth.ui.editApplication", {
+                    name: editingClient.displayName,
+                  })
                 : t("oauth.ui.Register_an_application")}
             </h4>
             {editingClient ? (
