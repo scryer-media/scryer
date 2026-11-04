@@ -207,7 +207,6 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
   },
   {
     id: "discover",
-    label: "Discover",
     labelKey: "nav.group.discover",
     items: [
       { kind: "view", id: "discovery" },
@@ -1808,7 +1807,7 @@ function RootSidebarContent({
                 )}
               >
                 <Heart className="h-3.5 w-3.5 text-[var(--scry-danger-text-soft)]" />
-                <span className="truncate">Sponsor</span>
+                <span className="truncate">{t("uiText.sponsor")}</span>
               </a>
             ) : null}
             {themeMounted ? (
@@ -1842,7 +1841,7 @@ function RootSidebarContent({
               className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 py-1 text-xs font-medium text-[var(--scry-muted)] transition hover:border-[var(--scry-border2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 group-data-[collapsible=icon]:hidden"
             >
               <BookOpen className="h-4 w-4" />
-              <span className="truncate">Docs</span>
+              <span className="truncate">{t("settings.pluginDocs")}</span>
             </a>
             <div
               className={cn(
@@ -1872,7 +1871,7 @@ function RootSidebarContent({
                     className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 py-1 text-xs font-medium text-[var(--scry-muted)] transition hover:border-[var(--scry-border2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
                   >
                     <MessagesSquare className="h-4 w-4" />
-                    <span className="truncate">Social</span>
+                    <span className="truncate">{t("uiText.social")}</span>
                   </button>
                 </PopoverTrigger>
                 <PopoverContent
@@ -1899,7 +1898,7 @@ function RootSidebarContent({
                 >
                   <div
                     role="menu"
-                    aria-label="Social links"
+                    aria-label={t("uiAttr.Social_links")}
                     className="space-y-0.5 rounded-lg border border-[var(--scry-border2)] bg-[var(--scry-bg)] p-1 shadow-xl"
                   >
                     <a

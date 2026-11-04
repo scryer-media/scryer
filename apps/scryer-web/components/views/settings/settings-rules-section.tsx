@@ -491,7 +491,10 @@ function wrapLocalePackTooltipText(text: string): React.ReactNode {
   );
 }
 
-function trashLocalePackTooltip(description: string) {
+function trashLocalePackTooltip(
+  description: string,
+  t: ReturnType<typeof useTranslate>,
+) {
   const prefix = "Managed TRaSH Guides score-only locale pack for ";
   if (!description.startsWith(prefix)) {
     return wrapLocalePackTooltipText(description);
@@ -499,9 +502,9 @@ function trashLocalePackTooltip(description: string) {
 
   return (
     <>
-      Managed TRaSH Guides
+      {t("uiText.managedTRaSHGuides")}
       <br />
-      score-only locale pack for
+      {t("uiText.scoreOnlyLocalePackFor")}
       <br />
       {wrapLocalePackTooltipText(description.slice(prefix.length))}
     </>
@@ -580,7 +583,7 @@ function TrashLocalePacksCard({
                     {record.name}
                   </Label>
                   <InfoHelp
-                    text={trashLocalePackTooltip(record.description)}
+                    text={trashLocalePackTooltip(record.description, t)}
                     ariaLabel={record.name}
                   />
                 </div>
@@ -718,7 +721,7 @@ function RuleLibrary({
               )}
               onClick={() => setTab("builtin")}
             >
-              Built-in
+              {t("settings.pluginBuiltin")}
             </button>
             <button
               id="settings-rules-library-tab-community"
@@ -731,7 +734,7 @@ function RuleLibrary({
               )}
               onClick={() => setTab("community")}
             >
-              Community
+              {t("uiText.community")}
             </button>
           </div>
 
@@ -752,7 +755,7 @@ function RuleLibrary({
                         "settings-rules-library-category",
                         isAll ? "all" : cat,
                       )}
-                      key={cat}
+                      key={t(`rules.category.${cat}`)}
                       type="button"
                       className={cn(
                         "rounded-full px-3 py-1 text-xs font-medium transition-colors",
@@ -762,7 +765,7 @@ function RuleLibrary({
                       )}
                       onClick={() => setCategoryFilter(isAll ? "All" : cat)}
                     >
-                      {cat}
+                      {t(`rules.category.${cat}`)}
                     </button>
                   );
                 })}
@@ -787,7 +790,7 @@ function RuleLibrary({
                   setPackTemplates([]);
                 }}
               >
-                &larr; Back to packs
+                {t("uiText.backToPacks")}
               </button>
               <p className="mb-1 text-sm font-medium">{selectedPack.name}</p>
               <p className="mb-3 text-xs text-muted-foreground">
@@ -800,20 +803,21 @@ function RuleLibrary({
               ) : (
                 <div className="space-y-3">
                   <p className="text-xs text-muted-foreground">
-                    Choose the rules to enable after installation. Rules stay
-                    managed
-                    {selectedPack.customizable !== false
-                      ? " and can be copied individually for customization."
-                      : "."}
+                    {t(
+                      selectedPack.customizable !== false
+                        ? "rules.packChooseCustomizable"
+                        : "rules.packChooseManaged",
+                    )}
                   </p>
                   {selectedPack.customizable === false ? (
                     <p className="text-xs text-muted-foreground">
-                      Managed by the pack author.
+                      {t("uiText.managedByThePackAuthor")}
                     </p>
                   ) : null}
                   <p className="text-xs text-muted-foreground">
-                    Existing custom copies are not adopted or disabled when this
-                    pack is installed.
+                    {t(
+                      "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled",
+                    )}
                   </p>
                   <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
                     {packTemplates.map((template) => {
@@ -915,7 +919,7 @@ function RuleLibrary({
                     </Badge>
                     {pack.customizable === false ? (
                       <Badge tone="neutral" className="text-[10px]">
-                        Managed
+                        {t("settings.managedIndexerBadge")}
                       </Badge>
                     ) : null}
                     <span className="text-[10px] text-muted-foreground">
@@ -939,6 +943,7 @@ function TemplateGrid({
   templates: RuleTemplate[];
   onApply: (template: RuleTemplate) => void;
 }) {
+  const t = useTranslate();
   return (
     <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
       {templates.map((tpl) => (
@@ -950,14 +955,14 @@ function TemplateGrid({
           onClick={() => onApply(tpl)}
         >
           <p className="text-sm font-medium text-foreground group-hover:text-primary">
-            {tpl.title}
+            {t(`rules.template.${tpl.id}.title`)}
           </p>
           <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-            {tpl.description}
+            {t(`rules.template.${tpl.id}.description`)}
           </p>
           <div className="mt-2 flex items-center gap-2">
             <Badge tone="neutral" className="text-[10px]">
-              {tpl.category}
+              {t(`rules.category.${tpl.category}`)}
             </Badge>
             {tpl.appliedFacets
               ?.filter((f) => f.toLowerCase() !== tpl.category.toLowerCase())
@@ -1083,7 +1088,7 @@ export function SettingsRulesSection({
                         <TableCell>
                           <FacetTags
                             values={record.appliedFacets}
-                            emptyLabel="Global"
+                            emptyLabel={t("uiAttr.Global")}
                           />
                         </TableCell>
                         <TableCell className="text-center">
@@ -1247,7 +1252,9 @@ export function SettingsRulesSection({
                                 description: e.target.value,
                               }))
                             }
-                            placeholder="Block releases over 100 GiB"
+                            placeholder={t(
+                              "uiAttr.Block_releases_over_100_GiB",
+                            )}
                           />
                         </label>
                       </div>
@@ -1356,7 +1363,7 @@ export function SettingsRulesSection({
                               setIsTestScoringOpen((open) => !open)
                             }
                           >
-                            Test
+                            {t("settings.proxyTest")}
                           </Button>
                         ) : null}
                         <Button

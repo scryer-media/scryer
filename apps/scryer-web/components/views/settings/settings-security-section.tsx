@@ -238,10 +238,14 @@ export function SettingsSecuritySection({
                     onCheckedChange={(checked) =>
                       onApiKeysRestrictionChange(checked === true)
                     }
-                    label="Restrict API keys to system-settings users"
+                    label={t(
+                      "uiAttr.Restrict_API_keys_to_system_settings_users",
+                    )}
                     labelAccessory={
                       <InfoHelp
-                        ariaLabel="Restrict API keys to system-settings users"
+                        ariaLabel={t(
+                          "uiAttr.Restrict_API_keys_to_system_settings_users",
+                        )}
                         text="Only users with Manage System Settings can create or use API keys. Existing keys are preserved and resume if permission is restored or this setting is disabled."
                       />
                     }
@@ -255,7 +259,7 @@ export function SettingsSecuritySection({
             <section className={`${SECURITY_INSET_CLASS} p-4 lg:col-span-2`}>
               <div className={SECURITY_INSET_HEADER_CLASS}>
                 <h4 className={SECURITY_INSET_TITLE_CLASS}>
-                  Multi-factor authentication
+                  {t("uiText.multiFactorAuthentication")}
                 </h4>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
@@ -314,10 +318,10 @@ export function SettingsSecuritySection({
                   onCheckedChange={(checked) =>
                     onTotpEmbyLoginChange(checked === true)
                   }
-                  label="Require MFA for Emby login"
+                  label={t("uiAttr.Require_MFA_for_Emby_login")}
                   labelAccessory={
                     <InfoHelp
-                      ariaLabel="Require MFA for Emby login"
+                      ariaLabel={t("uiAttr.Require_MFA_for_Emby_login")}
                       text="Require an enrolled Scryer passkey or authenticator factor after either Local or Connect Emby authentication."
                     />
                   }

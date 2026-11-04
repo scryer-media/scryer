@@ -1,3 +1,4 @@
+import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import {
   lazy,
@@ -481,6 +482,7 @@ function MainContent({
   canAccessLists: boolean;
   canManageLists: boolean;
 }) {
+  const t = useTranslate();
   const { apiExplorerEnabled } = useInstanceFeatures();
   const instanceFeaturesLoaded = useInstanceFeaturesLoaded();
   if (view === "api-explorer") {
@@ -490,7 +492,7 @@ function MainContent({
       }
       return (
         <div role="status" className="p-8 text-muted-foreground">
-          API explorer is unavailable.
+          {t("uiText.aPIExplorerIsUnavailable")}
         </div>
       );
     }

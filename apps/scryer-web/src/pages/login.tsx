@@ -943,9 +943,11 @@ export default function LoginPage() {
       <div className={AUTH_PAGE_CLASS}>
         <div className={AUTH_MFA_PANEL_CLASS}>
           <div className="space-y-2 text-center">
-            <h1 className={AUTH_HEADING_CLASS}>Confirm it&apos;s you</h1>
+            <h1 className={AUTH_HEADING_CLASS}>{t("uiText.confirmItSYou")}</h1>
             <p className={AUTH_MUTED_TEXT_CLASS}>
-              Complete an enrolled authentication factor to finish signing in.
+              {t(
+                "uiText.completeAnEnrolledAuthenticationFactorToFinishSigningIn",
+              )}
             </p>
           </div>
 
@@ -971,11 +973,13 @@ export default function LoginPage() {
               inputId="login-verification-totp-code"
               submitId="login-verification-totp-submit"
               code={verificationTotpCode}
-              title="Authenticator or recovery code"
-              description="Enter a code from your authenticator app or a recovery code."
+              title={t("uiAttr.Authenticator_or_recovery_code")}
+              description={t(
+                "uiAttr.Enter_a_code_from_your_authenticator_app_or_a_recovery_code",
+              )}
               submitLabel="Verify"
               busyLabel="Verifying"
-              cancelLabel="Back"
+              cancelLabel={t("uiAttr.Back")}
               busy={submitting}
               disabled={submitting}
               allowRecoveryCode
@@ -1022,13 +1026,14 @@ export default function LoginPage() {
                   }}
                   className={AUTH_SECONDARY_BUTTON_CLASS}
                 >
-                  Use an authenticator or recovery code instead
+                  {t("uiText.useAnAuthenticatorOrRecoveryCodeInstead")}
                 </button>
               ) : null}
               {passkeyOnly && !verificationPasskeyBusy ? (
                 <p className={AUTH_MUTED_TEXT_CLASS}>
-                  Can&apos;t use your passkey? Contact an administrator to
-                  recover your account.
+                  {t(
+                    "uiText.canTUseYourPasskeyContactAnAdministratorToRecoverYourAccount",
+                  )}
                 </p>
               ) : null}
               <button
@@ -1037,7 +1042,7 @@ export default function LoginPage() {
                 disabled={verificationPasskeyBusy}
                 className={AUTH_SECONDARY_BUTTON_CLASS}
               >
-                Back to sign in
+                {t("uiText.backToSignIn")}
               </button>
             </div>
           )}
@@ -1148,7 +1153,7 @@ export default function LoginPage() {
           ) : (
             <div className="space-y-3">
               <p className={AUTH_MUTED_TEXT_CLASS}>
-                Protect your account with a passkey or an authenticator app.
+                {t("uiText.protectYourAccountWithAPasskeyOrAnAuthenticatorApp")}
               </p>
               {passkeyEnabled ? (
                 <button
@@ -1163,7 +1168,7 @@ export default function LoginPage() {
                   ) : (
                     <Fingerprint className="h-4 w-4" aria-hidden="true" />
                   )}
-                  Create a passkey
+                  {t("uiText.createAPasskey")}
                 </button>
               ) : null}
               <button
@@ -1173,7 +1178,7 @@ export default function LoginPage() {
                 disabled={jellyfinMfaBusy || loginEnrollmentPasskeyBusy}
                 className={AUTH_SECONDARY_BUTTON_CLASS}
               >
-                Use an authenticator app instead
+                {t("uiText.useAnAuthenticatorAppInstead")}
               </button>
               <button
                 type="button"
@@ -1305,7 +1310,7 @@ export default function LoginPage() {
               }}
               disabled={anySubmitting}
             />
-            Keep me signed in
+            {t("uiText.keepMeSignedIn")}
           </label>
         ) : null}
 
@@ -1361,7 +1366,7 @@ export default function LoginPage() {
                       }}
                       disabled={anySubmitting}
                     />
-                    Keep me signed in
+                    {t("uiText.keepMeSignedIn")}
                   </label>
 
                   <button
@@ -1507,7 +1512,7 @@ export default function LoginPage() {
                         onClick={() => setEmbyMode("LOCAL")}
                         className={AUTH_SECONDARY_BUTTON_CLASS}
                       >
-                        Local
+                        {t("uiText.local")}
                       </button>
                       <button
                         id="login-emby-mode-connect"
@@ -1516,7 +1521,7 @@ export default function LoginPage() {
                         onClick={() => setEmbyMode("CONNECT")}
                         className={AUTH_SECONDARY_BUTTON_CLASS}
                       >
-                        Connect
+                        {t("auth.embyConnectMode")}
                       </button>
                     </div>
                   ) : null}
@@ -1618,7 +1623,7 @@ export default function LoginPage() {
                 aria-hidden="true"
                 className="h-4 w-4"
               />
-              Sign in with Emby
+              {t("uiText.signInWithEmby")}
             </button>
           ) : null}
 

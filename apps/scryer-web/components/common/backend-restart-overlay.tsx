@@ -1,6 +1,8 @@
+import { useTranslate } from "@/lib/context/translate-context";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 export function BackendRestartOverlay() {
+  const t = useTranslate();
   return (
     <div
       id="backend-restart-overlay"
@@ -21,7 +23,7 @@ export function BackendRestartOverlay() {
           id="backend-restart-status"
           className="text-sm text-muted-foreground"
         >
-          Service is restarting&hellip;
+          {t("uiText.serviceIsRestarting")}
         </p>
       </div>
     </div>

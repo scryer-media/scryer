@@ -136,6 +136,7 @@ export function getLanguageLabel(code: string): string {
 }
 
 const FALLBACK: LocaleDictionary = en;
+const RUSSIAN_PLURALS = new Intl.PluralRules("ru");
 
 export function getLocaleDictionary(
   code: string | null | undefined,
@@ -217,6 +218,13 @@ export function t(
   values?: Record<string, string | number | boolean | null | undefined>,
 ): string {
   const locale = getLocaleDictionary(code);
-  const template = locale[key] ?? FALLBACK[key] ?? key;
+  const count = values?.count;
+  const pluralKey =
+    normalizeLocale(code) === "rus" &&
+    typeof count === "number" &&
+    Number.isFinite(count)
+      ? `${key}.${RUSSIAN_PLURALS.select(count)}`
+      : key;
+  const template = locale[pluralKey] ?? locale[key] ?? FALLBACK[key] ?? key;
   return interpolate(template, values);
 }

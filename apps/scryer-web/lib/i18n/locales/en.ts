@@ -11332,6 +11332,600 @@ const en: LocaleDictionary = {
     "Moving the file to its new name failed. The file and its episodes were left as they were.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episode numbering is ambiguous",
+  "uiText.tables": "Tables",
+  "uiText.table": "Table",
+  "uiText.rows": "Rows",
+  "uiText.restoreWarnings": "Restore warnings",
+  "uiText.scoringPreviewOnlyThisDoesNotSave":
+    "Scoring preview only. This does not save",
+  "uiText.admitADownloadOrCreateHistory":
+    ", admit a download, or create history.",
+  "uiText.libraryTitle": "Library title",
+  "uiText.sizeGiBOptional": "Size (GiB, optional)",
+  "uiText.inputsChangedResultIsStale": "Inputs changed; result is stale.",
+  "uiText.incompleteScoringPreview": "Incomplete scoring preview",
+  "uiText.thisResultIncludesEvaluationErrorsSoItCannotDetermineDownloadAdmission":
+    "This result includes evaluation errors, so it cannot determine download admission.",
+  "uiText.profile": "Profile:",
+  "uiText.context": "Context:",
+  "uiText.tags": "Tags:",
+  "uiText.evaluationErrors": "Evaluation errors",
+  "uiText.createAnIntegrationAPIKeyInWeaver":
+    "Create an integration API key in Weaver:",
+  "uiText.openWeaverSecuritySettings": "open Weaver security settings",
+  "uiText.finishTheWeaverURLAboveToGenerateTheLink":
+    "finish the Weaver URL above to generate the link.",
+  "uiText.discoveringProwlarrIndexers": "Discovering Prowlarr indexers…",
+  "uiText.sponsor": "Sponsor",
+  "uiText.social": "Social",
+  "uiText.bit": "-bit",
+  "uiText.kbps": "kbps",
+  "uiText.forced": "[Forced]",
+  "uiText.default": "[Default]",
+  "uiText.matchFilesToEpisodesOrSeriesMoviesFor":
+    "Match files to episodes or series movies for",
+  "uiText.openDownloadClientsSettings": "Open Download Clients settings",
+  "uiText.thisDownloadContainsArchivesExtractThemBeforeMappingMediaFiles":
+    "This download contains archives. Extract them before mapping media files.",
+  "uiText.extractArchivesPreview": "Extract archives & preview",
+  "uiText.theVideoFilesInThisDownloadDoNotHaveARecognizedExtension":
+    "The video files in this download do not have a recognized extension.",
+  "uiText.queueing": "Queueing...",
+  "uiText.more": "more",
+  "uiText.noSubs": "No subs",
+  "uiText.mON": "MON.",
+  "uiText.oAuthApplications": "OAuth applications",
+  "uiText.jellyfinPluginOAuth": "Jellyfin plugin OAuth",
+  "uiText.createAStandaloneOAuthClientForTheJellyfinPluginThisDoesNotRequireAJellyfinMediaServerConnectionOrAccountLinking":
+    "Create a standalone OAuth client for the Jellyfin plugin. This does not require a Jellyfin media-server connection or account linking.",
+  "uiText.oAuthClient": "OAuth client:",
+  "uiText.automaticAccountLinking": "Automatic account linking:",
+  "uiText.accountLinkingCannotUseThisPublicURL":
+    "Account linking cannot use this public URL:",
+  "uiText.thePluginStillSignsInItGrantsLibraryAccessOnlyUntilThisIsFixed":
+    "The plugin still signs in; it grants library access only until this is fixed.",
+  "uiText.moreThanOneOAuthClientIsRegisteredAsTheJellyfinPluginDeleteAllButOneBeforeThePluginSignsIn":
+    "More than one OAuth client is registered as the Jellyfin plugin. Delete all but one before the plugin signs in.",
+  "uiText.thisClientHasNoCallbackURLRegisteredEditItToAddThePluginCallback":
+    "This client has no callback URL registered. Edit it to add the plugin callback.",
+  "uiText.publicJellyfinBaseURL": "Public Jellyfin base URL",
+  "uiText.createJellyfinPluginClient": "Create Jellyfin plugin client",
+  "uiText.jellyfinPluginOAuthClientReconciliationPending":
+    "Jellyfin plugin OAuth client reconciliation pending",
+  "uiText.retryClientList": "Retry client list",
+  "uiText.managedApplications": "Managed applications",
+  "uiText.managedByScryer": "Managed by Scryer",
+  "uiText.customApplications": "Custom applications",
+  "uiText.noCustomOAuthApplicationsAreRegistered":
+    "No custom OAuth applications are registered.",
+  "uiText.displayName": "Display name",
+  "uiText.hTTPSCallbackURLs": "HTTPS callback URLs",
+  "uiText.oneExactHTTPSURLPerLine": "One exact HTTPS URL per line.",
+  "uiText.multiFactorAuthentication": "Multi-factor authentication",
+  "uiText.local": "· local",
+  "uiText.theSelectedEmbyConnectUserMustBeALocalAdministratorForSetup":
+    "The selected Emby Connect user must be a local administrator for setup.",
+  "uiText.embyConnectUsernameOrEmail": "Emby Connect username or email",
+  "uiText.embyServer": "Emby server",
+  "uiText.remote": "· remote",
+  "uiText.allowUsersToSignInThroughEmbyConnect":
+    "Allow users to sign in through Emby Connect",
+  "uiText.testConnect": "Test Connect",
+  "uiText.defaultPermissions": "Default Permissions",
+  "uiText.allowed": "Allowed",
+  "uiText.denied": "Denied",
+  "uiText.aPIKeys": "API keys",
+  "uiText.copyThisKeyNow": "Copy this key now",
+  "uiText.forYourSecurityScryerWillNotDisplayItAgain":
+    "For your security, Scryer will not display it again.",
+  "uiText.copyKey": "Copy key",
+  "uiText.aPIKeyCreationIsDisabledByTheCurrentSecurityPolicy":
+    "API key creation is disabled by the current security policy.",
+  "uiText.loadingAPIKeys": "Loading API keys…",
+  "uiText.noAPIKeysYet": "No API keys yet.",
+  "uiText.expires": "Expires",
+  "uiText.sponsorButton": "Sponsor button",
+  "uiText.showTheSponsorLinkInTheNavigationFooter":
+    "Show the Sponsor link in the navigation footer.",
+  "uiText.connectedApps": "Connected apps",
+  "uiText.oAuthIntegrationsAuthorizedToAccessScryerAsYou":
+    "OAuth integrations authorized to access Scryer as you.",
+  "uiText.noConnectedApps": "No connected apps.",
+  "uiText.authorized": "Authorized:",
+  "uiText.lastUsed": "Last used:",
+  "uiText.revoke": "Revoke",
+  "uiText.linkEmbyAccount": "Link Emby account",
+  "uiText.verifyAccountSecurity": "Verify account security",
+  "uiText.verifyACurrentFactorBeforeManagingPasskeysTOTPOrRecoveryCodes":
+    "Verify a current factor before managing passkeys, TOTP, or recovery codes.",
+  "uiText.tOTPOrRecoveryCode": "TOTP or recovery code",
+  "uiText.verifyPassword": "Verify password",
+  "uiText.verifyWithPasskey": "Verify with passkey",
+  "uiText.verifyCode": "Verify code",
+  "uiText.thisAccountHasNoAvailableReauthenticationFactorSignOutAndSignInAgainThenRetryTheAccountSecurityChange":
+    "This account has no available reauthentication factor. Sign out and sign in again, then retry the account-security change.",
+  "uiText.community": "Community",
+  "uiText.backToPacks": "← Back to packs",
+  "uiText.chooseTheRulesToEnableAfterInstallationRulesStayManaged":
+    "Choose the rules to enable after installation. Rules stay managed",
+  "uiText.managedByThePackAuthor": "Managed by the pack author.",
+  "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled":
+    "Existing custom copies are not adopted or disabled when this pack is installed.",
+  "uiText.toNotifyAMediaServerIeJellyfinFirstCreateA":
+    "To notify a media server (ie. Jellyfin), first create a",
+  "uiText.mediaServerConnection": "media server connection",
+  "uiText.enterDetailsManually": "Enter details manually",
+  "uiText.bundle": "Bundle",
+  "uiText.filesystem": "Filesystem",
+  "uiText.serviceHealth": "Service health",
+  "uiText.datastore": "Datastore",
+  "uiText.migration": "Migration",
+  "uiText.indexerStatsLast24h": "Indexer Stats (Last 24h)",
+  "uiText.countsCoverRequestsScryerSendsProwlarrChildCountsDoNotIncludeRequestsProwlarrMakesInternally":
+    "Counts cover requests Scryer sends. Prowlarr child counts do not include requests Prowlarr makes internally.",
+  "uiText.lastQuery": "Last query:",
+  "uiText.observedCallsToday": "Observed calls today:",
+  "uiText.since": "(since",
+  "uiText.observedSince": "Observed since",
+  "uiText.searchRuns": "Search runs:",
+  "uiText.failed": "failed)",
+  "uiText.providerAPIUsage": "Provider API usage:",
+  "uiText.providerGrabUsage": "Provider grab usage:",
+  "uiText.noIndexerActivityInTheLast24Hours":
+    "No indexer activity in the last 24 hours.",
+  "uiText.eventsLoaded": "events loaded",
+  "uiText.movie": "movie",
+  "uiText.wantedItem": "Wanted Item",
+  "uiText.confirmItSYou": "Confirm it's you",
+  "uiText.completeAnEnrolledAuthenticationFactorToFinishSigningIn":
+    "Complete an enrolled authentication factor to finish signing in.",
+  "uiText.useAnAuthenticatorOrRecoveryCodeInstead":
+    "Use an authenticator or recovery code instead",
+  "uiText.canTUseYourPasskeyContactAnAdministratorToRecoverYourAccount":
+    "Can't use your passkey? Contact an administrator to recover your account.",
+  "uiText.backToSignIn": "Back to sign in",
+  "uiText.protectYourAccountWithAPasskeyOrAnAuthenticatorApp":
+    "Protect your account with a passkey or an authenticator app.",
+  "uiText.createAPasskey": "Create a passkey",
+  "uiText.useAnAuthenticatorAppInstead": "Use an authenticator app instead",
+  "uiText.keepMeSignedIn": "Keep me signed in",
+  "uiText.signInWithEmby": "Sign in with Emby",
+  "uiText.completingAuthorization": "Completing authorization…",
+  "uiText.authorize": "Authorize",
+  "uiText.scopes": "Scopes",
+  "uiText.libraryAccess": "Library access",
+  "uiText.jellyfinAccountLinking": "Jellyfin account linking",
+  "uiText.accountLinkingNotGrantedNoEligibleJellyfinConnection":
+    "Account linking not granted: no eligible Jellyfin connection.",
+  "uiText.retryValidation": "Retry validation",
+  "uiText.deny": "Deny",
+  "uiText.isReadyToApply": "is ready to apply.",
+  "uiText.installedRulePacks": "Installed rule packs",
+  "uiText.packAuthoredNamesDescriptionsAndFacetsStayManagedSomePacksAllowIndividualRulesToBeCopiedForCustomization":
+    "Pack-authored names, descriptions, and facets stay managed. Some packs allow individual rules to be copied for customization.",
+  "uiText.pack": "Pack",
+  "uiText.lastUpdated": "Last updated",
+  "uiText.autoUpdate": "Auto-update",
+  "uiText.available": "available",
+  "uiText.updateFailed": "Update failed",
+  "uiText.check": "Check",
+  "uiText.removedUpstream": "Removed upstream",
+  "uiText.serviceIsRestarting": "Service is restarting…",
+  "uiText.noArt": "No art",
+  "uiText.loadingView": "Loading view…",
+  "uiText.loadingLibrary": "Loading library...",
+  "uiText.checkingYourTitlesAndLibrarySetup":
+    "Checking your titles and library setup.",
+  "uiText.currentDownload": "Current download:",
+  "uiText.state": "State:",
+  "uiText.pageNotFound": "Page not found",
+  "uiText.thePageYouRequestedDoesNotExist":
+    "The page you requested does not exist.",
+  "uiText.goToHome": "Go to Home",
+  "uiText.liveServiceOutput": "Live service output",
+  "uiText.buffered": "buffered",
+  "uiText.line": "Line",
+  "uiText.shown": "shown ·",
+  "uiText.matching": "matching",
+  "uiText.noLogsAvailableYet": "No logs available yet.",
+  "uiText.thisLegacyTextLogLineHasNoJSONEventPayload":
+    "This legacy text log line has no JSON event payload.",
+  "uiText.aPIExplorerIsUnavailable": "API explorer is unavailable.",
+  "uiText.home": "Home",
+  "uiText.managedTRaSHGuides": "Managed TRaSH Guides",
+  "uiText.scoreOnlyLocalePackFor": "score-only locale pack for",
+  "routeError.notFoundDetail":
+    "The page you're looking for doesn't exist or has been moved.",
+  "routeError.requestFailed": "Request failed",
+  "routeError.serverStatus": "The server returned an error ({{status}}).",
+  "routeError.somethingWrong": "Something went wrong",
+  "routeError.unexpected": "Unexpected error",
+  "routeError.unknownDetail":
+    "An unknown error occurred while loading this page.",
+  "auth.embyConnectMode": "Emby Connect",
+  "rules.previewSavedSafety":
+    "Scoring preview only. This does not save this rule, admit a download, or create history.",
+  "rules.previewDraftSafety":
+    "Scoring preview only. This does not save this draft, admit a download, or create history.",
+  "rules.packChooseCustomizable":
+    "Choose the rules to enable after installation. Rules stay managed and can be copied individually for customization.",
+  "rules.packChooseManaged":
+    "Choose the rules to enable after installation. Rules stay managed.",
+  "uiAttr.18_and_over": "18 and over",
+  "uiAttr.My_Indexer": "My Indexer",
+  "uiAttr.Select_provider": "Select provider",
+  "uiAttr.My_Download_Client": "My Download Client",
+  "uiAttr.Social_links": "Social links",
+  "uiAttr.Cancel_import": "Cancel import",
+  "uiAttr.This_stops_the_queued_or_active_import_Source_files_are_preserved_and_only_temporary_import_output_is_removed":
+    "This stops the queued or active import. Source files are preserved and only temporary import output is removed.",
+  "uiAttr.Calendar_monitoring_filter": "Calendar monitoring filter",
+  "uiAttr.Calendar_media_types": "Calendar media types",
+  "uiAttr.Refresh_requests": "Refresh requests",
+  "uiAttr.Request_filters": "Request filters",
+  "uiAttr.Level": "Level",
+  "uiAttr.Filter_log_text": "Filter log text...",
+  "uiAttr.App": "App",
+  "uiAttr.Replace_in_progress_download": "Replace in-progress download?",
+  "uiAttr.Toggle_Sidebar": "Toggle Sidebar",
+  "uiAttr.API_explorer": "API explorer",
+  "uiAttr.Search_movies_shows_and_anime": "Search movies, shows, and anime",
+  "uiAttr.Library_title": "Library title",
+  "uiAttr.Episode": "Episode",
+  "uiAttr.Unknown": "Unknown",
+  "uiAttr.New_API_key": "New API key",
+  "uiAttr.e_g_Home_automation": "e.g. Home automation",
+  "uiAttr.Expires": "Expires",
+  "uiAttr.Revoke_API_key": "Revoke API key?",
+  "uiAttr.Copy_Jellyfin_plugin_callback_URL":
+    "Copy Jellyfin plugin callback URL",
+  "uiAttr.Example_integration": "Example integration",
+  "uiAttr.Enabled": "Enabled",
+  "uiAttr.Disabling_immediately_revokes_all_existing_grants_and_tokens_for_this_application":
+    "Disabling immediately revokes all existing grants and tokens for this application.",
+  "uiAttr.Delete_OAuth_application": "Delete OAuth application?",
+  "uiAttr.Deleting_this_application_immediately_revokes_its_existing_OAuth_grants_and_tokens_This_cannot_be_undone":
+    "Deleting this application immediately revokes its existing OAuth grants and tokens. This cannot be undone.",
+  "uiAttr.Copy_OAuth_client_ID": "Copy OAuth client ID",
+  "uiAttr.Current_password": "Current password",
+  "uiAttr.TOTP_or_recovery_code": "TOTP or recovery code",
+  "uiAttr.Restrict_API_keys_to_system_settings_users":
+    "Restrict API keys to system-settings users",
+  "uiAttr.Require_MFA_for_Emby_login": "Require MFA for Emby login",
+  "uiAttr.Show_Sponsor_button": "Show Sponsor button",
+  "uiAttr.Permissions": "Permissions",
+  "uiAttr.Block_releases_over_100_GiB": "Block releases over 100 GiB",
+  "uiAttr.My_Webhook": "My Webhook",
+  "uiAttr.Installed_rule_packs": "Installed rule packs",
+  "uiAttr.Apply_rule_pack_update": "Apply rule pack update",
+  "uiAttr.Uninstall_rule_pack": "Uninstall rule pack",
+  "uiAttr.Select_a_server": "Select a server",
+  "uiAttr.Preparing_authorization": "Preparing authorization",
+  "uiAttr.Granted_scopes": "Granted scopes",
+  "uiAttr.Authenticator_or_recovery_code": "Authenticator or recovery code",
+  "uiAttr.Enter_a_code_from_your_authenticator_app_or_a_recovery_code":
+    "Enter a code from your authenticator app or a recovery code.",
+  "catalog.summary.movie": "{{formattedCount}} title",
+  "catalog.summary.movies": "{{formattedCount}} titles",
+  "catalog.summary.series": "{{formattedCount}} series",
+  "catalog.summary.anime": "{{formattedCount}} anime",
+  "requests.queueTitle": "Request Queue",
+  "requests.myTitle": "My Requests",
+  "requests.status.dismissed": "Dismissed",
+  "label.movie": "Movie",
+  "label.all": "All",
+  "calendar.locale": "en",
+  "calendar.today": "Today",
+  "calendar.month": "Month",
+  "calendar.week": "Week",
+  "calendar.type.anime": "Anime",
+  "calendar.type.movie": "Movie",
+  "calendar.type.series": "Series",
+  "calendar.seasonEpisode": "Season {{season}}, Episode {{episode}}",
+  "calendar.episode": "Episode {{episode}}",
+  "calendar.library": "Library: {{library}}",
+  "calendar.typeLabel": "Type: {{type}}",
+  "calendar.notMonitored": "(Not monitored)",
+  "calendar.dateAtTime": "{{date}} at {{time}}",
+  "oauth.ui.OAuth_application_updated": "OAuth application updated.",
+  "oauth.ui.OAuth_application_created": "OAuth application created.",
+  "oauth.ui.Unable_to_copy_the_OAuth_client_ID":
+    "Unable to copy the OAuth client ID.",
+  "oauth.ui.OAuth_client_ID_copied": "OAuth client ID copied.",
+  "oauth.ui.Unable_to_copy_the_Jellyfin_callback_URL":
+    "Unable to copy the Jellyfin callback URL.",
+  "oauth.ui.Jellyfin_callback_URL_copied": "Jellyfin callback URL copied.",
+  "oauth.ui.Enter_a_valid_public_HTTPS_Jellyfin_base_URL":
+    "Enter a valid public HTTPS Jellyfin base URL.",
+  "oauth.ui.Multiple_custom_OAuth_clients_use_this_exact_Jellyfin_callback_Remove_duplicates_before_continuing":
+    "Multiple custom OAuth clients use this exact Jellyfin callback. Remove duplicates before continuing.",
+  "oauth.ui.Jellyfin_plugin_OAuth_client_is_already_configured":
+    "Jellyfin plugin OAuth client is already configured.",
+  "oauth.ui.The_create_result_is_uncertain_Reloading_OAuth_applications_before_another_create_is_allowed":
+    "The create result is uncertain. Reloading OAuth applications before another create is allowed.",
+  "oauth.ui.Jellyfin_plugin_OAuth_client_created":
+    "Jellyfin plugin OAuth client created.",
+  "oauth.ui.OAuth_application_deleted_and_its_grants_revoked":
+    "OAuth application deleted and its grants revoked.",
+  "oauth.ui.reconciling_the_created_client": "reconciling the created client",
+  "oauth.ui.ambiguous_multiple_custom_clients_use_this_exact_callback_remove_duplicates_before_continuing":
+    "ambiguous: multiple custom clients use this exact callback; remove duplicates before continuing",
+  "oauth.ui.not_configured_for_this_callback":
+    "not configured for this callback",
+  "oauth.ui.ambiguous_more_than_one_eligible_Jellyfin_connection_matches_this_public_URL":
+    "ambiguous: more than one eligible Jellyfin connection matches this public URL",
+  "oauth.ui.connection_status_unavailable": "connection status unavailable",
+  "oauth.ui.enter_a_public_HTTPS_URL_to_check_connection_binding":
+    "enter a public HTTPS URL to check connection binding",
+  "oauth.ui.requires_exactly_one_enabled_Jellyfin_connection_with_linking_an_API_key_and_this_exact_public_URL":
+    "requires exactly one enabled Jellyfin connection with linking, an API key, and this exact public URL",
+  "oauth.ui.Enter_a_public_HTTPS_URL_to_derive_the_exact_callback":
+    "Enter a public HTTPS URL to derive the exact callback.",
+  "oauth.ui.Uses_Scryer_s_built_in_native_callback_policy":
+    "Uses Scryer’s built-in native callback policy.",
+  "oauth.ui.Register_an_application": "Register an application",
+  "oauth.ui.Save_application": "Save application",
+  "oauth.ui.Create_application": "Create application",
+  "oauth.ui.Delete_application": "Delete application",
+  "rules.template.freeleech-bonus.title": "Boost freeleech releases",
+  "rules.template.freeleech-bonus.description":
+    "Add 500 points to freeleech releases from Torznab indexers",
+  "rules.template.halfleech-bonus.title": "Boost half-leech releases",
+  "rules.template.halfleech-bonus.description":
+    "Add 200 points to half-leech (50% download) releases",
+  "rules.template.well-seeded-bonus.title": "Prefer well-seeded torrents",
+  "rules.template.well-seeded-bonus.description":
+    "Boost releases with 10+ seeders, penalize those with fewer than 3. Counts are the ones the indexer listed when the release was found or grabbed",
+  "rules.template.block-exe-torrents.title": "No .exe torrents",
+  "rules.template.block-exe-torrents.description":
+    "Strongly penalize torrents whose title names an executable file extension",
+  "rules.template.prefer-web-dl.title": "Prefer WEB-DL over WEBRip",
+  "rules.template.prefer-web-dl.description":
+    "Boost WEB-DL source releases by 100 points",
+  "rules.template.prefer-hevc.title": "Prefer HEVC",
+  "rules.template.prefer-hevc.description":
+    "Boost HEVC releases by 100 points and penalize x264 at 4K by 200",
+  "rules.template.size-limits.title":
+    "Prefer compact releases, penalize oversized",
+  "rules.template.size-limits.description":
+    "Boost releases under 5 GiB; apply -10000 above 100 GiB",
+  "rules.template.prefer-atmos-audio.title": "Prefer Atmos audio",
+  "rules.template.prefer-atmos-audio.description":
+    "Add a small bonus for Atmos releases and a light penalty when Atmos is missing",
+  "rules.template.release-group-scores.title": "Prefer release groups",
+  "rules.template.release-group-scores.description":
+    "Boost releases from the groups you list; use a negative score to penalize them instead",
+  "rules.template.block-old-releases.title":
+    "Penalize releases older than 1 year",
+  "rules.template.block-old-releases.description":
+    "Strongly penalize releases that were more than 365 days old when found or grabbed. Age is frozen at the grab, so a file never turns old by sitting in the library",
+  "rules.template.block-obfuscated-retagged.title":
+    "Penalize obfuscated or retagged releases",
+  "rules.template.block-obfuscated-retagged.description":
+    "Strongly penalize releases with normalized obfuscation or retagging signals",
+  "rules.template.block-hardcoded-subs.title": "Penalize hardcoded subtitles",
+  "rules.template.block-hardcoded-subs.description":
+    "Strongly penalize releases with hardcoded (burned-in) subtitles",
+  "rules.category.All": "All",
+  "rules.category.Torrent": "Torrent",
+  "rules.category.Quality": "Quality",
+  "rules.category.Size": "Size",
+  "rules.category.Audio": "Audio",
+  "rules.category.Groups": "Groups",
+  "rules.category.Penalties": "Penalties",
+  "jobs.builtin.LibraryScanMovies.name": "Library Scan: Movies",
+  "jobs.builtin.LibraryScanMovies.description":
+    "Scan the movies library and import missing movie files.",
+  "jobs.builtin.LibraryScanSeries.name": "Library Scan: Series",
+  "jobs.builtin.LibraryScanSeries.description":
+    "Scan the series library and reconcile episodic files.",
+  "jobs.builtin.LibraryScanAnime.name": "Library Scan: Anime",
+  "jobs.builtin.LibraryScanAnime.description":
+    "Scan the anime library and reconcile episodic files.",
+  "jobs.builtin.BackgroundLibraryRefreshMovies.name":
+    "Background Library Refresh: Movies",
+  "jobs.builtin.BackgroundLibraryRefreshMovies.description":
+    "Lightweight movie library refresh for newly discovered folders or files.",
+  "jobs.builtin.BackgroundLibraryRefreshSeries.name":
+    "Background Library Refresh: Series",
+  "jobs.builtin.BackgroundLibraryRefreshSeries.description":
+    "Lightweight series refresh that discovers new folders and additive file changes.",
+  "jobs.builtin.BackgroundLibraryRefreshAnime.name":
+    "Background Library Refresh: Anime",
+  "jobs.builtin.BackgroundLibraryRefreshAnime.description":
+    "Lightweight anime refresh that discovers new folders and additive file changes.",
+  "jobs.builtin.ProwlarrSync.name": "Prowlarr Sync",
+  "jobs.builtin.ProwlarrSync.description":
+    "Sync enabled managed Prowlarr parents and reconcile child indexers.",
+  "jobs.builtin.RssSync.name": "RSS Sync",
+  "jobs.builtin.RssSync.description":
+    "Fetch RSS feeds from enabled indexers and evaluate new releases.",
+  "jobs.builtin.SubtitleSearch.name": "Subtitle Search",
+  "jobs.builtin.SubtitleSearch.description":
+    "Search for missing subtitles for monitored media.",
+  "jobs.builtin.PluginRegistryRefresh.name": "Plugin Catalog Refresh",
+  "jobs.builtin.PluginRegistryRefresh.description":
+    "Refresh the installed plugin catalog metadata.",
+  "jobs.builtin.Housekeeping.name": "Housekeeping",
+  "jobs.builtin.Housekeeping.description":
+    "Clean stale records and purge expired artifacts.",
+  "jobs.builtin.HealthChecks.name": "Health Checks",
+  "jobs.builtin.HealthChecks.description":
+    "Run configured system health checks.",
+  "jobs.builtin.AutoBackup.name": "Automatic Backup",
+  "jobs.builtin.AutoBackup.description":
+    "Create a daily backup snapshot and keep the newest successful automatic backups.",
+  "jobs.builtin.PendingReleaseProcessing.name": "Pending Release Processing",
+  "jobs.builtin.PendingReleaseProcessing.description":
+    "Compatibility job; pending releases are re-evaluated during RSS sync.",
+  "jobs.builtin.StagedNzbPrune.name": "Staged NZB Prune",
+  "jobs.builtin.StagedNzbPrune.description":
+    "Prune expired staged NZB artifacts.",
+  "jobs.builtin.FullHashBackfill.name": "Full Hash Backfill",
+  "jobs.builtin.FullHashBackfill.description":
+    "Slowly compute missing full-file content hashes so duplicate detection and move verification have something to compare.",
+  "jobs.builtin.DiscoverySync.name": "Discovery Sync",
+  "jobs.builtin.DiscoverySync.description":
+    "Evaluate local discovery freshness and refresh SMG discovery snapshots.",
+  "jobs.builtin.ArtworkEncoding.name": "Artwork Encoding",
+  "jobs.builtin.ArtworkEncoding.description":
+    "Encode pending artwork overnight; Run now overrides the nightly window.",
+  "jobs.builtin.TitleImageCacheRefresh.name": "Title Image Cache Refresh",
+  "jobs.builtin.TitleImageCacheRefresh.description":
+    "Refresh remote artwork URLs from SMG and rebuild locally processed title images.",
+  "jobs.builtin.TitleDeletion.name": "Title Deletion",
+  "jobs.builtin.TitleDeletion.description":
+    "Delete selected titles from the catalog.",
+  "jobs.builtin.TitleRename.name": "Title Rename",
+  "jobs.builtin.TitleRename.description": "Rename files for selected titles.",
+  "jobs.builtin.MediaFileRescore.name": "Refresh File Scores",
+  "jobs.builtin.MediaFileRescore.description":
+    "Evaluate selected files under current scoring rules.",
+  "jobs.builtin.MediaFileDeletion.name": "Media File Deletion",
+  "jobs.builtin.MediaFileDeletion.description":
+    "Delete a media file from disk and the catalog.",
+  "jobs.builtin.RecycleBinRestore.name": "Recycle Bin Restore",
+  "jobs.builtin.RecycleBinRestore.description":
+    "Restore a recycled file to its library.",
+  "jobs.builtin.RecycleBinPurge.name": "Recycle Bin Purge",
+  "jobs.builtin.RecycleBinPurge.description":
+    "Permanently delete selected recycled files.",
+  "jobs.builtin.AcquisitionSearch.name": "Acquisition Search",
+  "jobs.builtin.AcquisitionSearch.description":
+    "Interactive acquisition search over the selected wanted/upgrade scopes.",
+  "jobs.builtin.ApplicationUpgrade.name": "Application Upgrade",
+  "jobs.builtin.ApplicationUpgrade.description":
+    "Download, verify, and apply a signed application upgrade.",
+  "jobs.builtin.MaintenanceRuleEvaluation.name": "Maintenance Rule Evaluation",
+  "jobs.builtin.MaintenanceRuleEvaluation.description":
+    "Evaluate enabled maintenance rules and reconcile lifecycle candidates. Never executes an action.",
+  "jobs.builtin.LifecycleActionHandling.name": "Maintenance Action Handling",
+  "jobs.builtin.LifecycleActionHandling.description":
+    "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks.",
+  "jobs.builtin.MediaServerSignalSync.name": "Media Server Signal Sync",
+  "jobs.builtin.MediaServerSignalSync.description":
+    "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals.",
+  "jobs.builtin.ListSync.name": "List Sync",
+  "jobs.builtin.ListSync.description":
+    "Read due list subscriptions, then add, request, or record their titles according to each list's settings.",
+  "jobs.builtin.LocationOperation.name": "Location Operation",
+  "jobs.builtin.LocationOperation.description":
+    "Move title content and catalog placement between roots or libraries.",
+  "jobs.builtin.CustomJob.name": "Custom Job",
+  "jobs.builtin.CustomJob.description":
+    "Run a user-defined script on its own schedule.",
+  "jobs.builtinText.Manual_only": "Manual only",
+  "jobs.builtinText.Every_2_hours": "Every 2 hours",
+  "jobs.builtinText.Every_6_hours": "Every 6 hours",
+  "jobs.builtinText.Every_8_hours": "Every 8 hours",
+  "jobs.builtinText.Every_12_hours": "Every 12 hours",
+  "jobs.builtinText.Every_24_hours": "Every 24 hours",
+  "jobs.builtinText.Every_15_minutes": "Every 15 minutes",
+  "jobs.builtinText.Every_hour": "Every hour",
+  "jobs.builtinText.Daily_at_configured_local_time":
+    "Daily at configured local time",
+  "jobs.builtinText.Dynamic_discovery_evaluator_with_daily_backstop":
+    "Dynamic discovery evaluator with daily backstop",
+  "jobs.builtinText.Every_30_minutes_02_00_06_00_host_local_time":
+    "Every 30 minutes, 02:00–06:00 host local time",
+  "jobs.builtinText.Re_evaluated_during_RSS_sync":
+    "Re-evaluated during RSS sync",
+  "jobs.builtinText.Scheduler_paced_per_indexer_15_minute_target":
+    "Scheduler-paced per indexer (15-minute target)",
+  "jobs.builtinText.Based_on_subtitle_settings_interval":
+    "Based on subtitle settings interval",
+  "jobs.builtinText.Encode_pending_artwork_Run_now_overrides_the_nightly_window_Waiting_for_pending_artwork":
+    "Encode pending artwork. Run now overrides the nightly window. Waiting for pending artwork.",
+  "providerConfig.Known_provider": "Known provider",
+  "providerConfig.Base_URL": "Base URL",
+  "providerConfig.API_Key": "API Key",
+  "providerConfig.API_key": "API key",
+  "providerConfig.API_Path": "API Path",
+  "providerConfig.API_path": "API path",
+  "providerConfig.Host": "Host",
+  "providerConfig.Hostname": "Hostname",
+  "providerConfig.Port": "Port",
+  "providerConfig.Username": "Username",
+  "providerConfig.Password": "Password",
+  "providerConfig.Category": "Category",
+  "providerConfig.Categories": "Categories",
+  "providerConfig.Tags": "Tags",
+  "providerConfig.Priority": "Priority",
+  "providerConfig.Default": "Default",
+  "providerConfig.Custom": "Custom",
+  "providerConfig.None": "None",
+  "providerConfig.Timeout": "Timeout",
+  "providerConfig.Request_timeout": "Request timeout",
+  "providerConfig.Use_SSL": "Use SSL",
+  "providerConfig.Verify_SSL": "Verify SSL",
+  "providerConfig.Verify_SSL_certificate": "Verify SSL certificate",
+  "providerConfig.URL_Base": "URL Base",
+  "providerConfig.URL_base": "URL base",
+  "providerConfig.URL_Path": "URL Path",
+  "providerConfig.Download_directory": "Download directory",
+  "providerConfig.Completed_directory": "Completed directory",
+  "providerConfig.Polling_interval": "Polling interval",
+  "providerConfig.Rate_limit": "Rate limit",
+  "providerConfig.Search_limit": "Search limit",
+  "providerConfig.Page_size": "Page size",
+  "providerConfig.Proxy": "Proxy",
+  "providerConfig.Enable_RSS": "Enable RSS",
+  "providerConfig.Enable_search": "Enable search",
+  "providerConfig.Seed_ratio": "Seed ratio",
+  "providerConfig.Seed_time": "Seed time",
+  "providerConfig.Minimum_seeders": "Minimum seeders",
+  "providerConfig.about": "About {{label}}",
+  "providerConfig.browse": "Browse {{label}}",
+  "providerConfig.select": "Select {{label}}",
+  "jobs.artworkWindow":
+    "Daily {{start}}–{{end}} host local time; host now {{clock}}",
+  "uiAttr.Replace_download": "Replace download",
+  "uiAttr.Keep_current": "Keep current",
+  "uiAttr.Revoke_key": "Revoke key",
+  "uiAttr.Cancel": "Cancel",
+  "uiAttr.All": "All",
+  "uiAttr.Global": "Global",
+  "uiAttr.Apply_update": "Apply update",
+  "uiAttr.Uninstall": "Uninstall",
+  "uiAttr.Back": "Back",
+  "permissions.MANAGE_USERS": "Manage Users",
+  "permissions.MANAGE_PERMISSIONS": "Manage Permissions",
+  "permissions.MANAGE_SYSTEM_SETTINGS": "Manage System Settings",
+  "permissions.MANAGE_CATALOG_SETTINGS": "Manage Catalog Settings",
+  "permissions.MANAGE_LISTS": "Manage Lists",
+  "permissions.VIEW": "View",
+  "permissions.MANAGE_TITLES": "Manage Titles",
+  "permissions.RESOLVE_IMPORTS": "Resolve Imports",
+  "permissions.MANAGE_LIBRARY": "Manage Library",
+  "permissions.REQUEST": "Request",
+  "permissions.AUTO_APPROVE_REQUESTS": "Auto-Approve Requests",
+  "permissions.MANAGE_SUBTITLES": "Manage Subtitles",
+  "permissions.selectAll": "Select all",
+  "permissions.unselectAll": "Unselect all",
+  "permissions.facet.MOVIE": "Movie",
+  "permissions.facet.SERIES": "Series",
+  "permissions.facet.ANIME": "Anime",
+  "apiKeys.ui.Revoked": "Revoked",
+  "apiKeys.ui.Expired": "Expired",
+  "apiKeys.ui.Policy_disabled": "Policy disabled",
+  "apiKeys.ui.Active": "Active",
+  "apiKeys.ui.Enter_a_name_for_this_API_key": "Enter a name for this API key.",
+  "apiKeys.ui.Clipboard_access_is_unavailable":
+    "Clipboard access is unavailable.",
+  "apiKeys.ui.API_key_copied": "API key copied",
+  "apiKeys.ui.Copy_API_key": "Copy API key",
+  "apiKeys.ui.30_days": "30 days",
+  "apiKeys.ui.90_days": "90 days",
+  "apiKeys.ui.1_year": "1 year",
+  "apiKeys.ui.Never": "Never",
+  "apiKeys.ui.Creating": "Creating…",
+  "apiKeys.ui.Create_API_key": "Create API key",
+  "apiKeys.ui.Revoking": "Revoking…",
+  "apiKeys.ui.Revoke": "Revoke",
+  "jobs.artworkWait.nightly":
+    "Encode pending artwork. Run now overrides the nightly window. Waiting for the nightly window.",
+  "jobs.artworkWait.scan":
+    "Encode pending artwork. Run now overrides the nightly window. Waiting for library scans.",
 };
 
 export default en;

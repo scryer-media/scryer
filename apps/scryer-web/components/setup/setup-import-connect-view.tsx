@@ -327,7 +327,7 @@ function InstanceCard({
       <div>
         <div className="mb-[5px] flex items-center justify-between gap-3">
           <label style={{ ...FIELD_LABEL_STYLE, marginBottom: 0 }}>
-            API Key
+            {t("apiExplorer.apiKey")}
           </label>
           {apiKeyHelpUrl ? (
             <a

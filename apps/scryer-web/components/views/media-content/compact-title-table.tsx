@@ -1089,7 +1089,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           )}
           title={t("title.table.monitored")}
         >
-          MON.
+          {t("uiText.mON")}
         </TableHead>
         {renderSortableHeader(
           "size",
