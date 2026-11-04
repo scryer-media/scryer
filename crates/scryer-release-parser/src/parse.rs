@@ -3618,6 +3618,11 @@ fn release_group_suffix_range(
             break;
         };
         let hyphen_joined = previous.separator_before == SeparatorKind::Hyphen;
+        // A single-letter suffix can continue a dot-delimited group (`.Files-x`).
+        // Otherwise preserve the terminal-group convention (`.Tag-GROUP`).
+        let dot_delimited_compound = previous.separator_before == SeparatorKind::Dot
+            && tokens[start_token].separator_before == SeparatorKind::Hyphen
+            && tokens[start_token].raw.len() == 1;
         let current_depth = tokens
             .get(start_token)
             .map(|token| token.bracket_depth)
@@ -3627,9 +3632,9 @@ fn release_group_suffix_range(
             && previous.bracket_depth == current_depth;
         if state.identity_token_mask.contains(previous_index)
             || previous.bracket_depth != current_depth
-            || (!hyphen_joined && !same_group)
+            || (!hyphen_joined && !same_group && !dot_delimited_compound)
             || !release_group_part_is_valid(previous, false)
-            || (!anime && previous.raw.len() > 3)
+            || (!anime && previous.raw.len() > 3 && !dot_delimited_compound)
         {
             break;
         }
@@ -4886,10 +4891,8 @@ fn build_candidate_zones(
             start_token,
             end_token: tokens.len(),
         });
-    let release_group_span = state
-        .release_group
-        .as_deref()
-        .or(release_group)
+    let release_group_span = release_group
+        .or(state.release_group.as_deref())
         .and_then(|release_group| find_phrase_span(tokens, release_group))
         .or_else(|| leading_release_group_token_range(tokens))
         .filter(|span| {
