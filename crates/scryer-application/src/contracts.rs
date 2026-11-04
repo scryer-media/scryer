@@ -1510,7 +1510,9 @@ impl DownloadClientAddRequest {
             candidates.extend(password_candidates.iter().map(String::as_str));
         }
         if let Some(password) = self.source_password.as_deref() {
-            candidates.push(password);
+            if !password.trim().eq_ignore_ascii_case("-1") {
+                candidates.push(password);
+            }
         }
         for name in [self.source_title.as_deref(), self.release_title.as_deref()]
             .into_iter()

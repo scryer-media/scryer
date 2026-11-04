@@ -1318,6 +1318,10 @@ pub(crate) fn classify(
     ))
 }
 
+fn is_password_protection_marker(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("-1")
+}
+
 pub(crate) fn nzb_header_passwords(
     headers: Option<&serde_json::Value>,
 ) -> scryer_application::DownloadPasswordCandidates {
@@ -1326,10 +1330,17 @@ pub(crate) fn nzb_header_passwords(
         for (name, value) in headers {
             if name.eq_ignore_ascii_case("x-dnzb-password") {
                 if let Some(value) = value.as_str() {
-                    passwords.push(value);
+                    if !is_password_protection_marker(value) {
+                        passwords.push(value);
+                    }
                 }
                 if let Some(values) = value.as_array() {
-                    passwords.extend(values.iter().filter_map(serde_json::Value::as_str));
+                    passwords.extend(
+                        values
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .filter(|value| !is_password_protection_marker(value)),
+                    );
                 }
             }
         }

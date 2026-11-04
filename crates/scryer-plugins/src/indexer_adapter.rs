@@ -1100,17 +1100,29 @@ fn decode_grab_result(
         for (name, value) in &payload.response_headers {
             if name.eq_ignore_ascii_case("x-dnzb-password") {
                 match value {
-                    serde_json::Value::String(value) => password_candidates.push(value),
+                    serde_json::Value::String(value) => {
+                        if !value.trim().eq_ignore_ascii_case("-1") {
+                            password_candidates.push(value);
+                        }
+                    }
                     serde_json::Value::Array(values) => {
                         for value in values.iter().filter_map(serde_json::Value::as_str) {
-                            password_candidates.push(value);
+                            if !value.trim().eq_ignore_ascii_case("-1") {
+                                password_candidates.push(value);
+                            }
                         }
                     }
                     _ => {}
                 }
             }
         }
-        password_candidates.extend(payload.password_candidates.iter().map(String::as_str));
+        password_candidates.extend(
+            payload
+                .password_candidates
+                .iter()
+                .map(String::as_str)
+                .filter(|value| !value.trim().eq_ignore_ascii_case("-1")),
+        );
         return Ok(Some(ResolvedDownloadArtifact::Nzb {
             bytes: payload.body,
             file_name: payload.file_name,
@@ -1969,6 +1981,12 @@ fn plugin_password_hint(
     result
         .password_hint
         .as_deref()
+        .filter(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "protected" | "passworded" | "0" | "false" | "no" | "-1"
+            )
+        })
         .and_then(|value| normalize_release_password(Some(value)))
         .or_else(|| {
             extra
@@ -1979,7 +1997,7 @@ fn plugin_password_hint(
                 .filter(|value| {
                     !matches!(
                         value.trim().to_ascii_lowercase().as_str(),
-                        "1" | "true" | "yes" | "protected" | "passworded" | "0" | "false" | "no"
+                        "1" | "true" | "yes" | "protected" | "passworded" | "0" | "false" | "no" | "-1"
                     )
                 })
                 .and_then(|value| normalize_release_password(Some(value)))
@@ -4390,6 +4408,7 @@ mod tests {
             "0",
             "false",
             "no",
+            "-1",
             "  ",
         ] {
             let result = scryer_plugin_sdk::PluginSearchResult {
