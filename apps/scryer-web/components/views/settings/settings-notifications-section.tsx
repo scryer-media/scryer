@@ -822,12 +822,12 @@ export function SettingsNotificationsSection({
                 <div className="space-y-2 text-sm text-muted-foreground">
                   <p>{t("settings.notificationNoProviders")}</p>
                   <p>
-                    To notify a media server (ie. Jellyfin), first create a{" "}
+                    {t("uiText.toNotifyAMediaServerIeJellyfinFirstCreateA")}{" "}
                     <Link
                       className="underline hover:text-foreground"
                       to="/settings/media-servers"
                     >
-                      media server connection
+                      {t("uiText.mediaServerConnection")}
                     </Link>
                     .
                   </p>
@@ -913,7 +913,7 @@ export function SettingsNotificationsSection({
                           }))
                         }
                         required
-                        placeholder="My Webhook"
+                        placeholder={t("uiAttr.My_Webhook")}
                       />
                     </label>
                   </div>

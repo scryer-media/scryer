@@ -163,7 +163,7 @@ export default function SetupImportSourcesView({
           className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground"
         >
           <LoadingMark className="h-4 w-4" />
-          Discovering Prowlarr indexers…
+          {t("uiText.discoveringProwlarrIndexers")}
         </div>
       ) : null}
       {prowlarrDiscoveryFailed ? (
@@ -182,7 +182,7 @@ export default function SetupImportSourcesView({
             variant="outline"
             onClick={() => void retryProwlarrWarmup()}
           >
-            Retry
+            {t("initialAuth.retry")}
           </Button>
         </div>
       ) : null}

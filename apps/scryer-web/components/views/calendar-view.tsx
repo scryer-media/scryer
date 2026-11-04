@@ -2,6 +2,7 @@ import { useEffect, useMemo, useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslate } from "@/lib/context/translate-context";
 import FullCalendar from "@fullcalendar/react";
+import ruCalendarLocale from "@fullcalendar/react/locales/ru";
 import dayGridPlugin from "@fullcalendar/react/daygrid";
 import classicThemePlugin from "@fullcalendar/react/themes/classic";
 import "@fullcalendar/react/skeleton.css";
@@ -76,6 +77,7 @@ function CalendarMonitoringFilterControl({
   onValueChange: (statuses: CalendarMonitoringStatus[]) => void;
   className?: string;
 }) {
+  const t = useTranslate();
   return (
     <ToggleGroup
       type="multiple"
@@ -89,7 +91,7 @@ function CalendarMonitoringFilterControl({
         );
         if (statuses.length > 0) onValueChange(statuses);
       }}
-      aria-label="Calendar monitoring filter"
+      aria-label={t("uiAttr.Calendar_monitoring_filter")}
       className={`shrink-0 ${className}`}
     >
       <ToggleGroupItem
@@ -102,7 +104,7 @@ function CalendarMonitoringFilterControl({
           aria-hidden="true"
           className="h-3.5 w-3.5 text-[var(--scry-success-text)]"
         />
-        <span>Monitored</span>
+        <span>{t("search.monitored")}</span>
         <Badge
           tone="neutral"
           className="h-4 min-w-5 rounded-full px-1 py-0 text-[10px]"
@@ -120,7 +122,7 @@ function CalendarMonitoringFilterControl({
           aria-hidden="true"
           className="h-3.5 w-3.5 text-[var(--scry-danger-text)]"
         />
-        <span>Unmonitored</span>
+        <span>{t("search.unmonitored")}</span>
         <Badge
           tone="neutral"
           className="h-4 min-w-5 rounded-full px-1 py-0 text-[10px]"
@@ -171,9 +173,9 @@ const FACET_RGB: Record<string, string> = {
 const FACET_ORDER = ["anime", "movie", "series"] as const;
 
 const FACET_LABELS: Record<string, string> = {
-  anime: "Anime",
-  movie: "Movie",
-  series: "Series",
+  anime: "calendar.type.anime",
+  movie: "calendar.type.movie",
+  series: "calendar.type.series",
 };
 
 function CalendarLibraryFacetFilters({
@@ -191,6 +193,7 @@ function CalendarLibraryFacetFilters({
   facetFilter: string[];
   onFacetFilterChange: (value: string[]) => void;
 }) {
+  const t = useTranslate();
   return (
     <div className="fc-scryer-calendar-filters flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
       <LibraryMultiSelect
@@ -208,7 +211,7 @@ function CalendarLibraryFacetFilters({
         onValueChange={(values) => {
           if (values.length > 0) onFacetFilterChange(values);
         }}
-        aria-label="Calendar media types"
+        aria-label={t("uiAttr.Calendar_media_types")}
         className="w-full sm:w-auto"
       >
         {FACET_ORDER.map((facet) => {
@@ -230,7 +233,7 @@ function CalendarLibraryFacetFilters({
                   boxShadow: active ? `0 0 7px ${FACET_GLOWS[facet]}` : "none",
                 }}
               />
-              {FACET_LABELS[facet]}
+              {t(FACET_LABELS[facet])}
             </ToggleGroupItem>
           );
         })}
@@ -250,7 +253,7 @@ function showsEpisodeTitle(ep: CalendarEpisodeItem): boolean {
 
 function formatEpisodeLabel(
   ep: CalendarEpisodeItem,
-  t: (key: string) => string,
+  t: ReturnType<typeof useTranslate>,
 ): string {
   const parts: string[] = [ep.titleName];
   if (ep.seasonNumber && ep.episodeNumber) {
@@ -264,14 +267,17 @@ function formatEpisodeLabel(
   return parts.join(" ");
 }
 
-function formatEpisodeBadge(ep: CalendarEpisodeItem): string | null {
+function formatEpisodeBadge(
+  ep: CalendarEpisodeItem,
+  t: ReturnType<typeof useTranslate>,
+): string | null {
   if (ep.seasonNumber && ep.episodeNumber) {
     return `S${ep.seasonNumber}E${ep.episodeNumber}`;
   }
   if (ep.episodeNumber) {
     return `E${ep.episodeNumber}`;
   }
-  return ep.titleFacet === "movie" ? "Movie" : null;
+  return ep.titleFacet === "movie" ? t("calendar.type.movie") : null;
 }
 
 // The comp chip shows an air time next to the code badge. Only render it when
@@ -291,21 +297,34 @@ function formatDateKey(date: Date): string {
 
 function formatTooltip(
   ep: CalendarEpisodeItem,
-  t: (key: string) => string,
+  t: ReturnType<typeof useTranslate>,
 ): string {
   const lines: string[] = [ep.titleName];
   if (ep.seasonNumber && ep.episodeNumber) {
-    lines.push(`Season ${ep.seasonNumber}, Episode ${ep.episodeNumber}`);
+    lines.push(
+      t("calendar.seasonEpisode", {
+        season: ep.seasonNumber,
+        episode: ep.episodeNumber,
+      }),
+    );
   } else if (ep.episodeNumber) {
-    lines.push(`Episode ${ep.episodeNumber}`);
+    lines.push(t("calendar.episode", { episode: ep.episodeNumber }));
   }
   if (showsEpisodeTitle(ep)) {
     lines.push(episodeTitleOrTba(ep.episodeTitle, t));
   }
-  lines.push(`Library: ${ep.libraryName ?? ep.libraryId}`);
-  lines.push(`Type: ${FACET_LABELS[ep.titleFacet] ?? ep.titleFacet}`);
+  lines.push(
+    t("calendar.library", { library: ep.libraryName ?? ep.libraryId }),
+  );
+  lines.push(
+    t("calendar.typeLabel", {
+      type: FACET_LABELS[ep.titleFacet]
+        ? t(FACET_LABELS[ep.titleFacet])
+        : ep.titleFacet,
+    }),
+  );
   if (!ep.monitored) {
-    lines.push("(Not monitored)");
+    lines.push(t("calendar.notMonitored"));
   }
   return lines.join("\n");
 }
@@ -320,17 +339,20 @@ export type CalendarHoverPreview = {
   };
 };
 
-function formatAirDateLabel(airDate: string | null): string | null {
+function formatAirDateLabel(
+  airDate: string | null,
+  t: ReturnType<typeof useTranslate>,
+): string | null {
   if (!airDate) return null;
   const [year, month, day] = airDate.slice(0, 10).split("-").map(Number);
   if (!year || !month || !day) return airDate;
-  const dateLabel = new Intl.DateTimeFormat(undefined, {
+  const dateLabel = new Intl.DateTimeFormat(t("calendar.locale"), {
     month: "short",
     day: "numeric",
     year: "numeric",
   }).format(new Date(year, month - 1, day));
   const time = formatAirTime(airDate);
-  return time ? `${dateLabel} at ${time}` : dateLabel;
+  return time ? t("calendar.dateAtTime", { date: dateLabel, time }) : dateLabel;
 }
 
 export function CalendarEventHoverCard({
@@ -386,12 +408,12 @@ export function CalendarEventHoverCard({
       window.innerHeight - estimatedHeight - viewportPadding,
     ),
   );
-  const badge = formatEpisodeBadge(episode);
+  const badge = formatEpisodeBadge(episode, t);
   const availabilityPill = episodeAvailabilityPill(
     episode.mediaAvailability,
     t,
   );
-  const airDate = formatAirDateLabel(episode.airDate);
+  const airDate = formatAirDateLabel(episode.airDate, t);
 
   return createPortal(
     <aside
@@ -426,7 +448,9 @@ export function CalendarEventHoverCard({
       <div className="fc-scryer-hover-card-copy">
         <div className="fc-scryer-hover-card-badges">
           <span className="fc-scryer-hover-card-meta-badge">
-            {FACET_LABELS[episode.titleFacet] ?? episode.titleFacet}
+            {FACET_LABELS[episode.titleFacet]
+              ? t(FACET_LABELS[episode.titleFacet])
+              : episode.titleFacet}
           </span>
           {badge ? (
             <span className="fc-scryer-hover-card-meta-badge">{badge}</span>
@@ -437,7 +461,9 @@ export function CalendarEventHoverCard({
             </span>
           ) : null}
           {!episode.monitored ? (
-            <span className="fc-scryer-hover-card-meta-badge">Unmonitored</span>
+            <span className="fc-scryer-hover-card-meta-badge">
+              {t("search.unmonitored")}
+            </span>
           ) : null}
         </div>
         <h3 className="fc-scryer-hover-card-title">{episode.titleName}</h3>
@@ -651,7 +677,7 @@ export function CalendarView({
   const renderEventContent = useCallback(
     (arg: EventDisplayInfo) => {
       const ep = arg.event.extendedProps as CalendarEpisodeItem;
-      const badge = formatEpisodeBadge(ep);
+      const badge = formatEpisodeBadge(ep, t);
       const availabilityPill = episodeAvailabilityPill(ep.mediaAvailability, t);
       const time = formatAirTime(ep.airDate);
 
@@ -724,9 +750,11 @@ export function CalendarView({
 
   const renderMoreLinkContent = useCallback(
     (arg: MoreLinkInfo) => (
-      <span className="fc-scryer-more-link-text">+{arg.num} more</span>
+      <span className="fc-scryer-more-link-text">
+        +{arg.num} {t("uiText.more")}
+      </span>
     ),
-    [],
+    [t],
   );
 
   const handleFacetChange = useCallback((values: string[]) => {
@@ -759,6 +787,8 @@ export function CalendarView({
             <FullCalendar
               key={isMobile ? "calendar-mobile" : "calendar-desktop"}
               plugins={[dayGridPlugin, classicThemePlugin]}
+              locales={[ruCalendarLocale]}
+              locale={t("calendar.locale")}
               initialView={initialCalendarView}
               headerToolbarClass="fc-scryer-header-toolbar"
               toolbarSectionClass="fc-scryer-toolbar-section"
@@ -805,9 +835,9 @@ export function CalendarView({
               moreLinkContent={renderMoreLinkContent}
               buttonGroupClass="fc-scryer-button-group"
               buttons={{
-                today: { text: "Today" },
-                dayGridMonth: { text: "Month" },
-                dayGridWeek: { text: "Week" },
+                today: { text: t("calendar.today") },
+                dayGridMonth: { text: t("calendar.month") },
+                dayGridWeek: { text: t("calendar.week") },
               }}
               toolbarElements={{
                 calendarLibraryFacetFilters: () => (

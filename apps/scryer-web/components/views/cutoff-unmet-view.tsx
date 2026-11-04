@@ -339,9 +339,13 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{t("cutoff.allFacets")}</SelectItem>
-              <SelectItem value="MOVIE">movie</SelectItem>
-              <SelectItem value="SERIES">series</SelectItem>
-              <SelectItem value="ANIME">anime</SelectItem>
+              <SelectItem value="MOVIE">{t("uiText.movie")}</SelectItem>
+              <SelectItem value="SERIES">
+                {t("dashboard.metricSeries")}
+              </SelectItem>
+              <SelectItem value="ANIME">
+                {t("dashboard.metricAnime")}
+              </SelectItem>
             </SelectContent>
           </Select>
 
@@ -410,7 +414,9 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("cutoff.colTitleEpisode")}</TableHead>
-                  <TableHead className="w-36 text-center">Library</TableHead>
+                  <TableHead className="w-36 text-center">
+                    {t("nav.library")}
+                  </TableHead>
                   <TableHead className="w-36 text-center">
                     {t("cutoff.colCurrentQuality")}
                   </TableHead>

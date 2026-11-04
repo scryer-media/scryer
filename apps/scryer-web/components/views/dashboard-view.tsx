@@ -485,13 +485,17 @@ export function StatsPanel({
           {
             key: "movies",
             value: overview?.library.movies ?? 0,
-            label: t("dashboard.metricMovies"),
+            label: t("dashboard.metricMovies", {
+              count: overview?.library.movies ?? 0,
+            }),
             facet: "MOVIE",
           },
           {
             key: "series",
             value: overview?.library.series ?? 0,
-            label: t("dashboard.metricSeries"),
+            label: t("dashboard.metricSeries", {
+              count: overview?.library.series ?? 0,
+            }),
             facet: "SERIES",
           },
           {

@@ -1260,7 +1260,7 @@ export function SettingsDownloadClientsSection({
                       />
                       {normalizedClientType === "weaver" ? (
                         <p className="mt-2 text-xs text-muted-foreground">
-                          Create an integration API key in Weaver:{" "}
+                          {t("uiText.createAnIntegrationAPIKeyInWeaver")}{" "}
                           {weaverApiKeyUrl ? (
                             <a
                               href={weaverApiKeyUrl}
@@ -1273,11 +1273,13 @@ export function SettingsDownloadClientsSection({
                               }
                               className="underline underline-offset-4 hover:text-foreground"
                             >
-                              open Weaver security settings
+                              {t("uiText.openWeaverSecuritySettings")}
                             </a>
                           ) : (
                             <span>
-                              finish the Weaver URL above to generate the link.
+                              {t(
+                                "uiText.finishTheWeaverURLAboveToGenerateTheLink",
+                              )}
                             </span>
                           )}
                         </p>

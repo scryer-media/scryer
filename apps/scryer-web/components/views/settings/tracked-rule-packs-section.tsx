@@ -1,3 +1,4 @@
+import { useTranslate } from "@/lib/context/translate-context";
 import * as React from "react";
 import { ChevronRight, Copy, RefreshCw, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -81,9 +82,10 @@ type TrackedRulePacksSectionProps = {
 };
 
 function FacetBadges({ facets }: { facets: string[] }) {
+  const t = useTranslate();
   return facets.length === 0 ? (
     <Badge tone="info" className="capitalize">
-      Global
+      {t("settings.notificationScope.global")}
     </Badge>
   ) : (
     <div className="flex flex-wrap gap-1">
@@ -97,6 +99,7 @@ function FacetBadges({ facets }: { facets: string[] }) {
 }
 
 function ChangeSummary({ preview }: { preview: TrackedRulePackPreview }) {
+  const t = useTranslate();
   const groups = [
     ["Added", preview.addedTemplateIds],
     ["Changed", preview.changedTemplateIds],
@@ -104,7 +107,9 @@ function ChangeSummary({ preview }: { preview: TrackedRulePackPreview }) {
   ] as const;
   return (
     <div className="space-y-2 text-xs text-muted-foreground">
-      <p>Version {preview.version} is ready to apply.</p>
+      <p>
+        {t("label.version")} {preview.version} {t("uiText.isReadyToApply")}
+      </p>
       {groups.map(([label, templateIds]) => (
         <div key={label}>
           <span className="font-medium text-foreground">
@@ -132,6 +137,7 @@ export function TrackedRulePacksSection({
   onCopyMember,
   defaultExpandedPackIds,
 }: TrackedRulePacksSectionProps) {
+  const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const [preview, setPreview] = React.useState<{
     pack: TrackedRulePackRecord;
@@ -157,26 +163,35 @@ export function TrackedRulePacksSection({
   return (
     <section id="settings-tracked-rule-packs" className="space-y-3">
       <div>
-        <h3 className="text-base font-semibold">Installed rule packs</h3>
+        <h3 className="text-base font-semibold">
+          {t("uiText.installedRulePacks")}
+        </h3>
         <p className="text-xs text-muted-foreground">
-          Pack-authored names, descriptions, and facets stay managed. Some packs
-          allow individual rules to be copied for customization.
+          {t(
+            "uiText.packAuthoredNamesDescriptionsAndFacetsStayManagedSomePacksAllowIndividualRulesToBeCopiedForCustomization",
+          )}
         </p>
       </div>
       <div className="overflow-x-auto rounded border border-border bg-card">
         <Table
           layout="fixed"
           className="min-w-[1080px]"
-          aria-label="Installed rule packs"
+          aria-label={t("uiAttr.Installed_rule_packs")}
         >
           <TableHeader>
             <TableRow>
-              <TableHead>Pack</TableHead>
-              <TableHead className="w-40">Version</TableHead>
-              <TableHead className="w-20 text-center">Rules</TableHead>
-              <TableHead className="w-52">Last updated</TableHead>
-              <TableHead className="w-36 text-center">Auto-update</TableHead>
-              <TableHead className="w-40 text-right">Actions</TableHead>
+              <TableHead>{t("uiText.pack")}</TableHead>
+              <TableHead className="w-40">{t("label.version")}</TableHead>
+              <TableHead className="w-20 text-center">
+                {t("nav.rules")}
+              </TableHead>
+              <TableHead className="w-52">{t("uiText.lastUpdated")}</TableHead>
+              <TableHead className="w-36 text-center">
+                {t("uiText.autoUpdate")}
+              </TableHead>
+              <TableHead className="w-40 text-right">
+                {t("label.actions")}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -229,7 +244,7 @@ export function TrackedRulePacksSection({
                           </span>
                           {!customizable ? (
                             <span className="block truncate text-xs text-muted-foreground">
-                              Managed by the pack author.
+                              {t("uiText.managedByThePackAuthor")}
                             </span>
                           ) : null}
                         </span>
@@ -241,12 +256,13 @@ export function TrackedRulePacksSection({
                       </span>
                       {pack.availableVersion ? (
                         <Badge tone="info" className="mt-1">
-                          Update {pack.availableVersion} available
+                          {t("label.update")} {pack.availableVersion}{" "}
+                          {t("uiText.available")}
                         </Badge>
                       ) : null}
                       {pack.lastError ? (
                         <span className="block text-xs text-[var(--scry-danger-text)]">
-                          Update failed
+                          {t("uiText.updateFailed")}
                         </span>
                       ) : null}
                     </TableCell>
@@ -277,7 +293,7 @@ export function TrackedRulePacksSection({
                             }
                           />
                           <Label htmlFor={autoUpdateId} className="sr-only">
-                            Auto-update {pack.name}
+                            {t("uiText.autoUpdate")} {pack.name}
                           </Label>
                         </div>
                       ) : (
@@ -303,7 +319,7 @@ export function TrackedRulePacksSection({
                             }
                             leadingIcon={<RefreshCw className="h-4 w-4" />}
                           >
-                            Check
+                            {t("uiText.check")}
                           </TextActionButton>
                           <IconButton
                             id={selectorId(
@@ -337,14 +353,20 @@ export function TrackedRulePacksSection({
                         >
                           <TableHeader>
                             <TableRow>
-                              <TableHead className="w-[28%]">Rule</TableHead>
-                              <TableHead>Description</TableHead>
-                              <TableHead className="w-32">Facets</TableHead>
+                              <TableHead className="w-[28%]">
+                                {t("settings.maintenancePreviewRuleSelect")}
+                              </TableHead>
+                              <TableHead>
+                                {t("settings.ruleDescription")}
+                              </TableHead>
+                              <TableHead className="w-32">
+                                {t("system.facetLabel")}
+                              </TableHead>
                               <TableHead className="w-20 text-center">
-                                Enabled
+                                {t("label.enabled")}
                               </TableHead>
                               <TableHead className="w-32 text-right">
-                                Actions
+                                {t("label.actions")}
                               </TableHead>
                             </TableRow>
                           </TableHeader>
@@ -366,7 +388,7 @@ export function TrackedRulePacksSection({
                                       {member.name ?? member.templateId}
                                       {member.removed ? (
                                         <Badge tone="neutral" className="ml-2">
-                                          Removed upstream
+                                          {t("uiText.removedUpstream")}
                                         </Badge>
                                       ) : null}
                                     </TableCell>
@@ -422,7 +444,7 @@ export function TrackedRulePacksSection({
                                             )
                                           }
                                         >
-                                          Test
+                                          {t("settings.proxyTest")}
                                         </Button>
                                         {canManage && customizable ? (
                                           <IconButton
@@ -478,14 +500,14 @@ export function TrackedRulePacksSection({
       </div>
       <ConfirmDialog
         open={canManage && preview !== null}
-        title="Apply rule pack update"
+        title={t("uiAttr.Apply_rule_pack_update")}
         description={
           preview
             ? `Review changes for ${preview.pack.name} before applying.`
             : ""
         }
-        confirmLabel="Apply update"
-        cancelLabel="Cancel"
+        confirmLabel={t("uiAttr.Apply_update")}
+        cancelLabel={t("uiAttr.Cancel")}
         confirmButtonVariant="primary"
         isBusy={preview !== null && mutatingPackId === preview.pack.packId}
         onCancel={() => setPreview(null)}
@@ -499,14 +521,14 @@ export function TrackedRulePacksSection({
       </ConfirmDialog>
       <ConfirmDialog
         open={canManage && pendingUninstall !== null}
-        title="Uninstall rule pack"
+        title={t("uiAttr.Uninstall_rule_pack")}
         description={
           pendingUninstall
             ? `Remove ${pendingUninstall.name} and its tracked rules? Custom copies remain.`
             : ""
         }
-        confirmLabel="Uninstall"
-        cancelLabel="Cancel"
+        confirmLabel={t("uiAttr.Uninstall")}
+        cancelLabel={t("uiAttr.Cancel")}
         isBusy={
           pendingUninstall !== null &&
           mutatingPackId === pendingUninstall.packId

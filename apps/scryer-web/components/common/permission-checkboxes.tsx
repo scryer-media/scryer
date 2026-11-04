@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import { ChevronDown } from "lucide-react";
 
 import { MultiSelectOptionList } from "@/components/ui/multi-select-dropdown";
@@ -87,15 +88,16 @@ function permissionLabel(permission: string, options: PermissionOption[]) {
 function permissionOptions(
   permissions: string[] | undefined,
   options: PermissionOption[],
+  t: (key: string) => string,
 ) {
-  if (!permissions) {
-    return options;
-  }
-
-  return permissions.map((permission) => ({
-    value: permission,
-    label: permissionLabel(permission, options),
-  }));
+  return (permissions ?? options.map((option) => option.value)).map(
+    (permission) => ({
+      value: permission,
+      label: options.some((option) => option.value === permission)
+        ? t(`permissions.${permission}`)
+        : permissionLabel(permission, options),
+    }),
+  );
 }
 
 export function togglePermissionValue(
@@ -183,7 +185,8 @@ function AppPermissionDropdown({
   idPrefix?: string;
   onChange: (next: string[]) => void;
 }) {
-  const options = permissionOptions(permissions, APP_PERMISSION_OPTIONS);
+  const t = useTranslate();
+  const options = permissionOptions(permissions, APP_PERMISSION_OPTIONS, t);
   const allPermissions = options.map((option) => option.value);
   const allSelected =
     allPermissions.length > 0 &&
@@ -194,7 +197,7 @@ function AppPermissionDropdown({
       <PopoverTrigger asChild>
         <PermissionDropdownTrigger
           id={idPrefix ? `${idPrefix}-app-trigger` : undefined}
-          label="App"
+          label={t("uiAttr.App")}
           count={selected.length}
           disabled={options.length === 0}
           readOnly={disabled}
@@ -221,7 +224,11 @@ function AppPermissionDropdown({
             showSelectAll
               ? {
                   id: idPrefix ? `${idPrefix}-app-select-all` : undefined,
-                  label: allSelected ? "Unselect all" : "Select all",
+                  label: t(
+                    allSelected
+                      ? "permissions.unselectAll"
+                      : "permissions.selectAll",
+                  ),
                   selected: allSelected,
                   onSelect: () => onChange(allSelected ? [] : allPermissions),
                 }
@@ -248,7 +255,8 @@ function FacetPermissionDropdown({
   idPrefix,
   onLibraryChange,
 }: FacetPermissionDropdownProps) {
-  const options = permissionOptions(permissions, LIBRARY_PERMISSION_OPTIONS);
+  const t = useTranslate();
+  const options = permissionOptions(permissions, LIBRARY_PERMISSION_OPTIONS, t);
   const facetLibraries = libraries.filter((library) => library.facet === facet);
   const allPermissions = options.map((option) => option.value);
   const allSelected =
@@ -298,7 +306,11 @@ function FacetPermissionDropdown({
                 id: idPrefix
                   ? `${idPrefix}-${facet.toLowerCase()}-select-all`
                   : undefined,
-                label: allSelected ? "Unselect all" : "Select all",
+                label: t(
+                  allSelected
+                    ? "permissions.unselectAll"
+                    : "permissions.selectAll",
+                ),
                 selected: allSelected,
                 onSelect: () =>
                   onLibraryChange(
@@ -398,6 +410,7 @@ export function PermissionDropdowns({
   onAppChange: (next: string[]) => void;
   onLibraryChange: (changes: LibraryPermissionDrafts) => void;
 }) {
+  const t = useTranslate();
   return (
     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
       <AppPermissionDropdown
@@ -412,7 +425,7 @@ export function PermissionDropdowns({
         <FacetPermissionDropdown
           key={facet.value}
           facet={facet.value}
-          label={facet.label}
+          label={t(`permissions.facet.${facet.value}`)}
           libraries={libraries}
           permissions={libraryPermissions}
           selectedByLibrary={selectedLibraryPermissions}

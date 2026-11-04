@@ -1306,12 +1306,12 @@ export function ActivityView({
               </div>
             </TableCell>
             <TableCell className="text-sm text-muted-foreground">
-              Filesystem
+              {t("uiText.filesystem")}
             </TableCell>
             <TableCell className="text-sm">
               <div>{status}</div>
               <div className="text-xs text-muted-foreground">
-                Started{" "}
+                {t("jobs.custom.started")}{" "}
                 {new Date(startedAt).toLocaleTimeString([], {
                   hour: "numeric",
                   minute: "2-digit",
@@ -1347,8 +1347,8 @@ export function ActivityView({
                   type="button"
                   size="icon"
                   variant="ghost"
-                  aria-label="Cancel import"
-                  title="Cancel import"
+                  aria-label={t("uiAttr.Cancel_import")}
+                  title={t("uiAttr.Cancel_import")}
                   onClick={() => setCancelImportConfirmStream(stream)}
                 >
                   <XCircle className="h-4 w-4 text-[var(--scry-danger-text)]" />
@@ -1421,9 +1421,11 @@ export function ActivityView({
       {releaseHeldSourcesDialog}
       <ConfirmDialog
         open={cancelImportConfirmStream !== null}
-        title="Cancel import?"
-        description="This stops the queued or active import. Source files are preserved and only temporary import output is removed."
-        confirmLabel="Cancel import"
+        title={t("uiAttr.Cancel_import")}
+        description={t(
+          "uiAttr.This_stops_the_queued_or_active_import_Source_files_are_preserved_and_only_temporary_import_output_is_removed",
+        )}
+        confirmLabel={t("uiAttr.Cancel_import")}
         cancelLabel={t("label.cancel")}
         isBusy={cancelImportInProgress}
         onConfirm={handleCancelActiveImport}
@@ -1638,7 +1640,7 @@ export function ActivityView({
                                     stream.phase.slice(1).toLowerCase()}
                             </div>
                             <div className="mt-1 text-xs text-muted-foreground">
-                              Started{" "}
+                              {t("jobs.custom.started")}{" "}
                               {new Date(startedAt).toLocaleTimeString([], {
                                 hour: "numeric",
                                 minute: "2-digit",
@@ -1671,7 +1673,7 @@ export function ActivityView({
                               onClick={() =>
                                 setCancelImportConfirmStream(stream)
                               }
-                              aria-label="Cancel import"
+                              aria-label={t("uiAttr.Cancel_import")}
                             >
                               <XCircle className="h-4 w-4 text-[var(--scry-danger-text)]" />
                             </Button>
