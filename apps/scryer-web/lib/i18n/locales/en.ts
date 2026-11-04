@@ -7937,6 +7937,21 @@ const en: LocaleDictionary = {
     "Some ranges or warnings were omitted because the report limit was reached.",
   "mediaFile.subtitleCount": "{{count}} Subs",
   "mediaFile.delete": "Delete file",
+  "subtitle.batchProgress":
+    "Searching subtitles: {{completed}} of {{total}} processed.",
+  "subtitle.batchCompleted":
+    "Subtitle search finished: {{downloaded}} downloaded, {{warnings}} items with warnings.",
+  "subtitle.batchRunFailed":
+    "Subtitle search failed. Check the job details and retry.",
+  "subtitle.batchSearch": "Search for subtitles",
+  "subtitle.batchQueued": "Subtitle search queued in the background.",
+  "subtitle.batchFailed": "Could not queue subtitle search.",
+  "subtitle.batchSelectionInvalid":
+    "Select between one and 1000 episodes from the same series.",
+  "subtitle.batchLanguagesRequired":
+    "Configure wanted subtitle languages before searching.",
+  "subtitle.batchAlreadyRunning":
+    "An episode subtitle batch is already running.",
   "subtitle.search": "Search Subtitles",
   "subtitle.searching": "Searching...",
   "subtitle.download": "Download",

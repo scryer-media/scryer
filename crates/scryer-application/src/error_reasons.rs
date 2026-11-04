@@ -4845,6 +4845,15 @@ pub mod application_upgrade {
 }
 
 pub mod subtitles {
+    /// Select between one and 1000 episodes from the same series.
+    pub const BATCH_SELECTION_INVALID: &str = "SUBTITLES_BATCH_SELECTION_INVALID";
+    /// Subtitle handling is disabled.
+    pub const BATCH_DISABLED: &str = "SUBTITLES_BATCH_DISABLED";
+    /// No wanted subtitle languages are configured.
+    pub const BATCH_LANGUAGES_REQUIRED: &str = "SUBTITLES_BATCH_LANGUAGES_REQUIRED";
+    /// An episode subtitle batch is already running.
+    pub const BATCH_ALREADY_RUNNING: &str = "SUBTITLES_BATCH_ALREADY_RUNNING";
+
     /// Invalid subtitle language code.
     pub const SUBTITLE_LANGUAGE_CODE_INVALID: &str = "SUBTITLES_SUBTITLE_LANGUAGE_CODE_INVALID";
     /// Unsupported subtitle format.
@@ -4916,6 +4925,10 @@ pub mod subtitles {
         "SUBTITLES_SUBTITLE_ARTIFACT_EXPANDS_BEYOND_BYTE_LIMIT";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        BATCH_SELECTION_INVALID,
+        BATCH_DISABLED,
+        BATCH_LANGUAGES_REQUIRED,
+        BATCH_ALREADY_RUNNING,
         SUBTITLE_LANGUAGE_CODE_INVALID,
         SUBTITLE_FORMAT_UNSUPPORTED,
         SUBTITLE_PROVIDER_CONFIG_NAME_REQUIRED,

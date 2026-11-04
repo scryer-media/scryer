@@ -1,6 +1,10 @@
 import * as React from "react";
 import { useClient } from "urql";
 
+import {
+  isEpisodeSubtitleBatch,
+  subtitleBatchProgressText,
+} from "@/lib/utils/episode-subtitle-search";
 import { toast } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -331,7 +335,7 @@ export function JobRunProvider({
         .filter((run): run is JobRun => run !== null);
 
       for (const run of normalizedRuns) {
-        if (shouldRestoreAutomaticSearch(run)) {
+        if (shouldRestoreAutomaticSearch(run) || isEpisodeSubtitleBatch(run)) {
           registerInteractiveJobRun(run);
         } else {
           upsertRun(run);
@@ -456,10 +460,14 @@ export function JobRunProvider({
           ? t("jobs.runSummaryCompleted")
           : t("jobs.runSummaryRunning"));
       const upgradeToast = applicationUpgradeToastDetails(run, t);
-      const title = upgradeToast?.title ?? run.displayName;
+      const subtitleDescription = subtitleBatchProgressText(run, t);
+      const title = isEpisodeSubtitleBatch(run)
+        ? t("subtitle.batchSearch")
+        : (upgradeToast?.title ?? run.displayName);
       const outcomeKey = automaticSearchOutcomeKey(run);
       const searchProgress = acquisitionProgress(run);
       const description =
+        subtitleDescription ??
         run.errorText ??
         (outcomeKey
           ? t(outcomeKey, {

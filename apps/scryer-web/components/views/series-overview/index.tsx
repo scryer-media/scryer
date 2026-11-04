@@ -1,6 +1,10 @@
 import * as React from "react";
 import { RefreshScoresButton } from "@/components/common/refresh-scores-button";
-import { FolderOpen, Trash2, X } from "lucide-react";
+import { useAuth } from "@/lib/hooks/use-auth";
+import { canManageLibrarySubtitles } from "@/lib/utils/permissions";
+import { useEpisodeSubtitleSearch } from "@/lib/hooks/use-episode-subtitle-search";
+import { episodeSelectionActions } from "@/lib/utils/episode-subtitle-search";
+import { FolderOpen, Trash2, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -512,8 +516,13 @@ function SeriesOverviewViewImpl({
     onRequestDeleteEpisodeFiles([...selectedEpisodeIds]);
   }, [onRequestDeleteEpisodeFiles, selectedEpisodeIds]);
 
-  const episodeSelectionEnabled =
-    canManageTitle && Boolean(onRequestDeleteEpisodeFiles);
+  const { user } = useAuth();
+  const episodeActions = episodeSelectionActions(
+    canManageTitle && Boolean(onRequestDeleteEpisodeFiles),
+    canManageLibrarySubtitles(user, title?.libraryId),
+  );
+  const episodeSelectionEnabled = episodeActions.enabled;
+  const subtitleBatch = useEpisodeSubtitleSearch(onRefreshSubtitles);
 
   const searchPrerequisiteNotice =
     canManageTitle && !hasDownloadClients && showSearchPrerequisiteNotice ? (
@@ -1555,7 +1564,7 @@ function SeriesOverviewViewImpl({
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                   {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
                     <>
-                      {wholeSeasonsSelected ? (
+                      {canManageTitle && wholeSeasonsSelected ? (
                         <RefreshScoresButton
                           selection={{
                             seasonIds: selectedSeasons.map(([id]) => id),
@@ -1571,18 +1580,39 @@ function SeriesOverviewViewImpl({
                       >
                         {t("seriesOverview.clearEpisodeSelection")}
                       </Button>
-                      <Button
-                        id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        onClick={handleDeleteSelectedEpisodeFiles}
-                      >
-                        <Trash2 className="mr-1.5 h-4 w-4" />
-                        {t("seriesOverview.deleteSelectedEpisodeFiles", {
-                          count: selectedEpisodeIds.size,
-                        })}
-                      </Button>
+                      {episodeActions.canSearchSubtitles && title ? (
+                        <Button
+                          id="series-overview-search-selected-subtitles"
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={subtitleBatch.pending}
+                          onClick={() =>
+                            void subtitleBatch.start(
+                              title.id,
+                              [...selectedEpisodeIds],
+                              handleClearEpisodeSelection,
+                            )
+                          }
+                        >
+                          <Search className="mr-1.5 h-4 w-4" />
+                          {t("subtitle.batchSearch")}
+                        </Button>
+                      ) : null}
+                      {episodeActions.canDelete ? (
+                        <Button
+                          id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={handleDeleteSelectedEpisodeFiles}
+                        >
+                          <Trash2 className="mr-1.5 h-4 w-4" />
+                          {t("seriesOverview.deleteSelectedEpisodeFiles", {
+                            count: selectedEpisodeIds.size,
+                          })}
+                        </Button>
+                      ) : null}
                     </>
                   ) : null}
                   {manualImport ? (

@@ -878,6 +878,31 @@ impl AppUseCase {
             return Ok(false);
         }
         match run.job_key {
+            JobKey::SubtitleSearch => {
+                let Some(scope) = run.operation_type.strip_prefix("episode_subtitle_search:")
+                else {
+                    return Ok(false);
+                };
+                let Some((library_id, _title_id)) = scope.split_once(':') else {
+                    return Ok(false);
+                };
+                let actor = self.attach_user_authorization(actor.clone()).await?;
+                match self
+                    .require_library_permission(
+                        &actor,
+                        library_id,
+                        scryer_domain::LibraryPermission::ManageSubtitles,
+                    )
+                    .await
+                {
+                    Ok(()) => Ok(true),
+                    Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+                        Ok(false)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+
             JobKey::TitleDeletion | JobKey::TitleRename => Ok(true),
             JobKey::MediaFileRescore
             | JobKey::MediaFileDeletion
@@ -984,7 +1009,8 @@ impl AppUseCase {
         if !can_manage_system
             && !matches!(
                 job_key,
-                JobKey::TitleDeletion
+                JobKey::SubtitleSearch
+                    | JobKey::TitleDeletion
                     | JobKey::TitleRename
                     | JobKey::MediaFileDeletion
                     | JobKey::MediaFileRescore

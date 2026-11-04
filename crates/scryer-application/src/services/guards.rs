@@ -751,6 +751,10 @@ impl BackupExecutionGuardTable {
         }
     }
 
+    pub async fn acquire(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.lock_for_key(key.to_string()).await.lock_owned().await
+    }
+
     pub async fn try_acquire(&self, key: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
         let lock = self.lock_for_key(key.to_string()).await;
         lock.try_lock_owned().ok()
