@@ -17,9 +17,9 @@ const ru: LocaleDictionary = {
     "Для этого тайтла уже выполняется другой поиск или постановка в очередь. Повторите попытку после завершения.",
   "wanted.standby": "Резерв · {{count}}",
   "wanted.standbyTooltip":
-    "Если текущая загрузка не удастся, будут опробованы сохранённые кандидаты: {{count}}.",
+    "Сохранённые кандидаты ({{count}}) будут опробованы, если текущая загрузка завершится неудачно.",
   "wanted.standbyScopeNote":
-    "Учитываются строки этой области; сезонные паки учитываются по опорному эпизоду сезона.",
+    "Считаются строки, привязанные к этой области; пакеты сезонов учитываются у опорного эпизода сезона.",
   "wanted.loadingStandby": "Загрузка сохранённых кандидатов…",
   "wanted.standbyCandidates": "Резервные кандидаты · {{count}}",
   "wanted.downloadStandby": "Скачать",
@@ -37,9 +37,9 @@ const ru: LocaleDictionary = {
   "wanted.standbyIndexer": "Индексатор",
   "wanted.standbySize": "Размер",
   "wanted.standbySeeders": "Сиды",
-  "wanted.standbyScore": "Оценка",
+  "wanted.standbyScore": "Баллы",
   "wanted.standbyAge": "Возраст",
-  "wanted.seasonPack": "Сезонный пак",
+  "wanted.seasonPack": "Пакет сезона",
   "wanted.noStandbyCandidates": "нет резервных кандидатов",
   "settings.oauthJellyfinCallbackCopied":
     "URL обратного вызова Jellyfin скопирован.",
