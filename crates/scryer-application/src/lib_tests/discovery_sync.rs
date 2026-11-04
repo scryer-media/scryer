@@ -7245,8 +7245,57 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
                     .iter()
                     .any(|allowed| allowed.eq_ignore_ascii_case(&media_kind))
             }) && recording_item_matches_query(item, &query.filters)
+                && query.browse_label.as_ref().is_none_or(|(kind, label)| {
+                    recording_canonical_facet_values_match(item, kind, std::slice::from_ref(label))
+                })
+                && recording_canonical_facet_values_match(
+                    item,
+                    "genre",
+                    &query.home_filters.genre_tag_keys,
+                )
+                && recording_canonical_facet_values_match(
+                    item,
+                    "theme",
+                    &query.home_filters.theme_tag_keys,
+                )
+                && !query.excluded_identity_keys.contains(&item.target_key)
+                && item
+                    .resolved_title_id
+                    .as_ref()
+                    .is_none_or(|id| !query.excluded_title_ids.contains(id))
+                && !item
+                    .target_key
+                    .splitn(3, ':')
+                    .collect::<Vec<_>>()
+                    .as_slice()
+                    .get(2)
+                    .is_some_and(|value| {
+                        let source = item.target_key.split(':').next().unwrap_or_default();
+                        let kind = recording_discovery_item_media_kind(item).unwrap_or_default();
+                        query
+                            .requested_keys
+                            .contains(&format!("{kind}:{source}:{value}"))
+                    })
         });
         recording_dedupe_and_sort(&mut items);
+        match query.sort.unwrap_or_default() {
+            crate::DiscoverySectionSort::Title => items.sort_by_cached_key(|item| {
+                item.sort_title
+                    .as_deref()
+                    .unwrap_or(&item.display_title)
+                    .to_lowercase()
+            }),
+            crate::DiscoverySectionSort::ReleaseDate => {
+                items.sort_by_key(|item| std::cmp::Reverse(item.year))
+            }
+            crate::DiscoverySectionSort::Popularity => {
+                items.sort_by(|a, b| b.base_rank.partial_cmp(&a.base_rank).unwrap())
+            }
+            crate::DiscoverySectionSort::Rating => {
+                items.sort_by(|a, b| b.rating.partial_cmp(&a.rating).unwrap())
+            }
+            crate::DiscoverySectionSort::Relevance => {}
+        }
         let total_count = items.len() as i64;
         let offset = query.offset.min(items.len());
         let limit = query.limit.min(items.len().saturating_sub(offset));
@@ -9381,6 +9430,7 @@ async fn discovery_home_watchlist_needs_an_enabled_personal_linked_list() {
 
 struct DiscoverySectionFixture {
     app: crate::AppUseCase,
+    discovery: Arc<RecordingDiscoveryRepository>,
     viewer: scryer_domain::User,
     media_requests: Arc<super::support_events_requests::MockMediaRequestRepo>,
     movie_library_id: String,
@@ -9479,6 +9529,7 @@ async fn discovery_section_fixture_with_lists(
     discovery.items.lock().await.extend(items);
     DiscoverySectionFixture {
         app,
+        discovery,
         viewer,
         media_requests,
         movie_library_id,
@@ -9614,6 +9665,122 @@ async fn discovery_section_pages_start_with_the_home_rail_and_never_repeat() {
         "the last composed rail ({}) continues past its home window into the pool",
         last.section_id
     );
+}
+
+#[tokio::test]
+async fn discovery_browse_includes_public_and_weak_candidates_without_rail_limits() {
+    let fixture = discovery_section_fixture("browse-combined", 1105).await;
+    {
+        let mut items = fixture.discovery.items.lock().await;
+        for item in items.iter_mut() {
+            item.matched_subject_count = 0;
+            item.matched_subject_keys.clear();
+            item.rank_score = None;
+            item.base_rank = None;
+            item.rating = None;
+            item.external_ratings.clear();
+            item.affinity_signals.clear();
+            for tag in &mut item.canonical_tags {
+                tag.confidence = None;
+                tag.sources.clear();
+            }
+        }
+        let mut public = items[0].clone();
+        public.id = "public-only".into();
+        public.target_key = "tmdb:movie:80000".into();
+        public.run_id = "section-public".into();
+        public.base_generation_id = Some("section-public".into());
+        public.source_run_kind = "public_feed".into();
+        public.library_provenance.clear();
+        let mut duplicate = public.clone();
+        duplicate.id = "public-duplicate".into();
+        duplicate.target_key = items[0].target_key.clone();
+        items.extend([public, duplicate]);
+    }
+    let (pages, count) = discovery_section_pages(&fixture, |offset| {
+        discovery_section_items_query("browse_genre_drama", 25, offset, 200)
+    })
+    .await;
+    assert_eq!(count, 1106);
+    let keys = pages.into_iter().flatten().collect::<HashSet<_>>();
+    assert_eq!(keys.len(), 1106);
+    assert!(keys.contains("tmdb:movie:80000"));
+    let mut query = discovery_section_items_query("browse_all", 25, 0, 200);
+    query.section.as_mut().unwrap().filters.genre_tag_keys = vec!["canonical:genre:drama".into()];
+    let page = fixture
+        .app
+        .discovery_items(&fixture.viewer, query)
+        .await
+        .unwrap();
+    assert_eq!(page.total_count, count);
+    assert_eq!(page.items.len(), 200);
+    assert_eq!(page.generation_ids, vec!["section-run", "section-public"]);
+    fixture
+        .app
+        .services
+        .config
+        .settings
+        .upsert_setting_json(
+            crate::SETTINGS_SCOPE_SYSTEM,
+            crate::DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            None,
+            "false".into(),
+            "test",
+            None,
+        )
+        .await
+        .unwrap();
+    let disabled = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            discovery_section_items_query("browse_all", 25, 0, 50),
+        )
+        .await
+        .unwrap();
+    assert_eq!(disabled.total_count, 2);
+    assert!(!disabled.can_view_personalized);
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: true,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        home.browse_labels
+            .iter()
+            .find(|label| label.label_key == "drama")
+            .unwrap()
+            .item_count,
+        2,
+        "thin public browse labels survive without personalized rails"
+    );
+    fixture
+        .discovery
+        .state
+        .lock()
+        .await
+        .as_mut()
+        .unwrap()
+        .last_success_generation_id = None;
+    let public = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            discovery_section_items_query("browse_genre_drama", 25, 0, 50),
+        )
+        .await
+        .unwrap();
+    assert_eq!(public.total_count, 2);
+    assert_eq!(public.generation_ids, vec!["section-public"]);
 }
 
 #[tokio::test]

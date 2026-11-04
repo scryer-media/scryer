@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   appendDiscoverySectionPage,
+  discoveryBrowseSectionId,
   discoverySectionPagingFor,
   discoverySectionQueryKey,
   nextDiscoverySectionPage,
@@ -11,6 +12,33 @@ import {
 } from "./discovery-section-paging.ts";
 
 type Card = { targetKind: string; targetKey: string; label: string };
+
+test("genre and theme filters open the full pool and clearing them restores home", () => {
+  assert.equal(discoveryBrowseSectionId(null, {}), null);
+  assert.equal(discoveryBrowseSectionId(null, { minimumYear: 2000 }), null);
+  assert.equal(
+    discoveryBrowseSectionId(null, { genreTagKeys: ["canonical:genre:drama"] }),
+    "browse_all",
+  );
+  assert.equal(
+    discoveryBrowseSectionId(null, { themeTagKeys: ["canonical:theme:heist"] }),
+    "browse_all",
+  );
+  assert.equal(
+    discoveryBrowseSectionId(null, {
+      genreTagKeys: [],
+      themeTagKeys: [],
+      minimumYear: 2000,
+    }),
+    null,
+  );
+  assert.equal(
+    discoveryBrowseSectionId("browse_genre_drama", {
+      themeTagKeys: ["canonical:theme:heist"],
+    }),
+    "browse_genre_drama",
+  );
+});
 
 function card(index: number, kind = "MOVIE"): Card {
   return {

@@ -20,7 +20,7 @@
 use super::*;
 use crate::ports::{
     DiscoveryBrowseLabel, DiscoveryBrowseLabelFamily, DiscoverySectionItemsQuery,
-    DiscoverySectionSort, MediaRequestQuery,
+    DiscoverySectionSort, DiscoverySyncStateRecord, MediaRequestQuery,
 };
 use scryer_domain::MediaRequestStatus;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -156,115 +156,6 @@ fn discovery_rail_label_family_kind(family: DiscoveryRailLabelFamily) -> &'stati
 /// know its key.
 fn discovery_browse_title(entry: &DiscoveryRailLabel) -> String {
     entry.browse_noun.to_string()
-}
-
-/// Whether a pool item may be listed under `entry`: a subject it was found
-/// through, and the label itself under the same corroboration rule a
-/// "because you like" rail applies.
-fn discovery_item_browses_under(
-    item: &DiscoveryItemRecord,
-    entry: &DiscoveryRailLabel,
-    context: &DiscoveryRailContext<'_>,
-) -> bool {
-    item.matched_subject_count > 0
-        && discovery_item_matches_affinity_label(
-            item,
-            entry.key,
-            discovery_rail_label_family_kind(entry.family),
-            context.settings.genre_rail_corroboration,
-        )
-}
-
-/// The allowlisted labels the visible pool holds enough of to browse, in
-/// allowlist order. A label needs as many listable titles as a rail needs to
-/// ship, so a card never opens onto a near-empty page.
-pub(super) fn discovery_browse_labels(
-    visible_items: &[DiscoveryItemRecord],
-    context: &DiscoveryRailContext<'_>,
-) -> Vec<DiscoveryBrowseLabel> {
-    // One normalized lookup per call: the allowlist lookup normalizes every
-    // entry on each probe, and this runs over the whole pool.
-    let entries = DISCOVERY_RAIL_LABELS
-        .iter()
-        .map(|entry| {
-            (
-                (entry.family, normalize_discovery_affinity_key(entry.key)),
-                entry,
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    let mut counts = HashMap::<&'static str, HashSet<&str>>::new();
-    for item in visible_items {
-        if item.matched_subject_count == 0 || !context.admits(item) {
-            continue;
-        }
-        for family in [
-            DiscoveryRailLabelFamily::Genre,
-            DiscoveryRailLabelFamily::Theme,
-        ] {
-            let kind = discovery_rail_label_family_kind(family);
-            for label in discovery_item_canonical_facet_labels(item, kind) {
-                let Some(entry) = entries
-                    .get(&(family, normalize_discovery_affinity_key(&label)))
-                    .copied()
-                else {
-                    continue;
-                };
-                if discovery_item_browses_under(item, entry, context) {
-                    counts
-                        .entry(entry.key)
-                        .or_default()
-                        .insert(discovery_item_identity_key(item));
-                }
-            }
-        }
-    }
-    DISCOVERY_RAIL_LABELS
-        .iter()
-        .filter_map(|entry| {
-            let item_count = counts.get(entry.key).map_or(0, HashSet::len);
-            (item_count >= DISCOVERY_RAIL_MIN_ITEMS).then(|| DiscoveryBrowseLabel {
-                family: match entry.family {
-                    DiscoveryRailLabelFamily::Genre => DiscoveryBrowseLabelFamily::Genre,
-                    DiscoveryRailLabelFamily::Theme => DiscoveryBrowseLabelFamily::Theme,
-                },
-                label_key: entry.key.to_string(),
-                section_id: discovery_browse_section_id(entry),
-                title: discovery_browse_title(entry),
-                item_count: item_count as i64,
-            })
-        })
-        .collect()
-}
-
-/// Every pool title listed under one browse label, in rail order.
-pub(super) fn discovery_browse_section(
-    visible_items: &[DiscoveryItemRecord],
-    context: &DiscoveryRailContext<'_>,
-    entry: &DiscoveryRailLabel,
-) -> Option<DiscoverySectionResult> {
-    let items = visible_items
-        .iter()
-        .filter(|item| discovery_item_browses_under(item, entry, context))
-        .cloned()
-        .collect::<Vec<_>>();
-    let items = compose_discovery_browse_items(items, context, &HashSet::new());
-    if items.is_empty() {
-        return None;
-    }
-    let section_type = match entry.family {
-        DiscoveryRailLabelFamily::Genre => DISCOVERY_BROWSE_GENRE_SECTION_TYPE,
-        DiscoveryRailLabelFamily::Theme => DISCOVERY_BROWSE_THEME_SECTION_TYPE,
-    };
-    Some(DiscoverySectionResult {
-        section_id: discovery_browse_section_id(entry),
-        section_type: section_type.to_string(),
-        title: discovery_browse_title(entry),
-        surface: "personalized".to_string(),
-        total_count: items.len() as i64,
-        items,
-        label_key: Some(entry.key.to_string()),
-    })
 }
 
 fn discovery_public_section_folds_into(source_type: &str) -> Option<&'static str> {
@@ -726,7 +617,15 @@ pub(super) fn continue_discovery_personalized_rail(
             let entry = discovery_rail_label(family, section.label_key.as_deref()?)?;
             listable
                 .into_iter()
-                .filter(|item| discovery_item_browses_under(item, entry, context))
+                .filter(|item| {
+                    item.matched_subject_count > 0
+                        && discovery_item_matches_affinity_label(
+                            item,
+                            entry.key,
+                            discovery_rail_label_family_kind(entry.family),
+                            context.settings.genre_rail_corroboration,
+                        )
+                })
                 .collect()
         }
         None => listable,
@@ -950,6 +849,98 @@ fn discovery_section_generation_ids(
 }
 
 impl AppUseCase {
+    pub(super) async fn discovery_browse_query(
+        &self,
+        actor: &User,
+        visibility: &DiscoveryVisibility,
+        state: &DiscoverySyncStateRecord,
+        can_view_personalized: bool,
+        query: &DiscoveryItemsQuery,
+        section: &DiscoverySectionItemsQuery,
+    ) -> AppResult<DiscoveryItemsStorageQuery> {
+        let owned = if query.include_owned {
+            CatalogOwnedVisibility::default()
+        } else {
+            self.discovery_home_owned_visibility(&sorted_discovery_library_ids(
+                &visibility.readable_library_ids,
+            ))
+            .await?
+        };
+        let requested_keys = if section.hide_requested {
+            self.discovery_pending_request_visibility(actor)
+                .await?
+                .keys
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let browse_label = match discovery_section_target(section.section_id.trim()) {
+            DiscoverySectionTarget::Browse(entry) => Some((
+                discovery_rail_label_family_kind(entry.family).to_string(),
+                entry.key.to_string(),
+            )),
+            _ => None,
+        };
+        Ok(DiscoveryItemsStorageQuery {
+            context_run_id: can_view_personalized
+                .then(|| state.last_success_generation_id.clone())
+                .flatten(),
+            public_run_id: state.last_public_feed_generation_id.clone(),
+            readable_library_ids: sorted_discovery_library_ids(&visibility.readable_library_ids),
+            allowed_media_kinds: visibility.sorted_allowed_media_kinds(),
+            filters: DiscoveryItemsQuery {
+                include_owned: query.include_owned,
+                include_unresolved: query.include_unresolved,
+                ..DiscoveryItemsQuery::default()
+            },
+            home_filters: section.filters.clone(),
+            browse_label,
+            sort: Some(section.sort),
+            excluded_identity_keys: owned.excluded_discovery_identity_keys(),
+            excluded_title_ids: owned.excluded_title_ids(),
+            requested_keys,
+            limit: discovery_items_limit(query.limit),
+            offset: query.offset,
+        })
+    }
+
+    pub(super) async fn discovery_pool_browse_labels(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+    ) -> AppResult<Vec<DiscoveryBrowseLabel>> {
+        let labels = DISCOVERY_RAIL_LABELS
+            .iter()
+            .map(|entry| {
+                (
+                    discovery_rail_label_family_kind(entry.family).to_string(),
+                    entry.key.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let counts = self
+            .services
+            .library
+            .discovery
+            .count_discovery_browse_labels(query, &labels)
+            .await?;
+        Ok(DISCOVERY_RAIL_LABELS
+            .iter()
+            .zip(counts)
+            .filter(|(_, count)| *count > 0)
+            .map(|(entry, item_count)| DiscoveryBrowseLabel {
+                family: match entry.family {
+                    DiscoveryRailLabelFamily::Genre => DiscoveryBrowseLabelFamily::Genre,
+                    DiscoveryRailLabelFamily::Theme => DiscoveryBrowseLabelFamily::Theme,
+                },
+                label_key: entry.key.to_string(),
+                section_id: discovery_browse_section_id(entry),
+                title: discovery_browse_title(entry),
+                item_count,
+            })
+            .collect())
+    }
+
     pub(super) async fn discovery_section_items(
         &self,
         actor: &User,
@@ -963,6 +954,68 @@ impl AppUseCase {
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
         let generation_ids = discovery_section_generation_ids(&status, can_view_personalized);
+        let browse_entry = match discovery_section_target(section_query.section_id.trim()) {
+            DiscoverySectionTarget::Browse(entry) => Some(entry),
+            _ => None,
+        };
+        if section_query.section_id.trim() == "browse_all" || browse_entry.is_some() {
+            let storage_query = self
+                .discovery_browse_query(
+                    actor,
+                    &visibility,
+                    &status.state,
+                    can_view_personalized,
+                    query,
+                    section_query,
+                )
+                .await?;
+            let mut page = self
+                .services
+                .library
+                .discovery
+                .query_discovery_items(&storage_query)
+                .await?;
+            let subjects = if let Some(run_id) = storage_query.context_run_id.as_deref() {
+                self.services
+                    .library
+                    .discovery
+                    .list_discovery_submitted_subjects(run_id)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            let subjects = filter_submitted_subjects_for_libraries(
+                &subjects,
+                &visibility.readable_library_ids,
+            );
+            // Reasons shown on cards remain scoped to readable library titles;
+            // the presence of a reason never decides browse membership.
+            resolve_discovery_matched_subjects(&mut page.items, &subjects)?;
+            let section = DiscoverySectionResult {
+                section_id: section_query.section_id.clone(),
+                section_type: browse_entry
+                    .map(|entry| match entry.family {
+                        DiscoveryRailLabelFamily::Genre => DISCOVERY_BROWSE_GENRE_SECTION_TYPE,
+                        DiscoveryRailLabelFamily::Theme => DISCOVERY_BROWSE_THEME_SECTION_TYPE,
+                    })
+                    .unwrap_or("BROWSE_ALL")
+                    .to_string(),
+                title: browse_entry
+                    .map(discovery_browse_title)
+                    .unwrap_or_else(|| "Discovery".to_string()),
+                surface: "browse".to_string(),
+                total_count: page.total_count,
+                items: page.items.clone(),
+                label_key: browse_entry.map(|entry| entry.key.to_string()),
+            };
+            return Ok(DiscoveryItemsResult {
+                items: page.items,
+                total_count: page.total_count,
+                can_view_personalized,
+                section: Some(section),
+                generation_ids,
+            });
+        }
         let cache_key = DiscoverySectionCacheKey {
             actor_id: actor.id.clone(),
             readable_library_ids: sorted_discovery_library_ids(&visibility.readable_library_ids),
@@ -1104,8 +1157,10 @@ impl AppUseCase {
                 .await?
                 .section
             }
-            target @ (DiscoverySectionTarget::PersonalizedRail
-            | DiscoverySectionTarget::Browse(_)) => {
+            DiscoverySectionTarget::Browse(_) => {
+                unreachable!("browse sections are paged directly by discovery_section_items")
+            }
+            DiscoverySectionTarget::PersonalizedRail => {
                 let Some(context_run_id) = context_run_id else {
                     return Ok(DiscoverySectionMembers::default());
                 };
@@ -1177,42 +1232,34 @@ impl AppUseCase {
                     &home_visible_items,
                     rail_limit,
                 );
-                let section = match target {
-                    DiscoverySectionTarget::Browse(entry) => {
-                        discovery_browse_section(&listable_items, &context, entry)
-                    }
-                    _ => {
-                        // The home's own watchlist claims, so page one is the
-                        // home rail and later pages never offer a title the
-                        // watchlist holds.
-                        let watchlist_claims = self
-                            .discovery_section_watchlist(
-                                actor,
-                                visibility,
-                                can_view_personalized,
-                                status,
-                                filters,
-                                include_unresolved,
-                                rail_limit,
-                            )
-                            .await?
-                            .claimed_item_keys;
-                        let shelf = personalized_section_results_in_context(
-                            home_visible_items,
-                            &library_profile,
-                            &context,
-                            &watchlist_claims,
-                        );
-                        continue_discovery_personalized_rail(
-                            section_id,
-                            shelf,
-                            listable_items,
-                            &context,
-                            &watchlist_claims,
-                        )
-                    }
-                };
-                section
+                // The home's own watchlist claims, so page one is the
+                // home rail and later pages never offer a title the
+                // watchlist holds.
+                let watchlist_claims = self
+                    .discovery_section_watchlist(
+                        actor,
+                        visibility,
+                        can_view_personalized,
+                        status,
+                        filters,
+                        include_unresolved,
+                        rail_limit,
+                    )
+                    .await?
+                    .claimed_item_keys;
+                let shelf = personalized_section_results_in_context(
+                    home_visible_items,
+                    &library_profile,
+                    &context,
+                    &watchlist_claims,
+                );
+                continue_discovery_personalized_rail(
+                    section_id,
+                    shelf,
+                    listable_items,
+                    &context,
+                    &watchlist_claims,
+                )
             }
             DiscoverySectionTarget::TopRated => {
                 let home = self

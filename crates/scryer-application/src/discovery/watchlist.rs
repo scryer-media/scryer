@@ -273,6 +273,7 @@ impl AppUseCase {
                 home_filters: home_filters.clone(),
                 limit: keys.len(),
                 offset: 0,
+                ..DiscoveryItemsStorageQuery::default()
             };
 
         // Every member resolves first, unfiltered, so a title the filter bar

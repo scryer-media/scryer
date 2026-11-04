@@ -17,6 +17,18 @@ import type {
 
 export const DISCOVERY_SECTION_PAGE_SIZE = 40;
 
+export function discoveryBrowseSectionId(
+  routeSectionId: string | null,
+  filters: DiscoveryHomeFilters,
+): string | null {
+  return (
+    routeSectionId ??
+    (filters.genreTagKeys?.length || filters.themeTagKeys?.length
+      ? "browse_all"
+      : null)
+  );
+}
+
 export type DiscoverySectionPageItem = {
   targetKind: string;
   targetKey: string;

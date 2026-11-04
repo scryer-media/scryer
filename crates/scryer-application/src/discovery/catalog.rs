@@ -88,6 +88,10 @@ impl CatalogOwnedVisibility {
         keys
     }
 
+    pub(super) fn excluded_title_ids(&self) -> Vec<String> {
+        self.title_ids.iter().cloned().collect()
+    }
+
     pub(super) fn item_is_owned(&self, item: &DiscoveryItemRecord) -> bool {
         if item.owned_in_input {
             return true;

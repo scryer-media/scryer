@@ -595,7 +595,7 @@ pub struct DiscoveryItemsPageRecord {
     pub total_count: i64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DiscoveryItemsStorageQuery {
     pub context_run_id: Option<String>,
     pub public_run_id: Option<String>,
@@ -606,6 +606,15 @@ pub struct DiscoveryItemsStorageQuery {
     /// rating), applied the same way the home rails apply it. Empty filters
     /// narrow nothing.
     pub home_filters: DiscoveryHomeFilters,
+    /// An additional mandatory browse label, independent of sidebar filters.
+    pub browse_label: Option<(String, String)>,
+    /// Browse ordering; absent for the existing general discovery query.
+    pub sort: Option<DiscoverySectionSort>,
+    /// Canonical identities excluded by current ownership or pending requests.
+    pub excluded_identity_keys: Vec<String>,
+    pub excluded_title_ids: Vec<String>,
+    /// Pending request identities as media-kind:source:external-id.
+    pub requested_keys: Vec<String>,
     pub limit: usize,
     pub offset: usize,
 }
@@ -1068,6 +1077,20 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         query: &DiscoveryItemsStorageQuery,
     ) -> AppResult<DiscoveryItemsPageRecord>;
+    async fn count_discovery_browse_labels(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+        labels: &[(String, String)],
+    ) -> AppResult<Vec<i64>> {
+        let mut counts = Vec::with_capacity(labels.len());
+        for label in labels {
+            let mut query = query.clone();
+            query.browse_label = Some(label.clone());
+            query.limit = 0;
+            counts.push(self.query_discovery_items(&query).await?.total_count);
+        }
+        Ok(counts)
+    }
     async fn replace_title_more_like_this_items(
         &self,
         title_id: &str,

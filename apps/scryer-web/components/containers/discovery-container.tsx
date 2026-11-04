@@ -42,6 +42,7 @@ import {
 } from "@/lib/utils/discovery-actions";
 import {
   appendDiscoverySectionPage,
+  discoveryBrowseSectionId,
   discoverySectionPagingFor,
   discoverySectionQueryKey,
   nextDiscoverySectionPage,
@@ -181,7 +182,8 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
   const scopeKeyRef = useRef<string | null>(null);
   const authorizationSignatureRef = useRef(authorizationSignature);
   const location = useLocation();
-  const sectionId = discoverySectionIdFromPath(location.pathname);
+  const routeSectionId = discoverySectionIdFromPath(location.pathname);
+  const sectionId = discoveryBrowseSectionId(routeSectionId, filters);
   const { uiSettings, uiSettingsLoaded, setUiSettings, saveUiSettings } =
     useUiSettings();
   const [sectionSort, setSectionSort] = useState<{

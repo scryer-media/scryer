@@ -58,14 +58,14 @@ const CATALOG_ANIME_PRIORITY_SECTION_IDS: &[&str] = &["new_on_streaming", "most_
 /// treated as corroborated. A lone source (for example a single trakt vote)
 /// can spike to 10.0 without corroboration, so such fossils must lose to
 /// corroborated evidence whenever ratings decide ordering.
-const DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT: usize = 2;
+pub const DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT: usize = 2;
 /// A single-provider rating still counts as credible when it is backed by at
 /// least this many votes: an aggregator score built from thousands of votes
 /// (a MAL-only anime, for instance) is stronger evidence than two thinly
 /// sourced provider entries, and must not be demoted below them. Kept in
 /// lockstep with SMG's display-evidence bar (CanonicalRatingDisplayMinVotes)
 /// so a rating SMG displays is never ranked non-credible here for votes alone.
-const DISCOVERY_CREDIBLE_RATING_MIN_VOTES: i32 = 25;
+pub const DISCOVERY_CREDIBLE_RATING_MIN_VOTES: i32 = 25;
 /// A rail's share of one medium may not exceed this multiple of the library's
 /// share of that medium. Shared across the three mediums by design: anime and
 /// Western animation are separate mediums under one rule.
@@ -253,6 +253,7 @@ use medium::*;
 use rail_labels::*;
 use records::*;
 pub(crate) use section::DiscoverySectionCache;
+#[cfg(test)]
 use section::*;
 use watchlist::*;
 
@@ -604,7 +605,6 @@ impl AppUseCase {
         let mut personalized_sections = Vec::new();
         let mut complete_collection = None;
         let mut facets = Vec::new();
-        let mut browse_labels = Vec::new();
         if can_view_personalized
             && query.include_personalized
             && let Some(context_run_id) = status.state.last_success_generation_id.as_deref()
@@ -681,7 +681,6 @@ impl AppUseCase {
                 &visible_items,
                 limit,
             );
-            browse_labels = discovery_browse_labels(&visible_items, &rail_context);
             personalized_sections = personalized_section_results_in_context(
                 visible_items,
                 &library_profile,
@@ -702,6 +701,27 @@ impl AppUseCase {
                     .await?;
             }
         }
+
+        let mut browse_query = self
+            .discovery_browse_query(
+                actor,
+                &visibility,
+                &status.state,
+                can_view_personalized && query.include_personalized,
+                &DiscoveryItemsQuery {
+                    include_unresolved,
+                    ..DiscoveryItemsQuery::default()
+                },
+                &crate::ports::DiscoverySectionItemsQuery {
+                    filters: query.filters.clone(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        if !query.include_public {
+            browse_query.public_run_id = None;
+        }
+        let browse_labels = self.discovery_pool_browse_labels(&browse_query).await?;
 
         let public_top_rated_run_id = query
             .include_public
@@ -928,6 +948,7 @@ impl AppUseCase {
             home_filters: crate::ports::DiscoveryHomeFilters::default(),
             limit,
             offset,
+            ..DiscoveryItemsStorageQuery::default()
         };
         let mut page = self
             .services
@@ -1001,6 +1022,7 @@ impl AppUseCase {
             home_filters: crate::ports::DiscoveryHomeFilters::default(),
             limit: 1,
             offset: 0,
+            ..DiscoveryItemsStorageQuery::default()
         };
         let mut page = self
             .services

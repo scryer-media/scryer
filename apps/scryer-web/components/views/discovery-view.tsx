@@ -251,6 +251,7 @@ const SECTION_DISPLAY_NAME_KEYS: Record<string, string> = {
   // one the gateway sent.
   POPULAR_RIGHT_NOW: "discovery.section.rightNow",
   TRENDING_NOW: "discovery.section.rightNow",
+  BROWSE_ALL: "nav.discovery",
   FOR_YOU: "discovery.section.fromYourTaste",
   [FROM_YOUR_WATCHLIST_SECTION_TYPE]: "discovery.section.fromYourWatchlist",
   COMPLETE_THE_COLLECTION: "discovery.section.almostComplete",
@@ -665,6 +666,7 @@ function DiscoverySectionGrid({
   requestableFacets,
   onAction,
   onDismissItem,
+  onBack,
 }: {
   grid: DiscoverySectionGridModel;
   /** The grid's titles after the local facet and "not interested" filters. */
@@ -673,6 +675,7 @@ function DiscoverySectionGrid({
   requestableFacets: ReadonlySet<Facet>;
   onAction: (item: DiscoveryHomeCard) => void;
   onDismissItem: (item: DiscoveryHomeCard) => void;
+  onBack: () => void;
 }) {
   const t = useTranslate();
   const heading = grid.section
@@ -709,6 +712,7 @@ function DiscoverySectionGrid({
     <section id="discovery-section-grid" data-ui="discovery-section-grid">
       <Link
         to="/discovery"
+        onClick={onBack}
         className="mb-3 inline-flex items-center gap-1.5 rounded-[6px] text-[12.5px] font-semibold text-[var(--scry-muted3)] no-underline hover:text-[var(--scry-accent-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)]"
       >
         <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1966,6 +1970,15 @@ export function DiscoveryView({
             requestableFacets={requestableFacetSet}
             onAction={onAction}
             onDismissItem={hideItem}
+            onBack={() => {
+              setSelectedGenres([]);
+              setSelectedThemes([]);
+              onFiltersChange({
+                ...serverFilters,
+                genreTagKeys: [],
+                themeTagKeys: [],
+              });
+            }}
           />
         ) : null}
 

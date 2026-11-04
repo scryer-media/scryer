@@ -1175,6 +1175,49 @@ impl DiscoveryRepository for DiscoveryStore {
         query_discovery_items_page(&self.datastore, query).await
     }
 
+    async fn count_discovery_browse_labels(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+        labels: &[(String, String)],
+    ) -> AppResult<Vec<i64>> {
+        if labels.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(mut sql) = build_discovery_items_sql(&self.datastore, query) else {
+            return Ok(vec![0; labels.len()]);
+        };
+        let columns = labels
+            .iter()
+            .enumerate()
+            .map(|(index, (kind, label))| {
+                let mut clauses = Vec::new();
+                append_canonical_facet_filter(
+                    &mut clauses,
+                    &mut sql.args,
+                    kind,
+                    std::slice::from_ref(label),
+                );
+                format!(
+                    "COALESCE(SUM(CASE WHEN {} THEN 1 ELSE 0 END), 0) AS count_{index}",
+                    clauses.join(" AND ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let statement = format!(
+            "{} SELECT {columns} FROM deduped i WHERE identity_rank = 1",
+            sql.cte_sql
+        );
+        let row =
+            SqlRuntime::fetch_optional(self.datastore.read_exec(), &statement, &sql.args).await?;
+        (0..labels.len())
+            .map(|index| match &row {
+                Some(row) => row.i64(&format!("count_{index}")),
+                None => Ok(0),
+            })
+            .collect()
+    }
+
     async fn replace_title_more_like_this_items(
         &self,
         title_id: &str,
@@ -2902,21 +2945,7 @@ async fn fetch_discovery_home_filter_options(
             "i.base_generation_id = {}".to_string(),
             "i.tombstoned_at IS NULL".to_string(),
             "i.owned_in_input = FALSE".to_string(),
-            displayable_discovery_title_clause(datastore, "t"),
-            "EXISTS (
-                SELECT 1
-                FROM discovery_section_items si
-                JOIN discovery_sections s
-                  ON s.run_id = si.run_id
-                 AND s.section_id = si.section_id
-                WHERE si.run_id = {}
-                  AND si.item_id = i.id
-                  AND s.surface = 'public'
-                  AND UPPER(TRIM(s.section_type)) <> 'COMPLETE_THE_COLLECTION'
-             )"
-            .to_string(),
         ];
-        args.push(SqlArg::Text(run_id.to_string()));
         args.push(SqlArg::Text(run_id.to_string()));
         if !include_unresolved {
             clauses.push("t.resolved = TRUE".to_string());
@@ -2936,7 +2965,6 @@ async fn fetch_discovery_home_filter_options(
             "i.base_generation_id = {}".to_string(),
             "i.tombstoned_at IS NULL".to_string(),
             "i.owned_in_input = FALSE".to_string(),
-            displayable_discovery_title_clause(datastore, "t"),
         ];
         args.push(SqlArg::Text(run_id.to_string()));
         if !include_unresolved {
@@ -3457,16 +3485,17 @@ async fn query_discovery_items_page(
     }
 
     let mut page_args = sql.args;
+    let (ranking_cte, table, order) = discovery_browse_order_sql(datastore, query, &mut page_args);
     page_args.push(SqlArg::I64(query.limit as i64));
     page_args.push(SqlArg::I64(query.offset as i64));
     let page_sql = format!(
-        "{}
+        "{}{ranking_cte}
          SELECT {}
-         FROM deduped
+         FROM {table}
          WHERE identity_rank = 1
-         ORDER BY COALESCE(rank_score, -999999999.0) DESC,
+         ORDER BY {order},
                   COALESCE(sort_title, display_title) ASC,
-                  target_key ASC
+                  target_key ASC, id ASC
          LIMIT {{}}
          OFFSET {{}}",
         sql.cte_sql,
@@ -3474,6 +3503,74 @@ async fn query_discovery_items_page(
     );
     let items = fetch_items_with_sql(datastore, &page_sql, &page_args).await?;
     Ok(DiscoveryItemsPageRecord { items, total_count })
+}
+
+/// The same relevance precedence as the application's rail comparator, without
+/// hydrating complete cards before pagination. General item queries keep their
+/// original edge-score order when no browse sort was requested.
+fn discovery_browse_order_sql(
+    datastore: &StoreDatastore,
+    query: &DiscoveryItemsStorageQuery,
+    args: &mut Vec<SqlArg>,
+) -> (String, &'static str, String) {
+    use scryer_application::DiscoverySectionSort;
+    let Some(sort) = query.sort else {
+        return (
+            String::new(),
+            "deduped",
+            "COALESCE(rank_score, -999999999.0) DESC".into(),
+        );
+    };
+    let source_identity = rating_source_identity_sql("sources.source");
+    let matched_count = if let Some(run) = &query.context_run_id {
+        args.push(SqlArg::Text(run.clone()));
+        args.push(excluded_identity_keys_arg(&query.readable_library_ids));
+        let libraries = match datastore {
+            StoreDatastore::Sqlite { .. } => "SELECT value FROM json_each({})",
+            StoreDatastore::Postgres { .. } => {
+                "SELECT value FROM jsonb_array_elements_text(CAST({} AS JSONB)) AS libraries(value)"
+            }
+        };
+        format!("(SELECT COUNT(*) FROM discovery_item_subject_links links
+                  JOIN discovery_submitted_subjects subjects ON subjects.subject_key = links.subject_key
+                  WHERE links.item_id = deduped.id AND links.link_type = 'matched'
+                    AND subjects.run_id = {{}} AND subjects.library_id IN ({libraries})
+                    AND TRIM(COALESCE(subjects.display_title, '')) <> '')")
+    } else {
+        "0".to_string()
+    };
+    let cte = format!(", browse_ranked AS (
+        SELECT deduped.*,
+            {matched_count} AS browse_matched_count,
+            (SELECT MAX(CASE WHEN r.normalized <= 1.0 THEN r.normalized * 10.0 ELSE r.normalized END)
+             FROM discovery_title_metadata_external_ratings r
+             WHERE r.discovery_title_id = deduped.discovery_title_id AND r.normalized > 0) AS browse_external_rating,
+            COALESCE((SELECT MAX(COALESCE(r.votes, 0)) FROM discovery_title_metadata_external_ratings r
+             WHERE r.discovery_title_id = deduped.discovery_title_id AND r.normalized > 0), 0) AS browse_rating_votes,
+            COALESCE((SELECT CASE WHEN r.rating <= 1.0 THEN r.rating * 10.0 ELSE r.rating END
+             FROM discovery_title_metadata_rating_summaries r WHERE r.discovery_title_id = deduped.discovery_title_id), 0) AS browse_summary_rating,
+            (SELECT COUNT(DISTINCT {source_identity}) FROM (
+                SELECT source FROM discovery_title_metadata_rating_sources WHERE discovery_title_id = deduped.discovery_title_id
+                UNION SELECT source FROM discovery_title_metadata_external_ratings WHERE discovery_title_id = deduped.discovery_title_id
+             ) sources WHERE TRIM(sources.source) <> '') AS browse_rating_sources
+        FROM deduped WHERE identity_rank = 1
+    )");
+    let order = match sort {
+        DiscoverySectionSort::Relevance => format!(
+            "COALESCE(recommendation_score, 0.0) DESC, browse_matched_count DESC,
+             CASE WHEN (browse_summary_rating > 0 OR browse_external_rating IS NOT NULL)
+                  AND (browse_rating_sources >= {} OR browse_rating_votes >= {}) THEN 1 ELSE 0 END DESC,
+             browse_external_rating DESC NULLS LAST, browse_rating_votes DESC, browse_summary_rating DESC,
+             COALESCE(base_rank, 0.0) DESC, COALESCE(rank_score, 0.0) DESC, sort_index ASC",
+            scryer_application::DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT,
+            scryer_application::DISCOVERY_CREDIBLE_RATING_MIN_VOTES,
+        ),
+        DiscoverySectionSort::Popularity => "COALESCE(base_rank, 0.0) DESC".into(),
+        DiscoverySectionSort::Rating => "COALESCE(browse_external_rating, NULLIF(browse_summary_rating, 0)) DESC NULLS LAST".into(),
+        DiscoverySectionSort::ReleaseDate => "year DESC NULLS LAST".into(),
+        DiscoverySectionSort::Title => "LOWER(COALESCE(sort_title, display_title)) ASC".into(),
+    };
+    (cte, "browse_ranked", order)
 }
 
 fn build_discovery_items_sql(
@@ -3489,11 +3586,11 @@ fn build_discovery_items_sql(
     // The home filter bar reads the joined title row, so it narrows each
     // source where `t` is in scope rather than the projected union.
     let home_filter_clause = |args: &mut Vec<SqlArg>| {
-        if query.home_filters == DiscoveryHomeFilters::default() {
-            return String::new();
-        }
         let mut clauses = Vec::new();
         append_discovery_home_filters(&mut clauses, args, &query.home_filters);
+        if let Some((kind, label)) = &query.browse_label {
+            append_canonical_facet_filter(&mut clauses, args, kind, std::slice::from_ref(label));
+        }
         format!(" AND {}", clauses.join(" AND "))
     };
     if let Some(context_run_id) = query.context_run_id.as_deref()
@@ -3540,6 +3637,37 @@ fn build_discovery_items_sql(
         &query.allowed_media_kinds,
     );
     append_discovery_items_filters(&mut clauses, &mut args, &query.filters);
+    if !query.excluded_identity_keys.is_empty() {
+        clauses.push(excluded_identity_keys_clause("LOWER(TRIM(i.target_key))"));
+    }
+    let json_values = match datastore {
+        StoreDatastore::Sqlite { .. } => "SELECT value FROM json_each({})",
+        StoreDatastore::Postgres { .. } => {
+            "SELECT value FROM jsonb_array_elements_text(CAST({} AS JSONB)) AS values_list(value)"
+        }
+    };
+    if !query.excluded_title_ids.is_empty() {
+        clauses.push(format!(
+            "(i.resolved_title_id IS NULL OR i.resolved_title_id NOT IN ({json_values}))"
+        ));
+        args.push(excluded_identity_keys_arg(&query.excluded_title_ids));
+    }
+    if !query.requested_keys.is_empty() {
+        // Target keys use source:kind:id; request identity uses the authoritative
+        // media kind, so anime never collides with an unrelated movie or series.
+        let identity = match datastore {
+            StoreDatastore::Sqlite { .. } => {
+                "LOWER(COALESCE(NULLIF(TRIM(i.content_type), ''), i.target_kind) || ':' || SUBSTR(i.target_key, 1, INSTR(i.target_key, ':') - 1) || ':' || SUBSTR(SUBSTR(i.target_key, INSTR(i.target_key, ':') + 1), INSTR(SUBSTR(i.target_key, INSTR(i.target_key, ':') + 1), ':') + 1))"
+            }
+            StoreDatastore::Postgres { .. } => {
+                "LOWER(COALESCE(NULLIF(TRIM(i.content_type), ''), i.target_kind) || ':' || split_part(i.target_key, ':', 1) || ':' || substring(i.target_key FROM '^[^:]+:[^:]+:(.*)$'))"
+            }
+        };
+        clauses.push(format!("COALESCE({identity}, '') NOT IN ({json_values})"));
+        args.push(excluded_identity_keys_arg(&query.requested_keys));
+    }
+    let exclusion_cte =
+        prepend_excluded_identity_keys_cte(datastore, &mut args, &query.excluded_identity_keys);
     let where_clause = if clauses.is_empty() {
         "1 = 1".to_string()
     } else {
@@ -3548,7 +3676,7 @@ fn build_discovery_items_sql(
 
     Some(DiscoveryItemsSql {
         cte_sql: format!(
-            "WITH visible AS (
+            "WITH {exclusion_cte}visible AS (
                 {}
              ),
              filtered AS (
@@ -3563,7 +3691,7 @@ fn build_discovery_items_sql(
                            ORDER BY source_priority ASC,
                                     COALESCE(rank_score, -999999999.0) DESC,
                                     COALESCE(sort_title, display_title) ASC,
-                                    target_key ASC
+                                    target_key ASC, id ASC
                        ) AS identity_rank
                 FROM filtered
              )",
@@ -8355,6 +8483,7 @@ mod tests {
                 home_filters: DiscoveryHomeFilters::default(),
                 limit: 1,
                 offset: 0,
+                ..DiscoveryItemsStorageQuery::default()
             })
             .await
             .expect("movie query should use normalized media kind");
@@ -8374,6 +8503,7 @@ mod tests {
                 home_filters: DiscoveryHomeFilters::default(),
                 limit: 1,
                 offset: 1,
+                ..DiscoveryItemsStorageQuery::default()
             })
             .await
             .expect("second movie page should preserve filtered pagination");
@@ -8392,6 +8522,7 @@ mod tests {
             home_filters,
             limit: 10,
             offset: 0,
+            ..DiscoveryItemsStorageQuery::default()
         };
         let year_page = store
             .query_discovery_items(&filtered_query(DiscoveryHomeFilters {
@@ -10047,6 +10178,367 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn sqlite_discovery_browse_pages_the_combined_pool_without_recommendation_gates() {
+        let db = std::env::temp_dir().join(format!("scryer_browse_{}.db", uuid::Uuid::new_v4()));
+        let services = SqliteServices::new(db.to_string_lossy()).await.unwrap();
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+        for (run, kind) in [
+            ("browse-context", "context_snapshot"),
+            ("browse-public", "public_feed"),
+        ] {
+            store
+                .upsert_discovery_sync_run(&discovery_prune_run(run, kind, "complete", now))
+                .await
+                .unwrap();
+            let indices = if run == "browse-context" {
+                0..1105
+            } else {
+                1100..1110
+            };
+            let items = indices
+                .map(|index| {
+                    let mut item = discovery_prune_item(run, now);
+                    item.id = format!("{run}-{index}");
+                    item.target_key = format!("tmdb:movie:{index}");
+                    item.display_title = format!("Browse {index:04}");
+                    item.sort_title = Some(item.display_title.clone());
+                    item.source_run_kind = kind.to_string();
+                    item.resolved = true;
+                    item.canonical_tags = canonical_genre_tags(&["Drama"]);
+                    if index % 2 == 0 {
+                        let mut theme = canonical_genre_tags(&["Heist"]).remove(0);
+                        theme.key = "canonical:theme:heist".into();
+                        theme.category = "theme".into();
+                        item.canonical_tags.push(theme);
+                    }
+                    // Membership must not depend on confidence, provenance of the
+                    // genre, ratings, matched subjects, or recommendation strength.
+                    for tag in &mut item.canonical_tags {
+                        tag.confidence = None;
+                        tag.sources.clear();
+                    }
+                    item.rank_score = None;
+                    item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+                        subject_key: "tmdb:movie:seed".into(),
+                        title_id: None,
+                        library_id: Some("browse-library".into()),
+                    }];
+                    item
+                })
+                .collect::<Vec<_>>();
+            store.replace_discovery_items(run, &items).await.unwrap();
+        }
+        let mut query = DiscoveryItemsStorageQuery {
+            context_run_id: Some("browse-context".into()),
+            public_run_id: Some("browse-public".into()),
+            readable_library_ids: vec!["browse-library".into()],
+            allowed_media_kinds: vec!["movie".into()],
+            browse_label: Some(("genre".into(), "drama".into())),
+            limit: 73,
+            sort: Some(scryer_application::DiscoverySectionSort::Title),
+            ..Default::default()
+        };
+        let mut keys = Vec::new();
+        loop {
+            let page = store.query_discovery_items(&query).await.unwrap();
+            assert_eq!(page.total_count, 1110);
+            if page.items.is_empty() {
+                break;
+            }
+            query.offset += page.items.len();
+            keys.extend(page.items.into_iter().map(|item| item.target_key));
+        }
+        assert_eq!(keys.len(), 1110);
+        assert_eq!(keys.iter().collect::<HashSet<_>>().len(), 1110);
+        assert_eq!(keys[0], "tmdb:movie:0");
+        query.offset = 0;
+        let counts = store
+            .count_discovery_browse_labels(
+                &query,
+                &[
+                    ("genre".into(), "drama".into()),
+                    ("genre".into(), "comedy".into()),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(counts, vec![1110, 0]);
+        query.home_filters.genre_tag_keys = vec![
+            "canonical:genre:comedy".into(),
+            "canonical:genre:drama".into(),
+        ];
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            1110,
+            "genres are ORed"
+        );
+        query.home_filters.theme_tag_keys = vec!["canonical:theme:heist".into()];
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            555,
+            "genre and theme filters intersect without affinity evidence"
+        );
+        query.home_filters = DiscoveryHomeFilters::default();
+        let options = store
+            .list_discovery_home_filter_options(
+                Some("browse-public"),
+                None,
+                &[],
+                &["movie".into()],
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            options.genres.len(),
+            1,
+            "public pool tags do not require placement in a recommendation section"
+        );
+        assert_eq!(options.themes.len(), 1);
+        for sort in [
+            scryer_application::DiscoverySectionSort::Relevance,
+            scryer_application::DiscoverySectionSort::Popularity,
+            scryer_application::DiscoverySectionSort::Rating,
+            scryer_application::DiscoverySectionSort::ReleaseDate,
+            scryer_application::DiscoverySectionSort::Title,
+        ] {
+            query.sort = Some(sort);
+            let first = store.query_discovery_items(&query).await.unwrap();
+            let repeated = store.query_discovery_items(&query).await.unwrap();
+            assert_eq!(first.total_count, 1110);
+            assert_eq!(
+                first.items.iter().map(|i| &i.id).collect::<Vec<_>>(),
+                repeated.items.iter().map(|i| &i.id).collect::<Vec<_>>()
+            );
+        }
+        query.excluded_identity_keys = vec!["tmdb:movie:0".into()];
+        query.requested_keys = vec!["movie:tmdb:1".into()];
+        let page = store.query_discovery_items(&query).await.unwrap();
+        assert_eq!(page.total_count, 1108);
+        assert_eq!(page.items[0].target_key, "tmdb:movie:2");
+        query.home_filters.genre_tag_keys = vec!["canonical:genre:comedy".into()];
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            0,
+            "named label and sidebar must intersect"
+        );
+        query.home_filters = DiscoveryHomeFilters::default();
+        query.readable_library_ids.clear();
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            10,
+            "unreadable personalized rows stay private"
+        );
+        query.context_run_id = None;
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            10,
+            "public-only browsing works"
+        );
+        query.allowed_media_kinds = vec!["series".into()];
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            0
+        );
+        query.context_run_id = Some("browse-context".into());
+        query.readable_library_ids = vec!["browse-library".into()];
+        query.allowed_media_kinds = vec!["movie".into()];
+        query.excluded_identity_keys.clear();
+        query.requested_keys.clear();
+        sqlx::query(
+            "UPDATE discovery_items SET owned_in_input = TRUE WHERE id = 'browse-context-0'",
+        )
+        .execute(&services.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            1109
+        );
+        query.filters.include_owned = true;
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            1110
+        );
+        sqlx::query(
+            "UPDATE discovery_titles SET resolved = FALSE WHERE target_key = 'tmdb:movie:0'",
+        )
+        .execute(&services.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            1109
+        );
+        query.filters.include_unresolved = true;
+        assert_eq!(
+            store
+                .query_discovery_items(&query)
+                .await
+                .unwrap()
+                .total_count,
+            1110
+        );
+        drop(store);
+        drop(services);
+        std::fs::remove_file(db).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sqlite_discovery_browse_relevance_preserves_recommendation_and_evidence_order() {
+        let db =
+            std::env::temp_dir().join(format!("scryer_browse_order_{}.db", uuid::Uuid::new_v4()));
+        let services = SqliteServices::new(db.to_string_lossy()).await.unwrap();
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+        let run = "browse-order";
+        store
+            .upsert_discovery_sync_run(&discovery_prune_run(
+                run,
+                "context_snapshot",
+                "complete",
+                now,
+            ))
+            .await
+            .unwrap();
+        let subjects = [("visible", "readable"), ("private", "hidden")].map(|(key, library)| {
+            DiscoverySubmittedSubjectRecord {
+                run_id: run.into(),
+                subject_key: key.into(),
+                title_id: None,
+                library_id: Some(library.into()),
+                library_facet: Some("movie".into()),
+                title_kind: Some("movie".into()),
+                display_title: Some(key.into()),
+                external_ids_json: "[]".into(),
+                raw_subject_json: "{}".into(),
+            }
+        });
+        store
+            .replace_discovery_submitted_subjects(run, &subjects)
+            .await
+            .unwrap();
+        let ranks = [1.0, 10.0, 8.0, 9.0, 2.0, 20.0, 100.0, 0.0];
+        let recommendations = [
+            Some(0.9),
+            Some(0.1),
+            Some(0.5),
+            Some(0.5),
+            Some(0.5),
+            Some(0.5),
+            None,
+            Some(0.0),
+        ];
+        let items = (0..8)
+            .map(|index| {
+                let mut item = discovery_prune_item(run, now);
+                item.id = format!("ordered-{index}");
+                item.target_key = format!("tmdb:movie:{index}");
+                item.resolved = true;
+                item.rank_score = Some(ranks[index]);
+                item.recommendation_score = recommendations[index];
+                item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+                    subject_key: "visible".into(),
+                    title_id: None,
+                    library_id: Some("readable".into()),
+                }];
+                if index == 4 || index == 6 {
+                    item.matched_subject_keys = vec!["visible".into()];
+                }
+                if index == 5 {
+                    item.matched_subject_keys = vec!["private".into()];
+                    item.matched_subject_count = 100;
+                }
+                if index == 2 || index == 3 {
+                    item.external_ratings = vec![TitleExternalRating {
+                        source: "imdb".into(),
+                        value: Some(8.0),
+                        score: Some(80.0),
+                        normalized: 0.8,
+                        votes: Some(if index == 2 { 25 } else { 1 }),
+                        url: String::new(),
+                    }];
+                    item.base_rank = Some(if index == 2 { 1.0 } else { 100.0 });
+                }
+                item
+            })
+            .collect::<Vec<_>>();
+        store.replace_discovery_items(run, &items).await.unwrap();
+        let mut query = DiscoveryItemsStorageQuery {
+            context_run_id: Some(run.into()),
+            readable_library_ids: vec!["readable".into()],
+            allowed_media_kinds: vec!["movie".into()],
+            sort: Some(scryer_application::DiscoverySectionSort::Relevance),
+            limit: 2,
+            ..Default::default()
+        };
+        let mut ids = Vec::new();
+        for offset in [0, 2, 4, 6] {
+            query.offset = offset;
+            let page = store.query_discovery_items(&query).await.unwrap();
+            assert_eq!(page.total_count, 8);
+            ids.extend(page.items.into_iter().map(|item| item.id));
+        }
+        assert_eq!(
+            ids,
+            [0, 4, 2, 3, 5, 1, 6, 7].map(|index| format!("ordered-{index}"))
+        );
+        query.sort = None;
+        query.offset = 0;
+        query.limit = 8;
+        let legacy = store.query_discovery_items(&query).await.unwrap();
+        assert_eq!(
+            legacy
+                .items
+                .into_iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            [6, 5, 1, 3, 2, 4, 0, 7].map(|index| format!("ordered-{index}")),
+            "general item queries keep their existing order"
+        );
+        drop(store);
+        drop(services);
+        std::fs::remove_file(db).unwrap();
     }
 
     fn discovery_prune_run(

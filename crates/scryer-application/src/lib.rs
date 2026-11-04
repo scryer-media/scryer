@@ -8,6 +8,7 @@ mod contracts;
 pub mod delete_refusal;
 mod discovery;
 pub use discovery::{
+    DISCOVERY_CREDIBLE_RATING_MIN_VOTES, DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT,
     DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery, DiscoveryNeighborsView,
     LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
 };

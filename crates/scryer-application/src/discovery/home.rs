@@ -762,18 +762,6 @@ impl<'a> DiscoveryRailContext<'a> {
             limit,
         }
     }
-
-    /// Whether `item` may appear in any personalized rail at all: the medium
-    /// gate and the evidence floor, before order, caps and dedupe.
-    pub(super) fn admits(&self, item: &DiscoveryItemRecord) -> bool {
-        (!self.settings.medium_affinity_gate || self.medium_mix.admits(discovery_item_medium(item)))
-            && (!self.settings.evidence_gate
-                || discovery_home_item_passes_evidence_floor(
-                    item,
-                    self.candidates_by_id,
-                    self.median_base_rank,
-                ))
-    }
 }
 
 /// Rollback levers for the rail-quality rules. Each one is a named setting so a

@@ -3711,14 +3711,12 @@ fn discovery_home_composition_timing() {
     for pool_size in [1_000usize, 2_500] {
         let items = &pool[..pool_size];
         let mut samples = Vec::with_capacity(ROUNDS);
-        let mut browse_samples = Vec::with_capacity(ROUNDS);
         let mut rails = 0;
-        let mut browse = 0;
         let candidates_by_id = HashMap::new();
         for _ in 0..ROUNDS {
             let started = Instant::now();
             // The same steps the home runs: visibility, the shared rail
-            // context, the browse cards, then the shelf.
+            // context, then the shelf.
             let visible_items = discovery_home_visible_items(items, true);
             let context = DiscoveryRailContext::new(
                 &candidates_by_id,
@@ -3727,9 +3725,6 @@ fn discovery_home_composition_timing() {
                 &visible_items,
                 18,
             );
-            let browse_started = Instant::now();
-            let labels = discovery_browse_labels(&visible_items, &context);
-            browse_samples.push(browse_started.elapsed());
             let sections = personalized_section_results_in_context(
                 visible_items,
                 &profile,
@@ -3738,22 +3733,18 @@ fn discovery_home_composition_timing() {
             );
             samples.push(started.elapsed());
             rails = sections.len();
-            browse = labels.len();
         }
         samples.sort();
-        browse_samples.sort();
         assert!(rails > 0, "the synthetic pool composes a shelf");
-        assert!(browse > 0, "the synthetic pool offers browse cards");
         assert!(
             samples[ROUNDS - 1] < std::time::Duration::from_secs(5),
             "composing a {pool_size}-title pool took {:?}",
             samples[ROUNDS - 1]
         );
         println!(
-            "discovery home composition: pool={pool_size} rails={rails} browse={browse} median={:?} max={:?} (browse cards median={:?})",
+            "discovery home composition: pool={pool_size} rails={rails} median={:?} max={:?}",
             samples[ROUNDS / 2],
-            samples[ROUNDS - 1],
-            browse_samples[ROUNDS / 2]
+            samples[ROUNDS - 1]
         );
     }
 }
