@@ -9715,6 +9715,38 @@ async fn discovery_browse_includes_public_and_weak_candidates_without_rail_limit
     assert_eq!(page.total_count, count);
     assert_eq!(page.items.len(), 200);
     assert_eq!(page.generation_ids, vec!["section-run", "section-public"]);
+    assert_eq!(page.section.as_ref().unwrap().surface, "mixed");
+    let public_generation = fixture
+        .discovery
+        .state
+        .lock()
+        .await
+        .as_mut()
+        .unwrap()
+        .last_public_feed_generation_id
+        .take();
+    let personalized = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            discovery_section_items_query("browse_all", 25, 0, 50),
+        )
+        .await
+        .unwrap();
+    assert_eq!(personalized.total_count, 1105);
+    assert_eq!(
+        personalized.section.as_ref().unwrap().surface,
+        "personalized"
+    );
+    fixture
+        .discovery
+        .state
+        .lock()
+        .await
+        .as_mut()
+        .unwrap()
+        .last_public_feed_generation_id = public_generation;
+
     fixture
         .app
         .services
@@ -9739,6 +9771,7 @@ async fn discovery_browse_includes_public_and_weak_candidates_without_rail_limit
         .await
         .unwrap();
     assert_eq!(disabled.total_count, 2);
+    assert_eq!(disabled.section.as_ref().unwrap().surface, "public");
     assert!(!disabled.can_view_personalized);
     let home = fixture
         .app
@@ -9781,6 +9814,7 @@ async fn discovery_browse_includes_public_and_weak_candidates_without_rail_limit
         .unwrap();
     assert_eq!(public.total_count, 2);
     assert_eq!(public.generation_ids, vec!["section-public"]);
+    assert_eq!(public.section.as_ref().unwrap().surface, "public");
 }
 
 #[tokio::test]

@@ -1003,7 +1003,15 @@ impl AppUseCase {
                 title: browse_entry
                     .map(discovery_browse_title)
                     .unwrap_or_else(|| "Discovery".to_string()),
-                surface: "browse".to_string(),
+                surface: match (
+                    storage_query.context_run_id.is_some(),
+                    storage_query.public_run_id.is_some(),
+                ) {
+                    (true, true) => "mixed",
+                    (true, false) => "personalized",
+                    (false, _) => "public",
+                }
+                .to_string(),
                 total_count: page.total_count,
                 items: page.items.clone(),
                 label_key: browse_entry.map(|entry| entry.key.to_string()),
