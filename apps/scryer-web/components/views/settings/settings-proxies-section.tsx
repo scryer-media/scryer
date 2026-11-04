@@ -635,7 +635,7 @@ export function SettingsProxiesSection({
                         variant="outline"
                         onClick={() => setIsWireguardDetailsOpen(true)}
                       >
-                        Enter details manually
+                        {t("uiText.enterDetailsManually")}
                       </Button>
                     </div>
                   </div>
@@ -656,7 +656,7 @@ export function SettingsProxiesSection({
                             {!isTunnelDraft ? (
                               <span className="text-muted-foreground">
                                 {" "}
-                                (optional)
+                                {t("setup.optional")}
                               </span>
                             ) : null}
                           </Label>
@@ -691,7 +691,7 @@ export function SettingsProxiesSection({
                               {t("settings.proxyPassword")}
                               <span className="text-muted-foreground">
                                 {" "}
-                                (optional)
+                                {t("setup.optional")}
                               </span>
                             </Label>
                             <Input
@@ -855,7 +855,7 @@ export function SettingsProxiesSection({
                             {t("settings.proxyPrivateKeyPassphrase")}
                             <span className="text-muted-foreground">
                               {" "}
-                              (optional)
+                              {t("setup.optional")}
                             </span>
                           </Label>
                           <Input

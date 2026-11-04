@@ -367,6 +367,7 @@ function buildLogViewerSnapshot(
 }
 
 function LogViewer() {
+  const t = useTranslate();
   const client = useClient();
   const isMobile = useIsMobile();
   const [search, setSearch] = useState("");
@@ -582,7 +583,7 @@ function LogViewer() {
               className={`flex items-center gap-2 ${SYSTEM_PANEL_TITLE_CLASS}`}
             >
               <Terminal className="h-4 w-4 text-[var(--scry-accent-text)]" />
-              Live service output
+              {t("uiText.liveServiceOutput")}
             </h2>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -594,11 +595,11 @@ function LogViewer() {
             </span>
             {paused ? (
               <span className="rounded-full border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-2.5 py-1 text-[var(--scry-warning-text)]">
-                Paused
+                {t("activity.activityFilter.paused")}
               </span>
             ) : null}
             <span className="rounded-full border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2.5 py-1 text-[var(--scry-muted3)]">
-              {snapshot.bufferedCount} buffered
+              {snapshot.bufferedCount} {t("uiText.buffered")}
             </span>
           </div>
         </div>
@@ -609,7 +610,7 @@ function LogViewer() {
         >
           <div className="space-y-1">
             <SingleSelectField
-              label="Level"
+              label={t("uiAttr.Level")}
               labelClassName={`text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}
               value={level}
               onValueChange={setLevel}
@@ -627,7 +628,7 @@ function LogViewer() {
           </div>
           <div className="space-y-1">
             <Label className={`text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>
-              Search
+              {t("label.search")}
             </Label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--scry-muted3)]" />
@@ -635,7 +636,7 @@ function LogViewer() {
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Filter log text..."
+                placeholder={t("uiAttr.Filter_log_text")}
                 className="h-9 w-full rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] pl-9 text-[13px] text-[var(--scry-body)] shadow-none"
               />
             </div>
@@ -677,7 +678,7 @@ function LogViewer() {
               }}
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Clear
+              {t("label.clear")}
             </Button>
           </div>
         </div>
@@ -692,9 +693,10 @@ function LogViewer() {
         >
           <div className="flex flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-bg)]">
             <div className="flex items-center justify-between gap-3 border-b border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 text-xs text-[var(--scry-muted3)]">
-              <span>Line</span>
+              <span>{t("uiText.line")}</span>
               <span>
-                {snapshot.lines.length} shown · {snapshot.matchedCount} matching
+                {snapshot.lines.length} {t("uiText.shown")}{" "}
+                {snapshot.matchedCount} {t("uiText.matching")}
               </span>
             </div>
             <div
@@ -707,7 +709,7 @@ function LogViewer() {
               {snapshot.lines.length === 0 ? (
                 <div className="flex h-full min-h-[220px] items-center justify-center p-6 text-center">
                   <p className={SYSTEM_MUTED_TEXT_CLASS}>
-                    No logs available yet.
+                    {t("uiText.noLogsAvailableYet")}
                   </p>
                 </div>
               ) : (
@@ -751,7 +753,7 @@ function LogViewer() {
                   />
                 ) : (
                   <p className="text-xs text-[var(--scry-muted3)]">
-                    This legacy text log line has no JSON event payload.
+                    {t("uiText.thisLegacyTextLogLineHasNoJSONEventPayload")}
                   </p>
                 )}
               </div>
@@ -776,9 +778,9 @@ export function SystemView({
   const healthPlaceholder = "\u2014";
   const statusReady = systemHealth?.serviceReady === true;
   const facetStats: Array<[string, number | string]> = [
-    ["Movies", systemHealth?.titlesMovie ?? healthPlaceholder],
-    ["Series", systemHealth?.titlesSeries ?? healthPlaceholder],
-    ["Anime", systemHealth?.titlesAnime ?? healthPlaceholder],
+    [t("nav.movies"), systemHealth?.titlesMovie ?? healthPlaceholder],
+    [t("nav.series"), systemHealth?.titlesSeries ?? healthPlaceholder],
+    [t("nav.anime"), systemHealth?.titlesAnime ?? healthPlaceholder],
   ];
   const recentEventPreview = systemHealth?.recentEventPreview ?? [];
   const indexerStats = systemHealth?.indexerStats ?? null;
@@ -789,7 +791,9 @@ export function SystemView({
       <section className={SYSTEM_PANEL_CLASS}>
         <div className={SYSTEM_PANEL_HEADER_CLASS}>
           <div className="space-y-1">
-            <h2 className={SYSTEM_PANEL_TITLE_CLASS}>Service health</h2>
+            <h2 className={SYSTEM_PANEL_TITLE_CLASS}>
+              {t("uiText.serviceHealth")}
+            </h2>
             <p className="min-h-4 text-xs font-medium text-[var(--scry-faint)]">
               {scryerVersion ? `Scryer v${scryerVersion}` : "\u00a0"}
             </p>
@@ -872,7 +876,7 @@ export function SystemView({
                     <Database className="h-4 w-4" />
                   </span>
                   <p className="font-semibold text-[var(--scry-ink2)]">
-                    Datastore
+                    {t("uiText.datastore")}
                   </p>
                 </div>
                 <div className="min-w-0 space-y-3">
@@ -890,7 +894,7 @@ export function SystemView({
                     <p
                       className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}
                     >
-                      Migration
+                      {t("uiText.migration")}
                     </p>
                     <div className="mt-1 grid min-w-0 gap-2">
                       <code className="block w-fit max-w-full break-all whitespace-normal rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
@@ -960,12 +964,15 @@ export function SystemView({
         className={SYSTEM_PANEL_CLASS}
       >
         <div className={SYSTEM_PANEL_HEADER_CLASS}>
-          <h3 className={SYSTEM_PANEL_TITLE_CLASS}>Indexer Stats (Last 24h)</h3>
+          <h3 className={SYSTEM_PANEL_TITLE_CLASS}>
+            {t("uiText.indexerStatsLast24h")}
+          </h3>
         </div>
         <div className={SYSTEM_PANEL_BODY_CLASS}>
           <p className={`mb-3 text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>
-            Counts cover requests Scryer sends. Prowlarr child counts do not
-            include requests Prowlarr makes internally.
+            {t(
+              "uiText.countsCoverRequestsScryerSendsProwlarrChildCountsDoNotIncludeRequestsProwlarrMakesInternally",
+            )}
           </p>
           {indexerStats === null ? (
             <div
@@ -1014,7 +1021,7 @@ export function SystemView({
                         <p
                           className={`mt-1 text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}
                         >
-                          Last query:{" "}
+                          {t("uiText.lastQuery")}{" "}
                           {formatUiDateTime(stat.lastQueryAt, dateTimeFormat)}
                         </p>
                       ) : null}
@@ -1026,7 +1033,7 @@ export function SystemView({
                   <div className="mt-3 space-y-2 text-xs">
                     <p data-ui="system-indexer-observed-requests">
                       <span className={SYSTEM_MUTED_TEXT_CLASS}>
-                        Observed calls today:
+                        {t("uiText.observedCallsToday")}
                       </span>{" "}
                       <span data-ui="system-indexer-observed-count">
                         {stat.apiRequestsToday}
@@ -1034,7 +1041,7 @@ export function SystemView({
                       {stat.apiRequestsWindowStartedAt ? (
                         <span className={SYSTEM_MUTED_TEXT_CLASS}>
                           {" "}
-                          (since{" "}
+                          {t("uiText.since")}{" "}
                           {formatUiDateTime(
                             stat.apiRequestsWindowStartedAt,
                             dateTimeFormat,
@@ -1045,7 +1052,7 @@ export function SystemView({
                     </p>
                     {stat.apiRequestsObservedSince ? (
                       <p className={SYSTEM_MUTED_TEXT_CLASS}>
-                        Observed since{" "}
+                        {t("uiText.observedSince")}{" "}
                         {formatUiDateTime(
                           stat.apiRequestsObservedSince,
                           dateTimeFormat,
@@ -1065,20 +1072,20 @@ export function SystemView({
                       data-failed-count={stat.failedLast24H}
                     >
                       <span className={SYSTEM_MUTED_TEXT_CLASS}>
-                        Search runs:
+                        {t("uiText.searchRuns")}
                       </span>{" "}
                       {stat.queriesLast24H}
                       {stat.failedLast24H > 0 && (
                         <span className="text-[var(--scry-danger-text-soft)]">
                           {" "}
-                          ({stat.failedLast24H} failed)
+                          ({stat.failedLast24H} {t("uiText.failed")}
                         </span>
                       )}
                     </p>
                     {stat.apiMax !== null && (
                       <p data-ui="system-indexer-api-usage">
                         <span className={SYSTEM_MUTED_TEXT_CLASS}>
-                          Provider API usage:
+                          {t("uiText.providerAPIUsage")}
                         </span>{" "}
                         <span
                           className={quotaBadgeClass(
@@ -1093,7 +1100,7 @@ export function SystemView({
                     {stat.grabMax !== null && (
                       <p data-ui="system-indexer-grab-usage">
                         <span className={SYSTEM_MUTED_TEXT_CLASS}>
-                          Provider grab usage:
+                          {t("uiText.providerGrabUsage")}
                         </span>{" "}
                         <span
                           className={quotaBadgeClass(
@@ -1113,7 +1120,7 @@ export function SystemView({
             <div
               className={`${SYSTEM_INSET_CLASS} min-h-[142px] p-4 ${SYSTEM_MUTED_TEXT_CLASS}`}
             >
-              No indexer activity in the last 24 hours.
+              {t("uiText.noIndexerActivityInTheLast24Hours")}
             </div>
           )}
         </div>

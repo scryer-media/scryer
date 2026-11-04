@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { translateProviderConfigText } from "@/lib/i18n/provider-config-text";
 import { FolderOpen } from "lucide-react";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { InfoHelp } from "@/components/common/info-help";
@@ -32,7 +33,7 @@ function joinConfigTagValue(values: string[]): string {
 }
 
 export function DownloadClientConfigField({
-  field,
+  field: rawField,
   value,
   hasStoredSecretValue = false,
   idPrefix = "download-client-field",
@@ -47,12 +48,26 @@ export function DownloadClientConfigField({
   onClearStoredSecret?: (key: string) => void;
 }) {
   const t = useTranslate();
+  const field = {
+    ...rawField,
+    label: translateProviderConfigText(rawField.label, t),
+    helpText: rawField.helpText
+      ? translateProviderConfigText(rawField.helpText, t)
+      : null,
+    options: rawField.options.map((option) => ({
+      ...option,
+      label: translateProviderConfigText(option.label, t),
+    })),
+  };
   const [browserOpen, setBrowserOpen] = useState(false);
   const fieldId = selectorId(idPrefix, field.key);
   const optionIdPrefix = `${idPrefix}-option`;
   const isFileBackedField = isFileBackedDownloadClientConfigField(field);
   const help = field.helpText ? (
-    <InfoHelp text={field.helpText} ariaLabel={`About ${field.label}`} />
+    <InfoHelp
+      text={field.helpText}
+      ariaLabel={t("providerConfig.about", { label: field.label })}
+    />
   ) : null;
   const requiredMarker = field.required ? (
     <span aria-hidden="true" className="text-destructive">
@@ -265,8 +280,8 @@ export function DownloadClientConfigField({
             type="button"
             variant="outline"
             className="shrink-0 px-3"
-            aria-label={`Browse ${field.label}`}
-            title={`Browse ${field.label}`}
+            aria-label={t("providerConfig.browse", { label: field.label })}
+            title={t("providerConfig.browse", { label: field.label })}
             onClick={() => setBrowserOpen(true)}
           >
             <FolderOpen className="h-4 w-4" aria-hidden="true" />
@@ -277,7 +292,7 @@ export function DownloadClientConfigField({
           onOpenChange={setBrowserOpen}
           selectionTypes={["folder"]}
           initialPath={value || field.defaultValue || "/"}
-          title={`Select ${field.label}`}
+          title={t("providerConfig.select", { label: field.label })}
           onSelect={(path) => onChange(field.key, path)}
         />
       </div>

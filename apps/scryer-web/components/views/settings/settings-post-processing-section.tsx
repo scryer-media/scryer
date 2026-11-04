@@ -147,7 +147,7 @@ export const SettingsPostProcessingSection = React.memo(
                             <TableCell>
                               <FacetTags
                                 values={script.appliedFacets}
-                                emptyLabel="All"
+                                emptyLabel={t("uiAttr.All")}
                               />
                             </TableCell>
                             <TableCell className="text-muted-foreground">

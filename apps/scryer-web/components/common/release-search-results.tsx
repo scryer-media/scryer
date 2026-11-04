@@ -134,7 +134,7 @@ function SearchResultRow({
   const approvedBadge = decision?.allowed ? (
     <span className="inline-flex items-center gap-1 rounded-[6px] bg-[var(--scry-success-bg-strong)] px-[7px] py-px text-[10px] font-bold text-[var(--scry-success-text-soft)]">
       <Check className="h-2.5 w-2.5" />
-      Approved
+      {t("requests.status.approved")}
     </span>
   ) : null;
   const currentFileBadge = currentFile ? (
@@ -1011,7 +1011,7 @@ function SearchResultBucketsContent({
               <thead className="bg-card/80">
                 <tr>
                   <th className="px-4 py-3 text-base font-bold text-foreground">
-                    Release
+                    {t("queue.releaseTitle")}
                   </th>
                   <th className="px-2 py-3 text-center text-base font-bold text-foreground">
                     <button
@@ -1032,7 +1032,7 @@ function SearchResultBucketsContent({
                     </button>
                   </th>
                   <th className="px-3 py-3 text-center text-base font-bold text-foreground">
-                    Actions
+                    {t("label.actions")}
                   </th>
                 </tr>
               </thead>

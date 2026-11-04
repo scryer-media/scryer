@@ -817,7 +817,7 @@ export function SettingsMediaServersSection({
                               }))
                             }
                           >
-                            Local
+                            {t("uiText.local")}
                           </Button>
                           <Button
                             id="settings-emby-mode-connect"
@@ -839,7 +839,7 @@ export function SettingsMediaServersSection({
                               }))
                             }
                           >
-                            Connect
+                            {t("auth.embyConnectMode")}
                           </Button>
                         </div>
 
@@ -890,8 +890,9 @@ export function SettingsMediaServersSection({
                         ) : (
                           <div className="space-y-3 rounded border border-border bg-background/40 p-3">
                             <p className="text-xs text-muted-foreground">
-                              The selected Emby Connect user must be a local
-                              administrator for setup.
+                              {t(
+                                "uiText.theSelectedEmbyConnectUserMustBeALocalAdministratorForSetup",
+                              )}
                             </p>
                             <div className="grid gap-3 md:grid-cols-2">
                               <label>
@@ -899,7 +900,7 @@ export function SettingsMediaServersSection({
                                   className="mb-2 block"
                                   htmlFor="settings-emby-connect-username"
                                 >
-                                  Emby Connect username or email
+                                  {t("uiText.embyConnectUsernameOrEmail")}
                                 </Label>
                                 <Input
                                   id="settings-emby-connect-username"
@@ -919,7 +920,7 @@ export function SettingsMediaServersSection({
                                   className="mb-2 block"
                                   htmlFor="settings-emby-connect-password"
                                 >
-                                  Password
+                                  {t("settings.securityConfirmPassword")}
                                 </Label>
                                 <Input
                                   id="settings-emby-connect-password"
@@ -953,7 +954,7 @@ export function SettingsMediaServersSection({
                                   className="mb-2 block"
                                   htmlFor="settings-emby-connect-server"
                                 >
-                                  Emby server
+                                  {t("uiText.embyServer")}
                                 </Label>
                                 <Select
                                   value={draft.embyConnectServerId}
@@ -972,7 +973,9 @@ export function SettingsMediaServersSection({
                                   }}
                                 >
                                   <SelectTrigger id="settings-emby-connect-server">
-                                    <SelectValue placeholder="Select a server" />
+                                    <SelectValue
+                                      placeholder={t("uiAttr.Select_a_server")}
+                                    />
                                   </SelectTrigger>
                                   <SelectContent>
                                     {draft.embyDiscoveredServers.map(
@@ -981,9 +984,9 @@ export function SettingsMediaServersSection({
                                           key={server.serverId}
                                           value={server.serverId}
                                         >
-                                          {server.name} · local{" "}
-                                          {server.localStatus.toLowerCase()} ·
-                                          remote{" "}
+                                          {server.name} {t("uiText.local")}{" "}
+                                          {server.localStatus.toLowerCase()}{" "}
+                                          {t("uiText.remote")}{" "}
                                           {server.remoteStatus.toLowerCase()}
                                         </SelectItem>
                                       ),
@@ -1007,7 +1010,7 @@ export function SettingsMediaServersSection({
                             }
                           />
                           <span>
-                            Allow users to sign in through Emby Connect
+                            {t("uiText.allowUsersToSignInThroughEmbyConnect")}
                           </span>
                         </label>
                         {editingConnectionId && draft.embyConnectEnabled ? (
@@ -1018,7 +1021,7 @@ export function SettingsMediaServersSection({
                             disabled={embyConnectBusy}
                             onClick={() => void testSavedEmbyConnect()}
                           >
-                            Test Connect
+                            {t("uiText.testConnect")}
                           </Button>
                         ) : null}
                       </>
@@ -1284,7 +1287,7 @@ export function SettingsMediaServersSection({
                     {draft.autoAddEnabled ? (
                       <div className="rounded border border-border bg-card/50 p-3">
                         <Label className="mb-2 block">
-                          Default Permissions
+                          {t("uiText.defaultPermissions")}
                         </Label>
                         <PermissionDropdowns
                           libraries={libraries}

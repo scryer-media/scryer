@@ -461,9 +461,9 @@ export function ManualImportDialog({
         className="sm:max-w-[67.2rem] max-h-[85vh] overflow-y-auto"
       >
         <DialogHeader>
-          <DialogTitle>Manual Import</DialogTitle>
+          <DialogTitle>{t("queue.manualImport")}</DialogTitle>
           <DialogDescription>
-            Match files to episodes or series movies for {titleName}
+            {t("uiText.matchFilesToEpisodesOrSeriesMoviesFor")} {titleName}
           </DialogDescription>
         </DialogHeader>
 
@@ -492,7 +492,7 @@ export function ManualImportDialog({
                 className="mt-4"
                 onClick={openArchivePluginSettings}
               >
-                Open Download Clients settings
+                {t("uiText.openDownloadClientsSettings")}
               </Button>
             )}
           </div>
@@ -505,14 +505,15 @@ export function ManualImportDialog({
                   className="flex flex-col items-center gap-3 py-8 text-center"
                 >
                   <p className="text-sm text-muted-foreground">
-                    This download contains archives. Extract them before mapping
-                    media files.
+                    {t(
+                      "uiText.thisDownloadContainsArchivesExtractThemBeforeMappingMediaFiles",
+                    )}
                   </p>
                   <Button
                     id="activity-manual-import-extract-archives"
                     onClick={() => void loadPreview(true)}
                   >
-                    Extract archives &amp; preview
+                    {t("uiText.extractArchivesPreview")}
                   </Button>
                 </div>
               ) : (
@@ -520,18 +521,25 @@ export function ManualImportDialog({
                   id="activity-manual-import-empty"
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
-                  The video files in this download do not have a recognized
-                  extension.
+                  {t(
+                    "uiText.theVideoFilesInThisDownloadDoNotHaveARecognizedExtension",
+                  )}
                 </p>
               )
             ) : (
               <Table id="activity-manual-import-table" className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>File</TableHead>
-                    <TableHead className="w-24 text-right">Size</TableHead>
-                    <TableHead className="w-24 text-center">Quality</TableHead>
-                    <TableHead className="w-[280px]">Target</TableHead>
+                    <TableHead>{t("move.transferFilePath")}</TableHead>
+                    <TableHead className="w-24 text-right">
+                      {t("title.table.size")}
+                    </TableHead>
+                    <TableHead className="w-24 text-center">
+                      {t("facetSettings.quality")}
+                    </TableHead>
+                    <TableHead className="w-[280px]">
+                      {t("system.auditTarget")}
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -650,7 +658,7 @@ export function ManualImportDialog({
                     className="mt-3"
                     onClick={openArchivePluginSettings}
                   >
-                    Open Download Clients settings
+                    {t("uiText.openDownloadClientsSettings")}
                   </Button>
                 )}
               </div>
@@ -676,7 +684,7 @@ export function ManualImportDialog({
             onClick={() => onOpenChange(false)}
             disabled={importing}
           >
-            Cancel
+            {t("label.cancel")}
           </Button>
           <Button
             id="activity-manual-import-queue"
@@ -686,7 +694,7 @@ export function ManualImportDialog({
             {importing ? (
               <>
                 <LoadingMark className="mr-2 h-4 w-4" />
-                Queueing...
+                {t("uiText.queueing")}
               </>
             ) : (
               `Queue ${assignedCount} file${assignedCount === 1 ? "" : "s"}`
