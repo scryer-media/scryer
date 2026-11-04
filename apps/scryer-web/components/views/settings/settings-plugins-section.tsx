@@ -929,7 +929,7 @@ export function SettingsPluginsSection({
 
       {catalogStatus && catalogStatus.restoreWarnings.length > 0 && (
         <div className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-sm text-[var(--scry-warning-text)]">
-          <div className="font-medium">Restore warnings</div>
+          <div className="font-medium">{t("uiText.restoreWarnings")}</div>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             {catalogStatus.restoreWarnings.map((warning) => (
               <li key={warning}>{warning}</li>

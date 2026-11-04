@@ -351,7 +351,9 @@ function ProfileListEditor({
         className={`${QUALITY_EDITOR_SECTION_BODY_CLASS} grid gap-3 md:grid-cols-2`}
       >
         <div>
-          <Label className="mb-2 block text-[var(--scry-ink2)]">Allowed</Label>
+          <Label className="mb-2 block text-[var(--scry-ink2)]">
+            {t("uiText.allowed")}
+          </Label>
           <div className={QUALITY_EDITOR_LIST_CLASS}>
             {sortedAllowed.length === 0 ? (
               <p className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}>
@@ -379,7 +381,9 @@ function ProfileListEditor({
           </div>
         </div>
         <div>
-          <Label className="mb-2 block text-[var(--scry-ink2)]">Denied</Label>
+          <Label className="mb-2 block text-[var(--scry-ink2)]">
+            {t("uiText.denied")}
+          </Label>
           <div className={QUALITY_EDITOR_LIST_CLASS}>
             {sortedDenied.length === 0 ? (
               <p className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}>

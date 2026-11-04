@@ -483,9 +483,11 @@ export function RuleSetTestPanel({
     >
       <CollapsibleContent className="px-3 py-3">
         <p className="mb-3 text-xs text-muted-foreground">
-          Scoring preview only. This does not save{" "}
-          {savedRuleSetMode ? "this rule" : "this draft"}, admit a download, or
-          create history.
+          {t(
+            savedRuleSetMode
+              ? "rules.previewSavedSafety"
+              : "rules.previewDraftSafety",
+          )}
         </p>
         <div className="space-y-3">
           <ToggleGroup
@@ -514,7 +516,7 @@ export function RuleSetTestPanel({
                 htmlFor="settings-rule-test-release"
                 className="mb-1 block"
               >
-                Release name
+                {t("settings.ruleTestModeRelease")}
               </Label>
               <Input
                 id="settings-rule-test-release"
@@ -526,13 +528,13 @@ export function RuleSetTestPanel({
           )}
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <Label className="mb-1 block">Library title</Label>
+              <Label className="mb-1 block">{t("uiText.libraryTitle")}</Label>
               <TitleAutocompletePicker
                 selectedTitle={selectedTitle}
                 selectedTitleId={selectedTitle?.id ?? null}
                 onSelectedTitleChange={handleSelectedTitleChange}
-                placeholder="Search movies, shows, and anime"
-                ariaLabel="Library title"
+                placeholder={t("uiAttr.Search_movies_shows_and_anime")}
+                ariaLabel={t("uiAttr.Library_title")}
               />
             </div>
             {episodic ? (
@@ -541,7 +543,7 @@ export function RuleSetTestPanel({
                   htmlFor="settings-rule-test-episode"
                   className="mb-1 block"
                 >
-                  Episode
+                  {t("episode.numberLabel")}
                 </Label>
                 <FilterableSelect
                   id="settings-rule-test-episode"
@@ -556,7 +558,7 @@ export function RuleSetTestPanel({
                   }
                   filterPlaceholder="Filter episodes"
                   filterByValue={false}
-                  ariaLabel="Episode"
+                  ariaLabel={t("uiAttr.Episode")}
                   optionIdPrefix="settings-rule-test-episode-option"
                   disabled={loadingEpisodes}
                 />
@@ -602,14 +604,14 @@ export function RuleSetTestPanel({
             <>
               <div className="max-w-sm">
                 <Label htmlFor="settings-rule-test-size" className="mb-1 block">
-                  Size (GiB, optional)
+                  {t("uiText.sizeGiBOptional")}
                 </Label>
                 <Input
                   id="settings-rule-test-size"
                   inputMode="decimal"
                   value={sizeGib}
                   onChange={(event) => setSizeGib(event.target.value)}
-                  placeholder="Unknown"
+                  placeholder={t("uiAttr.Unknown")}
                 />
               </div>
               <Collapsible
@@ -776,7 +778,7 @@ export function RuleSetTestPanel({
           </Button>
           {stale ? (
             <span className="text-xs text-[var(--scry-warning-text)]">
-              Inputs changed; result is stale.
+              {t("uiText.inputsChangedResultIsStale")}
             </span>
           ) : null}
         </div>
@@ -894,7 +896,7 @@ export function RuleSetTestPanel({
                               />
                             ) : (
                               <span className="shrink-0 text-muted-foreground">
-                                No match
+                                {t("lists.preview.unresolved")}
                               </span>
                             )}
                           </div>
@@ -923,21 +925,24 @@ export function RuleSetTestPanel({
             </div>
             {incomplete ? (
               <div className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
-                <p className="font-medium">Incomplete scoring preview</p>
+                <p className="font-medium">
+                  {t("uiText.incompleteScoringPreview")}
+                </p>
                 <p>
-                  This result includes evaluation errors, so it cannot determine
-                  download admission.
+                  {t(
+                    "uiText.thisResultIncludesEvaluationErrorsSoItCannotDetermineDownloadAdmission",
+                  )}
                 </p>
               </div>
             ) : null}
             <div className="space-y-1 text-xs">
               <p>
-                <span className="font-medium">Profile:</span>{" "}
+                <span className="font-medium">{t("uiText.profile")}</span>{" "}
                 {result.profileName || "Unavailable"}
               </p>
               {result.context ? (
                 <p>
-                  <span className="font-medium">Context:</span>{" "}
+                  <span className="font-medium">{t("uiText.context")}</span>{" "}
                   {[
                     result.context.titleName,
                     result.context.libraryName,
@@ -951,7 +956,7 @@ export function RuleSetTestPanel({
               ) : null}
               {result.context?.tags?.length ? (
                 <p>
-                  <span className="font-medium">Tags:</span>{" "}
+                  <span className="font-medium">{t("uiText.tags")}</span>{" "}
                   {result.context.tags.join(", ")}
                 </p>
               ) : null}
@@ -997,7 +1002,9 @@ export function RuleSetTestPanel({
                     <dd className="break-words">{value}</dd>
                   </React.Fragment>
                 ))}
-                <dt className="text-muted-foreground">Size</dt>
+                <dt className="text-muted-foreground">
+                  {t("title.table.size")}
+                </dt>
                 <dd>
                   {result.parsed?.sizeBytes == null
                     ? "Unknown"
@@ -1007,7 +1014,7 @@ export function RuleSetTestPanel({
             </div>
             {result.errors?.length ? (
               <div className="rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-2 py-2 text-xs text-[var(--scry-danger-text)]">
-                <p className="font-medium">Evaluation errors</p>
+                <p className="font-medium">{t("uiText.evaluationErrors")}</p>
                 <ul className="list-disc pl-4">
                   {result.errors.map((item, index) => (
                     <li key={`${item.code || "error"}-${index}`}>

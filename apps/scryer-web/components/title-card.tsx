@@ -336,7 +336,7 @@ function TitleCardImpl({
           ) : null}
           {isAdult ? (
             <span
-              aria-label="18 and over"
+              aria-label={t("uiAttr.18_and_over")}
               className={cn(
                 "pointer-events-none inline-flex items-center rounded-[8px] bg-[linear-gradient(135deg,rgba(var(--scry-danger-rgb),0.96),rgba(var(--scry-danger-rgb),0.72))] font-black tracking-[0.035em] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_8px_18px_rgba(0,0,0,0.22)]",
                 compact ? "px-2 py-1 text-[10px]" : "px-2.5 py-1 text-[11px]",
