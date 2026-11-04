@@ -540,6 +540,19 @@ async fn expected_episode_units_with_release_evidence(
         return ExpectedEpisodeResolution::Unresolved;
     };
 
+    if let Some(evidence) = release_evidence {
+        match crate::import_workflow::expected_episode_ids_from_verified_pack(app, &title, evidence)
+            .await
+        {
+            Ok(Some(expected)) => return ExpectedEpisodeResolution::Resolved(expected),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, %title_id, "failed to verify completed download pack scope");
+                return ExpectedEpisodeResolution::Unresolved;
+            }
+        }
+    }
+
     if let Some(scope) = release_evidence.and_then(crate::import_workflow::ReleaseEvidence::scope)
         && let Some(expected) = crate::import_workflow::expected_episode_ids_from_submission_scope(
             app, &title, scope, true,

@@ -2882,7 +2882,7 @@ export const mediaSettingsInitQuery = `query MediaSettingsInit($scope: ContentSc
   }
 }`;
 
-export const globalSearchInitQuery = `query GlobalSearchInit {
+export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettings: Boolean! = false) {
   qualityProfileSettings {${qualityProfileSettingsFieldSelection}
   }
   manageableLibraries: libraries(permission: MANAGE_TITLES) {
@@ -2912,11 +2912,11 @@ export const globalSearchInitQuery = `query GlobalSearchInit {
       isDefault
     }
   }
-  movieSettings: mediaSettings(scope: MOVIE) {${mediaSettingsFieldSelection}
+  movieSettings: mediaSettings(scope: MOVIE) @include(if: $includeMediaSettings) {${mediaSettingsFieldSelection}
   }
-  seriesSettings: mediaSettings(scope: SERIES) {${mediaSettingsFieldSelection}
+  seriesSettings: mediaSettings(scope: SERIES) @include(if: $includeMediaSettings) {${mediaSettingsFieldSelection}
   }
-  animeSettings: mediaSettings(scope: ANIME) {${mediaSettingsFieldSelection}
+  animeSettings: mediaSettings(scope: ANIME) @include(if: $includeMediaSettings) {${mediaSettingsFieldSelection}
   }
 }`;
 

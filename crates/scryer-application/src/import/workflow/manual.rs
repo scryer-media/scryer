@@ -1124,8 +1124,7 @@ async fn preview_manual_import(
         .catalog
         .shows
         .get_anime_numbering_bridge(title_id)
-        .await
-        .unwrap_or_default();
+        .await?;
     // A verified pack vouches for every standard episode in the seasons its
     // release name declares, not only the season (or episode set) the grab was
     // scoped to: a two-season pack grabbed for season 1 imports its season 2
@@ -1179,11 +1178,39 @@ async fn preview_manual_import(
     })
     .flatten();
     let expected_pack_episode_ids = match (verified_pack.as_ref(), release_evidence.scope()) {
+        (Some(pack), _) if pack.exact_episode_ids.is_some() => pack.exact_episode_ids.clone(),
         (Some(_), Some(scope)) => {
             expected_episode_ids_from_submission_scope(app, title, scope, false).await
         }
         _ => None,
     };
+    let mut leading_suggestions = HashMap::new();
+    let mut leading_counts = HashMap::<String, usize>::new();
+    if let Some(pack) = verified_pack.as_ref() {
+        for candidate in &video_files {
+            let path = &candidate.source_entry_path;
+            if let PlannedMemberDraft::Resolved(episodes) = plan_episode_pack_member(
+                title,
+                source_dir,
+                path,
+                available_episodes,
+                anime_numbering_bridge.as_ref(),
+                file_reference_date(path),
+                Some(pack),
+            ) {
+                for episode in &episodes {
+                    *leading_counts.entry(episode.id.clone()).or_default() += 1;
+                }
+                let parsed = parsed_pack_member_for_catalog(title, path, available_episodes);
+                if pack_member_episode_identity(title, path, &parsed, Some(pack)).is_none()
+                    && let [episode] = episodes.as_slice()
+                {
+                    leading_suggestions.insert(path.clone(), episode.clone());
+                }
+            }
+        }
+    }
+    leading_suggestions.retain(|_, episode| leading_counts.get(&episode.id) == Some(&1));
 
     // Built once for the whole preview: the context every file name is read
     // against. Facet, aliases, year and ids come from the title; the episode
@@ -1245,6 +1272,7 @@ async fn preview_manual_import(
             })
             .filter(|parsed| parsed.episode.is_some())
             .unwrap_or_else(|| parsed_release_from_file_stem(path));
+        parsed.episode = pack_member_episode_identity(title, path, &parsed, verified_pack.as_ref());
         // Translate community anime numbering into the catalog's own before the
         // suggestion lookups, so a file named in per-cour numbering points at
         // the episode the user actually has. Inert without a bridge.
@@ -1412,12 +1440,15 @@ async fn preview_manual_import(
         let is_grabbed_fallback_path = grabbed_fallback_path
             .as_ref()
             .is_some_and(|fallback| fallback == path);
+        let unresolved_leading_member =
+            parsed.episode.is_none() && leading_numbered_pack_body(path).is_some();
         let scoped_suggestion = (!unresolved_pack && !numbering_ambiguous)
             .then(|| {
                 manual_episode_suggestion_for_grabbed_scope(
                     suggested_episode_id.clone(),
                     &grabbed_episode_ids,
                     !exact_pack_scope
+                        && !unresolved_leading_member
                         && manual_grabbed_episode_fallback_applies(
                             is_grabbed_fallback_path,
                             parsed.episode.as_ref(),
@@ -1433,6 +1464,12 @@ async fn preview_manual_import(
                     .map(manual_import_episode_label)
             });
             suggested_episode_id = scoped_suggestion;
+        }
+        if unresolved_leading_member && let Some(episode) = leading_suggestions.get(path) {
+            suggested_episode_id = Some(episode.id.clone());
+            suggested_episode_label = Some(manual_import_episode_label(episode));
+            parsed_season = catalog_episode_season(episode);
+            parsed_episodes = catalog_episode_number(episode).into_iter().collect();
         }
 
         use crate::library::filename_parser::SeriesMovieFilenameMatch;
@@ -1527,6 +1564,31 @@ async fn preview_manual_import(
     }
 
     Ok(ManualImportPreview { files: previews })
+}
+
+#[cfg(test)]
+pub(crate) async fn preview_manual_import_episode_details_for_tests(
+    app: &AppUseCase,
+    source_dir: &Path,
+    title: &scryer_domain::Title,
+    release_evidence: &ReleaseEvidence,
+    available_episodes: &[scryer_domain::Episode],
+) -> AppResult<Vec<(String, Option<u32>, Vec<u32>, Option<String>)>> {
+    Ok(
+        preview_manual_import(app, source_dir, title, release_evidence, available_episodes)
+            .await?
+            .files
+            .into_iter()
+            .map(|file| {
+                (
+                    file.file_name,
+                    file.parsed_season,
+                    file.parsed_episodes,
+                    file.suggested_episode_id,
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
