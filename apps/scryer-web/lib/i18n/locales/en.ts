@@ -344,6 +344,8 @@ const en: LocaleDictionary = {
     "The Prowlarr configuration is invalid.",
   "error.reason.ACQUISITION_PROWLARR_PARENT_SEARCH_UNSUPPORTED":
     "Prowlarr parent configs are management-only; search through synced child indexers.",
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "This Prowlarr version is not supported. Upgrade Prowlarr to 2.0 or newer.",
   "error.reason.ACQUISITION_PROXY_CONFIG_NOT_FOUND":
     "The proxy config could not be found.",
   "error.reason.ACQUISITION_PROXY_REPOSITORY_UNAVAILABLE":

@@ -576,8 +576,7 @@ impl AppUseCase {
         } else {
             crate::IndexerValidationResult {
                 status: "valid".to_string(),
-                message: None,
-                retry_after_seconds: None,
+                ..Default::default()
             }
         };
         validate_indexer_connection_result(validation.clone())?;
@@ -602,7 +601,10 @@ fn validate_indexer_connection_result(result: crate::IndexerValidationResult) ->
         .filter(|message| !message.is_empty())
         .unwrap_or_else(|| format!("indexer reported status '{}'", result.status));
 
-    Err(AppError::Validation(message))
+    match result.reason {
+        Some(reason) => Err(AppError::validation_refused(reason, message)),
+        None => Err(AppError::Validation(message)),
+    }
 }
 
 /// Both call sites wrap the indexer interaction itself — the probe search and
@@ -1876,8 +1878,7 @@ mod tests {
                 supports_managed_children_sync: false,
                 validate_result: crate::IndexerValidationResult {
                     status: "valid".to_string(),
-                    message: None,
-                    retry_after_seconds: None,
+                    ..Default::default()
                 },
                 sync_plan: crate::IndexerSyncPlan::default(),
                 plan_sync_error: None,
@@ -1913,7 +1914,7 @@ mod tests {
             provider.validate_result = crate::IndexerValidationResult {
                 status: status.to_string(),
                 message: message.map(|message| message.to_string()),
-                retry_after_seconds: None,
+                ..Default::default()
             };
             provider
         }
@@ -4517,6 +4518,42 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "validation: Request limit reached, try again in an hour"
+        );
+    }
+
+    /// A provider that names why it refused hands that reason to the client
+    /// instead of a sentence-only validation error.
+    #[tokio::test]
+    async fn test_indexer_connection_carries_the_validation_reason() {
+        let mut provider = RecordingPluginProvider::with_validation_result(
+            "unsupported",
+            Some("Prowlarr 1.37.0.5076 is not supported; upgrade to 2.0.0 or newer"),
+        );
+        provider.validate_result.reason = Some("ACQUISITION_PROWLARR_VERSION_UNSUPPORTED");
+        let app = test_app(
+            Arc::new(RecordingIndexerConfigRepo::new()),
+            Some(Arc::new(provider)),
+            Arc::new(NullSettingsRepository),
+        );
+
+        let error = app
+            .test_indexer_connection(
+                &test_admin(),
+                "torrent_rss",
+                Some(r#"{"feed_url":"https://indexer.example/t.rss"}"#),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.validation_reason(),
+            Some("ACQUISITION_PROWLARR_VERSION_UNSUPPORTED")
+        );
+        assert_eq!(
+            error.to_string(),
+            "validation: Prowlarr 1.37.0.5076 is not supported; upgrade to 2.0.0 or newer"
         );
     }
 

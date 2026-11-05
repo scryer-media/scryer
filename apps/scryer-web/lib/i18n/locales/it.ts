@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const it: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "Questa versione di Prowlarr non è supportata. Aggiorna Prowlarr alla 2.0 o successiva.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer non può connettersi al gateway dei metadati perché l’orologio di sistema ha uno scarto superiore a 5 minuti. Sincronizza l’orologio di sistema e riavvia Scryer.",
   "httpRelease.refusal.detailsUnavailable":

@@ -800,6 +800,11 @@ pub struct IndexerValidationResult {
     pub status: String,
     pub message: Option<String>,
     pub retry_after_seconds: Option<i64>,
+    /// Stable reason code for a status other than `valid`, when the provider
+    /// has one a client can act on or translate.
+    pub reason: Option<&'static str>,
+    /// The server version a successful probe reported, for display.
+    pub server_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

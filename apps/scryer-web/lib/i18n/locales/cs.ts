@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const cs: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "Tato verze Prowlarru není podporována. Aktualizujte Prowlarr na verzi 2.0 nebo novější.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer se nemůže připojit k bráně metadat, protože se systémové hodiny liší o více než 5 minut. Synchronizujte systémové hodiny a restartujte Scryer.",
   "httpRelease.refusal.detailsUnavailable":

@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const nl: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "Deze Prowlarr-versie wordt niet ondersteund. Werk Prowlarr bij naar 2.0 of nieuwer.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer kan geen verbinding maken met de metadatagateway omdat uw systeemklok meer dan 5 minuten afwijkt. Synchroniseer uw systeemklok en start Scryer opnieuw.",
   "httpRelease.refusal.detailsUnavailable":
