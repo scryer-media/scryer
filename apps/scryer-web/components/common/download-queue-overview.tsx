@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { AlertCircle } from "lucide-react";
 
 import { DownloadClientTypeLogo } from "@/components/common/download-client-type-logo";
@@ -6,6 +7,7 @@ import { ActivityQueueSeedingProgress } from "@/components/views/activity/queue-
 import { useTranslate } from "@/lib/context/translate-context";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import { cn } from "@/lib/utils";
+import { movieOverviewProgress } from "@/lib/utils/movie-overview-progress";
 import {
   buildQueueStatusDetail,
   downloadQueueItemIdentityKey,
@@ -215,8 +217,6 @@ export function MovieOverviewDownloadList({
   return (
     <div className={cn("space-y-3", className)}>
       {items.map((item) => {
-        const stateKey = item.displayState;
-        const { percent: progress, remainingLabel } = queueItemProgress(item);
         const detail = buildQueueStatusDetail(item, t);
         const rowId = downloadQueueItemIdentityKey(item);
 
@@ -263,18 +263,39 @@ export function MovieOverviewDownloadList({
                     ) : null}
                   </div>
                 </div>
-                <ActivityProgressBar
-                  percent={progress}
-                  remainingLabel={remainingLabel}
-                  colorClass={getProgressBarColor(stateKey)}
-                  indeterminate={stateKey === "QUEUED"}
-                />
+                <MovieOverviewProgressBar item={item} />
               </div>
             </div>
           </div>
         );
       })}
     </div>
+  );
+}
+
+function MovieOverviewProgressBar({ item }: { item: DownloadQueueItem }) {
+  const [snapshot, setSnapshot] = useState(() => ({
+    item,
+    progress: movieOverviewProgress(item),
+  }));
+  let progress = snapshot.progress;
+  if (snapshot.item !== item) {
+    progress = movieOverviewProgress(item, snapshot.progress);
+    setSnapshot({ item, progress });
+  }
+  const remainingLabel = progress.indeterminate
+    ? null
+    : progress.measuredTransfer
+      ? `${formatByteCount(progress.bytes!)} / ${formatByteCount(progress.total!)}`
+      : formatRemainingDuration(item.remainingSeconds);
+  return (
+    <ActivityProgressBar
+      key={progress.phaseKey}
+      percent={progress.percent}
+      remainingLabel={remainingLabel}
+      colorClass={getProgressBarColor(item.displayState)}
+      indeterminate={progress.indeterminate}
+    />
   );
 }
 
