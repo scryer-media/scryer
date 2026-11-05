@@ -325,6 +325,65 @@ test("a title with no links rests at the edge of the graph, not off on its own",
   }
 });
 
+test("small disconnected neighbourhoods stay near the unplaced series", () => {
+  const nodes = [
+    ...[0, 1].flatMap((clusterId) =>
+      Array.from({ length: 4 }, (_, index) => ({
+        key: `series:${clusterId}:${index}`,
+        clusterId,
+      })),
+    ),
+    ...Array.from({ length: 14 }, (_, index) => ({
+      key: `unplaced:${index}`,
+      clusterId: -1,
+      free: true,
+    })),
+  ];
+  const edges = [
+    ...[0, 1].flatMap((clusterId) => {
+      const members = nodes.filter((node) => node.clusterId === clusterId);
+      return members.flatMap((node, index) =>
+        members.slice(index + 1).map((other) => ({
+          from: node.key,
+          to: other.key,
+          weight: 0.5,
+        })),
+      );
+    }),
+    { from: "unplaced:4", to: "unplaced:5", weight: 0.5 },
+  ];
+  const layout = createLayout(nodes, edges);
+  settle(layout);
+  const positions = layoutPositions(layout);
+
+  for (const clusterId of [0, 1]) {
+    const members = nodes.filter((node) => node.clusterId === clusterId);
+    const unplaced = nodes.filter((node) => node.clusterId === -1);
+    const gap = Math.min(
+      ...members.flatMap((member) =>
+        unplaced.map((other) => {
+          const from = positions.get(member.key);
+          const to = positions.get(other.key);
+          assert.ok(from && to);
+          return Math.hypot(from.x - to.x, from.y - to.y);
+        }),
+      ),
+    );
+    assert.ok(
+      gap < 120,
+      `neighbourhood ${clusterId} is ${gap.toFixed(0)} away`,
+    );
+  }
+
+  const points = [...positions.values()];
+  for (let index = 0; index < points.length; index += 1) {
+    for (const other of points.slice(index + 1)) {
+      const point = points[index];
+      assert.ok(Math.hypot(point.x - other.x, point.y - other.y) > 20);
+    }
+  }
+});
+
 test("the layout comes out wider than tall, for wide screens", () => {
   const { nodes, edges } = fixtureLayoutInput();
   const layout = createLayout(nodes, edges);

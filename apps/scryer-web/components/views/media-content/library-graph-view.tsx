@@ -2,9 +2,10 @@ import * as React from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { useClient } from "urql";
-import { Maximize2, Minimize2, Undo2, X } from "lucide-react";
+import { Maximize2, Minimize2, Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { LibraryGraphSelectionCard } from "./library-graph-selection-card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -2526,30 +2527,6 @@ export default function LibraryGraphView({
               </button>
             </React.Fragment>
           ))}
-          {recommendationBands.length > 0 ? (
-            <ul
-              aria-label={t("libraryGraph.recommendationGroupsLabel")}
-              className="flex flex-wrap items-center gap-1.5"
-            >
-              {recommendationBands.map((band) => (
-                <li
-                  key={band.key}
-                  className="flex items-center gap-1.5 rounded-full border border-[var(--scry-border2)] px-2.5 py-0.5 text-[12px] text-[var(--scry-body)]"
-                  style={{ backgroundColor: withAlpha(band.color, 0.14) }}
-                >
-                  <span
-                    aria-hidden="true"
-                    className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: band.color }}
-                  />
-                  <span>{band.name}</span>
-                  <span className="text-[var(--scry-muted2)]">
-                    {band.keys.length}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
           <Button
             type="button"
             variant="outline"
@@ -2569,7 +2546,7 @@ export default function LibraryGraphView({
           role="application"
           aria-label={t("libraryGraph.canvasLabel")}
           onKeyDown={handleCanvasKeyDown}
-          className="absolute inset-0 touch-none outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)]"
+          className="absolute inset-0 touch-none outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)] max-sm:bottom-auto max-sm:aspect-square max-sm:max-h-full"
           data-testid="library-graph-canvas"
         />
         <div aria-live="polite" className="sr-only">
@@ -2580,6 +2557,30 @@ export default function LibraryGraphView({
           aria-hidden="true"
           className="pointer-events-none absolute left-0 top-0"
         />
+        {focusCenterKey !== null && recommendationBands.length > 0 ? (
+          <ul
+            aria-label={t("libraryGraph.recommendationGroupsLabel")}
+            className="absolute left-3 top-3 z-10 flex max-h-[calc(100%-1.5rem)] max-w-[calc(100%-1.5rem)] flex-col gap-1.5 overflow-y-auto overscroll-contain rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-card2)]/90 p-2 text-[12px] shadow-lg backdrop-blur-sm"
+          >
+            {recommendationBands.map((band) => (
+              <li
+                key={band.key}
+                className="flex min-w-0 items-center gap-2 rounded-[6px] px-2 py-1 text-[var(--scry-ink2)]"
+                style={{ backgroundColor: withAlpha(band.color, 0.14) }}
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: band.color }}
+                />
+                <span className="min-w-0 break-words">{band.name}</span>
+                <span className="ml-auto shrink-0 pl-2 tabular-nums text-[var(--scry-muted2)]">
+                  {band.keys.length}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {groups
           .filter((group) => group.named)
           .map((group) => (
@@ -2658,46 +2659,21 @@ export default function LibraryGraphView({
           </div>
         ) : null}
         {selectedNode && selectedNode.collapsedClusterId === undefined ? (
-          <div
-            role="region"
-            aria-label={nodeLabel(selectedNode)}
-            data-testid="library-graph-selection"
-            data-ghost={selectedNode.ghost ? "true" : "false"}
-            className="absolute bottom-3 left-3 z-10 flex w-[min(20rem,calc(100%-1.5rem))] flex-col gap-2 rounded-[12px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] p-3 text-[12px] text-[var(--scry-ink2)] shadow-lg"
+          <LibraryGraphSelectionCard
+            key={selectedNode.subjectKey}
+            label={nodeLabel(selectedNode)}
+            item={selectedItem}
+            title={
+              selectedCatalogTitle ??
+              join?.titleBySubjectKey.get(selectedNode.subjectKey) ??
+              null
+            }
+            facet={facet}
+            ghost={selectedNode.ghost}
+            inLibrary={!selectedNode.ghost || selectedResolved}
+            onClose={exitFocus}
           >
-            <div className="flex items-start gap-2">
-              {selectedItem?.posterUrl ? (
-                <img
-                  src={
-                    selectPosterVariantUrl(selectedItem.posterUrl, "w70") ?? ""
-                  }
-                  alt=""
-                  className="h-14 w-10 shrink-0 rounded-[4px] border border-dashed border-[var(--scry-muted2)] object-cover opacity-80"
-                />
-              ) : null}
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-semibold">
-                  {nodeLabel(selectedNode)}
-                </div>
-                {selectedItem ? (
-                  <div className="text-[var(--scry-muted2)]">
-                    {selectedResolved
-                      ? t("libraryGraph.inLibrary")
-                      : t("libraryGraph.notInLibrary")}
-                  </div>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                onClick={exitFocus}
-                aria-label={t("libraryGraph.backToOverview")}
-                title={t("libraryGraph.backToOverview")}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)]"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
               {selectedResolved && openSelected ? (
                 <Button
                   type="button"
@@ -2716,7 +2692,7 @@ export default function LibraryGraphView({
                     actedGhostKeyRef.current = selectedNode.subjectKey;
                     void onAction?.(selectedItem);
                   }}
-                  className="h-7 rounded-[8px] px-2.5 text-[12px]"
+                  className="h-11 min-w-24 rounded-[10px] px-5 text-sm font-semibold"
                 >
                   {selectedAddable
                     ? t("discovery.add")
@@ -2735,7 +2711,7 @@ export default function LibraryGraphView({
                 {t("libraryGraph.moreLikeThisEmpty")}
               </p>
             ) : null}
-          </div>
+          </LibraryGraphSelectionCard>
         ) : null}
       </div>
       {moreLikeThisActions.dialogs}

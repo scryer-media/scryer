@@ -40,7 +40,9 @@ export type LayoutState = {
   nearestLinked: Int32Array;
 };
 
-const CLUSTER_RING_RADIUS = 260;
+// Keep sparse neighbourhoods near the centre; hull separation makes room for
+// larger groups without reserving empty space around every small one.
+const CLUSTER_RING_RADIUS = 110;
 /** How much wider than tall the ring of clusters is. */
 export const CLUSTER_RING_WIDTH = 1.8;
 const START_JITTER = 70;
