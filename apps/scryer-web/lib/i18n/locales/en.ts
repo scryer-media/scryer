@@ -2726,8 +2726,7 @@ const en: LocaleDictionary = {
     "Notification provider the selected item does not support test notifications.",
   "error.reason.NOTIFICATION_PROVIDER_REQUIRES":
     "Notification provider the selected item requires the selected item.",
-  "error.reason.NOTIFICATION_PROVIDER_UNAVAILABLE":
-    "Plugin not installed",
+  "error.reason.NOTIFICATION_PROVIDER_UNAVAILABLE": "Plugin not installed",
   "error.reason.NOTIFICATION_SUBSCRIPTION_NOT_FOUND":
     "The subscription could not be found.",
   "error.reason.NOTIFICATION_SUBSCRIPTION_TARGET_REQUIRED":
@@ -4380,7 +4379,7 @@ const en: LocaleDictionary = {
   "settings.networkCustomHelp":
     "Enter an IP address that belongs to this computer, such as its address on your network. Scryer keeps its current port.",
   "settings.networkPinnedEnvironment":
-    "This install pins Scryer's address with SCRYER_BIND, so it cannot be changed here.",
+    "These controls are disabled because SCRYER_BIND in Scryer's launch configuration overrides this setting. Development runs started with cargo xtask serve set it automatically. Change the address in your launch configuration and restart Scryer, or remove the override to manage it here.",
   "settings.networkPinnedContainer":
     "Network access is decided by the ports your container publishes, so it cannot be changed here.",
   "settings.networkClear": "Use the default",

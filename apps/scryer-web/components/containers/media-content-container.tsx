@@ -943,7 +943,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setViewMode,
     visibleColumns: visibleTitleTableColumns,
     setColumnVisible: setTitleTableColumnVisible,
-    graphEnabled: graphViewEnabled,
   } = useCatalogViewPreferences(view, t);
   const [selectedTitleIds, setSelectedTitleIds] = React.useState<Set<string>>(
     () => new Set(),
@@ -5399,7 +5398,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           viewMode: effectiveViewMode,
           viewModePending,
           setViewMode,
-          graphViewEnabled,
           selectedTitleIds,
           toggleTitleSelection,
           toggleAllVisibleTitles,

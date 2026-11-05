@@ -471,13 +471,16 @@ impl LibraryMutations {
     async fn refresh_file_scores(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Exactly one bounded selection of file, season, or title IDs.")]
+        #[graphql(desc = "Exactly one bounded selection of file, episode, season, or title IDs.")]
         selection: FileScoreSelectionInput,
     ) -> GqlResult<JobRunPayload> {
         use scryer_application::ScoreRefreshSelection;
         let selection = match selection {
             FileScoreSelectionInput::FileIds(ids) => {
                 ScoreRefreshSelection::Files(ids.into_iter().map(String::from).collect())
+            }
+            FileScoreSelectionInput::EpisodeIds(ids) => {
+                ScoreRefreshSelection::Episodes(ids.into_iter().map(String::from).collect())
             }
             FileScoreSelectionInput::SeasonIds(ids) => {
                 ScoreRefreshSelection::Seasons(ids.into_iter().map(String::from).collect())

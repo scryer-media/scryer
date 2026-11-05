@@ -1,5 +1,4 @@
 import type {
-  InstanceFeatures,
   SetMyCatalogViewInput,
   UiCatalogViewMode,
   UiDeviceClass,
@@ -12,45 +11,9 @@ export type CatalogFacet = "MOVIES" | "SERIES" | "ANIME";
 export type CatalogTableViewMode = "COMPACT" | "POSTER_TABLE";
 export type CatalogColumnsInput = NonNullable<SetMyCatalogViewInput["columns"]>;
 
-/**
- * Whether the catalog offers the graph view: only on an instance that has
- * turned experimental features on. While it is off the view-mode selector
- * leaves the graph out and a saved graph preference shows the poster grid
- * instead.
- */
-export function graphViewEnabled(
-  features: Pick<InstanceFeatures, "experimentalFeaturesEnabled">,
-): boolean {
-  return features.experimentalFeaturesEnabled;
-}
-
 /** The view modes the selector offers, in display order. */
-export function catalogViewModeOptions(
-  graphEnabled: boolean,
-): CatalogContentViewMode[] {
-  return graphEnabled
-    ? ["compact", "poster-table", "poster", "graph"]
-    : ["compact", "poster-table", "poster"];
-}
-
-/** The view mode to show for a chosen one: the graph falls back to posters while it is off. */
-export function availableCatalogViewMode(
-  mode: CatalogContentViewMode,
-  graphEnabled: boolean,
-): CatalogContentViewMode {
-  return mode === "graph" && !graphEnabled ? "poster" : mode;
-}
-
-/**
- * Whether a chosen view mode cannot be settled yet: a graph choice waits for
- * the instance's switches, since showing posters first would load the
- * poster listing and then swap views once the graph turns out to be on.
- */
-export function catalogViewModePending(
-  mode: CatalogContentViewMode,
-  featuresLoaded: boolean,
-): boolean {
-  return mode === "graph" && !featuresLoaded;
+export function catalogViewModeOptions(): CatalogContentViewMode[] {
+  return ["compact", "poster-table", "poster", "graph"];
 }
 
 /** The column choices both table layouts share, in display order. */

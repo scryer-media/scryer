@@ -689,7 +689,24 @@ function groupedRecommendationSections(
   const claimed = new Set<string>();
   const sections: RecommendationSection[] = [];
   let covered = false;
+  // Server neighbourhoods describe connectivity, so several can share one
+  // category. Combine them before applying section size and count limits.
+  const categories = new Map<string, RecommendationGroup>();
+  const mergedGroups: RecommendationGroup[] = [];
   for (const group of groups) {
+    const category = group.labelKey
+      ? clusterLabelKeyCandidates(group.labelKey).at(-1)
+      : null;
+    const existing = category ? categories.get(category) : undefined;
+    if (existing) {
+      existing.keys = [...existing.keys, ...group.keys];
+    } else {
+      const merged = { ...group, keys: [...group.keys] };
+      mergedGroups.push(merged);
+      if (category) categories.set(category, merged);
+    }
+  }
+  for (const group of mergedGroups) {
     const members = new Set(
       group.keys.filter((key) => present.has(key) && !claimed.has(key)),
     );

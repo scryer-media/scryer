@@ -9,6 +9,8 @@ pub use scryer_interface_media_types::*;
 pub enum FileScoreSelectionInput {
     /// Media file IDs to evaluate, limited to 1000 selections.
     FileIds(Vec<ID>),
+    /// Episode IDs whose live files should be evaluated, limited to 1000 selections.
+    EpisodeIds(Vec<ID>),
     /// Season IDs whose live files should be evaluated, limited to 1000 selections.
     SeasonIds(Vec<ID>),
     /// Title IDs whose live files should be evaluated, limited to 1000 selections.

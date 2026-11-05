@@ -614,13 +614,17 @@ impl MediaFileRepository for MediaFileStore {
             ScoreRefreshSelection::Files(ids) => ("mf.id", ids),
             ScoreRefreshSelection::Titles(ids) => ("mf.title_id", ids),
             ScoreRefreshSelection::Seasons(ids) => ("e.collection_id", ids),
+            ScoreRefreshSelection::Episodes(ids) => ("e.id", ids),
         };
         if ids.is_empty() {
             return Ok(Vec::new());
         }
         let placeholders = vec!["{}"; ids.len()].join(", ");
         let predicate = live_media_file_predicate(dialect_for_datastore(&self.datastore), "mf");
-        let scope = if matches!(selection, ScoreRefreshSelection::Seasons(_)) {
+        let scope = if matches!(
+            selection,
+            ScoreRefreshSelection::Seasons(_) | ScoreRefreshSelection::Episodes(_)
+        ) {
             format!(
                 "EXISTS (SELECT 1 FROM file_episode_map fem JOIN episodes e ON e.id = fem.episode_id WHERE fem.file_id = mf.id AND {field} IN ({placeholders}))"
             )
@@ -3312,6 +3316,99 @@ mod tests {
         Collection, CollectionType, Episode, MediaFacet, MovieEntity, SeriesMovieLink, Title,
     };
     use scryer_infrastructure_datastore::SqliteServices;
+
+    #[tokio::test]
+    async fn score_evaluation_episode_selection_deduplicates_shared_files() {
+        use scryer_application::ScoreRefreshSelection;
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("episodes.db").to_string_lossy())
+            .await
+            .unwrap();
+        title_store(&services)
+            .create(make_test_series_title("selected"))
+            .await
+            .unwrap();
+        let shows = show_store(&services);
+        let files = media_file_store(&services);
+        for id in ["episode-a", "episode-b", "unselected"] {
+            shows
+                .create_episode(Episode {
+                    id: id.into(),
+                    title_id: "selected".into(),
+                    collection_id: None,
+                    episode_type: scryer_domain::EpisodeType::Standard,
+                    episode_number: None,
+                    season_number: Some("1".into()),
+                    episode_label: None,
+                    title: None,
+                    air_date: None,
+                    duration_seconds: Some(1800),
+                    has_multi_audio: false,
+                    has_subtitle: false,
+                    is_filler: false,
+                    is_recap: false,
+                    absolute_number: None,
+                    contiguous_absolute_number: None,
+                    overview: None,
+                    tvdb_id: None,
+                    tmdb_id: None,
+                    image_url: None,
+                    monitored: false,
+                    created_at: Utc::now(),
+                })
+                .await
+                .unwrap();
+        }
+        let mut expected = Vec::new();
+        for (path, episodes) in [
+            ("shared", vec!["episode-a", "episode-b"]),
+            ("individual", vec!["episode-b"]),
+            ("unrelated", vec!["unselected"]),
+        ] {
+            let id = files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: "selected".into(),
+                    file_path: format!("/synthetic/{path}.mkv"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            for episode in episodes {
+                files.link_file_to_episode(&id, episode).await.unwrap();
+            }
+            if path != "unrelated" {
+                expected.push(id);
+            }
+        }
+        expected.sort();
+        let scope = ScoreRefreshSelection::Episodes(vec![
+            "episode-a".into(),
+            "episode-b".into(),
+            "episode-a".into(),
+        ]);
+        assert_eq!(
+            files.score_refresh_page(&scope, "").await.unwrap(),
+            expected
+        );
+        assert_eq!(
+            files
+                .score_refresh_page(&scope, &expected[0])
+                .await
+                .unwrap(),
+            vec![expected[1].clone()]
+        );
+        assert_eq!(
+            files
+                .score_refresh_page(
+                    &ScoreRefreshSelection::Episodes(vec!["episode-a".into()]),
+                    ""
+                )
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 
     #[tokio::test]
     async fn score_evaluation_selection_and_persistence_preserve_acquisition_evidence() {

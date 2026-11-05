@@ -137,6 +137,7 @@ pub(crate) struct SeriesLibraryScanCandidate {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedMovieLibraryScanCandidate {
+    pub(crate) boundary_evidence: Option<crate::library_discovery::DiscoveredBoundaryEvidence>,
     pub(crate) file: LibraryFile,
     pub(crate) representative_is_directory: bool,
     pub(crate) discovered_files: Vec<LibraryFile>,
@@ -1467,6 +1468,7 @@ async fn build_prepared_movie_library_scan_candidate(
         full_path_key.as_deref(),
     ) {
         return Ok(PreparedMovieLibraryScanCandidate {
+            boundary_evidence: None,
             file,
             representative_is_directory,
             discovered_files,
@@ -1586,6 +1588,7 @@ async fn build_prepared_movie_library_scan_candidate(
     }
 
     Ok(PreparedMovieLibraryScanCandidate {
+        boundary_evidence: None,
         file,
         representative_is_directory,
         discovered_files,
@@ -2134,6 +2137,7 @@ mod tests {
         search_candidates: &[&str],
     ) -> PreparedMovieLibraryScanCandidate {
         PreparedMovieLibraryScanCandidate {
+            boundary_evidence: None,
             file: build_library_file("/library/Movie/Movie.mkv"),
             representative_is_directory: false,
             discovered_files: vec![build_library_file("/library/Movie/Movie.mkv")],

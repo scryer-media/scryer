@@ -14,7 +14,7 @@ import {
   FolderPen,
   LayoutGrid,
   LayoutList,
-  Network,
+  Maximize2,
   PanelLeftOpen,
   PanelRightOpen,
   Pencil,
@@ -25,6 +25,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { GraphStar } from "@/components/common/graph-star";
 import { deriveInteractiveSearchPresentation } from "@/lib/utils/interactive-search-presentation";
 import {
   AnidbExternalLink,
@@ -2073,11 +2074,9 @@ export function MediaContentView({
     isDeletingCatalogTitleById: Record<string, boolean>;
     isMobile: boolean;
     viewMode: ContentViewMode;
-    /** Whether the view mode waits on the instance's switches; the list shows as loading. */
+    /** Whether the view mode is still loading. */
     viewModePending: boolean;
     setViewMode: (value: ContentViewMode) => void;
-    /** Whether the view-mode selector offers the graph. */
-    graphViewEnabled: boolean;
     selectedTitleIds: ReadonlySet<string>;
     toggleTitleSelection: (titleId: string) => void;
     toggleAllVisibleTitles: (checked: boolean) => void;
@@ -2282,7 +2281,6 @@ export function MediaContentView({
     viewMode,
     viewModePending,
     setViewMode,
-    graphViewEnabled,
     selectedTitleIds,
     toggleTitleSelection,
     toggleAllVisibleTitles,
@@ -2571,6 +2569,7 @@ export function MediaContentView({
   const [selectedTitleListDrawerOpen, setSelectedTitleListDrawerOpen] =
     React.useState(false);
   const selectedTitleListDrawerRef = React.useRef<HTMLDivElement | null>(null);
+  const graphControlsRef = React.useRef<{ fit: () => void } | null>(null);
   const selectedTitleListPreviousFocusRef = React.useRef<HTMLElement | null>(
     null,
   );
@@ -3307,14 +3306,26 @@ export function MediaContentView({
           className="hidden h-[2.8125rem] shrink-0 sm:block sm:w-[2.8125rem]"
         />
       )}
+      {effectiveViewMode === "graph" ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => graphControlsRef.current?.fit()}
+          className="h-9 shrink-0 gap-1.5 rounded-[9px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 text-[12px] shadow-none"
+          aria-label={t("libraryGraph.resetView")}
+          title={t("libraryGraph.resetView")}
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+          <span className="max-sm:sr-only">{t("libraryGraph.resetView")}</span>
+        </Button>
+      ) : null}
       <ToggleGroup
         type="single"
         variant="outline"
         value={effectiveViewMode}
         onValueChange={(v) => {
-          const next = catalogViewModeOptions(graphViewEnabled).find(
-            (mode) => mode === v,
-          );
+          const next = catalogViewModeOptions().find((mode) => mode === v);
           if (next) {
             setViewMode(next);
           }
@@ -3353,18 +3364,16 @@ export function MediaContentView({
         >
           <LayoutGrid className="h-[1.125rem] w-[1.125rem]" />
         </ToggleGroupItem>
-        {catalogViewModeOptions(graphViewEnabled).includes("graph") ? (
-          <ToggleGroupItem
-            id={titleOverviewViewModeId(view, "graph")}
-            value="graph"
-            size="sm"
-            aria-label={t("title.viewModeGraph")}
-            title={t("title.viewModeGraph")}
-            className="h-9 w-9 rounded-[9px] px-0 text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] data-[state=on]:!border-transparent data-[state=on]:!bg-[var(--scry-accent)] data-[state=on]:!text-primary-foreground data-[state=on]:!shadow-none"
-          >
-            <Network className="h-[1.125rem] w-[1.125rem]" />
-          </ToggleGroupItem>
-        ) : null}
+        <ToggleGroupItem
+          id={titleOverviewViewModeId(view, "graph")}
+          value="graph"
+          size="sm"
+          aria-label={t("title.viewModeGraph")}
+          title={t("title.viewModeGraph")}
+          className="h-9 w-9 rounded-[9px] px-0 text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] data-[state=on]:!border-transparent data-[state=on]:!bg-[var(--scry-accent)] data-[state=on]:!text-primary-foreground data-[state=on]:!shadow-none"
+        >
+          <GraphStar className="h-[1.125rem] w-[1.125rem]" />
+        </ToggleGroupItem>
       </ToggleGroup>
       {catalogContextRailCollapsed &&
       activeOverviewTitleId === null &&
@@ -3910,6 +3919,7 @@ export function MediaContentView({
                     >
                       <LibraryGraphView
                         key={`${view}-library-graph`}
+                        controlsRef={graphControlsRef}
                         facet={
                           isMovieView
                             ? "MOVIE"
@@ -3923,6 +3933,12 @@ export function MediaContentView({
                         selectedTitleId={contextPanelSelectedTitleId}
                         contextPanelId={selectedTitleContextPanelId}
                         onSelectTitle={onSelectTitleForContextPanel}
+                        onOpenOverview={(title) =>
+                          handleOpenOverviewFromContext(
+                            overviewTargetView,
+                            title,
+                          )
+                        }
                         onCatalogChanged={refreshTitles}
                       />
                     </React.Suspense>

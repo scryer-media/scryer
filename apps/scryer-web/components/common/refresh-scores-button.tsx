@@ -13,7 +13,10 @@ import { cn } from "@/lib/utils";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
 
 type Selection =
-  { fileIds: string[] } | { seasonIds: string[] } | { titleIds: string[] };
+  | { fileIds: string[] }
+  | { episodeIds: string[] }
+  | { seasonIds: string[] }
+  | { titleIds: string[] };
 const refresh = `mutation RefreshFileScores($selection: FileScoreSelectionInput!) {
   refreshFileScores(selection: $selection) { ${JOB_RUN_FIELDS} }
 }`;

@@ -28,7 +28,6 @@ import {
 } from "@/lib/utils/release-queue-scope";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import {
-  SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID,
   SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID,
   seriesOverviewSeriesMovieRowId,
 } from "@/lib/utils/dom-ids";
@@ -521,7 +520,7 @@ function SeriesOverviewViewImpl({
     canManageTitle && Boolean(onRequestDeleteEpisodeFiles),
     canManageLibrarySubtitles(user, title?.libraryId),
   );
-  const episodeSelectionEnabled = episodeActions.enabled;
+  const episodeSelectionEnabled = episodeActions.enabled || canManageTitle;
   const subtitleBatch = useEpisodeSubtitleSearch(onRefreshSubtitles);
 
   const searchPrerequisiteNotice =
@@ -1554,32 +1553,25 @@ function SeriesOverviewViewImpl({
         <div>
           <Card className="relative overflow-hidden max-sm:p-2">
             <CardHeader className="max-sm:px-1 max-sm:pt-1">
-              {/* min-h matches the small buttons so the header keeps one
+              {/* min-h matches the action buttons so the header keeps one
                 height whether or not the selection controls are showing. */}
-              <div className="flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-h-9 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <FolderOpen className="h-4 w-4" />
                   {t("title.seasonsAndEpisodes")}
                 </CardTitle>
-                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end [&_button]:h-9">
                   {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
                     <>
-                      {canManageTitle && wholeSeasonsSelected ? (
+                      {canManageTitle ? (
                         <RefreshScoresButton
-                          selection={{
-                            seasonIds: selectedSeasons.map(([id]) => id),
-                          }}
+                          selection={
+                            wholeSeasonsSelected
+                              ? { seasonIds: selectedSeasons.map(([id]) => id) }
+                              : { episodeIds: [...selectedEpisodeIds] }
+                          }
                         />
                       ) : null}
-                      <Button
-                        id={SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID}
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleClearEpisodeSelection}
-                      >
-                        {t("seriesOverview.clearEpisodeSelection")}
-                      </Button>
                       {episodeActions.canSearchSubtitles && title ? (
                         <Button
                           id="series-overview-search-selected-subtitles"

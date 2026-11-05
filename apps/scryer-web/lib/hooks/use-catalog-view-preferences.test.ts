@@ -168,7 +168,7 @@ function installStorage(t: test.TestContext, stored: Record<string, string>) {
   return storage;
 }
 
-test("a saved graph view shows posters while experimental features are off and is never re-saved", async (t) => {
+test("a saved graph view opens with experimental features off without rewriting preferences", async (t) => {
   const storage = installStorage(t, {});
   const h = harness({
     catalogViews: [
@@ -178,13 +178,12 @@ test("a saved graph view shows posters while experimental features are off and i
   });
   for (let index = 0; index < 3; index += 1) {
     const rendered = h.render();
-    assert.equal(rendered.viewMode, "poster");
-    assert.equal(rendered.graphEnabled, false);
+    assert.equal(rendered.viewMode, "graph");
   }
   await Promise.resolve();
   assert.deepEqual(h.mutations, []);
   assert.deepEqual(h.settingsWrites, []);
-  // The saved choice is left as it was, for when the switch is turned on.
+  // Opening the saved view must not rewrite the profile or browser preference.
   assert.equal(storage.size, 0);
 });
 
@@ -202,7 +201,6 @@ test("a saved graph view shows the graph while experimental features are on", as
   for (let index = 0; index < 3; index += 1) {
     const rendered = h.render();
     assert.equal(rendered.viewMode, "graph");
-    assert.equal(rendered.graphEnabled, true);
   }
   await Promise.resolve();
   assert.deepEqual(h.mutations, []);
@@ -211,12 +209,12 @@ test("a saved graph view shows the graph while experimental features are on", as
 });
 
 for (const enabled of [false, true]) {
-  test(`a graph view stored in this browser shows ${enabled ? "the graph" : "posters"} while experimental features are ${enabled ? "on" : "off"}`, async (t) => {
+  test(`a graph view stored in this browser shows the graph while experimental features are ${enabled ? "on" : "off"}`, async (t) => {
     const storage = installStorage(t, {
       [`${contentViewMode.CONTENT_VIEW_MODE_STORAGE_KEY}:series`]: "graph",
     });
     const h = harness({ catalogViews: [], tableColumns: [] }, enabled);
-    const expected = enabled ? "graph" : "poster";
+    const expected = "graph";
     assert.equal(h.render().viewMode, expected);
     assert.equal(h.render().viewMode, expected);
     await Promise.resolve();
@@ -228,7 +226,7 @@ for (const enabled of [false, true]) {
   });
 }
 
-test("a saved graph view shows as loading, not posters, until the switches load", async (t) => {
+test("a saved graph view opens immediately before the instance switches load", async (t) => {
   installStorage(t, {});
   const instance = { featuresLoaded: false };
   const settings = {
@@ -245,17 +243,17 @@ test("a saved graph view shows as loading, not posters, until the switches load"
   const on = harness(settings, false, instance);
   const pending = on.render();
   assert.equal(pending.viewMode, "graph");
-  assert.equal(pending.viewModePending, true);
+  assert.equal(pending.viewModePending, false);
 
   // Loaded and on: the graph, no longer pending.
   const loadedOn = harness(settings, true, { featuresLoaded: true }).render();
   assert.equal(loadedOn.viewMode, "graph");
   assert.equal(loadedOn.viewModePending, false);
 
-  // Loaded and off: posters, and nothing is re-saved.
+  // Loaded and off: still the graph, and nothing is re-saved.
   instance.featuresLoaded = true;
   const loadedOff = on.render();
-  assert.equal(loadedOff.viewMode, "poster");
+  assert.equal(loadedOff.viewMode, "graph");
   assert.equal(loadedOff.viewModePending, false);
   await Promise.resolve();
   assert.deepEqual(on.mutations, []);

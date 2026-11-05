@@ -105,11 +105,7 @@ export function NetworkBindPanel({ onSaved }: { onSaved?: () => void }) {
       onSaved?.();
     } catch (cause) {
       setError(
-        userFacingGraphQlErrorMessage(
-          cause,
-          t("settings.networkSaveError"),
-          t,
-        ),
+        userFacingGraphQlErrorMessage(cause, t("settings.networkSaveError"), t),
       );
     } finally {
       setBusy(false);
@@ -128,11 +124,13 @@ export function NetworkBindPanel({ onSaved }: { onSaved?: () => void }) {
 
   return (
     <section
-      className="space-y-4 rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5"
+      className="space-y-4 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4"
       aria-busy={busy || restarting}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-semibold">{t("settings.networkTitle")}</h3>
+      <div className="-mx-4 -mt-4 mb-4 flex flex-wrap items-center gap-2 border-b border-[var(--scry-line2)] px-4 py-3">
+        <h4 className="text-sm font-semibold text-[var(--scry-ink)]">
+          {t("settings.networkTitle")}
+        </h4>
         {settings ? (
           <Badge tone="neutral">{t(SOURCE_KEYS[settings.bindSource])}</Badge>
         ) : null}
@@ -280,10 +278,7 @@ export function NetworkBindPanel({ onSaved }: { onSaved?: () => void }) {
             </p>
           ) : null}
           {restart.error ? <p role="alert">{restart.error}</p> : null}
-          <Button
-            disabled={restarting}
-            onClick={() => void restart.restart()}
-          >
+          <Button disabled={restarting} onClick={() => void restart.restart()}>
             {t(
               restarting
                 ? "settings.networkRestarting"

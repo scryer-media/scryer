@@ -98,6 +98,98 @@ pub(crate) type MovieTopLevelEntryBatchReceiver =
 pub(crate) struct TitleFolderBoundary {
     pub(crate) path: PathBuf,
     pub(crate) rejection: Option<String>,
+    pub(crate) evidence: Option<DiscoveredBoundaryEvidence>,
+}
+
+/// A complete leaf-directory inspection, carried only within one scan.
+/// Nested layouts retain the recursive verifier: their folded discovery
+/// summaries do not preserve every fact needed by the ownership policy.
+#[derive(Clone, Debug)]
+pub(crate) struct DiscoveredBoundaryEvidence {
+    path: PathBuf,
+    episodic: bool,
+    stamps: Vec<Option<BoundaryStamp>>,
+    media: BoundaryEvidence,
+    local: Option<BoundaryEvidence>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BoundaryStamp {
+    modified: std::time::SystemTime,
+    created: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+    len: u64,
+    directory: bool,
+}
+
+async fn boundary_stamps(path: &Path, episodic: bool) -> Option<Vec<Option<BoundaryStamp>>> {
+    let names: &[&str] = if episodic {
+        &["", "tvshow.nfo", ".plexmatch"]
+    } else {
+        &["", "movie.nfo"]
+    };
+    let mut stamps = Vec::with_capacity(names.len());
+    for name in names {
+        let target = if name.is_empty() {
+            path.to_path_buf()
+        } else {
+            path.join(name)
+        };
+        match tokio::fs::symlink_metadata(target).await {
+            Ok(meta) if !meta.file_type().is_symlink() => stamps.push(Some(BoundaryStamp {
+                modified: meta.modified().ok()?,
+                created: meta.created().ok(),
+                #[cfg(unix)]
+                identity: {
+                    use std::os::unix::fs::MetadataExt;
+                    (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+                },
+                len: meta.len(),
+                directory: meta.is_dir(),
+            })),
+            Err(error) if !name.is_empty() && error.kind() == std::io::ErrorKind::NotFound => {
+                stamps.push(None)
+            }
+            _ => return None,
+        }
+    }
+    stamps.first()?.as_ref().filter(|stamp| stamp.directory)?;
+    Some(stamps)
+}
+
+impl DiscoveredBoundaryEvidence {
+    pub(crate) async fn verify(
+        &self,
+        path: &Path,
+        facet: &MediaFacet,
+        ids: &[scryer_domain::ExternalId],
+    ) -> AppResult<bool> {
+        if self.path != path
+            || self.episodic != (*facet != MediaFacet::Movie)
+            || boundary_stamps(path, self.episodic).await.as_ref() != Some(&self.stamps)
+        {
+            return Ok(false);
+        }
+        let owner = BoundaryEvidence::from_external_ids(ids);
+        let folder =
+            BoundaryEvidence::from_name(&path.file_name().unwrap_or_default().to_string_lossy());
+        if self.media.conflicts_with(&owner)
+            || self.media.conflicts_with(&folder)
+            || folder.conflicts_with(&owner)
+            || self.local.as_ref().is_some_and(|local| {
+                local.conflicts_with(&owner)
+                    || self.media.conflicts_with(local)
+                    || folder.conflicts_with(local)
+            })
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER,
+                "media identity conflicts with the proposed title folder",
+            ));
+        }
+        Ok(true)
+    }
 }
 
 pub(crate) struct TitleFolderBoundaryPolicy {
@@ -199,7 +291,7 @@ pub(crate) async fn episode_folder_patterns(
 
 const MAX_UNOWNED_TITLE_DEPTH: usize = 8;
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct BoundaryEvidence {
     has_media: bool,
     title: Option<String>,
@@ -344,6 +436,7 @@ struct ScanBoundaryOwner<'a> {
 }
 
 struct BoundaryFrame {
+    reusable_evidence: Option<DiscoveredBoundaryEvidence>,
     path: PathBuf,
     entries: tokio::fs::ReadDir,
     depth: usize,
@@ -525,6 +618,8 @@ impl BoundaryFrame {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> AppResult<Self> {
         let folded = season || part;
+        let stamps = boundary_stamps(&path, episodic).await;
+        let mut leaf = !folded;
         let mut entries = tokio::fs::read_dir(&path)
             .await
             .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -563,6 +658,7 @@ impl BoundaryFrame {
                 }
             };
             let child = entry.path();
+            leaf &= !kind.is_dir() && !kind.is_symlink();
             if kind.is_file()
                 && is_allowed_video_path(&child)
                 && !should_skip_library_top_level_entry(&child, false)
@@ -610,7 +706,17 @@ impl BoundaryFrame {
         };
         let has_title_nfo = local_identity.is_some();
         let skip_extras = depth > 0 && (evidence.has_media || has_title_nfo || folded);
+        let reusable_evidence = stamps
+            .filter(|_| leaf && inspection_error.is_none() && !cancel.is_cancelled())
+            .map(|stamps| DiscoveredBoundaryEvidence {
+                path: path.clone(),
+                episodic,
+                stamps,
+                media: evidence.clone(),
+                local: local_identity.clone(),
+            });
         Ok(Self {
+            reusable_evidence,
             path,
             entries,
             depth,
@@ -679,6 +785,7 @@ async fn discover_title_folder_boundaries(
             first_io_error.get_or_insert_with(|| format!("{}: {error}", frame.path.display()));
             frame.rejection_emitted = true;
             batch.push(TitleFolderBoundary {
+                evidence: None,
                 path: frame.path.clone(),
                 rejection: Some(format!("cannot inspect title boundary: {error}")),
             });
@@ -694,6 +801,7 @@ async fn discover_title_folder_boundaries(
                 if !frame.rejection_emitted {
                     frame.rejection_emitted = true;
                     batch.push(TitleFolderBoundary {
+                        evidence: None,
                         path: frame.path.clone(),
                         rejection: Some(format!("cannot inspect title boundary: {error}")),
                     });
@@ -710,6 +818,7 @@ async fn discover_title_folder_boundaries(
                     frame.blocked = true;
                     first_io_error.get_or_insert_with(|| format!("{}: {error}", path.display()));
                     batch.push(TitleFolderBoundary {
+                        evidence: None,
                         path,
                         rejection: Some(format!("cannot inspect title boundary: {error}")),
                     });
@@ -810,12 +919,14 @@ async fn discover_title_folder_boundaries(
             if let Some(rejection) = rejection {
                 frame.blocked = true;
                 batch.push(TitleFolderBoundary {
+                    evidence: None,
                     path,
                     rejection: Some(rejection),
                 });
             } else if owned {
                 frame.child_titles = true;
                 batch.push(TitleFolderBoundary {
+                    evidence: None,
                     path,
                     rejection: contains_owner
                         .then(|| "folder contains another recorded title boundary".into()),
@@ -834,6 +945,7 @@ async fn discover_title_folder_boundaries(
                         first_io_error
                             .get_or_insert_with(|| format!("{}: {error}", path.display()));
                         batch.push(TitleFolderBoundary {
+                            evidence: None,
                             path,
                             rejection: Some(format!("cannot inspect title boundary: {error}")),
                         });
@@ -855,6 +967,7 @@ async fn discover_title_folder_boundaries(
                         if !frame.rejection_emitted {
                             frame.rejection_emitted = true;
                             batch.push(TitleFolderBoundary {
+                                evidence: None,
                                 path: frame.path.clone(),
                                 rejection: Some(format!("cannot inspect title boundary: {error}")),
                             });
@@ -890,6 +1003,11 @@ async fn discover_title_folder_boundaries(
                         None
                     };
                     batch.push(TitleFolderBoundary {
+                        evidence: if rejection.is_none() {
+                            frame.reusable_evidence
+                        } else {
+                            None
+                        },
                         path: frame.path,
                         rejection,
                     });
@@ -1103,6 +1221,21 @@ pub(crate) async fn verify_new_scan_title_boundary(
     path: &Path,
     title: &scryer_domain::NewTitle,
 ) -> AppResult<()> {
+    verify_new_scan_title_boundary_with_evidence(path, title, None).await
+}
+
+pub(crate) async fn verify_new_scan_title_boundary_with_evidence(
+    path: &Path,
+    title: &scryer_domain::NewTitle,
+    evidence: Option<&DiscoveredBoundaryEvidence>,
+) -> AppResult<()> {
+    if let Some(evidence) = evidence
+        && evidence
+            .verify(path, &title.facet, &title.external_ids)
+            .await?
+    {
+        return Ok(());
+    }
     verify_scan_boundary(
         path,
         &title.facet,
@@ -1839,6 +1972,144 @@ mod tests {
             stored_folders: vec![],
             other_roots: vec![],
         }
+    }
+
+    async fn discovered_leaf_evidence(root: &Path, folder: &Path) -> DiscoveredBoundaryEvidence {
+        collect_nested_boundaries(root, discovery_policy(MediaFacet::Movie))
+            .await
+            .into_iter()
+            .find(|boundary| boundary.path == folder)
+            .unwrap()
+            .evidence
+            .expect("complete leaf evidence")
+    }
+
+    #[tokio::test]
+    async fn discovery_evidence_reuses_inspection_and_checks_resolved_identity() {
+        let root = tempfile::tempdir().unwrap();
+        write_discovery_fixture(root.path(), "Fixture {tmdb-123}/Fixture {tmdb-123}.mkv");
+        let folder = root.path().join("Fixture {tmdb-123}");
+        let evidence = discovered_leaf_evidence(root.path(), &folder).await;
+        let mut title = scryer_domain::NewTitle {
+            name: "Fixture".into(),
+            facet: MediaFacet::Movie,
+            external_ids: vec![scryer_domain::ExternalId::new("tmdb", "123")],
+            ..Default::default()
+        };
+        // A second directory inspection would hit the injected error.
+        BOUNDARY_ENTRY_METADATA_FAILURE
+            .scope(folder.join("Fixture {tmdb-123}.mkv"), async {
+                verify_new_scan_title_boundary_with_evidence(&folder, &title, Some(&evidence))
+                    .await
+                    .unwrap();
+                assert!(
+                    verify_new_scan_title_boundary(&folder, &title)
+                        .await
+                        .is_err()
+                );
+            })
+            .await;
+        title.external_ids[0].value = "456".into();
+        let error = verify_new_scan_title_boundary_with_evidence(&folder, &title, Some(&evidence))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::library::MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER)
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_evidence_sidecar_changes_force_fresh_validation() {
+        let root = tempfile::tempdir().unwrap();
+        write_discovery_fixture(root.path(), "Fixture/Fixture.mkv");
+        let folder = root.path().join("Fixture");
+        std::fs::write(
+            folder.join("movie.nfo"),
+            "<movie><uniqueid type=\"tmdb\">123</uniqueid></movie>",
+        )
+        .unwrap();
+        let evidence = discovered_leaf_evidence(root.path(), &folder).await;
+        std::fs::write(
+            folder.join("movie.nfo"),
+            "<movie><uniqueid type=\"tmdb\">456789</uniqueid></movie>",
+        )
+        .unwrap();
+        let title = scryer_domain::NewTitle {
+            name: "Fixture".into(),
+            facet: MediaFacet::Movie,
+            external_ids: vec![scryer_domain::ExternalId::new("tmdb", "123")],
+            ..Default::default()
+        };
+        assert!(
+            !evidence
+                .verify(&folder, &title.facet, &title.external_ids)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            verify_new_scan_title_boundary_with_evidence(&folder, &title, Some(&evidence))
+                .await
+                .unwrap_err()
+                .validation_reason(),
+            Some(crate::error_reasons::library::MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER)
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_evidence_replaced_directory_cannot_claim_child_title() {
+        let root = tempfile::tempdir().unwrap();
+        write_discovery_fixture(root.path(), "Fixture/Fixture.mkv");
+        let folder = root.path().join("Fixture");
+        let evidence = discovered_leaf_evidence(root.path(), &folder).await;
+        std::fs::rename(&folder, root.path().join("Original")).unwrap();
+        write_discovery_fixture(root.path(), "Fixture/Other Title/Other.Title.2024.mkv");
+        let title = scryer_domain::NewTitle {
+            name: "Fixture".into(),
+            facet: MediaFacet::Movie,
+            ..Default::default()
+        };
+        assert!(!evidence.verify(&folder, &title.facet, &[]).await.unwrap());
+        assert!(
+            verify_new_scan_title_boundary_with_evidence(&folder, &title, Some(&evidence))
+                .await
+                .is_err()
+        );
+        assert!(root.path().join("Original/Fixture.mkv").exists());
+        assert!(folder.join("Other Title/Other.Title.2024.mkv").exists());
+    }
+
+    #[tokio::test]
+    async fn discovery_evidence_nested_layout_retains_full_verifier() {
+        let root = tempfile::tempdir().unwrap();
+        write_discovery_fixture(root.path(), "Fixture/Disc 1/part.mkv");
+        let boundaries =
+            collect_nested_boundaries(root.path(), discovery_policy(MediaFacet::Movie)).await;
+        let boundary = boundaries
+            .iter()
+            .find(|boundary| boundary.path == root.path().join("Fixture"))
+            .unwrap();
+        assert!(boundary.rejection.is_none());
+        assert!(boundary.evidence.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn discovery_evidence_linked_entries_are_not_reusable() {
+        let root = tempfile::tempdir().unwrap();
+        write_discovery_fixture(root.path(), "Fixture/Fixture.mkv");
+        std::os::unix::fs::symlink(
+            root.path().join("Fixture/Fixture.mkv"),
+            root.path().join("Fixture/link.mkv"),
+        )
+        .unwrap();
+        let boundaries =
+            collect_nested_boundaries(root.path(), discovery_policy(MediaFacet::Movie)).await;
+        assert!(
+            boundaries
+                .iter()
+                .all(|boundary| boundary.evidence.is_none())
+        );
     }
 
     #[tokio::test]

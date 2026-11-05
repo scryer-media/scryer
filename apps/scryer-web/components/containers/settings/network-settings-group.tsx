@@ -18,16 +18,23 @@ export function NetworkSettingsGroup() {
     hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
   if (!allowed) return null;
   return (
-    <section aria-labelledby="settings-network-group-title" className="mb-6">
-      <h2
-        id="settings-network-group-title"
-        className="mb-3 text-lg font-semibold"
-      >
-        {t("settings.networkGroupTitle")}
-      </h2>
-      <NetworkBindPanel onSaved={() => setRevision((value) => value + 1)} />
-      <PublicUrlPanel key={revision} />
-      <TrustedProxiesPanel />
+    <section
+      aria-labelledby="settings-network-group-title"
+      className="overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]"
+    >
+      <div className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0))] px-4 py-3">
+        <h3
+          id="settings-network-group-title"
+          className="text-[15px] font-semibold text-[var(--scry-ink2)]"
+        >
+          {t("settings.networkGroupTitle")}
+        </h3>
+      </div>
+      <div className="space-y-4 p-4">
+        <NetworkBindPanel onSaved={() => setRevision((value) => value + 1)} />
+        <PublicUrlPanel key={revision} />
+        <TrustedProxiesPanel />
+      </div>
     </section>
   );
 }

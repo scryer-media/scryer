@@ -674,6 +674,39 @@ test("recommendations with nothing that splits them stay one section", () => {
   assert.deepEqual(recommendationSections([]), []);
 });
 
+test("same-category neighbourhoods form one section before section limits", () => {
+  const items = ["r:1", "r:2", "r:3", "r:4", "r:5", "r:6", "r:7"].map(
+    (key) => ({ key, tags: [] }),
+  );
+  const groups = [
+    { labelKey: "genre:adventure", label: "Adventure", keys: ["r:3", "r:1"] },
+    { labelKey: "genre:comedy", label: "Comedy", keys: ["r:4", "r:2"] },
+    {
+      labelKey: "canonical:genre:adventure",
+      label: "Adventure",
+      keys: ["r:5", "r:1", "r:6", "outside"],
+    },
+  ];
+  const sections = recommendationSections(items, 2, groups);
+  assert.deepEqual(sections, [
+    {
+      tagKey: "genre:adventure",
+      name: "Adventure",
+      keys: ["r:1", "r:3", "r:5", "r:6"],
+    },
+    { tagKey: "genre:comedy", name: "Comedy", keys: ["r:2", "r:4"] },
+    { tagKey: null, name: null, keys: ["r:7"] },
+  ]);
+  assert.equal(
+    new Set(sections.flatMap((section) => section.keys)).size,
+    items.length,
+  );
+  // A single shared category does not manufacture distinct neighbourhoods.
+  assert.deepEqual(recommendationSections(items, 5, [groups[0], groups[2]]), [
+    { tagKey: null, name: null, keys: items.map((item) => item.key) },
+  ]);
+});
+
 test("server neighbourhoods decide the sections when there are any", () => {
   const sports = tag("canonical:genre:sports", "genre", "Sports");
   const items = ["r:1", "r:2", "r:3", "r:4", "r:5", "r:6"].map((key) => ({

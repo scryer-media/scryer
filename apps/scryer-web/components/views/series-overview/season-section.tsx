@@ -8,7 +8,6 @@ import {
   Eye,
   EyeOff,
   History,
-  Info,
   Search,
   Zap,
 } from "lucide-react";
@@ -22,12 +21,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { IconButton } from "@/components/ui/icon-button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Popover,
@@ -96,7 +89,7 @@ const EPISODE_TABLE_MIN_WIDTH = 720;
 
 export { SeriesMovieTimelineSection } from "./series-movie-row";
 
-const SEASON_ACTIONS_MENU_MAX_WIDTH = 520;
+const SEASON_ACTIONS_MENU_MAX_WIDTH = 720;
 
 function SeasonActionsMenuItem(
   props: Omit<React.ComponentProps<typeof Button>, "size" | "variant">,
@@ -336,7 +329,6 @@ function SeasonSectionImpl({
   const isMobile = useIsNarrowElement(sectionRef, EPISODE_TABLE_MIN_WIDTH);
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const [seasonToggling, setSeasonToggling] = React.useState(false);
-  const [detailsOpen, setDetailsOpen] = React.useState(false);
   const [seasonSearchOpen, setSeasonSearchOpen] = React.useState(false);
   const actionsInMenu = useIsNarrowElement(
     sectionRef,
@@ -534,41 +526,6 @@ function SeasonSectionImpl({
       data-collection-id={collection.id}
       className="overflow-hidden rounded-lg border border-border bg-background/40"
     >
-      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent id={`season-details-dialog-${collection.id}`}>
-          <DialogHeader>
-            <DialogTitle>
-              {seasonHeading(collection, t)} — {t("episode.details")}
-            </DialogTitle>
-          </DialogHeader>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 text-sm">
-            <dt className="text-muted-foreground">
-              {t("title.table.monitored")}
-            </dt>
-            <dd>{t(collection.monitored ? "label.yes" : "label.no")}</dd>
-            <dt className="text-muted-foreground">
-              {t("title.table.episodes")}
-            </dt>
-            <dd>
-              {episodesReady ||
-              (collection.episodesTotal != null &&
-                collection.episodesOwned != null &&
-                collection.episodesMonitored != null)
-                ? t("title.table.episodeProgressTooltipWithTotal", {
-                    owned: collectionMetrics.ownedEpisodes,
-                    total: collectionMetrics.totalEpisodes,
-                    monitored: collectionMetrics.monitoredEpisodes,
-                  })
-                : t("label.unknown")}
-              {episodeRangeLabel ? (
-                <p className="text-muted-foreground">{episodeRangeLabel}</p>
-              ) : null}
-            </dd>
-            <dt className="text-muted-foreground">{t("title.table.size")}</dt>
-            <dd>{collectionSizeLabel ?? t("label.unknown")}</dd>
-          </dl>
-        </DialogContent>
-      </Dialog>
       {showCollectionHeader ? (
         <div
           id={seriesOverviewSeasonToggleId(collection.collectionIndex)}
@@ -590,9 +547,7 @@ function SeasonSectionImpl({
             expanded ? "rounded-t-[inherit]" : "rounded-[inherit]",
           )}
         >
-          <div
-            className={cn("flex items-center gap-2", actionsInMenu && "w-full")}
-          >
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             {selectionEnabled ? (
               // On desktop this mirrors the table's 40px selection column
               // (pulled back through the header's px-4) so the season and
@@ -655,7 +610,7 @@ function SeasonSectionImpl({
             </button>
             <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground">
+              <p className="truncate text-sm font-semibold text-foreground">
                 {seasonHeading(collection, t)}
               </p>
               {episodeRangeLabel ? (
@@ -664,6 +619,25 @@ function SeasonSectionImpl({
                 </p>
               ) : null}
             </div>
+          </div>
+          <div
+            className={cn(
+              "ml-auto flex shrink-0 items-center gap-2 empty:hidden",
+              actionsInMenu && "gap-1.5",
+            )}
+          >
+            {collectionSizeLabel ? (
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {collectionSizeLabel}
+              </span>
+            ) : null}
+            {!isSpecials && collectionEpisodeProgress ? (
+              <EpisodeProgressBar
+                progress={collectionEpisodeProgress}
+                compact
+                className={actionsInMenu ? "w-20" : "w-[6.75rem]"}
+              />
+            ) : null}
             {actionsInMenu ? (
               <Popover open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
                 <PopoverTrigger asChild>
@@ -697,16 +671,6 @@ function SeasonSectionImpl({
                       selection={{ seasonIds: [collection.id] }}
                     />
                   ) : null}
-                  <SeasonActionsMenuItem
-                    id={`season-details-${collection.id}`}
-                    onClick={() => {
-                      setActionsMenuOpen(false);
-                      setDetailsOpen(true);
-                    }}
-                  >
-                    <Info className="h-4 w-4" />
-                    {t("episode.details")}
-                  </SeasonActionsMenuItem>
                   {onOpenSeasonHistory ? (
                     <SeasonActionsMenuItem
                       id={`season-history-${collection.id}`}
@@ -759,25 +723,6 @@ function SeasonSectionImpl({
                 </PopoverContent>
               </Popover>
             ) : null}
-          </div>
-          <div
-            className={cn(
-              "flex items-center gap-2 empty:hidden",
-              actionsInMenu && "ml-auto",
-            )}
-          >
-            {collectionSizeLabel ? (
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {collectionSizeLabel}
-              </span>
-            ) : null}
-            {!isSpecials && collectionEpisodeProgress ? (
-              <EpisodeProgressBar
-                progress={collectionEpisodeProgress}
-                compact
-                className="w-[6.75rem]"
-              />
-            ) : null}
             {canRefreshScores && !actionsInMenu ? (
               <RefreshScoresButton
                 appearance="icon"
@@ -785,19 +730,6 @@ function SeasonSectionImpl({
                 selection={{ seasonIds: [collection.id] }}
               />
             ) : null}
-            {actionsInMenu ? null : (
-              <IconButton
-                id={`season-details-${collection.id}`}
-                label={`${seasonHeading(collection, t)} — ${t("episode.details")}`}
-                onKeyDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setDetailsOpen(true);
-                }}
-              >
-                <Info className="h-4 w-4" />
-              </IconButton>
-            )}
             {onOpenSeasonHistory && !actionsInMenu ? (
               <IconButton
                 id={`season-history-${collection.id}`}

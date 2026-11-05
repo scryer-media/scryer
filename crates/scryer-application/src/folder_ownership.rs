@@ -774,18 +774,27 @@ pub(crate) async fn claim_title_folder_for_scan_if_missing(
     title: &mut Title,
     folder_path: &Path,
 ) -> AppResult<()> {
+    claim_title_folder_for_scan_with_evidence(app, title, folder_path, None).await
+}
+
+pub(crate) async fn claim_title_folder_for_scan_with_evidence(
+    app: &AppUseCase,
+    title: &mut Title,
+    folder_path: &Path,
+    evidence: Option<&crate::library_discovery::DiscoveredBoundaryEvidence>,
+) -> AppResult<()> {
     claim_title_folder_with_layout(
         app,
         title,
         folder_path,
-        TitleFolderClaimLayout::Conventional,
+        TitleFolderClaimLayout::Conventional(evidence),
     )
     .await
 }
 
-enum TitleFolderClaimLayout {
+enum TitleFolderClaimLayout<'a> {
     Configured,
-    Conventional,
+    Conventional(Option<&'a crate::library_discovery::DiscoveredBoundaryEvidence>),
 }
 
 /// Every check [`claim_title_folder_if_missing`] makes before recording
@@ -804,7 +813,7 @@ async fn claim_title_folder_with_layout(
     app: &AppUseCase,
     title: &mut Title,
     folder_path: &Path,
-    layout: TitleFolderClaimLayout,
+    layout: TitleFolderClaimLayout<'_>,
 ) -> AppResult<()> {
     ensure_folder_available_to_title(app, title, folder_path).await?;
     if non_empty_folder_path(title.folder_path.as_deref()).is_some() {
@@ -826,22 +835,34 @@ async fn ensure_unowned_folder_claimable(
     app: &AppUseCase,
     title: &Title,
     folder_path: &Path,
-    layout: TitleFolderClaimLayout,
+    layout: TitleFolderClaimLayout<'_>,
 ) -> AppResult<()> {
     ensure_folder_move_available_to_title(app, title, folder_path).await?;
+    let boundary_verified = match &layout {
+        TitleFolderClaimLayout::Conventional(Some(evidence)) => {
+            evidence
+                .verify(folder_path, &title.facet, &title.external_ids)
+                .await?
+        }
+        _ => false,
+    };
     // Imports reserve missing or empty destinations before writing media. A
     // destination with contents must not hold other titles' folders; stray
     // files or empty subfolders left by an earlier attempt do not block it.
-    let has_contents = match tokio::fs::symlink_metadata(folder_path).await {
-        Ok(_) => tokio::fs::read_dir(folder_path)
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?
-            .next_entry()
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?
-            .is_some(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(AppError::Repository(error.to_string())),
+    let has_contents = if boundary_verified {
+        false
+    } else {
+        match tokio::fs::symlink_metadata(folder_path).await {
+            Ok(_) => tokio::fs::read_dir(folder_path)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?
+                .next_entry()
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?
+                .is_some(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(AppError::Repository(error.to_string())),
+        }
     };
     if has_contents {
         match layout {
@@ -854,7 +875,7 @@ async fn ensure_unowned_folder_claimable(
                 )
                 .await?;
             }
-            TitleFolderClaimLayout::Conventional => {
+            TitleFolderClaimLayout::Conventional(_) => {
                 crate::library_discovery::ensure_scanned_folder_holds_no_child_titles(
                     folder_path,
                     title,
@@ -1169,6 +1190,69 @@ mod tests {
             .unwrap();
         assert!(created.title.folder_path.is_none());
         (app, created.title)
+    }
+
+    #[tokio::test]
+    async fn discovery_evidence_claim_preserves_library_root_boundaries() {
+        for mode in ["valid", "root", "outside"] {
+            let root = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let folder = root.path().join("Scan Fixture");
+            std::fs::create_dir(&folder).unwrap();
+            let file = folder.join("Scan.Fixture.mkv");
+            std::fs::write(&file, b"preserved media").unwrap();
+            let mut discoveries = crate::library_discovery::stream_title_folder_boundaries(
+                root.path().into(),
+                crate::library_discovery::TitleFolderBoundaryPolicy {
+                    facet: MediaFacet::Movie,
+                    stored_folders: vec![],
+                    other_roots: vec![],
+                },
+                1,
+                Default::default(),
+            );
+            let evidence =
+                tokio::time::timeout(std::time::Duration::from_secs(30), discoveries.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .remove(0)
+                    .evidence
+                    .unwrap();
+            let library_root = match mode {
+                "root" => folder.as_path(),
+                "outside" => outside.path(),
+                _ => root.path(),
+            };
+            let (app, mut title) = unowned_scan_title(MediaFacet::Movie, library_root).await;
+            let result = claim_title_folder_for_scan_with_evidence(
+                &app,
+                &mut title,
+                &folder,
+                Some(&evidence),
+            )
+            .await;
+            if mode == "valid" {
+                result.unwrap();
+                assert!(title_owns_folder(&title, &folder));
+            } else {
+                assert!(result.is_err());
+                assert!(title.folder_path.is_none());
+                assert!(
+                    app.services
+                        .catalog
+                        .titles
+                        .get_by_id(&title.id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .folder_path
+                        .is_none()
+                );
+            }
+            assert_eq!(std::fs::read(file).unwrap(), b"preserved media");
+        }
     }
 
     #[tokio::test]

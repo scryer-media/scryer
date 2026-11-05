@@ -1,12 +1,12 @@
 import * as React from "react";
 import Graph from "graphology";
-import Sigma from "sigma";
+import Sigma, { DEFAULT_STYLES } from "sigma";
+import { sdfRectangle } from "sigma/rendering";
 import { useClient } from "urql";
-import { Maximize2, Minimize2, Undo2 } from "lucide-react";
+import { ArrowUpRight, Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { LibraryGraphSelectionCard } from "./library-graph-selection-card";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { discoveryNeighborsQuery } from "@/lib/graphql/queries";
@@ -16,11 +16,21 @@ import type { DiscoveryItem, DiscoveryNeighbors } from "@/lib/types/discovery";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
 import { discoveryErrorMessage } from "@/lib/utils/discovery-error-message";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
+import { showOverviewTitleLabels } from "@/lib/utils/library-graph-labels";
+import { graphSelectionCatalogTitle } from "@/lib/utils/library-graph-selection";
 import {
   LIBRARY_PERMISSIONS,
   hasAnyLibraryPermission,
 } from "@/lib/utils/permissions";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import {
+  GRAPH_POSTER_ASPECT_RATIO,
+  GRAPH_POSTER_CORNER_RADIUS_RATIO,
+  drawGraphPoster,
+  graphPosterBounds,
+  traceGraphPoster,
+  type GraphPosterBounds,
+} from "@/lib/utils/library-graph-posters";
 import type { Facet, TitleRecord } from "@/lib/types/titles";
 import {
   UNPLACED_CLUSTER_ID,
@@ -37,7 +47,6 @@ import {
   LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
   LIBRARY_GRAPH_MAX_NODE_SIZE,
   LIBRARY_GRAPH_MIN_NODE_SIZE,
-  LIBRARY_GRAPH_SIZE_METRICS,
   displayedLibraryGraph,
   joinLibraryGraphToTitles,
   libraryGraphEdgeKindLabels,
@@ -80,14 +89,12 @@ import {
   isGhostSubjectKey,
   LIBRARY_GRAPH_GHOST_CAP,
   isLibraryItem,
-  itemMatchKeys,
   moreLikeThisEdgeKinds,
   neighborTargetKey,
   nextNodeInCluster,
   ownedNodeIndex,
   ownedSubjectForItem,
   stampGhostTitle,
-  uncoveredKeyboardGroups,
   seedGhostPositions,
   traversalGraphState,
   type KeyboardNode,
@@ -152,12 +159,6 @@ function focusNeighborRadiusPx(metricSize: number) {
 }
 /** Focused-view labels longer than this are cut short. */
 const FOCUS_LABEL_MAX_CHARS = 28;
-
-const METRIC_LABEL_KEYS: Record<LibraryGraphSizeMetric, string> = {
-  ratingEvidence: "libraryGraph.sizeBy.ratingEvidence",
-  rating: "libraryGraph.sizeBy.rating",
-  popularity: "libraryGraph.sizeBy.popularity",
-};
 
 type NodeAttributes = {
   x: number;
@@ -327,33 +328,12 @@ export type LibraryGraphViewProps = {
   libraryIds: readonly string[];
   selectedTitleId: string | null;
   contextPanelId?: string;
+  controlsRef?: React.Ref<{ fit: () => void }>;
   onSelectTitle: (title: TitleRecord) => void;
+  onOpenOverview: (title: TitleRecord) => void;
   /** Refreshes the catalog listing after a title is added or requested. */
   onCatalogChanged?: () => Promise<void> | void;
 };
-
-// The catalog listing's title an explored item names: the title Scryer
-// resolved it to, else the first title one of its keys names.
-function catalogTitleForItem(
-  item: DiscoveryItem,
-  catalogIndex: ReadonlyMap<string, TitleRecord>,
-  titles: readonly TitleRecord[],
-): TitleRecord | null {
-  const resolved = item.resolvedTitleId?.trim();
-  const byId = resolved
-    ? titles.find((title) => title.id === resolved)
-    : undefined;
-  if (byId) {
-    return byId;
-  }
-  for (const key of itemMatchKeys(item)) {
-    const title = catalogIndex.get(key);
-    if (title) {
-      return title;
-    }
-  }
-  return null;
-}
 
 type NeighborsData = {
   discoveryNeighbors?: DiscoveryNeighbors | null;
@@ -372,7 +352,9 @@ export default function LibraryGraphView({
   libraryIds,
   selectedTitleId,
   contextPanelId,
+  controlsRef,
   onSelectTitle,
+  onOpenOverview,
   onCatalogChanged,
 }: LibraryGraphViewProps) {
   const t = useTranslate();
@@ -473,6 +455,7 @@ export default function LibraryGraphView({
     TraversalState<DiscoveryItem>
   >(() => emptyTraversal<DiscoveryItem>());
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+  const [selectionCardOpen, setSelectionCardOpen] = React.useState(true);
   const [focusedKey, setFocusedKey] = React.useState<string | null>(null);
   // Why each explored result sits next to the title it was found from, by
   // the pair of nodes their link joins.
@@ -486,8 +469,7 @@ export default function LibraryGraphView({
   const [expandNotice, setExpandNotice] = React.useState<ExpandNotice | null>(
     null,
   );
-  const [metric, setMetric] =
-    React.useState<LibraryGraphSizeMetric>("ratingEvidence");
+  const [metric] = React.useState<LibraryGraphSizeMetric>("ratingEvidence");
   const [expandedClusterIds, setExpandedClusterIds] = React.useState<
     ReadonlySet<number>
   >(() => new Set());
@@ -856,6 +838,20 @@ export default function LibraryGraphView({
   // Neighbourhoods are named and outlined only when there are several; one
   // neighbourhood is the whole library.
   const showsNeighbourhoods = groups.filter((group) => group.named).length > 1;
+  const neighborhoodLegend =
+    focusCenterKey !== null
+      ? recommendationBands.map((band) => ({
+          key: band.key,
+          name: band.name,
+          color: band.color,
+          count: band.keys.length,
+        }))
+      : shownGroups.map((group) => ({
+          key: String(group.id),
+          name: group.name,
+          color: group.color,
+          count: group.count,
+        }));
   const showsNeighbourhoodsRef = React.useRef(showsNeighbourhoods);
   React.useEffect(() => {
     showsNeighbourhoodsRef.current = showsNeighbourhoods;
@@ -882,12 +878,11 @@ export default function LibraryGraphView({
         ? traversal.ghostItems.get(node.subjectKey)
         : undefined;
       if (item) {
-        const name = discoveryItemDisplayTitle(item);
-        return item.year ? `${name} (${item.year})` : name;
+        return discoveryItemDisplayTitle(item);
       }
       const title = join?.titleBySubjectKey.get(node.subjectKey);
       if (title) {
-        return title.year ? `${title.name} (${title.year})` : title.name;
+        return title.name;
       }
       return node.targetKey;
     },
@@ -931,18 +926,29 @@ export default function LibraryGraphView({
 
     const pointsByCluster = new Map<number, LayoutPoint[]>();
     const viewportByNode = new Map<string, LayoutPoint>();
+    const sizesByNode = new Map<string, number>();
     // Every drawn title, so neighbourhood names can keep off them.
-    const nodeDiscs: { x: number; y: number; r: number }[] = [];
+    const nodeDiscs: (GraphPosterBounds & {
+      x: number;
+      y: number;
+      r: number;
+    })[] = [];
     graph.forEachNode((key, attributes) => {
       const point = sigma.graphToViewport({
         x: attributes.x as number,
         y: attributes.y as number,
       });
       viewportByNode.set(key, point);
+      // Match the WebGL size after style and reducer adjustments.
+      const size = sigma.scaleSize(
+        sigma.getNodeDisplayData(key)?.size ?? attributes.size,
+      );
+      sizesByNode.set(key, size);
       nodeDiscs.push({
         x: point.x,
         y: point.y,
-        r: sigma.scaleSize(attributes.size as number),
+        r: size,
+        ...graphPosterBounds(point, size),
       });
       // Ghosts are not in the library, so they never stretch a cluster hull.
       if (attributes.collapsedClusterId !== undefined || attributes.ghost) {
@@ -1035,11 +1041,13 @@ export default function LibraryGraphView({
         const baseY = median(points.map((point) => point.y));
         // A spot is clear when the name covers no title and no other name.
         const coversTitle = (cx: number, cy: number) =>
-          nodeDiscs.some((disc) => {
-            const dx = Math.max(Math.abs(disc.x - cx) - w / 2, 0);
-            const dy = Math.max(Math.abs(disc.y - cy) - h / 2, 0);
-            return dx * dx + dy * dy < (disc.r + 3) * (disc.r + 3);
-          });
+          nodeDiscs.some(
+            (poster) =>
+              poster.left < cx + w / 2 + 3 &&
+              poster.right > cx - w / 2 - 3 &&
+              poster.top < cy + h / 2 + 3 &&
+              poster.bottom > cy - h / 2 - 3,
+          );
         const coversName = (cx: number, cy: number) =>
           placedHullLabels.some(
             (other) =>
@@ -1111,12 +1119,13 @@ export default function LibraryGraphView({
           angles.push(
             Math.atan2(point.y - bandCenter.y, point.x - bandCenter.x),
           );
-          const size = sigma.scaleSize(
-            graph.getNodeAttribute(key, "size") as number,
-          );
+          const size = sizesByNode.get(key) ?? 0;
           inner = Math.min(inner, radius);
           outer = Math.max(outer, radius);
-          pad = Math.max(pad, size + 6);
+          pad = Math.max(
+            pad,
+            Math.hypot(size * GRAPH_POSTER_ASPECT_RATIO, size) + 6,
+          );
         }
         if (outer === 0) {
           continue;
@@ -1169,7 +1178,7 @@ export default function LibraryGraphView({
       if (!url) {
         return;
       }
-      const radius = sigma.scaleSize(attributes.size as number);
+      const radius = sizesByNode.get(key) ?? 0;
       const point = viewportByNode.get(key);
       if (
         !point ||
@@ -1200,22 +1209,7 @@ export default function LibraryGraphView({
       if (hoverFocus && !hoverFocus.near.has(key)) {
         context.globalAlpha = HOVER_FADE_ALPHA;
       }
-      context.beginPath();
-      context.arc(point.x, point.y, radius, 0, Math.PI * 2);
-      context.clip();
-      const scale = Math.max(
-        (radius * 2) / image.naturalWidth,
-        (radius * 2) / image.naturalHeight,
-      );
-      const drawWidth = image.naturalWidth * scale;
-      const drawHeight = image.naturalHeight * scale;
-      context.drawImage(
-        image,
-        point.x - drawWidth / 2,
-        point.y - drawHeight / 2,
-        drawWidth,
-        drawHeight,
-      );
+      drawGraphPoster(context, image, point, radius);
       context.restore();
       if (
         selectedKeyRef.current !== null
@@ -1223,8 +1217,7 @@ export default function LibraryGraphView({
           : attributes.titleId &&
             attributes.titleId === selectedTitleIdRef.current
       ) {
-        context.beginPath();
-        context.arc(point.x, point.y, radius + 2, 0, Math.PI * 2);
+        traceGraphPoster(context, point, radius, 2);
         context.lineWidth = 3;
         context.strokeStyle = cachedCssColor(
           themeColorsRef.current,
@@ -1253,7 +1246,7 @@ export default function LibraryGraphView({
         return;
       }
       const point = viewportByNode.get(key);
-      const radius = sigma.scaleSize(attributes.size as number);
+      const radius = sizesByNode.get(key) ?? 0;
       if (
         !point ||
         point.x < -radius ||
@@ -1263,19 +1256,34 @@ export default function LibraryGraphView({
       ) {
         return;
       }
-      context.beginPath();
-      context.arc(point.x, point.y, radius + 2, 0, Math.PI * 2);
+      traceGraphPoster(context, point, radius, 2);
       context.stroke();
     });
     context.restore();
 
+    // Title labels require a close zoom as well as an uncrowded view.
+    // A small library at overview scale must not reveal labels just because
+    // there are few nodes. Require most visible posters to be readable too.
+    const visibleDiscs = nodeDiscs.filter(
+      ({ x, y, r }) =>
+        x + r >= 0 && y + r >= 0 && x - r <= width && y - r <= height,
+    );
+    const showOverviewLabels = showOverviewTitleLabels(
+      visibleDiscs,
+      width,
+      height,
+    );
     // A focused view names the nodes it shows, each label pointing away
     // from the centre so the ring stays clear. Labels are placed centre
     // first, then the keyboard-focused node, then outward; one that would
     // overlap a placed label is left off, and the hover card names it.
-    const centerPoint =
-      focusCenter !== null ? viewportByNode.get(focusCenter) : undefined;
-    if (centerPoint) {
+    const centerPoint = (focusCenter !== null
+      ? viewportByNode.get(focusCenter)
+      : undefined) ?? {
+      x: width / 2,
+      y: height / 2,
+    };
+    if (focusCenter !== null || showOverviewLabels) {
       context.save();
       context.textBaseline = "middle";
       context.lineJoin = "round";
@@ -1295,7 +1303,15 @@ export default function LibraryGraphView({
       const keyboardKey = focusedKeyRef.current;
       const order: string[] = [];
       graph.forEachNode((key) => {
-        if (viewportByNode.has(key)) {
+        const point = viewportByNode.get(key);
+        if (
+          point &&
+          (focusCenter !== null ||
+            (point.x >= 0 &&
+              point.y >= 0 &&
+              point.x <= width &&
+              point.y <= height))
+        ) {
           order.push(key);
         }
       });
@@ -1310,6 +1326,11 @@ export default function LibraryGraphView({
       order.sort(
         (a, b) =>
           rank(a) - rank(b) ||
+          // Small posters need their names most in the overview.
+          (focusCenter === null
+            ? (graph.getNodeAttribute(a, "size") as number) -
+              (graph.getNodeAttribute(b, "size") as number)
+            : 0) ||
           distance(a) - distance(b) ||
           (a < b ? -1 : a > b ? 1 : 0),
       );
@@ -1318,7 +1339,12 @@ export default function LibraryGraphView({
         top: number;
         right: number;
         bottom: number;
-      }[] = [];
+      }[] = placedHullLabels.map(({ x, y, w, h }) => ({
+        left: x - w / 2,
+        top: y - h / 2,
+        right: x + w / 2,
+        bottom: y + h / 2,
+      }));
       // Band names first, as pills kept on the canvas; node labels give way
       // to them.
       context.font = "700 12px system-ui, sans-serif";
@@ -1385,9 +1411,7 @@ export default function LibraryGraphView({
           : "500 11px system-ui, sans-serif";
         const lineHeight = isCenter ? 15 : 13;
         const textWidth = context.measureText(text).width;
-        const radius = sigma.scaleSize(
-          graph.getNodeAttribute(key, "size") as number,
-        );
+        const radius = sizesByNode.get(key) ?? 0;
         const dx = point.x - centerPoint.x;
         const dy = point.y - centerPoint.y;
         let x = point.x;
@@ -1437,11 +1461,8 @@ export default function LibraryGraphView({
     const focused = focusedKeyRef.current;
     const focusPoint = focused ? viewportByNode.get(focused) : undefined;
     if (focused && focusPoint && graph.hasNode(focused)) {
-      const radius = sigma.scaleSize(
-        graph.getNodeAttribute(focused, "size") as number,
-      );
-      context.beginPath();
-      context.arc(focusPoint.x, focusPoint.y, radius + 5, 0, Math.PI * 2);
+      const radius = sizesByNode.get(focused) ?? 0;
+      traceGraphPoster(context, focusPoint, radius, 5);
       context.lineWidth = 2;
       context.strokeStyle = cachedCssColor(
         themeColorsRef.current,
@@ -1464,6 +1485,23 @@ export default function LibraryGraphView({
       multi: false,
     });
     const sigma = new Sigma<NodeAttributes, EdgeAttributes>(graph, container, {
+      primitives: {
+        nodes: {
+          shapes: [
+            sdfRectangle({
+              aspectRatio: GRAPH_POSTER_ASPECT_RATIO,
+              cornerRadius: GRAPH_POSTER_CORNER_RADIUS_RATIO,
+            }),
+          ],
+        },
+      },
+      styles: {
+        nodes: {
+          ...DEFAULT_STYLES.nodes,
+          shape: "rectangle",
+          backdropVisibility: "hidden",
+        },
+      },
       settings: {
         // The view can sit in a hidden drawer (narrow screens with a title
         // open), where the container has no size; sigma must not throw there.
@@ -1915,16 +1953,6 @@ export default function LibraryGraphView({
     traversal,
   ]);
 
-  // Explored titles that settled in no library cluster get a chip of their
-  // own, so the keyboard can reach them.
-  const exploredGroups = React.useMemo(
-    () =>
-      uncoveredKeyboardGroups(
-        keyboardNodes,
-        new Set(groups.map((group) => group.id)),
-      ),
-    [groups, keyboardNodes],
-  );
   const keyboardNodesRef = React.useRef(keyboardNodes);
   React.useEffect(() => {
     keyboardNodesRef.current = keyboardNodes;
@@ -1964,6 +1992,10 @@ export default function LibraryGraphView({
       .getCamera()
       .animate(camera ?? restCamera(sigma), { duration: 300 });
   }, []);
+
+  React.useImperativeHandle(controlsRef, () => ({ fit: resetCamera }), [
+    resetCamera,
+  ]);
 
   // The node picked in the graph, while it is still drawn.
   const displayedNodesByKey = React.useMemo(
@@ -2151,6 +2183,7 @@ export default function LibraryGraphView({
       setExpandingKey(null);
       setExpandNotice(null);
       setSelectedKey(key);
+      setSelectionCardOpen(true);
       setFocusedKey(key);
       const title = attributes.titleId
         ? titlesByIdRef.current.get(attributes.titleId)
@@ -2222,6 +2255,7 @@ export default function LibraryGraphView({
       setExpandNotice(null);
       setTraversal((current) => collapseTraversalToCrumb(current, index));
       setSelectedKey(anchor);
+      setSelectionCardOpen(true);
       setFocusedKey(anchor);
     },
     [exitFocus, traversal.expansions],
@@ -2261,7 +2295,11 @@ export default function LibraryGraphView({
           }
           if (selectedNode) {
             event.preventDefault();
-            exitFocus();
+            if (selectionCardOpen) {
+              setSelectionCardOpen(false);
+            } else {
+              exitFocus();
+            }
           } else if (shownFocusedKey) {
             event.preventDefault();
             setFocusedKey(null);
@@ -2277,6 +2315,7 @@ export default function LibraryGraphView({
       exitFocus,
       keyboardNodes,
       selectedNode,
+      selectionCardOpen,
       selectedTitleId,
       shownFocusedKey,
     ],
@@ -2317,9 +2356,6 @@ export default function LibraryGraphView({
     ? libraryGraphEdgeKindLabels(shownHover.lines, t)
     : hoverReasonLines;
   const visibleNodeCount = join?.graph.nodes.length ?? 0;
-  // Above the threshold clusters start collapsed; an expanded one can fold
-  // back from its chip.
-  const collapsing = visibleNodeCount > LIBRARY_GRAPH_COLLAPSE_THRESHOLD;
   const selectedVisible =
     selectedTitleId !== null && titlesById.has(selectedTitleId);
   // Titles still paging, or the graph still loading for them, show as
@@ -2353,16 +2389,21 @@ export default function LibraryGraphView({
       : null;
   const { canAddItem, canRequestItem, onAction, onOpenResolved } =
     moreLikeThisActions.stripProps;
-  // A ghost that is one of the viewer's titles, though not drawn as a
-  // library node, opens instead of offering Add or Request: through the
-  // listing when it is there, else through the title Scryer resolved.
+  // Owned nodes and discovered catalog matches open their overview instead
+  // of offering Add or Request.
+  const selectedCatalogTitle = graphSelectionCatalogTitle(
+    selectedNode
+      ? join?.titleBySubjectKey.get(selectedNode.subjectKey)
+      : undefined,
+    selectedItem,
+    catalogIndex,
+    titles ?? [],
+  );
   const selectedResolved =
-    selectedItem !== null && isLibraryItem(selectedItem, catalogIndex);
-  const selectedCatalogTitle = selectedItem
-    ? catalogTitleForItem(selectedItem, catalogIndex, titles ?? [])
-    : null;
+    selectedCatalogTitle !== null ||
+    (selectedItem !== null && isLibraryItem(selectedItem, catalogIndex));
   const openSelected = selectedCatalogTitle
-    ? () => onSelectTitle(selectedCatalogTitle)
+    ? () => onOpenOverview(selectedCatalogTitle)
     : selectedItem?.resolvedTitleId?.trim() && onOpenResolved
       ? () => void onOpenResolved(selectedItem)
       : null;
@@ -2397,105 +2438,6 @@ export default function LibraryGraphView({
       aria-controls={selectedVisible ? contextPanelId : undefined}
       className="flex h-full min-h-[24rem] flex-col gap-3"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[12px] text-[var(--scry-muted2)]">
-          {t("libraryGraph.sizeByLabel")}
-        </span>
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          value={metric}
-          onValueChange={(value) => {
-            const next = LIBRARY_GRAPH_SIZE_METRICS.find(
-              (candidate) => candidate === value,
-            );
-            if (next) {
-              setMetric(next);
-            }
-          }}
-          aria-label={t("libraryGraph.sizeByLabel")}
-          className="rounded-[9px] border !border-[var(--scry-border2)] bg-[var(--scry-inset)] p-[0.1875rem]"
-        >
-          {LIBRARY_GRAPH_SIZE_METRICS.map((candidate) => (
-            <ToggleGroupItem
-              key={candidate}
-              value={candidate}
-              size="sm"
-              className="h-7 rounded-[7px] px-2.5 text-[12px] text-[var(--scry-muted2)] data-[state=on]:!bg-[var(--scry-accent)] data-[state=on]:!text-primary-foreground"
-            >
-              {t(METRIC_LABEL_KEYS[candidate])}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={resetCamera}
-          className="ml-auto h-8 gap-1.5 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 text-[12px] shadow-none"
-          aria-label={t("libraryGraph.resetView")}
-          title={t("libraryGraph.resetView")}
-        >
-          <Maximize2 className="h-3.5 w-3.5" />
-          <span className="max-sm:sr-only">{t("libraryGraph.resetView")}</span>
-        </Button>
-      </div>
-      {(showsNeighbourhoods || exploredGroups.length > 0) &&
-      focusCenterKey === null ? (
-        <nav
-          aria-label={t("libraryGraph.clustersLabel")}
-          className="flex gap-1.5 overflow-x-auto pb-1"
-        >
-          {(showsNeighbourhoods ? shownGroups : []).map((group) => (
-            <span key={group.id} className="flex shrink-0 items-center gap-0.5">
-              <button
-                type="button"
-                onClick={() => focusGroup(group.id)}
-                className="flex items-center gap-1.5 rounded-full border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 py-1 text-[12px] text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)]"
-              >
-                <span
-                  aria-hidden="true"
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: group.color }}
-                />
-                <span>{group.name}</span>
-                <span className="text-[var(--scry-muted2)]">{group.count}</span>
-              </button>
-              {collapsing && expandedClusterIds.has(group.id) ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setExpandedClusterIds((current) =>
-                      toggleClusterExpanded(current, group.id),
-                    )
-                  }
-                  aria-label={t("libraryGraph.collapseCluster", {
-                    name: group.name,
-                  })}
-                  title={t("libraryGraph.collapseCluster", {
-                    name: group.name,
-                  })}
-                  className="flex h-6 w-6 items-center justify-center rounded-full text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)]"
-                >
-                  <Minimize2 className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
-            </span>
-          ))}
-          {exploredGroups.map((group) => (
-            <button
-              key={`explored-${group.id}`}
-              type="button"
-              onClick={() => focusGroup(group.id)}
-              className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 py-1 text-[12px] text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)]"
-            >
-              <span>{t("libraryGraph.exploredGroup")}</span>
-              <span className="text-[var(--scry-muted2)]">{group.count}</span>
-            </button>
-          ))}
-        </nav>
-      ) : null}
       {result?.truncated ? (
         <p
           className="text-[12px] text-[var(--scry-muted2)]"
@@ -2557,12 +2499,16 @@ export default function LibraryGraphView({
           aria-hidden="true"
           className="pointer-events-none absolute left-0 top-0"
         />
-        {focusCenterKey !== null && recommendationBands.length > 0 ? (
+        {neighborhoodLegend.length > 0 ? (
           <ul
-            aria-label={t("libraryGraph.recommendationGroupsLabel")}
+            aria-label={t(
+              focusCenterKey !== null
+                ? "libraryGraph.recommendationGroupsLabel"
+                : "libraryGraph.clustersLabel",
+            )}
             className="absolute left-3 top-3 z-10 flex max-h-[calc(100%-1.5rem)] max-w-[calc(100%-1.5rem)] flex-col gap-1.5 overflow-y-auto overscroll-contain rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-card2)]/90 p-2 text-[12px] shadow-lg backdrop-blur-sm"
           >
-            {recommendationBands.map((band) => (
+            {neighborhoodLegend.map((band) => (
               <li
                 key={band.key}
                 className="flex min-w-0 items-center gap-2 rounded-[6px] px-2 py-1 text-[var(--scry-ink2)]"
@@ -2575,7 +2521,7 @@ export default function LibraryGraphView({
                 />
                 <span className="min-w-0 break-words">{band.name}</span>
                 <span className="ml-auto shrink-0 pl-2 tabular-nums text-[var(--scry-muted2)]">
-                  {band.keys.length}
+                  {band.count}
                 </span>
               </li>
             ))}
@@ -2658,30 +2604,35 @@ export default function LibraryGraphView({
                 : t("libraryGraph.empty")}
           </div>
         ) : null}
-        {selectedNode && selectedNode.collapsedClusterId === undefined ? (
+        {selectionCardOpen &&
+        selectedNode &&
+        selectedNode.collapsedClusterId === undefined ? (
           <LibraryGraphSelectionCard
             key={selectedNode.subjectKey}
             label={nodeLabel(selectedNode)}
             item={selectedItem}
-            title={
-              selectedCatalogTitle ??
-              join?.titleBySubjectKey.get(selectedNode.subjectKey) ??
-              null
-            }
+            title={selectedCatalogTitle}
             facet={facet}
             ghost={selectedNode.ghost}
             inLibrary={!selectedNode.ghost || selectedResolved}
-            onClose={exitFocus}
+            onClose={() => {
+              setSelectionCardOpen(false);
+              containerRef.current?.focus({ preventScroll: true });
+            }}
           >
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               {selectedResolved && openSelected ? (
                 <Button
                   type="button"
                   size="sm"
-                  onClick={openSelected}
-                  className="h-7 rounded-[8px] px-2.5 text-[12px]"
+                  onClick={() => {
+                    setSelectionCardOpen(false);
+                    openSelected();
+                  }}
+                  className="h-11 min-w-24 gap-2 rounded-[10px] px-5 text-sm font-semibold"
                 >
-                  {t("libraryGraph.openTitle")}
+                  {t("nav.group.overview")}
+                  <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
                 </Button>
               ) : null}
               {selectedItem && (selectedAddable || selectedRequestable) ? (

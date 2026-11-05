@@ -1,22 +1,15 @@
 import * as React from "react";
 import { useClient } from "urql";
 import { toast } from "sonner";
-import {
-  useInstanceFeatures,
-  useInstanceFeaturesLoaded,
-} from "@/lib/context/instance-features-context";
 import { useUiSettings } from "@/lib/context/ui-settings-context";
 import { setMyCatalogViewMutation } from "@/lib/graphql/mutations";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import type { SetMyCatalogViewInput, UiSettings } from "@/lib/types/settings";
 import {
-  availableCatalogViewMode,
   catalogColumnsInput,
-  catalogViewModePending,
   catalogDeviceClass,
   catalogFacetForView,
   catalogViewModeToProfile,
-  graphViewEnabled,
   savedCatalogViewMode,
   savedCatalogVisibleColumns,
 } from "@/lib/utils/catalog-view-preferences";
@@ -47,9 +40,6 @@ export function useCatalogViewPreferences(
   const client = useClient();
   const isMobile = useIsMobile();
   const { uiSettings, uiSettingsLoaded, setUiSettings } = useUiSettings();
-  // The graph view is offered only while experimental features are on.
-  const graphEnabled = graphViewEnabled(useInstanceFeatures());
-  const featuresLoaded = useInstanceFeaturesLoaded();
   const deviceClass = catalogDeviceClass(isMobile);
   const facet = catalogFacetForView(view);
   const scopeKey = `${deviceClass}:${view}`;
@@ -71,8 +61,6 @@ export function useCatalogViewPreferences(
     [view],
   );
 
-  // A graph choice holds as the graph, shown as loading, until the switches
-  // are known; then it falls back to posters if the graph is off.
   const { viewMode, viewModePending } = React.useMemo((): {
     viewMode: ContentViewMode;
     viewModePending: boolean;
@@ -83,18 +71,13 @@ export function useCatalogViewPreferences(
         : null;
     const chosen =
       localViewModes[scopeKey] ?? saved ?? readStoredContentViewMode(view);
-    if (catalogViewModePending(chosen, featuresLoaded)) {
-      return { viewMode: chosen, viewModePending: true };
-    }
     return {
-      viewMode: availableCatalogViewMode(chosen, graphEnabled),
+      viewMode: chosen,
       viewModePending: false,
     };
   }, [
     deviceClass,
     facet,
-    featuresLoaded,
-    graphEnabled,
     localViewModes,
     scopeKey,
     uiSettings,
@@ -199,6 +182,5 @@ export function useCatalogViewPreferences(
     setViewMode,
     visibleColumns,
     setColumnVisible,
-    graphEnabled,
   };
 }

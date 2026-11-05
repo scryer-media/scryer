@@ -2295,6 +2295,7 @@ async fn run_movie_candidate_jobs_from_discovery(
                     .await;
                 continue;
             }
+            let boundary_evidence = entry.evidence;
             let entry = MovieTopLevelEntry {
                 path: entry.path,
                 is_dir: true,
@@ -2304,7 +2305,16 @@ async fn run_movie_candidate_jobs_from_discovery(
             let library_path = ctx.library_path.clone();
             let scan_hints = ctx.scan_hints.clone();
             runner.evidence_set.spawn(async move {
-                movie_evidence_job(scanner, entry, library_path, scan_hints, key).await
+                let mut output =
+                    movie_evidence_job(scanner, entry, library_path, scan_hints, key).await;
+                if let EvidenceJobOutput::Candidate {
+                    candidate: ScanPipelineCandidate::Movie(candidate),
+                    ..
+                } = &mut output
+                {
+                    candidate.boundary_evidence = boundary_evidence;
+                }
+                output
             });
         }
 
@@ -3513,6 +3523,7 @@ mod tests {
                     .iter()
                     .map(
                         |(_, path, _)| crate::library_discovery::TitleFolderBoundary {
+                            evidence: None,
                             path: path.clone(),
                             rejection: None,
                         },
@@ -3638,6 +3649,7 @@ mod tests {
             let boundaries = expected
                 .iter()
                 .map(|path| crate::library_discovery::TitleFolderBoundary {
+                    evidence: None,
                     path: PathBuf::from(path),
                     rejection: None,
                 })

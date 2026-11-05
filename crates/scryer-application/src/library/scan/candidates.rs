@@ -277,12 +277,34 @@ async fn sync_movie_title_folder_path_for_scan(
     representative_path: &str,
     representative_is_directory: bool,
 ) -> AppResult<(Option<String>, Option<String>)> {
+    sync_movie_title_folder_path_for_scan_with_evidence(
+        app,
+        library,
+        title,
+        scan_root,
+        representative_path,
+        representative_is_directory,
+        None,
+    )
+    .await
+}
+
+async fn sync_movie_title_folder_path_for_scan_with_evidence(
+    app: &AppUseCase,
+    library: Option<&Library>,
+    title: &mut Title,
+    scan_root: &Path,
+    representative_path: &str,
+    representative_is_directory: bool,
+    evidence: Option<&crate::library_discovery::DiscoveredBoundaryEvidence>,
+) -> AppResult<(Option<String>, Option<String>)> {
     let synced = sync_movie_title_folder_path_for_scan_inner(
         app,
         title,
         scan_root,
         representative_path,
         representative_is_directory,
+        evidence,
     )
     .await?;
     heal_scanned_title_root_folder_id(app, library, title).await?;
@@ -295,6 +317,7 @@ async fn sync_movie_title_folder_path_for_scan_inner(
     scan_root: &Path,
     representative_path: &str,
     representative_is_directory: bool,
+    evidence: Option<&crate::library_discovery::DiscoveredBoundaryEvidence>,
 ) -> AppResult<(Option<String>, Option<String>)> {
     let scan_folder_path = scanned_movie_entry_folder_path(
         scan_root,
@@ -325,10 +348,11 @@ async fn sync_movie_title_folder_path_for_scan_inner(
         return Ok((None, scan_folder_path));
     };
 
-    crate::folder_ownership::claim_title_folder_for_scan_if_missing(
+    crate::folder_ownership::claim_title_folder_for_scan_with_evidence(
         app,
         title,
         &stored_path_to_path_buf(folder_path),
+        evidence,
     )
     .await?;
 
@@ -913,9 +937,10 @@ async fn resolve_movie_metadata_match(
 
     let new_title = build_new_title_from_metadata_match(facet, &selected);
     if candidate.representative_is_directory
-        && let Err(error) = crate::library_discovery::verify_new_scan_title_boundary(
+        && let Err(error) = crate::library_discovery::verify_new_scan_title_boundary_with_evidence(
             Path::new(&candidate.file.path),
             &new_title,
+            candidate.boundary_evidence.as_ref(),
         )
         .await
     {
@@ -1387,15 +1412,17 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
     .await?
     {
         MovieMetadataResolution::Ready(mut title) => {
-            let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
-                app,
-                library,
-                &mut title,
-                scan_root,
-                &candidate.file.path,
-                candidate.representative_is_directory,
-            )
-            .await?;
+            let (canonical_folder_path, scan_folder_path) =
+                sync_movie_title_folder_path_for_scan_with_evidence(
+                    app,
+                    library,
+                    &mut title,
+                    scan_root,
+                    &candidate.file.path,
+                    candidate.representative_is_directory,
+                    candidate.boundary_evidence.as_ref(),
+                )
+                .await?;
             sync_existing_title_folder_path_in_memory(existing_titles, &title);
             if movie_scan_folder_conflicts(
                 canonical_folder_path.as_deref(),
@@ -1432,15 +1459,17 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
             Ok(())
         }
         MovieMetadataResolution::ReadyCreated { mut title, .. } => {
-            let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
-                app,
-                library,
-                &mut title,
-                scan_root,
-                &candidate.file.path,
-                candidate.representative_is_directory,
-            )
-            .await?;
+            let (canonical_folder_path, scan_folder_path) =
+                sync_movie_title_folder_path_for_scan_with_evidence(
+                    app,
+                    library,
+                    &mut title,
+                    scan_root,
+                    &candidate.file.path,
+                    candidate.representative_is_directory,
+                    candidate.boundary_evidence.as_ref(),
+                )
+                .await?;
             sync_existing_title_folder_path_in_memory(existing_titles, &title);
             let queued = merge_default_movie_title_work(
                 executor,
@@ -2512,6 +2541,7 @@ mod tests {
 
     fn movie_candidate(query: &str, year_hint: Option<u32>) -> PreparedMovieLibraryScanCandidate {
         PreparedMovieLibraryScanCandidate {
+            boundary_evidence: None,
             file: LibraryFile {
                 path: format!("/library/{query}/{query}.mkv"),
                 display_name: query.to_string(),

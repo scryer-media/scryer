@@ -10,6 +10,7 @@ mod refresh_job;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ScoreRefreshSelection {
     Files(Vec<String>),
+    Episodes(Vec<String>),
     Seasons(Vec<String>),
     Titles(Vec<String>),
 }
@@ -17,7 +18,7 @@ pub enum ScoreRefreshSelection {
 impl ScoreRefreshSelection {
     pub fn ids(&self) -> &[String] {
         match self {
-            Self::Files(ids) | Self::Seasons(ids) | Self::Titles(ids) => ids,
+            Self::Files(ids) | Self::Episodes(ids) | Self::Seasons(ids) | Self::Titles(ids) => ids,
         }
     }
 }

@@ -62,7 +62,7 @@ type SettingsSecuritySectionProps = {
   onMfaPasswordLoginChange: (enabled: boolean) => void;
   onTotpJellyfinLoginChange: (enabled: boolean) => void;
   onTotpEmbyLoginChange: (enabled: boolean) => void;
-  /** Who can reach Scryer, its public URL and trusted proxies; shown first. */
+  /** Who can reach Scryer, its public URL and trusted proxies. */
   networkPanel: React.ReactNode;
   oauthApplicationsPanel: React.ReactNode;
 };
@@ -115,7 +115,6 @@ export function SettingsSecuritySection({
   return (
     <>
       <div id="settings-security-section" className="space-y-4 text-sm">
-        {networkPanel}
         <div className={SECURITY_PANEL_CLASS}>
           <div className={SECURITY_PANEL_HEADER_CLASS}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -376,6 +375,7 @@ export function SettingsSecuritySection({
           </div>
         ) : null}
 
+        {networkPanel}
         {oauthApplicationsPanel}
       </div>
 
