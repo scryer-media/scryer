@@ -3232,23 +3232,48 @@ export default function LibraryGraphView({
           className="flex flex-wrap items-center gap-1.5"
           data-testid="library-graph-trail"
         >
-          {crumbs.map((crumb, index) => (
-            <React.Fragment key={crumb.anchor}>
-              {index > 0 ? (
-                <span aria-hidden="true" className="text-[var(--scry-muted2)]">
-                  ›
-                </span>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => collapseToCrumb(index)}
-                aria-current={index === crumbs.length - 1 ? "step" : undefined}
-                className="max-w-[12rem] truncate rounded-full border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 py-0.5 text-[12px] text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)] aria-[current=step]:border-[var(--scry-accent)]"
-              >
-                {crumb.label}
-              </button>
-            </React.Fragment>
-          ))}
+          {crumbs.map((crumb, index) =>
+            crumbs.length > 4 &&
+            index > 0 &&
+            index < crumbs.length - 2 ? null : (
+              <React.Fragment key={crumb.anchor}>
+                {index > 0 ? (
+                  <span
+                    aria-hidden="true"
+                    className="text-[var(--scry-muted2)]"
+                  >
+                    ›
+                  </span>
+                ) : null}
+                {crumbs.length > 4 && index === crumbs.length - 2 ? (
+                  <>
+                    <span
+                      aria-hidden="true"
+                      className="text-[var(--scry-muted2)]"
+                    >
+                      …
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      className="text-[var(--scry-muted2)]"
+                    >
+                      ›
+                    </span>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => collapseToCrumb(index)}
+                  aria-current={
+                    index === crumbs.length - 1 ? "step" : undefined
+                  }
+                  className="max-w-[12rem] truncate rounded-full border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 py-0.5 text-[12px] text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)] aria-[current=step]:border-[var(--scry-accent)]"
+                >
+                  {crumb.label}
+                </button>
+              </React.Fragment>
+            ),
+          )}
           <Button
             type="button"
             variant="outline"
