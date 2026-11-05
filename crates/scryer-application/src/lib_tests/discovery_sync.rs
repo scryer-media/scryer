@@ -1493,6 +1493,46 @@ async fn discovery_home_hydrates_only_selected_cards_from_large_candidate_set() 
         0,
         "card-only discovery home must not load unused personalized facets"
     );
+    discovery.hydrated_home_hero_ids.lock().await.clear();
+    let projected = app
+        .discovery_home_projected(
+            &viewer_actor,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 1,
+                filters: DiscoveryHomeFilters::default(),
+            },
+            crate::DiscoveryHomeProjection::default(),
+        )
+        .await
+        .unwrap();
+    assert!(projected.hero_item.is_none());
+    assert!(projected.browse_labels.is_empty());
+    assert!(projected.facets.is_empty());
+    assert!(discovery.hydrated_home_hero_ids.lock().await.is_empty());
+    assert!(
+        discovery
+            .hydrated_home_candidate_ids
+            .lock()
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        projected
+            .personalized_sections
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .map(|item| &item.id)
+            .collect::<Vec<_>>(),
+        card_home
+            .personalized_sections
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .map(|item| &item.id)
+            .collect::<Vec<_>>(),
+    );
 }
 
 #[tokio::test]

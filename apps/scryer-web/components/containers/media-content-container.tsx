@@ -1,6 +1,7 @@
 import { hasGraphQlErrorReason } from "@/lib/graphql/error-message";
 import { titleDeleteErrorMessage } from "@/lib/utils/title-delete-error-message";
 import * as React from "react";
+import { DiscoveryInFlight } from "@/lib/utils/discovery-in-flight";
 import { useCatalogFilterState } from "@/lib/hooks/use-catalog-filter-state";
 import { createCatalogPageRequestGate } from "@/lib/utils/catalog-page-request";
 import { loadCatalogBulk } from "@/lib/utils/catalog-bulk-load";
@@ -759,6 +760,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     [advancedTitleFilters, setAdvancedTitleFilters],
   );
   const catalogDiscoveryRequestIdRef = React.useRef(0);
+  const catalogDiscoveryInFlight = React.useRef(
+    new DiscoveryInFlight<CatalogDiscoveryPayload | undefined>(),
+  );
   const [catalogDiscoveryGroups, setCatalogDiscoveryGroups] = React.useState<
     CatalogDiscoveryGroup[]
   >([]);
@@ -774,6 +778,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   React.useLayoutEffect(() => {
     authorizationSignatureRef.current = authorizationSignature;
     catalogDiscoveryRequestIdRef.current += 1;
+    catalogDiscoveryInFlight.current.clear();
     setCatalogDiscoveryGroups([]);
     setAddDiscoveryDialogTarget(null);
     setRequestDiscoveryDialogTarget(null);
@@ -798,7 +803,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     catalogDiscoveryRequestIdRef.current = requestId;
     if (
       !shouldLoadCatalogTitles ||
-      !catalogDependentRequestsAllowedRef.current ||
       (!canManageCatalogDiscovery && !canRequestCatalogDiscovery)
     ) {
       setCatalogDiscoveryGroups([]);
@@ -816,18 +820,22 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       maxGroups: CATALOG_DISCOVERY_MAX_GROUPS,
     };
     try {
-      const { data, error } = await client
-        .query<{ catalogDiscovery?: CatalogDiscoveryPayload }>(
-          catalogDiscoveryQuery,
-          { input },
-          { requestPolicy: "network-only" },
-        )
-        .toPromise();
-      if (error) {
-        throw error;
-      }
+      const payload = await catalogDiscoveryInFlight.current.run(
+        JSON.stringify([authorizationSignature, input]),
+        async () => {
+          const { data, error } = await client
+            .query<{ catalogDiscovery?: CatalogDiscoveryPayload }>(
+              catalogDiscoveryQuery,
+              { input },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+          if (error) throw error;
+          return data?.catalogDiscovery;
+        },
+      );
       if (catalogDiscoveryRequestIdRef.current === requestId) {
-        setCatalogDiscoveryGroups(data?.catalogDiscovery?.groups ?? []);
+        setCatalogDiscoveryGroups(payload?.groups ?? []);
       }
     } catch (error) {
       console.error("[catalog-discovery] refresh failed:", error);
@@ -837,6 +845,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
   }, [
     activeFacet,
+    authorizationSignature,
     canManageCatalogDiscovery,
     canRequestCatalogDiscovery,
     client,
@@ -1281,18 +1290,25 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   catalogDependentRequestsAllowedRef.current =
     catalogSurfaceAllowsDependentRequests;
   React.useEffect(() => {
+    if (librariesLoading || librariesFacet !== activeFacet) return;
+    void refreshCatalogDiscovery();
+    return () => {
+      catalogDiscoveryRequestIdRef.current += 1;
+    };
+  }, [
+    activeFacet,
+    authorizationSignature,
+    librariesFacet,
+    librariesLoading,
+    refreshCatalogDiscovery,
+  ]);
+  React.useEffect(() => {
     if (!catalogSurfaceAllowsDependentRequests) {
-      setCatalogDiscoveryGroups([]);
       return;
     }
 
-    void refreshCatalogDiscovery();
     void refreshTitleCatalogFilterOptions();
-  }, [
-    catalogSurfaceAllowsDependentRequests,
-    refreshCatalogDiscovery,
-    refreshTitleCatalogFilterOptions,
-  ]);
+  }, [catalogSurfaceAllowsDependentRequests, refreshTitleCatalogFilterOptions]);
   const retryCatalogBootstrap = React.useCallback(() => {
     catalogBootstrapRequestSeqRef.current += 1;
     catalogBootstrapInFlightKeyRef.current = null;

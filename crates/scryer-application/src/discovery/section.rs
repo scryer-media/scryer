@@ -866,6 +866,28 @@ impl AppUseCase {
             ))
             .await?
         };
+        self.discovery_browse_query_with_owned(
+            actor,
+            visibility,
+            state,
+            can_view_personalized,
+            query,
+            section,
+            &owned,
+        )
+        .await
+    }
+
+    pub(super) async fn discovery_browse_query_with_owned(
+        &self,
+        actor: &User,
+        visibility: &DiscoveryVisibility,
+        state: &DiscoverySyncStateRecord,
+        can_view_personalized: bool,
+        query: &DiscoveryItemsQuery,
+        section: &DiscoverySectionItemsQuery,
+        owned: &CatalogOwnedVisibility,
+    ) -> AppResult<DiscoveryItemsStorageQuery> {
         let requested_keys = if section.hide_requested {
             self.discovery_pending_request_visibility(actor)
                 .await?
@@ -1112,7 +1134,7 @@ impl AppUseCase {
         section_query: &DiscoverySectionItemsQuery,
         include_unresolved: bool,
     ) -> AppResult<DiscoveryHomeResult> {
-        self.discovery_home_with_selected_card_hydration(
+        self.discovery_home_projected(
             actor,
             DiscoveryHomeQuery {
                 include_public: true,
@@ -1121,7 +1143,7 @@ impl AppUseCase {
                 limit_per_section: discovery_section_limit(section_query.rail_limit),
                 filters: section_query.filters.clone(),
             },
-            false,
+            crate::DiscoveryHomeProjection::default(),
         )
         .await
     }

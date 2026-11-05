@@ -102,6 +102,7 @@ impl DiscoveryLibraryMediumMix {
             .min(limit)
     }
 
+    #[cfg(test)]
     pub(super) fn from_titles(titles: &[Title]) -> Self {
         let mut mix = Self::default();
         for title in titles {
@@ -142,6 +143,7 @@ pub(super) fn discovery_item_medium(item: &DiscoveryItemRecord) -> DiscoveryMedi
 
 /// The medium of an owned title. Same ladder as [`discovery_item_medium`], read
 /// off the catalog facet and the canonical tags SMG assigned to the title.
+#[cfg(test)]
 pub(super) fn discovery_title_medium(title: &Title) -> DiscoveryMedium {
     discovery_medium_from_genres(
         &title.facet,

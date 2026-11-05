@@ -573,8 +573,8 @@ async fn insert_tag_values_tx(
     Ok(())
 }
 
-fn rows_to_tags_by_owner(
-    rows: &[crate::queries::sql_runtime::SqlRow],
+pub(crate) fn rows_to_tags_by_owner<'a>(
+    rows: impl IntoIterator<Item = &'a crate::queries::sql_runtime::SqlRow>,
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
     #[derive(Default)]
     struct OrderedOwnerTags {

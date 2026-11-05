@@ -651,6 +651,65 @@ fn title_name_candidate_from_row(
 
 #[async_trait]
 impl TitleRepository for TitleStore {
+    async fn list_discovery_affinity_titles(
+        &self,
+        library_ids: &[String],
+        run_id: Option<&str>,
+        _submitted_title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::DiscoveryAffinityTitle>> {
+        if library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let libraries = std::iter::repeat_n("{}", library_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut args = library_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        args.push(SqlArg::OptText(run_id.map(str::to_owned)));
+        args.extend(library_ids.iter().cloned().map(SqlArg::Text));
+        let scope = format!(
+            "WITH scoped AS (SELECT id, facet FROM titles WHERE library_id IN ({libraries})),
+             submitted AS (SELECT DISTINCT t.id, t.facet FROM scoped t
+                 JOIN discovery_submitted_subjects s ON s.title_id = t.id
+                 WHERE s.run_id = {{}} AND s.library_id IN ({libraries})),
+             selected AS (SELECT * FROM submitted UNION ALL
+                 SELECT * FROM scoped WHERE NOT EXISTS (SELECT 1 FROM submitted))"
+        );
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &format!(
+            "{scope} SELECT s.id, s.facet, t.title_id AS owner_id, t.tag_key, t.category, t.name,
+                 t.confidence, t.affinity_signals_json, t.is_adult, t.is_spoiler,
+                 ts.source, tk.source_tag_key
+             FROM selected s LEFT JOIN title_metadata_tags t ON t.title_id = s.id
+                 AND LOWER(t.category) IN ('genre', 'theme')
+             LEFT JOIN title_metadata_tag_sources ts ON ts.title_id = t.title_id AND ts.tag_key = t.tag_key
+             LEFT JOIN title_metadata_tag_source_keys tk ON tk.title_id = t.title_id AND tk.tag_key = t.tag_key
+             ORDER BY s.id, t.sort_index, t.category, t.name,
+                 ts.sort_index, ts.source, tk.sort_index, tk.source_tag_key"
+        ), &args).await?;
+        let mut identities = BTreeMap::new();
+        let mut tag_rows = Vec::new();
+        for row in &rows {
+            identities
+                .entry(row.text("id")?)
+                .or_insert(row.text("facet")?);
+            if row.opt_text("tag_key")?.is_some() {
+                tag_rows.push(row);
+            }
+        }
+        let mut tags = crate::media::canonical_tags::rows_to_tags_by_owner(tag_rows)?;
+        Ok(identities
+            .into_iter()
+            .map(|(id, facet)| scryer_application::DiscoveryAffinityTitle {
+                canonical_tags: tags.remove(&id).unwrap_or_default(),
+                id,
+                facet: parse_facet(&facet),
+            })
+            .collect())
+    }
+
     async fn list_discovery_context_titles(
         &self,
     ) -> AppResult<Vec<scryer_application::DiscoveryContextTitle>> {
@@ -6846,6 +6905,73 @@ mod tests {
         assert!(rows[1].external_ids.is_empty());
         assert_eq!(rows[0].created_at.to_rfc3339(), "2026-01-02T03:04:05+00:00");
         assert_eq!(rows[1].created_at.to_rfc3339(), "2026-02-03T04:05:06+00:00");
+    }
+
+    #[tokio::test]
+    async fn discovery_affinity_projection_preserves_scope_and_empty_submission_fallback() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        // Presentation columns are intentionally absent: full-title hydration must fail.
+        sqlx::raw_sql("
+            CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT, facet TEXT);
+            CREATE TABLE discovery_submitted_subjects (run_id TEXT, title_id TEXT, library_id TEXT);
+            CREATE TABLE title_metadata_tags (title_id TEXT, tag_key TEXT, category TEXT, name TEXT,
+                confidence REAL, affinity_signals_json TEXT, is_adult INTEGER, is_spoiler INTEGER, sort_index INTEGER);
+            CREATE TABLE title_metadata_tag_sources (title_id TEXT, tag_key TEXT, source TEXT, sort_index INTEGER);
+            CREATE TABLE title_metadata_tag_source_keys (title_id TEXT, tag_key TEXT, source_tag_key TEXT, sort_index INTEGER);
+            INSERT INTO titles VALUES ('a','visible','movie'), ('b','visible','anime'), ('c','private','movie');
+            INSERT INTO discovery_submitted_subjects VALUES ('run','b','visible'), ('run','b','visible'), ('run','c','private');
+            INSERT INTO title_metadata_tags VALUES ('b','canonical:genre:animation','genre','Animation',0.9,'[]',0,0,0);
+            INSERT INTO title_metadata_tag_sources VALUES ('b','canonical:genre:animation','provider',0);
+        ").execute(&pool).await.unwrap();
+        let store = TitleStore::new(StoreDatastore::sqlite(
+            pool.clone(),
+            Arc::new(tokio::sync::Mutex::new(())),
+        ));
+        let libraries = vec!["visible".to_string()];
+        let rows = store
+            .list_discovery_affinity_titles(&libraries, Some("run"), &[])
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "b");
+        assert_eq!(rows[0].facet, MediaFacet::Anime);
+        assert_eq!(rows[0].canonical_tags[0].sources, ["provider"]);
+        let fallback = store
+            .list_discovery_affinity_titles(&libraries, Some("missing"), &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            fallback
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        sqlx::query(
+            "UPDATE discovery_submitted_subjects SET library_id = 'private' WHERE title_id = 'b'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            store
+                .list_discovery_affinity_titles(&libraries, Some("run"), &[])
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            store
+                .list_discovery_affinity_titles(&[], Some("run"), &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// A title stored as `C:\Media\Show` has to be found when a scan or a move

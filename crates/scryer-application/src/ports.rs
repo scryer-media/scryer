@@ -1047,6 +1047,14 @@ pub trait DiscoveryRepository: Send + Sync {
         allowed_media_kinds: &[String],
         include_unresolved: bool,
     ) -> AppResult<DiscoveryHomeFilterOptions>;
+    /// Enrich only sidebar cards chosen by the application composer.
+    /// In-memory repositories already return complete fixture records.
+    async fn hydrate_catalog_discovery_items(
+        &self,
+        _items: &mut [DiscoveryItemRecord],
+    ) -> AppResult<()> {
+        Ok(())
+    }
     async fn list_catalog_public_discovery_items(
         &self,
         run_id: &str,
@@ -1534,8 +1542,50 @@ impl From<&Title> for DiscoveryContextTitle {
     }
 }
 
+/// Optional presentation work selected by the caller; authorization is always evaluated.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DiscoveryHomeProjection {
+    pub full_cards: bool,
+    pub hero: bool,
+    pub browse_labels: bool,
+    pub facets: bool,
+}
+
+/// Only the catalog evidence consumed by Discovery rail composition.
+#[derive(Clone, Debug)]
+pub struct DiscoveryAffinityTitle {
+    pub id: String,
+    pub facet: MediaFacet,
+    pub canonical_tags: Vec<CanonicalMediaTag>,
+}
+
 #[async_trait]
 pub trait TitleRepository: Send + Sync {
+    /// SQL implementations join the submitted generation without hydrating titles.
+    async fn list_discovery_affinity_titles(
+        &self,
+        library_ids: &[String],
+        _run_id: Option<&str>,
+        submitted_title_ids: &[String],
+    ) -> AppResult<Vec<DiscoveryAffinityTitle>> {
+        let mut titles = self.list_for_libraries(None, library_ids, None).await?;
+        let submitted = submitted_title_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>();
+        let selected = titles.iter().any(|title| submitted.contains(&title.id));
+        if selected {
+            titles.retain(|title| submitted.contains(&title.id));
+        }
+        Ok(titles
+            .into_iter()
+            .map(|title| DiscoveryAffinityTitle {
+                id: title.id,
+                facet: title.facet,
+                canonical_tags: title.canonical_tags,
+            })
+            .collect())
+    }
+
     /// Identity and genre evidence for discovery, without presentation metadata.
     async fn list_discovery_context_titles(&self) -> AppResult<Vec<DiscoveryContextTitle>> {
         Ok(self

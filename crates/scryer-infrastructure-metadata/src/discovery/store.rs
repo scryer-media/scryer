@@ -1107,6 +1107,57 @@ impl DiscoveryRepository for DiscoveryStore {
         .await
     }
 
+    async fn hydrate_catalog_discovery_items(
+        &self,
+        items: &mut [DiscoveryItemRecord],
+    ) -> AppResult<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let started_at = Instant::now();
+        let ids = items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+        let rows = fetch_child_rows(
+            &self.datastore,
+            &format!(
+                "SELECT {} FROM discovery_items i
+                 JOIN discovery_titles t ON t.id = i.discovery_title_id
+                 WHERE i.id IN ({{}})",
+                discovery_item_projection(&self.datastore, "i", "t"),
+            ),
+            &ids,
+        )
+        .await?;
+        let mut hydrated = rows
+            .iter()
+            .map(item_from_row)
+            .collect::<AppResult<Vec<_>>>()?;
+        let title_ids = discovery_title_ids_from_rows(&rows)?;
+        hydrate_discovery_items(&self.datastore, &mut hydrated, &title_ids).await?;
+        let mut by_id = hydrated
+            .into_iter()
+            .map(|item| (item.id.clone(), item))
+            .collect::<HashMap<_, _>>();
+        for item in items.iter_mut() {
+            let replacement = by_id.remove(&item.id).ok_or_else(|| {
+                AppError::Repository("selected discovery card disappeared during hydration".into())
+            })?;
+            if replacement.target_key != item.target_key {
+                return Err(AppError::Repository(
+                    "selected discovery card changed identity during hydration".into(),
+                ));
+            }
+            *item = replacement;
+        }
+        debug!(
+            operation = "catalog_discovery",
+            stage = "selected_hydration",
+            selected_item_count = items.len(),
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "catalog discovery selected cards hydrated"
+        );
+        Ok(())
+    }
+
     async fn list_catalog_public_discovery_items(
         &self,
         run_id: &str,
@@ -1186,36 +1237,37 @@ impl DiscoveryRepository for DiscoveryStore {
         let Some(mut sql) = build_discovery_items_sql(&self.datastore, query) else {
             return Ok(vec![0; labels.len()]);
         };
-        let columns = labels
-            .iter()
-            .enumerate()
-            .map(|(index, (kind, label))| {
-                let mut clauses = Vec::new();
-                append_canonical_facet_filter(
-                    &mut clauses,
-                    &mut sql.args,
-                    kind,
-                    std::slice::from_ref(label),
-                );
-                format!(
-                    "COALESCE(SUM(CASE WHEN {} THEN 1 ELSE 0 END), 0) AS count_{index}",
-                    clauses.join(" AND ")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
+        let mut label_rows = Vec::new();
+        for (index, (kind, label)) in labels.iter().enumerate() {
+            for value in canonical_facet_filter_values(kind, std::slice::from_ref(label)) {
+                label_rows.push("(CAST({} AS BIGINT), CAST({} AS TEXT), CAST({} AS TEXT))");
+                sql.args.push(SqlArg::I64(index as i64));
+                sql.args
+                    .push(SqlArg::Text(kind.trim().to_ascii_lowercase()));
+                sql.args.push(SqlArg::Text(value));
+            }
+        }
+        if label_rows.is_empty() {
+            return Ok(vec![0; labels.len()]);
+        }
         let statement = format!(
-            "{} SELECT {columns} FROM deduped i WHERE identity_rank = 1",
-            sql.cte_sql
+            "{}, requested_labels(label_index, category, value) AS (VALUES {})
+             SELECT labels.label_index, COUNT(DISTINCT i.id) AS item_count
+             FROM deduped i
+             JOIN discovery_title_metadata_tags tag ON tag.discovery_title_id = i.discovery_title_id
+             JOIN requested_labels labels ON labels.category = LOWER(tag.category)
+                 AND (labels.value = LOWER(tag.tag_key) OR labels.value = LOWER(tag.name))
+             WHERE i.identity_rank = 1
+             GROUP BY labels.label_index",
+            sql.cte_sql,
+            label_rows.join(", ")
         );
-        let row =
-            SqlRuntime::fetch_optional(self.datastore.read_exec(), &statement, &sql.args).await?;
-        (0..labels.len())
-            .map(|index| match &row {
-                Some(row) => row.i64(&format!("count_{index}")),
-                None => Ok(0),
-            })
-            .collect()
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &statement, &sql.args).await?;
+        let mut counts = vec![0; labels.len()];
+        for row in rows {
+            counts[row.i64("label_index")? as usize] = row.i64("item_count")?;
+        }
+        Ok(counts)
     }
 
     async fn replace_title_more_like_this_items(
@@ -3137,7 +3189,7 @@ async fn fetch_catalog_public_items(
         discovery_item_row_columns()
     );
     args.push(SqlArg::I64(limit));
-    fetch_catalog_candidates_with_sql(datastore, &sql, &args).await
+    fetch_catalog_candidates_with_sql(datastore, &sql, &args, false).await
 }
 
 async fn fetch_catalog_public_sections(
@@ -3232,7 +3284,7 @@ async fn fetch_catalog_public_sections(
          FROM ranked
          WHERE section_rank <= {{}}
         ORDER BY section_sort_index ASC, section_rank ASC, id ASC",
-        discovery_item_projection(datastore, "i", "t"),
+        discovery_item_projection_with_presentation(datastore, "i", "t", false),
         authoritative_media_kind_clause("t", media_kind),
         displayable_discovery_title_clause(datastore, "t"),
         discovery_item_row_columns()
@@ -3250,9 +3302,6 @@ async fn fetch_catalog_public_sections(
         ));
         items.push(item_from_row(row)?);
     }
-    let title_ids = discovery_title_ids_from_rows(&rows)?;
-    hydrate_discovery_items(datastore, &mut items, &title_ids).await?;
-
     let mut sections = Vec::<CatalogDiscoverySectionCandidatesRecord>::new();
     for (item, (section_id, section_type, title, total_count)) in
         items.into_iter().zip(item_metadata)
@@ -3336,17 +3385,18 @@ async fn fetch_catalog_personalized_items(
                   COALESCE(sort_title, display_title) ASC,
                   target_key ASC
         LIMIT {{}}",
-        discovery_item_projection(datastore, "i", "t"),
+        discovery_item_projection_with_presentation(datastore, "i", "t", false),
         clauses.join(" AND "),
         discovery_item_row_columns()
     );
-    fetch_catalog_candidates_with_sql(datastore, &sql, &args).await
+    fetch_catalog_candidates_with_sql(datastore, &sql, &args, true).await
 }
 
 async fn fetch_catalog_candidates_with_sql(
     datastore: &StoreDatastore,
     sql: &str,
     args: &[SqlArg],
+    selection_only: bool,
 ) -> AppResult<CatalogDiscoveryCandidatesRecord> {
     let rows = SqlRuntime::fetch_all(datastore.read_exec(), sql, args).await?;
     let total_count = rows
@@ -3359,8 +3409,47 @@ async fn fetch_catalog_candidates_with_sql(
         .map(item_from_row)
         .collect::<AppResult<Vec<_>>>()?;
     let title_ids = discovery_title_ids_from_rows(&rows)?;
-    hydrate_discovery_items(datastore, &mut items, &title_ids).await?;
+    if selection_only {
+        hydrate_catalog_selection(datastore, &mut items, &title_ids).await?;
+    } else {
+        hydrate_discovery_items(datastore, &mut items, &title_ids).await?;
+    }
     Ok(CatalogDiscoveryCandidatesRecord { total_count, items })
+}
+
+async fn hydrate_catalog_selection(
+    datastore: &StoreDatastore,
+    items: &mut [DiscoveryItemRecord],
+    title_ids: &[String],
+) -> AppResult<()> {
+    let mut title_indexes = HashMap::<String, Vec<usize>>::new();
+    for (index, title_id) in title_ids.iter().enumerate() {
+        title_indexes
+            .entry(title_id.clone())
+            .or_default()
+            .push(index);
+    }
+    let unique_title_ids = title_indexes.keys().cloned().collect::<Vec<_>>();
+    let tags = load_discovery_title_metadata_tags_in_category(
+        datastore.read_exec(),
+        &unique_title_ids,
+        "genre",
+    )
+    .await?;
+    for (title_id, tags) in tags {
+        for index in title_indexes.get(&title_id).into_iter().flatten() {
+            items[*index].canonical_tags = tags.clone();
+        }
+    }
+    hydrate_title_terms(datastore, items, &unique_title_ids, &title_indexes).await?;
+    let item_ids = items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    let item_indexes = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (item.id.clone(), index))
+        .collect();
+    hydrate_item_subject_links(datastore, items, &item_ids, &item_indexes).await?;
+    Ok(())
 }
 
 async fn fetch_personalized_facets(
@@ -6979,6 +7068,7 @@ mod tests {
             item.display_title = display_title.to_string();
             item.original_title = original_title.map(str::to_string);
             item.sort_title = sort_title.map(str::to_string);
+            item.overview = Some("Card presentation is loaded only after selection.".to_string());
             item.poster_url = Some(format!("https://images.example.test/{id}.jpg"));
             item.content_type = Some("movie".to_string());
             item
@@ -7081,6 +7171,24 @@ mod tests {
             .map(|item| item.target_key.as_str())
             .collect::<Vec<_>>();
         assert_eq!(catalog_target_keys, vec!["tmdb:movie:1", "tvdb:movie:5"]);
+
+        let mut selected = catalog_sections[0].items[..1].to_vec();
+        assert!(selected[0].overview.is_none());
+        assert!(selected[0].external_ids.is_empty());
+        store
+            .hydrate_catalog_discovery_items(&mut selected)
+            .await
+            .unwrap();
+        let full = store
+            .list_discovery_items_for_generation(run_id)
+            .await
+            .unwrap();
+        let expected = full.iter().find(|item| item.id == selected[0].id).unwrap();
+        assert_eq!(
+            serde_json::to_value(&selected[0]).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        assert!(selected[0].overview.is_some());
 
         let _ = std::fs::remove_file(db);
     }

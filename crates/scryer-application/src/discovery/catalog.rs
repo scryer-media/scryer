@@ -723,15 +723,15 @@ pub(super) fn corroborated_canonical_genre_labels(
 /// than that is skipped and the next-ranked label considered, rather than
 /// promoted into a rail the library never earned. Three crime titles out of ten
 /// is not a crime library.
-pub(super) fn top_owned_title_labels<'a, F, I>(
-    titles: &'a [Title],
+pub(super) fn top_owned_title_labels<'a, T: 'a, F, I>(
+    titles: &'a [T],
     family: DiscoveryRailLabelFamily,
     labels_for_title: F,
     limit: usize,
     min_carriers: usize,
 ) -> Vec<String>
 where
-    F: Fn(&'a Title) -> I,
+    F: Fn(&'a T) -> I,
     I: IntoIterator,
     I::Item: AsRef<str>,
 {

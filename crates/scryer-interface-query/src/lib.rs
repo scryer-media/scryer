@@ -2906,7 +2906,23 @@ impl JobAndDownloadQueries {
         let actor = actor_from_ctx(ctx)?;
         let query = discovery_home_query_from_input(input).map_err(to_gql_error)?;
         let result = app
-            .discovery_home(&actor, query)
+            .discovery_home_projected(
+                &actor,
+                query,
+                scryer_application::DiscoveryHomeProjection {
+                    full_cards: [
+                        "publicSections",
+                        "personalizedSections",
+                        "completeCollection",
+                        "heroItem",
+                    ]
+                    .iter()
+                    .any(|field| ctx.look_ahead().field(field).exists()),
+                    hero: ctx.look_ahead().field("heroItem").exists(),
+                    browse_labels: ctx.look_ahead().field("browseLabels").exists(),
+                    facets: ctx.look_ahead().field("facets").exists(),
+                },
+            )
             .await
             .map_err(to_gql_error)?;
         Ok(from_discovery_home(&app, result))
@@ -2923,7 +2939,16 @@ impl JobAndDownloadQueries {
         let actor = actor_from_ctx(ctx)?;
         let query = discovery_home_query_from_input(input).map_err(to_gql_error)?;
         let result = app
-            .discovery_home_cards(&actor, query)
+            .discovery_home_projected(
+                &actor,
+                query,
+                scryer_application::DiscoveryHomeProjection {
+                    full_cards: false,
+                    hero: ctx.look_ahead().field("heroItem").exists(),
+                    browse_labels: ctx.look_ahead().field("browseLabels").exists(),
+                    facets: false,
+                },
+            )
             .await
             .map_err(to_gql_error)?;
         from_discovery_home_cards(&app, result).map_err(to_gql_error)

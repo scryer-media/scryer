@@ -46,9 +46,6 @@ const DISCOVERY_PERSONALIZED_SECTION_MAX_CANDIDATES: usize = 2_500;
 /// How deep a public section page can go.
 const DISCOVERY_PUBLIC_SECTION_MAX_ITEMS: usize = 2_500;
 const DISCOVERY_FOR_YOU_SECTION_ID: &str = "for_you";
-/// Titles read per query when building the library affinity profile, kept
-/// well under every datastore's bound-parameter limit.
-const DISCOVERY_AFFINITY_TITLE_BATCH: usize = 500;
 const DISCOVERY_COMPLETE_COLLECTION_MIN_CANDIDATES: usize = 100;
 const DISCOVERY_COMPLETE_COLLECTION_MAX_CANDIDATES: usize = 500;
 const CATALOG_ANIME_WEEKLY_SECTION_ID: &str = "anime_this_week";
@@ -175,6 +172,8 @@ pub(crate) struct DiscoveryLibrarySubject {
 
 #[derive(Default)]
 struct DiscoveryVisibility {
+    owned_library_ids: HashSet<String>,
+    facets_by_library_id: HashMap<String, MediaFacet>,
     readable_library_ids: HashSet<String>,
     allowed_media_kinds: HashSet<&'static str>,
 }
@@ -449,8 +448,17 @@ impl AppUseCase {
         actor: &User,
         query: DiscoveryHomeQuery,
     ) -> AppResult<DiscoveryHomeResult> {
-        self.discovery_home_with_selected_card_hydration(actor, query, true)
-            .await
+        self.discovery_home_projected(
+            actor,
+            query,
+            crate::DiscoveryHomeProjection {
+                full_cards: true,
+                hero: true,
+                browse_labels: true,
+                facets: true,
+            },
+        )
+        .await
     }
 
     pub async fn discovery_home_cards(
@@ -458,8 +466,17 @@ impl AppUseCase {
         actor: &User,
         query: DiscoveryHomeQuery,
     ) -> AppResult<DiscoveryHomeResult> {
-        self.discovery_home_with_selected_card_hydration(actor, query, false)
-            .await
+        self.discovery_home_projected(
+            actor,
+            query,
+            crate::DiscoveryHomeProjection {
+                full_cards: false,
+                hero: true,
+                browse_labels: true,
+                facets: false,
+            },
+        )
+        .await
     }
 
     pub async fn discovery_home_filter_options(
@@ -504,11 +521,11 @@ impl AppUseCase {
         Ok(options)
     }
 
-    async fn discovery_home_with_selected_card_hydration(
+    pub async fn discovery_home_projected(
         &self,
         actor: &User,
         query: DiscoveryHomeQuery,
-        hydrate_selected_cards: bool,
+        projection: crate::DiscoveryHomeProjection,
     ) -> AppResult<DiscoveryHomeResult> {
         let discovery_home_started_at = Instant::now();
         let visibility = self.discovery_visibility(actor).await?;
@@ -531,12 +548,7 @@ impl AppUseCase {
             .map(|media_kind| (*media_kind).to_string())
             .collect::<Vec<_>>();
         allowed_media_kinds.sort();
-        let owned_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let owned_library_id_list = sorted_discovery_library_ids(&owned_library_ids);
+        let owned_library_id_list = sorted_discovery_library_ids(&visibility.owned_library_ids);
         let owned_visibility = self
             .discovery_home_owned_visibility(&owned_library_id_list)
             .await?;
@@ -687,7 +699,7 @@ impl AppUseCase {
                 &rail_context,
                 &watchlist.claimed_item_keys,
             );
-            if hydrate_selected_cards {
+            if projection.facets {
                 facets = self
                     .services
                     .library
@@ -703,7 +715,7 @@ impl AppUseCase {
         }
 
         let mut browse_query = self
-            .discovery_browse_query(
+            .discovery_browse_query_with_owned(
                 actor,
                 &visibility,
                 &status.state,
@@ -716,12 +728,17 @@ impl AppUseCase {
                     filters: query.filters.clone(),
                     ..Default::default()
                 },
+                &owned_visibility,
             )
             .await?;
         if !query.include_public {
             browse_query.public_run_id = None;
         }
-        let browse_labels = self.discovery_pool_browse_labels(&browse_query).await?;
+        let browse_labels = if projection.browse_labels {
+            self.discovery_pool_browse_labels(&browse_query).await?
+        } else {
+            Vec::new()
+        };
 
         let public_top_rated_run_id = query
             .include_public
@@ -786,11 +803,15 @@ impl AppUseCase {
             }
         }
 
-        let hero_item = select_discovery_home_hero_with_candidates(
-            &public_sections,
-            &personalized_sections,
-            &candidates_by_id,
-        );
+        let hero_item = if projection.hero {
+            select_discovery_home_hero_with_candidates(
+                &public_sections,
+                &personalized_sections,
+                &candidates_by_id,
+            )
+        } else {
+            None
+        };
         // Added after the hero is chosen: watchlist cards are resolved outside
         // the candidate pool, so they carry no candidate for hero hydration.
         if let Some(watchlist_section) = watchlist.section {
@@ -815,10 +836,10 @@ impl AppUseCase {
             elapsed_ms = discovery_home_elapsed_ms(section_selection_started_at),
             "discovery home sections selected"
         );
-        if hydrate_selected_cards {
+        if projection.full_cards {
             self.hydrate_discovery_home_result(&mut result, &candidates_by_id)
                 .await?;
-        } else {
+        } else if projection.hero {
             self.hydrate_discovery_home_hero(&mut result, &candidates_by_id)
                 .await?;
         }
@@ -1070,9 +1091,22 @@ impl AppUseCase {
             });
         }
 
-        let effective_library_ids = self
-            .discovery_effective_library_ids(actor, &query.facet, &query.library_ids)
-            .await?;
+        let requested_library_ids = query
+            .library_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .collect::<HashSet<_>>();
+        let effective_library_ids = visibility
+            .owned_library_ids
+            .iter()
+            .filter(|id| {
+                visibility.facets_by_library_id.get(*id) == Some(&query.facet)
+                    && (requested_library_ids.is_empty()
+                        || requested_library_ids.contains(id.as_str()))
+            })
+            .cloned()
+            .collect::<HashSet<_>>();
         let can_view_personalized =
             !effective_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let effective_library_id_list = sorted_discovery_library_ids(&effective_library_ids);
@@ -1087,12 +1121,7 @@ impl AppUseCase {
         let limit = catalog_discovery_group_limit(query.limit_per_group);
         let max_groups = catalog_discovery_max_groups(query.max_groups);
         let candidate_limit = catalog_discovery_candidate_limit(limit, max_groups);
-        let owned_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let owned_library_id_list = sorted_discovery_library_ids(&owned_library_ids);
+        let owned_library_id_list = sorted_discovery_library_ids(&visibility.owned_library_ids);
         let owned_visibility = self
             .owned_discovery_visibility(&owned_library_id_list)
             .await?;
@@ -1218,6 +1247,26 @@ impl AppUseCase {
             }
         }
 
+        let mut selected_items = groups
+            .iter()
+            .flat_map(|group| group.items.iter().cloned())
+            .collect::<Vec<_>>();
+        self.services
+            .library
+            .discovery
+            .hydrate_catalog_discovery_items(&mut selected_items)
+            .await?;
+        let mut selected_items = selected_items.into_iter();
+        for group in &mut groups {
+            for item in &mut group.items {
+                if let Some(hydrated) = selected_items.next() {
+                    *item = hydrated;
+                }
+            }
+            if matches!(group.surface, CatalogDiscoverySurface::Personalized) {
+                resolve_discovery_matched_subjects(&mut group.items, &submitted_subjects)?;
+            }
+        }
         Ok(CatalogDiscoveryResult {
             groups,
             can_view_personalized,
@@ -1282,7 +1331,10 @@ impl AppUseCase {
             .into_iter()
             .chain(manageable_library_ids)
             .collect::<HashSet<_>>();
-        let mut visibility = DiscoveryVisibility::default();
+        let mut visibility = DiscoveryVisibility {
+            owned_library_ids: readable_library_ids.iter().cloned().collect(),
+            ..Default::default()
+        };
         for library_id in &discoverable_library_ids {
             if let Some(facet) = facets_by_library_id.get(library_id) {
                 visibility
@@ -1299,6 +1351,7 @@ impl AppUseCase {
                         .contains(discovery_media_kind_for_facet(facet.clone()))
                 })
             }));
+        visibility.facets_by_library_id = facets_by_library_id;
         Ok(visibility)
     }
 
@@ -1401,27 +1454,26 @@ impl AppUseCase {
             .filter(|title_id| seen_title_ids.insert((*title_id).to_string()))
             .map(str::to_string)
             .collect::<Vec<_>>();
-        let mut titles_by_id = HashMap::with_capacity(title_ids.len());
-        for chunk in title_ids.chunks(DISCOVERY_AFFINITY_TITLE_BATCH) {
-            for title in self.services.catalog.titles.get_by_ids(chunk).await? {
-                titles_by_id.insert(title.id.clone(), title);
-            }
-        }
-        // Submission order, as the per-title reads produced it.
-        let mut titles = title_ids
-            .iter()
-            .filter_map(|title_id| titles_by_id.remove(title_id))
-            .filter(|title| allowed_library_ids.contains(&title.library_id))
-            .collect::<Vec<_>>();
-        if titles.is_empty() {
-            titles = self
-                .services
-                .catalog
-                .titles
-                .list_for_libraries(None, &library_ids, None)
-                .await?;
-        }
-        Ok(discovery_library_affinity_profile_from_titles(
+        let started = Instant::now();
+        let titles = self
+            .services
+            .catalog
+            .titles
+            .list_discovery_affinity_titles(
+                &library_ids,
+                submitted_subjects
+                    .first()
+                    .map(|subject| subject.run_id.as_str()),
+                &title_ids,
+            )
+            .await?;
+        debug!(
+            operation = "discovery_affinity",
+            title_count = titles.len(),
+            elapsed_ms = discovery_home_elapsed_ms(started),
+            "discovery affinity evidence loaded"
+        );
+        Ok(discovery_library_affinity_profile_from_projection(
             &titles,
             genre_rail_corroboration,
         ))
@@ -1483,8 +1535,24 @@ impl AppUseCase {
 
 /// The library profile, computed from owned titles alone so the same numbers
 /// drive the medium mix sent to SMG and the gate applied to what comes back.
+#[cfg(test)]
 pub(super) fn discovery_library_affinity_profile_from_titles(
     titles: &[Title],
+    genre_rail_corroboration: bool,
+) -> DiscoveryLibraryAffinityProfile {
+    let titles = titles
+        .iter()
+        .map(|title| crate::DiscoveryAffinityTitle {
+            id: title.id.clone(),
+            facet: title.facet.clone(),
+            canonical_tags: title.canonical_tags.clone(),
+        })
+        .collect::<Vec<_>>();
+    discovery_library_affinity_profile_from_projection(&titles, genre_rail_corroboration)
+}
+
+fn discovery_library_affinity_profile_from_projection(
+    titles: &[crate::DiscoveryAffinityTitle],
     genre_rail_corroboration: bool,
 ) -> DiscoveryLibraryAffinityProfile {
     let support_floor = discovery_rail_label_support_floor(titles.len());
@@ -1510,7 +1578,20 @@ pub(super) fn discovery_library_affinity_profile_from_titles(
             DISCOVERY_RAIL_LADDER_LABELS,
             support_floor,
         ),
-        medium_mix: DiscoveryLibraryMediumMix::from_titles(titles),
+        medium_mix: {
+            let mut mix = DiscoveryLibraryMediumMix::default();
+            for title in titles {
+                mix.add(discovery_medium_from_genres(
+                    &title.facet,
+                    title
+                        .canonical_tags
+                        .iter()
+                        .filter(|tag| tag.category.eq_ignore_ascii_case("genre"))
+                        .map(|tag| tag.name.as_str()),
+                ));
+            }
+            mix
+        },
         owned_title_count: titles.len(),
     }
 }
