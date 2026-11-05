@@ -26,8 +26,6 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 use toml::Value as TomlValue;
 use toml_edit::{DocumentMut, value};
@@ -122,6 +120,7 @@ const REQUIRED_SCRYER_DRY_RUN_STEPS: &[&str] = &[
     "release_container_contract",
     "builtin_refresh",
     "web_validation",
+    "web_format",
     "rust_validation",
     GRAPHQL_API_COMPAT_STEP,
     "release_hygiene",
@@ -385,6 +384,7 @@ impl ReleaseValidationScope {
             Self::WebOnly => &[
                 "release_container_contract",
                 "web_validation",
+                "web_format",
                 "release_hygiene",
             ],
             Self::MetaOnly => &["release_container_contract", "release_hygiene"],
@@ -3467,6 +3467,11 @@ fn refresh_builtin_plugins(
 }
 
 fn run_clippy_ci(ctx: &TaskContext) -> Result<()> {
+    run_clippy_host(ctx)?;
+    run_clippy_windows(ctx)
+}
+
+fn run_clippy_host(ctx: &TaskContext) -> Result<()> {
     let manifest =
         fs::read_to_string(ctx.repo_root.join("Cargo.toml")).context("read root Cargo.toml")?;
     let unoptimized = clippy_unoptimized_config_args(&manifest)?;
@@ -3477,8 +3482,13 @@ fn run_clippy_ci(ctx: &TaskContext) -> Result<()> {
     add_ci_clippy_package_args(&mut command);
     command.args(&unoptimized);
     command.args(["--", "-D", "warnings"]);
-    run_checked(&mut command)?;
+    run_checked(&mut command)
+}
 
+fn run_clippy_windows(ctx: &TaskContext) -> Result<()> {
+    let manifest =
+        fs::read_to_string(ctx.repo_root.join("Cargo.toml")).context("read root Cargo.toml")?;
+    let unoptimized = clippy_unoptimized_config_args(&manifest)?;
     if !command_available("cargo-xwin")? {
         warn("cargo-xwin not installed — installing");
         let mut install = ctx.command_in("cargo", &ctx.repo_root);
@@ -3723,41 +3733,13 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
             refresh_builtin_plugins(ctx, &next_version, Some(&builtin_manifest), false)?;
         let validation_result = match validation_scope {
             ReleaseValidationScope::Full => {
-                step("Running web and Rust validation in parallel");
-                let (web_tx, web_rx) = mpsc::channel();
-                let (rust_tx, rust_rx) = mpsc::channel();
-                let web_ctx = ctx.clone();
-                let rust_ctx = ctx.clone();
-
-                thread::spawn(move || {
-                    let _ = web_tx.send(run_scryer_web_validation(&web_ctx, "[web] "));
-                });
-                thread::spawn(move || {
-                    let _ = rust_tx.send(run_scryer_rust_validation(&rust_ctx, "[rust] "));
-                });
-
-                let web_result = web_rx
-                    .recv()
-                    .context("web validation thread ended unexpectedly")?;
-                let rust_result = rust_rx
-                    .recv()
-                    .context("rust validation thread ended unexpectedly")?;
-                if let Err(error) = &web_result {
-                    warn(format!("Web validation failed: {error:#}"));
-                }
-                if let Err(error) = &rust_result {
-                    warn(format!("Rust validation failed: {error:#}"));
-                }
-                web_result?;
-                rust_result?;
-                run_scryer_graphql_api_compat_validation(
+                run_scryer_validation(
                     ctx,
-                    "[graphql] ",
+                    validation_scope,
                     latest_tag.as_deref(),
                     &next_version,
                     args.allow_breaking_api,
                 )?;
-                run_scryer_release_hygiene_validation(ctx, "[hygiene] ")?;
                 ok("Full release validation passed");
                 Ok::<(BuiltinRefresh, Vec<String>), anyhow::Error>((
                     refreshed_builtins,
@@ -3770,8 +3752,13 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
             }
             ReleaseValidationScope::WebOnly => {
                 step("Running web-only release validation");
-                run_scryer_web_validation(ctx, "[web] ")?;
-                run_scryer_release_hygiene_validation(ctx, "[hygiene] ")?;
+                run_scryer_validation(
+                    ctx,
+                    validation_scope,
+                    latest_tag.as_deref(),
+                    &next_version,
+                    args.allow_breaking_api,
+                )?;
                 ok("Web-only release validation passed");
                 Ok((
                     refreshed_builtins,
@@ -3784,7 +3771,13 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
             }
             ReleaseValidationScope::MetaOnly => {
                 step("Skipping application validation for CI/docs-only release");
-                run_scryer_release_hygiene_validation(ctx, "[hygiene] ")?;
+                run_scryer_validation(
+                    ctx,
+                    validation_scope,
+                    latest_tag.as_deref(),
+                    &next_version,
+                    args.allow_breaking_api,
+                )?;
                 ok("CI/docs-only release validation passed");
                 Ok((
                     refreshed_builtins,
@@ -4106,26 +4099,108 @@ fn run_sdk_release(ctx: &TaskContext, args: SdkReleaseArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_scryer_web_validation(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReleaseValidationStage {
+    WebAudit,
+    RustAudit,
+    RustFmt,
+    WebLint,
+    GraphqlCompare,
+    Hygiene,
+    WebBuild,
+    ClippyWindows,
+    ClippyHost,
+    Nextest,
+}
+
+fn run_validation_stages(
+    scope: ReleaseValidationScope,
+    mut run: impl FnMut(ReleaseValidationStage) -> Result<()>,
+) -> Result<()> {
+    use ReleaseValidationStage::*;
+    let stages: &[ReleaseValidationStage] = match scope {
+        ReleaseValidationScope::Full => &[
+            WebAudit,
+            RustAudit,
+            RustFmt,
+            WebLint,
+            GraphqlCompare,
+            Hygiene,
+            WebBuild,
+            ClippyWindows,
+            ClippyHost,
+            Nextest,
+        ],
+        ReleaseValidationScope::WebOnly => &[WebAudit, WebLint, Hygiene, WebBuild],
+        ReleaseValidationScope::MetaOnly => &[Hygiene],
+    };
+    for &stage in stages {
+        run(stage)?;
+    }
+    Ok(())
+}
+
+fn run_scryer_validation(
+    ctx: &TaskContext,
+    scope: ReleaseValidationScope,
+    latest_tag: Option<&str>,
+    next_version: &Version,
+    allow_breaking_api: bool,
+) -> Result<()> {
+    run_validation_stages(scope, |stage| match stage {
+        ReleaseValidationStage::WebAudit => run_scryer_web_audit(ctx, "[web] "),
+        ReleaseValidationStage::RustAudit => run_scryer_rust_audit(ctx, "[rust] "),
+        ReleaseValidationStage::RustFmt => run_scryer_rust_fmt(ctx, "[rust] "),
+        ReleaseValidationStage::WebLint => run_scryer_web_validation(ctx, "[web] "),
+        ReleaseValidationStage::GraphqlCompare => run_scryer_graphql_api_compat_validation(
+            ctx,
+            "[graphql] ",
+            latest_tag,
+            next_version,
+            allow_breaking_api,
+        ),
+        ReleaseValidationStage::Hygiene => run_scryer_release_hygiene_validation(ctx, "[hygiene] "),
+        ReleaseValidationStage::WebBuild => run_scryer_web_build(ctx, "[web] "),
+        ReleaseValidationStage::ClippyWindows => run_clippy_windows(ctx),
+        ReleaseValidationStage::ClippyHost => run_clippy_host(ctx),
+        ReleaseValidationStage::Nextest => run_scryer_nextest_validation(ctx, "[rust-test] "),
+    })
+}
+
+fn run_scryer_web_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
     let web_dir = ctx.path("apps/scryer-web");
     prefixed_step(prefix, "Running npm audit fix");
     let mut audit = ctx.release_command_in("npm", &web_dir);
     audit.args(["audit", "fix"]);
     run_streaming(&mut audit, prefix)?;
     prefixed_ok(prefix, "npm audit fix complete");
+    Ok(())
+}
 
-    prefixed_step(prefix, "Running TypeScript type check");
+fn run_scryer_web_validation(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
+    let web_dir = ctx.path("apps/scryer-web");
+    prefixed_step(prefix, "Running web lint (TypeScript, i18n, ESLint)");
     let mut lint = ctx.release_command_in("npm", &web_dir);
     lint.args(["run", "lint"]);
     run_streaming(&mut lint, prefix)?;
-    prefixed_ok(prefix, "TypeScript type check passed");
+    prefixed_ok(prefix, "Web lint passed");
+
+    prefixed_step(prefix, "Checking web formatting");
+    let mut fmt = ctx.release_command_in("npm", &web_dir);
+    fmt.args(["run", "format:check"]);
+    run_streaming(&mut fmt, prefix)?;
+    prefixed_ok(prefix, "Web formatting passed");
 
     prefixed_step(prefix, "Running GraphQL compatibility checker tests");
     let mut graphql_compat_tests = ctx.release_command_in("npm", &web_dir);
     graphql_compat_tests.args(["run", "test:graphql-compat"]);
     run_streaming(&mut graphql_compat_tests, prefix)?;
     prefixed_ok(prefix, "GraphQL compatibility checker tests passed");
+    Ok(())
+}
 
+fn run_scryer_web_build(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
+    let web_dir = ctx.path("apps/scryer-web");
     prefixed_step(prefix, "Running web build");
     let mut build = ctx.release_command_in("npm", &web_dir);
     build
@@ -4197,7 +4272,7 @@ fn webpki_roots_compat_audit_exception(lockfile: &str) -> Result<bool> {
         }))
 }
 
-fn run_scryer_rust_validation(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
+fn run_scryer_rust_fmt(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
     prefixed_step(prefix, "Running cargo fmt --all");
     let mut fmt_fix = ctx.release_command_in("cargo", &ctx.repo_root);
     fmt_fix.args(["fmt", "--all"]);
@@ -4209,14 +4284,10 @@ fn run_scryer_rust_validation(ctx: &TaskContext, prefix: &'static str) -> Result
     fmt.args(["fmt", "--all", "--check"]);
     run_streaming(&mut fmt, prefix)?;
     prefixed_ok(prefix, "cargo fmt passed");
+    Ok(())
+}
 
-    if !command_available("cargo-nextest")? {
-        warn("cargo-nextest not installed — installing");
-        let mut install = ctx.release_command_in("cargo", &ctx.repo_root);
-        install.args(["install", "--locked", "cargo-nextest"]);
-        run_streaming(&mut install, prefix)?;
-    }
-
+fn run_scryer_rust_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
     let cargo_lockfiles = git_tracked_cargo_lockfiles(ctx)?;
     for cargo_lock in &cargo_lockfiles {
         let cargo_dir = cargo_lock
@@ -4239,102 +4310,67 @@ fn run_scryer_rust_validation(ctx: &TaskContext, prefix: &'static str) -> Result
         prefixed_ok(prefix, format!("{display_path} updated"));
     }
 
-    prefixed_step(
-        prefix,
-        "Starting Rust tests while other Rust release validations continue",
-    );
-    let (nextest_tx, nextest_rx) = mpsc::channel();
-    let nextest_ctx = ctx.clone();
-
-    thread::spawn(move || {
-        let _ = nextest_tx.send(run_scryer_nextest_validation(&nextest_ctx, "[rust-test] "));
-    });
-
-    let mut failures = Vec::new();
-    let release_checks_result: Result<()> = (|| {
-        if !command_available("cargo-audit")? {
-            warn("cargo-audit not installed — installing");
-            let mut install = ctx.release_command_in("cargo", &ctx.repo_root);
-            install.args(["install", "--locked", "cargo-audit"]);
-            run_streaming(&mut install, prefix)?;
-        }
-        let ignores = [
-            // Sigstore reaches rsa for public-key verification only. Scryer does not
-            // perform the private-key RSA decryption affected by this timing advisory.
-            "RUSTSEC-2023-0071",
-            "RUSTSEC-2026-0006",
-            "RUSTSEC-2026-0020",
-            "RUSTSEC-2026-0021",
-            // Extism currently pins wasmtime 41.x upstream, so these remain release
-            // blockers until the runtime stack moves onto a patched wasmtime line.
-            "RUSTSEC-2026-0085",
-            "RUSTSEC-2026-0086",
-            "RUSTSEC-2026-0087",
-            "RUSTSEC-2026-0088",
-            "RUSTSEC-2026-0089",
-            "RUSTSEC-2026-0091",
-            "RUSTSEC-2026-0092",
-            "RUSTSEC-2026-0093",
-            "RUSTSEC-2026-0094",
-            "RUSTSEC-2026-0095",
-            "RUSTSEC-2026-0096",
-            "RUSTSEC-2026-0114",
-            // Wasmtime's compiled-code cache pins zstd 0.13 upstream. It only calls
-            // zstd::decode_all and zstd::encode_all on its own local cache files, which
-            // never reach the reused contexts, seekable API or streaming write decoder
-            // these cover. Remove them once wasmtime moves to zstd 0.14.3.
-            "RUSTSEC-2026-0391",
-            "RUSTSEC-2026-0398",
-            "RUSTSEC-2026-0403",
-        ];
-        warn(format!(
-            "Ignoring advisories pending upstream fixes: {}",
-            ignores.join(" ")
-        ));
-        for cargo_lock in &cargo_lockfiles {
-            let display_path = cargo_lock
-                .strip_prefix(&ctx.repo_root)
-                .unwrap_or(cargo_lock)
-                .display();
-            prefixed_step(prefix, format!("Running cargo audit ({display_path})"));
-            let mut audit = ctx.release_command_in("cargo", &ctx.repo_root);
-            audit.args(["audit", "--file"]);
-            audit.arg(cargo_lock);
-            for advisory in ignores {
-                audit.args(["--ignore", advisory]);
-            }
-            if webpki_roots_compat_audit_exception(&fs::read_to_string(cargo_lock)?)? {
-                warn(format!(
-                    "{display_path}: RUSTSEC-2026-0381 compatibility-wrapper false positive; verified crates.io 0.26.11 delegates to patched roots"
-                ));
-                audit.args(["--ignore", "RUSTSEC-2026-0381"]);
-            }
-            run_streaming(&mut audit, prefix)?;
-            prefixed_ok(prefix, format!("cargo audit passed ({display_path})"));
-        }
-
-        run_scryer_ci_clippy_validation(ctx, "[rust-clippy] ")?;
-        Ok(())
-    })();
-
-    let nextest_result = nextest_rx
-        .recv()
-        .context("Rust test validation thread ended unexpectedly")?;
-
-    if let Err(error) = release_checks_result {
-        failures.push(format!("Rust release validation failed: {error:#}"));
+    if !command_available("cargo-audit")? {
+        warn("cargo-audit not installed — installing");
+        let mut install = ctx.release_command_in("cargo", &ctx.repo_root);
+        install.args(["install", "--locked", "cargo-audit"]);
+        run_streaming(&mut install, prefix)?;
     }
-    if let Err(error) = nextest_result {
-        failures.push(format!("Rust test validation failed: {error:#}"));
-    }
-    if !failures.is_empty() {
-        for failure in &failures {
-            warn(failure);
+    let ignores = [
+        // Sigstore reaches rsa for public-key verification only. Scryer does not
+        // perform the private-key RSA decryption affected by this timing advisory.
+        "RUSTSEC-2023-0071",
+        "RUSTSEC-2026-0006",
+        "RUSTSEC-2026-0020",
+        "RUSTSEC-2026-0021",
+        // Extism currently pins wasmtime 41.x upstream, so these remain release
+        // blockers until the runtime stack moves onto a patched wasmtime line.
+        "RUSTSEC-2026-0085",
+        "RUSTSEC-2026-0086",
+        "RUSTSEC-2026-0087",
+        "RUSTSEC-2026-0088",
+        "RUSTSEC-2026-0089",
+        "RUSTSEC-2026-0091",
+        "RUSTSEC-2026-0092",
+        "RUSTSEC-2026-0093",
+        "RUSTSEC-2026-0094",
+        "RUSTSEC-2026-0095",
+        "RUSTSEC-2026-0096",
+        "RUSTSEC-2026-0114",
+        // Wasmtime's compiled-code cache pins zstd 0.13 upstream. It only calls
+        // zstd::decode_all and zstd::encode_all on its own local cache files, which
+        // never reach the reused contexts, seekable API or streaming write decoder
+        // these cover. Remove them once wasmtime moves to zstd 0.14.3.
+        "RUSTSEC-2026-0391",
+        "RUSTSEC-2026-0398",
+        "RUSTSEC-2026-0403",
+    ];
+    warn(format!(
+        "Ignoring advisories pending upstream fixes: {}",
+        ignores.join(" ")
+    ));
+    for cargo_lock in &cargo_lockfiles {
+        let display_path = cargo_lock
+            .strip_prefix(&ctx.repo_root)
+            .unwrap_or(cargo_lock)
+            .display();
+        prefixed_step(prefix, format!("Running cargo audit ({display_path})"));
+        let mut audit = ctx.release_command_in("cargo", &ctx.repo_root);
+        audit.args(["audit", "--file"]);
+        audit.arg(cargo_lock);
+        for advisory in ignores {
+            audit.args(["--ignore", advisory]);
         }
-        bail!(failures.join("\n\n"));
+        if webpki_roots_compat_audit_exception(&fs::read_to_string(cargo_lock)?)? {
+            warn(format!(
+                "{display_path}: RUSTSEC-2026-0381 compatibility-wrapper false positive; verified crates.io 0.26.11 delegates to patched roots"
+            ));
+            audit.args(["--ignore", "RUSTSEC-2026-0381"]);
+        }
+        run_streaming(&mut audit, prefix)?;
+        prefixed_ok(prefix, format!("cargo audit passed ({display_path})"));
     }
 
-    prefixed_ok(prefix, "Rust release validations and tests passed");
     Ok(())
 }
 
@@ -4551,16 +4587,6 @@ fn run_scryer_release_hygiene_validation(ctx: &TaskContext, prefix: &'static str
     Ok(())
 }
 
-fn run_scryer_ci_clippy_validation(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
-    prefixed_step(
-        prefix,
-        "Running host and Windows clippy for the whole workspace",
-    );
-    run_clippy_ci(ctx)?;
-    prefixed_ok(prefix, "CI clippy passed");
-    Ok(())
-}
-
 /// Workspace packages CI's nextest matrix skips (`EXCLUDED` in
 /// `.github/scripts/nextest_matrix.py`). Every other workspace package is tested.
 const RELEASE_TEST_EXCLUDED_PACKAGES: &[&str] = &[
@@ -4581,6 +4607,12 @@ fn nextest_release_args() -> Vec<&'static str> {
 }
 
 fn run_scryer_nextest_validation(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
+    if !command_available("cargo-nextest")? {
+        warn("cargo-nextest not installed — installing");
+        let mut install = ctx.release_command_in("cargo", &ctx.repo_root);
+        install.args(["install", "--locked", "cargo-nextest"]);
+        run_streaming(&mut install, prefix)?;
+    }
     prefixed_step(
         prefix,
         "Running Rust tests for scryer production binary packages",
@@ -4607,6 +4639,80 @@ fn run_scryer_nextest_validation(ctx: &TaskContext, prefix: &'static str) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_validation_runs_cheap_checks_before_clippy_and_nextest() {
+        use ReleaseValidationStage::*;
+        let mut calls = Vec::new();
+        run_validation_stages(ReleaseValidationScope::Full, |stage| {
+            calls.push(stage);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            calls,
+            [
+                WebAudit,
+                RustAudit,
+                RustFmt,
+                WebLint,
+                GraphqlCompare,
+                Hygiene,
+                WebBuild,
+                ClippyWindows,
+                ClippyHost,
+                Nextest,
+            ]
+        );
+    }
+
+    #[test]
+    fn release_validation_preserves_narrow_scopes() {
+        use ReleaseValidationStage::*;
+        for (scope, expected) in [
+            (
+                ReleaseValidationScope::WebOnly,
+                vec![WebAudit, WebLint, Hygiene, WebBuild],
+            ),
+            (ReleaseValidationScope::MetaOnly, vec![Hygiene]),
+        ] {
+            let mut calls = Vec::new();
+            run_validation_stages(scope, |stage| {
+                calls.push(stage);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(calls, expected);
+        }
+    }
+
+    #[test]
+    fn release_validation_stops_immediately_at_every_failed_stage() {
+        for scope in [
+            ReleaseValidationScope::Full,
+            ReleaseValidationScope::WebOnly,
+            ReleaseValidationScope::MetaOnly,
+        ] {
+            let mut stages = Vec::new();
+            run_validation_stages(scope, |stage| {
+                stages.push(stage);
+                Ok(())
+            })
+            .unwrap();
+            for (index, &failed) in stages.iter().enumerate() {
+                let mut calls = Vec::new();
+                let result = run_validation_stages(scope, |stage| {
+                    calls.push(stage);
+                    if stage == failed {
+                        bail!("synthetic validation failure");
+                    }
+                    Ok(())
+                });
+                assert!(result.is_err());
+                assert_eq!(calls, stages[..=index]);
+            }
+        }
+    }
 
     fn webpki_roots_compat_lock(parent_version: &str) -> String {
         format!(
@@ -5944,6 +6050,23 @@ merge :2
                 "}\n"
             )
         );
+    }
+
+    #[test]
+    fn release_dry_run_cache_requires_web_format_check() {
+        for scope in [
+            ReleaseValidationScope::Full,
+            ReleaseValidationScope::WebOnly,
+        ] {
+            let mut cache = sample_release_dry_run_cache();
+            cache.validated_steps.retain(|step| step != "web_format");
+            let mut expected = sample_release_dry_run_expectations();
+            expected.validation_scope = scope;
+            assert_eq!(
+                release_dry_run_cache_rejection_reason(&cache, &expected, true).as_deref(),
+                Some("dry run did not record required release-blocking validations: web_format"),
+            );
+        }
     }
 
     #[test]
