@@ -798,7 +798,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     isMediaView && contentSettingsSection === "overview";
   const shouldLoadMediaSettingsForSection =
     isMediaView && isMediaSettingsSection(contentSettingsSection);
-  const refreshCatalogDiscovery = React.useCallback(async () => {
+  const refreshCatalogDiscovery = React.useCallback(async (refresh = false) => {
     const requestId = catalogDiscoveryRequestIdRef.current + 1;
     catalogDiscoveryRequestIdRef.current = requestId;
     if (
@@ -833,6 +833,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           if (error) throw error;
           return data?.catalogDiscovery;
         },
+        refresh,
       );
       if (catalogDiscoveryRequestIdRef.current === requestId) {
         setCatalogDiscoveryGroups(payload?.groups ?? []);
@@ -2637,7 +2638,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         return;
       }
       void refreshTitles();
-      void refreshCatalogDiscovery();
+      void refreshCatalogDiscovery(true);
     };
 
     window.addEventListener(
@@ -5491,7 +5492,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               options,
             );
             if (accepted) {
-              await Promise.all([refreshTitles(), refreshCatalogDiscovery()]);
+              await Promise.all([refreshTitles(), refreshCatalogDiscovery(true)]);
             }
             return accepted;
           }}

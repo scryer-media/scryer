@@ -36,6 +36,37 @@ test("scope invalidation cannot let an old completion evict new work", async () 
   assert.equal(await currentRequest, 2);
 });
 
+test("mutation refresh waits for pending transport work and reads again", async () => {
+  for (const fails of [false, true]) {
+    const requests = new DiscoveryInFlight<number>();
+    const pending = Promise.withResolvers<number>();
+    let settled = false;
+    const first = requests.run("scope", () =>
+      pending.promise.finally(() => {
+        settled = true;
+      }),
+    );
+    const firstResult = first.catch(() => undefined);
+    const refreshed = requests.run(
+      "scope",
+      async () => {
+        assert.equal(settled, true);
+        return 2;
+      },
+      true,
+    );
+    assert.notEqual(first, refreshed);
+    assert.equal(
+      requests.run("scope", async () => 3),
+      refreshed,
+    );
+    if (fails) pending.reject(new Error("old request failed"));
+    else pending.resolve(1);
+    assert.equal(await refreshed, 2);
+    await firstResult;
+  }
+});
+
 test("different scopes proceed independently and failures permit retry", async () => {
   const requests = new DiscoveryInFlight<number>();
   const blocked = Promise.withResolvers<number>();
