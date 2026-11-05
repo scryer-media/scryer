@@ -251,7 +251,16 @@ const TITLE_CATALOG_PAGE_SIZE: usize = 300;
 fn title_catalog_page_limit(limit: Option<i32>) -> usize {
     limit
         .unwrap_or(TITLE_CATALOG_PAGE_SIZE as i32)
-        .clamp(1, TITLE_CATALOG_PAGE_SIZE as i32) as usize
+        .clamp(1, 10_000) as usize
+}
+
+#[test]
+fn catalog_bulk_page_limit_preserves_default_and_bounds_explicit_requests() {
+    assert_eq!(title_catalog_page_limit(None), 300);
+    assert_eq!(title_catalog_page_limit(Some(10_000)), 10_000);
+    assert_eq!(title_catalog_page_limit(Some(i32::MAX)), 10_000);
+    assert_eq!(title_catalog_page_limit(Some(0)), 1);
+    assert_eq!(title_catalog_page_limit(Some(-1)), 1);
 }
 
 fn title_catalog_page_offset(offset: Option<i32>) -> usize {
@@ -1351,7 +1360,9 @@ impl CatalogQueries {
         filter: Option<TitleCatalogFilterInput>,
         #[graphql(desc = "Optional sort key and direction; omitted uses the application default.")]
         sort: Option<TitleCatalogSortInput>,
-        #[graphql(desc = "Requested page size; defaults to 300 and is clamped to 1 through 300.")]
+        #[graphql(
+            desc = "Requested page size; defaults to 300 and is clamped to 1 through 10000."
+        )]
         limit: Option<i32>,
         #[graphql(
             desc = "Zero-based page offset; defaults to 0 and negative values are treated as 0."
