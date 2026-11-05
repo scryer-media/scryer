@@ -424,6 +424,16 @@ impl AppUseCase {
             None
         };
 
+        // Preserve the saved transport kind without reusing its persistence identity.
+        // A managed Nab proxy must not be normalized as a direct Nab endpoint.
+        let managed_child = persisted_config.as_ref().filter(|config| {
+            config.is_prowlarr_nab_proxy()
+                && config
+                    .provider_type
+                    .trim()
+                    .eq_ignore_ascii_case(provider_type.trim())
+        });
+
         // The probe deliberately runs under a synthetic id: it must exercise the
         // submitted configuration, not whatever is stored. Nothing may persist
         // against that id — `indexer_error_history_is_persistable` is what the
@@ -445,8 +455,9 @@ impl AppUseCase {
             proxy_config_id,
             download_client_id: None,
             seeding_profile_id: None,
-            managed_parent_config_id: None,
-            managed_child_key: None,
+            managed_parent_config_id: managed_child
+                .and_then(|config| config.managed_parent_config_id.clone()),
+            managed_child_key: managed_child.and_then(|config| config.managed_child_key.clone()),
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
@@ -3784,6 +3795,70 @@ mod tests {
             error.validation_reason(),
             Some(crate::login_challenge_refusal::IMAGE_TYPE_UNSUPPORTED)
         );
+    }
+
+    #[tokio::test]
+    async fn connection_probe_preserves_managed_transport_only_for_same_provider() {
+        for (managed, provider_type, saved) in [
+            (true, "newznab", true),
+            (false, "newznab", true),
+            (true, "torznab", true),
+            (true, "newznab", false),
+        ] {
+            let repo = Arc::new(RecordingIndexerConfigRepo::new());
+            let mut stored = cache_config();
+            stored.base_url = "http://127.0.0.1:9696/1".into();
+            stored.config_json = Some(
+                r#"{"base_url":"http://127.0.0.1:9696/1","api_path":"/api","api_key":"synthetic-key"}"#.into(),
+            );
+            if managed {
+                stored.managed_parent_config_id = Some("parent".into());
+                stored.managed_child_key = Some("1".into());
+            }
+            repo.created.lock().await.push(stored.clone());
+            let provider = Arc::new(RecordingPluginProvider::new(
+                provider_type,
+                vec![
+                    string_field(
+                        "base_url",
+                        "Base URL",
+                        Some(scryer_domain::ConfigFieldRole::ConnectionUrl),
+                    ),
+                    string_field("api_path", "API Path", None),
+                    password_field("api_key", "API Key"),
+                ],
+                searchable_capabilities(),
+                Arc::new(RecordingIndexerClient::new(false).with_connection_probe()),
+            ));
+            let app = test_app(
+                repo.clone(),
+                Some(provider.clone()),
+                Arc::new(NullSettingsRepository),
+            );
+            app.probe_indexer_connection(
+                &test_admin(),
+                provider_type,
+                stored.config_json.as_deref(),
+                saved.then_some(stored.id.as_str()),
+                None,
+            )
+            .await
+            .expect("connection probe");
+            let seen = provider.seen_configs.lock().unwrap().clone();
+            let probe = &seen[0];
+            assert_eq!(probe.id, crate::CONNECTION_TEST_INDEXER_ID);
+            let preserve = managed && saved && provider_type == "newznab";
+            assert_eq!(probe.is_prowlarr_nab_proxy(), preserve);
+            assert_eq!(
+                probe.managed_parent_config_id.as_deref(),
+                preserve.then_some("parent")
+            );
+            assert_eq!(probe.managed_child_key.as_deref(), preserve.then_some("1"));
+            assert!(!crate::indexer_error_history_is_persistable(&probe.id));
+            assert!(repo.cleared_ids().await.is_empty());
+            assert!(repo.recorded_errors.lock().await.is_empty());
+            assert_eq!(repo.created.lock().await.as_slice(), &[stored]);
+        }
     }
 
     #[tokio::test]
