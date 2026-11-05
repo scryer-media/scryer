@@ -702,7 +702,7 @@ pub use ports::{
     ShowRepository, SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore, SubtitleDownloadRepository,
     SubtitlePluginProvider, SubtitleProviderClient, SubtitleProviderConfigRepository,
     SystemInfoProvider, TitleImageProcessor, TitleImageRepository, TitleListProjection,
-    TitleNameBucketQuery, TitleNameCandidate, TitleRepository, TotpRepository,
+    TitleNameBucketQuery, TitleNameCandidate, TitleRepository, TitleRowProjection, TotpRepository,
     UserExternalAccountRepository, UserRepository, VerifiedExternalIdentity, WebauthnRepository,
     WorkflowOperationInfo, WorkflowOperationRepository,
 };

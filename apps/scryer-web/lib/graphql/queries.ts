@@ -1492,6 +1492,7 @@ export const TITLE_LIST_FIELDS = `
     createdAt`;
 
 export type TitleCatalogTitleProjection = {
+  graph?: boolean;
   includeSettings?: boolean;
   library?: boolean;
   quality?: boolean;
@@ -1539,6 +1540,11 @@ const TITLE_CATALOG_BASE_FIELDS = `
     createdAt`;
 
 function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
+  if (projection.graph) {
+    return `id name facet libraryId monitored slug year posterUrl popularity imdbId
+      externalIds { source value }
+      ratings { rating ratingSources externalRatings { source normalized votes } }`;
+  }
   const fields = [TITLE_CATALOG_BASE_FIELDS];
   if (projection.includeSettings !== false) {
     fields.push(`

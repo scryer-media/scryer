@@ -3,6 +3,7 @@ import { titleDeleteErrorMessage } from "@/lib/utils/title-delete-error-message"
 import * as React from "react";
 import { useCatalogFilterState } from "@/lib/hooks/use-catalog-filter-state";
 import { createCatalogPageRequestGate } from "@/lib/utils/catalog-page-request";
+import { loadCatalogBulk } from "@/lib/utils/catalog-bulk-load";
 import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import { MediaContentView } from "@/components/views/media-content-view";
 import {
@@ -1185,6 +1186,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const skipNextCatalogOverviewReloadRef = React.useRef(false);
   const [catalogPaginationState, setCatalogPaginationState] =
     React.useState<TitleCatalogState>(emptyTitleCatalogState);
+  const [catalogBulkLoadedCount, setCatalogBulkLoadedCount] = React.useState(0);
+  const catalogBulkGenerationRef = React.useRef(0);
+  React.useEffect(() => {
+    setCatalogBulkLoadedCount(0);
+    return () => {
+      catalogBulkGenerationRef.current += 1;
+    };
+  }, [effectiveViewMode, activeFacet, authorizationSignature]);
 
   React.useEffect(() => {
     catalogQueryKeyRef.current = catalogPaginationState.queryKey;
@@ -2018,6 +2027,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           null,
       );
       const requestSeq = ++catalogTitleRequestSeqRef.current;
+      setCatalogBulkLoadedCount(0);
       catalogPageRequestGate.reset();
       setCatalogPageError(null);
       catalogPageLoadInFlightRef.current = true;
@@ -2274,43 +2284,56 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       return;
     }
     const offset = catalogPaginationState.nextOffset;
+    const bulkGeneration = catalogBulkGenerationRef.current;
+    const isCurrent = () =>
+      requestSeq === catalogTitleRequestSeqRef.current &&
+      catalogQueryKeyRef.current === queryKey &&
+      bulkGeneration === catalogBulkGenerationRef.current;
+    if (effectiveViewMode === "graph") setCatalogBulkLoadedCount(offset);
     catalogPageLoadInFlightRef.current = true;
     setCatalogPaginationState((current) => ({ ...current, loadingMore: true }));
 
     try {
       const result = await catalogPageRequestGate.run(async () => {
-        const { data, error } = await client
-          .query(
-            buildTitlesQuery(titleCatalogProjection, {
-              includeAggregates: false,
-            }),
-            buildTitleCatalogQueryVariables({
-              facet: activeFacet,
-              libraryIds: selectedLibraryIds,
-              query,
-              filters: effectiveTitleQuickFilters,
-              advancedFilters: effectiveAdvancedTitleFilters,
-              sort: effectiveTitleCatalogSort,
-              limit: titleCatalogPageSize,
-              offset,
-            }),
-            { requestPolicy: "network-only" },
-          )
-          .toPromise();
-        if (error) throw error;
-        if (!data?.titles) throw new Error(t("status.failedToLoad"));
-        return data;
+        const loadPage = async (offset: number) => {
+          const { data, error } = await client
+            .query(
+              buildTitlesQuery(titleCatalogProjection, {
+                includeAggregates: false,
+              }),
+              buildTitleCatalogQueryVariables({
+                facet: activeFacet,
+                libraryIds: selectedLibraryIds,
+                query,
+                filters: effectiveTitleQuickFilters,
+                advancedFilters: effectiveAdvancedTitleFilters,
+                sort: effectiveTitleCatalogSort,
+                limit: titleCatalogPageSize,
+                offset,
+              }),
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+          if (error) throw error;
+          if (!data?.titles) throw new Error(t("status.failedToLoad"));
+          return {
+            items: (data.titles.items ?? []) as TitleRecord[],
+            hasMore: Boolean(data.titles.hasMore),
+          };
+        };
+        if (effectiveViewMode !== "graph") return loadPage(offset);
+        const items = await loadCatalogBulk({
+          offset,
+          pageSize: titleCatalogPageSize,
+          isCurrent,
+          loadPage,
+          onProgress: setCatalogBulkLoadedCount,
+        });
+        return items ? { items, hasMore: false } : null;
       });
       if (!result) return;
-      const data = result;
-      if (
-        requestSeq !== catalogTitleRequestSeqRef.current ||
-        catalogQueryKeyRef.current !== queryKey
-      ) {
-        return;
-      }
-
-      const page = data?.titles ?? {};
+      if (!isCurrent()) return;
+      const page = result;
       const nextTitles = (page.items ?? []) as TitleRecord[];
       setMonitoredTitles((current) =>
         appendCatalogTitlesPreservingImages(current, nextTitles),
@@ -2323,10 +2346,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         loadingMore: false,
       }));
     } catch (error) {
-      if (
-        requestSeq === catalogTitleRequestSeqRef.current &&
-        catalogQueryKeyRef.current === queryKey
-      ) {
+      if (isCurrent()) {
         setCatalogPageError(
           userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
         );
@@ -2351,6 +2371,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     catalogPaginationState.nextOffset,
     catalogPaginationState.queryKey,
     client,
+    effectiveViewMode,
     effectiveAdvancedTitleFilters,
     effectiveTitleQuickFilters,
     effectiveTitleCatalogSort,
@@ -5292,6 +5313,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           refreshTitles,
           titleLoading,
           catalogTotalTitleCount: catalogPaginationState.totalCount,
+          catalogBulkLoadedCount,
           catalogManagedBytes: catalogPaginationState.managedBytes,
           catalogHasMoreTitles:
             catalogPaginationState.hasMore && !catalogPageError,

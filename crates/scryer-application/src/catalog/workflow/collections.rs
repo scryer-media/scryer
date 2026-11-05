@@ -1626,6 +1626,7 @@ impl AppUseCase {
                         crate::TitleListProjection {
                             include_external_ids: false,
                             include_canonical_tags: false,
+                            ..Default::default()
                         },
                         crate::TitleCatalogAggregates::default(),
                     )

@@ -28,7 +28,12 @@ import {
   GRAPH_POSTER_CORNER_RADIUS_RATIO,
   drawGraphPoster,
   createGraphPosterAdmission,
+  prepareGraphPosterImages,
   graphPosterBounds,
+  graphPosterInViewport,
+  graphPosterHoverable,
+  graphRelationOpacity,
+  changedGraphViewportEdges,
   traceGraphPoster,
   type GraphPosterBounds,
 } from "@/lib/utils/library-graph-posters";
@@ -50,7 +55,7 @@ import {
   LIBRARY_GRAPH_MIN_NODE_SIZE,
   displayedLibraryGraph,
   graphDetailClusters,
-  graphDetailCompaction,
+  graphDetailPosterSize,
   graphDetailOpacity,
   largeLibraryGraphLayout,
   libraryGraphOverviewPreview,
@@ -119,7 +124,6 @@ const CLUSTER_COLORS = [
 ];
 const UNPLACED_COLOR = "#7a8499";
 const LAYOUT_STEPS_PER_FRAME = 6;
-const MAX_POSTERS_PER_FRAME = 240;
 const MIN_POSTER_RADIUS_PX = 9;
 const HULL_PADDING_PX = 18;
 // How far a neighbourhood name may wander from its titles to find a spot
@@ -177,6 +181,8 @@ type NodeAttributes = {
   posterUrl?: string | null;
   collapsedClusterId?: number;
   detailOpacity?: number;
+  hull?: readonly LayoutPoint[];
+  dots?: readonly LayoutPoint[];
   clusterId: number;
   /** A title reached by exploring, not in the library. */
   ghost?: boolean;
@@ -220,6 +226,37 @@ function clusterColor(clusterId: number, order: readonly number[]): string {
     return UNPLACED_COLOR;
   }
   return CLUSTER_COLORS[position % CLUSTER_COLORS.length];
+}
+
+function graphTransitionBlobs(
+  groups: readonly { id: number; count: number; name: string; color: string }[],
+  layout: ReturnType<typeof largeLibraryGraphLayout> | null,
+  expanded: ReadonlySet<number>,
+  spacing: number,
+  sizeScale: number,
+): NodeAttributes[] {
+  const opacity = 1 - graphDetailOpacity(spacing);
+  if (!layout || opacity === 0) return [];
+  return groups.flatMap((group) => {
+    const center = layout.positions.get(`cluster:${group.id}`);
+    if (!center || !expanded.has(group.id)) return [];
+    const baseSize = 24 * Math.sqrt(group.count);
+    return [
+      {
+        ...center,
+        label: group.name,
+        clusterId: group.id,
+        collapsedClusterId: group.id,
+        hull: layout.hulls.get(group.id),
+        dots: layout.dots.get(group.id),
+        baseSize,
+        size: (baseSize * spacing) / 34 / sizeScale,
+        color: group.color,
+        baseColor: group.color,
+        detailOpacity: opacity,
+      },
+    ];
+  });
 }
 
 // The camera at rest: unzoomed and centred on the layout's origin, where
@@ -333,6 +370,7 @@ export type LibraryGraphViewProps = {
   titlesComplete: boolean;
   allowOverviewPreview: boolean;
   totalTitles: number;
+  loadedTitles?: number;
   libraryIds: readonly string[];
   selectedTitleId: string | null;
   contextPanelId?: string;
@@ -359,6 +397,7 @@ export default function LibraryGraphView({
   titlesComplete,
   allowOverviewPreview,
   totalTitles,
+  loadedTitles = currentTitles.length,
   libraryIds,
   selectedTitleId,
   contextPanelId,
@@ -391,6 +430,15 @@ export default function LibraryGraphView({
   const resumeLayoutRef = React.useRef<() => void>(() => {});
   const positionsRef = React.useRef(new Map<string, LayoutPoint>());
   const posterCacheRef = React.useRef(new Map<string, HTMLImageElement>());
+  const viewportNodesRef = React.useRef(new Set<string>());
+  const relationOpacityRef = React.useRef(new Map<string, number>());
+  const largeLayoutRef = React.useRef<ReturnType<
+    typeof largeLibraryGraphLayout
+  > | null>(null);
+  const hoverableNodesRef = React.useRef(new Set<string>());
+  const hoveredEdgeRef = React.useRef<{ from: string; to: string } | null>(
+    null,
+  );
   const transitionBlobsRef = React.useRef<NodeAttributes[]>([]);
   // The title under the pointer and the titles one link from it, which stay
   // bright while the rest of the graph fades.
@@ -639,16 +687,20 @@ export default function LibraryGraphView({
     !titlesComplete &&
     allowOverviewPreview &&
     (result?.nodes.length ?? 0) > LIBRARY_GRAPH_COLLAPSE_THRESHOLD;
+  const overviewPreview = React.useMemo(
+    () => (result && previewing ? libraryGraphOverviewPreview(result) : null),
+    [result, previewing],
+  );
   const join = React.useMemo(
     () =>
       !result
         ? null
         : previewing
-          ? libraryGraphOverviewPreview(result)
+          ? overviewPreview
           : titlesComplete && titles
             ? joinLibraryGraphToTitles(result, titles)
             : null,
-    [result, titles, titlesComplete, previewing],
+    [result, titles, titlesComplete, previewing, overviewPreview],
   );
   const [paintedJoin, setPaintedJoin] = React.useState<typeof join>(null);
   React.useEffect(() => {
@@ -737,6 +789,9 @@ export default function LibraryGraphView({
         : null,
     [join, explored],
   );
+  React.useEffect(() => {
+    largeLayoutRef.current = largeLayout;
+  }, [largeLayout]);
   const overview = React.useMemo(
     () =>
       explored && join
@@ -961,6 +1016,9 @@ export default function LibraryGraphView({
     const pointsByCluster = new Map<number, LayoutPoint[]>();
     const viewportByNode = new Map<string, LayoutPoint>();
     const sizesByNode = new Map<string, number>();
+    const viewportNodes = new Set<string>();
+    const relationOpacity = new Map<string, number>();
+    const fadingNodes: string[] = [];
     // Every drawn title, so neighbourhood names can keep off them.
     const nodeDiscs: (GraphPosterBounds & {
       x: number;
@@ -978,12 +1036,29 @@ export default function LibraryGraphView({
         sigma.getNodeDisplayData(key)?.size ?? attributes.size,
       );
       sizesByNode.set(key, size);
-      nodeDiscs.push({
-        x: point.x,
-        y: point.y,
-        r: size,
-        ...graphPosterBounds(point, size),
-      });
+      if (
+        graph.hasNode(key) &&
+        graphPosterInViewport(point, size, width, height)
+      )
+        viewportNodes.add(key);
+      if (viewportNodes.has(key)) {
+        const opacity =
+          attributes.collapsedClusterId !== undefined
+            ? 1
+            : graphRelationOpacity(size, attributes.detailOpacity ?? 1);
+        relationOpacity.set(key, opacity);
+        if (
+          relationOpacityRef.current.has(key) &&
+          relationOpacityRef.current.get(key) !== opacity
+        )
+          fadingNodes.push(key);
+        nodeDiscs.push({
+          x: point.x,
+          y: point.y,
+          r: size,
+          ...graphPosterBounds(point, size),
+        });
+      }
       // Ghosts are not in the library, so they never stretch a cluster hull.
       if (attributes.collapsedClusterId !== undefined) {
         if (
@@ -994,42 +1069,64 @@ export default function LibraryGraphView({
         )
           return;
         const color = attributes.baseColor;
+        const hull = attributes.hull?.map((point) =>
+          sigma.graphToViewport(point),
+        );
         context.save();
         context.globalAlpha = attributes.detailOpacity ?? 1;
         context.beginPath();
-        for (let i = 0; i < 24; i++) {
-          const angle = (i * Math.PI) / 12;
-          const radius = size * (1.12 + 0.04 * Math.sin(i * 2.3));
-          const x = point.x + Math.cos(angle) * radius;
-          const y = point.y + Math.sin(angle) * radius;
-          if (i === 0) context.moveTo(x, y);
-          else context.lineTo(x, y);
-        }
+        if (hull && hull.length > 2) {
+          hull.forEach((point, index) => {
+            if (index === 0) context.moveTo(point.x, point.y);
+            else context.lineTo(point.x, point.y);
+          });
+        } else
+          for (let i = 0; i < 24; i++) {
+            const angle = (i * Math.PI) / 12;
+            const radius = size * (1.12 + 0.04 * Math.sin(i * 2.3));
+            const x = point.x + Math.cos(angle) * radius;
+            const y = point.y + Math.sin(angle) * radius;
+            if (i === 0) context.moveTo(x, y);
+            else context.lineTo(x, y);
+          }
         context.closePath();
-        context.fillStyle = withAlpha(color, 0.14);
+        context.fillStyle = withAlpha(color, 0.1);
         context.fill();
+        context.lineJoin = "round";
+        context.lineWidth = HULL_PADDING_PX * 2;
+        context.strokeStyle = withAlpha(color, 0.1);
+        context.stroke();
         const count = Math.min(
           600,
           Math.max(24, Math.round((size * size) / 30)),
         );
         context.fillStyle = color;
-        for (let i = 0; i < count; i++) {
-          const angle = i * 2.399963229728653;
-          const radius = size * Math.sqrt((i + 0.5) / count);
-          context.fillRect(
-            point.x + Math.cos(angle) * radius,
-            point.y + Math.sin(angle) * radius,
-            1.5,
-            2,
-          );
-        }
+        if (attributes.dots) {
+          for (const dot of attributes.dots) {
+            const position = sigma.graphToViewport(dot);
+            context.fillRect(position.x, position.y, 1.5, 2);
+          }
+        } else
+          for (let i = 0; i < count; i++) {
+            const angle = i * 2.399963229728653;
+            const radius = size * Math.sqrt((i + 0.5) / count);
+            context.fillRect(
+              point.x + Math.cos(angle) * radius,
+              point.y + Math.sin(angle) * radius,
+              1.5,
+              2,
+            );
+          }
         const group = groupsRef.current.find(
           (group) => group.id === attributes.collapsedClusterId,
         );
         const name = group?.name ?? attributes.label;
         context.font = "600 12px system-ui, sans-serif";
         const halfWidth = context.measureText(name).width / 2 + 12;
-        const y = point.y - size * 1.15 - 16;
+        const y =
+          (hull?.length
+            ? Math.min(...hull.map((point) => point.y))
+            : point.y - size * 1.15) - 16;
         context.beginPath();
         context.roundRect(point.x - halfWidth, y - 13, halfWidth * 2, 26, 13);
         context.fillStyle = cachedCssColor(
@@ -1068,6 +1165,20 @@ export default function LibraryGraphView({
       }
     };
     graph.forEachNode(drawNode);
+    const changedEdges = changedGraphViewportEdges(
+      viewportNodesRef.current,
+      viewportNodes,
+      (key) => (graph.hasNode(key) ? graph.edges(key) : []),
+      fadingNodes,
+    );
+    viewportNodesRef.current = viewportNodes;
+    relationOpacityRef.current = relationOpacity;
+    if (changedEdges.length) {
+      sigma.scheduleRefresh({
+        partialGraph: { edges: changedEdges },
+        skipIndexation: true,
+      });
+    }
     if (focusCenterRef.current === null) {
       transitionBlobsRef.current.forEach((attributes, index) =>
         drawNode(`transition:${index}`, attributes),
@@ -1098,7 +1209,10 @@ export default function LibraryGraphView({
         }
         continue;
       }
-      const hull = convexHull(points);
+      const cachedHull = largeLayoutRef.current?.hulls.get(group.id);
+      const hull = cachedHull
+        ? cachedHull.map((point) => sigma.graphToViewport(point))
+        : convexHull(points);
       const opacity =
         1 -
         (transitionBlobsRef.current.find(
@@ -1290,10 +1404,12 @@ export default function LibraryGraphView({
       width,
       height,
       0,
-      MAX_POSTERS_PER_FRAME,
+      Number.POSITIVE_INFINITY,
     );
     const visiblePosters = new Set<string>();
-    graph.forEachNode((key, attributes) => {
+    const hoverableNodes = new Set<string>();
+    viewportNodes.forEach((key) => {
+      const attributes = graph.getNodeAttributes(key);
       const url = attributes.posterUrl as string | null | undefined;
       if (!url) {
         return;
@@ -1313,29 +1429,8 @@ export default function LibraryGraphView({
         return;
       }
       visiblePosters.add(url);
-      let image = posterCacheRef.current.get(url);
-      if (!image) {
-        // Keep decoded posters across zoom reversals, with a hard bound on
-        // both retained images and outstanding requests.
-        if (posterCacheRef.current.size >= MAX_POSTERS_PER_FRAME) {
-          const evict = [...posterCacheRef.current.keys()].find(
-            (cachedUrl) => !visiblePosters.has(cachedUrl),
-          );
-          if (!evict) return;
-          const old = posterCacheRef.current.get(evict)!;
-          old.onload = null;
-          if (!old.complete) old.src = "";
-          posterCacheRef.current.delete(evict);
-        }
-        image = new Image();
-        image.decoding = "async";
-        image.onload = () => sigmaRef.current?.scheduleRender();
-        image.src = url;
-        posterCacheRef.current.set(url, image);
-      }
-      posterCacheRef.current.delete(url);
-      posterCacheRef.current.set(url, image);
-      if (!image.complete || image.naturalWidth === 0) {
+      const image = posterCacheRef.current.get(url);
+      if (!image?.complete || image.naturalWidth === 0) {
         return;
       }
       context.save();
@@ -1348,6 +1443,15 @@ export default function LibraryGraphView({
       }
       context.globalAlpha *= (attributes.detailOpacity ?? 1) * posterOpacity;
       drawGraphPoster(context, image, point, radius);
+      if (
+        graphPosterHoverable(
+          radius,
+          posterOpacity * (attributes.detailOpacity ?? 1),
+          true,
+        )
+      ) {
+        hoverableNodes.add(key);
+      }
       context.restore();
       if (
         selectedKeyRef.current !== null
@@ -1366,6 +1470,32 @@ export default function LibraryGraphView({
         context.stroke();
       }
     });
+
+    prepareGraphPosterImages(posterCacheRef.current, visiblePosters, () =>
+      sigmaRef.current?.scheduleRender(),
+    );
+    hoverableNodesRef.current = hoverableNodes;
+    if (
+      hoverFocusRef.current &&
+      !hoverableNodes.has(hoverFocusRef.current.key)
+    ) {
+      hoverFocusRef.current = null;
+      setHover(null);
+      sigma.getContainer().style.cursor = "";
+      sigma.scheduleRefresh({
+        partialGraph: { nodes: graph.nodes(), edges: graph.edges() },
+        skipIndexation: true,
+      });
+    }
+    const hoveredEdge = hoveredEdgeRef.current;
+    if (
+      hoveredEdge &&
+      (!hoverableNodes.has(hoveredEdge.from) ||
+        !hoverableNodes.has(hoveredEdge.to))
+    ) {
+      hoveredEdgeRef.current = null;
+      setHover(null);
+    }
 
     // Ghosts wear a dashed ring so they read apart from library titles.
     const muted = cachedCssColor(
@@ -1661,6 +1791,9 @@ export default function LibraryGraphView({
         // as one smooth motion rather than a jump between fixed levels.
         zoomingRatio: 1.1,
         zoomDuration: 90,
+        // Scale the fixed geometry together; moving titles during zoom
+        // breaks the camera's cursor anchor and forces graph reindexing.
+        zoomToSizeRatioFunction: (ratio) => ratio,
       },
       nodeReducer: (key, attributes, node) => {
         if (node.collapsedClusterId !== undefined)
@@ -1681,16 +1814,26 @@ export default function LibraryGraphView({
             };
       },
       edgeReducer: (edge, attributes) => {
+        const [from, to] = graph.extremities(edge);
+        if (
+          !viewportNodesRef.current.has(from) ||
+          !viewportNodesRef.current.has(to)
+        ) {
+          return { ...attributes, visibility: "hidden" };
+        }
+        const opacity = Math.min(
+          relationOpacityRef.current.get(from) ?? 0,
+          relationOpacityRef.current.get(to) ?? 0,
+        );
+        if (opacity === 0) return { ...attributes, visibility: "hidden" };
         const focus = hoverFocusRef.current;
         if (!focus) {
-          return focusCenterRef.current === null && graph.order > 500
-            ? { ...attributes, visibility: "hidden" }
-            : attributes;
+          return { ...attributes, opacity };
         }
-        const [from, to] = graph.extremities(edge);
         if (from === focus.key || to === focus.key) {
           return {
             ...attributes,
+            opacity,
             color: withAlpha(focus.accent, 0.9),
             size: attributes.size + 1,
             zIndex: 1,
@@ -1713,13 +1856,18 @@ export default function LibraryGraphView({
       );
     });
     sigma.on("enterNode", ({ node, event }) => {
+      if (!hoverableNodesRef.current.has(node)) return;
+      hoveredEdgeRef.current = null;
       const attributes = graph.getNodeAttributes(node);
       hoverFocusRef.current = {
         key: node,
         near: new Set([node, ...graph.neighbors(node)]),
         accent: readCssColor(container, "--scry-accent", "#5b64ff"),
       };
-      sigma.refresh({ skipIndexation: true });
+      sigma.refresh({
+        partialGraph: { nodes: graph.nodes(), edges: graph.edges() },
+        skipIndexation: true,
+      });
       setHover({
         kind: "node",
         key: node,
@@ -1730,12 +1878,24 @@ export default function LibraryGraphView({
       container.style.cursor = "pointer";
     });
     sigma.on("leaveNode", () => {
+      if (!hoverFocusRef.current) return;
       hoverFocusRef.current = null;
-      sigma.refresh({ skipIndexation: true });
+      sigma.refresh({
+        partialGraph: { nodes: graph.nodes(), edges: graph.edges() },
+        skipIndexation: true,
+      });
       setHover(null);
       container.style.cursor = "";
     });
     sigma.on("enterEdge", ({ edge, event }) => {
+      const from = graph.source(edge);
+      const to = graph.target(edge);
+      if (
+        !hoverableNodesRef.current.has(from) ||
+        !hoverableNodesRef.current.has(to)
+      )
+        return;
+      hoveredEdgeRef.current = { from, to };
       setHover({
         kind: "edge",
         from: graph.source(edge),
@@ -1745,7 +1905,10 @@ export default function LibraryGraphView({
         lines: graph.getEdgeAttribute(edge, "kinds"),
       });
     });
-    sigma.on("leaveEdge", () => setHover(null));
+    sigma.on("leaveEdge", () => {
+      hoveredEdgeRef.current = null;
+      setHover(null);
+    });
     // A touch never leaves a node, so the tooltip goes when the finger lifts.
     const clearHover = () => setHover(null);
     container.addEventListener("touchend", clearHover);
@@ -1924,13 +2087,28 @@ export default function LibraryGraphView({
     );
     const initialDetailOpacity =
       largeLayout && !focusing ? graphDetailOpacity(zoomSpacing) : 1;
+    // Preserve the overview boundary on the very first materialized frame,
+    // before the camera effect runs its next coalesced update.
+    transitionBlobsRef.current = focusing
+      ? []
+      : graphTransitionBlobs(
+          groupsRef.current,
+          largeLayout,
+          new Set(
+            displayed.nodes
+              .filter((node) => node.collapsedClusterId === undefined)
+              .map((node) => node.clusterId),
+          ),
+          zoomSpacing,
+          sigma.scaleSize(1),
+        );
     for (const node of displayed.nodes) {
       const position = from.get(node.subjectKey) ?? { x: 0, y: 0 };
       const color = clusterColor(node.clusterId, clusterOrder);
       let attributes: NodeAttributes;
       if (node.collapsedClusterId !== undefined) {
         const size = largeLayout
-          ? Math.max(140, 12 * Math.sqrt(node.memberCount ?? 1))
+          ? 24 * Math.sqrt(node.memberCount ?? 1)
           : Math.min(36, 10 + Math.sqrt(node.memberCount ?? 1));
         attributes = {
           ...position,
@@ -1943,6 +2121,8 @@ export default function LibraryGraphView({
           baseColor: color,
           label: nodeLabel(node),
           collapsedClusterId: node.collapsedClusterId,
+          hull: largeLayout?.hulls.get(node.collapsedClusterId),
+          dots: largeLayout?.dots.get(node.collapsedClusterId),
           clusterId: node.clusterId,
         };
       } else if (node.ghost) {
@@ -1987,6 +2167,10 @@ export default function LibraryGraphView({
         };
       }
       if (attributes.collapsedClusterId === undefined) {
+        if (largeLayout && !focusing)
+          attributes.size =
+            graphDetailPosterSize(attributes.baseSize, zoomSpacing) /
+            sigma.scaleSize(1);
         attributes.detailOpacity = initialDetailOpacity;
         if (initialDetailOpacity < 1)
           attributes.color = withAlpha(
@@ -2001,16 +2185,6 @@ export default function LibraryGraphView({
       }
     }
     for (const edge of displayed.edges) {
-      // At library scale, show connections between neighbourhoods. Title
-      // connections are drawn in the focused view, not as a full-library mesh.
-      if (
-        largeLayout &&
-        !focusing &&
-        (graph.getNodeAttribute(edge.from, "collapsedClusterId") ===
-          undefined ||
-          graph.getNodeAttribute(edge.to, "collapsedClusterId") === undefined)
-      )
-        continue;
       if (graph.hasEdge(edge.from, edge.to)) {
         continue;
       }
@@ -2173,6 +2347,7 @@ export default function LibraryGraphView({
       return;
     let frame: number | null = null;
     let lastProjection = "";
+    let lastDetailOpacity: number | null = null;
     const update = () => {
       frame = null;
       if (fitWhenSettledRef.current) return;
@@ -2198,65 +2373,37 @@ export default function LibraryGraphView({
       const projection = `${origin.x},${origin.y},${along.x},${along.y}`;
       if (projection === lastProjection) return;
       lastProjection = projection;
-      // Compress local offsets as magnification grows. Always derive from
-      // the stable layout so zooming back out restores the original spacing.
-      const compact = graphDetailCompaction(spacing);
       const detailOpacity = graphDetailOpacity(spacing);
+      const opacityChanged = detailOpacity !== lastDetailOpacity;
+      lastDetailOpacity = detailOpacity;
       if (tweenFrameRef.current !== null) {
         cancelAnimationFrame(tweenFrameRef.current);
         tweenFrameRef.current = null;
       }
       const graph = graphRef.current;
-      if (graph) {
+      if (graph && opacityChanged) {
         const expanded = new Set<number>();
         graph.forEachNode((_key, attributes) => {
           if (attributes.collapsedClusterId === undefined)
             expanded.add(attributes.clusterId);
         });
-        transitionBlobsRef.current = groupsRef.current.flatMap((group) => {
-          const center = largeLayout.positions.get(`cluster:${group.id}`);
-          if (!center || !expanded.has(group.id) || detailOpacity >= 1)
-            return [];
-          const baseSize = Math.max(140, 12 * Math.sqrt(group.count));
-          return [
-            {
-              ...center,
-              label: group.name,
-              clusterId: group.id,
-              collapsedClusterId: group.id,
-              baseSize,
-              size: (baseSize * (spacing / 34)) / sigma.scaleSize(1),
-              color: group.color,
-              baseColor: group.color,
-              detailOpacity: 1 - detailOpacity,
-            },
-          ];
-        });
+        transitionBlobsRef.current = graphTransitionBlobs(
+          groupsRef.current,
+          largeLayout,
+          expanded,
+          spacing,
+          sigma.scaleSize(1),
+        );
         graph.updateEachNodeAttributes(
-          (key, attributes) => {
-            const sizeScale = sigma.scaleSize(1);
-            if (attributes.collapsedClusterId !== undefined)
-              return {
-                ...attributes,
-                size: (attributes.baseSize * (spacing / 34)) / sizeScale,
-              };
-            const base = largeLayout.positions.get(key);
-            const center =
-              largeLayout.positions.get(`cluster:${attributes.clusterId}`) ??
-              largeLayout.positions.get(`cluster:${UNPLACED_CLUSTER_ID}`);
-            if (!base || !center) return attributes;
+          (_key, attributes) => {
+            if (attributes.collapsedClusterId !== undefined) return attributes;
             return {
               ...attributes,
               detailOpacity,
               color: withAlpha(attributes.baseColor, detailOpacity),
-              x: center.x + (base.x - center.x) * compact,
-              y: center.y + (base.y - center.y) * compact,
-              size:
-                Math.min(28, Math.max(12, attributes.baseSize * 1.5)) /
-                sizeScale,
             };
           },
-          { attributes: ["x", "y", "size", "color", "detailOpacity"] },
+          { attributes: ["color", "detailOpacity"] },
         );
       }
       const { width, height } = sigma.getDimensions();
@@ -2962,7 +3109,8 @@ export default function LibraryGraphView({
                       30 *
                         Math.min(
                           1,
-                          currentTitles.length / Math.max(1, totalTitles),
+                          Math.max(currentTitles.length, loadedTitles) /
+                            Math.max(1, totalTitles),
                         )
               }
               className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-[var(--scry-border2)]"
@@ -2977,7 +3125,7 @@ export default function LibraryGraphView({
                           "library-graph-loading 1.2s ease-in-out infinite",
                       }
                     : {
-                        width: `${join && !previewing ? 95 : 60 + 30 * Math.min(1, currentTitles.length / Math.max(1, totalTitles))}%`,
+                        width: `${join && !previewing ? 95 : 60 + 30 * Math.min(1, Math.max(currentTitles.length, loadedTitles) / Math.max(1, totalTitles))}%`,
                       }
                 }
               />

@@ -45,6 +45,40 @@ function edgeBetween(graph: GraphState, a: string, b: string) {
   );
 }
 
+test("collapsing thousands of medoids visits node identities linearly", () => {
+  let reads = 0;
+  const count = 10_000;
+  const graph: GraphState = {
+    nodes: Array.from({ length: count }, (_, i) => ({
+      get subjectKey() {
+        reads++;
+        return `s:${i}`;
+      },
+      targetKey: `tmdb:movie:${i + 1}`,
+      clusterId: i,
+      ghost: false,
+    })),
+    edges: [],
+    clusters: Array.from({ length: count }, (_, i) => ({
+      id: i,
+      medoid: `s:${i}`,
+      labelKey: null,
+      label: "",
+      size: 1,
+    })),
+  };
+  const result = collapseClusters(
+    graph,
+    new Set(graph.clusters.map((c) => c.id)),
+  );
+  assert.ok(reads <= count * 4, `expected linear identity reads, got ${reads}`);
+  assert.equal(result.nodes.length, count);
+  result.nodes.forEach((node, i) => {
+    assert.equal(node.targetKey, `tmdb:movie:${i + 1}`);
+    assert.equal(node.memberCount, 1);
+  });
+});
+
 test("a result's duplicate edges merge by pair with kinds united and the max weight", () => {
   const graph = owned();
   assert.equal(graph.edges.length, 2);

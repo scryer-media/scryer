@@ -89,6 +89,14 @@ fn import_source_title_from_payload(
 }
 
 pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
+    from_title_projected(app, title, scryer_application::TitleRowProjection::ALL)
+}
+
+pub fn from_title_projected(
+    app: &AppUseCase,
+    title: Title,
+    projection: scryer_application::TitleRowProjection,
+) -> TitlePayload {
     let quality_profile_id = extract_tag_string(&title.tags, "scryer:quality-profile:");
     let monitor_type = extract_tag_string(&title.tags, "scryer:monitor-type:")
         .as_deref()
@@ -119,20 +127,30 @@ pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
         .background_url
         .as_deref()
         .filter(|url| url.starts_with("http")));
-    let poster_url = app.media_image_url(
-        poster_upstream,
-        Some("title"),
-        Some(&title.id),
-        ImageProxyKind::Poster,
-        "w250",
-    );
-    let background_url = app.media_image_url(
-        background_upstream,
-        Some("title"),
-        Some(&title.id),
-        ImageProxyKind::Fanart,
-        "w1280",
-    );
+    let poster_url = projection
+        .poster
+        .then(|| {
+            app.media_image_url(
+                poster_upstream,
+                Some("title"),
+                Some(&title.id),
+                ImageProxyKind::Poster,
+                "w250",
+            )
+        })
+        .flatten();
+    let background_url = projection
+        .background
+        .then(|| {
+            app.media_image_url(
+                background_upstream,
+                Some("title"),
+                Some(&title.id),
+                ImageProxyKind::Fanart,
+                "w1280",
+            )
+        })
+        .flatten();
 
     TitlePayload {
         id: title.id.into(),

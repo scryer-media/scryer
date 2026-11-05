@@ -1,6 +1,123 @@
 use super::*;
 
 #[tokio::test]
+async fn graphql_catalog_projection_skips_unselected_row_decoding() {
+    let ctx = TestContext::new().await;
+    let id = add_test_title(&ctx, "Projection Fixture", "MOVIE").await;
+    // A malformed optional value detects accidental eager JSON decoding.
+    sqlx::query("UPDATE titles SET aliases = 'invalid-json' WHERE id = ?")
+        .bind(&id)
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    let body = gql(&ctx, "{ titles { items { id name } hasMore } }", json!({})).await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["titles"]["items"][0]["id"], id);
+    assert_eq!(
+        body["data"]["titles"]["items"][0]["name"],
+        "Projection Fixture"
+    );
+    let body = gql(&ctx, "{ titles { items { aliases } } }", json!({})).await;
+    assert!(
+        body.get("errors").is_some(),
+        "selected values must still be decoded strictly"
+    );
+}
+
+#[tokio::test]
+async fn graphql_catalog_projection_matches_full_title_fields_and_dependencies() {
+    let ctx = TestContext::new().await;
+    let id = add_test_title(&ctx, "Projection Series", "SERIES").await;
+    sqlx::query("UPDATE titles SET tags = ?, aliases = ?, tagged_aliases_json = ?, overview = 'Synopsis', poster_url = 'https://image.tmdb.org/t/p/original/poster.jpg', background_url = 'https://image.tmdb.org/t/p/original/background.jpg' WHERE id = ?")
+        .bind(r#"["scryer:season-folder:disabled","scryer:quality-profile:fixture","scryer:monitor-specials:true"]"#)
+        .bind(r#"["Alternate"]"#)
+        .bind(r#"[{"name":"Alternative","language":"eng","country":null}]"#)
+        .bind(&id).execute(ctx.db.pool()).await.unwrap();
+    let fields = "id libraryId name facet monitored tags externalIds { source value } createdAt year overview posterUrl posterSourceUrl backgroundUrl backgroundSourceUrl sortTitle slug imdbId runtimeMinutes popularity contentStatus language firstAired network studio country aliases taggedAliases { name language country } metadataLanguage metadataFetchedAt minAvailability qualityProfileId rootFolderId monitorType useSeasonFolders monitorSpecials interSeasonMovies fillerPolicy recapPolicy releaseNumbering useSeasonFoldersOverride effectiveUseSeasonFolders inheritsUseSeasonFolders";
+    let query = format!(
+        "query($id: ID!) {{ full: title(id: $id) {{ {fields} }} catalog: titles {{ items {{ {fields} }} }} }}"
+    );
+    let body = gql(&ctx, &query, json!({"id": id})).await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["catalog"]["items"][0], body["data"]["full"]);
+    // Dependencies must survive aliases and fragments without explicitly
+    // selecting the backing tags or useSeasonFolders fields.
+    let typed = gql(&ctx, "{ titles { items { __typename } } }", json!({})).await;
+    let type_name = typed["data"]["titles"]["items"][0]["__typename"]
+        .as_str()
+        .unwrap();
+    let query = format!(
+        "{{ titles {{ items {{ ...Settings }} }} }} fragment Settings on {type_name} {{ inherited: inheritsUseSeasonFolders effective: effectiveUseSeasonFolders }}"
+    );
+    let body = gql(&ctx, &query, json!({})).await;
+    assert_no_errors(&body);
+    assert_eq!(
+        body["data"]["titles"]["items"][0],
+        json!({"inherited": false, "effective": false})
+    );
+}
+
+#[tokio::test]
+async fn graphql_catalog_projection_registers_only_selected_artwork() {
+    let ctx = TestContext::new().await;
+    let id = add_test_title(&ctx, "Artwork Projection", "MOVIE").await;
+    let poster = "https://image.tmdb.org/t/p/original/projected-poster.jpg";
+    let background = "https://image.tmdb.org/t/p/original/projected-background.jpg";
+    sqlx::query("UPDATE titles SET poster_url = ?, background_url = ? WHERE id = ?")
+        .bind(poster)
+        .bind(background)
+        .bind(&id)
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    let body = gql(&ctx, "{ titles { items { id name } } }", json!({})).await;
+    assert_no_errors(&body);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM image_proxy_sources WHERE upstream_url IN (?, ?)")
+            .bind(poster)
+            .bind(background)
+            .fetch_one(ctx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        count, 0,
+        "unselected artwork must not enqueue source writes"
+    );
+    let body = gql(&ctx, "{ titles { items { posterUrl } } }", json!({})).await;
+    assert_no_errors(&body);
+    assert!(
+        body["data"]["titles"]["items"][0]["posterUrl"]
+            .as_str()
+            .unwrap()
+            .contains("/images/media/")
+    );
+    let sources: Vec<String> = sqlx::query_scalar(
+        "SELECT upstream_url FROM image_proxy_sources WHERE upstream_url IN (?, ?)",
+    )
+    .bind(poster)
+    .bind(background)
+    .fetch_all(ctx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(sources, vec![poster.to_owned()]);
+    let body = gql(
+        &ctx,
+        "{ titles { items { backgroundSourceUrl } } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM image_proxy_sources WHERE upstream_url IN (?, ?)")
+            .bind(poster)
+            .bind(background)
+            .fetch_one(ctx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
 async fn graphql_catalog_skips_unrequested_canonical_tag_hydration() {
     let ctx = TestContext::new().await;
     let id = add_test_title(&ctx, "Poster Series", "SERIES").await;

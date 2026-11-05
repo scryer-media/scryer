@@ -1152,9 +1152,9 @@ pub trait DiscoveryRepository: Send + Sync {
     ) -> AppResult<()>;
 }
 
-/// What a title list read projects on top of the `titles` row itself.
+/// Stored values and related metadata required by a title list consumer.
 ///
-/// Both parts default to on, so a caller that never thinks about the
+/// All fields default to on, so a caller that never thinks about the
 /// projection keeps the whole record. Turning one off is an assertion that the
 /// consumer does not read that field — the store is free to skip the query
 /// that fills it.
@@ -1162,6 +1162,84 @@ pub trait DiscoveryRepository: Send + Sync {
 pub struct TitleListProjection {
     pub include_external_ids: bool,
     pub include_canonical_tags: bool,
+    pub row: TitleRowProjection,
+}
+
+/// Stored title values required by a read. Identity and authorization fields
+/// remain available to nested resolvers even when they are not displayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TitleRowProjection {
+    pub name: bool,
+    pub monitored: bool,
+    pub tags: bool,
+    pub root_folder_id: bool,
+    pub created_by: bool,
+    pub created_at: bool,
+    pub year: bool,
+    pub overview: bool,
+    pub poster: bool,
+    pub background: bool,
+    pub sort_title: bool,
+    pub catalog_sort_key: bool,
+    pub slug: bool,
+    pub imdb_id: bool,
+    pub runtime_minutes: bool,
+    pub popularity: bool,
+    pub content_status: bool,
+    pub language: bool,
+    pub first_aired: bool,
+    pub network: bool,
+    pub studio: bool,
+    pub country: bool,
+    pub aliases: bool,
+    pub tagged_aliases: bool,
+    pub metadata_language: bool,
+    pub metadata_fetched_at: bool,
+    pub min_availability: bool,
+    pub digital_release_date: bool,
+    pub movie_release_dates: bool,
+    pub folder_path: bool,
+}
+
+impl Default for TitleRowProjection {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
+impl TitleRowProjection {
+    pub const ALL: Self = Self {
+        name: true,
+        monitored: true,
+        tags: true,
+        root_folder_id: true,
+        created_by: true,
+        created_at: true,
+        year: true,
+        overview: true,
+        poster: true,
+        background: true,
+        sort_title: true,
+        catalog_sort_key: true,
+        slug: true,
+        imdb_id: true,
+        runtime_minutes: true,
+        popularity: true,
+        content_status: true,
+        language: true,
+        first_aired: true,
+        network: true,
+        studio: true,
+        country: true,
+        aliases: true,
+        tagged_aliases: true,
+        metadata_language: true,
+        metadata_fetched_at: true,
+        min_availability: true,
+        digital_release_date: true,
+        movie_release_dates: true,
+        folder_path: true,
+    };
 }
 
 impl Default for TitleListProjection {
@@ -1169,6 +1247,7 @@ impl Default for TitleListProjection {
         Self {
             include_external_ids: true,
             include_canonical_tags: true,
+            row: TitleRowProjection::ALL,
         }
     }
 }
@@ -1183,6 +1262,7 @@ impl TitleListProjection {
         Self {
             include_external_ids: true,
             include_canonical_tags: false,
+            row: TitleRowProjection::ALL,
         }
     }
 

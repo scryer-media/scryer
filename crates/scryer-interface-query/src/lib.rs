@@ -702,6 +702,7 @@ fn convergence_state_to_value(
 #[derive(Clone, Copy)]
 struct TitlePayloadSelection {
     include_external_ids: bool,
+    row: scryer_application::TitleRowProjection,
 }
 
 impl TitlePayloadSelection {
@@ -712,6 +713,57 @@ impl TitlePayloadSelection {
         };
         Self {
             include_external_ids: title_field_exists("externalIds"),
+            row: scryer_application::TitleRowProjection {
+                name: title_field_exists("name"),
+                monitored: title_field_exists("monitored"),
+                tags: [
+                    "tags",
+                    "qualityProfileId",
+                    "monitorType",
+                    "useSeasonFolders",
+                    "monitorSpecials",
+                    "interSeasonMovies",
+                    "fillerPolicy",
+                    "recapPolicy",
+                    "releaseNumbering",
+                    "useSeasonFoldersOverride",
+                    "effectiveUseSeasonFolders",
+                    "inheritsUseSeasonFolders",
+                    "effectiveFillerPolicy",
+                    "effectiveRecapPolicy",
+                ]
+                .into_iter()
+                .any(title_field_exists),
+                root_folder_id: title_field_exists("rootFolderId")
+                    || title_field_exists("rootFolderPath"),
+                created_by: false,
+                created_at: title_field_exists("createdAt"),
+                year: title_field_exists("year"),
+                overview: title_field_exists("overview"),
+                poster: title_field_exists("posterUrl") || title_field_exists("posterSourceUrl"),
+                background: title_field_exists("backgroundUrl")
+                    || title_field_exists("backgroundSourceUrl"),
+                sort_title: title_field_exists("sortTitle"),
+                catalog_sort_key: false,
+                slug: title_field_exists("slug"),
+                imdb_id: title_field_exists("imdbId"),
+                runtime_minutes: title_field_exists("runtimeMinutes"),
+                popularity: title_field_exists("popularity"),
+                content_status: title_field_exists("contentStatus"),
+                language: title_field_exists("language"),
+                first_aired: title_field_exists("firstAired"),
+                network: title_field_exists("network"),
+                studio: title_field_exists("studio"),
+                country: title_field_exists("country"),
+                aliases: title_field_exists("aliases"),
+                tagged_aliases: title_field_exists("taggedAliases"),
+                metadata_language: title_field_exists("metadataLanguage"),
+                metadata_fetched_at: title_field_exists("metadataFetchedAt"),
+                min_availability: title_field_exists("minAvailability"),
+                digital_release_date: false,
+                movie_release_dates: false,
+                folder_path: false,
+            },
         }
     }
 }
@@ -1334,6 +1386,7 @@ impl CatalogQueries {
                 title_catalog_page_offset(offset),
                 scryer_application::TitleListProjection {
                     include_external_ids: selection.include_external_ids,
+                    row: selection.row,
                     include_canonical_tags: lookahead
                         .field("items")
                         .field("canonicalTags")
@@ -1350,7 +1403,9 @@ impl CatalogQueries {
         let items = page
             .items
             .into_iter()
-            .map(|title| from_title(&app, title))
+            .map(|title| {
+                scryer_interface_media::mappers::from_title_projected(&app, title, selection.row)
+            })
             .collect();
 
         Ok(TitleCatalogPayload {

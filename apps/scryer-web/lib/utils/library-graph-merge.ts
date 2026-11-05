@@ -293,6 +293,11 @@ export function collapseClusters(
   const clusterById = new Map(
     graph.clusters.map((cluster) => [cluster.id, cluster]),
   );
+  const targetBySubject = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (!targetBySubject.has(node.subjectKey))
+      targetBySubject.set(node.subjectKey, node.targetKey);
+  }
   const redirect = new Map<string, string>();
   const collapsed = new Map<number, GraphNode>();
   const nodes: GraphNode[] = [];
@@ -321,21 +326,24 @@ export function collapseClusters(
       memberCount: member,
     };
     if (cluster) {
-      stand.targetKey =
-        graph.nodes.find((member) => member.subjectKey === cluster.medoid)
-          ?.targetKey ?? "";
+      stand.targetKey = targetBySubject.get(cluster.medoid) ?? "";
     }
     collapsed.set(node.clusterId, stand);
     nodes.push(stand);
   }
-  const edges = graph.edges.map((edge) => ({
-    ...edge,
-    from: redirect.get(edge.from) ?? edge.from,
-    to: redirect.get(edge.to) ?? edge.to,
-  }));
+  function* redirectedEdges() {
+    for (const edge of graph.edges) {
+      const from = redirect.get(edge.from) ?? edge.from;
+      const to = redirect.get(edge.to) ?? edge.to;
+      if (from !== to) yield { ...edge, from, to };
+    }
+  }
   return {
     nodes,
-    edges: dedupeEdges(edges, new Set(nodes.map((node) => node.subjectKey))),
+    edges: dedupeEdges(
+      redirectedEdges(),
+      new Set(nodes.map((node) => node.subjectKey)),
+    ),
     clusters: graph.clusters,
   };
 }

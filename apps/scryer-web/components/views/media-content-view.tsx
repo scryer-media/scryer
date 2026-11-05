@@ -1909,6 +1909,7 @@ export function MediaContentView({
     refreshTitles: (query?: string) => Promise<void> | void;
     titleLoading: boolean;
     catalogTotalTitleCount: number;
+    catalogBulkLoadedCount: number;
     catalogManagedBytes: number;
     catalogHasMoreTitles: boolean;
     catalogLoadingMoreTitles: boolean;
@@ -2191,6 +2192,7 @@ export function MediaContentView({
     refreshTitles,
     titleLoading,
     catalogTotalTitleCount,
+    catalogBulkLoadedCount,
     catalogManagedBytes,
     catalogHasMoreTitles,
     catalogLoadingMoreTitles,
@@ -3952,6 +3954,7 @@ export function MediaContentView({
                           )
                         }
                         totalTitles={catalogTotalTitleCount}
+                        loadedTitles={catalogBulkLoadedCount}
                         libraryIds={selectedLibraryIds}
                         selectedTitleId={contextPanelSelectedTitleId}
                         contextPanelId={selectedTitleContextPanelId}

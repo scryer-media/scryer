@@ -19,6 +19,7 @@ import {
   type GraphState,
 } from "./library-graph-merge.ts";
 import { discoveryBrowseLabelTitle } from "./discovery-sections.ts";
+import { convexHull, type LayoutPoint } from "./library-graph-layout.ts";
 
 /** Above this many nodes, clusters collapse to one node each until expanded. */
 export const LIBRARY_GRAPH_COLLAPSE_THRESHOLD = 5000;
@@ -304,13 +305,14 @@ export function nodeSizesByTitleId(
       .filter((value): value is number => value !== null)
       .sort((a, b) => a - b);
     // Tied values share the middle of their ranks.
-    const rankOf = (value: number) => {
-      let first = 0;
-      while (ranked[first] < value) first += 1;
+    const ranks = new Map<number, number>();
+    for (let first = 0; first < ranked.length;) {
       let last = first;
-      while (last + 1 < ranked.length && ranked[last + 1] === value) last += 1;
-      return (first + last) / 2;
-    };
+      while (last + 1 < ranked.length && ranked[last + 1] === ranked[first])
+        last += 1;
+      ranks.set(ranked[first], (first + last) / 2);
+      first = last + 1;
+    }
     for (const [id, value] of values) {
       if (value === null) {
         sizes.set(id, LIBRARY_GRAPH_MIN_NODE_SIZE);
@@ -320,7 +322,7 @@ export function nodeSizesByTitleId(
         sizes.set(
           id,
           LIBRARY_GRAPH_MIN_NODE_SIZE +
-            (span * rankOf(value)) / (ranked.length - 1),
+            (span * ranks.get(value)!) / (ranked.length - 1),
         );
       }
     }
@@ -346,14 +348,14 @@ export type LibraryGraphJoin = {
   titleBySubjectKey: Map<string, TitleRecord>;
 };
 
-/** Neighborhoods need membership only, not catalog metadata or title edges. */
+/** Neighborhood membership and connections are available before catalog metadata. */
 export function libraryGraphOverviewPreview(
   result: LibraryGraphResult,
 ): LibraryGraphJoin {
   return {
     graph: {
       nodes: result.nodes.map((node) => ({ ...node, ghost: false })),
-      edges: [],
+      edges: result.edges,
       clusters: result.clusters,
     },
     titleBySubjectKey: new Map(),
@@ -454,6 +456,8 @@ export function largeLibraryGraphLayout(graph: GraphState) {
       ) +
     160;
   const positions = new Map<string, { x: number; y: number }>();
+  const hulls = new Map<number, LayoutPoint[]>();
+  const dots = new Map<number, LayoutPoint[]>();
   const regions: GraphDetailRegion[] = [];
   ids.forEach((id, index) => {
     const x = ((index % columns) - (columns - 1) / 2) * cell;
@@ -482,6 +486,18 @@ export function largeLibraryGraphLayout(graph: GraphState) {
         y: y + Math.sin(angle) * distance,
       });
     });
+    const points = members.map((node) => positions.get(node.subjectKey)!);
+    hulls.set(id, convexHull(points));
+    // A bounded sample of the actual title positions, so overview dots and
+    // the detail boundary occupy the same space through the crossfade.
+    const count = Math.min(600, points.length);
+    dots.set(
+      id,
+      Array.from(
+        { length: count },
+        (_, rank) => points[Math.floor((rank * points.length) / count)],
+      ),
+    );
   });
   const extent = Math.max(
     cell,
@@ -492,13 +508,17 @@ export function largeLibraryGraphLayout(graph: GraphState) {
       Math.abs(region.bottom),
     ]),
   );
-  return { positions, regions, extent };
+  return { positions, regions, extent, hulls, dots };
 }
 
-/** Keep a readable local spacing while zooming, with a floor for separation. */
-export function graphDetailCompaction(spacingPx: number): number {
-  if (!Number.isFinite(spacingPx) || spacingPx <= 60) return 1;
-  return Math.max(0.12, 60 / spacingPx);
+/** Grow posters with their local spacing instead of canceling camera zoom. */
+export function graphDetailPosterSize(
+  baseSize: number,
+  spacingPx: number,
+): number {
+  const magnification =
+    Number.isFinite(spacingPx) && spacingPx > 0 ? spacingPx / 60 : 1;
+  return Math.min(28, Math.max(12, baseSize * 1.5)) * magnification;
 }
 
 /** Smooth overlap between neighborhood and title rendering in both directions. */

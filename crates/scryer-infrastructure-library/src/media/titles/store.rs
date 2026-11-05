@@ -1308,16 +1308,24 @@ impl TitleRepository for TitleStore {
             limit.saturating_add(1),
             offset,
             title_catalog_dialect_for_datastore(&self.datastore),
+            projection,
         );
         let mut rows =
             SqlRuntime::fetch_all(self.datastore.read_exec(), &page_sql, &page_args).await?;
         let has_more = rows.len() > limit;
         rows.truncate(limit);
-        let mut items = decode_runtime_title_rows(
-            &rows,
-            PersistedTitleReadMode::Presentation,
-            projection.include_external_ids,
-        )?;
+        let base_path = normalized_base_path();
+        let mut items = rows
+            .iter()
+            .map(|row| {
+                title_from_projection_row(
+                    &SelectedTitleRow { row, projection },
+                    PersistedTitleReadMode::Presentation,
+                    projection.include_external_ids,
+                    &base_path,
+                )
+            })
+            .collect::<AppResult<Vec<_>>>()?;
         if projection.include_canonical_tags {
             attach_metadata_tags_to_titles(self.datastore.read_exec(), &mut items).await?;
         }
@@ -3396,6 +3404,111 @@ fn external_id_key(source: &str, kind: &str, value: &str) -> String {
     }
 }
 
+fn title_column_selected(column: &str, projection: TitleListProjection) -> bool {
+    let p = projection.row;
+    match column {
+        "id" | "library_id" | "facet" => true,
+        "external_ids" => projection.include_external_ids,
+        "name" => p.name,
+        "monitored" => p.monitored,
+        "tags" => p.tags,
+        "root_folder_id" => p.root_folder_id,
+        "created_by" => p.created_by,
+        "created_at" => p.created_at,
+        "year" => p.year,
+        "overview" => p.overview,
+        "poster_url" | "poster_local_path" => p.poster,
+        "background_url" | "background_local_path" => p.background,
+        "sort_title" => p.sort_title,
+        "catalog_sort_key" => p.catalog_sort_key,
+        "slug" => p.slug,
+        "imdb_id" => p.imdb_id,
+        "runtime_minutes" => p.runtime_minutes,
+        "popularity" => p.popularity,
+        "content_status" => p.content_status,
+        "language" => p.language,
+        "first_aired" => p.first_aired,
+        "network" => p.network,
+        "studio" => p.studio,
+        "country" => p.country,
+        "aliases" => p.aliases,
+        "tagged_aliases_json" => p.tagged_aliases,
+        "metadata_language" => p.metadata_language,
+        "metadata_fetched_at" => p.metadata_fetched_at,
+        "min_availability" => p.min_availability,
+        "digital_release_date" => p.digital_release_date,
+        "movie_release_dates_json" => p.movie_release_dates,
+        "folder_path" => p.folder_path,
+        _ => unreachable!("unknown title projection column"),
+    }
+}
+
+/// Only list projections may supply defaults for deliberately unread columns.
+/// Full-record reads retain strict decoding and still reject missing columns.
+struct SelectedTitleRow<'a> {
+    row: &'a SqlRow,
+    projection: TitleListProjection,
+}
+
+impl TitleProjectionRow for SelectedTitleRow<'_> {
+    fn text(&self, column: &str) -> AppResult<String> {
+        if title_column_selected(column, self.projection) {
+            TitleProjectionRow::text(self.row, column)
+        } else {
+            Ok(String::new())
+        }
+    }
+    fn opt_text(&self, column: &str) -> AppResult<Option<String>> {
+        if title_column_selected(column, self.projection) {
+            TitleProjectionRow::opt_text(self.row, column)
+        } else {
+            Ok(None)
+        }
+    }
+    fn bool(&self, column: &str) -> AppResult<bool> {
+        if title_column_selected(column, self.projection) {
+            TitleProjectionRow::bool(self.row, column)
+        } else {
+            Ok(false)
+        }
+    }
+    fn timestamp(&self, column: &str) -> AppResult<DateTime<Utc>> {
+        if title_column_selected(column, self.projection) {
+            TitleProjectionRow::timestamp(self.row, column)
+        } else {
+            Ok(DateTime::UNIX_EPOCH)
+        }
+    }
+    fn opt_timestamp(&self, column: &str) -> AppResult<Option<DateTime<Utc>>> {
+        if title_column_selected(column, self.projection) {
+            TitleProjectionRow::opt_timestamp(self.row, column)
+        } else {
+            Ok(None)
+        }
+    }
+    fn opt_i32(&self, column: &str) -> AppResult<Option<i32>> {
+        if title_column_selected(column, self.projection) {
+            TitleProjectionRow::opt_i32(self.row, column)
+        } else {
+            Ok(None)
+        }
+    }
+    fn opt_f64(&self, column: &str) -> AppResult<Option<f64>> {
+        if title_column_selected(column, self.projection) {
+            TitleProjectionRow::opt_f64(self.row, column)
+        } else {
+            Ok(None)
+        }
+    }
+    fn opt_json_value(&self, column: &str) -> AppResult<Option<serde_json::Value>> {
+        if title_column_selected(column, self.projection) {
+            TitleProjectionRow::opt_json_value(self.row, column)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 trait TitleProjectionRow {
     fn text(&self, column: &str) -> AppResult<String>;
     fn opt_text(&self, column: &str) -> AppResult<Option<String>>;
@@ -4510,8 +4623,15 @@ fn build_title_catalog_page_sql(
     limit: usize,
     offset: usize,
     dialect: TitleCatalogSqlDialect,
+    projection: TitleListProjection,
 ) -> (String, Vec<SqlArg>) {
-    let mut sql = format!("SELECT {TITLE_COLUMNS} FROM titles");
+    let columns = TITLE_COLUMNS
+        .split(',')
+        .map(str::trim)
+        .filter(|column| title_column_selected(column, projection))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut sql = format!("SELECT {columns} FROM titles");
     sql.push_str(&build_title_catalog_sort_join_sql(sort.key, dialect));
     let (where_sql, mut args) =
         build_title_catalog_where_sql(facet, library_ids, query, filter, dialect);
@@ -6385,6 +6505,71 @@ mod tests {
     use super::*;
 
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[test]
+    fn catalog_projection_omits_columns_without_changing_filters_or_sorting() {
+        let full = TitleListProjection::default();
+        let narrow = TitleListProjection {
+            include_external_ids: false,
+            row: scryer_application::TitleRowProjection {
+                overview: false,
+                aliases: false,
+                tagged_aliases: false,
+                poster: false,
+                background: false,
+                movie_release_dates: false,
+                ..Default::default()
+            },
+            ..full
+        };
+        for dialect in [
+            TitleCatalogSqlDialect::Sqlite,
+            TitleCatalogSqlDialect::Postgres,
+        ] {
+            let build = |projection| {
+                build_title_catalog_page_sql(
+                    Some(MediaFacet::Movie),
+                    &["visible-library".to_owned()],
+                    None,
+                    &TitleCatalogFilter::default(),
+                    TitleCatalogSort::default(),
+                    301,
+                    600,
+                    dialect,
+                    projection,
+                )
+            };
+            let (full_sql, full_args) = build(full);
+            let (narrow_sql, narrow_args) = build(narrow);
+            let (selected, narrow_tail) = narrow_sql.split_once(" FROM titles").unwrap();
+            assert_eq!(narrow_tail, full_sql.split_once(" FROM titles").unwrap().1);
+            assert_eq!(full_args.len(), narrow_args.len());
+            for column in [
+                "overview",
+                "aliases",
+                "tagged_aliases_json",
+                "poster_url",
+                "poster_local_path",
+                "background_url",
+                "background_local_path",
+                "external_ids",
+                "movie_release_dates_json",
+            ] {
+                assert!(
+                    !selected
+                        .split([',', ' '])
+                        .any(|selected| selected == column),
+                    "{column}"
+                );
+            }
+            for column in TITLE_COLUMNS.split(',').map(str::trim) {
+                assert!(
+                    title_column_selected(column, full),
+                    "full reads preserve {column}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn external_id_merge_preserves_all_incoming_provider_identities() {
