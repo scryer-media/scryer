@@ -171,6 +171,10 @@ import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
 import { discoveryRailLabelTitle } from "@/lib/utils/discovery-sections";
+import {
+  mergeMoviePopularGroups,
+  MOVIE_POPULAR_GROUP_ID,
+} from "@/lib/utils/catalog-popular-groups";
 import { titleGenreLabels } from "@/lib/utils/title-genres";
 import { cn } from "@/lib/utils";
 import { persistOverviewWindowScroll } from "@/lib/hooks/use-overview-window-scroll-restoration";
@@ -447,6 +451,9 @@ function catalogDiscoveryGroupLabel(
   view: ViewId,
   t: Translate,
 ) {
+  if (group.id === MOVIE_POPULAR_GROUP_ID) {
+    return t("title.contextPopular");
+  }
   switch (group.kind) {
     case "PUBLIC_TOP":
       return group.labelValue ?? titleContextWeeklyLabel(view, t);
@@ -2297,8 +2304,15 @@ export function MediaContentView({
   const [titleLayoutRef, titleLayoutWidth] =
     useMeasuredElementWidth<HTMLDivElement>();
   const deferredTitleContextTitles = React.useDeferredValue(titleContextTitles);
+  const displayCatalogDiscoveryGroups = React.useMemo(
+    () =>
+      view === "movies"
+        ? mergeMoviePopularGroups(catalogDiscoveryGroups)
+        : catalogDiscoveryGroups,
+    [catalogDiscoveryGroups, view],
+  );
   const deferredCatalogDiscoveryGroups = React.useDeferredValue(
-    catalogDiscoveryGroups,
+    displayCatalogDiscoveryGroups,
   );
   const manageableDiscoveryFacetSet = React.useMemo(
     () => new Set(manageableDiscoveryFacets),
@@ -3929,6 +3943,15 @@ export function MediaContentView({
                         }
                         titles={monitoredTitles}
                         titlesComplete={graphTitlesAreComplete}
+                        allowOverviewPreview={
+                          !hasActiveTitleDisplayFilters &&
+                          !Object.values(advancedTitleFilters).some((value) =>
+                            Array.isArray(value)
+                              ? value.length > 0
+                              : value !== null && value !== false,
+                          )
+                        }
+                        totalTitles={catalogTotalTitleCount}
                         libraryIds={selectedLibraryIds}
                         selectedTitleId={contextPanelSelectedTitleId}
                         contextPanelId={selectedTitleContextPanelId}

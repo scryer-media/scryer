@@ -30,6 +30,7 @@ import {
 import { toCount } from "@/lib/location-operations";
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import {
+  canApplyConflictPreview,
   previewPendingImportConflictsMutation,
   resolvePendingImportConflictsMutation,
   pendingImportConflictTaskQuery,
@@ -105,7 +106,8 @@ export function PendingImportConflictDialog({
   }, [client, input, refresh, t]);
 
   async function apply(confirmPermanentDelete = false) {
-    if (!preview || loading || applying) return;
+    if (!preview || !canApplyConflictPreview(preview, loading, applying))
+      return;
     if (
       preview.requiresPermanentDeleteConfirmation &&
       !confirmPermanentDelete
@@ -253,6 +255,12 @@ export function PendingImportConflictDialog({
                 shown: preview.rows.length,
               })}
             </p>
+            <p className="text-sm text-muted-foreground">
+              {t("pendingImports.conflict.actionableCount", {
+                actionable: preview.actionableCount,
+                failed: preview.failedCount,
+              })}
+            </p>
             {preview.sampled && (
               <p className="text-sm">{t("pendingImports.conflict.sampled")}</p>
             )}
@@ -294,29 +302,33 @@ export function PendingImportConflictDialog({
                       id={`pending-import-conflict-survivor-${row.pendingImportId}`}
                       className="max-w-60 break-all font-mono text-xs"
                     >
-                      {row.survivorPath}
+                      {row.errorReason ? "—" : row.survivorPath}
                     </TableCell>
                     <TableCell
                       id={`pending-import-conflict-primary-${row.pendingImportId}`}
                       className="max-w-60 break-all font-mono text-xs"
                     >
-                      {row.primaryPath}
+                      {row.errorReason ? "—" : row.primaryPath}
                     </TableCell>
                     <TableCell>
-                      {formatByteCount(toCount(row.moveBytes))}
+                      {row.errorReason
+                        ? "—"
+                        : formatByteCount(toCount(row.moveBytes))}
                     </TableCell>
                     <TableCell>
-                      {t("pendingImports.conflict.filesBytes", {
-                        count: row.recycleCount,
-                        bytes: formatByteCount(toCount(row.recycleBytes)),
-                      })}
+                      {row.errorReason
+                        ? "—"
+                        : t("pendingImports.conflict.filesBytes", {
+                            count: row.recycleCount,
+                            bytes: formatByteCount(toCount(row.recycleBytes)),
+                          })}
                       <PathList
                         paths={row.recyclePaths}
                         sampled={row.filesSampled}
                       />
                     </TableCell>
                     <TableCell>
-                      {row.collisionRenames}
+                      {row.errorReason ? "—" : row.collisionRenames}
                       {row.collisionRenameSamples.length > 0 && (
                         <details className="mt-2 text-xs">
                           <summary>
@@ -341,17 +353,21 @@ export function PendingImportConflictDialog({
                       )}
                     </TableCell>
                     <TableCell>
-                      {t("pendingImports.conflict.filesBytes", {
-                        count: row.leftoverCount,
-                        bytes: formatByteCount(toCount(row.leftoverBytes)),
-                      })}
-                      <p>
-                        {t(
-                          leftovers === "PRESERVE_ALL"
-                            ? "pendingImports.conflict.preserveAll"
-                            : "pendingImports.conflict.mediaOnly",
-                        )}
-                      </p>
+                      {row.errorReason
+                        ? "—"
+                        : t("pendingImports.conflict.filesBytes", {
+                            count: row.leftoverCount,
+                            bytes: formatByteCount(toCount(row.leftoverBytes)),
+                          })}
+                      {!row.errorReason && (
+                        <p>
+                          {t(
+                            leftovers === "PRESERVE_ALL"
+                              ? "pendingImports.conflict.preserveAll"
+                              : "pendingImports.conflict.mediaOnly",
+                          )}
+                        </p>
+                      )}
                       <PathList
                         paths={row.leftoverPaths}
                         sampled={row.filesSampled}
@@ -377,9 +393,7 @@ export function PendingImportConflictDialog({
           </Button>
           <Button
             id="pending-import-conflict-apply"
-            disabled={
-              !preview || loading || applying || preview.totalCount === 0
-            }
+            disabled={!canApplyConflictPreview(preview, loading, applying)}
             onClick={() => void apply()}
           >
             {applying && <LoadingMark className="mr-2 h-4 w-4" />}

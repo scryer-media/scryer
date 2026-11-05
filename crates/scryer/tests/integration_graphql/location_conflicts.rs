@@ -203,6 +203,378 @@ async fn seed_conflict(
 }
 
 #[tokio::test]
+async fn conflict_file_imports_normalize_and_deduplicate_without_losing_files() {
+    for policy in [ConflictPolicy::AdoptAll, ConflictPolicy::KeepOne] {
+        let fixture = ConflictFixture::new().await;
+        let best = fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv");
+        let second = fixture.junk.join("Emberfall.2024.1080p.WEB-DL.mkv");
+        let third_folder = fixture.root.join("third-copy");
+        std::fs::create_dir_all(&third_folder).unwrap();
+        let third = third_folder.join("Emberfall.2024.480p.WEB-DL.mkv");
+        let unrelated = fixture.root.join("unrelated.mkv");
+        std::fs::write(&second, b"second movie").unwrap();
+        std::fs::write(&third, b"third movie").unwrap();
+        std::fs::write(&unrelated, b"unrelated movie").unwrap();
+        let mut ids = Vec::new();
+        for (path, id) in [(&best, "file-a"), (&second, "file-b"), (&third, "file-c")] {
+            ids.push(seed_conflict(&fixture.ctx, &fixture.title, path, id).await);
+        }
+        let request = ConflictRequest {
+            pending_import_ids: ids.clone(),
+            policy,
+            leftovers: ConflictLeftovers::PreserveAll,
+        };
+        let preview = fixture
+            .ctx
+            .app
+            .preview_pending_import_conflicts(&fixture.actor, request.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                preview.total_count,
+                preview.actionable_count,
+                preview.failed_count
+            ),
+            (3, 3, 0)
+        );
+        assert!(
+            preview.rows.iter().all(|row| row.error_reason.is_none()),
+            "{preview:?}"
+        );
+        // Preview is read-only, including for inferior media and neighboring files.
+        for (path, contents) in [
+            (&best, b"best movie contents".as_slice()),
+            (&second, b"second movie"),
+            (&third, b"third movie"),
+            (&unrelated, b"unrelated movie"),
+        ] {
+            assert_eq!(std::fs::read(path).unwrap(), contents);
+        }
+        let task = fixture.settle(request, false).await;
+        assert_eq!(
+            (
+                task.settled_count,
+                task.failed_count,
+                task.operation_ids.len()
+            ),
+            (3, 0, 1),
+            "{task:?}"
+        );
+        let media = fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            media.len(),
+            if policy == ConflictPolicy::AdoptAll {
+                4
+            } else {
+                1
+            }
+        );
+        assert_eq!(
+            std::fs::read(fixture.named.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap(),
+            b"best movie contents"
+        );
+        assert_eq!(
+            std::fs::read(fixture.named.join("poster.jpg")).unwrap(),
+            b"artwork contents"
+        );
+        assert_eq!(
+            std::fs::read(fixture.named.join("Emberfall.2024.2160p.BluRay.en.srt")).unwrap(),
+            b"subtitle contents"
+        );
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"unrelated movie");
+        for id in ids.iter().chain(std::iter::once(&fixture.pending_id)) {
+            assert!(
+                fixture
+                    .ctx
+                    .library_scan_unmatched
+                    .get_library_scan_unmatched_item(id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        if policy == ConflictPolicy::KeepOne {
+            let recycled = fixture
+                .ctx
+                .app
+                .list_recycled_items(&fixture.actor, Some(vec![fixture.title.library_id.clone()]))
+                .await
+                .unwrap();
+            assert_eq!(recycled.len(), 3, "inferior media is recycled, not lost");
+        }
+    }
+}
+
+#[tokio::test]
+async fn conflict_preview_exposes_counts_but_not_unauthorized_title_identity() {
+    let fixture = ConflictFixture::new().await;
+    let query = format!(
+        r#"mutation {{ previewPendingImportConflicts(input: {{pendingImportIds: ["{}"], policy: ADOPT_ALL, leftovers: PRESERVE_ALL}}) {{ totalCount actionableCount failedCount rows {{ titleId titleName errorReason }} }} }}"#,
+        fixture.pending_id
+    );
+    let response = schema_exec(&fixture.ctx, &query, Some(fixture.actor.clone())).await;
+    assert_no_errors(&response);
+    let preview = &response["data"]["previewPendingImportConflicts"];
+    assert_eq!(preview["totalCount"], 1);
+    assert_eq!(preview["actionableCount"], 1);
+    assert_eq!(preview["failedCount"], 0);
+    assert_eq!(preview["rows"][0]["titleId"], fixture.title.id);
+
+    let mut denied_actor = fixture.actor.clone();
+    denied_actor.id = Id::new().0;
+    denied_actor.username = "conflict-observer".into();
+    denied_actor.authorization.app = scryer_domain::AppPermissionMask::from_permissions([]);
+    denied_actor.authorization.libraries.clear();
+    denied_actor.authorization.default_library = scryer_domain::LibraryPermissionMask::NONE;
+    denied_actor.authorization.loaded = true;
+    let denied = schema_exec(&fixture.ctx, &query, Some(denied_actor)).await;
+    assert_graphql_field_denied(&denied, "previewPendingImportConflicts");
+    assert!(!denied.to_string().contains(&fixture.title.name));
+}
+
+#[tokio::test]
+async fn conflict_owned_folder_pointing_to_file_is_not_normalized_to_a_broader_folder() {
+    let fixture = ConflictFixture::new().await;
+    let file = fixture.named.join("Emberfall.2024.720p.WEB-DL.mkv");
+    set_title_folder_path(&fixture.ctx, &fixture.title.id, &file).await;
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(
+            &fixture.actor,
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::PATH_NOT_DIRECTORY)
+    );
+    assert_eq!(preview.actionable_count, 0);
+    assert_eq!(std::fs::read(file).unwrap(), b"inferior movie");
+}
+
+#[tokio::test]
+async fn conflict_missing_file_retains_title_and_cannot_be_applied() {
+    let fixture = ConflictFixture::new().await;
+    let missing = fixture.junk.join("missing.mkv");
+    let id = seed_conflict(&fixture.ctx, &fixture.title, &missing, "missing-file").await;
+    let request = ConflictRequest {
+        pending_import_ids: vec![id],
+        policy: ConflictPolicy::KeepOne,
+        leftovers: ConflictLeftovers::PreserveAll,
+    };
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request.clone())
+        .await
+        .unwrap();
+    assert_eq!((preview.actionable_count, preview.failed_count), (0, 1));
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::PATH_MISSING)
+    );
+    assert_eq!(preview.rows[0].title_id, fixture.title.id);
+    assert_eq!(preview.rows[0].title_name, fixture.title.name);
+    let error = fixture
+        .ctx
+        .app
+        .resolve_pending_import_conflicts(
+            &fixture.actor,
+            ResolveConflictRequest {
+                request,
+                plan_fingerprint: preview.plan_fingerprint,
+                confirm_permanent_delete: false,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.validation_reason(), Some(refusal::UNSUPPORTED));
+    assert_eq!(
+        std::fs::read(fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap(),
+        b"best movie contents"
+    );
+}
+
+#[tokio::test]
+async fn conflict_complete_counts_include_actionable_rows_beyond_the_sample() {
+    let fixture = ConflictFixture::new().await;
+    let mut request = fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll);
+    request
+        .pending_import_ids
+        .extend((0..100).map(|i| format!("absent-{i:03}")));
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            preview.total_count,
+            preview.actionable_count,
+            preview.failed_count
+        ),
+        (101, 1, 100)
+    );
+    assert!(preview.sampled);
+    assert_eq!(preview.rows.len(), 100);
+    assert!(
+        preview
+            .rows
+            .iter()
+            .all(|row| row.error_reason.as_deref() == Some(refusal::NOT_FOUND))
+    );
+    let task = fixture
+        .ctx
+        .app
+        .resolve_pending_import_conflicts(
+            &fixture.actor,
+            ResolveConflictRequest {
+                request,
+                plan_fingerprint: preview.plan_fingerprint,
+                confirm_permanent_delete: false,
+            },
+        )
+        .await
+        .unwrap();
+    let task = fixture.wait_task(&task.job_run_id).await;
+    assert_eq!(
+        (task.total_count, task.settled_count, task.failed_count),
+        (101, 1, 100)
+    );
+    assert_eq!(task.operation_ids.len(), 1);
+}
+
+#[tokio::test]
+async fn conflict_file_at_library_root_is_not_a_folder_resolution_target() {
+    let fixture = ConflictFixture::new().await;
+    let file = fixture.root.join("loose.mkv");
+    std::fs::write(&file, b"unrelated contents").unwrap();
+    let id = seed_conflict(&fixture.ctx, &fixture.title, &file, "root-file").await;
+    let mut request = fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll);
+    request.pending_import_ids = vec![id];
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request)
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::FOLDER_UNSAFE)
+    );
+    assert_eq!(std::fs::read(file).unwrap(), b"unrelated contents");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn conflict_non_regular_import_is_refused_without_removing_it() {
+    let fixture = ConflictFixture::new().await;
+    let path = fixture.junk.join("socket");
+    let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let id = seed_conflict(&fixture.ctx, &fixture.title, &path, "socket-import").await;
+    let mut request = fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll);
+    request.pending_import_ids = vec![id];
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request)
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::FOLDER_UNSAFE)
+    );
+    use std::os::unix::fs::FileTypeExt;
+    assert!(
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .file_type()
+            .is_socket()
+    );
+}
+
+#[tokio::test]
+async fn conflict_file_parent_owned_by_another_title_is_preserved() {
+    let fixture = ConflictFixture::new().await;
+    let other = create_catalog_title(
+        &fixture.ctx,
+        "Other Movie",
+        MediaFacet::Movie,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    set_title_folder_path(&fixture.ctx, &other.id, &fixture.junk).await;
+    let file = fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv");
+    let id = seed_conflict(&fixture.ctx, &fixture.title, &file, "claimed-file").await;
+    let mut request = fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll);
+    request.pending_import_ids = vec![id];
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request)
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::OWNERSHIP_CHANGED)
+    );
+    assert_eq!(std::fs::read(file).unwrap(), b"best movie contents");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn conflict_file_import_refuses_symlink_and_symlink_parent() {
+    for link_parent in [false, true] {
+        let fixture = ConflictFixture::new().await;
+        let best = fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv");
+        let link = fixture.root.join("alias");
+        std::os::unix::fs::symlink(if link_parent { &fixture.junk } else { &best }, &link).unwrap();
+        let source = if link_parent {
+            link.join(best.file_name().unwrap())
+        } else {
+            link.clone()
+        };
+        let id = seed_conflict(&fixture.ctx, &fixture.title, &source, "linked-file").await;
+        let mut request = fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll);
+        request.pending_import_ids = vec![id];
+        let preview = fixture
+            .ctx
+            .app
+            .preview_pending_import_conflicts(&fixture.actor, request)
+            .await
+            .unwrap();
+        let reason = preview.rows[0].error_reason.as_deref().unwrap();
+        assert_eq!(
+            reason,
+            if link_parent {
+                scryer_application::error_reasons::location::RECOVERY_SYMLINK_FORBIDDEN
+            } else {
+                refusal::FOLDER_UNSAFE
+            }
+        );
+        assert_eq!(preview.actionable_count, 0);
+        assert_eq!(std::fs::read(best).unwrap(), b"best movie contents");
+        assert!(
+            std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+}
+
+#[tokio::test]
 async fn conflict_adopt_all_consolidates_three_folders_and_roles_without_losing_leftovers() {
     let fixture = ConflictFixture::new().await;
     let third = fixture.root.join("XYZZ98");

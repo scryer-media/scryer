@@ -42,6 +42,8 @@ export type ConflictRow = {
 export type ConflictPreview = {
   planFingerprint: string;
   totalCount: number;
+  actionableCount: number;
+  failedCount: number;
   sampled: boolean;
   rows: ConflictRow[];
   permanentDeleteCount: number;
@@ -59,9 +61,17 @@ export type ConflictTask = {
   completed: boolean;
 };
 
+export function canApplyConflictPreview(
+  preview: Pick<ConflictPreview, "actionableCount"> | null,
+  loading: boolean,
+  applying: boolean,
+): boolean {
+  return !loading && !applying && (preview?.actionableCount ?? 0) > 0;
+}
+
 export const previewPendingImportConflictsMutation = `mutation PreviewPendingImportConflicts($input: PendingImportConflictInput!) {
   previewPendingImportConflicts(input: $input) {
-    planFingerprint totalCount sampled permanentDeleteCount permanentDeleteBytes
+    planFingerprint totalCount actionableCount failedCount sampled permanentDeleteCount permanentDeleteBytes
     requiresPermanentDeleteConfirmation permanentDeletePaths permanentDeleteSampled
     rows { pendingImportId titleId titleName survivorPath primaryPath moveBytes recycleBytes recycleCount collisionRenames leftoverCount leftoverBytes leftoverPaths recyclePaths filesSampled errorReason errorMessage collisionRenameSamples { sourcePath destinationPath } }
   }

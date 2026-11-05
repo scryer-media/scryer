@@ -993,6 +993,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
     return titleCatalogSort;
   }, [effectiveViewMode, titleCatalogSort, view, visibleTitleTableColumns]);
+  const titleCatalogPageSize =
+    effectiveViewMode === "graph"
+      ? TITLE_CATALOG_SELECT_ALL_PAGE_SIZE
+      : TITLE_CATALOG_PAGE_SIZE;
   const titleCatalogProjection = React.useMemo(
     () =>
       effectiveViewMode === "graph"
@@ -2048,7 +2052,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               filters: effectiveTitleQuickFilters,
               advancedFilters,
               sort: effectiveTitleCatalogSort,
-              limit: TITLE_CATALOG_PAGE_SIZE,
+              limit: titleCatalogPageSize,
               offset: 0,
             }),
             { requestPolicy: "network-only" },
@@ -2119,6 +2123,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       t,
       titleCatalogProjection,
       refreshCatalogSummaries,
+      titleCatalogPageSize,
     ],
   );
 
@@ -2286,7 +2291,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               filters: effectiveTitleQuickFilters,
               advancedFilters: effectiveAdvancedTitleFilters,
               sort: effectiveTitleCatalogSort,
-              limit: TITLE_CATALOG_PAGE_SIZE,
+              limit: titleCatalogPageSize,
               offset,
             }),
             { requestPolicy: "network-only" },
@@ -2354,6 +2359,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     shouldLoadCatalogTitles,
     t,
     titleCatalogProjection,
+    titleCatalogPageSize,
   ]);
 
   const retryCatalogPage = React.useCallback(async () => {

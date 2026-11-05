@@ -1493,6 +1493,10 @@ pub struct PendingImportConflictPreviewPayload {
     pub plan_fingerprint: String,
     /// Complete number of selected conflicts.
     pub total_count: i32,
+    /// Selected conflicts with valid plans, including rows outside the sample.
+    pub actionable_count: i32,
+    /// Selected conflicts that could not be planned, including rows outside the sample.
+    pub failed_count: i32,
     /// True when the rows are a sample of the complete selection.
     pub sampled: bool,
     /// Per-conflict survivor and disposition summary.

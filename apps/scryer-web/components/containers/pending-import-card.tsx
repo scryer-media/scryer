@@ -69,12 +69,9 @@ export type PendingImportCardProps = {
   onOpenSearch: (item: PendingImportItem) => void;
   onRequestIgnore: (item: PendingImportItem) => void;
   onBind: () => void;
-  conflictSelected?: boolean;
+  selected?: boolean;
   conflictBusy?: boolean;
-  onConflictSelectedChange?: (
-    item: PendingImportItem,
-    checked: boolean,
-  ) => void;
+  onSelectedChange?: (item: PendingImportItem, checked: boolean) => void;
   onResolveConflict?: (
     item: PendingImportItem,
     policy: "ADOPT_ALL" | "KEEP_ONE",
@@ -120,9 +117,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   onRequestIgnore,
   onBind,
   onAssignEpisode,
-  conflictSelected,
+  selected,
   conflictBusy,
-  onConflictSelectedChange,
+  onSelectedChange,
   onResolveConflict,
   onResolve,
   onToggleEpisodeSelection,
@@ -159,32 +156,37 @@ export const PendingImportCard = React.memo(function PendingImportCard({
     >
       <CardHeader className="space-y-2">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-1">
-            <CardTitle className="text-base">{item.displayName}</CardTitle>
-            <p
-              id={`pending-import-status-${item.id}`}
-              className="text-sm text-muted-foreground"
-            >
-              {summary}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {t("pendingImports.library")} {libraryLabel}
-            </p>
+          <div className="flex min-w-0 items-start gap-3">
+            {item.status === "PENDING" && onSelectedChange ? (
+              <Checkbox
+                id={`pending-import-conflict-select-${item.id}`}
+                size="large"
+                aria-label={t("pendingImports.selectItem", {
+                  name: item.displayName,
+                })}
+                checked={selected ?? false}
+                disabled={isBusy || conflictBusy}
+                onCheckedChange={(checked) =>
+                  onSelectedChange(item, checked === true)
+                }
+              />
+            ) : null}
+            <div className="min-w-0 space-y-1">
+              <CardTitle className="text-base">{item.displayName}</CardTitle>
+              <p
+                id={`pending-import-status-${item.id}`}
+                className="text-sm text-muted-foreground"
+              >
+                {summary}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t("pendingImports.library")} {libraryLabel}
+              </p>
+            </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             {isResolvableConflict(item) && onResolveConflict ? (
               <>
-                <label className="flex items-center gap-2 text-xs">
-                  <Checkbox
-                    id={`pending-import-conflict-select-${item.id}`}
-                    checked={conflictSelected ?? false}
-                    disabled={isBusy || conflictBusy}
-                    onCheckedChange={(checked) =>
-                      onConflictSelectedChange?.(item, checked === true)
-                    }
-                  />
-                  {t("pendingImports.conflict.select")}
-                </label>
                 <Button
                   id={`pending-import-conflict-adopt-${item.id}`}
                   size="sm"

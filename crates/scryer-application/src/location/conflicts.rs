@@ -31,6 +31,16 @@ pub mod refusal {
     pub const NOT_FOUND: &str = "LOCATION_CONFLICT_NOT_FOUND";
     /// The selected item is not a pending movie ownership conflict.
     pub const UNSUPPORTED: &str = "LOCATION_CONFLICT_UNSUPPORTED";
+    /// A source file or folder no longer exists.
+    pub const PATH_MISSING: &str = "LOCATION_CONFLICT_PATH_MISSING";
+    /// A directory is required at a source path.
+    pub const PATH_NOT_DIRECTORY: &str = "LOCATION_CONFLICT_PATH_NOT_DIRECTORY";
+    /// Filesystem access to a source was denied.
+    pub const PATH_PERMISSION_DENIED: &str = "LOCATION_CONFLICT_PATH_PERMISSION_DENIED";
+    /// A filesystem operation failed for another reason.
+    pub const PATH_IO_FAILED: &str = "LOCATION_CONFLICT_PATH_IO_FAILED";
+    /// Planning failed without a more specific refusal.
+    pub const PLAN_FAILED: &str = "LOCATION_CONFLICT_PLAN_FAILED";
     /// A folder escapes its root, overlaps another folder, or contains links.
     pub const FOLDER_UNSAFE: &str = "LOCATION_CONFLICT_FOLDER_UNSAFE";
     /// A title or media ownership claim changed.
@@ -50,6 +60,11 @@ pub mod refusal {
         SELECTION_INVALID,
         NOT_FOUND,
         UNSUPPORTED,
+        PATH_MISSING,
+        PATH_NOT_DIRECTORY,
+        PATH_PERMISSION_DENIED,
+        PATH_IO_FAILED,
+        PLAN_FAILED,
         FOLDER_UNSAFE,
         OWNERSHIP_CHANGED,
         MEDIA_MISSING,
@@ -126,6 +141,8 @@ pub struct ConflictRow {
 pub struct ConflictPreview {
     pub plan_fingerprint: String,
     pub total_count: i32,
+    pub actionable_count: i32,
+    pub failed_count: i32,
     pub sampled: bool,
     pub rows: Vec<ConflictRow>,
     pub permanent_delete_count: i32,
@@ -211,6 +228,70 @@ struct ConflictTaskJournal {
 
 fn refused(reason: &'static str, message: impl Into<String>) -> AppError {
     AppError::validation_refused(reason, message)
+}
+
+fn conflict_io_error(error: std::io::Error) -> AppError {
+    let (reason, message) = match error.kind() {
+        std::io::ErrorKind::NotFound => (
+            refusal::PATH_MISSING,
+            "A conflict file or folder no longer exists",
+        ),
+        std::io::ErrorKind::NotADirectory => (
+            refusal::PATH_NOT_DIRECTORY,
+            "A conflict folder path is not a directory",
+        ),
+        std::io::ErrorKind::PermissionDenied => (
+            refusal::PATH_PERMISSION_DENIED,
+            "Scryer cannot access a conflict file or folder",
+        ),
+        _ => (
+            refusal::PATH_IO_FAILED,
+            "A conflict file or folder could not be read",
+        ),
+    };
+    refused(reason, message)
+}
+
+async fn conflict_path_metadata(path: &str) -> AppResult<std::fs::Metadata> {
+    if !crate::stored_paths::stored_path_is_native(path) {
+        return Err(refused(
+            refusal::FOLDER_UNSAFE,
+            "The conflict path uses another platform's encoding",
+        ));
+    }
+    let path = stored_path_to_path_buf(path);
+    let metadata = tokio::fs::symlink_metadata(&path)
+        .await
+        .map_err(conflict_io_error)?;
+    if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+        return Err(refused(
+            refusal::FOLDER_UNSAFE,
+            "Only regular files and directories may be consolidated",
+        ));
+    }
+    super::title_folder_recovery::inspect_path(&path, false).await?;
+    Ok(metadata)
+}
+
+async fn pending_conflict_folder(path: &str) -> AppResult<String> {
+    if conflict_path_metadata(path).await?.is_dir() {
+        return Ok(path.to_owned());
+    }
+    let path = stored_path_to_path_buf(path);
+    let parent = path.parent().ok_or_else(|| {
+        refused(
+            refusal::FOLDER_UNSAFE,
+            "The conflict file has no parent folder",
+        )
+    })?;
+    let folder = path_to_stored_string(parent);
+    if !conflict_path_metadata(&folder).await?.is_dir() {
+        return Err(refused(
+            refusal::PATH_NOT_DIRECTORY,
+            "The conflict file's parent is not a directory",
+        ));
+    }
+    Ok(folder)
 }
 
 fn overlaps(a: &str, b: &str) -> bool {
@@ -305,13 +386,9 @@ async fn enumerate(folder: &str, root: &str) -> AppResult<(Vec<ConflictFile>, Ve
     while let Some(path) = pending.pop() {
         let mut entries = tokio::fs::read_dir(&path)
             .await
-            .map_err(|e| AppError::Repository(e.to_string()))?;
+            .map_err(conflict_io_error)?;
         directories.push(path_to_stored_string(&path));
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| AppError::Repository(e.to_string()))?
-        {
+        while let Some(entry) = entries.next_entry().await.map_err(conflict_io_error)? {
             if files.len() + directories.len() + pending.len() >= MAX_FILES {
                 return Err(refused(
                     refusal::FOLDER_UNSAFE,
@@ -321,7 +398,7 @@ async fn enumerate(folder: &str, root: &str) -> AppResult<(Vec<ConflictFile>, Ve
             let path = entry.path();
             let metadata = tokio::fs::symlink_metadata(&path)
                 .await
-                .map_err(|e| AppError::Repository(e.to_string()))?;
+                .map_err(conflict_io_error)?;
             super::title_folder_recovery::inspect_path(&path, false).await?;
             if metadata.is_dir() {
                 pending.push(path);
@@ -354,6 +431,7 @@ impl AppUseCase {
         id: &str,
         request: &ConflictRequest,
         catalog: &super::title_folder_recovery::RecoveryCatalog,
+        authorized_title: &mut Option<(String, String)>,
     ) -> AppResult<PlannedConflict> {
         let repo = &self.services.library.library_scan_unmatched_items;
         let item = repo
@@ -391,6 +469,8 @@ impl AppUseCase {
                 "The title changed libraries",
             ));
         }
+        // Only retain identity after authorizing its library, including on failure.
+        *authorized_title = Some((title.id.clone(), title.name.clone()));
         let library = self
             .services
             .catalog
@@ -405,7 +485,7 @@ impl AppUseCase {
                     "The title no longer owns a folder",
                 )
             })?,
-            item.item_path.clone(),
+            pending_conflict_folder(&item.item_path).await?,
         ];
         let siblings = repo
             .list_pending_folder_conflicts_for_title(&item.library_id, &title.id)
@@ -422,7 +502,7 @@ impl AppUseCase {
                 && sibling.title_id.as_deref() == Some(&title.id)
                 && sibling.reason_code == item.reason_code
             {
-                folders.push(sibling.item_path);
+                folders.push(pending_conflict_folder(&sibling.item_path).await?);
                 pending_ids.push(sibling.id);
             }
         }
@@ -443,6 +523,12 @@ impl AppUseCase {
         // only copy, so physical identity, not spelling, decides.
         let mut folder_identities = BTreeMap::new();
         for (index, folder) in folders.iter().enumerate() {
+            if !conflict_path_metadata(folder).await?.is_dir() {
+                return Err(refused(
+                    refusal::PATH_NOT_DIRECTORY,
+                    "A conflict folder path is not a directory",
+                ));
+            }
             if let Some(identity) = directory_identity(&stored_path_to_path_buf(folder)).await?
                 && folder_identities.insert(identity, index).is_some()
             {
@@ -971,6 +1057,25 @@ mod native_name_tests {
     use super::*;
 
     #[test]
+    fn conflict_io_reasons_use_kinds_not_sentences() {
+        for (kind, reason) in [
+            (std::io::ErrorKind::NotFound, refusal::PATH_MISSING),
+            (
+                std::io::ErrorKind::NotADirectory,
+                refusal::PATH_NOT_DIRECTORY,
+            ),
+            (
+                std::io::ErrorKind::PermissionDenied,
+                refusal::PATH_PERMISSION_DENIED,
+            ),
+            (std::io::ErrorKind::Other, refusal::PATH_IO_FAILED),
+        ] {
+            let error = conflict_io_error(std::io::Error::new(kind, "arbitrary provider wording"));
+            assert_eq!(error.validation_reason(), Some(reason));
+        }
+    }
+
+    #[test]
     fn encoded_relative_names_cannot_escape_the_survivor() {
         let folder = std::path::Path::new("/library/survivor");
         for unsafe_name in [
@@ -1136,7 +1241,7 @@ async fn directory_identity(path: &std::path::Path) -> AppResult<Option<(u64, u6
         use std::os::unix::fs::MetadataExt;
         let metadata = tokio::fs::symlink_metadata(path)
             .await
-            .map_err(|e| AppError::Repository(e.to_string()))?;
+            .map_err(conflict_io_error)?;
         Ok(Some((metadata.dev(), metadata.ino())))
     }
     #[cfg(not(unix))]
@@ -1418,8 +1523,9 @@ impl AppUseCase {
                 fingerprints.push((id.clone(), existing.plan.fingerprint.0.clone()));
                 continue;
             }
+            let mut authorized_title = None;
             match self
-                .plan_pending_import_conflict(actor, id, request, &catalog)
+                .plan_pending_import_conflict(actor, id, request, &catalog, &mut authorized_title)
                 .await
             {
                 Ok(plan) => {
@@ -1466,15 +1572,16 @@ impl AppUseCase {
                     return Err(error);
                 }
                 Err(error) => {
-                    let reason = error
-                        .validation_reason()
-                        .unwrap_or(refusal::UNSUPPORTED)
-                        .to_owned();
+                    if error.reason().is_none() {
+                        tracing::warn!(pending_import_id = %id, error = %error, "Conflict preview planning failed");
+                    }
+                    let reason = error.reason().unwrap_or(refusal::PLAN_FAILED).to_owned();
                     fingerprints.push((id.clone(), reason.clone()));
+                    let (title_id, title_name) = authorized_title.unwrap_or_default();
                     rows.push(ConflictRow {
                         pending_import_id: id.clone(),
-                        title_id: String::new(),
-                        title_name: String::new(),
+                        title_id,
+                        title_name,
                         survivor_path: String::new(),
                         primary_path: String::new(),
                         move_bytes: 0,
@@ -1499,9 +1606,12 @@ impl AppUseCase {
         )
         .to_hex()
         .to_string();
+        let actionable_count: i32 = plans.iter().map(|plan| plan.selected_count).sum();
         let preview = ConflictPreview {
             plan_fingerprint: fingerprint,
             total_count: rows.len() as i32,
+            actionable_count,
+            failed_count: rows.len() as i32 - actionable_count,
             sampled: rows.len() > SAMPLE,
             rows: rows.into_iter().take(SAMPLE).collect(),
             permanent_delete_count: permanent.len() as i32,

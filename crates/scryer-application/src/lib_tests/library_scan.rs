@@ -5879,6 +5879,76 @@ async fn movie_full_scan_completes_title_match_while_inventory_walk_is_blocked()
 }
 
 #[tokio::test]
+async fn multi_root_full_scan_counts_media_from_every_root() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let roots = [
+        tempdir.path().join("movies-a"),
+        tempdir.path().join("movies-b"),
+    ];
+    for root in &roots {
+        std::fs::create_dir_all(root).unwrap();
+    }
+    let scanner = Arc::new(PerDirectoryBlockingLibraryScanner::default());
+    let (base_app, user, _) =
+        bootstrap_movie_scan_app(&roots[0], Vec::new(), Arc::new(EmptySearchMetadataGateway)).await;
+    let app = base_app.with_test_overrides(|builder| builder.with_library_scanner(scanner.clone()));
+    app.update_media_settings(
+        &user,
+        MediaFacet::Movie,
+        empty_update_media_settings_with_roots(vec![
+            build_root_folder_entry(&roots[0], true),
+            build_root_folder_entry(&roots[1], false),
+        ]),
+    )
+    .await
+    .unwrap();
+    for (index, root) in roots.iter().enumerate() {
+        let label = format!("scan-item-{index}");
+        let folder = root.join(&label);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut files = Vec::new();
+        for part in 0..=index {
+            let file = folder.join(format!("{label}-{part}.mkv"));
+            std::fs::write(&file, b"scan").unwrap();
+            files.push(build_test_library_file(file.to_string_lossy().as_ref()));
+        }
+        scanner.set_directory_files(&folder, files).await;
+        create_movie_title_with_folder(&app, &user, &label, &folder).await;
+        if index == 1 {
+            scanner.block_directory(&folder).await;
+        }
+    }
+    let session = app
+        .trigger_library_scan_by_id(
+            &user,
+            &scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+        )
+        .await
+        .unwrap();
+    scanner.wait_for_blocked_directory_scan().await;
+    let between_roots =
+        wait_for_projected_library_scan_session_matching(&app, &session.session_id, |session| {
+            session.file_progress.completed == 1
+        })
+        .await;
+    assert_eq!(between_roots.file_progress.total, 1);
+    assert!(!between_roots.file_total_known);
+    assert!(!between_roots.status.is_terminal());
+    scanner.release_blocked_directory_scans().await;
+    let completed =
+        wait_for_projected_library_scan_session_matching(&app, &session.session_id, |session| {
+            session.status.is_terminal()
+        })
+        .await;
+    assert_eq!(completed.status, LibraryScanStatus::Completed);
+    assert!(completed.file_total_known);
+    assert_eq!(completed.file_progress.total, 3);
+    assert_eq!(completed.file_progress.completed, 3);
+    assert_eq!(completed.file_progress.failed, 0);
+    assert_eq!(completed.found_titles, 2);
+}
+
+#[tokio::test]
 async fn movie_full_scan_marks_exact_media_total_before_blocked_analysis_finishes() {
     const ITEM_COUNT: usize = 90;
 
@@ -7009,7 +7079,7 @@ async fn series_full_scan_starts_media_analysis_while_later_enumeration_is_pendi
 }
 
 #[tokio::test]
-async fn multi_root_full_scan_waits_for_final_root_to_mark_title_match_total_known() {
+async fn multi_root_full_scan_waits_for_final_root_to_mark_totals_known() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let root_one = tempdir.path().join("series-a");
     let root_two = tempdir.path().join("series-b");
@@ -7080,6 +7150,8 @@ async fn multi_root_full_scan_waits_for_final_root_to_mark_title_match_total_kno
         })
         .await;
     assert_eq!(final_root_projected.title_match_progress.total, 2);
+    assert!(!final_root_projected.metadata_total_known);
+    assert!(!final_root_projected.file_total_known);
     assert!(final_root_projected.summary.is_none());
 
     metadata_gateway.release();

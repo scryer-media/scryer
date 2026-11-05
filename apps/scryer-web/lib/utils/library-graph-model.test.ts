@@ -19,6 +19,11 @@ import {
   LIBRARY_GRAPH_MAX_NODE_SIZE,
   LIBRARY_GRAPH_MIN_NODE_SIZE,
   displayedLibraryGraph,
+  graphDetailClusters,
+  graphDetailCompaction,
+  graphDetailOpacity,
+  largeLibraryGraphLayout,
+  libraryGraphOverviewPreview,
   joinLibraryGraphToTitles,
   libraryGraphClusterName,
   libraryGraphEdgeKindLabel,
@@ -193,7 +198,7 @@ test("nodes whose title is filtered out are pruned with their edges", () => {
   );
 });
 
-test("above the threshold every cluster collapses until it is expanded", () => {
+test("large overviews collapse named neighbourhoods and gather unnamed titles as unplaced", () => {
   const { graph } = joinLibraryGraphToTitles(
     libraryGraphFixture({ facet: "MOVIE" }),
     catalog(64),
@@ -204,10 +209,9 @@ test("above the threshold every cluster collapses until it is expanded", () => {
   assert.deepEqual(
     collapsed.nodes.map((node) => node.subjectKey).sort(),
     [
-      clusterNodeKey(-1),
       clusterNodeKey(0),
       clusterNodeKey(1),
-      clusterNodeKey(2),
+      clusterNodeKey(UNPLACED_CLUSTER_ID),
     ].sort(),
   );
   // Co-watch bridges join the cluster nodes.
@@ -218,8 +222,162 @@ test("above the threshold every cluster collapses until it is expanded", () => {
   assert.equal(
     oneOpen.nodes.filter((node) => node.collapsedClusterId !== undefined)
       .length,
-    3,
+    2,
   );
+});
+
+test("neighbourhood filters use OR and preserve every unplaced title on expansion", () => {
+  const { graph } = joinLibraryGraphToTitles(
+    libraryGraphFixture({ facet: "MOVIE" }),
+    catalog(64),
+  );
+  const expanded = new Set([0, 1, UNPLACED_CLUSTER_ID]);
+  const filtered = displayedLibraryGraph(
+    graph,
+    expanded,
+    60,
+    graph,
+    new Set([0, 1]),
+  );
+  assert.equal(filtered.nodes.length, 42);
+  assert.ok(
+    filtered.nodes.every(
+      (node) => node.clusterId === 0 || node.clusterId === 1,
+    ),
+  );
+  const visible = new Set(filtered.nodes.map((node) => node.subjectKey));
+  assert.ok(
+    filtered.edges.every(
+      (edge) => visible.has(edge.from) && visible.has(edge.to),
+    ),
+  );
+  const unplaced = displayedLibraryGraph(
+    graph,
+    expanded,
+    60,
+    graph,
+    new Set([UNPLACED_CLUSTER_ID]),
+  );
+  assert.equal(unplaced.nodes.length, 22);
+  assert.ok(
+    unplaced.nodes.every((node) => node.collapsedClusterId === undefined),
+  );
+  assert.equal(
+    displayedLibraryGraph(graph, expanded, 60, graph, new Set()).nodes.length,
+    64,
+  );
+});
+
+test("ten thousand titles retain stable nested positions and collapse to neighbourhoods", () => {
+  const fixture = libraryGraphFixture({ facet: "MOVIE" });
+  const graph = {
+    clusters: fixture.clusters.map((cluster) => ({ ...cluster, size: 3334 })),
+    edges: [],
+    nodes: Array.from({ length: 10_000 }, (_, index) => ({
+      subjectKey: `title:${index}`,
+      targetKey: `tmdb:movie:${index}`,
+      clusterId: index % 3,
+      ghost: false,
+    })),
+  };
+  const layout = largeLibraryGraphLayout(graph);
+  const reordered = largeLibraryGraphLayout({
+    ...graph,
+    nodes: [...graph.nodes].reverse(),
+  });
+  assert.deepEqual(layout, reordered);
+  assert.equal(layout.positions.size, 10_003);
+  const collapsed = displayedLibraryGraph(graph, new Set());
+  assert.equal(collapsed.nodes.length, 3);
+  assert.ok(
+    collapsed.nodes.every((node) => node.collapsedClusterId !== undefined),
+  );
+  assert.equal(
+    collapsed.nodes.reduce((sum, node) => sum + (node.memberCount ?? 0), 0),
+    10_000,
+  );
+  for (const node of graph.nodes) {
+    const point = layout.positions.get(node.subjectKey)!;
+    const region = layout.regions.find(
+      (region) => region.id === (node.clusterId === 2 ? -1 : node.clusterId),
+    )!;
+    assert.ok(
+      point.x >= region.left &&
+        point.x <= region.right &&
+        point.y >= region.top &&
+        point.y <= region.bottom,
+    );
+  }
+});
+
+test("overview preview renders membership without reading edges or catalog metadata", () => {
+  const result = libraryGraphFixture({ facet: "MOVIE" });
+  const { graph, titleBySubjectKey } = libraryGraphOverviewPreview({
+    ...result,
+    get edges(): typeof result.edges {
+      throw new Error("overview must not process title edges");
+    },
+  });
+  assert.equal(titleBySubjectKey.size, 0);
+  assert.equal(graph.nodes.length, result.nodes.length);
+  assert.equal(graph.edges.length, 0);
+  const collapsed = displayedLibraryGraph(graph, new Set(), 1);
+  assert.ok(
+    collapsed.nodes.every((node) => node.collapsedClusterId !== undefined),
+  );
+  assert.equal(
+    collapsed.nodes.reduce((sum, node) => sum + (node.memberCount ?? 0), 0),
+    result.nodes.length,
+  );
+});
+
+test("detail fades reversibly with eased endpoints inside materialization thresholds", () => {
+  const regions = [{ id: 0, left: 0, right: 100, top: 0, bottom: 100 }];
+  let expanded: ReadonlySet<number> = new Set();
+  for (const spacing of [33, 40, 45, 55, 65, 70, 65, 55, 45, 40, 30]) {
+    expanded = graphDetailClusters(expanded, regions, spacing, 800, 600);
+    assert.equal(expanded.has(0), true);
+    const opacity = graphDetailOpacity(spacing);
+    assert.ok(opacity >= 0 && opacity <= 1);
+    assert.ok(
+      Math.abs(opacity + graphDetailOpacity(110 - spacing) - 1) < 1e-12,
+    );
+  }
+  assert.equal(graphDetailOpacity(40), 0);
+  assert.equal(graphDetailOpacity(55), 0.5);
+  assert.equal(graphDetailOpacity(70), 1);
+  assert.ok(graphDetailOpacity(40.1) < 0.001);
+  assert.ok(graphDetailOpacity(69.9) > 0.999);
+  assert.equal(graphDetailClusters(expanded, regions, 23, 800, 600).size, 0);
+  assert.equal(graphDetailOpacity(23), 0);
+});
+
+test("detail spacing tightens with magnification and restores at overview zoom", () => {
+  assert.equal(graphDetailCompaction(30), 1);
+  assert.equal(graphDetailCompaction(60), 1);
+  assert.equal(graphDetailCompaction(120), 0.5);
+  assert.equal(graphDetailCompaction(240), 0.25);
+  assert.equal(graphDetailCompaction(10000), 0.12);
+  assert.equal(graphDetailCompaction(NaN), 1);
+  assert.equal(graphDetailCompaction(30), 1);
+});
+
+test("zoom detail opens only nearby regions with hysteresis and collapses when zooming out", () => {
+  const regions = [
+    { id: 0, left: 10, right: 30, top: 10, bottom: 30 },
+    { id: 1, left: 2000, right: 2100, top: 10, bottom: 30 },
+  ];
+  const empty = new Set<number>();
+  assert.equal(graphDetailClusters(empty, regions, 30, 800, 600), empty);
+  const close = graphDetailClusters(empty, regions, 50, 800, 600);
+  assert.deepEqual([...close], [0]);
+  assert.equal(graphDetailClusters(close, regions, 35, 800, 600), close);
+  assert.equal(graphDetailClusters(close, regions, 20, 800, 600).size, 0);
+  assert.equal(
+    graphDetailClusters(close, regions.slice(1), 50, 800, 600).size,
+    0,
+  );
+  assert.equal(graphDetailClusters(close, regions, 50, 0, 0), close);
 });
 
 test("explored ghosts neither tip the graph into collapsing nor count as cluster members", () => {
@@ -354,7 +512,7 @@ test("clusters are named from the label table, else by their medoid title", () =
       titleBySubjectKey,
       t,
     ),
-    "Unplaced titles",
+    "Everything else",
   );
 });
 

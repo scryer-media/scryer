@@ -1,7 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { graphPosterBounds } from "./library-graph-posters.ts";
+import {
+  graphPosterBounds,
+  createGraphPosterAdmission,
+} from "./library-graph-posters.ts";
+
+test("poster admission caps pending images and excludes offscreen or zoomed-out titles", () => {
+  const admit = createGraphPosterAdmission(800, 600, 8, 240);
+  for (let index = 0; index < 10_000; index++) {
+    assert.equal(admit({ x: -100, y: 300 }, 10), false);
+    assert.equal(admit({ x: 400, y: 300 }, 2), false);
+  }
+  let requests = 0;
+  for (let index = 0; index < 10_000; index++) {
+    if (admit({ x: 400, y: 300 }, 10)) requests++;
+  }
+  assert.equal(requests, 240);
+  const nextViewport = createGraphPosterAdmission(800, 600, 8, 240);
+  assert.equal(nextViewport({ x: -5, y: 300 }, 10), true);
+  assert.equal(
+    createGraphPosterAdmission(0, 0, 0, 240)({ x: 0, y: 0 }, 10),
+    false,
+  );
+});
 
 test("graph posters stay centred and keep their 2:3 aspect ratio at every size", () => {
   for (const size of [2, 9, 28, 60]) {

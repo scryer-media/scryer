@@ -20,6 +20,26 @@ export function graphPosterBounds(point: Point, size: number, padding = 0) {
 
 export type GraphPosterBounds = ReturnType<typeof graphPosterBounds>;
 
+/** Admission precedes image loading, so pending requests count toward the
+ * viewport budget just like decoded images. Create once per frame. */
+export function createGraphPosterAdmission(
+  width: number,
+  height: number,
+  minSize: number,
+  limit: number,
+) {
+  let admitted = 0;
+  return (point: Point, size: number): boolean => {
+    if (admitted >= limit || size < minSize || width <= 0 || height <= 0)
+      return false;
+    const box = graphPosterBounds(point, size);
+    if (box.right < 0 || box.left > width || box.bottom < 0 || box.top > height)
+      return false;
+    admitted += 1;
+    return true;
+  };
+}
+
 export function traceGraphPoster(
   context: CanvasRenderingContext2D,
   point: Point,

@@ -110,6 +110,7 @@ fn catalog_public_top_group_keeps_source_label_and_refills_after_deduplication()
     .expect("remaining candidates should produce a group");
 
     assert_eq!(group.label_value.as_deref(), Some("Trending Now"));
+    assert_eq!(group.label_key.as_deref(), Some("trending_now"));
     assert_eq!(group.total_count, 3);
     assert_eq!(group.items.len(), 2);
     assert_eq!(

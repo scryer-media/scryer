@@ -1,5 +1,8 @@
 use std::path::Path;
 
+mod scan_cache;
+pub(crate) use scan_cache::{ScanOwnershipContext, with_scan_ownership};
+
 use scryer_domain::Title;
 
 use crate::library::workflow::{LibraryRootState, library_root_state};
@@ -249,7 +252,10 @@ pub(crate) async fn folder_spans_a_library_root(
     app: &AppUseCase,
     folder_path: &str,
 ) -> AppResult<bool> {
-    let snapshot = SCAN_FOLDER_ROOTS.try_with(std::sync::Arc::clone).ok();
+    let snapshot = SCAN_FOLDER_ROOTS
+        .try_with(std::sync::Arc::clone)
+        .ok()
+        .filter(|_| ScanOwnershipContext::current().is_none());
     let loaded;
     let all_roots = if let Some(snapshot) = snapshot.as_ref() {
         &snapshot.all
@@ -284,13 +290,17 @@ pub(crate) async fn title_folder_is_outside_its_library(
     title: &Title,
     folder_path: &str,
 ) -> AppResult<bool> {
-    let library_roots = if let Ok(roots) = SCAN_FOLDER_ROOTS.try_with(|snapshot| {
-        snapshot
-            .by_library
-            .get(&title.library_id)
-            .cloned()
-            .unwrap_or_default()
-    }) {
+    let snapshot_roots = SCAN_FOLDER_ROOTS
+        .try_with(|snapshot| {
+            snapshot
+                .by_library
+                .get(&title.library_id)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .ok()
+        .filter(|_| ScanOwnershipContext::current().is_none());
+    let library_roots = if let Some(roots) = snapshot_roots {
         roots
     } else {
         app.services
@@ -459,6 +469,7 @@ pub(crate) struct FolderOverlapKeys {
     /// Whether a folder below a library root is a link, shared by owners
     /// under the same organizing folders.
     links: std::collections::HashMap<std::path::PathBuf, bool>,
+    link_probes: u64,
 }
 
 impl FolderOverlapKeys {
@@ -499,6 +510,7 @@ impl FolderOverlapKeys {
             candidate,
             roots,
             links: Default::default(),
+            link_probes: 0,
         })
     }
 
@@ -506,6 +518,14 @@ impl FolderOverlapKeys {
     /// An owner unrelated by key, also after substituting its resolved library
     /// root, with no link between that root and its folder, cannot overlap.
     pub(crate) fn needs_exact_comparison(&mut self, owned_path: &str) -> AppResult<bool> {
+        self.needs_exact_comparison_with_evidence(owned_path, &mut |_| false)
+    }
+
+    fn needs_exact_comparison_with_evidence(
+        &mut self,
+        owned_path: &str,
+        verified_directory: &mut impl FnMut(&Path) -> bool,
+    ) -> AppResult<bool> {
         let Some(owner) = overlap_prefilter_key(owned_path) else {
             return Ok(true);
         };
@@ -547,6 +567,11 @@ impl FolderOverlapKeys {
             let is_link = match self.links.get(ancestor) {
                 Some(is_link) => *is_link,
                 None => {
+                    if verified_directory(ancestor) {
+                        self.links.insert(ancestor.to_path_buf(), false);
+                        continue;
+                    }
+                    self.link_probes += 1;
                     let is_link = match std::fs::symlink_metadata(ancestor) {
                         Ok(metadata) => metadata.file_type().is_symlink(),
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
@@ -580,6 +605,9 @@ pub(crate) async fn ensure_folder_move_available_to_title(
         ));
     }
     let folder_path = path_to_stored_string(folder_path);
+    if let Some(context) = ScanOwnershipContext::current() {
+        return context.check(app, title, folder_path).await;
+    }
     let mut keys = None;
     for owner in app
         .services
@@ -1190,6 +1218,64 @@ mod tests {
             .unwrap();
         assert!(created.title.folder_path.is_none());
         (app, created.title)
+    }
+
+    #[tokio::test]
+    async fn scan_ownership_context_reads_new_catalog_owners() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("candidate");
+        std::fs::create_dir(&folder).unwrap();
+        let sentinel = folder.join("preserved.mkv");
+        std::fs::write(&sentinel, b"preserved").unwrap();
+        let (app, title) = unowned_scan_title(MediaFacet::Movie, root.path()).await;
+        let context = ScanOwnershipContext::new();
+        with_scan_ownership(Some(context), async {
+            ensure_folder_move_available_to_title(&app, &title, &folder)
+                .await
+                .unwrap();
+            let mut owner = title.clone();
+            owner.id = "new-owner".into();
+            owner.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+            owner.name = "New Owner".into();
+            owner.folder_path = Some(path_to_stored_string(&folder));
+            app.services
+                .catalog
+                .titles
+                .create_or_get_existing(owner)
+                .await
+                .unwrap();
+            let error = ensure_folder_move_available_to_title(&app, &title, &folder)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE)
+            );
+            let other = root.path().join("other");
+            std::fs::create_dir(&other).unwrap();
+            app.services
+                .catalog
+                .titles
+                .set_folder_path("new-owner", &path_to_stored_string(&other))
+                .await
+                .unwrap();
+            ensure_folder_move_available_to_title(&app, &title, &folder)
+                .await
+                .unwrap();
+            app.services
+                .catalog
+                .titles
+                .set_folder_path("new-owner", &path_to_stored_string(&folder))
+                .await
+                .unwrap();
+            assert!(
+                ensure_folder_move_available_to_title(&app, &title, &folder)
+                    .await
+                    .is_err()
+            );
+        })
+        .await;
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"preserved");
     }
 
     #[tokio::test]

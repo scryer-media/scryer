@@ -1465,6 +1465,7 @@ impl AppUseCase {
         }
 
         let valid_root_count = valid_roots.len();
+        let ownership_context = crate::folder_ownership::ScanOwnershipContext::new();
 
         for (root_index, library_path) in valid_roots.into_iter().enumerate() {
             if library_scan_cancel_requested(cancel_token.as_ref()) {
@@ -1472,64 +1473,70 @@ impl AppUseCase {
             }
             let finalize_discovery_on_drain =
                 mode == LibraryScanMode::Full && root_index + 1 == valid_root_count;
-            let root_summary = match (mode.clone(), facet) {
-                (LibraryScanMode::Full, MediaFacet::Movie) => {
-                    scan_library_movies(
-                        self,
-                        actor,
-                        facet,
-                        library_id,
-                        library_path,
-                        session_id,
-                        finalize_discovery_on_drain,
-                        cancel_token.clone(),
-                        scan_hints.as_ref(),
-                    )
-                    .await?
-                }
-                (LibraryScanMode::Full, MediaFacet::Series | MediaFacet::Anime) => {
-                    // Both Series and Anime route through scan_library_series and
-                    // look up hints under LibraryScanHintFacet::Series, which is how
-                    // BOTH Sonarr series and Sonarr anime import hints are stamped.
-                    // Previously Anime was passed None here, so anime imports lost
-                    // their arr identity and fell back to the filesystem parser.
-                    scan_library_series(
-                        self,
-                        actor,
-                        facet,
-                        library_id,
-                        library_path,
-                        session_id,
-                        finalize_discovery_on_drain,
-                        cancel_token.clone(),
-                        scan_hints.as_ref(),
-                    )
-                    .await?
-                }
-                (LibraryScanMode::Additive, MediaFacet::Movie) => {
-                    background_refresh_movies(
-                        self,
-                        actor,
-                        library_id,
-                        library_path,
-                        session_id,
-                        cancel_token.clone(),
-                    )
-                    .await?
-                }
-                (LibraryScanMode::Additive, MediaFacet::Series | MediaFacet::Anime) => {
-                    background_refresh_series(
-                        self,
-                        actor,
-                        facet,
-                        library_id,
-                        library_path,
-                        session_id,
-                        cancel_token.clone(),
-                    )
-                    .await?
-                }
-            };
+            let root_summary = crate::folder_ownership::with_scan_ownership(
+                Some(ownership_context.clone()),
+                async {
+                    Ok::<_, AppError>(match (mode.clone(), facet) {
+                        (LibraryScanMode::Full, MediaFacet::Movie) => {
+                            scan_library_movies(
+                                self,
+                                actor,
+                                facet,
+                                library_id,
+                                library_path,
+                                session_id,
+                                finalize_discovery_on_drain,
+                                cancel_token.clone(),
+                                scan_hints.as_ref(),
+                            )
+                            .await?
+                        }
+                        (LibraryScanMode::Full, MediaFacet::Series | MediaFacet::Anime) => {
+                            // Both Series and Anime route through scan_library_series and
+                            // look up hints under LibraryScanHintFacet::Series, which is how
+                            // BOTH Sonarr series and Sonarr anime import hints are stamped.
+                            // Previously Anime was passed None here, so anime imports lost
+                            // their arr identity and fell back to the filesystem parser.
+                            scan_library_series(
+                                self,
+                                actor,
+                                facet,
+                                library_id,
+                                library_path,
+                                session_id,
+                                finalize_discovery_on_drain,
+                                cancel_token.clone(),
+                                scan_hints.as_ref(),
+                            )
+                            .await?
+                        }
+                        (LibraryScanMode::Additive, MediaFacet::Movie) => {
+                            background_refresh_movies(
+                                self,
+                                actor,
+                                library_id,
+                                library_path,
+                                session_id,
+                                cancel_token.clone(),
+                            )
+                            .await?
+                        }
+                        (LibraryScanMode::Additive, MediaFacet::Series | MediaFacet::Anime) => {
+                            background_refresh_series(
+                                self,
+                                actor,
+                                facet,
+                                library_id,
+                                library_path,
+                                session_id,
+                                cancel_token.clone(),
+                            )
+                            .await?
+                        }
+                    })
+                },
+            )
+            .await?;
             summary.absorb(&root_summary);
         }
 

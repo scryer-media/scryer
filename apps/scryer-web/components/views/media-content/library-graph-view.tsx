@@ -27,6 +27,7 @@ import {
   GRAPH_POSTER_ASPECT_RATIO,
   GRAPH_POSTER_CORNER_RADIUS_RATIO,
   drawGraphPoster,
+  createGraphPosterAdmission,
   graphPosterBounds,
   traceGraphPoster,
   type GraphPosterBounds,
@@ -48,6 +49,11 @@ import {
   LIBRARY_GRAPH_MAX_NODE_SIZE,
   LIBRARY_GRAPH_MIN_NODE_SIZE,
   displayedLibraryGraph,
+  graphDetailClusters,
+  graphDetailCompaction,
+  graphDetailOpacity,
+  largeLibraryGraphLayout,
+  libraryGraphOverviewPreview,
   joinLibraryGraphToTitles,
   libraryGraphEdgeKindLabels,
   libraryGraphGroupName,
@@ -60,7 +66,6 @@ import {
   recommendationSections,
   titleIndexByMatchKey,
   titleMatchKeys,
-  titleTargetKey,
   type LibraryGraphSizeMetric,
   type NeighborReason,
   type RecommendationSection,
@@ -171,6 +176,7 @@ type NodeAttributes = {
   titleId?: string;
   posterUrl?: string | null;
   collapsedClusterId?: number;
+  detailOpacity?: number;
   clusterId: number;
   /** A title reached by exploring, not in the library. */
   ghost?: boolean;
@@ -325,6 +331,8 @@ export type LibraryGraphViewProps = {
    * rebuilding on every page.
    */
   titlesComplete: boolean;
+  allowOverviewPreview: boolean;
+  totalTitles: number;
   libraryIds: readonly string[];
   selectedTitleId: string | null;
   contextPanelId?: string;
@@ -349,6 +357,8 @@ export default function LibraryGraphView({
   facet,
   titles: currentTitles,
   titlesComplete,
+  allowOverviewPreview,
+  totalTitles,
   libraryIds,
   selectedTitleId,
   contextPanelId,
@@ -381,6 +391,7 @@ export default function LibraryGraphView({
   const resumeLayoutRef = React.useRef<() => void>(() => {});
   const positionsRef = React.useRef(new Map<string, LayoutPoint>());
   const posterCacheRef = React.useRef(new Map<string, HTMLImageElement>());
+  const transitionBlobsRef = React.useRef<NodeAttributes[]>([]);
   // The title under the pointer and the titles one link from it, which stay
   // bright while the rest of the graph fades.
   const hoverFocusRef = React.useRef<{
@@ -473,6 +484,9 @@ export default function LibraryGraphView({
   const [expandedClusterIds, setExpandedClusterIds] = React.useState<
     ReadonlySet<number>
   >(() => new Set());
+  const [selectedNeighborhoods, setSelectedNeighborhoods] = React.useState<
+    ReadonlySet<number>
+  >(() => new Set());
   const [hover, setHover] = React.useState<Hover | null>(null);
 
   const applySelection = React.useCallback(() => {
@@ -542,15 +556,6 @@ export default function LibraryGraphView({
     };
   }, []);
 
-  const catalogTargetKeys = React.useMemo(
-    () =>
-      (titles ?? [])
-        .map((title) => titleTargetKey(title))
-        .filter((key): key is string => key !== null)
-        .sort(),
-    [titles],
-  );
-  const hasTitles = catalogTargetKeys.length > 0;
   const libraryIdSignature = [...libraryIds].sort().join(",");
 
   // The graph covers the facet's selected libraries; filters only prune it.
@@ -564,6 +569,8 @@ export default function LibraryGraphView({
   const [exploredSourceKey, setExploredSourceKey] = React.useState(sourceKey);
   if (exploredSourceKey !== sourceKey) {
     setExploredSourceKey(sourceKey);
+    positionsRef.current.clear();
+    setSelectedNeighborhoods(new Set());
     // The old graph is not joined to the new listing while the new one loads.
     setResult(null);
     setLoadStatus("pending");
@@ -591,7 +598,7 @@ export default function LibraryGraphView({
   }, []);
   const loadedSourceKeyRef = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (!hasTitles || loadedSourceKeyRef.current === sourceKey) {
+    if (loadedSourceKeyRef.current === sourceKey) {
       return;
     }
     loadedSourceKeyRef.current = sourceKey;
@@ -626,19 +633,31 @@ export default function LibraryGraphView({
         loadedSourceKeyRef.current = null;
       }
     };
-  }, [
-    client,
-    facet,
-    hasTitles,
-    libraryIdSignature,
-    resetExploration,
-    sourceKey,
-  ]);
+  }, [client, facet, libraryIdSignature, resetExploration, sourceKey]);
 
+  const previewing =
+    !titlesComplete &&
+    allowOverviewPreview &&
+    (result?.nodes.length ?? 0) > LIBRARY_GRAPH_COLLAPSE_THRESHOLD;
   const join = React.useMemo(
-    () => (result && titles ? joinLibraryGraphToTitles(result, titles) : null),
-    [result, titles],
+    () =>
+      !result
+        ? null
+        : previewing
+          ? libraryGraphOverviewPreview(result)
+          : titlesComplete && titles
+            ? joinLibraryGraphToTitles(result, titles)
+            : null,
+    [result, titles, titlesComplete, previewing],
   );
+  const [paintedJoin, setPaintedJoin] = React.useState<typeof join>(null);
+  React.useEffect(() => {
+    if (!join) return;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setPaintedJoin(join));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [join]);
   const titlesById = React.useMemo(() => {
     const byId = new Map<string, TitleRecord>();
     for (const title of join?.titleBySubjectKey.values() ?? []) {
@@ -709,17 +728,27 @@ export default function LibraryGraphView({
       ? selectedKey
       : null;
   // Collapsing follows the library's own size; explored ghosts never tip it.
+  const largeLayout = React.useMemo(
+    () =>
+      join &&
+      explored &&
+      join.graph.nodes.length > LIBRARY_GRAPH_COLLAPSE_THRESHOLD
+        ? largeLibraryGraphLayout(explored)
+        : null,
+    [join, explored],
+  );
   const overview = React.useMemo(
     () =>
       explored && join
         ? displayedLibraryGraph(
             explored,
-            expandedClusterIds,
+            previewing ? new Set() : expandedClusterIds,
             LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
             join.graph,
+            selectedNeighborhoods,
           )
         : null,
-    [expandedClusterIds, explored, join],
+    [expandedClusterIds, explored, join, selectedNeighborhoods, previewing],
   );
   const displayed = React.useMemo(
     () =>
@@ -807,7 +836,12 @@ export default function LibraryGraphView({
     }
     const counts = new Map<number, number>();
     for (const node of join.graph.nodes) {
-      counts.set(node.clusterId, (counts.get(node.clusterId) ?? 0) + 1);
+      const id =
+        join.graph.nodes.length > LIBRARY_GRAPH_COLLAPSE_THRESHOLD &&
+        !namedClusterIds.has(node.clusterId)
+          ? UNPLACED_CLUSTER_ID
+          : node.clusterId;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
     }
     return Array.from(counts, ([id, count]) => ({
       id,
@@ -933,7 +967,7 @@ export default function LibraryGraphView({
       y: number;
       r: number;
     })[] = [];
-    graph.forEachNode((key, attributes) => {
+    const drawNode = (key: string, attributes: NodeAttributes) => {
       const point = sigma.graphToViewport({
         x: attributes.x as number,
         y: attributes.y as number,
@@ -951,6 +985,74 @@ export default function LibraryGraphView({
         ...graphPosterBounds(point, size),
       });
       // Ghosts are not in the library, so they never stretch a cluster hull.
+      if (attributes.collapsedClusterId !== undefined) {
+        if (
+          point.x + size < 0 ||
+          point.y + size < 0 ||
+          point.x - size > width ||
+          point.y - size > height
+        )
+          return;
+        const color = attributes.baseColor;
+        context.save();
+        context.globalAlpha = attributes.detailOpacity ?? 1;
+        context.beginPath();
+        for (let i = 0; i < 24; i++) {
+          const angle = (i * Math.PI) / 12;
+          const radius = size * (1.12 + 0.04 * Math.sin(i * 2.3));
+          const x = point.x + Math.cos(angle) * radius;
+          const y = point.y + Math.sin(angle) * radius;
+          if (i === 0) context.moveTo(x, y);
+          else context.lineTo(x, y);
+        }
+        context.closePath();
+        context.fillStyle = withAlpha(color, 0.14);
+        context.fill();
+        const count = Math.min(
+          600,
+          Math.max(24, Math.round((size * size) / 30)),
+        );
+        context.fillStyle = color;
+        for (let i = 0; i < count; i++) {
+          const angle = i * 2.399963229728653;
+          const radius = size * Math.sqrt((i + 0.5) / count);
+          context.fillRect(
+            point.x + Math.cos(angle) * radius,
+            point.y + Math.sin(angle) * radius,
+            1.5,
+            2,
+          );
+        }
+        const group = groupsRef.current.find(
+          (group) => group.id === attributes.collapsedClusterId,
+        );
+        const name = group?.name ?? attributes.label;
+        context.font = "600 12px system-ui, sans-serif";
+        const halfWidth = context.measureText(name).width / 2 + 12;
+        const y = point.y - size * 1.15 - 16;
+        context.beginPath();
+        context.roundRect(point.x - halfWidth, y - 13, halfWidth * 2, 26, 13);
+        context.fillStyle = cachedCssColor(
+          themeColorsRef.current,
+          canvas,
+          "--scry-surfD",
+          "#0b0e15",
+        );
+        context.fill();
+        context.strokeStyle = color;
+        context.lineWidth = 2;
+        context.stroke();
+        context.fillStyle = cachedCssColor(
+          themeColorsRef.current,
+          canvas,
+          "--scry-ink2",
+          "#e6e8ef",
+        );
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(name, point.x, y);
+        context.restore();
+      }
       if (attributes.collapsedClusterId !== undefined || attributes.ghost) {
         return;
       }
@@ -964,7 +1066,13 @@ export default function LibraryGraphView({
       } else {
         pointsByCluster.set(clusterId, [point]);
       }
-    });
+    };
+    graph.forEachNode(drawNode);
+    if (focusCenterRef.current === null) {
+      transitionBlobsRef.current.forEach((attributes, index) =>
+        drawNode(`transition:${index}`, attributes),
+      );
+    }
 
     // Cluster hulls, padded by stroking the hull with a wide round pen.
     context.lineJoin = "round";
@@ -991,6 +1099,14 @@ export default function LibraryGraphView({
         continue;
       }
       const hull = convexHull(points);
+      const opacity =
+        1 -
+        (transitionBlobsRef.current.find(
+          (blob) => blob.collapsedClusterId === group.id,
+        )?.detailOpacity ?? 0);
+      if (label) label.style.opacity = String(opacity);
+      context.save();
+      context.globalAlpha = opacity;
       context.beginPath();
       if (hull.length === 1) {
         // One node, or several on one spot: a zero-length path strokes
@@ -1092,6 +1208,7 @@ export default function LibraryGraphView({
         label.style.visibility = "visible";
         label.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
       }
+      context.restore();
     }
 
     // In a focused view, a tinted band behind each group of recommendations
@@ -1169,35 +1286,55 @@ export default function LibraryGraphView({
     // view shows every title on its rings with its poster.
     const minPosterRadius =
       cameraCenterRef.current != null ? 0 : MIN_POSTER_RADIUS_PX;
-    let drawn = 0;
+    const admitPoster = createGraphPosterAdmission(
+      width,
+      height,
+      0,
+      MAX_POSTERS_PER_FRAME,
+    );
+    const visiblePosters = new Set<string>();
     graph.forEachNode((key, attributes) => {
-      if (drawn >= MAX_POSTERS_PER_FRAME) {
-        return;
-      }
       const url = attributes.posterUrl as string | null | undefined;
       if (!url) {
         return;
       }
       const radius = sizesByNode.get(key) ?? 0;
       const point = viewportByNode.get(key);
-      if (
-        !point ||
-        radius < minPosterRadius ||
-        point.x < -radius ||
-        point.y < -radius ||
-        point.x > width + radius ||
-        point.y > height + radius
-      ) {
+      const threshold = minPosterRadius * 0.7;
+      const fade =
+        minPosterRadius === 0
+          ? 1
+          : Math.max(
+              0,
+              Math.min(1, (radius - threshold) / (minPosterRadius * 0.6)),
+            );
+      const posterOpacity = fade * fade * (3 - 2 * fade);
+      if (radius < threshold || !point || !admitPoster(point, radius)) {
         return;
       }
+      visiblePosters.add(url);
       let image = posterCacheRef.current.get(url);
       if (!image) {
+        // Keep decoded posters across zoom reversals, with a hard bound on
+        // both retained images and outstanding requests.
+        if (posterCacheRef.current.size >= MAX_POSTERS_PER_FRAME) {
+          const evict = [...posterCacheRef.current.keys()].find(
+            (cachedUrl) => !visiblePosters.has(cachedUrl),
+          );
+          if (!evict) return;
+          const old = posterCacheRef.current.get(evict)!;
+          old.onload = null;
+          if (!old.complete) old.src = "";
+          posterCacheRef.current.delete(evict);
+        }
         image = new Image();
         image.decoding = "async";
         image.onload = () => sigmaRef.current?.scheduleRender();
         image.src = url;
         posterCacheRef.current.set(url, image);
       }
+      posterCacheRef.current.delete(url);
+      posterCacheRef.current.set(url, image);
       if (!image.complete || image.naturalWidth === 0) {
         return;
       }
@@ -1209,6 +1346,7 @@ export default function LibraryGraphView({
       if (hoverFocus && !hoverFocus.near.has(key)) {
         context.globalAlpha = HOVER_FADE_ALPHA;
       }
+      context.globalAlpha *= (attributes.detailOpacity ?? 1) * posterOpacity;
       drawGraphPoster(context, image, point, radius);
       context.restore();
       if (
@@ -1227,7 +1365,6 @@ export default function LibraryGraphView({
         );
         context.stroke();
       }
-      drawn += 1;
     });
 
     // Ghosts wear a dashed ring so they read apart from library titles.
@@ -1283,7 +1420,7 @@ export default function LibraryGraphView({
       x: width / 2,
       y: height / 2,
     };
-    if (focusCenter !== null || showOverviewLabels) {
+    if (graph.order > 0) {
       context.save();
       context.textBaseline = "middle";
       context.lineJoin = "round";
@@ -1303,6 +1440,14 @@ export default function LibraryGraphView({
       const keyboardKey = focusedKeyRef.current;
       const order: string[] = [];
       graph.forEachNode((key) => {
+        if (graph.getNodeAttribute(key, "collapsedClusterId") !== undefined)
+          return;
+        if (
+          focusCenter === null &&
+          !showOverviewLabels &&
+          graph.getNodeAttribute(key, "collapsedClusterId") === undefined
+        )
+          return;
         const point = viewportByNode.get(key);
         if (
           point &&
@@ -1396,6 +1541,7 @@ export default function LibraryGraphView({
         "#e6e8ef",
       );
       for (const key of order) {
+        context.globalAlpha = graph.getNodeAttribute(key, "detailOpacity") ?? 1;
         const point = viewportByNode.get(key);
         const raw = graph.getNodeAttribute(key, "label");
         if (!point || !raw) {
@@ -1517,6 +1663,8 @@ export default function LibraryGraphView({
         zoomDuration: 90,
       },
       nodeReducer: (key, attributes, node) => {
+        if (node.collapsedClusterId !== undefined)
+          return { ...attributes, color: "rgba(0, 0, 0, 0)" };
         const focus = hoverFocusRef.current;
         if (!focus) {
           return attributes;
@@ -1525,14 +1673,19 @@ export default function LibraryGraphView({
           ? { ...attributes, zIndex: 1 }
           : {
               ...attributes,
-              color: withAlpha(node.baseColor, HOVER_FADE_ALPHA),
+              color: withAlpha(
+                node.baseColor,
+                HOVER_FADE_ALPHA * (node.detailOpacity ?? 1),
+              ),
               zIndex: 0,
             };
       },
       edgeReducer: (edge, attributes) => {
         const focus = hoverFocusRef.current;
         if (!focus) {
-          return attributes;
+          return focusCenterRef.current === null && graph.order > 500
+            ? { ...attributes, visibility: "hidden" }
+            : attributes;
         }
         const [from, to] = graph.extremities(edge);
         if (from === focus.key || to === focus.key) {
@@ -1653,13 +1806,17 @@ export default function LibraryGraphView({
     graph.forEachNode((key, attributes) => {
       current.set(key, { x: attributes.x, y: attributes.y });
     });
-    const keep = new Set(displayed.nodes.map((node) => node.subjectKey));
-    graph.forEachNode((key) => {
-      if (!keep.has(key)) {
-        graph.dropNode(key);
-      }
-    });
-    graph.clearEdges();
+    // Detach during replacement: Sigma re-indexes the whole remaining graph
+    // synchronously for every nodeDropped event, even with scheduled rendering.
+    // Keep this store's identity for the renderer's event handlers.
+    hoverFocusRef.current = null;
+    sigma.setGraph(
+      new Graph<NodeAttributes, EdgeAttributes>({
+        type: "undirected",
+        multi: false,
+      }),
+    );
+    graph.clear();
     if (frameRef.current !== null) {
       window.cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
@@ -1710,6 +1867,18 @@ export default function LibraryGraphView({
         outerPixels / pixelsPerUnit,
         FOCUS_RING_SPACING_PX / pixelsPerUnit,
       );
+    } else if (largeLayout) {
+      targets = new Map(
+        displayed.nodes.map((node) => [
+          node.subjectKey,
+          largeLayout.positions.get(node.subjectKey)!,
+        ]),
+      );
+      extentRef.current = largeLayout.extent;
+      sigma.setCustomBBox({
+        x: [-largeLayout.extent, largeLayout.extent],
+        y: [-largeLayout.extent, largeLayout.extent],
+      });
     } else {
       layout = createLayout(
         displayed.nodes.map((node) => ({
@@ -1734,7 +1903,7 @@ export default function LibraryGraphView({
       extent += 220;
       extentRef.current = extent;
       sigma.setCustomBBox({ x: [-extent, extent], y: [-extent, extent] });
-      positionsRef.current = targets;
+      for (const [key, point] of targets) positionsRef.current.set(key, point);
     }
     // A node new to the drawing starts where it goes, or in a focused view
     // at the focused node, so its neighbours fan out from it.
@@ -1747,15 +1916,28 @@ export default function LibraryGraphView({
       from.set(key, current.get(key) ?? fanFrom ?? target);
     }
 
+    const zoomOrigin = sigma.graphToViewport({ x: 0, y: 0 });
+    const zoomAlong = sigma.graphToViewport({ x: 34, y: 0 });
+    const zoomSpacing = Math.hypot(
+      zoomAlong.x - zoomOrigin.x,
+      zoomAlong.y - zoomOrigin.y,
+    );
+    const initialDetailOpacity =
+      largeLayout && !focusing ? graphDetailOpacity(zoomSpacing) : 1;
     for (const node of displayed.nodes) {
       const position = from.get(node.subjectKey) ?? { x: 0, y: 0 };
       const color = clusterColor(node.clusterId, clusterOrder);
       let attributes: NodeAttributes;
       if (node.collapsedClusterId !== undefined) {
-        const size = Math.min(36, 10 + Math.sqrt(node.memberCount ?? 1));
+        const size = largeLayout
+          ? Math.max(140, 12 * Math.sqrt(node.memberCount ?? 1))
+          : Math.min(36, 10 + Math.sqrt(node.memberCount ?? 1));
         attributes = {
           ...position,
-          size,
+          size:
+            largeLayout && !focusing
+              ? (size * (zoomSpacing / 34)) / sigma.scaleSize(1)
+              : size,
           color,
           baseSize: size,
           baseColor: color,
@@ -1804,6 +1986,14 @@ export default function LibraryGraphView({
           clusterId: node.clusterId,
         };
       }
+      if (attributes.collapsedClusterId === undefined) {
+        attributes.detailOpacity = initialDetailOpacity;
+        if (initialDetailOpacity < 1)
+          attributes.color = withAlpha(
+            attributes.baseColor,
+            initialDetailOpacity,
+          );
+      }
       if (graph.hasNode(node.subjectKey)) {
         graph.replaceNodeAttributes(node.subjectKey, attributes);
       } else {
@@ -1811,6 +2001,16 @@ export default function LibraryGraphView({
       }
     }
     for (const edge of displayed.edges) {
+      // At library scale, show connections between neighbourhoods. Title
+      // connections are drawn in the focused view, not as a full-library mesh.
+      if (
+        largeLayout &&
+        !focusing &&
+        (graph.getNodeAttribute(edge.from, "collapsedClusterId") ===
+          undefined ||
+          graph.getNodeAttribute(edge.to, "collapsedClusterId") === undefined)
+      )
+        continue;
       if (graph.hasEdge(edge.from, edge.to)) {
         continue;
       }
@@ -1836,6 +2036,7 @@ export default function LibraryGraphView({
       graph.addUndirectedEdge(edge.from, edge.to, attributes);
     }
 
+    sigma.setGraph(graph);
     layoutRef.current = layout;
     const container = sigma.getContainer();
     const tick = () => {
@@ -1870,7 +2071,8 @@ export default function LibraryGraphView({
       }
       stepLayout(running, LAYOUT_STEPS_PER_FRAME);
       const positions = layoutPositions(running);
-      positionsRef.current = positions;
+      for (const [key, point] of positions)
+        positionsRef.current.set(key, point);
       graph.updateEachNodeAttributes((key, attributes) => {
         const point = positions.get(key);
         if (point) {
@@ -1936,6 +2138,10 @@ export default function LibraryGraphView({
     }
     applySelection();
     sigma.refresh();
+    if (largeLayout && focusCenterKey === null && fitWhenSettledRef.current) {
+      fitWhenSettledRef.current = false;
+      sigma.getCamera().setState(restCamera(sigma));
+    }
     resumeLayoutRef.current();
   }, [
     allClusterIds,
@@ -1947,11 +2153,130 @@ export default function LibraryGraphView({
     focusFrameVersion,
     focusRings,
     join,
+    largeLayout,
     metric,
     nodeLabel,
     titlesById,
     traversal,
   ]);
+
+  // Only nearby neighbourhoods unfold. Camera events are coalesced so a
+  // trackpad gesture makes at most one detail decision per animation frame.
+  React.useEffect(() => {
+    const sigma = sigmaRef.current;
+    if (
+      !sigma ||
+      !join ||
+      join.graph.nodes.length <= LIBRARY_GRAPH_COLLAPSE_THRESHOLD ||
+      focusCenterKey !== null
+    )
+      return;
+    let frame: number | null = null;
+    let lastProjection = "";
+    const update = () => {
+      frame = null;
+      if (fitWhenSettledRef.current) return;
+      if (!largeLayout) return;
+      const regions = largeLayout.regions.map((region) => {
+        const corners = [
+          sigma.graphToViewport({ x: region.left, y: region.top }),
+          sigma.graphToViewport({ x: region.right, y: region.top }),
+          sigma.graphToViewport({ x: region.left, y: region.bottom }),
+          sigma.graphToViewport({ x: region.right, y: region.bottom }),
+        ];
+        return {
+          id: region.id,
+          left: Math.min(...corners.map((p) => p.x)),
+          right: Math.max(...corners.map((p) => p.x)),
+          top: Math.min(...corners.map((p) => p.y)),
+          bottom: Math.max(...corners.map((p) => p.y)),
+        };
+      });
+      const origin = sigma.graphToViewport({ x: 0, y: 0 });
+      const along = sigma.graphToViewport({ x: 34, y: 0 });
+      const spacing = Math.hypot(along.x - origin.x, along.y - origin.y);
+      const projection = `${origin.x},${origin.y},${along.x},${along.y}`;
+      if (projection === lastProjection) return;
+      lastProjection = projection;
+      // Compress local offsets as magnification grows. Always derive from
+      // the stable layout so zooming back out restores the original spacing.
+      const compact = graphDetailCompaction(spacing);
+      const detailOpacity = graphDetailOpacity(spacing);
+      if (tweenFrameRef.current !== null) {
+        cancelAnimationFrame(tweenFrameRef.current);
+        tweenFrameRef.current = null;
+      }
+      const graph = graphRef.current;
+      if (graph) {
+        const expanded = new Set<number>();
+        graph.forEachNode((_key, attributes) => {
+          if (attributes.collapsedClusterId === undefined)
+            expanded.add(attributes.clusterId);
+        });
+        transitionBlobsRef.current = groupsRef.current.flatMap((group) => {
+          const center = largeLayout.positions.get(`cluster:${group.id}`);
+          if (!center || !expanded.has(group.id) || detailOpacity >= 1)
+            return [];
+          const baseSize = Math.max(140, 12 * Math.sqrt(group.count));
+          return [
+            {
+              ...center,
+              label: group.name,
+              clusterId: group.id,
+              collapsedClusterId: group.id,
+              baseSize,
+              size: (baseSize * (spacing / 34)) / sigma.scaleSize(1),
+              color: group.color,
+              baseColor: group.color,
+              detailOpacity: 1 - detailOpacity,
+            },
+          ];
+        });
+        graph.updateEachNodeAttributes(
+          (key, attributes) => {
+            const sizeScale = sigma.scaleSize(1);
+            if (attributes.collapsedClusterId !== undefined)
+              return {
+                ...attributes,
+                size: (attributes.baseSize * (spacing / 34)) / sizeScale,
+              };
+            const base = largeLayout.positions.get(key);
+            const center =
+              largeLayout.positions.get(`cluster:${attributes.clusterId}`) ??
+              largeLayout.positions.get(`cluster:${UNPLACED_CLUSTER_ID}`);
+            if (!base || !center) return attributes;
+            return {
+              ...attributes,
+              detailOpacity,
+              color: withAlpha(attributes.baseColor, detailOpacity),
+              x: center.x + (base.x - center.x) * compact,
+              y: center.y + (base.y - center.y) * compact,
+              size:
+                Math.min(28, Math.max(12, attributes.baseSize * 1.5)) /
+                sizeScale,
+            };
+          },
+          { attributes: ["x", "y", "size", "color", "detailOpacity"] },
+        );
+      }
+      const { width, height } = sigma.getDimensions();
+      setExpandedClusterIds((previous) =>
+        graphDetailClusters(previous, regions, spacing, width, height),
+      );
+    };
+    const schedule = () => {
+      if (frame === null) frame = window.requestAnimationFrame(update);
+    };
+    const camera = sigma.getCamera();
+    camera.on("updated", schedule);
+    sigma.on("afterRender", schedule);
+    schedule();
+    return () => {
+      camera.off("updated", schedule);
+      sigma.off("afterRender", schedule);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [focusCenterKey, join, largeLayout, displayed]);
 
   const keyboardNodesRef = React.useRef(keyboardNodes);
   React.useEffect(() => {
@@ -2174,6 +2499,20 @@ export default function LibraryGraphView({
       const attributes = graph.getNodeAttributes(key);
       if (attributes.collapsedClusterId !== undefined) {
         const clusterId = attributes.collapsedClusterId;
+        const sigma = sigmaRef.current;
+        if (largeLayout && sigma) {
+          const point = { x: attributes.x, y: attributes.y };
+          const origin = sigma.graphToViewport(point);
+          const step = sigma.graphToViewport({ x: point.x + 34, y: point.y });
+          const spacing = Math.hypot(step.x - origin.x, step.y - origin.y);
+          const center = sigma.graphToFramedGraph(point);
+          sigma.getCamera().setState({
+            x: center.x,
+            y: center.y,
+            ratio: (sigma.getCamera().getState().ratio * spacing) / 50,
+          });
+          return;
+        }
         setExpandedClusterIds((current) =>
           toggleClusterExpanded(current, clusterId),
         );
@@ -2216,7 +2555,13 @@ export default function LibraryGraphView({
         void expandNode(node);
       }
     },
-    [expandNode, exploredNodesByKey, flushPendingSelect, traversal.expansions],
+    [
+      expandNode,
+      exploredNodesByKey,
+      flushPendingSelect,
+      traversal.expansions,
+      largeLayout,
+    ],
   );
   React.useEffect(() => {
     activateNodeRef.current = activateNode;
@@ -2361,19 +2706,15 @@ export default function LibraryGraphView({
   // Titles still paging, or the graph still loading for them, show as
   // loading; a finished listing with nothing to draw shows as empty.
   const graphStatus: "loading" | "empty" | "notBuilt" | "failed" | "ready" =
-    !titlesComplete
-      ? "loading"
-      : !hasTitles
-        ? "empty"
-        : loadStatus === "pending"
+    loadStatus === "failed"
+      ? "failed"
+      : loadStatus === "notBuilt"
+        ? "notBuilt"
+        : loadStatus === "pending" || !join || paintedJoin !== join
           ? "loading"
-          : loadStatus === "notBuilt"
-            ? "notBuilt"
-            : loadStatus === "failed"
-              ? "failed"
-              : visibleNodeCount === 0
-                ? "empty"
-                : "ready";
+          : visibleNodeCount === 0
+            ? "empty"
+            : "ready";
 
   const crumbs = React.useMemo(
     () =>
@@ -2509,20 +2850,33 @@ export default function LibraryGraphView({
             className="absolute left-3 top-3 z-10 flex max-h-[calc(100%-1.5rem)] max-w-[calc(100%-1.5rem)] flex-col gap-1.5 overflow-y-auto overscroll-contain rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-card2)]/90 p-2 text-[12px] shadow-lg backdrop-blur-sm"
           >
             {neighborhoodLegend.map((band) => (
-              <li
-                key={band.key}
-                className="flex min-w-0 items-center gap-2 rounded-[6px] px-2 py-1 text-[var(--scry-ink2)]"
-                style={{ backgroundColor: withAlpha(band.color, 0.14) }}
-              >
-                <span
-                  aria-hidden="true"
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: band.color }}
-                />
-                <span className="min-w-0 break-words">{band.name}</span>
-                <span className="ml-auto shrink-0 pl-2 tabular-nums text-[var(--scry-muted2)]">
-                  {band.count}
-                </span>
+              <li key={band.key}>
+                <button
+                  type="button"
+                  disabled={focusCenterKey !== null}
+                  aria-pressed={
+                    focusCenterKey === null
+                      ? selectedNeighborhoods.has(Number(band.key))
+                      : undefined
+                  }
+                  onClick={() =>
+                    setSelectedNeighborhoods((current) =>
+                      toggleClusterExpanded(current, Number(band.key)),
+                    )
+                  }
+                  className="flex w-full min-w-0 items-center gap-2 rounded-[6px] border border-transparent px-2 py-1 text-left text-[var(--scry-ink2)] aria-pressed:border-[var(--scry-accent)] hover:bg-[var(--scry-hover)]"
+                  style={{ backgroundColor: withAlpha(band.color, 0.14) }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: band.color }}
+                  />
+                  <span className="min-w-0 break-words">{band.name}</span>
+                  <span className="ml-auto shrink-0 pl-2 tabular-nums text-[var(--scry-muted2)]">
+                    {band.count}
+                  </span>
+                </button>
               </li>
             ))}
           </ul>
@@ -2583,12 +2937,51 @@ export default function LibraryGraphView({
             ))}
           </div>
         ) : null}
-        {graphStatus === "loading" ? (
+        {graphStatus === "loading" || previewing ? (
           <div
             role="status"
-            className="absolute inset-0 flex items-center justify-center p-6 text-center text-[13px] text-[var(--scry-muted2)]"
+            className={
+              previewing && paintedJoin === join
+                ? "pointer-events-none absolute right-4 top-4 w-48 rounded-lg bg-[var(--scry-surfD)] p-3 text-[13px] text-[var(--scry-muted2)]"
+                : "pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-[13px] text-[var(--scry-muted2)]"
+            }
           >
             {t("label.loading")}
+            <style>{`@keyframes library-graph-loading { from { transform: translateX(-100%); } to { transform: translateX(340%); } }`}</style>
+            <div
+              role="progressbar"
+              aria-label={t("label.loading")}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={
+                loadStatus === "pending"
+                  ? undefined
+                  : join && !previewing
+                    ? 95
+                    : 60 +
+                      30 *
+                        Math.min(
+                          1,
+                          currentTitles.length / Math.max(1, totalTitles),
+                        )
+              }
+              className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-[var(--scry-border2)]"
+            >
+              <div
+                className="h-full rounded-full bg-[var(--scry-accent)] transition-[width] duration-300"
+                style={
+                  loadStatus === "pending"
+                    ? {
+                        width: "30%",
+                        animation:
+                          "library-graph-loading 1.2s ease-in-out infinite",
+                      }
+                    : {
+                        width: `${join && !previewing ? 95 : 60 + 30 * Math.min(1, currentTitles.length / Math.max(1, totalTitles))}%`,
+                      }
+                }
+              />
+            </div>
           </div>
         ) : graphStatus === "empty" ||
           graphStatus === "notBuilt" ||

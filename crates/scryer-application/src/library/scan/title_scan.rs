@@ -1154,6 +1154,7 @@ impl LibraryScanMediaWorkReservation {
 pub(super) struct LibraryScanMediaAnalysisPool {
     app: AppUseCase,
     folder_roots: std::sync::Arc<crate::folder_ownership::ScanFolderRoots>,
+    ownership_context: Option<std::sync::Arc<crate::folder_ownership::ScanOwnershipContext>>,
     actor: User,
     session_id: Option<String>,
     coordinator: Option<LibraryScanCoordinator>,
@@ -1314,6 +1315,7 @@ impl LibraryScanMediaAnalysisPool {
         Ok(Self {
             app: app.clone(),
             folder_roots: crate::folder_ownership::ScanFolderRoots::load(app).await?,
+            ownership_context: crate::folder_ownership::ScanOwnershipContext::current(),
             actor: actor.clone(),
             session_id: policy.session_id,
             coordinator: policy.coordinator,
@@ -1639,6 +1641,7 @@ impl LibraryScanMediaAnalysisPool {
         let hydration_source = self.hydration_source;
         let file_analysis_concurrency = self.analysis_profile.file_analysis_concurrency_per_title;
         let folder_roots = self.folder_roots.clone();
+        let ownership_context = self.ownership_context.clone();
         self.work_set.spawn(async move {
             let walk = hydrate_enumerate_and_walk_title_work(
                 &app,
@@ -1656,7 +1659,10 @@ impl LibraryScanMediaAnalysisPool {
                 },
             );
             let (discovered_file_count, result) = crate::folder_ownership::SCAN_FOLDER_ROOTS
-                .scope(folder_roots, walk)
+                .scope(
+                    folder_roots,
+                    crate::folder_ownership::with_scan_ownership(ownership_context, walk),
+                )
                 .await;
             LibraryScanTitleWalkTaskOutput {
                 title_id,

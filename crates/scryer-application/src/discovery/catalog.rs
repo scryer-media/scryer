@@ -275,7 +275,7 @@ pub(super) fn catalog_public_top_group(
             kind: CatalogDiscoveryGroupKind::PublicTop,
             surface: CatalogDiscoverySurface::Public,
             label_value,
-            label_key: None,
+            label_key: Some(section.section_id.clone()),
             total_count: Some(section.total_count),
         },
         section.items,

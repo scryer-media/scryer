@@ -346,6 +346,20 @@ export type LibraryGraphJoin = {
   titleBySubjectKey: Map<string, TitleRecord>;
 };
 
+/** Neighborhoods need membership only, not catalog metadata or title edges. */
+export function libraryGraphOverviewPreview(
+  result: LibraryGraphResult,
+): LibraryGraphJoin {
+  return {
+    graph: {
+      nodes: result.nodes.map((node) => ({ ...node, ghost: false })),
+      edges: [],
+      clusters: result.clusters,
+    },
+    titleBySubjectKey: new Map(),
+  };
+}
+
 /**
  * The graph joined to the catalog's current titles. Nodes whose target is not
  * among the titles (filtered out by facet chips, library filters or search)
@@ -380,16 +394,153 @@ export function displayedLibraryGraph(
   expandedClusterIds: ReadonlySet<number>,
   threshold: number = LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
   owned: GraphState = graph,
+  selectedClusters: ReadonlySet<number> = new Set(),
 ): GraphState {
+  const named = libraryGraphNamedClusterIds(owned.clusters);
+  const large = owned.nodes.length > threshold;
+  // Unnamed communities are not meaningful neighbourhoods. Keep their
+  // titles reachable through the existing unplaced group, without inventing
+  // thousands of "Around …" neighbourhoods.
+  const grouped = large
+    ? {
+        ...graph,
+        nodes: graph.nodes.map((node) =>
+          named.has(node.clusterId)
+            ? node
+            : { ...node, clusterId: UNPLACED_CLUSTER_ID },
+        ),
+        clusters: graph.clusters.filter((cluster) => named.has(cluster.id)),
+      }
+    : graph;
+  const filtered =
+    selectedClusters.size === 0
+      ? grouped
+      : pruneToVisible(
+          grouped,
+          new Set(
+            grouped.nodes
+              .filter((node) => selectedClusters.has(node.clusterId))
+              .map((node) => node.subjectKey),
+          ),
+        );
   return collapseClusters(
-    graph,
-    clustersToCollapse(owned, threshold, expandedClusterIds),
+    filtered,
+    large ? clustersToCollapse(filtered, -1, expandedClusterIds) : new Set(),
   );
 }
 
 /** Whether a node stands in for a collapsed cluster. */
 export function isCollapsedClusterNode(node: GraphNode): boolean {
   return node.collapsedClusterId !== undefined;
+}
+
+/** Stable nested positions at library scale; zoom never restarts a force
+ * simulation or moves the neighbourhood being inspected. */
+export function largeLibraryGraphLayout(graph: GraphState) {
+  const named = libraryGraphNamedClusterIds(graph.clusters);
+  const groups = new Map<number, GraphNode[]>();
+  for (const node of graph.nodes) {
+    const id = named.has(node.clusterId) ? node.clusterId : UNPLACED_CLUSTER_ID;
+    const members = groups.get(id) ?? [];
+    members.push(node);
+    groups.set(id, members);
+  }
+  const ids = [...groups.keys()].sort((a, b) => a - b);
+  const columns = Math.max(1, Math.ceil(Math.sqrt(ids.length)));
+  const cell =
+    48 *
+      Math.sqrt(
+        Math.max(1, ...[...groups.values()].map((nodes) => nodes.length)),
+      ) +
+    160;
+  const positions = new Map<string, { x: number; y: number }>();
+  const regions: GraphDetailRegion[] = [];
+  ids.forEach((id, index) => {
+    const x = ((index % columns) - (columns - 1) / 2) * cell;
+    const y =
+      (Math.floor(index / columns) -
+        (Math.ceil(ids.length / columns) - 1) / 2) *
+      cell;
+    const members = groups
+      .get(id)!
+      .slice()
+      .sort((a, b) => a.subjectKey.localeCompare(b.subjectKey));
+    positions.set(`cluster:${id}`, { x, y });
+    const radius = 24 * Math.sqrt(members.length);
+    regions.push({
+      id,
+      left: x - radius,
+      right: x + radius,
+      top: y - radius,
+      bottom: y + radius,
+    });
+    members.forEach((node, rank) => {
+      const angle = rank * Math.PI * (3 - Math.sqrt(5));
+      const distance = 24 * Math.sqrt(rank + 0.5);
+      positions.set(node.subjectKey, {
+        x: x + Math.cos(angle) * distance,
+        y: y + Math.sin(angle) * distance,
+      });
+    });
+  });
+  const extent = Math.max(
+    cell,
+    ...regions.flatMap((region) => [
+      Math.abs(region.left),
+      Math.abs(region.right),
+      Math.abs(region.top),
+      Math.abs(region.bottom),
+    ]),
+  );
+  return { positions, regions, extent };
+}
+
+/** Keep a readable local spacing while zooming, with a floor for separation. */
+export function graphDetailCompaction(spacingPx: number): number {
+  if (!Number.isFinite(spacingPx) || spacingPx <= 60) return 1;
+  return Math.max(0.12, 60 / spacingPx);
+}
+
+/** Smooth overlap between neighborhood and title rendering in both directions. */
+export function graphDetailOpacity(spacingPx: number): number {
+  if (!Number.isFinite(spacingPx)) return 0;
+  const t = Math.max(0, Math.min(1, (spacingPx - 40) / 30));
+  return t * t * (3 - 2 * t);
+}
+
+export type GraphDetailRegion = {
+  id: number;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+/** Reveal nearby neighbourhoods when titles have room; use separate thresholds
+ * for entering and leaving detail so trackpad motion cannot flicker the view. */
+export function graphDetailClusters(
+  previous: ReadonlySet<number>,
+  regions: readonly GraphDetailRegion[],
+  spacingPx: number,
+  width: number,
+  height: number,
+): ReadonlySet<number> {
+  if (width <= 0 || height <= 0 || !Number.isFinite(spacingPx)) return previous;
+  const next = new Set<number>();
+  for (const region of regions) {
+    const margin = previous.has(region.id) ? 160 : 80;
+    const nearby =
+      region.right >= -margin &&
+      region.left <= width + margin &&
+      region.bottom >= -margin &&
+      region.top <= height + margin;
+    if (nearby && spacingPx >= (previous.has(region.id) ? 24 : 32))
+      next.add(region.id);
+  }
+  return next.size === previous.size &&
+    [...next].every((id) => previous.has(id))
+    ? previous
+    : next;
 }
 
 function clusterLabelKeyCandidates(labelKey: string): string[] {

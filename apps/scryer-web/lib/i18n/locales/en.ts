@@ -23,6 +23,18 @@ const en: LocaleDictionary = {
     "A selected conflict no longer exists. Refresh the page.",
   "error.reason.LOCATION_CONFLICT_UNSUPPORTED":
     "This conflict cannot be resolved with this workflow.",
+  "error.reason.LOCATION_CONFLICT_PATH_MISSING":
+    "A conflict file or folder no longer exists. Restore access or scan the library again.",
+  "error.reason.LOCATION_CONFLICT_PATH_NOT_DIRECTORY":
+    "A conflict folder path points to a file instead of a directory.",
+  "error.reason.LOCATION_CONFLICT_PATH_PERMISSION_DENIED":
+    "Scryer does not have permission to read a conflict file or folder.",
+  "error.reason.LOCATION_CONFLICT_PATH_IO_FAILED":
+    "A conflict file or folder could not be read. Check storage access and refresh the preview.",
+  "error.reason.LOCATION_CONFLICT_PLAN_FAILED":
+    "The conflict preview could not be prepared. Refresh the preview and check the server logs if it still fails.",
+  "pendingImports.conflict.actionableCount":
+    "{{actionable}} ready to resolve; {{failed}} cannot be resolved. Only ready conflicts will be applied.",
   "error.reason.LOCATION_CONFLICT_FOLDER_UNSAFE":
     "A folder is outside the permitted roots or cannot be safely accessed.",
   "error.reason.LOCATION_CONFLICT_OWNERSHIP_CHANGED":
@@ -6312,6 +6324,7 @@ const en: LocaleDictionary = {
   "title.hideTitleList": "Hide list",
   "title.contextForYouTitle": "Discover",
   "title.contextForYouTop": "Top",
+  "title.contextPopular": "Popular",
   "title.contextForYouTopMoviesThisWeek": "Top Movies This Week",
   "title.contextForYouTopSeriesThisWeek": "Top Series This Week",
   "title.contextForYouTopAnimeThisWeek": "Top Anime This Week",
@@ -6375,7 +6388,7 @@ const en: LocaleDictionary = {
   "libraryGraph.resetView": "Fit graph",
   "libraryGraph.clustersLabel": "Clusters",
   "libraryGraph.clusterAroundTitle": "Around {{title}}",
-  "libraryGraph.unplaced": "Unplaced titles",
+  "libraryGraph.unplaced": "Everything else",
   "libraryGraph.collapsedCluster": "{{name}} ({{count}} titles)",
   "libraryGraph.collapseCluster": "Collapse {{name}}",
   "libraryGraph.linkedBy": "Linked by",
@@ -6610,6 +6623,13 @@ const en: LocaleDictionary = {
   "pendingImports.ignoredSection": "Ignored Imports",
   "pendingImports.ignore": "Ignore",
   "pendingImports.ignoreConfirmTitle": "Ignore import?",
+  "pendingImports.selectItem": "Select {{name}}",
+  "pendingImports.selectPage": "Select imports on this page",
+  "pendingImports.bulkIgnoreConfirmTitle": "Ignore selected imports?",
+  "pendingImports.bulkIgnoreConfirmDescription":
+    "Move {{count}} selected imports to Ignored Imports?",
+  "pendingImports.bulkIgnoreResult":
+    "Ignored {{ignored}} imports; {{failed}} failed.",
   "pendingImports.ignoreSuccess": "Ignored import for {{name}}.",
   "pendingImports.ignoreFailed": "Failed to ignore pending import.",
   "pendingImports.resolveSuccess": "Resolved pending import for {{name}}.",

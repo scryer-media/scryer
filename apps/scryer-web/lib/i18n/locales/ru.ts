@@ -1646,6 +1646,7 @@ const ru: LocaleDictionary = {
   "title.contextForYouBody":
     "Откройте рабочую область материала или изучите рекомендации, подобранные на основе вашей коллекции.",
   "title.contextForYouTop": "Лучшее",
+  "title.contextPopular": "Популярное",
   "title.contextForYouTopMoviesThisWeek": "Лучшие фильмы недели",
   "title.contextForYouTopSeriesThisWeek": "Лучшие сериалы недели",
   "title.contextForYouTopAnimeThisWeek": "Лучшее аниме недели",
@@ -1978,6 +1979,13 @@ const ru: LocaleDictionary = {
     "Для этой категории нет игнорируемых импортов.",
   "pendingImports.ignore": "Игнорировать",
   "pendingImports.ignoreConfirmTitle": "Игнорировать импорт?",
+  "pendingImports.selectItem": "Выбрать {{name}}",
+  "pendingImports.selectPage": "Выбрать импорты на этой странице",
+  "pendingImports.bulkIgnoreConfirmTitle": "Игнорировать выбранные импорты?",
+  "pendingImports.bulkIgnoreConfirmDescription":
+    "Переместить выбранные импорты ({{count}}) в игнорируемые?",
+  "pendingImports.bulkIgnoreResult":
+    "Проигнорировано: {{ignored}}; ошибок: {{failed}}.",
   "pendingImports.ignoreSuccess": "Импорт для {{name}} был проигнорирован.",
   "pendingImports.ignoreFailed": "Не удалось проигнорировать ожидающий импорт.",
   "pendingImports.resolving": "Обработка…",
@@ -13073,6 +13081,18 @@ const ru: LocaleDictionary = {
     "Выбранный конфликт больше не существует. Обновите страницу.",
   "error.reason.LOCATION_CONFLICT_UNSUPPORTED":
     "Этот конфликт нельзя разрешить таким способом.",
+  "error.reason.LOCATION_CONFLICT_PATH_MISSING":
+    "Файл или папка конфликта больше не существует. Восстановите доступ или повторите сканирование библиотеки.",
+  "error.reason.LOCATION_CONFLICT_PATH_NOT_DIRECTORY":
+    "Путь папки конфликта указывает на файл, а не на каталог.",
+  "error.reason.LOCATION_CONFLICT_PATH_PERMISSION_DENIED":
+    "У Scryer нет разрешения на чтение файла или папки конфликта.",
+  "error.reason.LOCATION_CONFLICT_PATH_IO_FAILED":
+    "Не удалось прочитать файл или папку конфликта. Проверьте доступ к хранилищу и обновите предпросмотр.",
+  "error.reason.LOCATION_CONFLICT_PLAN_FAILED":
+    "Не удалось подготовить предпросмотр конфликта. Обновите предпросмотр; если ошибка повторится, проверьте журнал сервера.",
+  "pendingImports.conflict.actionableCount":
+    "Готовы к разрешению: {{actionable}}; не могут быть разрешены: {{failed}}. Будут применены только готовые конфликты.",
   "error.reason.LOCATION_CONFLICT_FOLDER_UNSAFE":
     "Папка находится вне разрешённых корневых папок или к ней нельзя безопасно обратиться.",
   "error.reason.LOCATION_CONFLICT_OWNERSHIP_CHANGED":

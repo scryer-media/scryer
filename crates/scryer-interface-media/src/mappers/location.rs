@@ -204,6 +204,8 @@ pub fn from_pending_import_conflict_preview(
     PendingImportConflictPreviewPayload {
         plan_fingerprint: preview.plan_fingerprint,
         total_count: preview.total_count,
+        actionable_count: preview.actionable_count,
+        failed_count: preview.failed_count,
         sampled: preview.sampled,
         rows: preview
             .rows
