@@ -13,6 +13,7 @@ These changes are relative to v0.21.23.
 
 ## Prowlarr compatibility
 
+- Fix connection tests for saved Prowlarr-managed indexers without changing their synchronized URLs.
 - Prowlarr 2.x and 3.x use the same supported management API for connection tests, indexer sync, app profiles, and child capabilities. Existing connection settings continue to work.
 - A newer major version is allowed through the known API generation with a warning that it is newer than the tested releases, rather than being rejected solely for its major version.
 - Versions older than 2.0 are refused with a translated unsupported-version explanation.
