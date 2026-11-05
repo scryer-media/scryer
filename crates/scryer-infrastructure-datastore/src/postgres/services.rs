@@ -1281,9 +1281,13 @@ mod tests {
             })
             .collect();
         // 0278 replaces folded-term uniqueness with native spelling/language
-        // uniqueness. Every other baseline parity index is still required.
+        // uniqueness.
         assert!(indexes.remove("idx_title_search_terms_title_kind_normalized"));
         assert!(indexes.insert("idx_title_search_terms_title_kind_language".to_string()));
+        // 0327 replaces the incomplete title index with both complete orders.
+        assert!(indexes.remove("idx_titles_catalog_sort_key"));
+        assert!(indexes.insert("idx_titles_catalog_order_asc".to_string()));
+        assert!(indexes.insert("idx_titles_catalog_order_desc".to_string()));
         indexes
     }
 

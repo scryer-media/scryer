@@ -2630,6 +2630,9 @@ pub trait TitleRepository: Send + Sync {
     }
 }
 
+#[cfg(test)]
+mod catalog_order_tests;
+
 fn sort_titles_for_catalog(titles: &mut [Title], sort: &TitleCatalogSort) {
     titles.sort_by(|left, right| match sort.key {
         TitleCatalogSortKey::Year => {
@@ -2658,18 +2661,13 @@ fn sort_titles_for_catalog(titles: &mut [Title], sort: &TitleCatalogSort) {
         }
         _ => {
             let ordering = match sort.key {
-                TitleCatalogSortKey::Title => compare_titles_by_catalog_title(left, right),
-                TitleCatalogSortKey::Library => left
-                    .library_id
-                    .cmp(&right.library_id)
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
-                TitleCatalogSortKey::Monitored => left
-                    .monitored
-                    .cmp(&right.monitored)
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
+                TitleCatalogSortKey::Title => {
+                    return compare_titles_by_catalog_title_direction(left, right, sort.direction);
+                }
+                TitleCatalogSortKey::Library => left.library_id.cmp(&right.library_id),
+                TitleCatalogSortKey::Monitored => left.monitored.cmp(&right.monitored),
                 TitleCatalogSortKey::Status => title_catalog_status_sort_value(left)
-                    .cmp(&title_catalog_status_sort_value(right))
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
+                    .cmp(&title_catalog_status_sort_value(right)),
                 TitleCatalogSortKey::Quality
                 | TitleCatalogSortKey::Episodes
                 | TitleCatalogSortKey::Size
@@ -2690,22 +2688,18 @@ fn sort_titles_for_catalog(titles: &mut [Title], sort: &TitleCatalogSort) {
                 | TitleCatalogSortKey::RatingMyanimelist
                 | TitleCatalogSortKey::RatingAnilist
                 | TitleCatalogSortKey::RatingAnidb
-                | TitleCatalogSortKey::RatingMdblist => {
-                    compare_titles_by_catalog_title(left, right)
-                }
-                TitleCatalogSortKey::Added => left
-                    .created_at
-                    .cmp(&right.created_at)
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
+                | TitleCatalogSortKey::RatingMdblist => Ordering::Equal,
+                TitleCatalogSortKey::Added => left.created_at.cmp(&right.created_at),
                 TitleCatalogSortKey::Year
                 | TitleCatalogSortKey::Runtime
                 | TitleCatalogSortKey::Popularity
                 | TitleCatalogSortKey::Profile => Ordering::Equal,
             };
-            match sort.direction {
+            let ordering = match sort.direction {
                 SortDirection::Asc => ordering,
                 SortDirection::Desc => ordering.reverse(),
-            }
+            };
+            ordering.then_with(|| compare_titles_by_catalog_title(left, right))
         }
     });
 }
@@ -2746,11 +2740,27 @@ fn compare_nullable_partial_null_last(
 }
 
 fn compare_titles_by_catalog_title(left: &Title, right: &Title) -> Ordering {
-    title_catalog_sort_value(left)
-        .cmp(&title_catalog_sort_value(right))
-        .then_with(|| title_catalog_name_tie_value(left).cmp(&title_catalog_name_tie_value(right)))
-        .then_with(|| left.year.cmp(&right.year))
-        .then_with(|| left.id.cmp(&right.id))
+    compare_titles_by_catalog_title_direction(left, right, SortDirection::Asc)
+}
+
+fn compare_titles_by_catalog_title_direction(
+    left: &Title,
+    right: &Title,
+    direction: SortDirection,
+) -> Ordering {
+    let directed = |ordering: Ordering| match direction {
+        SortDirection::Asc => ordering,
+        SortDirection::Desc => ordering.reverse(),
+    };
+    directed(
+        title_catalog_sort_value(left)
+            .cmp(&title_catalog_sort_value(right))
+            .then_with(|| {
+                title_catalog_name_tie_value(left).cmp(&title_catalog_name_tie_value(right))
+            }),
+    )
+    .then_with(|| compare_nullable_ord_null_last(left.year, right.year, direction))
+    .then_with(|| directed(left.id.cmp(&right.id)))
 }
 
 fn title_catalog_sort_value(title: &Title) -> String {

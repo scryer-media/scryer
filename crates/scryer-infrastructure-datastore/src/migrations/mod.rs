@@ -933,6 +933,9 @@ async fn run_rust_hook(
         "migrate_title_catalog_sort_keys" => {
             title_catalog_sort_keys::migrate_title_catalog_sort_keys_sqlite(tx).await
         }
+        "migrate_title_catalog_order_keys" => {
+            title_catalog_sort_keys::migrate_title_catalog_order_keys_sqlite(tx).await
+        }
         "migrate_title_folder_ownership" => {
             title_folder_ownership::migrate_title_folder_ownership_sqlite(tx).await
         }

@@ -17,13 +17,13 @@ use scryer_application::{
     },
 };
 use scryer_domain::{
-    ExternalId, MediaFacet, MonitorSelection, Title, TitleTagDefinition, title_catalog_sort_key,
+    ExternalId, MediaFacet, MonitorSelection, Title, TitleTagDefinition,
+    title_catalog_name_tie_key, title_catalog_sort_key,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use sqlx::{QueryBuilder, Row, Sqlite, postgres::PgRow};
 use std::collections::{BTreeMap, BTreeSet};
-use unicode_normalization::UnicodeNormalization;
 
 use crate::media::canonical_tags::{
     attach_metadata_tags_to_titles, load_title_metadata_ratings, load_title_metadata_tags,
@@ -48,14 +48,14 @@ use crate::title_images::normalized_base_path;
 
 const TITLE_INSERT_SQL: &str = "INSERT INTO titles (
     id, library_id, name, facet, monitored, tags, external_ids, root_folder_id, created_by, created_at,
-    year, overview, poster_url, background_url, sort_title, catalog_sort_key, slug, imdb_id,
+    year, overview, poster_url, background_url, sort_title, catalog_sort_key, catalog_name_tie_key, slug, imdb_id,
     runtime_minutes, popularity, content_status, language, first_aired, network, studio,
     country, aliases, metadata_language, metadata_fetched_at, min_availability,
     digital_release_date, movie_release_dates_json, folder_path, tagged_aliases_json,
     metadata_hydration_next_attempt_at, metadata_hydration_attempt_count
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}, {}, {}, {}, {},
+    {}, {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}
@@ -63,14 +63,14 @@ const TITLE_INSERT_SQL: &str = "INSERT INTO titles (
 
 const TITLE_UPSERT_SQL: &str = "INSERT INTO titles (
     id, library_id, name, facet, monitored, tags, external_ids, root_folder_id, created_by, created_at,
-    year, overview, poster_url, background_url, sort_title, catalog_sort_key, slug, imdb_id,
+    year, overview, poster_url, background_url, sort_title, catalog_sort_key, catalog_name_tie_key, slug, imdb_id,
     runtime_minutes, popularity, content_status, language, first_aired, network, studio,
     country, aliases, metadata_language, metadata_fetched_at, min_availability,
     digital_release_date, movie_release_dates_json, folder_path, tagged_aliases_json,
     metadata_hydration_next_attempt_at, metadata_hydration_attempt_count
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}, {}, {}, {}, {},
+    {}, {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}
@@ -99,6 +99,7 @@ ON CONFLICT (id) DO UPDATE SET
     background_url = excluded.background_url,
     sort_title = excluded.sort_title,
     catalog_sort_key = excluded.catalog_sort_key,
+    catalog_name_tie_key = excluded.catalog_name_tie_key,
     slug = excluded.slug,
     imdb_id = excluded.imdb_id,
     runtime_minutes = excluded.runtime_minutes,
@@ -3317,19 +3318,50 @@ impl TitleRepository for TitleStore {
     }
 
     async fn clear_metadata_language_for_all(&self) -> AppResult<u64> {
+        let row_lock = match title_catalog_dialect_for_datastore(&self.datastore) {
+            TitleCatalogSqlDialect::Sqlite => "",
+            TitleCatalogSqlDialect::Postgres => " FOR UPDATE",
+        };
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "clear_metadata_language_for_all",
             move |tx| {
                 Box::pin(async move {
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "UPDATE titles
-                            SET metadata_language = NULL
-                          WHERE metadata_language IS NOT NULL",
-                        &[],
-                    )
-                    .await
+                    let mut after_id: Option<String> = None;
+                    let mut cleared = 0;
+                    loop {
+                        let (sql, args) = match after_id.as_ref() {
+                            Some(id) => (
+                                "SELECT id, name FROM titles WHERE metadata_language IS NOT NULL AND id > {} ORDER BY id LIMIT 1000",
+                                vec![SqlArg::Text(id.clone())],
+                            ),
+                            None => (
+                                "SELECT id, name FROM titles WHERE metadata_language IS NOT NULL ORDER BY id LIMIT 1000",
+                                vec![],
+                            ),
+                        };
+                        let sql = format!("{sql}{row_lock}");
+                        let rows = SqlRuntime::fetch_all(SqlExec::Tx(tx), &sql, &args).await?;
+                        if rows.is_empty() {
+                            break;
+                        }
+                        for row in rows {
+                            let id = row.text("id")?;
+                            let name = row.text("name")?;
+                            cleared += SqlRuntime::execute(
+                                SqlExec::Tx(tx),
+                                "UPDATE titles SET metadata_language = NULL, catalog_sort_key = {}, catalog_name_tie_key = {} WHERE id = {}",
+                                &[
+                                    SqlArg::Text(title_catalog_sort_key(&name, None)),
+                                    SqlArg::Text(title_catalog_name_tie_key(&name)),
+                                    SqlArg::Text(id.clone()),
+                                ],
+                            )
+                            .await?;
+                            after_id = Some(id);
+                        }
+                    }
+                    Ok(cleared)
                 })
             },
         )
@@ -5097,23 +5129,20 @@ fn build_title_catalog_order_sql(
         SortDirection::Desc => "DESC",
     };
     match sort.key {
-        TitleCatalogSortKey::Title => {
-            let title_tie_expression = title_catalog_normalized_name_tie_expression_sql();
-            format!(
-                "ORDER BY catalog_sort_key {direction}, {title_tie_expression} {direction}, \
-                 CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, year {direction}, id {direction}"
-            )
-        }
+        TitleCatalogSortKey::Title => format!(
+            "ORDER BY {}",
+            title_catalog_title_order_sql(dialect, direction)
+        ),
         TitleCatalogSortKey::Library => format!(
             "ORDER BY LOWER(COALESCE(NULLIF(TRIM(title_catalog_library.sort_library_name), ''), titles.library_id)) {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Monitored => format!(
             "ORDER BY monitored {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Quality => {
-            title_catalog_numeric_sort_order_sql("catalog_media_quality.quality_rank", direction)
+            title_catalog_numeric_sort_order_sql("catalog_media_quality.quality_rank", direction, dialect)
         }
         TitleCatalogSortKey::Profile => {
             let names = sort.profile_names.as_ref();
@@ -5122,7 +5151,7 @@ fn build_title_catalog_order_sql(
             format!(
                 "ORDER BY CASE WHEN {missing} IS NULL THEN 1 ELSE 0 END ASC, \
                  LOWER({name}) {direction}, {}",
-                title_catalog_ascending_tie_order_sql()
+                title_catalog_ascending_tie_order_sql(dialect)
             )
         }
         TitleCatalogSortKey::Episodes => format!(
@@ -5133,7 +5162,7 @@ fn build_title_catalog_order_sql(
              END {direction},
              COALESCE(catalog_episode_progress.owned_episodes, 0) {direction},
              COALESCE(catalog_episode_progress.total_episodes, 0) {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Status => {
             let missing_direction = nullable_text_missing_direction(sort.direction);
@@ -5147,52 +5176,53 @@ fn build_title_catalog_order_sql(
             format!(
                 "ORDER BY CASE WHEN {expression} = '' THEN 1 ELSE 0 END {missing_direction}, \
                  {expression} {direction}, {}",
-                title_catalog_ascending_tie_order_sql()
+                title_catalog_ascending_tie_order_sql(dialect)
             )
         }
         TitleCatalogSortKey::Size => format!(
             "ORDER BY COALESCE(catalog_media_size.total_size_bytes, -1) {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Added => format!(
             "ORDER BY created_at {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Year => format!(
             "ORDER BY CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, year {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Runtime => format!(
             "ORDER BY CASE WHEN runtime_minutes IS NULL THEN 1 ELSE 0 END ASC, runtime_minutes {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Root => format!(
             "ORDER BY CASE WHEN NULLIF(TRIM(COALESCE(title_catalog_root.path, '')), '') IS NULL THEN 1 ELSE 0 END ASC,
              LOWER(TRIM(COALESCE(title_catalog_root.path, ''))) {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Popularity => format!(
             "ORDER BY CASE WHEN popularity IS NULL THEN 1 ELSE 0 END ASC, popularity {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::MediaResolution => format!(
             "ORDER BY CASE WHEN catalog_movie_media.resolution_rank IS NULL THEN 1 ELSE 0 END ASC,
              catalog_movie_media.resolution_rank {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::MediaHdr => format!(
             "ORDER BY CASE WHEN catalog_movie_media.hdr_rank IS NULL THEN 1 ELSE 0 END ASC,
              catalog_movie_media.hdr_rank {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::MediaAudioCodec => format!(
             "ORDER BY CASE WHEN NULLIF(TRIM(COALESCE(catalog_movie_media.audio_codec, '')), '') IS NULL THEN 1 ELSE 0 END ASC,
              LOWER(TRIM(COALESCE(catalog_movie_media.audio_codec, ''))) {direction}, {}",
-            title_catalog_ascending_tie_order_sql()
+            title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::RatingScryer => title_catalog_numeric_sort_order_sql(
             "catalog_rating_scryer.rating",
             direction,
+            dialect,
         ),
         TitleCatalogSortKey::RatingImdb
         | TitleCatalogSortKey::RatingRottenTomatoes
@@ -5207,15 +5237,19 @@ fn build_title_catalog_order_sql(
         | TitleCatalogSortKey::RatingAnilist
         | TitleCatalogSortKey::RatingAnidb
         | TitleCatalogSortKey::RatingMdblist => {
-            title_catalog_numeric_sort_order_sql("catalog_external_rating.normalized", direction)
+            title_catalog_numeric_sort_order_sql("catalog_external_rating.normalized", direction, dialect)
         }
     }
 }
 
-fn title_catalog_numeric_sort_order_sql(expression: &str, direction: &str) -> String {
+fn title_catalog_numeric_sort_order_sql(
+    expression: &str,
+    direction: &str,
+    dialect: TitleCatalogSqlDialect,
+) -> String {
     format!(
         "ORDER BY CASE WHEN {expression} IS NULL THEN 1 ELSE 0 END ASC, {expression} {direction}, {}",
-        title_catalog_ascending_tie_order_sql()
+        title_catalog_ascending_tie_order_sql(dialect)
     )
 }
 
@@ -5223,48 +5257,21 @@ fn sql_string_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn title_catalog_cjk_width_normalization_chars() -> impl Iterator<Item = char> {
-    std::iter::once('\u{3000}').chain('\u{ff01}'..='\u{ff5e}')
-}
-
-fn title_catalog_normalized_name_expression_sql() -> String {
-    let mut expression = "name".to_string();
-    for value in title_catalog_cjk_width_normalization_chars() {
-        let source = value.to_string();
-        let replacement = source.nfkc().collect::<String>();
-        if source == replacement {
-            continue;
-        }
-        expression = format!(
-            "REPLACE({expression}, {}, {})",
-            sql_string_literal(&source),
-            sql_string_literal(&replacement),
-        );
-    }
-    expression
-}
-
-// Secondary tiebreak for titles that share a primary `catalog_sort_key` (primary strength is
-// case/accent-insensitive). Mirrors the Rust `title_catalog_name_tie_key`, but the case-folding
-// is engine-specific: SQLite `LOWER()` is ASCII-only while Postgres and the Rust comparator fold
-// full Unicode, so the tie order of equal-primary titles that differ only in non-ASCII case can
-// vary across engines. That is cosmetic — the trailing `id` ordering keeps every result set a
-// deterministic total order. Making the secondary order identical across all three would require
-// a precomputed tie-key column.
-fn title_catalog_normalized_name_tie_expression_sql() -> String {
+fn title_catalog_title_order_sql(dialect: TitleCatalogSqlDialect, direction: &str) -> String {
+    let collation = match dialect {
+        TitleCatalogSqlDialect::Sqlite => "BINARY",
+        TitleCatalogSqlDialect::Postgres => "\"C\"",
+    };
     format!(
-        "LOWER(TRIM({}))",
-        title_catalog_normalized_name_expression_sql()
+        "catalog_sort_key COLLATE {collation} {direction}, \
+         catalog_name_tie_key COLLATE {collation} {direction}, \
+         CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, year {direction}, \
+         titles.id COLLATE {collation} {direction}"
     )
 }
 
-fn title_catalog_ascending_tie_order_sql() -> String {
-    format!(
-        "{} ASC, {} ASC, \
-         CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, year ASC, id ASC",
-        "catalog_sort_key",
-        title_catalog_normalized_name_tie_expression_sql()
-    )
+fn title_catalog_ascending_tie_order_sql(dialect: TitleCatalogSqlDialect) -> String {
+    title_catalog_title_order_sql(dialect, "ASC")
 }
 
 fn nullable_text_missing_direction(direction: SortDirection) -> &'static str {
@@ -6310,6 +6317,7 @@ fn title_write_args(
             &title.name,
             title.metadata_language.as_deref(),
         )),
+        SqlArg::Text(title_catalog_name_tie_key(&title.name)),
         SqlArg::OptText(title.slug.clone()),
         SqlArg::OptText(title.imdb_id.clone()),
         SqlArg::OptI64(title.runtime_minutes.map(i64::from)),
@@ -6558,6 +6566,9 @@ async fn delete_indexer_search_learning_for_title_tx(
 
 #[cfg(test)]
 mod catalog_presence_tests;
+
+#[cfg(test)]
+mod catalog_order_tests;
 
 #[cfg(test)]
 mod tests {

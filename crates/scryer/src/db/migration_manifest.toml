@@ -3765,6 +3765,47 @@ file = "postgres/migrations/0326_discovery_library_graph_payload.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 327
+description = "persist catalog ordering keys"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0327_catalog_order_keys.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "migrate_title_catalog_order_keys"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0327_catalog_order_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0327_catalog_order_keys.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "migrate_title_catalog_order_keys"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0327_catalog_order_indexes.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"
