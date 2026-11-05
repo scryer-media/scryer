@@ -117,6 +117,7 @@ const WINGET_WINDOWS_ARM64_ASSET: &str = "scryer-windows-arm64-winget.msi";
 const WINGET_WINDOWS_X64_METADATA: &str = "scryer-windows-x86_64-winget.msi.json";
 const WINGET_WINDOWS_ARM64_METADATA: &str = "scryer-windows-arm64-winget.msi.json";
 const REQUIRED_SCRYER_DRY_RUN_STEPS: &[&str] = &[
+    "application_version_bump",
     "release_container_contract",
     "builtin_refresh",
     "web_validation",
@@ -382,12 +383,17 @@ impl ReleaseValidationScope {
         match self {
             Self::Full => REQUIRED_SCRYER_DRY_RUN_STEPS,
             Self::WebOnly => &[
+                "application_version_bump",
                 "release_container_contract",
                 "web_validation",
                 "web_format",
                 "release_hygiene",
             ],
-            Self::MetaOnly => &["release_container_contract", "release_hygiene"],
+            Self::MetaOnly => &[
+                "application_version_bump",
+                "release_container_contract",
+                "release_hygiene",
+            ],
         }
     }
 }
@@ -2229,6 +2235,45 @@ fn is_scryer_app_release_package(name: &str) -> bool {
     )
 }
 
+fn bump_scryer_release_versions(ctx: &TaskContext, version: &Version) -> Result<()> {
+    let manifests = scryer_release_member_tomls(ctx)?;
+    if manifests.is_empty() {
+        bail!("No workspace member Cargo.toml files found");
+    }
+    step(format!(
+        "Updating Scryer application crate versions to {version}"
+    ));
+    for path in &manifests {
+        if package_version(path)? != *version {
+            write_package_version(path, version)?;
+        }
+        let name = path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(OsStr::to_str)
+            .unwrap_or("unknown");
+        println!("   version: {name} → {version}");
+    }
+    ok(format!("{} crates set to {version}", manifests.len()));
+    Ok(())
+}
+
+fn require_scryer_release_versions(ctx: &TaskContext, version: &Version) -> Result<()> {
+    let manifests = scryer_release_member_tomls(ctx)?;
+    if manifests.is_empty() {
+        bail!("No workspace member Cargo.toml files found");
+    }
+    for path in manifests {
+        if package_version(&path)? != *version {
+            bail!(
+                "{} is not at target version {version}; run a new release dry run",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn write_package_version(path: &Path, version: &Version) -> Result<()> {
     let mut document = fs::read_to_string(path)?
         .parse::<DocumentMut>()
@@ -3563,7 +3608,7 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
         );
     }
     if args.dry_run {
-        println!("   {YELLOW}(dry run — no version bump, tag, or push){RESET}");
+        println!("   {YELLOW}(dry run — local version bump, no tag or push){RESET}");
     }
 
     step("Pre-flight checks");
@@ -3686,6 +3731,7 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
                 {
                     println!("   {YELLOW}Skipping dry-run cache reuse: {reason}{RESET}");
                 } else {
+                    require_scryer_release_versions(ctx, &next_version)?;
                     if tooling_only_changes {
                         step("Validating CI workflow changes since dry run");
                         let mut tests = ctx.command("cargo");
@@ -3722,8 +3768,8 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
 
     if !args.dry_run && !reused_dry_run_cache {
         println!(
-            "   {YELLOW}No matching dry run; running the full release validation now, then \
-             continuing to the version bump, tag, and push{RESET}"
+            "   {YELLOW}No matching dry run; applying the target version and running full \
+             release validation before tag and push{RESET}"
         );
     }
 
@@ -3860,7 +3906,7 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
                 },
             )?;
             println!(
-                "\n{YELLOW}{BOLD}Dry run complete — stopping before version bump/tag/push.{RESET}"
+                "\n{YELLOW}{BOLD}Dry run complete — target version validated; stopping before tag/push.{RESET}"
             );
             println!("  Version {next_version} validated OK.");
             println!(
@@ -3869,43 +3915,23 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
             );
             return Ok(());
         }
-        ok("Release validation passed; continuing to the version bump");
+        ok("Release validation passed at the target version");
     }
 
-    // origin/main can move while validation runs; re-check before anything is bumped or tagged.
+    // origin/main can move while validation runs; re-check before tagging.
     step("Re-checking the release branch contains origin/main");
     require_main_merged(ctx)?;
     ok("Release branch contains origin/main");
 
     let workspace_tomls = scryer_release_member_tomls(ctx)?;
-    if workspace_tomls.is_empty() {
-        bail!("No workspace member Cargo.toml files found");
-    }
-    step(format!(
-        "Updating Scryer application crate versions to {next_version}"
-    ));
-    for toml_path in &workspace_tomls {
-        write_package_version(toml_path, &next_version)?;
-        let name = toml_path
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(OsStr::to_str)
-            .unwrap_or("unknown");
-        println!("   bumped: {name} → {next_version}");
-    }
-    ok(format!(
-        "{} crates updated to {}",
-        workspace_tomls.len(),
-        next_version
-    ));
-    refresh_release_cargo_lockfile(ctx)?;
+    require_scryer_release_versions(ctx, &next_version)?;
 
     if reused_dry_run_cache {
-        ok("Reused dry-run cache for pre-bump validations");
+        ok("Reused dry-run cache for target-version validations");
     }
 
     if validation_scope == ReleaseValidationScope::Full {
-        step("Running cargo check after version bump");
+        step("Running final cargo check at the target version");
         let mut cargo_check = ctx.release_command_in("cargo", &ctx.repo_root);
         cargo_check.arg("check");
         add_prod_package_args(&mut cargo_check);
@@ -4101,6 +4127,7 @@ fn run_sdk_release(ctx: &TaskContext, args: SdkReleaseArgs) -> Result<()> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReleaseValidationStage {
+    VersionBump,
     WebAudit,
     RustAudit,
     RustFmt,
@@ -4120,6 +4147,7 @@ fn run_validation_stages(
     use ReleaseValidationStage::*;
     let stages: &[ReleaseValidationStage] = match scope {
         ReleaseValidationScope::Full => &[
+            VersionBump,
             WebAudit,
             RustAudit,
             RustFmt,
@@ -4131,8 +4159,8 @@ fn run_validation_stages(
             ClippyHost,
             Nextest,
         ],
-        ReleaseValidationScope::WebOnly => &[WebAudit, WebLint, Hygiene, WebBuild],
-        ReleaseValidationScope::MetaOnly => &[Hygiene],
+        ReleaseValidationScope::WebOnly => &[VersionBump, WebAudit, WebLint, Hygiene, WebBuild],
+        ReleaseValidationScope::MetaOnly => &[VersionBump, Hygiene],
     };
     for &stage in stages {
         run(stage)?;
@@ -4148,6 +4176,10 @@ fn run_scryer_validation(
     allow_breaking_api: bool,
 ) -> Result<()> {
     run_validation_stages(scope, |stage| match stage {
+        ReleaseValidationStage::VersionBump => {
+            bump_scryer_release_versions(ctx, next_version)?;
+            refresh_release_cargo_lockfile(ctx)
+        }
         ReleaseValidationStage::WebAudit => run_scryer_web_audit(ctx, "[web] "),
         ReleaseValidationStage::RustAudit => run_scryer_rust_audit(ctx, "[rust] "),
         ReleaseValidationStage::RustFmt => run_scryer_rust_fmt(ctx, "[rust] "),
@@ -4652,6 +4684,7 @@ mod tests {
         assert_eq!(
             calls,
             [
+                VersionBump,
                 WebAudit,
                 RustAudit,
                 RustFmt,
@@ -4672,9 +4705,9 @@ mod tests {
         for (scope, expected) in [
             (
                 ReleaseValidationScope::WebOnly,
-                vec![WebAudit, WebLint, Hygiene, WebBuild],
+                vec![VersionBump, WebAudit, WebLint, Hygiene, WebBuild],
             ),
-            (ReleaseValidationScope::MetaOnly, vec![Hygiene]),
+            (ReleaseValidationScope::MetaOnly, vec![VersionBump, Hygiene]),
         ] {
             let mut calls = Vec::new();
             run_validation_stages(scope, |stage| {
@@ -6050,6 +6083,69 @@ merge :2
                 "}\n"
             )
         );
+    }
+
+    #[test]
+    fn release_dry_run_cache_requires_target_version_validation() {
+        for scope in [
+            ReleaseValidationScope::Full,
+            ReleaseValidationScope::WebOnly,
+            ReleaseValidationScope::MetaOnly,
+        ] {
+            let mut cache = sample_release_dry_run_cache();
+            cache
+                .validated_steps
+                .retain(|step| step != "application_version_bump");
+            let mut expected = sample_release_dry_run_expectations();
+            expected.validation_scope = scope;
+            assert_eq!(
+                release_dry_run_cache_rejection_reason(&cache, &expected, true).as_deref(),
+                Some(
+                    "dry run did not record required release-blocking validations: application_version_bump"
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn release_version_bump_updates_only_app_manifests_and_is_idempotent() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::write(
+            repo.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"sdk\", \"tool\"]\n",
+        )
+        .unwrap();
+        for (dir, name) in [
+            ("app", "scryer"),
+            ("sdk", "scryer-plugin-sdk"),
+            ("tool", "xtask-release"),
+        ] {
+            fs::create_dir(repo.path().join(dir)).unwrap();
+            fs::write(
+                repo.path().join(dir).join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\ndescription = \"fixture\"\n"
+                ),
+            )
+            .unwrap();
+        }
+        let ctx = TaskContext::with_repo_root(repo.path().to_path_buf());
+        let target = Version::new(0, 99, 1);
+        assert!(require_scryer_release_versions(&ctx, &target).is_err());
+        bump_scryer_release_versions(&ctx, &target).unwrap();
+        require_scryer_release_versions(&ctx, &target).unwrap();
+        let app = repo.path().join("app/Cargo.toml");
+        let bumped = fs::read_to_string(&app).unwrap();
+        assert_eq!(package_version(&app).unwrap(), target);
+        assert!(bumped.contains("description = \"fixture\""));
+        for dir in ["sdk", "tool"] {
+            assert_eq!(
+                package_version(&repo.path().join(dir).join("Cargo.toml")).unwrap(),
+                Version::new(0, 1, 0)
+            );
+        }
+        bump_scryer_release_versions(&ctx, &target).unwrap();
+        assert_eq!(fs::read_to_string(&app).unwrap(), bumped);
     }
 
     #[test]
