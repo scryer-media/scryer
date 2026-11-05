@@ -396,18 +396,22 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
 
     async fn clear_audience_read(&self, connection_id: &str) -> AppResult<()> {
         let args = vec![SqlArg::Text(connection_id.to_string())];
-        SqlRuntime::run_in_transaction(&self.datastore, "clear_media_server_audience_read", move |tx| {
-            let args = args.clone();
-            Box::pin(async move {
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "DELETE FROM media_server_audience_reads WHERE connection_id = {}",
-                    &args,
-                )
-                .await?;
-                Ok(())
-            })
-        })
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "clear_media_server_audience_read",
+            move |tx| {
+                let args = args.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM media_server_audience_reads WHERE connection_id = {}",
+                        &args,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
+        )
         .await
     }
 
