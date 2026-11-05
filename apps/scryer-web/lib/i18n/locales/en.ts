@@ -2727,7 +2727,7 @@ const en: LocaleDictionary = {
   "error.reason.NOTIFICATION_PROVIDER_REQUIRES":
     "Notification provider the selected item requires the selected item.",
   "error.reason.NOTIFICATION_PROVIDER_UNAVAILABLE":
-    "Notification provider the selected item is not available.",
+    "Plugin not installed",
   "error.reason.NOTIFICATION_SUBSCRIPTION_NOT_FOUND":
     "The subscription could not be found.",
   "error.reason.NOTIFICATION_SUBSCRIPTION_TARGET_REQUIRED":
