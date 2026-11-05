@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  drawGraphPoster,
+  graphPosterArtworkOpacity,
   graphPosterBounds,
   graphPosterInViewport,
   graphPosterHoverable,
@@ -10,6 +12,84 @@ import {
   createGraphPosterAdmission,
   prepareGraphPosterImages,
 } from "./library-graph-posters.ts";
+
+test("readable posters have artwork without waiting for the neighborhood crossfade", () => {
+  assert.equal(graphPosterArtworkOpacity(6.3), 0);
+  assert.ok(Math.abs(graphPosterArtworkOpacity(9) - 0.5) < Number.EPSILON);
+  assert.equal(graphPosterArtworkOpacity(12), 1);
+  assert.equal(graphPosterArtworkOpacity(30), 1);
+  assert.equal(graphPosterArtworkOpacity(2, 0), 1);
+  const sizes = Array.from({ length: 61 }, (_, i) => i / 2);
+  const values = sizes.map((size) => graphPosterArtworkOpacity(size));
+  assert.deepEqual(
+    [...sizes].reverse().map((size) => graphPosterArtworkOpacity(size)),
+    [...values].reverse(),
+  );
+  for (let i = 1; i < values.length; i++) assert.ok(values[i] >= values[i - 1]);
+});
+
+test("zero-opacity artwork cannot leave a visible empty backing", () => {
+  drawGraphPoster(
+    { globalAlpha: 0 } as CanvasRenderingContext2D,
+    {} as HTMLImageElement,
+    { x: 0, y: 0 },
+    30,
+    "#000",
+  );
+});
+
+test("a fading poster clears zones within its rounded clip even with a translucent surface", () => {
+  const calls: { operation: string; opacity: number; color: string }[] = [];
+  const context = {
+    globalAlpha: 0.18,
+    fillStyle: "#ff00ff",
+    save() {},
+    restore() {},
+    beginPath() {},
+    roundRect() {},
+    clip() {
+      calls.push({
+        operation: "clip",
+        opacity: this.globalAlpha,
+        color: this.fillStyle,
+      });
+    },
+    clearRect() {
+      calls.push({
+        operation: "clear",
+        opacity: this.globalAlpha,
+        color: this.fillStyle,
+      });
+    },
+    fillRect() {
+      calls.push({
+        operation: "backing",
+        opacity: this.globalAlpha,
+        color: this.fillStyle,
+      });
+    },
+    drawImage() {
+      calls.push({
+        operation: "poster",
+        opacity: this.globalAlpha,
+        color: this.fillStyle,
+      });
+    },
+  };
+  drawGraphPoster(
+    context as unknown as CanvasRenderingContext2D,
+    { naturalWidth: 70, naturalHeight: 105 } as HTMLImageElement,
+    { x: 50, y: 50 },
+    30,
+    "rgba(8, 13, 25, 0.35)",
+  );
+  assert.deepEqual(calls, [
+    { operation: "clip", opacity: 0.18, color: "#ff00ff" },
+    { operation: "clear", opacity: 0.18, color: "#ff00ff" },
+    { operation: "backing", opacity: 1, color: "rgba(8, 13, 25, 0.35)" },
+    { operation: "poster", opacity: 0.18, color: "rgba(8, 13, 25, 0.35)" },
+  ]);
+});
 
 test("viewport relations require both poster bounds, including partially visible posters", () => {
   const visible = (point: { x: number; y: number }) =>

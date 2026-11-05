@@ -22,6 +22,7 @@ import {
   graphDetailClusters,
   graphDetailPosterSize,
   graphDetailOpacity,
+  graphNeighborhoodBounds,
   largeLibraryGraphLayout,
   libraryGraphOverviewPreview,
   joinLibraryGraphToTitles,
@@ -47,6 +48,34 @@ import {
   titleCatalogProjectionForGraph,
   titleCatalogProjectionForTable,
 } from "./title-catalog-query.ts";
+
+test("legend framing includes complete selected neighborhoods and resets to all regions", () => {
+  const regions = [
+    { id: 1, left: -100, right: -20, top: 10, bottom: 90 },
+    { id: 2, left: 50, right: 200, top: -60, bottom: 80 },
+    { id: -1, left: 500, right: 600, top: 500, bottom: 600 },
+  ];
+  assert.deepEqual(graphNeighborhoodBounds(regions, new Set([1])), {
+    left: -100,
+    right: -20,
+    top: 10,
+    bottom: 90,
+  });
+  assert.deepEqual(graphNeighborhoodBounds(regions, new Set([1, 2])), {
+    left: -100,
+    right: 200,
+    top: -60,
+    bottom: 90,
+  });
+  assert.deepEqual(graphNeighborhoodBounds(regions, new Set()), {
+    left: -100,
+    right: 600,
+    top: -60,
+    bottom: 600,
+  });
+  assert.equal(graphNeighborhoodBounds(regions, new Set([99])), null);
+  assert.equal(graphNeighborhoodBounds([], new Set()), null);
+});
 
 const dictionary: Record<string, string> = en;
 const t = (

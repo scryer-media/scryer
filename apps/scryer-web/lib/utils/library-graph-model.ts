@@ -8,6 +8,7 @@ import type { Facet, TitleRecord } from "../types/titles.ts";
 import {
   UNPLACED_CLUSTER_ID,
   type LibraryGraphCluster,
+  type LibraryGraphEdge,
   type LibraryGraphResult,
 } from "../types/library-graph.ts";
 import {
@@ -20,6 +21,7 @@ import {
 } from "./library-graph-merge.ts";
 import { discoveryBrowseLabelTitle } from "./discovery-sections.ts";
 import { convexHull, type LayoutPoint } from "./library-graph-layout.ts";
+import { assignRelatedSpiralSlots } from "./library-graph-spiral-slots.ts";
 
 /** Above this many nodes, clusters collapse to one node each until expanded. */
 export const LIBRARY_GRAPH_COLLAPSE_THRESHOLD = 5000;
@@ -441,11 +443,22 @@ export function isCollapsedClusterNode(node: GraphNode): boolean {
 export function largeLibraryGraphLayout(graph: GraphState) {
   const named = libraryGraphNamedClusterIds(graph.clusters);
   const groups = new Map<number, GraphNode[]>();
+  const groupByKey = new Map<string, number>();
   for (const node of graph.nodes) {
     const id = named.has(node.clusterId) ? node.clusterId : UNPLACED_CLUSTER_ID;
     const members = groups.get(id) ?? [];
     members.push(node);
     groups.set(id, members);
+    groupByKey.set(node.subjectKey, id);
+  }
+  // Partition once, so each neighbourhood only examines its own relations.
+  const edgesByGroup = new Map<number, LibraryGraphEdge[]>();
+  for (const edge of graph.edges) {
+    const id = groupByKey.get(edge.from);
+    if (id === undefined || id !== groupByKey.get(edge.to)) continue;
+    const edges = edgesByGroup.get(id) ?? [];
+    edges.push(edge);
+    edgesByGroup.set(id, edges);
   }
   const ids = [...groups.keys()].sort((a, b) => a - b);
   const columns = Math.max(1, Math.ceil(Math.sqrt(ids.length)));
@@ -478,15 +491,22 @@ export function largeLibraryGraphLayout(graph: GraphState) {
       top: y - radius,
       bottom: y + radius,
     });
-    members.forEach((node, rank) => {
+    const points = members.map((_node, rank) => {
       const angle = rank * Math.PI * (3 - Math.sqrt(5));
       const distance = 24 * Math.sqrt(rank + 0.5);
-      positions.set(node.subjectKey, {
+      return {
         x: x + Math.cos(angle) * distance,
         y: y + Math.sin(angle) * distance,
-      });
+      };
     });
-    const points = members.map((node) => positions.get(node.subjectKey)!);
+    const assignment = assignRelatedSpiralSlots(
+      members.map((node) => node.subjectKey),
+      edgesByGroup.get(id) ?? [],
+      points,
+    );
+    members.forEach((node, index) => {
+      positions.set(node.subjectKey, points[assignment[index]]);
+    });
     hulls.set(id, convexHull(points));
     // A bounded sample of the actual title positions, so overview dots and
     // the detail boundary occupy the same space through the crossfade.
@@ -535,6 +555,23 @@ export type GraphDetailRegion = {
   top: number;
   bottom: number;
 };
+
+/** Bounds of the legend selection; clearing it fits the whole overview. */
+export function graphNeighborhoodBounds(
+  regions: readonly GraphDetailRegion[],
+  selected: ReadonlySet<number>,
+): Omit<GraphDetailRegion, "id"> | null {
+  const included = regions.filter(
+    (region) => selected.size === 0 || selected.has(region.id),
+  );
+  if (!included.length) return null;
+  return {
+    left: Math.min(...included.map((region) => region.left)),
+    right: Math.max(...included.map((region) => region.right)),
+    top: Math.min(...included.map((region) => region.top)),
+    bottom: Math.max(...included.map((region) => region.bottom)),
+  };
+}
 
 /** Reveal nearby neighbourhoods when titles have room; use separate thresholds
  * for entering and leaving detail so trackpad motion cannot flicker the view. */

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useLibraryGraphHistory } from "@/lib/hooks/use-library-graph-history";
 import Graph from "graphology";
 import Sigma, { DEFAULT_STYLES } from "sigma";
 import { sdfRectangle } from "sigma/rendering";
@@ -27,6 +28,7 @@ import {
   GRAPH_POSTER_ASPECT_RATIO,
   GRAPH_POSTER_CORNER_RADIUS_RATIO,
   drawGraphPoster,
+  graphPosterArtworkOpacity,
   createGraphPosterAdmission,
   prepareGraphPosterImages,
   graphPosterBounds,
@@ -37,6 +39,14 @@ import {
   traceGraphPoster,
   type GraphPosterBounds,
 } from "@/lib/utils/library-graph-posters";
+import {
+  drawGraphRelations,
+  hitGraphRelation,
+  type GraphRelation,
+  type GraphRelationHit,
+  type GraphRelationNode,
+} from "@/lib/utils/library-graph-relations";
+import { createGraphHoverIntent } from "@/lib/utils/library-graph-hover-intent";
 import type { Facet, TitleRecord } from "@/lib/types/titles";
 import {
   UNPLACED_CLUSTER_ID,
@@ -57,6 +67,7 @@ import {
   graphDetailClusters,
   graphDetailPosterSize,
   graphDetailOpacity,
+  graphNeighborhoodBounds,
   largeLibraryGraphLayout,
   libraryGraphOverviewPreview,
   joinLibraryGraphToTitles,
@@ -83,6 +94,7 @@ import {
   layoutPositions,
   stepLayout,
   tweenPositions,
+  easeOutCubic,
   type LayoutPoint,
   type LayoutState,
 } from "@/lib/utils/library-graph-layout";
@@ -176,6 +188,8 @@ type NodeAttributes = {
   color: string;
   baseSize: number;
   baseColor: string;
+  unselectedSize?: number;
+  unselectedColor?: string;
   label: string;
   titleId?: string;
   posterUrl?: string | null;
@@ -414,6 +428,7 @@ export default function LibraryGraphView({
     null,
   );
   const graphRef = React.useRef<LibraryGraphStore | null>(null);
+  const relationsStoreRef = React.useRef<LibraryGraphStore | null>(null);
   const layoutRef = React.useRef<LayoutState | null>(null);
   const frameRef = React.useRef<number | null>(null);
   const tweenFrameRef = React.useRef<number | null>(null);
@@ -431,11 +446,15 @@ export default function LibraryGraphView({
   const positionsRef = React.useRef(new Map<string, LayoutPoint>());
   const posterCacheRef = React.useRef(new Map<string, HTMLImageElement>());
   const viewportNodesRef = React.useRef(new Set<string>());
-  const relationOpacityRef = React.useRef(new Map<string, number>());
+  const viewportRelationsRef = React.useRef(new Map<string, GraphRelation>());
+  const relationHitsRef = React.useRef<GraphRelationHit[]>([]);
   const largeLayoutRef = React.useRef<ReturnType<
     typeof largeLibraryGraphLayout
   > | null>(null);
   const hoverableNodesRef = React.useRef(new Set<string>());
+  const hoverIntentRef = React.useRef<ReturnType<
+    typeof createGraphHoverIntent
+  > | null>(null);
   const hoveredEdgeRef = React.useRef<{ from: string; to: string } | null>(
     null,
   );
@@ -553,8 +572,12 @@ export default function LibraryGraphView({
           : attributes.titleId !== undefined && attributes.titleId === selected;
       return {
         ...attributes,
-        color: isSelected ? accent : attributes.baseColor,
-        size: isSelected ? attributes.baseSize * 1.35 : attributes.baseSize,
+        color: isSelected
+          ? accent
+          : (attributes.unselectedColor ?? attributes.baseColor),
+        size:
+          (attributes.unselectedSize ?? attributes.baseSize) *
+          (isSelected ? 1.35 : 1),
       };
     });
   }, []);
@@ -991,10 +1014,15 @@ export default function LibraryGraphView({
   const drawOverlay = React.useCallback(() => {
     const sigma = sigmaRef.current;
     const graph = graphRef.current;
+    const relations = relationsStoreRef.current;
     const canvas = overlayRef.current;
-    if (!sigma || !graph || !canvas) {
+    if (!sigma || !graph || !relations || !canvas) {
       return;
     }
+    // setGraph renders synchronously while graph replacement is detached.
+    // Preserve the overlay and its viewport cache until this store is back,
+    // so temporary camera matrices cannot be mixed with the previous scene.
+    if (sigma.getGraph() !== graph) return;
     const { width, height } = sigma.getDimensions();
     const ratio = window.devicePixelRatio || 1;
     if (
@@ -1013,12 +1041,20 @@ export default function LibraryGraphView({
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
 
+    // Scale the margin with the title cloud instead of leaving a wide
+    // screen-space border around tiny overview clusters.
+    const origin = sigma.graphToViewport({ x: 0, y: 0 });
+    const paddingPoint = sigma.graphToViewport({ x: HULL_PADDING_PX, y: 0 });
+    const hullPadding = Math.min(
+      HULL_PADDING_PX,
+      Math.hypot(paddingPoint.x - origin.x, paddingPoint.y - origin.y),
+    );
     const pointsByCluster = new Map<number, LayoutPoint[]>();
     const viewportByNode = new Map<string, LayoutPoint>();
     const sizesByNode = new Map<string, number>();
     const viewportNodes = new Set<string>();
-    const relationOpacity = new Map<string, number>();
-    const fadingNodes: string[] = [];
+    const relationNodes = new Map<string, GraphRelationNode>();
+    const drawZones: (() => void)[] = [];
     // Every drawn title, so neighbourhood names can keep off them.
     const nodeDiscs: (GraphPosterBounds & {
       x: number;
@@ -1046,12 +1082,7 @@ export default function LibraryGraphView({
           attributes.collapsedClusterId !== undefined
             ? 1
             : graphRelationOpacity(size, attributes.detailOpacity ?? 1);
-        relationOpacity.set(key, opacity);
-        if (
-          relationOpacityRef.current.has(key) &&
-          relationOpacityRef.current.get(key) !== opacity
-        )
-          fadingNodes.push(key);
+        relationNodes.set(key, { point, size, opacity });
         nodeDiscs.push({
           x: point.x,
           y: point.y,
@@ -1068,87 +1099,100 @@ export default function LibraryGraphView({
           point.y - size > height
         )
           return;
-        const color = attributes.baseColor;
-        const hull = attributes.hull?.map((point) =>
-          sigma.graphToViewport(point),
-        );
-        context.save();
-        context.globalAlpha = attributes.detailOpacity ?? 1;
-        context.beginPath();
-        if (hull && hull.length > 2) {
-          hull.forEach((point, index) => {
-            if (index === 0) context.moveTo(point.x, point.y);
-            else context.lineTo(point.x, point.y);
-          });
-        } else
-          for (let i = 0; i < 24; i++) {
-            const angle = (i * Math.PI) / 12;
-            const radius = size * (1.12 + 0.04 * Math.sin(i * 2.3));
-            const x = point.x + Math.cos(angle) * radius;
-            const y = point.y + Math.sin(angle) * radius;
-            if (i === 0) context.moveTo(x, y);
-            else context.lineTo(x, y);
-          }
-        context.closePath();
-        context.fillStyle = withAlpha(color, 0.1);
-        context.fill();
-        context.lineJoin = "round";
-        context.lineWidth = HULL_PADDING_PX * 2;
-        context.strokeStyle = withAlpha(color, 0.1);
-        context.stroke();
-        const count = Math.min(
-          600,
-          Math.max(24, Math.round((size * size) / 30)),
-        );
-        context.fillStyle = color;
-        if (attributes.dots) {
-          for (const dot of attributes.dots) {
-            const position = sigma.graphToViewport(dot);
-            context.fillRect(position.x, position.y, 1.5, 2);
-          }
-        } else
-          for (let i = 0; i < count; i++) {
-            const angle = i * 2.399963229728653;
-            const radius = size * Math.sqrt((i + 0.5) / count);
-            context.fillRect(
-              point.x + Math.cos(angle) * radius,
-              point.y + Math.sin(angle) * radius,
-              1.5,
-              2,
-            );
-          }
-        const group = groupsRef.current.find(
-          (group) => group.id === attributes.collapsedClusterId,
-        );
-        const name = group?.name ?? attributes.label;
-        context.font = "600 12px system-ui, sans-serif";
-        const halfWidth = context.measureText(name).width / 2 + 12;
-        const y =
-          (hull?.length
-            ? Math.min(...hull.map((point) => point.y))
-            : point.y - size * 1.15) - 16;
-        context.beginPath();
-        context.roundRect(point.x - halfWidth, y - 13, halfWidth * 2, 26, 13);
-        context.fillStyle = cachedCssColor(
-          themeColorsRef.current,
-          canvas,
-          "--scry-surfD",
-          "#0b0e15",
-        );
-        context.fill();
-        context.strokeStyle = color;
-        context.lineWidth = 2;
-        context.stroke();
-        context.fillStyle = cachedCssColor(
-          themeColorsRef.current,
-          canvas,
-          "--scry-ink2",
-          "#e6e8ef",
-        );
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        context.fillText(name, point.x, y);
-        context.restore();
+        drawZones.push(() => {
+          const color = attributes.baseColor;
+          const hull = attributes.hull?.map((point) =>
+            sigma.graphToViewport(point),
+          );
+          context.save();
+          context.globalAlpha = attributes.detailOpacity ?? 1;
+          context.beginPath();
+          if (hull && hull.length > 2) {
+            hull.forEach((point, index) => {
+              if (index === 0) context.moveTo(point.x, point.y);
+              else context.lineTo(point.x, point.y);
+            });
+          } else
+            for (let i = 0; i < 24; i++) {
+              const angle = (i * Math.PI) / 12;
+              const radius = size * (1.12 + 0.04 * Math.sin(i * 2.3));
+              const x = point.x + Math.cos(angle) * radius;
+              const y = point.y + Math.sin(angle) * radius;
+              if (i === 0) context.moveTo(x, y);
+              else context.lineTo(x, y);
+            }
+          context.closePath();
+          // The zone occludes aggregate connections beneath it; its mask
+          // fades with the overview so detail links emerge continuously.
+          context.save();
+          context.globalCompositeOperation = "destination-out";
+          context.fillStyle = "#000";
+          context.strokeStyle = "#000";
+          context.lineJoin = "round";
+          context.lineWidth = hullPadding * 2;
+          context.fill();
+          context.stroke();
+          context.restore();
+          context.fillStyle = withAlpha(color, 0.1);
+          context.fill();
+          context.lineJoin = "round";
+          context.lineWidth = hullPadding * 2;
+          context.strokeStyle = withAlpha(color, 0.1);
+          context.stroke();
+          const count = Math.min(
+            600,
+            Math.max(24, Math.round((size * size) / 30)),
+          );
+          context.fillStyle = color;
+          if (attributes.dots) {
+            for (const dot of attributes.dots) {
+              const position = sigma.graphToViewport(dot);
+              context.fillRect(position.x, position.y, 1.5, 2);
+            }
+          } else
+            for (let i = 0; i < count; i++) {
+              const angle = i * 2.399963229728653;
+              const radius = size * Math.sqrt((i + 0.5) / count);
+              context.fillRect(
+                point.x + Math.cos(angle) * radius,
+                point.y + Math.sin(angle) * radius,
+                1.5,
+                2,
+              );
+            }
+          const group = groupsRef.current.find(
+            (group) => group.id === attributes.collapsedClusterId,
+          );
+          const name = group?.name ?? attributes.label;
+          context.font = "600 12px system-ui, sans-serif";
+          const halfWidth = context.measureText(name).width / 2 + 12;
+          const y =
+            (hull?.length
+              ? Math.min(...hull.map((point) => point.y))
+              : point.y - size * 1.15) - 16;
+          context.beginPath();
+          context.roundRect(point.x - halfWidth, y - 13, halfWidth * 2, 26, 13);
+          context.fillStyle = cachedCssColor(
+            themeColorsRef.current,
+            canvas,
+            "--scry-surfD",
+            "#0b0e15",
+          );
+          context.fill();
+          context.strokeStyle = color;
+          context.lineWidth = 2;
+          context.stroke();
+          context.fillStyle = cachedCssColor(
+            themeColorsRef.current,
+            canvas,
+            "--scry-ink2",
+            "#e6e8ef",
+          );
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillText(name, point.x, y);
+          context.restore();
+        });
       }
       if (attributes.collapsedClusterId !== undefined || attributes.ghost) {
         return;
@@ -1168,22 +1212,43 @@ export default function LibraryGraphView({
     const changedEdges = changedGraphViewportEdges(
       viewportNodesRef.current,
       viewportNodes,
-      (key) => (graph.hasNode(key) ? graph.edges(key) : []),
-      fadingNodes,
+      (key) => (relations.hasNode(key) ? relations.edges(key) : []),
     );
     viewportNodesRef.current = viewportNodes;
-    relationOpacityRef.current = relationOpacity;
-    if (changedEdges.length) {
-      sigma.scheduleRefresh({
-        partialGraph: { edges: changedEdges },
-        skipIndexation: true,
-      });
+    for (const key of changedEdges) {
+      if (!relations.hasEdge(key)) {
+        viewportRelationsRef.current.delete(key);
+        continue;
+      }
+      const [from, to] = relations.extremities(key);
+      if (!viewportNodes.has(from) || !viewportNodes.has(to))
+        viewportRelationsRef.current.delete(key);
+      else
+        viewportRelationsRef.current.set(key, {
+          ...relations.getEdgeAttributes(key),
+          key,
+          from,
+          to,
+        });
     }
+    const hoverFocus = hoverFocusRef.current;
+    relationHitsRef.current = hoverFocus
+      ? []
+      : drawGraphRelations(
+          context,
+          viewportRelationsRef.current.values(),
+          relationNodes,
+          null,
+        );
     if (focusCenterRef.current === null) {
       transitionBlobsRef.current.forEach((attributes, index) =>
         drawNode(`transition:${index}`, attributes),
       );
     }
+
+    // Aggregate relations sit below every overview zone, including during
+    // the detail crossfade. Posters are painted after all zones and bands.
+    for (const draw of drawZones) draw();
 
     // Cluster hulls, padded by stroking the hull with a wide round pen.
     context.lineJoin = "round";
@@ -1225,7 +1290,7 @@ export default function LibraryGraphView({
       if (hull.length === 1) {
         // One node, or several on one spot: a zero-length path strokes
         // nothing, so the hull is the padding circle around that point.
-        context.arc(hull[0].x, hull[0].y, HULL_PADDING_PX, 0, Math.PI * 2);
+        context.arc(hull[0].x, hull[0].y, hullPadding, 0, Math.PI * 2);
       } else {
         hull.forEach((point, index) => {
           if (index === 0) {
@@ -1239,9 +1304,9 @@ export default function LibraryGraphView({
       context.fillStyle = withAlpha(group.color, 0.1);
       context.fill();
       if (hull.length > 1) {
-        // The wide round pen pads the hull by HULL_PADDING_PX all round.
+        // Use the same zoom-scaled margin as the overview zone.
         context.strokeStyle = withAlpha(group.color, 0.1);
-        context.lineWidth = HULL_PADDING_PX * 2;
+        context.lineWidth = hullPadding * 2;
         context.stroke();
       }
       if (label) {
@@ -1396,6 +1461,16 @@ export default function LibraryGraphView({
       }
     }
 
+    // Active connections stay above zone fills and masks. Poster artwork
+    // still covers crossing lines, keeping the title cards legible.
+    if (hoverFocus)
+      relationHitsRef.current = drawGraphRelations(
+        context,
+        viewportRelationsRef.current.values(),
+        relationNodes,
+        hoverFocus,
+      );
+
     // Posters over the nodes large enough on screen to show one; a focused
     // view shows every title on its rings with its poster.
     const minPosterRadius =
@@ -1417,14 +1492,7 @@ export default function LibraryGraphView({
       const radius = sizesByNode.get(key) ?? 0;
       const point = viewportByNode.get(key);
       const threshold = minPosterRadius * 0.7;
-      const fade =
-        minPosterRadius === 0
-          ? 1
-          : Math.max(
-              0,
-              Math.min(1, (radius - threshold) / (minPosterRadius * 0.6)),
-            );
-      const posterOpacity = fade * fade * (3 - 2 * fade);
+      const posterOpacity = graphPosterArtworkOpacity(radius, minPosterRadius);
       if (radius < threshold || !point || !admitPoster(point, radius)) {
         return;
       }
@@ -1441,15 +1509,20 @@ export default function LibraryGraphView({
       if (hoverFocus && !hoverFocus.near.has(key)) {
         context.globalAlpha = HOVER_FADE_ALPHA;
       }
-      context.globalAlpha *= (attributes.detailOpacity ?? 1) * posterOpacity;
-      drawGraphPoster(context, image, point, radius);
-      if (
-        graphPosterHoverable(
-          radius,
-          posterOpacity * (attributes.detailOpacity ?? 1),
-          true,
-        )
-      ) {
+      context.globalAlpha *= posterOpacity;
+      drawGraphPoster(
+        context,
+        image,
+        point,
+        radius,
+        cachedCssColor(
+          themeColorsRef.current,
+          canvas,
+          "--scry-surfD",
+          "#0b0e15",
+        ),
+      );
+      if (graphPosterHoverable(radius, posterOpacity, true)) {
         hoverableNodes.add(key);
       }
       context.restore();
@@ -1483,7 +1556,7 @@ export default function LibraryGraphView({
       setHover(null);
       sigma.getContainer().style.cursor = "";
       sigma.scheduleRefresh({
-        partialGraph: { nodes: graph.nodes(), edges: graph.edges() },
+        partialGraph: { nodes: graph.nodes() },
         skipIndexation: true,
       });
     }
@@ -1776,7 +1849,14 @@ export default function LibraryGraphView({
           ...DEFAULT_STYLES.nodes,
           shape: "rectangle",
           backdropVisibility: "hidden",
+          // The delayed application hover owns highlighting; native hover
+          // must not reorder the node buffers during a passing swipe.
+          depth: "nodes",
+          size: { attribute: "size" },
         },
+        // Relations are painted from the visible adjacency cache on the
+        // overlay. Their fades must not re-upload the full WebGL edge buffer.
+        edges: { ...DEFAULT_STYLES.edges, visibility: "hidden" },
       },
       settings: {
         // The view can sit in a hidden drawer (narrow screens with a title
@@ -1784,7 +1864,7 @@ export default function LibraryGraphView({
         allowInvalidContainer: true,
         renderLabels: false,
         renderEdgeLabels: false,
-        enableEdgeEvents: true,
+        enableEdgeEvents: false,
         autoRescale: false,
         gestureTarget: "graph",
         // Small, quick steps per wheel or trackpad event, so zooming reads
@@ -1813,37 +1893,13 @@ export default function LibraryGraphView({
               zIndex: 0,
             };
       },
-      edgeReducer: (edge, attributes) => {
-        const [from, to] = graph.extremities(edge);
-        if (
-          !viewportNodesRef.current.has(from) ||
-          !viewportNodesRef.current.has(to)
-        ) {
-          return { ...attributes, visibility: "hidden" };
-        }
-        const opacity = Math.min(
-          relationOpacityRef.current.get(from) ?? 0,
-          relationOpacityRef.current.get(to) ?? 0,
-        );
-        if (opacity === 0) return { ...attributes, visibility: "hidden" };
-        const focus = hoverFocusRef.current;
-        if (!focus) {
-          return { ...attributes, opacity };
-        }
-        if (from === focus.key || to === focus.key) {
-          return {
-            ...attributes,
-            opacity,
-            color: withAlpha(focus.accent, 0.9),
-            size: attributes.size + 1,
-            zIndex: 1,
-          };
-        }
-        return { ...attributes, color: "rgba(0, 0, 0, 0)", zIndex: 0 };
-      },
     });
     graphRef.current = graph;
+    relationsStoreRef.current = graph.copy();
     sigmaRef.current = sigma;
+    const hoverIntent = createGraphHoverIntent();
+    hoverIntentRef.current = hoverIntent;
+    let latestPointer: { x: number; y: number } | null = null;
 
     sigma.on("afterRender", drawOverlay);
     // Ctrl-click (Cmd-click on a Mac) also opens the title's panel; a plain
@@ -1857,60 +1913,112 @@ export default function LibraryGraphView({
     });
     sigma.on("enterNode", ({ node, event }) => {
       if (!hoverableNodesRef.current.has(node)) return;
-      hoveredEdgeRef.current = null;
-      const attributes = graph.getNodeAttributes(node);
-      hoverFocusRef.current = {
-        key: node,
-        near: new Set([node, ...graph.neighbors(node)]),
-        accent: readCssColor(container, "--scry-accent", "#5b64ff"),
-      };
-      sigma.refresh({
-        partialGraph: { nodes: graph.nodes(), edges: graph.edges() },
-        skipIndexation: true,
+      hoverIntent.enter(node, () => {
+        if (
+          sigmaRef.current !== sigma ||
+          sigma.getGraph() !== graph ||
+          !graph.hasNode(node) ||
+          !hoverableNodesRef.current.has(node)
+        )
+          return;
+        hoveredEdgeRef.current = null;
+        const attributes = graph.getNodeAttributes(node);
+        if (latestPointer) {
+          const containerBox = container.getBoundingClientRect();
+          const box = graphPosterBounds(
+            sigma.graphToViewport(attributes),
+            sigma.scaleSize(
+              sigma.getNodeDisplayData(node)?.size ?? attributes.size,
+            ),
+          );
+          const x = latestPointer.x - containerBox.left;
+          const y = latestPointer.y - containerBox.top;
+          if (x < box.left || x > box.right || y < box.top || y > box.bottom)
+            return;
+        }
+        hoverFocusRef.current = {
+          key: node,
+          near: new Set([
+            node,
+            ...(relationsStoreRef.current?.neighbors(node) ?? []),
+          ]),
+          accent: readCssColor(container, "--scry-accent", "#5b64ff"),
+        };
+        sigma.refresh({
+          partialGraph: { nodes: graph.nodes() },
+          skipIndexation: true,
+        });
+        setHover({
+          kind: "node",
+          key: node,
+          x: event.x,
+          y: event.y,
+          lines: [attributes.label],
+        });
+        container.style.cursor = "pointer";
       });
-      setHover({
-        kind: "node",
-        key: node,
-        x: event.x,
-        y: event.y,
-        lines: [attributes.label],
-      });
-      container.style.cursor = "pointer";
     });
-    sigma.on("leaveNode", () => {
-      if (!hoverFocusRef.current) return;
+    sigma.on("leaveNode", ({ node }) => {
+      hoverIntent.leave(node);
+      if (hoverFocusRef.current?.key !== node) return;
       hoverFocusRef.current = null;
       sigma.refresh({
-        partialGraph: { nodes: graph.nodes(), edges: graph.edges() },
+        partialGraph: { nodes: graph.nodes() },
         skipIndexation: true,
       });
       setHover(null);
       container.style.cursor = "";
     });
-    sigma.on("enterEdge", ({ edge, event }) => {
-      const from = graph.source(edge);
-      const to = graph.target(edge);
-      if (
-        !hoverableNodesRef.current.has(from) ||
-        !hoverableNodesRef.current.has(to)
-      )
-        return;
-      hoveredEdgeRef.current = { from, to };
-      setHover({
-        kind: "edge",
-        from: graph.source(edge),
-        to: graph.target(edge),
-        x: event.x,
-        y: event.y,
-        lines: graph.getEdgeAttribute(edge, "kinds"),
-      });
-    });
-    sigma.on("leaveEdge", () => {
+    const clearEdgeHover = () => {
+      if (!hoveredEdgeRef.current) return;
       hoveredEdgeRef.current = null;
       setHover(null);
-    });
+    };
+    let edgeHoverFrame: number | null = null;
+    const moveEdgeHover = (event: MouseEvent) => {
+      // Track the live pointer even if GPU picking reports its leave late.
+      latestPointer = { x: event.clientX, y: event.clientY };
+      if (edgeHoverFrame !== null) cancelAnimationFrame(edgeHoverFrame);
+      edgeHoverFrame = requestAnimationFrame(() => {
+        edgeHoverFrame = null;
+        if (hoverFocusRef.current || sigma.getCamera().isAnimating()) {
+          clearEdgeHover();
+          return;
+        }
+        const bounds = container.getBoundingClientRect();
+        const point = {
+          x: event.clientX - bounds.left,
+          y: event.clientY - bounds.top,
+        };
+        const hit = hitGraphRelation(
+          relationHitsRef.current,
+          point,
+          hoverableNodesRef.current,
+        );
+        if (!hit) {
+          clearEdgeHover();
+          return;
+        }
+        const current = hoveredEdgeRef.current;
+        if (current?.from === hit.from && current.to === hit.to) return;
+        hoveredEdgeRef.current = { from: hit.from, to: hit.to };
+        setHover({
+          kind: "edge",
+          from: hit.from,
+          to: hit.to,
+          ...point,
+          lines: hit.kinds,
+        });
+      });
+    };
+    container.addEventListener("mousemove", moveEdgeHover);
+    container.addEventListener("mouseleave", clearEdgeHover);
+    container.addEventListener("mouseleave", hoverIntent.cancel);
     // A touch never leaves a node, so the tooltip goes when the finger lifts.
-    const clearHover = () => setHover(null);
+    const clearHover = () => {
+      hoverIntent.cancel();
+      setHover(null);
+    };
     container.addEventListener("touchend", clearHover);
     container.addEventListener("touchcancel", clearHover);
 
@@ -1929,6 +2037,12 @@ export default function LibraryGraphView({
 
     return () => {
       resizeObserver.disconnect();
+      container.removeEventListener("mousemove", moveEdgeHover);
+      container.removeEventListener("mouseleave", clearEdgeHover);
+      container.removeEventListener("mouseleave", hoverIntent.cancel);
+      hoverIntent.cancel();
+      hoverIntentRef.current = null;
+      if (edgeHoverFrame !== null) cancelAnimationFrame(edgeHoverFrame);
       container.removeEventListener("touchend", clearHover);
       container.removeEventListener("touchcancel", clearHover);
       if (frameRef.current !== null) {
@@ -1942,6 +2056,7 @@ export default function LibraryGraphView({
       sigma.kill();
       sigmaRef.current = null;
       graphRef.current = null;
+      relationsStoreRef.current = null;
     };
   }, [drawOverlay]);
 
@@ -1956,6 +2071,7 @@ export default function LibraryGraphView({
     }
     titlesByIdRef.current = titlesById;
     focusCenterRef.current = focusCenterKey;
+    selectedKeyRef.current = focusCenterKey;
     const focusing = focusCenterKey !== null;
     const sizes = nodeSizesByTitleId(Array.from(titlesById.values()), metric);
     const mutedEdge = readCssColor(
@@ -1966,13 +2082,30 @@ export default function LibraryGraphView({
 
     // Where each drawn node is now, so it can glide from there.
     const current = new Map<string, LayoutPoint>();
+    const currentViewport = new Map<string, LayoutPoint>();
+    const currentRadii = new Map<string, number>();
+    const incoming = new Set(displayed.nodes.map((node) => node.subjectKey));
     graph.forEachNode((key, attributes) => {
       current.set(key, { x: attributes.x, y: attributes.y });
+      if (focusing && incoming.has(key)) {
+        currentViewport.set(key, sigma.graphToViewport(attributes));
+        currentRadii.set(
+          key,
+          sigma.scaleSize(
+            sigma.getNodeDisplayData(key)?.size ?? attributes.size,
+          ),
+        );
+      }
     });
     // Detach during replacement: Sigma re-indexes the whole remaining graph
     // synchronously for every nodeDropped event, even with scheduled rendering.
     // Keep this store's identity for the renderer's event handlers.
     hoverFocusRef.current = null;
+    hoveredEdgeRef.current = null;
+    hoverIntentRef.current?.cancel();
+    viewportNodesRef.current = new Set();
+    viewportRelationsRef.current.clear();
+    relationHitsRef.current = [];
     sigma.setGraph(
       new Graph<NodeAttributes, EdgeAttributes>({
         type: "undirected",
@@ -2003,6 +2136,13 @@ export default function LibraryGraphView({
       const extent = extentRef.current;
       sigma.setCustomBBox({ x: [-extent, extent], y: [-extent, extent] });
       const rest = restCamera(sigma);
+      // Rebase the existing screen positions into the resting frame before
+      // moving nodes. A camera zoom running beside the glide would magnify
+      // the destination's pixel-sized posters before shrinking them again.
+      for (const [key, point] of currentViewport)
+        current.set(key, sigma.viewportToGraph(point, { cameraState: rest }));
+      sigma.getCamera().cancelAnimation();
+      sigma.getCamera().setState(rest);
       const unit = 1000;
       const origin = sigma.graphToViewport(
         { x: 0, y: 0 },
@@ -2075,6 +2215,8 @@ export default function LibraryGraphView({
         ? (current.get(focusCenterKey) ?? targets.get(focusCenterKey))
         : undefined;
     const from = new Map<string, LayoutPoint>();
+    const fromSizes = new Map<string, number>();
+    const targetSizes = new Map<string, number>();
     for (const [key, target] of targets) {
       from.set(key, current.get(key) ?? fanFrom ?? target);
     }
@@ -2130,7 +2272,10 @@ export default function LibraryGraphView({
         const ghostColor = withAlpha(color, 0.35);
         const size =
           node.subjectKey === focusCenterKey
-            ? FOCUS_CENTER_RADIUS_PX / focusPixelsPerUnit
+            ? (currentRadii.get(node.subjectKey) ??
+                FOCUS_CENTER_RADIUS_PX * 1.35) /
+              1.35 /
+              focusPixelsPerUnit
             : focusing
               ? FOCUS_GHOST_RADIUS_PX / focusPixelsPerUnit
               : GHOST_NODE_SIZE;
@@ -2150,7 +2295,10 @@ export default function LibraryGraphView({
         const metricSize = title ? (sizes.get(title.id) ?? 4) : 4;
         const size =
           node.subjectKey === focusCenterKey
-            ? FOCUS_CENTER_RADIUS_PX / focusPixelsPerUnit
+            ? (currentRadii.get(node.subjectKey) ??
+                FOCUS_CENTER_RADIUS_PX * 1.35) /
+              1.35 /
+              focusPixelsPerUnit
             : focusing
               ? focusNeighborRadiusPx(metricSize) / focusPixelsPerUnit
               : metricSize;
@@ -2178,14 +2326,33 @@ export default function LibraryGraphView({
             initialDetailOpacity,
           );
       }
+      // Selection decorates the prepared geometry, not the rating metric.
+      // Restoring baseSize here would undo the calibrated poster scale.
+      const previousRadius = currentRadii.get(node.subjectKey);
+      if (focusing && previousRadius !== undefined) {
+        targetSizes.set(node.subjectKey, attributes.size);
+        const startSize =
+          previousRadius /
+          sigma.scaleSize(1) /
+          (node.subjectKey === focusCenterKey ? 1.35 : 1);
+        fromSizes.set(node.subjectKey, startSize);
+        attributes.size = startSize;
+      }
+      attributes.unselectedSize = attributes.size;
+      attributes.unselectedColor = attributes.color;
+      if (focusing && node.subjectKey === focusCenterKey)
+        attributes.size *= 1.35;
       if (graph.hasNode(node.subjectKey)) {
         graph.replaceNodeAttributes(node.subjectKey, attributes);
       } else {
         graph.addNode(node.subjectKey, attributes);
       }
     }
+    // Keep adjacency and edge metadata off the renderer: even hidden WebGL
+    // edges run a frame pass on every camera update.
+    const relations = graph.copy();
     for (const edge of displayed.edges) {
-      if (graph.hasEdge(edge.from, edge.to)) {
+      if (relations.hasEdge(edge.from, edge.to)) {
         continue;
       }
       const toGhost =
@@ -2207,9 +2374,10 @@ export default function LibraryGraphView({
           : mutedEdge,
         kinds: edge.kinds,
       };
-      graph.addUndirectedEdge(edge.from, edge.to, attributes);
+      relations.addUndirectedEdge(edge.from, edge.to, attributes);
     }
 
+    relationsStoreRef.current = relations;
     sigma.setGraph(graph);
     layoutRef.current = layout;
     const container = sigma.getContainer();
@@ -2271,7 +2439,9 @@ export default function LibraryGraphView({
     const moving = Array.from(targets).some(([key, target]) => {
       const start = from.get(key);
       return (
-        start !== undefined && (start.x !== target.x || start.y !== target.y)
+        (start !== undefined &&
+          (start.x !== target.x || start.y !== target.y)) ||
+        fromSizes.get(key) !== targetSizes.get(key)
       );
     });
     if (moving) {
@@ -2281,14 +2451,27 @@ export default function LibraryGraphView({
         started ??= now;
         const progress = Math.min(1, (now - started) / FOCUS_TWEEN_MS);
         const positions = tweenPositions(from, targets, progress);
-        graph.updateEachNodeAttributes((key, attributes) => {
-          const point = positions.get(key);
-          if (point) {
-            attributes.x = point.x;
-            attributes.y = point.y;
-          }
-          return attributes;
-        }, POSITION_HINTS);
+        graph.updateEachNodeAttributes(
+          (key, attributes) => {
+            const point = positions.get(key);
+            if (point) {
+              attributes.x = point.x;
+              attributes.y = point.y;
+            }
+            const startSize = fromSizes.get(key);
+            const targetSize = targetSizes.get(key);
+            if (startSize !== undefined && targetSize !== undefined) {
+              attributes.unselectedSize =
+                startSize + (targetSize - startSize) * easeOutCubic(progress);
+              attributes.size =
+                attributes.unselectedSize * (key === focusCenterKey ? 1.35 : 1);
+            }
+            return attributes;
+          },
+          fromSizes.size
+            ? { attributes: ["x", "y", "size", "unselectedSize"] }
+            : POSITION_HINTS,
+        );
         if (progress < 1) {
           tweenFrameRef.current = window.requestAnimationFrame(glide);
         } else {
@@ -2306,9 +2489,10 @@ export default function LibraryGraphView({
     if (cameraCenterRef.current !== focusCenterKey || focusCenterKey !== null) {
       cameraCenterRef.current = focusCenterKey;
       fitWhenSettledRef.current = focusCenterKey === null;
-      void sigma
-        .getCamera()
-        .animate(restCamera(sigma), { duration: FOCUS_TWEEN_MS });
+      if (!focusing)
+        void sigma
+          .getCamera()
+          .animate(restCamera(sigma), { duration: FOCUS_TWEEN_MS });
     }
     applySelection();
     sigma.refresh();
@@ -2401,9 +2585,10 @@ export default function LibraryGraphView({
               ...attributes,
               detailOpacity,
               color: withAlpha(attributes.baseColor, detailOpacity),
+              unselectedColor: withAlpha(attributes.baseColor, detailOpacity),
             };
           },
-          { attributes: ["color", "detailOpacity"] },
+          { attributes: ["color", "detailOpacity", "unselectedColor"] },
         );
       }
       const { width, height } = sigma.getDimensions();
@@ -2447,6 +2632,57 @@ export default function LibraryGraphView({
       void sigma.getCamera().animate(camera, { duration: 400 });
     }
   }, []);
+
+  const selectNeighborhood = React.useCallback(
+    (clusterId: number) => {
+      const next = toggleClusterExpanded(selectedNeighborhoods, clusterId);
+      setSelectedNeighborhoods(next);
+      const sigma = sigmaRef.current;
+      const graph = graphRef.current;
+      if (!sigma || !graph) return;
+      const layout = largeLayoutRef.current;
+      if (!layout) {
+        const camera = framingCamera(
+          sigma,
+          graph,
+          (attributes) => next.size === 0 || next.has(attributes.clusterId),
+          1.5,
+        );
+        if (camera) void sigma.getCamera().animate(camera, { duration: 300 });
+        return;
+      }
+      // Fit the complete selected clouds, even when the renderer currently
+      // holds only their collapsed center nodes. Unplaced titles are excluded
+      // from a named selection but included when clearing the selection.
+      const bounds = graphNeighborhoodBounds(layout.regions, next);
+      if (!bounds) return;
+      const corners = [
+        { x: bounds.left, y: bounds.top },
+        { x: bounds.right, y: bounds.top },
+        { x: bounds.right, y: bounds.bottom },
+        { x: bounds.left, y: bounds.bottom },
+      ].map((point) => sigma.graphToViewport(point));
+      const { width, height } = sigma.getDimensions();
+      if (width <= 0 || height <= 0) return;
+      const center = sigma.graphToFramedGraph({
+        x: (bounds.left + bounds.right) / 2,
+        y: (bounds.top + bounds.bottom) / 2,
+      });
+      const ratio =
+        sigma.getCamera().getState().ratio *
+        OVERVIEW_FIT_PADDING *
+        Math.max(
+          (Math.max(...corners.map((p) => p.x)) -
+            Math.min(...corners.map((p) => p.x))) /
+            width,
+          (Math.max(...corners.map((p) => p.y)) -
+            Math.min(...corners.map((p) => p.y))) /
+            height,
+        );
+      void sigma.getCamera().animate({ ...center, ratio }, { duration: 300 });
+    },
+    [selectedNeighborhoods],
+  );
 
   // A focused view rests on its rings; the overview fits its titles, which
   // the layout gathers well inside the frame around the cluster ring.
@@ -2622,9 +2858,59 @@ export default function LibraryGraphView({
     ],
   );
 
+  const [historyExpansion, setHistoryExpansion] = React.useState<string | null>(
+    null,
+  );
+  const historySnapshot = React.useMemo(
+    () => ({
+      traversal,
+      reasonsByPair,
+      selectedKey,
+      focusedKey,
+      selectionCardOpen,
+      expandingKey,
+    }),
+    [
+      traversal,
+      reasonsByPair,
+      selectedKey,
+      focusedKey,
+      selectionCardOpen,
+      expandingKey,
+    ],
+  );
+  const restoreHistory = React.useCallback((saved: typeof historySnapshot) => {
+    invalidateExpansions(expandTokenRef);
+    const pending = pendingSelectRef.current;
+    if (pending) window.clearTimeout(pending.timer);
+    pendingSelectRef.current = null;
+    setTraversal(saved.traversal);
+    setReasonsByPair(saved.reasonsByPair);
+    setSelectedKey(saved.selectedKey);
+    setFocusedKey(saved.focusedKey);
+    setSelectionCardOpen(saved.selectionCardOpen);
+    setExpandingKey(null);
+    setExpandNotice(null);
+    setHistoryExpansion(saved.expandingKey);
+  }, []);
+  const pushGraphHistory = useLibraryGraphHistory(
+    sourceKey,
+    historySnapshot,
+    restoreHistory,
+  );
+  React.useEffect(() => {
+    if (!historyExpansion) return;
+    const node = exploredNodesByKey.get(historyExpansion);
+    if (!node) return;
+    setHistoryExpansion(null);
+    void expandNode(node);
+  }, [historyExpansion, exploredNodesByKey, expandNode]);
+
   // Leaves the focused view for the library overview, dropping what was
   // explored from it.
   const exitFocus = React.useCallback(() => {
+    if (selectedKey !== null) pushGraphHistory();
+    setHistoryExpansion(null);
     invalidateExpansions(expandTokenRef);
     setTraversal(emptyTraversal<DiscoveryItem>());
     setReasonsByPair(new Map());
@@ -2632,7 +2918,7 @@ export default function LibraryGraphView({
     setFocusedKey(null);
     setExpandingKey(null);
     setExpandNotice(null);
-  }, []);
+  }, [pushGraphHistory, selectedKey]);
 
   // Picking a node focuses the view on it and brings in more like it. The
   // trail follows the focus: a node already on it cuts the trail back to it,
@@ -2668,6 +2954,8 @@ export default function LibraryGraphView({
       invalidateExpansions(expandTokenRef);
       setExpandingKey(null);
       setExpandNotice(null);
+      if (selectedKey !== key) pushGraphHistory();
+      setHistoryExpansion(null);
       setSelectedKey(key);
       setSelectionCardOpen(true);
       setFocusedKey(key);
@@ -2708,6 +2996,8 @@ export default function LibraryGraphView({
       flushPendingSelect,
       traversal.expansions,
       largeLayout,
+      selectedKey,
+      pushGraphHistory,
     ],
   );
   React.useEffect(() => {
@@ -2745,12 +3035,14 @@ export default function LibraryGraphView({
       invalidateExpansions(expandTokenRef);
       setExpandingKey(null);
       setExpandNotice(null);
+      if (selectedKey !== anchor) pushGraphHistory();
+      setHistoryExpansion(null);
       setTraversal((current) => collapseTraversalToCrumb(current, index));
       setSelectedKey(anchor);
       setSelectionCardOpen(true);
       setFocusedKey(anchor);
     },
-    [exitFocus, traversal.expansions],
+    [exitFocus, traversal.expansions, selectedKey, pushGraphHistory],
   );
 
   const handleCanvasKeyDown = React.useCallback(
@@ -3006,11 +3298,7 @@ export default function LibraryGraphView({
                       ? selectedNeighborhoods.has(Number(band.key))
                       : undefined
                   }
-                  onClick={() =>
-                    setSelectedNeighborhoods((current) =>
-                      toggleClusterExpanded(current, Number(band.key)),
-                    )
-                  }
+                  onClick={() => selectNeighborhood(Number(band.key))}
                   className="flex w-full min-w-0 items-center gap-2 rounded-[6px] border border-transparent px-2 py-1 text-left text-[var(--scry-ink2)] aria-pressed:border-[var(--scry-accent)] hover:bg-[var(--scry-hover)]"
                   style={{ backgroundColor: withAlpha(band.color, 0.14) }}
                 >

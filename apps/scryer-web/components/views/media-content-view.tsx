@@ -3251,7 +3251,9 @@ export function MediaContentView({
       count: knownCatalogTitleCount,
       formattedCount: knownCatalogTitleCount.toLocaleString(),
     }),
-    managedStorageSummary(Math.max(0, catalogManagedBytes)),
+    ...(collectionViewMode === "graph"
+      ? []
+      : [managedStorageSummary(Math.max(0, catalogManagedBytes))]),
   ].join(" · ");
 
   const [libraryCrumb, setLibraryCrumb] = React.useState<string | null>(null);
@@ -3842,12 +3844,12 @@ export function MediaContentView({
                   catalogSurfacePhase === "content" ||
                   catalogSurfacePhase === "empty";
 
-                // The graph stays up while a picked title resolves: swapping
-                // it out for the loading state would rebuild it and drop the
-                // title it is focused on.
+                // Mount the graph while catalog bootstrap runs so its request
+                // and progress UI start in parallel with title hydration.
+                // Keep it mounted while a picked title resolves as well.
                 if (
-                  catalogSurfacePhase === "resolving" ||
-                  (overviewTitleResolutionPending &&
+                  ((catalogSurfacePhase === "resolving" ||
+                    overviewTitleResolutionPending) &&
                     collectionViewMode !== "graph") ||
                   viewModePending
                 ) {

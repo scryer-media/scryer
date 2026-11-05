@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
+import { useQuery } from "urql";
+
+import { libraryGraphTitleDetailsQuery } from "@/lib/graphql/queries";
 
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
@@ -34,20 +37,44 @@ export function LibraryGraphSelectionCard({
   children,
 }: LibraryGraphSelectionCardProps) {
   const t = useTranslate();
+  // Catalog graph rows omit long descriptions and backdrop metadata. Read
+  // only the picked title, leaving the full graph's initial payload lean.
+  const [details] = useQuery<{
+    title: Pick<
+      TitleRecord,
+      "id" | "overview" | "backgroundUrl" | "canonicalTags"
+    > | null;
+  }>({
+    query: libraryGraphTitleDetailsQuery,
+    variables: { id: title?.id ?? "" },
+    pause:
+      !title ||
+      (title.overview !== undefined &&
+        title.backgroundUrl !== undefined &&
+        title.canonicalTags !== undefined),
+  });
+  const metadata =
+    title && details.data?.title?.id === title.id ? details.data.title : null;
+
   const posterUrl = selectPosterVariantUrl(
     title?.posterUrl ?? item?.posterUrl,
     "w250",
   );
   const backdropUrl = selectBackdropVariantUrl(
-    title?.backgroundUrl ?? item?.backgroundUrl,
+    title?.backgroundUrl ?? metadata?.backgroundUrl ?? item?.backgroundUrl,
     "w1280",
   );
-  const overview = title?.overview || item?.overview;
+  const overview = title?.overview || metadata?.overview || item?.overview;
   const contentType =
     title?.facet ?? (item && discoveryItemFacet(item)) ?? facet;
   const genres = [
     ...new Set(
-      (title?.canonicalTags ?? item?.canonicalTags ?? [])
+      (
+        title?.canonicalTags ??
+        metadata?.canonicalTags ??
+        item?.canonicalTags ??
+        []
+      )
         .filter(
           (tag) => tag.category.toLowerCase() === "genre" && !tag.isSpoiler,
         )

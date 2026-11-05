@@ -995,9 +995,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     return titleCatalogSort;
   }, [effectiveViewMode, titleCatalogSort, view, visibleTitleTableColumns]);
   const titleCatalogPageSize =
-    effectiveViewMode === "graph"
-      ? TITLE_CATALOG_SELECT_ALL_PAGE_SIZE
-      : TITLE_CATALOG_PAGE_SIZE;
+    effectiveViewMode === "graph" ? 10_000 : TITLE_CATALOG_PAGE_SIZE;
   const titleCatalogProjection = React.useMemo(
     () =>
       effectiveViewMode === "graph"
@@ -1966,6 +1964,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         },
         invalidate,
       );
+      if (effectiveViewMode === "graph") return;
       void summaryLoaders.bytes.run(
         countKey,
         async () => {
@@ -1991,6 +1990,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       effectiveTitleQuickFilters,
       setTitleStatus,
       summaryLoaders,
+      effectiveViewMode,
       t,
     ],
   );

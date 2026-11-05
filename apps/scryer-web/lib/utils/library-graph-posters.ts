@@ -20,6 +20,13 @@ export function graphPosterBounds(point: Point, size: number, padding = 0) {
 
 export type GraphPosterBounds = ReturnType<typeof graphPosterBounds>;
 
+/** Artwork follows visible poster size, independently of the zone crossfade. */
+export function graphPosterArtworkOpacity(size: number, minSize = 9) {
+  if (minSize === 0) return 1;
+  const t = Math.max(0, Math.min(1, (size - minSize * 0.7) / (minSize * 0.6)));
+  return t * t * (3 - 2 * t);
+}
+
 export function graphPosterHoverable(
   size: number,
   opacity: number,
@@ -148,7 +155,9 @@ export function drawGraphPoster(
   image: HTMLImageElement,
   point: Point,
   size: number,
+  background: string,
 ) {
+  if (context.globalAlpha <= 0) return;
   const box = graphPosterBounds(point, size);
   const scale = Math.max(
     box.width / image.naturalWidth,
@@ -159,6 +168,14 @@ export function drawGraphPoster(
   context.save();
   traceGraphPoster(context, point, size);
   context.clip();
+  // Theme surfaces can be translucent. Remove zones and relation lines
+  // inside the rounded clip so they cannot bleed through fading artwork.
+  context.clearRect(box.left, box.top, box.width, box.height);
+  const opacity = context.globalAlpha;
+  context.globalAlpha = 1;
+  context.fillStyle = background;
+  context.fillRect(box.left, box.top, box.width, box.height);
+  context.globalAlpha = opacity;
   context.drawImage(
     image,
     point.x - width / 2,

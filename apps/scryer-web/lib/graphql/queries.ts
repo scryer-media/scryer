@@ -1956,6 +1956,16 @@ ${DISCOVERY_ITEM_DETAIL_FIELDS}
   }
 }`;
 
+export const libraryGraphTitleDetailsQuery = `query LibraryGraphTitleDetails($id: ID!) {
+  title(id: $id) {
+    id
+    overview
+    backgroundUrl
+    canonicalTags {${TITLE_CANONICAL_TAG_FIELDS}
+    }
+  }
+}`;
+
 export const libraryGraphQuery = `query LibraryGraph($input: LibraryGraphInput!) {
   libraryGraph(input: $input) {
     generatedAt
