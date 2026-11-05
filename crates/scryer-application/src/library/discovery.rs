@@ -123,6 +123,14 @@ struct BoundaryStamp {
     directory: bool,
 }
 
+// Size, birth time and mtime alone cannot detect sidecar rewrites that preserve
+// timestamps. Keep full inspection on platforms without a change-time stamp.
+#[cfg(not(unix))]
+async fn boundary_stamps(_path: &Path, _episodic: bool) -> Option<Vec<Option<BoundaryStamp>>> {
+    None
+}
+
+#[cfg(unix)]
 async fn boundary_stamps(path: &Path, episodic: bool) -> Option<Vec<Option<BoundaryStamp>>> {
     let names: &[&str] = if episodic {
         &["", "tvshow.nfo", ".plexmatch"]
@@ -1974,6 +1982,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     async fn discovered_leaf_evidence(root: &Path, folder: &Path) -> DiscoveredBoundaryEvidence {
         collect_nested_boundaries(root, discovery_policy(MediaFacet::Movie))
             .await
@@ -1984,6 +1993,7 @@ mod tests {
             .expect("complete leaf evidence")
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn discovery_evidence_reuses_inspection_and_checks_resolved_identity() {
         let root = tempfile::tempdir().unwrap();
@@ -2019,6 +2029,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn discovery_evidence_sidecar_changes_force_fresh_validation() {
         let root = tempfile::tempdir().unwrap();
@@ -2056,6 +2067,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn discovery_evidence_replaced_directory_cannot_claim_child_title() {
         let root = tempfile::tempdir().unwrap();
@@ -2077,6 +2089,47 @@ mod tests {
         );
         assert!(root.path().join("Original/Fixture.mkv").exists());
         assert!(folder.join("Other Title/Other.Title.2024.mkv").exists());
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn discovery_evidence_without_change_time_uses_fresh_sidecar_identity() {
+        let root = tempfile::tempdir().unwrap();
+        write_discovery_fixture(root.path(), "Fixture/Fixture.mkv");
+        let folder = root.path().join("Fixture");
+        let nfo = folder.join("movie.nfo");
+        std::fs::write(&nfo, "<movie><tmdbid>123</tmdbid></movie>").unwrap();
+        let modified = std::fs::metadata(&nfo).unwrap().modified().unwrap();
+        let boundary = collect_nested_boundaries(root.path(), discovery_policy(MediaFacet::Movie))
+            .await
+            .into_iter()
+            .find(|boundary| boundary.path == folder)
+            .unwrap();
+        assert!(boundary.evidence.is_none());
+        std::fs::write(&nfo, "<movie><tmdbid>456</tmdbid></movie>").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&nfo)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let title = scryer_domain::NewTitle {
+            name: "Fixture".into(),
+            facet: MediaFacet::Movie,
+            external_ids: vec![scryer_domain::ExternalId::new("tmdb", "123")],
+            ..Default::default()
+        };
+        assert_eq!(
+            verify_new_scan_title_boundary_with_evidence(
+                &folder,
+                &title,
+                boundary.evidence.as_ref()
+            )
+            .await
+            .unwrap_err()
+            .validation_reason(),
+            Some(crate::error_reasons::library::MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER)
+        );
     }
 
     #[tokio::test]

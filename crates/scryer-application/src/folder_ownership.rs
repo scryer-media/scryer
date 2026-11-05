@@ -1193,8 +1193,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discovery_evidence_claim_preserves_library_root_boundaries() {
-        for mode in ["valid", "root", "outside"] {
+    async fn discovery_evidence_claim_preserves_ownership_and_library_boundaries() {
+        for mode in ["valid", "root", "outside", "owner", "descendant_owner"] {
             let root = tempfile::tempdir().unwrap();
             let outside = tempfile::tempdir().unwrap();
             let folder = root.path().join("Scan Fixture");
@@ -1218,19 +1218,38 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .remove(0)
-                    .evidence
-                    .unwrap();
+                    .evidence;
+            assert_eq!(evidence.is_some(), cfg!(unix));
             let library_root = match mode {
                 "root" => folder.as_path(),
                 "outside" => outside.path(),
                 _ => root.path(),
             };
             let (app, mut title) = unowned_scan_title(MediaFacet::Movie, library_root).await;
+            let owner_path = match mode {
+                "owner" => Some(folder.clone()),
+                "descendant_owner" => Some(folder.join("Recorded Child")),
+                _ => None,
+            };
+            if let Some(owner_path) = &owner_path {
+                // Catalog ownership can change after discovery, without any
+                // filesystem change that would invalidate the cached stamps.
+                let mut owner = title.clone();
+                owner.id = "other-owner".into();
+                owner.name = "Other Owner".into();
+                owner.folder_path = Some(path_to_stored_string(owner_path));
+                app.services
+                    .catalog
+                    .titles
+                    .create_or_get_existing(owner)
+                    .await
+                    .unwrap();
+            }
             let result = claim_title_folder_for_scan_with_evidence(
                 &app,
                 &mut title,
                 &folder,
-                Some(&evidence),
+                evidence.as_ref(),
             )
             .await;
             if mode == "valid" {
@@ -1249,6 +1268,19 @@ mod tests {
                         .unwrap()
                         .folder_path
                         .is_none()
+                );
+            }
+            if let Some(owner_path) = owner_path {
+                assert_eq!(
+                    app.services
+                        .catalog
+                        .titles
+                        .get_by_id("other-owner")
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .folder_path,
+                    Some(path_to_stored_string(&owner_path)),
                 );
             }
             assert_eq!(std::fs::read(file).unwrap(), b"preserved media");
