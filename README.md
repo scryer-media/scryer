@@ -158,6 +158,12 @@ Installation Steps:
 ### Support
 If you're facing any issues with installation or issues, feel free to use any of our social platforms (Discord, Reddit, Github) for support!
 
+## Sponsors
+
+Thank you to everyone sponsoring Scryer! [Become a sponsor](https://opencollective.com/scryer-media/projects/scryer).
+
+[![Scryer sponsors on Open Collective](https://opencollective.com/scryer/backers.svg?width=890&button=false)](https://opencollective.com/scryer-media/projects/scryer)
+
 ## Development
 
 - [Contributing guide](CONTRIBUTING.md)
