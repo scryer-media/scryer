@@ -1576,6 +1576,8 @@ export const PendingImportsContainer = React.memo(
                   <Checkbox
                     id="pending-import-conflict-select-page"
                     size="large"
+                    // Match the bar's small buttons (h-8) exactly.
+                    className="size-8"
                     checked={
                       pendingConnection.totalCount > 0 &&
                       selectedImports.length >= pendingConnection.totalCount

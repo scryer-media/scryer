@@ -190,6 +190,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                 <Button
                   id={`pending-import-conflict-adopt-${item.id}`}
                   size="sm"
+                  variant="outline"
                   disabled={isBusy || conflictBusy}
                   onClick={() => onResolveConflict(item, "ADOPT_ALL")}
                 >
