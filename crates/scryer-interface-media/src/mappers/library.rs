@@ -444,6 +444,7 @@ pub fn from_library(library: Library) -> LibraryPayload {
                 is_default: root.is_default,
             })
             .collect(),
+        removed_title_count: 0,
     }
 }
 

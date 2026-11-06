@@ -26,6 +26,15 @@ pub struct LibraryRootDraft {
     pub is_default: bool,
 }
 
+/// A library after an update, with what the update took out of the catalog.
+#[derive(Clone, Debug)]
+pub struct UpdatedLibrary {
+    pub library: scryer_domain::Library,
+    /// Titles removed from the catalog because the root under them was
+    /// dropped by this update. Their files on disk are untouched.
+    pub removed_title_count: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum MetadataFieldUpdate<T> {
     #[default]

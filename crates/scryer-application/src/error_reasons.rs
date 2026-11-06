@@ -146,6 +146,8 @@ pub mod library {
     pub const NAME_REQUIRED: &str = "LIBRARY_NAME_REQUIRED";
     /// Libraries require at least one root folder.
     pub const ROOT_REQUIRED: &str = "LIBRARY_ROOT_REQUIRED";
+    /// A title under a root being removed is held by a location operation or an in-flight deletion.
+    pub const ROOT_TITLES_BUSY: &str = "LIBRARY_ROOT_TITLES_BUSY";
     /// Default libraries cannot be deleted.
     pub const DEFAULT_LIBRARIES_CANNOT_DELETED: &str = "LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED";
     /// Library scan session was not found.
@@ -353,6 +355,7 @@ pub mod library {
         RESOURCE_NOT_FOUND,
         NAME_REQUIRED,
         ROOT_REQUIRED,
+        ROOT_TITLES_BUSY,
         DEFAULT_LIBRARIES_CANNOT_DELETED,
         SCAN_SESSION_NOT_FOUND,
         SCAN_CANCEL_UNAVAILABLE,

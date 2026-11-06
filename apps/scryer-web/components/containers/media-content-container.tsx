@@ -4720,7 +4720,17 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         await refreshLibraries();
         await refreshRootValidationLibraries();
         if (library) {
-          setGlobalStatus(t("settings.librarySaved"), { level: "SUCCESS" });
+          const removedTitleCount = library.removedTitleCount ?? 0;
+          if (removedTitleCount > 0) {
+            setGlobalStatus(
+              t("settings.libraryRootsRemovedTitles", {
+                count: removedTitleCount,
+              }),
+              { level: "SUCCESS" },
+            );
+          } else {
+            setGlobalStatus(t("settings.librarySaved"), { level: "SUCCESS" });
+          }
         }
         return library;
       } catch (error) {

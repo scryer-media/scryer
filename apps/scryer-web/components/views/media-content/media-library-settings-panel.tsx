@@ -330,6 +330,10 @@ export const MediaLibrarySettingsPanel = React.memo(
     // covers the panel adopting the saved library afterwards.
     const [saveInProgress, setSaveInProgress] = React.useState(false);
     const [deleteLibraryOpen, setDeleteLibraryOpen] = React.useState(false);
+    const [pendingRootRemoval, setPendingRootRemoval] = React.useState<{
+      paths: string[];
+      scan: boolean;
+    } | null>(null);
     const [pendingLibrarySelection, setPendingLibrarySelection] =
       React.useState<string | null>(null);
     const [activeLibraryId, setActiveLibraryId] = React.useState<string | null>(
@@ -1249,6 +1253,66 @@ export const MediaLibrarySettingsPanel = React.memo(
         return;
       }
       await onDeleteLibrary(activeLibrary.id);
+    };
+
+    // Stored roots the draft drops. The server takes the titles under them
+    // out of the catalog, so the save asks first. A draft root keeps a stored
+    // root when it carries its id, or, without one, when it has its path.
+    const rootsRemovedByDraft = (): RootFolderOption[] => {
+      if (mode !== "existing" || !activeLibrary) {
+        return [];
+      }
+      const draft = normalizeRoots(draftRoots, localPathStyle);
+      const storedIds = new Set(
+        savedRoots.map((root) => root.id).filter(Boolean),
+      );
+      const keptIds = new Set<string>();
+      const draftPathsWithoutId = new Set<string>();
+      draft.forEach((root) => {
+        if (root.id && storedIds.has(root.id)) {
+          keptIds.add(root.id);
+        } else {
+          draftPathsWithoutId.add(
+            normalizeComparableLibraryRootPath(root.path, localPathStyle),
+          );
+        }
+      });
+      return savedRoots.filter(
+        (root) =>
+          !(root.id && keptIds.has(root.id)) &&
+          !draftPathsWithoutId.has(
+            normalizeComparableLibraryRootPath(root.path, localPathStyle),
+          ),
+      );
+    };
+
+    const requestSaveLibrary = async (scan: boolean) => {
+      const removedRoots = rootsRemovedByDraft();
+      if (removedRoots.length > 0) {
+        setPendingRootRemoval({
+          paths: removedRoots.map((root) => root.path),
+          scan,
+        });
+        return;
+      }
+      if (scan) {
+        await handleSaveAndScanLibrary();
+      } else {
+        await handleSaveLibrary();
+      }
+    };
+
+    const handleConfirmRootRemoval = async () => {
+      const pending = pendingRootRemoval;
+      setPendingRootRemoval(null);
+      if (!pending) {
+        return;
+      }
+      if (pending.scan) {
+        await handleSaveAndScanLibrary();
+      } else {
+        await handleSaveLibrary();
+      }
     };
 
     const handleConfirmDiscardLibraryChanges = React.useCallback(() => {
@@ -2468,7 +2532,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       id="media-library-save"
                       type="button"
                       variant="outline"
-                      onClick={handleSaveLibrary}
+                      onClick={() => void requestSaveLibrary(false)}
                       disabled={
                         settingsBusy ||
                         downloadClientRoutingBusy ||
@@ -2485,7 +2549,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       id="media-library-save-scan"
                       type="button"
                       variant="primary"
-                      onClick={handleSaveAndScanLibrary}
+                      onClick={() => void requestSaveLibrary(true)}
                       disabled={
                         settingsBusy ||
                         downloadClientRoutingBusy ||
@@ -2545,6 +2609,20 @@ export const MediaLibrarySettingsPanel = React.memo(
           cancelLabel={t("label.cancel")}
           onConfirm={handleConfirmDeleteLibrary}
           onCancel={() => setDeleteLibraryOpen(false)}
+        />
+        <ConfirmDialog
+          open={pendingRootRemoval !== null}
+          title={t("settings.libraryRemoveRootsTitle")}
+          description={t("settings.libraryRemoveRootsConfirm", {
+            paths: pendingRootRemoval?.paths.join(", ") ?? "",
+          })}
+          confirmLabel={t("label.remove")}
+          cancelLabel={t("label.cancel")}
+          contentId="media-library-remove-roots-dialog"
+          confirmButtonId="media-library-remove-roots-confirm"
+          cancelButtonId="media-library-remove-roots-cancel"
+          onConfirm={handleConfirmRootRemoval}
+          onCancel={() => setPendingRootRemoval(null)}
         />
         <ConfirmDialog
           open={libraryDiscardPrompt === "open"}

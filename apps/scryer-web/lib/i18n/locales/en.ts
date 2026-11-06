@@ -1970,6 +1970,8 @@ const en: LocaleDictionary = {
     "Library roots must be unique within a library.",
   "error.reason.LIBRARY_ROOT_REQUIRED":
     "Libraries require at least one root folder.",
+  "error.reason.LIBRARY_ROOT_TITLES_BUSY":
+    "A title under a root being removed is busy with a move or a deletion. Try again when it finishes.",
   "error.reason.LIBRARY_SCAN_ALREADY_RUNNING":
     "A library scan is already running.",
   "error.reason.LIBRARY_SCAN_CANCEL_UNAVAILABLE":
@@ -5185,6 +5187,11 @@ const en: LocaleDictionary = {
   "settings.libraryDeleteButton": "Delete library",
   "settings.libraryDeleteConfirm":
     "Delete {{name}}? Media files on disk will not be removed.",
+  "settings.libraryRemoveRootsTitle": "Remove root folders",
+  "settings.libraryRemoveRootsConfirm":
+    "Removing {{paths}} also removes every title under it from the catalog. Media files on disk will not be removed.",
+  "settings.libraryRootsRemovedTitles":
+    "Library saved. Titles removed from the catalog: {{count}}.",
   "settings.libraryEmpty": "No libraries available.",
   "settings.libraryCreated": "Library created.",
   "settings.librarySaved": "Library saved.",

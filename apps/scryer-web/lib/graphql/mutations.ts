@@ -783,6 +783,7 @@ export const createLibraryMutation = `mutation CreateLibrary($input: CreateLibra
 
 export const updateLibraryMutation = `mutation UpdateLibrary($input: UpdateLibraryInput!) {
   updateLibrary(input: $input) {${LIBRARY_FIELDS}
+    removedTitleCount
   }
 }`;
 

@@ -740,6 +740,11 @@ const ru: LocaleDictionary = {
   "settings.libraryDeleteButton": "Удалить библиотеку",
   "settings.libraryDeleteConfirm":
     "Удалить библиотеку {{name}}? Медиафайлы на диске удалены не будут.",
+  "settings.libraryRemoveRootsTitle": "Удаление корневых папок",
+  "settings.libraryRemoveRootsConfirm":
+    "Удаление {{paths}} также удалит из каталога все тайтлы в этой папке. Медиафайлы на диске удалены не будут.",
+  "settings.libraryRootsRemovedTitles":
+    "Библиотека сохранена. Тайтлов удалено из каталога: {{count}}.",
   "settings.libraryEmpty": "Нет доступных библиотек.",
   "settings.libraryCreated": "Библиотека создана.",
   "settings.librarySaved": "Библиотека сохранена.",
@@ -8235,6 +8240,8 @@ const ru: LocaleDictionary = {
     "Корневые каталоги внутри библиотеки должны быть уникальными.",
   "error.reason.LIBRARY_ROOT_REQUIRED":
     "Для библиотеки требуется хотя бы одна корневая папка.",
+  "error.reason.LIBRARY_ROOT_TITLES_BUSY":
+    "Тайтл в удаляемой корневой папке занят перемещением или удалением. Повторите попытку после его завершения.",
   "error.reason.LIBRARY_SCAN_ALREADY_RUNNING":
     "Сканирование библиотеки уже выполняется.",
   "error.reason.LIBRARY_SCAN_CANCEL_UNAVAILABLE":

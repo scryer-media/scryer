@@ -691,6 +691,8 @@ pub struct LibraryPayload {
     pub is_bootstrap_default_root_set: bool,
     /// Root folders configured for the library.
     pub roots: Vec<LibraryRootPayload>,
+    /// Titles removed from the catalog because the root under them was dropped by this mutation; zero everywhere else.
+    pub removed_title_count: i32,
 }
 
 #[derive(SimpleObject, Clone)]

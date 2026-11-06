@@ -484,6 +484,47 @@ fn normalize_library_root_path(path: &str) -> String {
     scryer_domain::normalize_library_root_path(path)
 }
 
+/// The stored roots an edit drops. Mirrors how the store resolves drafts: a
+/// draft naming a stored root's id keeps that root, and a draft without a
+/// known id keeps the stored root at the same normalized path.
+fn removed_library_root_ids(
+    existing: &[scryer_domain::LibraryRoot],
+    drafts: &[LibraryRootDraft],
+) -> Vec<String> {
+    let known_ids = existing
+        .iter()
+        .map(|root| root.id.as_str())
+        .collect::<HashSet<_>>();
+    let ids_by_path = existing
+        .iter()
+        .map(|root| (normalize_library_root_path(&root.path), root.id.as_str()))
+        .collect::<HashMap<_, _>>();
+    let mut kept = HashSet::new();
+    let mut unresolved = Vec::new();
+    for draft in drafts {
+        match draft
+            .id
+            .as_deref()
+            .filter(|id| known_ids.contains(id) && !kept.contains(id))
+        {
+            Some(id) => {
+                kept.insert(id);
+            }
+            None => unresolved.push(draft),
+        }
+    }
+    for draft in unresolved {
+        if let Some(id) = ids_by_path.get(&normalize_library_root_path(&draft.path)) {
+            kept.insert(*id);
+        }
+    }
+    existing
+        .iter()
+        .filter(|root| !kept.contains(root.id.as_str()))
+        .map(|root| root.id.clone())
+        .collect()
+}
+
 fn conflicting_library_names_for_roots(
     libraries: &[Library],
     current_library_id: Option<&str>,
@@ -672,6 +713,22 @@ impl AppUseCase {
         roots: Option<Vec<LibraryRootDraft>>,
         settings: Option<LibrarySettingsOverrideDraft>,
     ) -> AppResult<Library> {
+        self.update_library_with_outcome(actor, library_id, name, roots, settings)
+            .await
+            .map(|updated| updated.library)
+    }
+
+    /// Update a library and report what the edit took out of the catalog.
+    /// Dropping a root removes the titles under it from the catalog; their
+    /// files on disk are never touched.
+    pub async fn update_library_with_outcome(
+        &self,
+        actor: &User,
+        library_id: &str,
+        name: Option<String>,
+        roots: Option<Vec<LibraryRootDraft>>,
+        settings: Option<LibrarySettingsOverrideDraft>,
+    ) -> AppResult<UpdatedLibrary> {
         let existing = self
             .services
             .catalog
@@ -731,6 +788,15 @@ impl AppUseCase {
             self.validate_library_roots_against_recycle_bin(&existing.roots, &roots)
                 .await?;
         }
+        // A root dropped from the list takes the titles under it out of the
+        // catalog; their files stay where they are. The store still refuses a
+        // removal that leaves a title behind, so this runs before it.
+        let removed_title_count = if roots_were_provided {
+            self.delete_titles_under_removed_roots(actor, &existing, &roots)
+                .await?
+        } else {
+            0
+        };
         let slug = if existing.is_default {
             scryer_domain::default_library_slug_for_facet(&existing.facet).to_string()
         } else {
@@ -766,7 +832,8 @@ impl AppUseCase {
             )
             .await?;
         }
-        self.services
+        let library = self
+            .services
             .catalog
             .libraries
             .get_by_id(&library.id)
@@ -776,7 +843,11 @@ impl AppUseCase {
                     crate::error_reasons::library::RESOURCE_NOT_FOUND,
                     format!("library {}", library.id),
                 )
-            })
+            })?;
+        Ok(UpdatedLibrary {
+            library,
+            removed_title_count,
+        })
     }
 
     pub async fn delete_library(&self, actor: &User, library_id: &str) -> AppResult<bool> {
@@ -844,11 +915,46 @@ impl AppUseCase {
                 None,
             )
             .await?;
-        let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
-        let actor_event = DomainEventActor::from(actor);
+        self.delete_titles_logically(&titles, DomainEventActor::from(actor), false)
+            .await?;
 
-        for title in &titles {
-            self.purge_title_logical_dependents(title, false, actor_event.clone())
+        self.services
+            .config
+            .settings
+            .delete_values_for_scope_id(&library.id)
+            .await?;
+
+        let deleted = self
+            .services
+            .catalog
+            .libraries
+            .delete_library(&library.id)
+            .await?;
+        if deleted {
+            self.refresh_download_client_category_admission_best_effort()
+                .await;
+            // The delete drops this library from every delay profile scope and
+            // disables a profile left with none, so the settings page reloads.
+            let _ = self.runtime.events.settings_changed_broadcast.send(vec![
+                crate::delay_profile::DELAY_PROFILE_CATALOG_KEY.to_string(),
+            ]);
+        }
+        Ok(deleted)
+    }
+
+    /// Remove titles from the catalog: their dependents, history, events and
+    /// rows. Catalog rows only; files on disk are never touched, and the
+    /// recycle bin is left alone unless `clear_recycle_bin` is set.
+    pub(crate) async fn delete_titles_logically(
+        &self,
+        titles: &[scryer_domain::Title],
+        actor: DomainEventActor,
+        clear_recycle_bin: bool,
+    ) -> AppResult<usize> {
+        let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+
+        for title in titles {
+            self.purge_title_logical_dependents(title, clear_recycle_bin, actor.clone())
                 .await?;
         }
 
@@ -875,33 +981,76 @@ impl AppUseCase {
                 .await?;
         }
 
-        for title in &titles {
-            self.delete_title_row(title, actor_event.clone(), true, Vec::new())
+        for title in titles {
+            self.delete_title_row(title, actor.clone(), true, Vec::new())
                 .await?;
+            self.release_lifecycle_claims_for_deleted_title(&title.id)
+                .await;
         }
 
-        self.services
-            .config
-            .settings
-            .delete_values_for_scope_id(&library.id)
-            .await?;
+        Ok(titles.len())
+    }
 
-        let deleted = self
+    /// Take the titles under every root `drafts` drops out of the catalog,
+    /// leaving their files where they are. Refuses, before removing anything,
+    /// when one of those titles is being deleted or held by a location
+    /// operation.
+    async fn delete_titles_under_removed_roots(
+        &self,
+        actor: &User,
+        library: &Library,
+        drafts: &[LibraryRootDraft],
+    ) -> AppResult<usize> {
+        let removed_root_ids = removed_library_root_ids(&library.roots, drafts);
+        if removed_root_ids.is_empty() {
+            return Ok(0);
+        }
+        let removed_root_ids = removed_root_ids.into_iter().collect::<HashSet<_>>();
+        let titles = self
             .services
             .catalog
-            .libraries
-            .delete_library(&library.id)
-            .await?;
-        if deleted {
-            self.refresh_download_client_category_admission_best_effort()
-                .await;
-            // The delete drops this library from every delay profile scope and
-            // disables a profile left with none, so the settings page reloads.
-            let _ = self.runtime.events.settings_changed_broadcast.send(vec![
-                crate::delay_profile::DELAY_PROFILE_CATALOG_KEY.to_string(),
-            ]);
+            .titles
+            .list_for_libraries(
+                Some(library.facet.clone()),
+                std::slice::from_ref(&library.id),
+                None,
+            )
+            .await?
+            .into_iter()
+            .filter(|title| removed_root_ids.contains(&title.root_folder_id))
+            .collect::<Vec<_>>();
+
+        let mut _location_guards = Vec::with_capacity(titles.len());
+        for title in &titles {
+            if self.title_is_being_deleted(&title.id) {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::ROOT_TITLES_BUSY,
+                    format!(
+                        "title '{}' under a removed root is already being deleted",
+                        title.name
+                    ),
+                ));
+            }
+            let guard = self
+                .acquire_location_title_mutation(
+                    &crate::location::ownership_guard::TITLE_DELETE_ENTRY,
+                    &title.id,
+                )
+                .await
+                .map_err(|error| match error {
+                    AppError::LocationOperationBusy(message) => AppError::validation_refused(
+                        crate::error_reasons::library::ROOT_TITLES_BUSY,
+                        message,
+                    ),
+                    other => other,
+                })?;
+            _location_guards.push(guard);
         }
-        Ok(deleted)
+
+        // Files stay on disk and so does the recycle bin: removing a root
+        // only forgets what the catalog knew about it.
+        self.delete_titles_logically(&titles, DomainEventActor::from(actor), false)
+            .await
     }
 
     pub(crate) async fn ensure_library_scan_cancellation_token(

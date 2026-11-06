@@ -4260,53 +4260,6 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         custom_root_id
     );
 
-    let referenced_path_edit = gql(
-        &ctx,
-        r#"mutation($input: UpdateLibraryInput!) {
-            updateLibrary(input: $input) {
-                roots { id path isDefault }
-            }
-        }"#,
-        json!({
-            "input": {
-                "libraryId": library_id,
-                "roots": [
-                    {
-                        "path": "/library/root-lifecycle-default",
-                        "isDefault": true
-                    },
-                    {
-                        "path": "/library/root-lifecycle-renamed",
-                        "isDefault": false
-                    }
-                ]
-            }
-        }),
-    )
-    .await;
-    assert!(
-        referenced_path_edit.get("errors").is_some(),
-        "referenced root path edit should be rejected: {referenced_path_edit}"
-    );
-
-    let after_rejected_edit = gql(
-        &ctx,
-        r#"query($id: ID!) {
-            title(id: $id) { rootFolderId rootFolderPath }
-        }"#,
-        json!({ "id": title_id }),
-    )
-    .await;
-    assert_no_errors(&after_rejected_edit);
-    assert_eq!(
-        after_rejected_edit["data"]["title"]["rootFolderId"],
-        custom_root_id
-    );
-    assert_eq!(
-        after_rejected_edit["data"]["title"]["rootFolderPath"],
-        "/library/root-lifecycle-custom"
-    );
-
     let added_unreferenced_root = gql(
         &ctx,
         r#"mutation($input: UpdateLibraryInput!) {
@@ -4440,6 +4393,105 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         stored_title_root_folder_id(&ctx, &title_id).await,
         custom_root_id
     );
+
+    // A title on the default root, which every edit below keeps.
+    let kept_body = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                title { id rootFolderId }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "Root Lifecycle Anime Kept",
+                "facet": "ANIME",
+                "libraryId": library_id,
+                "monitored": true,
+                "tags": [],
+                "options": {
+                    "rootFolderId": library_root_id(&library, "/library/root-lifecycle-default")
+                }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&kept_body);
+    let kept_title_id = kept_body["data"]["addTitle"]["title"]["id"]
+        .as_str()
+        .expect("kept title id")
+        .to_string();
+
+    // Rewriting a referenced root's path without its id drops that root and
+    // configures a new one: the titles under the dropped root leave the
+    // catalog, and the mutation says how many.
+    let dropped_custom_root = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) {
+                roots { id path isDefault }
+                removedTitleCount
+            }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "roots": [
+                    {
+                        "path": "/library/root-lifecycle-default",
+                        "isDefault": true
+                    },
+                    {
+                        "path": "/library/root-lifecycle-renamed",
+                        "isDefault": false
+                    }
+                ]
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&dropped_custom_root);
+    let dropped = &dropped_custom_root["data"]["updateLibrary"];
+    assert_eq!(dropped["removedTitleCount"], 1);
+    assert_ne!(
+        library_root_id(dropped, "/library/root-lifecycle-renamed"),
+        custom_root_id
+    );
+
+    let after_drop = gql(
+        &ctx,
+        r#"query($dropped: ID!, $kept: ID!) {
+            dropped: title(id: $dropped) { id }
+            kept: title(id: $kept) { id rootFolderPath }
+        }"#,
+        json!({ "dropped": title_id, "kept": kept_title_id }),
+    )
+    .await;
+    assert_no_errors(&after_drop);
+    assert!(after_drop["data"]["dropped"].is_null(), "{after_drop}");
+    assert_eq!(
+        after_drop["data"]["kept"]["rootFolderPath"],
+        "/library/root-lifecycle-default"
+    );
+
+    // A save that keeps every root removes nothing.
+    let resaved = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) {
+                removedTitleCount
+            }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "name": "Root Lifecycle Anime Library"
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&resaved);
+    assert_eq!(resaved["data"]["updateLibrary"]["removedTitleCount"], 0);
 }
 
 #[tokio::test]

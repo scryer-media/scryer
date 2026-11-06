@@ -10558,6 +10558,10 @@ type LibraryPayload {
 	"""
 	roots: [LibraryRootPayload!]!
 	"""
+	Titles removed from the catalog because the root under them was dropped by this mutation; zero everywhere else.
+	"""
+	removedTitleCount: Int!
+	"""
 	Effective title quality-profile ID for this library; requires title-management or catalog-settings access.
 	"""
 	qualityProfileId: ID!
