@@ -1579,27 +1579,22 @@ impl AppUseCase {
                 )
                 .await;
         };
-        let key = affinity_cache::DiscoveryAffinityCacheKey {
+        let scope = affinity_cache::DiscoveryAffinityCacheScope {
             run_id: run_id.map(str::to_owned),
             library_ids: library_ids.clone(),
             genre_rail_corroboration,
-            revision,
         };
         let profile = self
             .runtime
             .catalog
             .discovery_affinity_cache
-            .get_or_fill(
-                key,
-                || {
-                    self.discovery_library_affinity_profile_uncached(
-                        &library_ids,
-                        run_id,
-                        genre_rail_corroboration,
-                    )
-                },
-                || self.services.catalog.titles.discovery_affinity_revision(),
-            )
+            .get_or_fill(scope, revision, Instant::now(), || {
+                self.discovery_library_affinity_profile_uncached(
+                    &library_ids,
+                    run_id,
+                    genre_rail_corroboration,
+                )
+            })
             .await?;
         Ok((*profile).clone())
     }
