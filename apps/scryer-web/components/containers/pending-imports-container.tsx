@@ -20,8 +20,8 @@ import {
   type ConflictTask,
 } from "@/lib/pending-import-conflicts";
 import {
-  canResolvePendingImportSelection,
   ignorePendingImportBatch,
+  resolvablePendingImportSelection,
   togglePendingImportSelection,
 } from "@/lib/pending-import-selection";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -428,8 +428,11 @@ export const PendingImportsContainer = React.memo(
       PendingImportItem[]
     >([]);
     const selectedImportIds = selectedImports.map((item) => item.id);
-    const canResolveSelection =
-      canResolvePendingImportSelection(selectedImports);
+    const selectedConflicts = React.useMemo(
+      () => resolvablePendingImportSelection(selectedImports),
+      [selectedImports],
+    );
+    const selectedConflictIds = selectedConflicts.map((item) => item.id);
     const [conflictDialog, setConflictDialog] = React.useState<{
       ids: string[];
       policy: ConflictPolicy;
@@ -1608,8 +1611,15 @@ export const PendingImportsContainer = React.memo(
                         count: selectedImports.length,
                       })}
                     </span>
-                    {canResolveSelection && (
+                    {selectedConflicts.length > 0 && (
                       <>
+                        {selectedConflicts.length < selectedImports.length && (
+                          <span className="text-muted-foreground">
+                            {t("pendingImports.conflict.selectedConflicts", {
+                              count: selectedConflicts.length,
+                            })}
+                          </span>
+                        )}
                         <Button
                           id="pending-import-conflict-bulk"
                           size="sm"
@@ -1617,7 +1627,7 @@ export const PendingImportsContainer = React.memo(
                           disabled={selectionBusy}
                           onClick={() =>
                             setConflictDialog({
-                              ids: selectedImportIds,
+                              ids: selectedConflictIds,
                               policy: "ADOPT_ALL",
                             })
                           }
@@ -1631,7 +1641,7 @@ export const PendingImportsContainer = React.memo(
                           disabled={selectionBusy}
                           onClick={() =>
                             setConflictDialog({
-                              ids: selectedImportIds,
+                              ids: selectedConflictIds,
                               policy: "KEEP_ONE",
                             })
                           }

@@ -7,10 +7,16 @@ type SelectableImport = {
   reason: string;
 };
 
+export function resolvablePendingImportSelection<T extends SelectableImport>(
+  items: readonly T[],
+): T[] {
+  return items.filter(isResolvableConflict);
+}
+
 export function canResolvePendingImportSelection(
   items: readonly SelectableImport[],
 ): boolean {
-  return items.length > 0 && items.every(isResolvableConflict);
+  return items.some(isResolvableConflict);
 }
 
 export function togglePendingImportSelection<T extends SelectableImport>(

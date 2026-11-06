@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   canResolvePendingImportSelection,
   ignorePendingImportBatch,
+  resolvablePendingImportSelection,
   togglePendingImportSelection,
 } from "./pending-import-selection.ts";
 
@@ -14,13 +15,13 @@ const conflict = {
 };
 const unmatched = { ...conflict, id: "unmatched", reason: "metadata_missing" };
 
-test("only a nonempty selection of supported conflicts can be resolved", () => {
+test("a selection can be resolved when it holds at least one supported conflict", () => {
   assert.equal(canResolvePendingImportSelection([]), false);
   assert.equal(
     canResolvePendingImportSelection([conflict, { ...conflict, id: "second" }]),
     true,
   );
-  assert.equal(canResolvePendingImportSelection([conflict, unmatched]), false);
+  assert.equal(canResolvePendingImportSelection([conflict, unmatched]), true);
   assert.equal(canResolvePendingImportSelection([unmatched]), false);
   assert.equal(
     canResolvePendingImportSelection([{ ...conflict, facet: "SERIES" }]),
@@ -34,6 +35,24 @@ test("only a nonempty selection of supported conflicts can be resolved", () => {
     canResolvePendingImportSelection([{ ...conflict, status: "IGNORED" }]),
     false,
   );
+});
+
+test("the resolvable subset keeps only supported conflicts in selection order", () => {
+  const second = { ...conflict, id: "second" };
+  const mixed = [
+    unmatched,
+    conflict,
+    { ...conflict, id: "series", facet: "SERIES" },
+    { ...conflict, id: "ignored", status: "IGNORED" },
+    second,
+  ];
+  assert.deepEqual(resolvablePendingImportSelection(mixed), [conflict, second]);
+  assert.deepEqual(resolvablePendingImportSelection([unmatched]), []);
+  assert.deepEqual(resolvablePendingImportSelection([]), []);
+  assert.deepEqual(resolvablePendingImportSelection([conflict, second]), [
+    conflict,
+    second,
+  ]);
 });
 
 test("page selection includes non-conflicts, retains other pages, and deduplicates", () => {

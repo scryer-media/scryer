@@ -13141,6 +13141,7 @@ const ru: LocaleDictionary = {
   "pendingImports.conflict.operation": "Открыть операцию {{id}}",
   "pendingImports.conflict.selectPage": "Выбрать конфликты на этой странице",
   "pendingImports.conflict.selected": "Выбрано: {{count}}",
+  "pendingImports.conflict.selectedConflicts": "Конфликтов папок: {{count}}",
   "pendingImports.conflict.resolveSelected": "Разрешить выбранные",
   "move.operationType.FOLDER_CONSOLIDATION": "Объединение папок",
   "move.operationType.FOLDER_KEEP_ONE": "Сохранение одной папки",

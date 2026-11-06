@@ -90,6 +90,7 @@ const en: LocaleDictionary = {
   "pendingImports.conflict.operation": "View operation {{id}}",
   "pendingImports.conflict.selectPage": "Select conflicts on this page",
   "pendingImports.conflict.selected": "{{count}} selected",
+  "pendingImports.conflict.selectedConflicts": "{{count}} are folder conflicts",
   "pendingImports.conflict.resolveSelected": "Resolve selected",
   "move.operationType.FOLDER_CONSOLIDATION": "Folder consolidation",
   "move.operationType.FOLDER_KEEP_ONE": "Keep one folder",
