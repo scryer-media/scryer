@@ -379,13 +379,50 @@ impl AppUseCase {
         facet: Option<MediaFacet>,
         permission: LibraryPermission,
     ) -> AppResult<Vec<String>> {
-        let candidates = self.permission_candidate_library_ids(facet).await?;
-        let authorization = self.authorization_for_actor(actor).await?;
-        Ok(candidates
-            .into_iter()
+        Ok(self
+            .library_permission_context(actor, facet)
+            .await?
+            .library_ids(permission))
+    }
+
+    /// The libraries and the actor's authorization, read once so a caller
+    /// that needs several permissions filters them without reading either
+    /// again.
+    pub(crate) async fn library_permission_context(
+        &self,
+        actor: &User,
+        facet: Option<MediaFacet>,
+    ) -> AppResult<LibraryPermissionContext> {
+        let libraries = self.services.catalog.libraries.list(facet.clone()).await?;
+        let candidate_library_ids = if libraries.is_empty() {
+            default_library_ids(facet)
+        } else {
+            libraries.iter().map(|library| library.id.clone()).collect()
+        };
+        Ok(LibraryPermissionContext {
+            libraries,
+            candidate_library_ids,
+            authorization: self.authorization_for_actor(actor).await?,
+        })
+    }
+}
+
+/// What [`AppUseCase::library_permission_context`] read.
+pub(crate) struct LibraryPermissionContext {
+    pub(crate) libraries: Vec<scryer_domain::Library>,
+    candidate_library_ids: Vec<String>,
+    authorization: UserAuthorization,
+}
+
+impl LibraryPermissionContext {
+    /// [`AppUseCase::authorized_library_ids`] for `permission`.
+    pub(crate) fn library_ids(&self, permission: LibraryPermission) -> Vec<String> {
+        self.candidate_library_ids
+            .iter()
             .filter(|library_id| {
-                effective_library_permission(&authorization, library_id, permission)
+                effective_library_permission(&self.authorization, library_id, permission)
             })
-            .collect())
+            .cloned()
+            .collect()
     }
 }

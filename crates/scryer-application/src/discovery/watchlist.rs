@@ -229,7 +229,7 @@ impl AppUseCase {
         &self,
         actor: &User,
         visibility: &DiscoveryVisibility,
-        owned_visibility: &CatalogOwnedVisibility,
+        owned_library_ids: &[String],
         state: &crate::ports::DiscoverySyncStateRecord,
         can_view_personalized: bool,
         filters: &DiscoveryHomeFilters,
@@ -318,17 +318,30 @@ impl AppUseCase {
             Some(admitted)
         };
 
+        // Ownership is needed for exactly the members and the items they
+        // resolved to, so it reads only the titles those can name.
+        let owned_visibility = self
+            .owned_visibility_for_targets(
+                owned_library_ids,
+                target_keys.iter().map(|key| (key.as_str(), None)).chain(
+                    items
+                        .iter()
+                        .map(|item| (item.target_key.as_str(), item.resolved_title_id.as_deref())),
+                ),
+            )
+            .await?;
+
         // The same pending requests the section pages' "hide requested"
         // reads: every requester's, in the libraries the viewer can request
         // into or read.
-        let pending_requests = self.discovery_pending_requests(actor).await?;
+        let pending_requests = self.discovery_pending_requests(visibility).await?;
 
         let row_card_media_kinds = discovery_watchlist_row_card_media_kinds(visibility, filters);
         Ok(compose_discovery_watchlist(
             &members,
             items,
             &DiscoveryWatchlistRules {
-                owned_visibility,
+                owned_visibility: &owned_visibility,
                 pending_requests: &pending_requests,
                 admitted_item_keys: admitted_item_keys.as_ref(),
                 filters,
@@ -380,13 +393,12 @@ impl AppUseCase {
         {
             return Ok(None);
         }
-        let owned_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
+        let owned_library_ids = &visibility.owned_library_ids;
         let owned_visibility = self
-            .discovery_home_owned_visibility(&sorted_discovery_library_ids(&owned_library_ids))
+            .owned_visibility_for_targets(
+                &sorted_discovery_library_ids(&owned_library_ids),
+                title.target_keys.iter().map(|key| (key.as_str(), None)),
+            )
             .await?;
         if title
             .target_keys

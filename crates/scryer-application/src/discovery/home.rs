@@ -107,6 +107,23 @@ pub(super) fn selected_discovery_home_item_ids(result: &DiscoveryHomeResult) -> 
     item_ids
 }
 
+/// Every matched subject key carried by an item that subject resolution
+/// rewrites.
+pub(super) fn discovery_home_subject_keys(result: &DiscoveryHomeResult) -> BTreeSet<String> {
+    result
+        .personalized_sections
+        .iter()
+        .flat_map(|section| section.items.iter())
+        .chain(
+            result
+                .complete_collection
+                .iter()
+                .flat_map(|section| section.items.iter()),
+        )
+        .flat_map(|item| item.matched_subject_keys.iter().cloned())
+        .collect()
+}
+
 pub(super) fn discovery_home_subject_resolution_item_ids(
     result: &DiscoveryHomeResult,
 ) -> HashSet<String> {

@@ -851,7 +851,6 @@ fn discovery_section_generation_ids(
 impl AppUseCase {
     pub(super) async fn discovery_browse_query(
         &self,
-        actor: &User,
         visibility: &DiscoveryVisibility,
         state: &DiscoverySyncStateRecord,
         can_view_personalized: bool,
@@ -861,13 +860,13 @@ impl AppUseCase {
         let owned = if query.include_owned {
             CatalogOwnedVisibility::default()
         } else {
-            self.discovery_home_owned_visibility(&sorted_discovery_library_ids(
-                &visibility.readable_library_ids,
-            ))
+            self.discovery_home_owned_visibility(
+                &sorted_discovery_library_ids(&visibility.readable_library_ids),
+                state,
+            )
             .await?
         };
         self.discovery_browse_query_with_owned(
-            actor,
             visibility,
             state,
             can_view_personalized,
@@ -880,7 +879,6 @@ impl AppUseCase {
 
     pub(super) async fn discovery_browse_query_with_owned(
         &self,
-        actor: &User,
         visibility: &DiscoveryVisibility,
         state: &DiscoverySyncStateRecord,
         can_view_personalized: bool,
@@ -889,7 +887,7 @@ impl AppUseCase {
         owned: &CatalogOwnedVisibility,
     ) -> AppResult<DiscoveryItemsStorageQuery> {
         let requested_keys = if section.hide_requested {
-            self.discovery_pending_request_visibility(actor)
+            self.discovery_pending_request_visibility(visibility)
                 .await?
                 .keys
                 .into_iter()
@@ -983,7 +981,6 @@ impl AppUseCase {
         if section_query.section_id.trim() == "browse_all" || browse_entry.is_some() {
             let storage_query = self
                 .discovery_browse_query(
-                    actor,
                     &visibility,
                     &status.state,
                     can_view_personalized,
@@ -998,18 +995,15 @@ impl AppUseCase {
                 .query_discovery_items(&storage_query)
                 .await?;
             let subjects = if let Some(run_id) = storage_query.context_run_id.as_deref() {
-                self.services
-                    .library
-                    .discovery
-                    .list_discovery_submitted_subjects(run_id)
-                    .await?
+                self.discovery_submitted_subjects_for_items(
+                    run_id,
+                    &sorted_discovery_library_ids(&visibility.readable_library_ids),
+                    page.items.iter(),
+                )
+                .await?
             } else {
                 Vec::new()
             };
-            let subjects = filter_submitted_subjects_for_libraries(
-                &subjects,
-                &visibility.readable_library_ids,
-            );
             // Reasons shown on cards remain scoped to readable library titles;
             // the presence of a reason never decides browse membership.
             resolve_discovery_matched_subjects(&mut page.items, &subjects)?;
@@ -1085,7 +1079,9 @@ impl AppUseCase {
                             DiscoverySectionTarget::Watchlist
                         )
                     {
-                        let requested = self.discovery_pending_request_visibility(actor).await?;
+                        let requested = self
+                            .discovery_pending_request_visibility(&visibility)
+                            .await?;
                         section
                             .items
                             .retain(|item| !requested.item_is_requested(item));
@@ -1221,21 +1217,18 @@ impl AppUseCase {
                     .collect::<HashSet<_>>();
                 items.retain(|item| visibility.allows_item(item));
                 let submitted_subjects = self
-                    .services
-                    .library
-                    .discovery
-                    .list_discovery_submitted_subjects(context_run_id)
+                    .discovery_submitted_subjects_for_items(
+                        context_run_id,
+                        &sorted_discovery_library_ids(&visibility.readable_library_ids),
+                        items.iter(),
+                    )
                     .await?;
-                let submitted_subjects = filter_submitted_subjects_for_libraries(
-                    &submitted_subjects,
-                    &visibility.readable_library_ids,
-                );
                 resolve_discovery_matched_subjects(&mut items, &submitted_subjects)?;
                 let rail_settings = self.discovery_rail_composition_settings().await;
                 let library_profile = self
                     .discovery_library_affinity_profile(
                         &visibility.readable_library_ids,
-                        &submitted_subjects,
+                        Some(context_run_id),
                         rail_settings.genre_rail_corroboration,
                     )
                     .await?;
@@ -1297,15 +1290,12 @@ impl AppUseCase {
                     .await?;
                 let hero_key = discovery_home_hero_key(&home);
                 let window = discovery_rendered_window(&home, section_id, hero_key.as_deref());
-                let owned_library_ids = self
-                    .authorized_library_ids(actor, None, LibraryPermission::View)
-                    .await?
-                    .into_iter()
-                    .collect::<HashSet<_>>();
+                let owned_library_ids = &visibility.owned_library_ids;
                 let owned_visibility = self
-                    .discovery_home_owned_visibility(&sorted_discovery_library_ids(
-                        &owned_library_ids,
-                    ))
+                    .discovery_home_owned_visibility(
+                        &sorted_discovery_library_ids(&owned_library_ids),
+                        &status.state,
+                    )
                     .await?;
                 let excluded_identity_keys = if include_owned {
                     Vec::new()
@@ -1377,15 +1367,12 @@ impl AppUseCase {
                     home_selection_items_from_candidates(candidates, &mut candidates_by_id);
                 items.retain(|item| visibility.allows_item(item));
                 let submitted_subjects = self
-                    .services
-                    .library
-                    .discovery
-                    .list_discovery_submitted_subjects(context_run_id)
+                    .discovery_submitted_subjects_for_items(
+                        context_run_id,
+                        &sorted_discovery_library_ids(&visibility.readable_library_ids),
+                        items.iter(),
+                    )
                     .await?;
-                let submitted_subjects = filter_submitted_subjects_for_libraries(
-                    &submitted_subjects,
-                    &visibility.readable_library_ids,
-                );
                 resolve_discovery_matched_subjects(&mut items, &submitted_subjects)?;
                 continue_discovery_rendered_window(
                     window,
@@ -1427,14 +1414,11 @@ impl AppUseCase {
                 let owned_visibility = if include_owned {
                     CatalogOwnedVisibility::default()
                 } else {
-                    let owned_library_ids = self
-                        .authorized_library_ids(actor, None, LibraryPermission::View)
-                        .await?
-                        .into_iter()
-                        .collect::<HashSet<_>>();
-                    self.discovery_home_owned_visibility(&sorted_discovery_library_ids(
-                        &owned_library_ids,
-                    ))
+                    let owned_library_ids = &visibility.owned_library_ids;
+                    self.discovery_home_owned_visibility(
+                        &sorted_discovery_library_ids(&owned_library_ids),
+                        &status.state,
+                    )
                     .await?
                 };
                 let records = records
@@ -1480,18 +1464,11 @@ impl AppUseCase {
         if !self.personalized_discovery_enabled().await? {
             return Ok(DiscoveryWatchlistComposition::default());
         }
-        let owned_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let owned_visibility = self
-            .discovery_home_owned_visibility(&sorted_discovery_library_ids(&owned_library_ids))
-            .await?;
+        let owned_library_ids = &visibility.owned_library_ids;
         self.discovery_watchlist_composition(
             actor,
             visibility,
-            &owned_visibility,
+            &sorted_discovery_library_ids(&owned_library_ids),
             &status.state,
             can_view_personalized,
             filters,
@@ -1506,10 +1483,10 @@ impl AppUseCase {
     /// every requester's pending requests, not only the viewer's.
     async fn discovery_pending_request_visibility(
         &self,
-        actor: &User,
+        visibility: &DiscoveryVisibility,
     ) -> AppResult<DiscoveryRequestedVisibility> {
         Ok(DiscoveryRequestedVisibility::from_media_requests(
-            &self.discovery_pending_requests(actor).await?,
+            &self.discovery_pending_requests(visibility).await?,
         ))
     }
 
@@ -1517,16 +1494,13 @@ impl AppUseCase {
     /// read, whoever asked.
     pub(super) async fn discovery_pending_requests(
         &self,
-        actor: &User,
+        visibility: &DiscoveryVisibility,
     ) -> AppResult<Vec<scryer_domain::MediaRequest>> {
-        let mut library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::Request)
-            .await?
-            .into_iter()
-            .chain(
-                self.authorized_library_ids(actor, None, LibraryPermission::View)
-                    .await?,
-            )
+        let mut library_ids = visibility
+            .requestable_library_ids
+            .iter()
+            .chain(&visibility.owned_library_ids)
+            .cloned()
             .collect::<Vec<_>>();
         library_ids.sort();
         library_ids.dedup();

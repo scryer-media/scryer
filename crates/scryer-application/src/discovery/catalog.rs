@@ -59,16 +59,16 @@ impl CatalogOwnedVisibility {
 
     pub(super) fn from_title_records_and_series_movies(
         titles: &[CatalogOwnedTitleRecord],
-        series_movies: &[SeriesMovieLink],
+        series_movies: &[CatalogOwnedSeriesMovieRecord],
     ) -> Self {
         let mut visibility = Self::from_title_records(titles);
         for series_movie in series_movies {
             for (source, value) in [
-                ("imdb", series_movie.movie.imdb_id.as_deref()),
-                ("tvdb", series_movie.movie.tvdb_id.as_deref()),
-                ("tmdb", series_movie.movie.tmdb_id.as_deref()),
-                ("mal", series_movie.movie.mal_id.as_deref()),
-                ("anidb", series_movie.movie.anidb_id.as_deref()),
+                ("imdb", series_movie.imdb_id.as_deref()),
+                ("tvdb", series_movie.tvdb_id.as_deref()),
+                ("tmdb", series_movie.tmdb_id.as_deref()),
+                ("mal", series_movie.mal_id.as_deref()),
+                ("anidb", series_movie.anidb_id.as_deref()),
             ] {
                 add_catalog_owned_external_keys(
                     &mut visibility.keys,
@@ -93,19 +93,13 @@ impl CatalogOwnedVisibility {
     }
 
     pub(super) fn item_is_owned(&self, item: &DiscoveryItemRecord) -> bool {
-        if item.owned_in_input {
-            return true;
-        }
-        if item
-            .resolved_title_id
-            .as_deref()
-            .is_some_and(|title_id| self.title_ids.contains(title_id))
-        {
-            return true;
-        }
-        discovery_item_ownership_keys(item)
-            .into_iter()
-            .any(|key| self.keys.contains(&key))
+        item.owned_in_input
+            || self.target_is_owned(&item.target_key, item.resolved_title_id.as_deref())
+    }
+
+    fn target_is_owned(&self, target_key: &str, resolved_title_id: Option<&str>) -> bool {
+        resolved_title_id.is_some_and(|title_id| self.title_ids.contains(title_id))
+            || self.target_key_is_owned(target_key)
     }
 
     /// Whether a title named only by a discovery target key is in the
@@ -115,6 +109,117 @@ impl CatalogOwnedVisibility {
             .into_iter()
             .any(|key| self.keys.contains(&key))
     }
+}
+
+/// The probe that finds every catalog title (or linked movie) whose
+/// ownership keys could match one of `targets`.
+///
+/// An ownership key is `source:value`, `source:facet:value`, or for anime
+/// also `source:series:value` and `source:anime:value`, where `value` is the
+/// id lowercased and trimmed or its canonical positive number. A target
+/// matches when one of its ownership keys equals one of those, so the id
+/// the title must carry is the part of the key after one of its colons (a
+/// source such as `anilist:anime` has a colon of its own). Every such
+/// suffix goes in the probe, and its canonical number as well, since a
+/// stored id like `tmdb:0603` owns the key `tmdb:603`. Source and facet are
+/// left to the exact check that follows, so the probe only ever
+/// over-matches.
+pub(super) fn catalog_owned_probe<'a>(
+    targets: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> CatalogOwnedProbe {
+    let mut values = BTreeSet::new();
+    let mut numeric_values = BTreeSet::new();
+    let mut title_ids = BTreeSet::new();
+    for (target_key, resolved_title_id) in targets {
+        if let Some(title_id) = resolved_title_id.filter(|id| !id.is_empty()) {
+            title_ids.insert(title_id.to_string());
+        }
+        for key in discovery_target_key_ownership_keys(target_key) {
+            let suffixes = key
+                .match_indices(':')
+                .map(|(index, _)| &key[index + 1..])
+                .collect::<Vec<_>>();
+            for candidate in suffixes {
+                if candidate.is_empty() {
+                    continue;
+                }
+                if let Ok(number) = candidate.parse::<i64>()
+                    && number > 0
+                    && number.to_string() == candidate
+                {
+                    numeric_values.insert(number);
+                }
+                // A Postgres `LOWER` folds non-ASCII letters this key kept.
+                let folded = candidate.to_lowercase();
+                if folded != candidate {
+                    values.insert(folded);
+                }
+                values.insert(candidate.to_string());
+            }
+        }
+    }
+    CatalogOwnedProbe {
+        values: values.into_iter().collect(),
+        numeric_values: numeric_values.into_iter().collect(),
+        title_ids: title_ids.into_iter().collect(),
+    }
+}
+
+/// What the ownership check decides for each of `targets` when it may
+/// consider `titles` and `series_movies`: whether each is owned, and the
+/// excluded identity keys and title ids a storage query would compare those
+/// targets against. Store tests use it to show that a probe-scoped read
+/// decides exactly what a whole-catalog read does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogOwnershipDecisions {
+    pub owned: Vec<bool>,
+    pub excluded_identity_keys: BTreeSet<String>,
+    pub excluded_title_ids: BTreeSet<String>,
+}
+
+pub fn catalog_ownership_decisions(
+    titles: &[CatalogOwnedTitleRecord],
+    series_movies: &[CatalogOwnedSeriesMovieRecord],
+    targets: &[DiscoveryItemTargetRecord],
+) -> CatalogOwnershipDecisions {
+    let visibility =
+        CatalogOwnedVisibility::from_title_records_and_series_movies(titles, series_movies);
+    let target_identity_keys = targets
+        .iter()
+        .map(|target| normalize_catalog_owned_key(&target.target_key))
+        .collect::<HashSet<_>>();
+    let resolved_title_ids = targets
+        .iter()
+        .filter_map(|target| target.resolved_title_id.clone())
+        .collect::<HashSet<_>>();
+    CatalogOwnershipDecisions {
+        owned: targets
+            .iter()
+            .map(|target| {
+                visibility.target_is_owned(&target.target_key, target.resolved_title_id.as_deref())
+            })
+            .collect(),
+        excluded_identity_keys: visibility
+            .excluded_discovery_identity_keys()
+            .into_iter()
+            .filter(|key| target_identity_keys.contains(key))
+            .collect(),
+        excluded_title_ids: visibility
+            .excluded_title_ids()
+            .into_iter()
+            .filter(|id| resolved_title_ids.contains(id))
+            .collect(),
+    }
+}
+
+/// The probe [`catalog_ownership_decisions`] needs read for `targets`.
+pub fn catalog_owned_probe_for_targets(targets: &[DiscoveryItemTargetRecord]) -> CatalogOwnedProbe {
+    catalog_owned_probe(targets.iter().map(|target| {
+        (
+            target.target_key.as_str(),
+            target.resolved_title_id.as_deref(),
+        )
+    }))
 }
 
 pub(super) fn add_catalog_owned_external_keys(
@@ -165,10 +270,6 @@ pub(super) fn insert_catalog_owned_key(
     let key = format!("{source}:{value}");
     keys.insert(key.clone());
     identity_keys.insert(key);
-}
-
-pub(super) fn discovery_item_ownership_keys(item: &DiscoveryItemRecord) -> HashSet<String> {
-    discovery_target_key_ownership_keys(&item.target_key)
 }
 
 pub(super) fn discovery_target_key_ownership_keys(target_key: &str) -> HashSet<String> {
@@ -1010,22 +1111,6 @@ pub(super) fn resolve_discovery_matched_subjects(
     }
 
     Ok(())
-}
-
-pub(super) fn filter_submitted_subjects_for_libraries(
-    submitted_subjects: &[DiscoverySubmittedSubjectRecord],
-    readable_library_ids: &HashSet<String>,
-) -> Vec<DiscoverySubmittedSubjectRecord> {
-    submitted_subjects
-        .iter()
-        .filter(|subject| {
-            subject
-                .library_id
-                .as_deref()
-                .is_some_and(|library_id| readable_library_ids.contains(library_id))
-        })
-        .cloned()
-        .collect()
 }
 
 #[cfg(test)]

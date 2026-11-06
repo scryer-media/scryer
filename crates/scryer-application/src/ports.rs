@@ -30,7 +30,7 @@ use scryer_plugin_sdk::{
     SubtitleSyncOptions,
 };
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
@@ -189,6 +189,59 @@ pub struct CatalogOwnedTitleRecord {
 pub struct CatalogOwnedExternalIdRecord {
     pub source: String,
     pub value: String,
+}
+
+/// The external ids of a movie linked to a series in the catalog, for the
+/// ownership check that treats such a movie as owned.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CatalogOwnedSeriesMovieRecord {
+    pub imdb_id: Option<String>,
+    pub tvdb_id: Option<String>,
+    pub tmdb_id: Option<String>,
+    pub mal_id: Option<String>,
+    pub anidb_id: Option<String>,
+}
+
+impl From<&scryer_domain::SeriesMovieLink> for CatalogOwnedSeriesMovieRecord {
+    fn from(link: &scryer_domain::SeriesMovieLink) -> Self {
+        Self {
+            imdb_id: link.movie.imdb_id.clone(),
+            tvdb_id: link.movie.tvdb_id.clone(),
+            tmdb_id: link.movie.tmdb_id.clone(),
+            mal_id: link.movie.mal_id.clone(),
+            anidb_id: link.movie.anidb_id.clone(),
+        }
+    }
+}
+
+/// The ids a set of discovery candidates could match catalog titles by, so
+/// the ownership read touches only titles those candidates can name rather
+/// than the whole catalog.
+///
+/// A store returns every title (or linked movie) whose id compares equal to
+/// one of `values` after `LOWER(TRIM(..))`, whose trailing run of digits
+/// equals one of `numeric_values`, or whose id is in `title_ids`. Returning
+/// more is always correct: the caller recomputes the exact ownership keys
+/// from what comes back.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CatalogOwnedProbe {
+    pub values: Vec<String>,
+    pub numeric_values: Vec<i64>,
+    pub title_ids: Vec<String>,
+}
+
+impl CatalogOwnedProbe {
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty() && self.numeric_values.is_empty() && self.title_ids.is_empty()
+    }
+}
+
+/// A discovery item's catalog identity: its target key and the title it
+/// resolved to, if any.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DiscoveryItemTargetRecord {
+    pub target_key: String,
+    pub resolved_title_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -933,6 +986,64 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         run_id: &str,
     ) -> AppResult<Vec<DiscoverySubmittedSubjectRecord>>;
+    /// The submitted subjects of `run_id` whose key is one of
+    /// `subject_keys` and whose library is one of `library_ids`, in
+    /// `list_discovery_submitted_subjects` order.
+    /// The distinct title ids `run_id` submitted from `library_ids`, for a
+    /// title read that cannot select them itself. `None` means the title
+    /// store resolves the submitted set in its own query.
+    async fn list_discovery_submitted_title_ids(
+        &self,
+        run_id: &str,
+        library_ids: &[String],
+    ) -> AppResult<Option<Vec<String>>> {
+        let library_ids = library_ids.iter().collect::<HashSet<_>>();
+        let mut seen = HashSet::new();
+        Ok(Some(
+            self.list_discovery_submitted_subjects(run_id)
+                .await?
+                .into_iter()
+                .filter(|subject| {
+                    subject
+                        .library_id
+                        .as_ref()
+                        .is_some_and(|library_id| library_ids.contains(library_id))
+                })
+                .filter_map(|subject| subject.title_id)
+                .filter(|title_id| seen.insert(title_id.clone()))
+                .collect(),
+        ))
+    }
+    async fn list_discovery_submitted_subjects_for_keys(
+        &self,
+        run_id: &str,
+        library_ids: &[String],
+        subject_keys: &[String],
+    ) -> AppResult<Vec<DiscoverySubmittedSubjectRecord>> {
+        if library_ids.is_empty() || subject_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let library_ids = library_ids.iter().collect::<HashSet<_>>();
+        let subject_keys = subject_keys.iter().collect::<HashSet<_>>();
+        Ok(self
+            .list_discovery_submitted_subjects(run_id)
+            .await?
+            .into_iter()
+            .filter(|subject| {
+                subject_keys.contains(&subject.subject_key)
+                    && subject
+                        .library_id
+                        .as_ref()
+                        .is_some_and(|library_id| library_ids.contains(library_id))
+            })
+            .collect())
+    }
+    /// The distinct target keys and resolved title ids of every item whose
+    /// base generation is one of `run_ids`, tombstoned or not.
+    async fn list_discovery_item_targets(
+        &self,
+        run_ids: &[String],
+    ) -> AppResult<Vec<DiscoveryItemTargetRecord>>;
     async fn upsert_pending_discovery_context_change(
         &self,
         change: &DiscoveryPendingContextChangeRecord,
@@ -1870,6 +1981,18 @@ pub trait TitleRepository: Send + Sync {
                     .collect(),
             })
             .collect())
+    }
+    /// The catalog titles in `library_ids` that `probe` can match, with all
+    /// of their external ids. The default answers with every title in those
+    /// libraries, a superset the caller narrows; SQL stores override it with
+    /// an indexed lookup.
+    async fn list_catalog_owned_title_records_matching(
+        &self,
+        library_ids: &[String],
+        probe: &CatalogOwnedProbe,
+    ) -> AppResult<Vec<CatalogOwnedTitleRecord>> {
+        let _ = probe;
+        self.list_catalog_owned_title_records(library_ids).await
     }
     async fn list_for_libraries_without_external_ids(
         &self,
@@ -3510,6 +3633,19 @@ pub trait ShowRepository: Send + Sync {
             links.extend(self.list_series_movie_links_for_title(title_id).await?);
         }
         Ok(links)
+    }
+    /// The movies linked to series in `library_ids` that `probe` can match
+    /// by any of their external ids. `None` means the repository has no
+    /// probe-scoped read (the default, kept for in-memory test doubles); the
+    /// caller then reads the links of every title in those libraries. SQL
+    /// stores override it.
+    async fn list_catalog_owned_series_movies_matching(
+        &self,
+        library_ids: &[String],
+        probe: &CatalogOwnedProbe,
+    ) -> AppResult<Option<Vec<CatalogOwnedSeriesMovieRecord>>> {
+        let _ = (library_ids, probe);
+        Ok(None)
     }
     async fn list_series_movie_external_id_lookup_matches(
         &self,

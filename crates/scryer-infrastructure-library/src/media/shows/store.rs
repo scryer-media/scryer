@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
-    AppError, AppResult, CollectionUpdate, EpisodeImageUrlUpdate, EpisodeUpdate,
-    PrimaryCollectionSummary, ScopedExternalId, SeriesMovieExternalIdLookupMatch, ShowRepository,
-    TitleExternalIdLookup,
+    AppError, AppResult, CatalogOwnedProbe, CatalogOwnedSeriesMovieRecord, CollectionUpdate,
+    EpisodeImageUrlUpdate, EpisodeUpdate, PrimaryCollectionSummary, ScopedExternalId,
+    SeriesMovieExternalIdLookupMatch, ShowRepository, TitleExternalIdLookup,
 };
 use scryer_domain::{
     AbsoluteScale, AnimeCommunitySeason, AnimeNumberingBridge, CalendarEpisode, Collection,
@@ -20,6 +20,7 @@ use crate::media::title_credits::{load_movie_entity_credits, replace_movie_entit
 // Series-movie tags are the same bag with the same rules as a title's, so the
 // patch, the per-owner cap, and the reserved-namespace guard are the title
 // store's function rather than a second copy that could drift from it.
+use crate::media::titles::owned_probe;
 use crate::media::titles::store::apply_user_tag_patch;
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTarget, SqlTx, StoreDatastore,
@@ -151,6 +152,16 @@ impl ShowRepository for ShowStore {
         title_ids: &[String],
     ) -> AppResult<Vec<SeriesMovieLink>> {
         list_series_movie_links_for_titles_query(self.read_target(), title_ids).await
+    }
+
+    async fn list_catalog_owned_series_movies_matching(
+        &self,
+        library_ids: &[String],
+        probe: &CatalogOwnedProbe,
+    ) -> AppResult<Option<Vec<CatalogOwnedSeriesMovieRecord>>> {
+        list_catalog_owned_series_movies_matching_query(self.read_target(), library_ids, probe)
+            .await
+            .map(Some)
     }
 
     async fn list_series_movie_external_id_lookup_matches(
@@ -733,6 +744,54 @@ async fn list_series_movie_links_for_titles_query(
         .collect::<AppResult<Vec<_>>>()?;
     attach_movie_entity_ratings(SqlExec::Target(target), &mut links).await?;
     Ok(links)
+}
+
+/// The linked movies of series in `library_ids` that `probe` names by any of
+/// their five ids. The movie ids carry no expression index, so this reads
+/// the links of those libraries' series; the rows it returns are bounded by
+/// the probe.
+async fn list_catalog_owned_series_movies_matching_query(
+    target: SqlTarget<'_>,
+    library_ids: &[String],
+    probe: &CatalogOwnedProbe,
+) -> AppResult<Vec<CatalogOwnedSeriesMovieRecord>> {
+    if library_ids.is_empty() || probe.values.is_empty() && probe.numeric_values.is_empty() {
+        return Ok(Vec::new());
+    }
+    let postgres = matches!(target, SqlTarget::Postgres(_));
+    let id_clauses = ["imdb_id", "tvdb_id", "tmdb_id", "mal_id", "anidb_id"]
+        .iter()
+        .map(|column| owned_probe::probe_id_match_clause(postgres, &format!("me.{column}")))
+        .collect::<Vec<_>>()
+        .join("\n               OR ");
+    let library_placeholders = bind_placeholders(library_ids.len());
+    let sql = format!(
+        "WITH {ctes}
+         SELECT DISTINCT me.imdb_id AS imdb_id, me.tvdb_id AS tvdb_id, me.tmdb_id AS tmdb_id,
+                me.mal_id AS mal_id, me.anidb_id AS anidb_id
+         FROM series_movie_links sml
+         INNER JOIN titles series ON series.id = sml.series_title_id
+         INNER JOIN movie_entities me ON me.id = sml.movie_entity_id
+         WHERE series.library_id IN ({library_placeholders})
+           AND ({id_clauses})",
+        ctes = owned_probe::probe_ctes(postgres),
+    );
+    let args = owned_probe::probe_args(probe)
+        .into_iter()
+        .chain(library_ids.iter().cloned().map(SqlArg::Text))
+        .collect::<Vec<_>>();
+    let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
+    rows.iter()
+        .map(|row| {
+            Ok(CatalogOwnedSeriesMovieRecord {
+                imdb_id: row.opt_text("imdb_id")?,
+                tvdb_id: row.opt_text("tvdb_id")?,
+                tmdb_id: row.opt_text("tmdb_id")?,
+                mal_id: row.opt_text("mal_id")?,
+                anidb_id: row.opt_text("anidb_id")?,
+            })
+        })
+        .collect()
 }
 
 fn movie_entity_external_id_column(source: &str) -> Option<&'static str> {
