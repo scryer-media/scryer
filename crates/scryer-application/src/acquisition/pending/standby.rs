@@ -145,16 +145,10 @@ impl AppUseCase {
                 ..Default::default()
             });
         }
-        // Best effort, as Sonarr's queue removal: ask each client to cancel,
-        // settle locally, and queue without waiting for the clients to act.
-        let (cancelled, cancel_failed) =
-            if choice == StandbyQueueChoice::CancelAndQueue && !conflicts.is_empty() {
-                self.cancel_standby_conflicts(&pr.title_id, conflicts)
-                    .await?
-            } else {
-                (Vec::new(), Vec::new())
-            };
-        match self
+        // The grab runs first: a release the client never accepts must leave
+        // the downloads it would have replaced running. The standby submission
+        // queues alongside live conflicts, so they do not block it.
+        let (grabbed_scope, grabbed_job) = match self
             .grab_admitted_pending_release(
                 &wanted,
                 &pr,
@@ -165,17 +159,35 @@ impl AppUseCase {
             )
             .await?
         {
-            PendingGrabOutcome::Grabbed { .. } => Ok(StandbyQueueOutcome {
-                grabbed: true,
-                conflicts: Vec::new(),
-                cancelled,
-                cancel_failed,
-            }),
-            _ => Err(AppError::validation_refused(
-                refusal::NOT_QUEUEABLE,
-                "The saved release was not accepted; it remains available to retry",
-            )),
-        }
+            PendingGrabOutcome::Grabbed { scope, job } => (scope, job),
+            _ => {
+                return Err(AppError::validation_refused(
+                    refusal::NOT_QUEUEABLE,
+                    "The saved release was not accepted; it remains available to retry",
+                ));
+            }
+        };
+        // A submission that reused one of the listed jobs queued the release
+        // there; that job is the release now, never something to cancel.
+        let conflicts: Vec<_> = conflicts
+            .into_iter()
+            .filter(|conflict| locator(conflict) != grabbed_job)
+            .collect();
+        // Best effort, as Sonarr's queue removal: ask each client to cancel,
+        // settle locally, and report without waiting for the clients to act.
+        let (cancelled, cancel_failed) =
+            if choice == StandbyQueueChoice::CancelAndQueue && !conflicts.is_empty() {
+                self.cancel_standby_conflicts(&pr.title_id, conflicts, &grabbed_scope)
+                    .await
+            } else {
+                (Vec::new(), Vec::new())
+            };
+        Ok(StandbyQueueOutcome {
+            grabbed: true,
+            conflicts: Vec::new(),
+            cancelled,
+            cancel_failed,
+        })
     }
 
     /// Title-wide downloads the client is still running.
@@ -260,17 +272,31 @@ impl AppUseCase {
     /// whose client took the request is settled locally at once; one whose
     /// request failed keeps running and stays tracked. Returns the cancelled
     /// and the failed conflicts, in that order.
+    /// Runs after the release is queued, so a failure here never undoes that
+    /// grab: a conflict that could not be cancelled is reported as such.
     async fn cancel_standby_conflicts(
         &self,
         title_id: &str,
         conflicts: Vec<SubmissionScopeConflict>,
-    ) -> AppResult<(Vec<SubmissionScopeConflict>, Vec<SubmissionScopeConflict>)> {
-        let _location = self
+        grabbed_scope: &SubmissionScope,
+    ) -> (Vec<SubmissionScopeConflict>, Vec<SubmissionScopeConflict>) {
+        let _location = match self
             .acquire_location_title_mutation(
                 &crate::location::ownership_guard::TITLE_DOWNLOAD_ENTRY,
                 title_id,
             )
-            .await?;
+            .await
+        {
+            Ok(location) => location,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    title_id,
+                    "standby: conflicting downloads could not be cancelled"
+                );
+                return (Vec::new(), conflicts);
+            }
+        };
         let mut cancelled = Vec::new();
         let mut failed = Vec::new();
         for conflict in conflicts {
@@ -280,7 +306,10 @@ impl AppUseCase {
                     // whatever happens locally. A failed local settle leaves
                     // the submission row for the tracker to reconcile; it must
                     // not abort the remaining cancels or the grab.
-                    if let Err(error) = self.settle_cancelled_conflict(&conflict).await {
+                    if let Err(error) = self
+                        .settle_cancelled_conflict(&conflict, Some(grabbed_scope))
+                        .await
+                    {
                         tracing::warn!(
                             error = %error,
                             client_type = conflict.download_client_type.as_str(),
@@ -301,6 +330,6 @@ impl AppUseCase {
                 }
             }
         }
-        Ok((cancelled, failed))
+        (cancelled, failed)
     }
 }

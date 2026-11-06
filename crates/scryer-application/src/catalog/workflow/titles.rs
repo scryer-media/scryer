@@ -1161,7 +1161,7 @@ impl AppUseCase {
         }
 
         self.cancel_conflict_in_client(conflict).await?;
-        self.settle_cancelled_conflict(conflict).await
+        self.settle_cancelled_conflict(conflict, None).await
     }
 
     /// Ask the conflict's client to cancel its live queue item. Downloaded data
@@ -1196,10 +1196,12 @@ impl AppUseCase {
     }
 
     /// Drop the local submission of a conflict the client no longer runs and
-    /// reopen the wanted rows it held.
+    /// reopen the wanted rows it held, except those the `queued_in_place`
+    /// submission already covers.
     pub(crate) async fn settle_cancelled_conflict(
         &self,
         conflict: &SubmissionScopeConflict,
+        queued_in_place: Option<&SubmissionScope>,
     ) -> AppResult<()> {
         self.services
             .workflow
@@ -1220,8 +1222,12 @@ impl AppUseCase {
             .acquisition
             .download_submission_guards
             .forget_settled_download(&conflict.title_id);
-        self.reset_wanted_items_for_submission_scope(&conflict.title_id, &conflict.scope)
-            .await
+        self.reset_wanted_items_for_submission_scope(
+            &conflict.title_id,
+            &conflict.scope,
+            queued_in_place,
+        )
+        .await
     }
 }
 impl AppUseCase {

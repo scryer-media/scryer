@@ -47,6 +47,7 @@ struct Fixture {
     candidate: PendingRelease,
     client: Arc<StubDownloadClient>,
     pending: Arc<TrackingPendingReleaseRepo>,
+    wanted_id: String,
 }
 
 impl Fixture {
@@ -87,6 +88,7 @@ impl Fixture {
             candidate,
             client,
             pending,
+            wanted_id,
         }
     }
 
@@ -143,6 +145,18 @@ impl Fixture {
                 &identities(conflicts),
             )
             .await
+    }
+
+    async fn wanted_status(&self) -> AcquisitionScopeStatus {
+        self.app
+            .services
+            .workflow
+            .acquisition_scope_states
+            .get_acquisition_scope_state_by_id(&self.wanted_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status
     }
 
     async fn status(&self) -> PendingReleaseStatus {
@@ -329,6 +343,115 @@ async fn standby_queue_submission_failure_is_retryable() {
             .unwrap()
             .grabbed
     );
+}
+
+#[tokio::test]
+async fn standby_queue_failed_grab_leaves_conflicts_running() {
+    for error in [
+        StubSubmitError::Rejected("synthetic refusal".into()),
+        StubSubmitError::SubmitUnavailable("synthetic outage".into()),
+    ] {
+        let f = Fixture::new(true).await;
+        f.conflict("first", &f.title.id).await;
+        let result = f.queue(StandbyQueueChoice::Check, &[]).await.unwrap();
+        assert_eq!(item_ids(&result.conflicts), vec!["first"]);
+        f.client.set_submit_error(Some(error)).await;
+        assert!(
+            f.queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
+                .await
+                .is_err()
+        );
+        assert!(f.client.delete_attempts.lock().await.is_empty());
+        assert!(
+            f.client
+                .queue_items
+                .lock()
+                .await
+                .iter()
+                .any(|item| item.download_client_item_id == "first")
+        );
+        assert_eq!(row_ids(&f).await, vec!["first".to_string()]);
+        assert_eq!(f.status().await, PendingReleaseStatus::Standby);
+        // The conflict is still there to confirm on the retry.
+        f.client.set_submit_error(None).await;
+        let outcome = f
+            .queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
+            .await
+            .unwrap();
+        assert!(outcome.grabbed);
+        assert_eq!(item_ids(&outcome.cancelled), vec!["first"]);
+    }
+}
+
+#[tokio::test]
+async fn standby_queue_cancel_keeps_the_wanted_rows_the_new_grab_holds() {
+    let queued = Fixture::new(true).await;
+    queued.conflict("first", &queued.title.id).await;
+    let result = queued.queue(StandbyQueueChoice::Check, &[]).await.unwrap();
+    assert!(
+        queued
+            .queue(StandbyQueueChoice::Queue, &result.conflicts)
+            .await
+            .unwrap()
+            .grabbed
+    );
+    let cancelled = Fixture::new(true).await;
+    cancelled.conflict("first", &cancelled.title.id).await;
+    let result = cancelled
+        .queue(StandbyQueueChoice::Check, &[])
+        .await
+        .unwrap();
+    let outcome = cancelled
+        .queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
+        .await
+        .unwrap();
+    assert_eq!(item_ids(&outcome.cancelled), vec!["first"]);
+    // Cancelling the replaced download after the grab must not reopen the
+    // row the new release now holds.
+    assert_eq!(
+        cancelled.wanted_status().await,
+        queued.wanted_status().await
+    );
+    assert_ne!(
+        cancelled.wanted_status().await,
+        AcquisitionScopeStatus::Wanted
+    );
+}
+
+#[tokio::test]
+async fn standby_queue_cancel_never_cancels_the_job_the_grab_reused() {
+    let f = Fixture::new(true).await;
+    assert!(
+        f.queue(StandbyQueueChoice::Check, &[])
+            .await
+            .unwrap()
+            .grabbed
+    );
+    let mut duplicate = f.candidate.clone();
+    duplicate.id = Id::new().0;
+    f.pending.insert_pending_release(&duplicate).await.unwrap();
+    let result = f
+        .app
+        .queue_standby_release(&f.actor, &duplicate.id, StandbyQueueChoice::Check, &[])
+        .await
+        .unwrap();
+    assert_eq!(result.conflicts.len(), 1);
+    let outcome = f
+        .app
+        .queue_standby_release(
+            &f.actor,
+            &duplicate.id,
+            StandbyQueueChoice::CancelAndQueue,
+            &identities(&result.conflicts),
+        )
+        .await
+        .unwrap();
+    assert!(outcome.grabbed);
+    assert!(outcome.cancelled.is_empty());
+    assert!(outcome.cancel_failed.is_empty());
+    assert!(f.client.delete_attempts.lock().await.is_empty());
+    assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
+    assert_eq!(f.client.queue_items.lock().await.len(), 1);
 }
 
 #[tokio::test]

@@ -739,14 +739,24 @@ impl AppUseCase {
     /// Operator queue replacement: the blocking download is gone, so every
     /// scope it covered re-opens from scratch — score baseline cleared (the
     /// replacement decides on its own merits), all coverage pruned, loop woken.
+    ///
+    /// Rows `kept` covers stay as they are: a release already queued in the
+    /// blocking download's place holds them.
     pub(crate) async fn reset_wanted_items_for_submission_scope(
         &self,
         title_id: &str,
         scope: &SubmissionScope,
+        kept: Option<&SubmissionScope>,
     ) -> AppResult<()> {
-        let wanted_item_ids = self
+        let mut wanted_item_ids = self
             .covered_wanted_item_ids_for_submission_scope(title_id, scope, "")
             .await?;
+        if let Some(kept) = kept {
+            let held = self
+                .covered_wanted_item_ids_for_submission_scope(title_id, kept, "")
+                .await?;
+            wanted_item_ids.retain(|id| !held.contains(id));
+        }
         for wanted_item_id in wanted_item_ids {
             if let Some(item) = self
                 .services
