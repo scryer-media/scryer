@@ -319,22 +319,57 @@ fn revalidate_conflict_folder(
     if !catalog.roots.iter().any(|root| {
         root.library_id == title.library_id
             && crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
-    }) || catalog.owners.iter().any(|owner| {
-        owner.id != title.id
-            && owner
-                .folder_path
-                .as_deref()
-                .is_some_and(|other| overlaps(folder, other))
-    }) || catalog.media.iter().any(|media| {
-        media.title_id != title.id
-            && crate::title_folder_rules::path_is_strictly_within(&media.file_path, folder)
-    }) {
+    }) || another_title_holds_content(folder, &title.id, catalog)?
+    {
         return Err(refused(
             refusal::OWNERSHIP_CHANGED,
             "Conflict folder ownership or roots changed",
         ));
     }
     Ok(())
+}
+
+/// Whether another title owns a folder overlapping `folder`, or tracks media
+/// inside it. Owner folders compare the way ownership claims do, so a re-cased
+/// spelling on a case-insensitive volume still counts as the same folder.
+fn another_title_holds_content(
+    folder: &str,
+    title_id: &str,
+    catalog: &super::title_folder_recovery::RecoveryCatalog,
+) -> AppResult<bool> {
+    for owner in &catalog.owners {
+        if owner.id != title_id
+            && let Some(owned) = owner.folder_path.as_deref()
+            && other_folder_overlaps(folder, owned)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(catalog
+        .media
+        .iter()
+        .any(|media| media.title_id != title_id && other_media_within(&media.file_path, folder)))
+}
+
+/// [`overlaps`], widened to a case-folded match on a case-insensitive volume.
+/// The case-folded spelling is only a cheap filter; the claim comparison
+/// decides.
+fn other_folder_overlaps(folder: &str, owned: &str) -> AppResult<bool> {
+    if overlaps(folder, owned) {
+        return Ok(true);
+    }
+    if !overlaps(&folder.to_lowercase(), &owned.to_lowercase()) {
+        return Ok(false);
+    }
+    crate::folder_ownership::title_folders_overlap(folder, owned)
+}
+
+fn other_media_within(media: &str, folder: &str) -> bool {
+    crate::title_folder_rules::path_is_strictly_within(media, folder)
+        || (crate::title_folder_rules::path_is_strictly_within(
+            &media.to_lowercase(),
+            &folder.to_lowercase(),
+        ) && crate::folder_ownership::folder_case_insensitive(&stored_path_to_path_buf(folder)))
 }
 
 /// Whether `folder` is, or contains, any configured root of any library.
@@ -719,16 +754,7 @@ impl AppUseCase {
                     "Conflict folders must not overlap",
                 ));
             }
-            if catalog.owners.iter().any(|owner| {
-                owner.id != title.id
-                    && owner
-                        .folder_path
-                        .as_deref()
-                        .is_some_and(|owned| overlaps(folder, owned))
-            }) || catalog.media.iter().any(|media| {
-                media.title_id != title.id
-                    && crate::title_folder_rules::path_is_strictly_within(&media.file_path, folder)
-            }) {
+            if another_title_holds_content(folder, &title.id, catalog)? {
                 return Err(refused(
                     refusal::OWNERSHIP_CHANGED,
                     "Another title owns content in a conflict folder",
@@ -1398,6 +1424,61 @@ mod folder_name_rank_tests {
                 .expect_err("a root inside the folder is refused");
             assert_eq!(error.validation_reason(), Some(refusal::FOLDER_UNSAFE));
         }
+    }
+
+    /// A re-cased spelling of another title's folder is that folder exactly
+    /// when the volume folds case; the planner follows the volume, not the
+    /// spelling. The fixture's volume decides which answer is right.
+    #[test]
+    fn another_owner_under_a_re_cased_spelling_follows_the_volume() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let owned = base.join("Owner Folder");
+        std::fs::create_dir(&owned).unwrap();
+        std::fs::write(owned.join("Fixture.mkv"), b"x").unwrap();
+        let recased = base.join("owner folder");
+        let case_insensitive = crate::folder_ownership::folder_case_insensitive(&recased);
+        let mut title = movie("Emberfall", 2024, &[]);
+        title.id = "this-title".into();
+        let mut held = catalog(vec![]);
+        held.owners
+            .push(crate::location::title_folder_recovery::RecoveryOwner {
+                id: "other-title".into(),
+                library_id: title.library_id.clone(),
+                folder_path: Some(path_to_stored_string(&owned)),
+                revision: None,
+            });
+        assert_eq!(
+            another_title_holds_content(&path_to_stored_string(&recased), &title.id, &held)
+                .unwrap(),
+            case_insensitive
+        );
+        // An exact spelling always overlaps; an unrelated folder never does.
+        assert!(
+            another_title_holds_content(&path_to_stored_string(&owned), &title.id, &held).unwrap()
+        );
+        assert!(
+            !another_title_holds_content(
+                &path_to_stored_string(base.join("Elsewhere")),
+                &title.id,
+                &held
+            )
+            .unwrap()
+        );
+        let mut media = catalog(vec![]);
+        media
+            .media
+            .push(crate::location::title_folder_recovery::RecoveryMedia {
+                id: "media".into(),
+                title_id: "other-title".into(),
+                file_path: path_to_stored_string(owned.join("Fixture.mkv")),
+                size_bytes: 1,
+            });
+        assert_eq!(
+            another_title_holds_content(&path_to_stored_string(&recased), &title.id, &media)
+                .unwrap(),
+            case_insensitive
+        );
     }
 
     #[test]
