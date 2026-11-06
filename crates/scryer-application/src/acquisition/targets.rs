@@ -682,6 +682,25 @@ impl AppUseCase {
         title_id: Option<&str>,
         respect_title_monitoring: bool,
     ) -> AppResult<Vec<AcquisitionTarget>> {
+        let started = std::time::Instant::now();
+        let targets = self
+            .derive_missing_targets_for_search_untimed(now, title_id, respect_title_monitoring)
+            .await;
+        if title_id.is_none() {
+            crate::acquisition::walk_metrics::record_derivation(
+                crate::acquisition::walk_metrics::DerivationPass::Missing,
+                started.elapsed(),
+            );
+        }
+        targets
+    }
+
+    async fn derive_missing_targets_for_search_untimed(
+        &self,
+        now: &DateTime<Utc>,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
         let movie_availability = self.movie_availability_policies().await?;
         let candidates = self
             .services
@@ -871,11 +890,35 @@ impl AppUseCase {
         title_id: Option<&str>,
         respect_title_monitoring: bool,
     ) -> AppResult<Vec<AcquisitionTarget>> {
+        let mut targets = self
+            .derive_cutoff_quality_targets_for_search(now, title_id, respect_title_monitoring)
+            .await?;
+        let format_targets = self
+            .derive_format_cutoff_targets_for_search(
+                now,
+                title_id,
+                respect_title_monitoring,
+                &targets,
+            )
+            .await?;
+        targets.extend(format_targets);
+        Ok(targets)
+    }
+
+    /// The quality-tier half of the cutoff targets: scopes whose primary
+    /// file's tier sits strictly below the profile's cutoff tier.
+    async fn derive_cutoff_quality_targets_for_search(
+        &self,
+        now: &DateTime<Utc>,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
+        let started = std::time::Instant::now();
         let movie_availability = self.movie_availability_policies().await?;
         let items = self
             .compute_cutoff_unmet_items_for_search(None, None, title_id, respect_title_monitoring)
             .await?;
-        let mut targets: Vec<AcquisitionTarget> = items
+        let targets: Vec<AcquisitionTarget> = items
             .into_iter()
             .filter_map(|item| {
                 if item.episode_id.is_none()
@@ -924,7 +967,26 @@ impl AppUseCase {
                 })
             })
             .collect();
+        if title_id.is_none() {
+            crate::acquisition::walk_metrics::record_derivation(
+                crate::acquisition::walk_metrics::DerivationPass::CutoffQuality,
+                started.elapsed(),
+            );
+        }
+        Ok(targets)
+    }
 
+    /// The format-score half of the cutoff targets, for scopes the quality
+    /// sweep did not already nominate. Returns only the new targets.
+    async fn derive_format_cutoff_targets_for_search(
+        &self,
+        now: &DateTime<Utc>,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
+        quality_targets: &[AcquisitionTarget],
+    ) -> AppResult<Vec<AcquisitionTarget>> {
+        let started = std::time::Instant::now();
+        let movie_availability = self.movie_availability_policies().await?;
         // D19's second half: a scope whose *quality* is at cutoff but whose
         // score is below the profile's `cutoff_score` is still an upgrade
         // target. Appended rather than folded into `compute_cutoff_unmet_items`
@@ -936,10 +998,11 @@ impl AppUseCase {
         // score pass never scores them: their target exists whatever the
         // score says, and scoring them only to discard the result was pure
         // cost on every cycle.
-        let mut seen: HashSet<String> = targets
+        let mut seen: HashSet<String> = quality_targets
             .iter()
             .map(|target| target.scope_key.clone())
             .collect();
+        let mut targets = Vec::new();
         for target in self
             .derive_format_cutoff_targets(
                 now,
@@ -953,6 +1016,12 @@ impl AppUseCase {
             if seen.insert(target.scope_key.clone()) {
                 targets.push(target);
             }
+        }
+        if title_id.is_none() {
+            crate::acquisition::walk_metrics::record_derivation(
+                crate::acquisition::walk_metrics::DerivationPass::FormatScoring,
+                started.elapsed(),
+            );
         }
         Ok(targets)
     }
@@ -1167,6 +1236,26 @@ impl AppUseCase {
         let mut targets = self
             .derive_acquisition_candidates_for_search(now, title_id, respect_title_monitoring)
             .await?;
+        let started = std::time::Instant::now();
+        self.retain_unlocked_unpaused_targets(&mut targets, title_id)
+            .await?;
+        if title_id.is_none() {
+            crate::acquisition::walk_metrics::record_derivation(
+                crate::acquisition::walk_metrics::DerivationPass::Filters,
+                started.elapsed(),
+            );
+        }
+        Ok(targets)
+    }
+
+    /// Drops targets whose title a location operation owns and scopes the
+    /// operator paused. Both reads return only the locked and paused rows,
+    /// never the catalog.
+    pub(crate) async fn retain_unlocked_unpaused_targets(
+        &self,
+        targets: &mut Vec<AcquisitionTarget>,
+        title_id: Option<&str>,
+    ) -> AppResult<()> {
         let locked_titles = self.location_owned_title_ids().await?;
         targets.retain(|target| !locked_titles.contains(&target.title_id));
 
@@ -1197,8 +1286,88 @@ impl AppUseCase {
                 .collect();
             targets.retain(|target| !paused_keys.contains(&target.scope_key));
         }
+        Ok(())
+    }
+}
 
-        Ok(targets)
+/// What one full derivation of the acquisition target set cost, sub-pass by
+/// sub-pass, and how large the result is. Built for the walk benchmark.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default)]
+pub struct AcquisitionDerivationProfile {
+    pub missing: std::time::Duration,
+    pub cutoff_quality: std::time::Duration,
+    pub format_scoring: std::time::Duration,
+    pub filters: std::time::Duration,
+    pub targets: usize,
+    pub hot_targets: usize,
+    /// Estimated heap and inline bytes of the derived `Vec<AcquisitionTarget>`.
+    pub target_vec_bytes: usize,
+}
+
+impl AcquisitionTarget {
+    /// Estimated bytes this target holds, inline plus its string allocations.
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        fn heap(value: &str) -> usize {
+            value.len()
+        }
+        fn opt(value: Option<&String>) -> usize {
+            value.map_or(0, |value| value.len())
+        }
+        std::mem::size_of::<Self>()
+            + heap(&self.scope_key)
+            + heap(&self.title_id)
+            + heap(&self.library_id)
+            + heap(&self.media_type)
+            + opt(self.episode_id.as_ref())
+            + opt(self.collection_id.as_ref())
+            + opt(self.series_movie_link_id.as_ref())
+            + opt(self.season_number.as_ref())
+            + opt(self.episode_number.as_ref())
+    }
+}
+
+impl AppUseCase {
+    /// Runs one full derivation of the background walk's target set and
+    /// reports what each sub-pass cost. Benchmark support; the walk itself
+    /// does not call this.
+    #[doc(hidden)]
+    pub async fn profile_acquisition_target_derivation(
+        &self,
+    ) -> AppResult<AcquisitionDerivationProfile> {
+        let now = Utc::now();
+        let mut profile = AcquisitionDerivationProfile::default();
+        let started = std::time::Instant::now();
+        let mut targets = self
+            .derive_missing_targets_for_search(&now, None, true)
+            .await?;
+        profile.missing = started.elapsed();
+        let started = std::time::Instant::now();
+        let quality = self
+            .derive_cutoff_quality_targets_for_search(&now, None, true)
+            .await?;
+        profile.cutoff_quality = started.elapsed();
+        let started = std::time::Instant::now();
+        let format = self
+            .derive_format_cutoff_targets_for_search(&now, None, true, &quality)
+            .await?;
+        profile.format_scoring = started.elapsed();
+        targets.extend(quality);
+        targets.extend(format);
+        let mut seen = HashSet::new();
+        targets.retain(|target| seen.insert(target.scope_key.clone()));
+        let started = std::time::Instant::now();
+        self.retain_unlocked_unpaused_targets(&mut targets, None)
+            .await?;
+        profile.filters = started.elapsed();
+        profile.targets = targets.len();
+        profile.hot_targets = targets.iter().filter(|target| target.is_hot).count();
+        profile.target_vec_bytes = targets
+            .iter()
+            .map(AcquisitionTarget::estimated_bytes)
+            .sum::<usize>()
+            + (targets.capacity() - targets.len()) * std::mem::size_of::<AcquisitionTarget>();
+        Ok(profile)
     }
 }
 

@@ -338,6 +338,10 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         return BackgroundAcquisitionCycleOutcome::default();
     }
 
+    let walk_cpu_started = crate::acquisition::walk_metrics::process_cpu_seconds();
+    let targets_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+        crate::acquisition::walk_metrics::WalkSection::Targets,
+    );
     let mut targets = match app.derive_acquisition_targets(&now).await {
         Ok(targets) => targets,
         Err(err) => {
@@ -348,6 +352,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     if !blocked_facets.is_empty() {
         targets.retain(|target| !blocked_facets.contains(&target.facet));
     }
+    drop(targets_timer);
     if targets.is_empty() {
         return BackgroundAcquisitionCycleOutcome::default();
     }
@@ -407,6 +412,9 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             stop = WalkStopReason::combine(stop, WalkStopReason::Deadline);
             break;
         }
+        let selection_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+            crate::acquisition::walk_metrics::WalkSection::BatchSelection,
+        );
         let selection = crate::acquisition::targets::select_background_acquisition_batch(
             &targets,
             hot_cursor.as_deref(),
@@ -424,6 +432,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             selection.resume_after.as_deref(),
         )
         .await;
+        drop(selection_timer);
         let (hot_cursor_before, cursor_before) = (hot_cursor.take(), cursor.take());
         hot_cursor = selection.hot_resume_after;
         cursor = selection.resume_after;
@@ -529,6 +538,15 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         indexer_queries,
         stop,
     };
+    metrics::histogram!(crate::acquisition::walk_metrics::WALK_SECONDS)
+        .record(cycle_started.elapsed().as_secs_f64());
+    if let (Some(started), Some(ended)) = (
+        walk_cpu_started,
+        crate::acquisition::walk_metrics::process_cpu_seconds(),
+    ) {
+        metrics::histogram!(crate::acquisition::walk_metrics::WALK_PROCESS_CPU_SECONDS)
+            .record((ended - started).max(0.0));
+    }
     // One INFO line per walk, worded for why it ended.
     let stop_reason = stop.map_or("none", WalkStopReason::as_str);
     let elapsed_secs = cycle_started.elapsed().as_secs();
@@ -4512,6 +4530,9 @@ async fn process_single_target(
         .collect::<Vec<_>>();
 
     session.stats.queries += 1;
+    let search_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+        crate::acquisition::walk_metrics::WalkSection::ScopeSearch,
+    );
     let search_outcome = match app
         .search_and_score_subject_with_context(
             &search_title,
@@ -4536,6 +4557,7 @@ async fn process_single_target(
             return Ok(());
         }
     };
+    drop(search_timer);
     if let Some(scope_key) = convergence_scope_key.as_deref() {
         app.link_search_session_coverage_scope(&search_outcome.search_session_id, scope_key)
             .await;
@@ -4551,6 +4573,9 @@ async fn process_single_target(
     }
     // One evaluation over the union, so the merged rows are ranked by the same
     // comparator as the rest rather than appended past it.
+    let evaluation_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+        crate::acquisition::walk_metrics::WalkSection::Evaluation,
+    );
     let results = app
         .evaluate_search_results_for_subject_with_missing_history(
             &search_title,
@@ -4561,6 +4586,10 @@ async fn process_single_target(
             !session.options.intent.is_interactive(),
         )
         .await?;
+    drop(evaluation_timer);
+    let learning_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+        crate::acquisition::walk_metrics::WalkSection::LearningWrites,
+    );
     // A finalize failure withholds coverage (the scope re-searches next cycle)
     // but never the grab walk below: these are live results in hand, and
     // retention bookkeeping does not outrank acquiring with them.
@@ -4589,6 +4618,7 @@ async fn process_single_target(
         .acquisition_scope_states
         .record_acquisition_scope_search_attempt(&item.id, &now.to_rfc3339())
         .await;
+    drop(learning_timer);
 
     if results.is_empty() {
         debug!(
