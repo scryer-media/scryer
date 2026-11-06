@@ -2577,3 +2577,14 @@ fn a_shared_inode_needs_a_known_link_count_of_two() {
         SharedInode::Distinct
     );
 }
+
+/// Mounts that synthesize inodes (CIFS without serverino, mergerfs, rclone)
+/// can report one dev/ino for two different files. Different lengths prove
+/// they are not one file, so the pair falls through to the content comparison
+/// instead of a no-copy placement or a refusal.
+#[test]
+fn a_shared_inode_with_different_lengths_is_compared_by_content() {
+    assert_eq!(shared_inode_decision(true, 5, 6, Some(2)), SharedInode::Distinct);
+    assert_eq!(shared_inode_decision(true, 6, 5, Some(1)), SharedInode::Distinct);
+    assert_eq!(shared_inode_decision(true, 5, 6, None), SharedInode::Distinct);
+}

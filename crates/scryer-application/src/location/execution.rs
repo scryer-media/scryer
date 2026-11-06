@@ -605,8 +605,7 @@ pub(super) fn shared_inode_decision(
     destination_len: u64,
     link_count: Option<u64>,
 ) -> SharedInode {
-    let _ = (source_len, destination_len);
-    if !same_identity {
+    if !same_identity || source_len != destination_len {
         return SharedInode::Distinct;
     }
     match link_count {
