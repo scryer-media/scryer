@@ -2079,7 +2079,7 @@ struct RootMovePlanning {
 /// A previewed plan held for its confirmation (see `plan_cache`).
 pub struct CachedRootMovePlan {
     /// Digest of every catalog and configuration fact the plan was built from.
-    facts_digest: [u8; 32],
+    facts_digest: String,
     mode: LocationExecutionMode,
     planning: RootMovePlanning,
     /// What the free-space probe was asked, so a confirmation re-probes the
@@ -2095,15 +2095,27 @@ struct RootMoveFreeSpaceInputs {
     recycle_source_root: Option<String>,
 }
 
-/// Feed one part of the planning facts into the digest, length-prefixed so
-/// adjacent parts cannot run together.
-fn feed_digest(hasher: &mut blake3::Hasher, part: &[u8]) {
-    hasher.update(&(part.len() as u64).to_le_bytes());
-    hasher.update(part);
-}
+/// The planning facts, accumulated as one payload for the shared identity
+/// digest (`HashDomain::LocationPlanFacts`).
+#[derive(Default)]
+struct RootMoveFactsPayload(String);
 
-fn feed_digest_json(hasher: &mut blake3::Hasher, part: &impl serde::Serialize) {
-    feed_digest(hasher, &serde_json::to_vec(part).unwrap_or_default());
+impl RootMoveFactsPayload {
+    /// Append one part, length-prefixed so adjacent parts cannot run together.
+    fn feed(&mut self, part: &str) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{}:", part.len());
+        self.0.push_str(part);
+        self.0.push('\n');
+    }
+
+    fn feed_json(&mut self, part: &impl serde::Serialize) {
+        self.feed(&serde_json::to_string(part).unwrap_or_default());
+    }
+
+    fn finish(self) -> String {
+        crate::helpers::blake3_identity_hex(crate::helpers::HashDomain::LocationPlanFacts, self.0)
+    }
 }
 
 /// The catalog half of a root move's facts digest: the selection and its
@@ -2120,45 +2132,41 @@ fn digest_root_move_catalog_facts(
     media_files_by_title: &BTreeMap<String, Vec<crate::TitleMediaFile>>,
     owners: &BTreeMap<String, String>,
     active_work: &BTreeMap<String, String>,
-) -> blake3::Hasher {
-    let mut hasher = blake3::Hasher::new();
-    feed_digest_json(&mut hasher, &selection);
-    feed_digest_json(&mut hasher, destination);
-    feed_digest(&mut hasher, format!("{mode:?}").as_bytes());
+) -> RootMoveFactsPayload {
+    let mut payload = RootMoveFactsPayload::default();
+    payload.feed_json(&selection);
+    payload.feed_json(destination);
+    payload.feed(&format!("{mode:?}"));
     for title in titles {
-        feed_digest_json(&mut hasher, title);
+        payload.feed_json(title);
     }
-    feed_digest_json(&mut hasher, libraries);
-    feed_digest_json(&mut hasher, destination_library);
+    payload.feed_json(libraries);
+    payload.feed_json(destination_library);
     for (title_id, files) in media_files_by_title {
-        feed_digest(&mut hasher, title_id.as_bytes());
+        payload.feed(title_id);
         for file in files {
-            feed_digest(
-                &mut hasher,
-                format!(
-                    "{:?}",
-                    (
-                        &file.id,
-                        &file.title_id,
-                        &file.episode_id,
-                        &file.file_path,
-                        file.size_bytes,
-                        &file.role,
-                        &file.content_hashes,
-                        &file.created_at,
-                    )
+            payload.feed(&format!(
+                "{:?}",
+                (
+                    &file.id,
+                    &file.title_id,
+                    &file.episode_id,
+                    &file.file_path,
+                    file.size_bytes,
+                    &file.role,
+                    &file.content_hashes,
+                    &file.created_at,
                 )
-                .as_bytes(),
-            );
+            ));
         }
     }
     // Only the selection's claims: another operation taking or releasing its
     // own titles says nothing about this plan.
     for title in titles {
-        feed_digest_json(&mut hasher, &owners.get(&title.id));
+        payload.feed_json(&owners.get(&title.id));
     }
-    feed_digest_json(&mut hasher, active_work);
-    hasher
+    payload.feed_json(active_work);
+    payload
 }
 
 impl AppUseCase {
@@ -2318,7 +2326,7 @@ impl AppUseCase {
         // below, so it can be held for its confirmation. A transfer also
         // depends on the destination library's catalog, and is always planned
         // again.
-        let facts_hasher = titles
+        let facts_payload = titles
             .iter()
             .all(|title| title.library_id == destination_library.id)
             .then(|| {
@@ -2424,13 +2432,13 @@ impl AppUseCase {
             .map(|root| root.path)
             .collect::<Vec<_>>();
 
-        let facts_digest = facts_hasher.map(|mut hasher| {
-            feed_digest(&mut hasher, folder_template.as_bytes());
-            feed_digest(&mut hasher, format!("{depth:?}").as_bytes());
-            feed_digest_json(&mut hasher, &all_root_paths);
-            *hasher.finalize().as_bytes()
+        let facts_digest = facts_payload.map(|mut payload| {
+            payload.feed(&folder_template);
+            payload.feed(&format!("{depth:?}"));
+            payload.feed_json(&all_root_paths);
+            payload.finish()
         });
-        if let (Some(fingerprint), Some(digest)) = (confirming, facts_digest)
+        if let (Some(fingerprint), Some(digest)) = (confirming, facts_digest.as_deref())
             && let Some(cached) = self
                 .runtime
                 .library

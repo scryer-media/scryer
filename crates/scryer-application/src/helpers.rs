@@ -344,6 +344,9 @@ pub enum HashDomain {
     RenamePlan,
     /// Location-operation plan fingerprint (FR-081).
     LocationPlan,
+    /// The catalog and configuration facts a previewed location plan was
+    /// built from, for reusing that plan at confirmation.
+    LocationPlanFacts,
     /// Indexer credential fingerprint inside the search identity.
     IndexerSecret,
     /// Search-diagnostics query signature.
@@ -380,6 +383,7 @@ impl HashDomain {
             Self::DeletePreview => "scryer.library.delete-preview.v1",
             Self::RenamePlan => "scryer.library.rename-plan.v1",
             Self::LocationPlan => "scryer.location.plan.v1",
+            Self::LocationPlanFacts => "scryer.location.plan-facts.v1",
             Self::IndexerSecret => "scryer.indexer.secret.v1",
             Self::IndexerQuerySignature => "scryer.indexer.query-signature.v1",
             Self::IndexerSearchIdentity => "scryer.indexer.search-identity.v1",
