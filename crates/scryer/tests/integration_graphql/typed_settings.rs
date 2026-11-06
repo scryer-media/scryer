@@ -791,7 +791,6 @@ async fn graphql_typed_acquisition_settings_round_trip() {
         mutation UpdateAcquisitionSettings($input: UpdateAcquisitionSettingsInput!) {
           updateAcquisitionSettings(input: $input) {
             enabled
-            sameTierMinDelta
             pollIntervalSeconds
             walkIntervalSeconds
             longTailBackfillMaxScopesPerCycle
@@ -802,7 +801,6 @@ async fn graphql_typed_acquisition_settings_round_trip() {
         json!({
           "input": {
             "enabled": true,
-            "sameTierMinDelta": 140,
             "pollIntervalSeconds": 45,
             "walkIntervalSeconds": 240,
             "longTailBackfillMaxScopesPerCycle": 750,
@@ -819,7 +817,6 @@ async fn graphql_typed_acquisition_settings_round_trip() {
         query AcquisitionSettings {
           acquisitionSettings {
             enabled
-            sameTierMinDelta
             pollIntervalSeconds
             walkIntervalSeconds
             longTailBackfillMaxScopesPerCycle
@@ -834,7 +831,6 @@ async fn graphql_typed_acquisition_settings_round_trip() {
 
     let settings = &read["data"]["acquisitionSettings"];
     assert_eq!(settings["enabled"], true);
-    assert_eq!(settings["sameTierMinDelta"], 140);
     assert_eq!(settings["pollIntervalSeconds"], 45);
     assert_eq!(settings["walkIntervalSeconds"], 240);
     assert_eq!(settings["longTailBackfillMaxScopesPerCycle"], 750);
@@ -879,7 +875,6 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
         json!({
           "input": {
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 30,
             "walkIntervalSeconds": 90,
             "longTailBackfillMaxScopesPerCycle": 500,
@@ -900,7 +895,6 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
         json!({
           "input": {
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 30,
             "longTailBackfillMaxScopesPerCycle": 500,
             "longTailReconvergeDays": 0
@@ -920,7 +914,6 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
         json!({
           "input": {
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 30,
             "walkIntervalSeconds": 0,
             "longTailBackfillMaxScopesPerCycle": 500,
@@ -963,7 +956,6 @@ async fn graphql_acquisition_walk_intensity_defaults_and_survives_older_clients(
     let input = |intensity: Option<&str>| {
         let mut input = json!({
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 60,
             "longTailBackfillMaxScopesPerCycle": 500,
             "longTailReconvergeDays": 0
@@ -1082,7 +1074,6 @@ async fn graphql_movie_availability_settings_live_on_the_movie_facet() {
         }"#,
         json!({"input": {
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 60,
             "longTailBackfillMaxScopesPerCycle": 500,
             "longTailReconvergeDays": 0,
@@ -1218,7 +1209,9 @@ async fn graphql_movie_library_overrides_movie_availability_settings() {
 
 /// Clients built before the dead upgrade knobs were retired still send them.
 /// The fields stay in the schema as deprecated no-ops: accepted, never stored,
-/// and always reported as 0.
+/// and always reported as 0. `sameTierMinDelta` joined them when the same-tier
+/// delta moved into the quality profile, so it must not reach any profile
+/// either.
 #[tokio::test]
 async fn graphql_retired_acquisition_fields_are_accepted_and_ignored() {
     let ctx = TestContext::new().await;
@@ -1252,10 +1245,28 @@ async fn graphql_retired_acquisition_fields_are_accepted_and_ignored() {
     assert_no_errors(&update);
 
     let settings = &update["data"]["updateAcquisitionSettings"];
-    assert_eq!(settings["sameTierMinDelta"], 140);
+    assert_eq!(settings["sameTierMinDelta"], 0);
     assert_eq!(settings["upgradeCooldownHours"], 0);
     assert_eq!(settings["crossTierMinDelta"], 0);
     assert_eq!(settings["forcedUpgradeDeltaBypass"], 0);
+
+    let profiles = gql(
+        &ctx,
+        "{ qualityProfileSettings { profiles { id criteria { minUpgradeScoreDelta } } } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&profiles);
+    let profiles = profiles["data"]["qualityProfileSettings"]["profiles"]
+        .as_array()
+        .expect("profiles list");
+    assert!(!profiles.is_empty());
+    for profile in profiles {
+        assert_eq!(
+            profile["criteria"]["minUpgradeScoreDelta"], 120,
+            "the retired acquisition field never reaches a profile: {profile}"
+        );
+    }
 }
 
 #[tokio::test]

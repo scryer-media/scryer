@@ -1477,15 +1477,6 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
             SettingDefinitionSeed {
                 category: "acquisition".into(),
                 scope: "system".into(),
-                key_name: "acquisition.same_tier_min_delta".into(),
-                data_type: "number".into(),
-                default_value_json: "120".into(),
-                is_sensitive: false,
-                validation_json: None,
-            },
-            SettingDefinitionSeed {
-                category: "acquisition".into(),
-                scope: "system".into(),
                 key_name: "acquisition.poll_interval_seconds".into(),
                 data_type: "number".into(),
                 default_value_json: "60".into(),

@@ -773,10 +773,9 @@ const fr: LocaleDictionary = {
   "settings.acquisitionEnabled": "Activer l'acquisition automatique",
   "settings.acquisitionEnabledHelp":
     "Exécute la boucle d'acquisition en arrière-plan : balayages de recherche de convergence et correspondance RSS.",
-  "settings.acquisitionThresholds": "Seuils de mise à niveau",
-  "settings.acquisitionSameTierMinDelta":
+  "qualityProfile.minUpgradeScoreDelta":
     "Delta de score minimal au même palier",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "Une release du même palier de qualité doit dépasser le score du fichier actuel d'au moins cette valeur.",
   "settings.acquisitionConvergence": "Convergence et cadence",
   "settings.acquisitionPollIntervalSeconds":

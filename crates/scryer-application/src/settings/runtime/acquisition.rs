@@ -5,7 +5,6 @@ use crate::acquisition::convergence::{
 
 const ACQUISITION_ENABLED_KEY: &str = "acquisition.enabled";
 
-const ACQUISITION_SAME_TIER_MIN_DELTA_KEY: &str = "acquisition.same_tier_min_delta";
 const ACQUISITION_POLL_INTERVAL_SECONDS_KEY: &str = "acquisition.poll_interval_seconds";
 pub(crate) const ACQUISITION_WALK_INTERVAL_SECONDS_KEY: &str = "acquisition.walk_interval_seconds";
 pub(crate) const ACQUISITION_WALK_INTENSITY_KEY: &str = "acquisition.walk_intensity";
@@ -17,7 +16,6 @@ pub(crate) const DEFAULT_ACQUISITION_WALK_INTERVAL_SECONDS: i32 = 300;
 #[derive(Debug, Clone)]
 pub struct AcquisitionSettings {
     pub enabled: bool,
-    pub same_tier_min_delta: i32,
     /// How often the download clients are read and failed grabs are handled.
     pub poll_interval_seconds: i32,
     /// How often the catalog is scanned for missing and upgradable scopes and
@@ -32,20 +30,12 @@ pub struct AcquisitionSettings {
     /// this many days re-converges. `0` = off, the intended steady state.
     pub long_tail_reconverge_days: i32,
 }
-impl AcquisitionSettings {
-    /// The subset of these settings the acquisition gates read.
-    ///
-    /// Rows left behind by earlier releases under
-    /// `acquisition.upgrade_cooldown_hours`, `acquisition.cross_tier_min_delta`
-    /// and `acquisition.forced_upgrade_delta_bypass` are never loaded: no gate
-    /// consults them any more, so they were removed rather than kept as inert
-    /// knobs.
-    pub fn thresholds(&self) -> AcquisitionThresholds {
-        AcquisitionThresholds {
-            same_tier_min_delta: self.same_tier_min_delta,
-        }
-    }
-}
+// Rows left behind by earlier releases under
+// `acquisition.upgrade_cooldown_hours`, `acquisition.cross_tier_min_delta`,
+// `acquisition.forced_upgrade_delta_bypass` and `acquisition.same_tier_min_delta`
+// are never loaded. The first three no longer mean anything; the same-tier
+// delta moved to `QualityProfileCriteria::min_upgrade_score_delta`, and the
+// migration that introduced it carried any non-default value into the profiles.
 impl AppUseCase {
     async fn load_acquisition_settings(&self) -> AppResult<AcquisitionSettings> {
         Ok(AcquisitionSettings {
@@ -53,10 +43,6 @@ impl AppUseCase {
                 .read_setting_bool_value(ACQUISITION_ENABLED_KEY, None)
                 .await?
                 .unwrap_or(true),
-            same_tier_min_delta: self
-                .read_setting_i64_value(ACQUISITION_SAME_TIER_MIN_DELTA_KEY, None)
-                .await?
-                .unwrap_or(120) as i32,
             poll_interval_seconds: self
                 .read_setting_i64_value(ACQUISITION_POLL_INTERVAL_SECONDS_KEY, None)
                 .await?
@@ -118,9 +104,6 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
 
-        if settings.same_tier_min_delta < 0 {
-            return Err(AppError::validation_refused(crate::error_reasons::settings::ACQUISITION_THRESHOLDS_CANNOT_NEGATIVE, "acquisition thresholds cannot be negative".to_string()));
-        }
         if settings.poll_interval_seconds < 1 {
             return Err(AppError::validation_refused(crate::error_reasons::settings::ACQUISITION_POLL_INTERVAL_OUT_OF_RANGE, "acquisition poll interval must be at least 1 second".to_string()));
         }
@@ -137,12 +120,6 @@ impl AppUseCase {
         self.upsert_system_setting_json(
             ACQUISITION_ENABLED_KEY,
             &settings.enabled,
-            Some(actor.id.clone()),
-        )
-        .await?;
-        self.upsert_system_setting_json(
-            ACQUISITION_SAME_TIER_MIN_DELTA_KEY,
-            &settings.same_tier_min_delta,
             Some(actor.id.clone()),
         )
         .await?;
@@ -186,7 +163,6 @@ impl AppUseCase {
         .await;
         let _ = self.runtime.events.settings_changed_broadcast.send(vec![
             ACQUISITION_ENABLED_KEY.to_string(),
-            ACQUISITION_SAME_TIER_MIN_DELTA_KEY.to_string(),
             ACQUISITION_POLL_INTERVAL_SECONDS_KEY.to_string(),
             ACQUISITION_WALK_INTERVAL_SECONDS_KEY.to_string(),
             ACQUISITION_WALK_INTENSITY_KEY.to_string(),
@@ -196,19 +172,5 @@ impl AppUseCase {
         self.runtime.acquisition.acquisition_wake.notify_one();
 
         self.load_acquisition_settings().await
-    }
-}
-impl AppUseCase {
-    pub(crate) async fn acquisition_thresholds(
-        &self,
-        persona: &ScoringPersona,
-    ) -> AcquisitionThresholds {
-        match self.load_acquisition_settings().await {
-            Ok(settings) => settings.thresholds(),
-            Err(error) => {
-                warn!(error = %error, "failed to load acquisition settings, using persona defaults");
-                AcquisitionThresholds::for_persona(persona)
-            }
-        }
     }
 }

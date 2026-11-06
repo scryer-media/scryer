@@ -7482,3 +7482,123 @@ async fn migration_0326_drops_stored_graphs_and_keeps_failed_runs_for_their_retr
     .await
     .expect_err("a payload belongs to a stored run");
 }
+
+/// Migration 0330: the same-tier upgrade delta moves from the global
+/// `acquisition.same_tier_min_delta` setting into each quality profile.
+///
+/// An instance on the default leaves every profile without the key, so no
+/// profile's convergence fingerprint moves. An instance that had changed the
+/// setting carries that value into every profile that has none of its own.
+#[tokio::test]
+async fn migration_0330_carries_only_a_changed_global_delta_into_profiles() {
+    const SCHEMA: &str = r#"CREATE TABLE quality_profiles (
+               id TEXT PRIMARY KEY,
+               scoring_config TEXT NOT NULL DEFAULT '{}'
+           );
+           CREATE TABLE settings_definitions (
+               id TEXT PRIMARY KEY,
+               key_name TEXT NOT NULL
+           );
+           CREATE TABLE settings_values (
+               id TEXT PRIMARY KEY,
+               setting_definition_id TEXT NOT NULL,
+               scope TEXT NOT NULL,
+               scope_id TEXT,
+               value_json TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           );
+           INSERT INTO settings_definitions (id, key_name) VALUES
+             ('def-delta', 'acquisition.same_tier_min_delta');
+           INSERT INTO quality_profiles (id, scoring_config) VALUES
+             ('plain', '{"scoring_persona":"balanced","cutoff_tier":"1080P"}'),
+             ('own-value', '{"min_upgrade_score_delta":40}'),
+             ('empty', '{}');"#;
+    const MIGRATION: &str = include_str!(
+        "../../../scryer/src/db/migrations/0330_quality_profile_min_upgrade_score_delta.sql"
+    );
+
+    async fn run(global: Option<&str>) -> Vec<(String, Option<i64>)> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("migration test database should open");
+        sqlx::raw_sql(SCHEMA)
+            .execute(&pool)
+            .await
+            .expect("fixture should initialize");
+        if let Some(value) = global {
+            sqlx::query(
+                "INSERT INTO settings_values
+                     (id, setting_definition_id, scope, scope_id, value_json, updated_at)
+                 VALUES ('val-delta', 'def-delta', 'system', NULL, ?1, '2026-01-01T00:00:00Z')",
+            )
+            .bind(value)
+            .execute(&pool)
+            .await
+            .expect("seed the global delta");
+        }
+        for _ in 0..2 {
+            sqlx::raw_sql(MIGRATION)
+                .execute(&pool)
+                .await
+                .expect("migration 0330 should apply and re-apply");
+        }
+        // The old row stays where it was.
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings_values")
+            .fetch_one(&pool)
+            .await
+            .expect("count setting rows");
+        assert_eq!(rows, i64::from(global.is_some()));
+        let persona: Option<String> = sqlx::query_scalar(
+            "SELECT json_extract(scoring_config, '$.scoring_persona')
+               FROM quality_profiles WHERE id = 'plain'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("persona should load");
+        assert_eq!(persona.as_deref(), Some("balanced"));
+        sqlx::query_as(
+            "SELECT id, json_extract(scoring_config, '$.min_upgrade_score_delta')
+               FROM quality_profiles ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("deltas should load")
+    }
+
+    let untouched = vec![
+        ("empty".to_string(), None),
+        ("own-value".to_string(), Some(40)),
+        ("plain".to_string(), None),
+    ];
+    assert_eq!(
+        run(None).await,
+        untouched,
+        "no stored setting changes nothing"
+    );
+    assert_eq!(
+        run(Some("120")).await,
+        untouched,
+        "the default stays absent so no fingerprint moves"
+    );
+    assert_eq!(
+        run(Some("-5")).await,
+        untouched,
+        "a negative value is not carried"
+    );
+    assert_eq!(
+        run(Some("\"5\"")).await,
+        untouched,
+        "only a stored number is carried"
+    );
+    assert_eq!(
+        run(Some("5")).await,
+        vec![
+            ("empty".to_string(), Some(5)),
+            ("own-value".to_string(), Some(40)),
+            ("plain".to_string(), Some(5)),
+        ],
+        "a changed global delta reaches every profile without its own"
+    );
+}

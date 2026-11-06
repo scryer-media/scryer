@@ -946,10 +946,9 @@ const ru: LocaleDictionary = {
   "settings.acquisitionEnabled": "Включить автоматическое получение контента",
   "settings.acquisitionEnabledHelp":
     "Запускает фоновый цикл получения контента: поиск для достижения актуального состояния и сопоставление через RSS.",
-  "settings.acquisitionThresholds": "Пороги обновления",
-  "settings.acquisitionSameTierMinDelta":
+  "qualityProfile.minUpgradeScoreDelta":
     "Минимальная разница оценки в одном уровне качества",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "Релиз того же уровня качества должен превзойти оценку текущего файла как минимум на указанное значение.",
   "settings.acquisitionConvergence": "Сходимость и распределение нагрузки",
   "settings.acquisitionPollIntervalSeconds": "Интервал опроса (секунды)",

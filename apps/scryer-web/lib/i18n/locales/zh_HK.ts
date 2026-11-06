@@ -851,12 +851,11 @@ const zh_HK: LocaleDictionary = {
   "settings.acquisitionEnabled": "啓用自動獲取",
   "settings.acquisitionEnabledHelp":
     "運行後台獲取循環：收斂搜尋掃描與 RSS 匹配。",
-  "settings.acquisitionThresholds": "升級閾值",
   "settings.acquisitionUpgradeCooldownHours": "升級冷卻時間（小時）",
   "settings.acquisitionUpgradeCooldownHoursHelp":
     "同一項目兩次升級抓取之間的最短時間。",
-  "settings.acquisitionSameTierMinDelta": "同級最小分數差",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "同級最小分數差",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一質素級別的資源必須比當前檔案的分數至少高出此值。",
   "settings.acquisitionCrossTierMinDelta": "跨級最小分數差",
   "settings.acquisitionCrossTierMinDeltaHelp":

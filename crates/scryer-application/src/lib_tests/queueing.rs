@@ -5557,13 +5557,12 @@ async fn covered_background_walk_reads_no_persona_or_acquisition_thresholds() {
             .any(|key| key == INDEXER_ROUTING_SETTINGS_KEY),
         "the stage reached the convergence gate: {walk_reads:?}"
     );
-    // The acquisition thresholds are the only reader of the last key.
-    for key in [SCORING_PERSONA_KEY, "acquisition.same_tier_min_delta"] {
-        assert!(
-            !walk_reads.iter().any(|read| read == key),
-            "a covered stage never resolves the persona or the acquisition thresholds ({key}): {walk_reads:?}"
-        );
-    }
+    // The thresholds now come from the profile, so the persona is the only
+    // candidate-evaluation setting left to watch for.
+    assert!(
+        !walk_reads.iter().any(|read| read == SCORING_PERSONA_KEY),
+        "a covered stage never resolves the persona: {walk_reads:?}"
+    );
 }
 
 /// The rotation cursors are written only when they move. A cycle that ends

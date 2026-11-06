@@ -5371,9 +5371,8 @@ const en: LocaleDictionary = {
   "settings.acquisitionEnabled": "Enable automatic acquisition",
   "settings.acquisitionEnabledHelp":
     "Runs the background acquisition loop: convergence search sweeps and RSS matching.",
-  "settings.acquisitionThresholds": "Upgrade thresholds",
-  "settings.acquisitionSameTierMinDelta": "Same-tier minimum score delta",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "Same-tier minimum score delta",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "A release in the same quality tier must beat the current file's score by at least this much.",
   "settings.acquisitionConvergence": "Convergence & pacing",
   "settings.acquisitionPollIntervalSeconds": "Poll interval (seconds)",

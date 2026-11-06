@@ -713,9 +713,8 @@ const ja: LocaleDictionary = {
   "settings.acquisitionEnabled": "自動取得を有効にする",
   "settings.acquisitionEnabledHelp":
     "バックグラウンドの取得ループ（収束検索とRSSマッチング）を実行します。",
-  "settings.acquisitionThresholds": "アップグレードしきい値",
-  "settings.acquisitionSameTierMinDelta": "同一ティア内の最小スコア差",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "同一ティア内の最小スコア差",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "同じ品質ティアのリリースは、現在のファイルのスコアを少なくともこの値だけ上回る必要があります。",
   "settings.acquisitionConvergence": "収束とペース",
   "settings.acquisitionPollIntervalSeconds": "ポーリング間隔（秒）",

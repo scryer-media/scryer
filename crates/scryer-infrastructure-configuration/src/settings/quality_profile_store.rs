@@ -343,6 +343,7 @@ fn decode_quality_profile(
             cutoff_tier: scoring_config.cutoff_tier,
             min_score_to_grab: scoring_config.min_score_to_grab,
             cutoff_score: scoring_config.cutoff_score,
+            min_upgrade_score_delta: scoring_config.min_upgrade_score_delta,
             facet_persona_overrides: scoring_config.facet_persona_overrides,
         },
     })
@@ -412,6 +413,7 @@ async fn upsert_quality_profile_tx(
         cutoff_tier: criteria.cutoff_tier,
         min_score_to_grab: criteria.min_score_to_grab,
         cutoff_score: criteria.cutoff_score,
+        min_upgrade_score_delta: criteria.min_upgrade_score_delta,
         facet_persona_overrides: criteria.facet_persona_overrides,
     })
     .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -938,6 +940,51 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<JsonValue>(&raw).unwrap()["ignore_proper_repack"],
             true
+        );
+    }
+
+    #[tokio::test]
+    async fn quality_profile_upgrade_delta_round_trips_and_stays_absent_when_unset() {
+        let (store, pool) = fixture().await;
+        insert_profile(&pool, "delta-profile", "Delta Profile", None).await;
+        let mut profiles = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(profiles[0].criteria.min_upgrade_score_delta, None);
+
+        // Unset: the key never reaches the stored JSON.
+        store
+            .replace_quality_profiles(SCOPE, None, profiles.clone())
+            .await
+            .unwrap();
+        let raw: String = sqlx::query_scalar(
+            "SELECT scoring_config FROM quality_profiles WHERE id = 'delta-profile'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            serde_json::from_str::<JsonValue>(&raw)
+                .unwrap()
+                .get("min_upgrade_score_delta")
+                .is_none()
+        );
+
+        profiles[0].criteria.min_upgrade_score_delta = Some(5);
+        store
+            .replace_quality_profiles(SCOPE, None, profiles)
+            .await
+            .unwrap();
+        store.invalidate_cache();
+        let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(loaded[0].criteria.min_upgrade_score_delta, Some(5));
+        let raw: String = sqlx::query_scalar(
+            "SELECT scoring_config FROM quality_profiles WHERE id = 'delta-profile'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&raw).unwrap()["min_upgrade_score_delta"],
+            5
         );
     }
 

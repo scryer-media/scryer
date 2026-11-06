@@ -717,10 +717,9 @@ const de: LocaleDictionary = {
   "settings.acquisitionEnabled": "Automatische Beschaffung aktivieren",
   "settings.acquisitionEnabledHelp":
     "Führt die Hintergrund-Beschaffungsschleife aus: Konvergenz-Suchläufe und RSS-Abgleich.",
-  "settings.acquisitionThresholds": "Upgrade-Schwellen",
-  "settings.acquisitionSameTierMinDelta":
+  "qualityProfile.minUpgradeScoreDelta":
     "Mindest-Punktabstand innerhalb derselben Stufe",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "Ein Release derselben Qualitätsstufe muss den Score der aktuellen Datei um mindestens diesen Wert übertreffen.",
   "settings.acquisitionConvergence": "Konvergenz & Taktung",
   "settings.acquisitionPollIntervalSeconds": "Abfrageintervall (Sekunden)",

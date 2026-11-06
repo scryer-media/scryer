@@ -98,7 +98,7 @@ fn from_acquisition_settings(
         enabled: settings.enabled,
         // Deprecated no-op fields: nothing backs them, so they report 0.
         upgrade_cooldown_hours: 0,
-        same_tier_min_delta: settings.same_tier_min_delta,
+        same_tier_min_delta: 0,
         cross_tier_min_delta: 0,
         forced_upgrade_delta_bypass: 0,
         poll_interval_seconds: settings.poll_interval_seconds,
@@ -634,6 +634,11 @@ fn normalize_quality_profile(profile: QualityProfile) -> QualityProfile {
                 .filter(|value| !value.is_empty()),
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
+            // The default is stored as absent so that saving a profile at the
+            // default leaves its convergence fingerprint where it was.
+            min_upgrade_score_delta: criteria
+                .min_upgrade_score_delta
+                .filter(|delta| *delta != scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
             facet_persona_overrides,
         },
     }
@@ -704,6 +709,11 @@ fn quality_profile_from_input(
             cutoff_score: criteria
                 .cutoff_score
                 .or_else(|| existing.and_then(|profile| profile.criteria.cutoff_score)),
+            // Omitting it keeps the stored value, like `cutoff_score`; sending
+            // the default clears it back to unset in `normalize_quality_profile`.
+            min_upgrade_score_delta: criteria
+                .min_upgrade_score_delta
+                .or_else(|| existing.and_then(|profile| profile.criteria.min_upgrade_score_delta)),
             facet_persona_overrides: std::collections::HashMap::new(),
         },
     });
@@ -718,6 +728,16 @@ fn quality_profile_from_input(
         return Err(to_gql_error(AppError::validation_refused(
             scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_NAME_REQUIRED,
             "quality profile name is required",
+        )));
+    }
+    if profile
+        .criteria
+        .min_upgrade_score_delta
+        .is_some_and(|delta| delta < 0)
+    {
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_VALUE_INVALID,
+            "criteria.minUpgradeScoreDelta cannot be negative",
         )));
     }
     if profile.criteria.quality_tiers.is_empty() {
@@ -934,7 +954,6 @@ impl SettingsMutations {
                 &actor,
                 AppAcquisitionSettings {
                     enabled: input.enabled,
-                    same_tier_min_delta: input.same_tier_min_delta,
                     poll_interval_seconds: input.poll_interval_seconds,
                     walk_interval_seconds,
                     walk_intensity,

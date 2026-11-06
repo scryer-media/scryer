@@ -888,7 +888,6 @@ export const testSubtitleProviderConnectionMutation = `mutation TestSubtitleProv
 export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSettings($input: UpdateAcquisitionSettingsInput!) {
   updateAcquisitionSettings(input: $input) {
     enabled
-    sameTierMinDelta
     pollIntervalSeconds
     walkIntervalSeconds
     walkIntensity
@@ -1377,7 +1376,8 @@ const qualityProfileCriteriaFields = `
         blockUpscaled
       }
       cutoffTier
-      minScoreToGrab`;
+      minScoreToGrab
+      minUpgradeScoreDelta`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId

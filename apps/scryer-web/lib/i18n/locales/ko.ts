@@ -701,9 +701,8 @@ const ko: LocaleDictionary = {
   "settings.acquisitionEnabled": "자동 수집 사용",
   "settings.acquisitionEnabledHelp":
     "백그라운드 수집 루프(수렴 검색 및 RSS 매칭)를 실행합니다.",
-  "settings.acquisitionThresholds": "업그레이드 임계값",
-  "settings.acquisitionSameTierMinDelta": "동일 등급 최소 점수 차",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "동일 등급 최소 점수 차",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "같은 품질 등급의 릴리스는 현재 파일의 점수를 최소 이 값만큼 넘어야 합니다.",
   "settings.acquisitionConvergence": "수렴 및 속도",
   "settings.acquisitionPollIntervalSeconds": "폴링 간격(초)",
