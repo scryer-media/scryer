@@ -48,7 +48,7 @@
 //! pure function over those facts, so every FR-055 rule is testable from
 //! literals.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -426,75 +426,16 @@ impl DestinationIdentityOutcome {
 ///
 /// Several identity sources agreeing on one destination is still exactly one
 /// destination title, so it is `Unique`, not `Ambiguous`.
+///
+/// This is the one-title convenience over [`DestinationCandidateIndex`]; a
+/// selection of many titles builds the index once through
+/// [`detect_destination_titles`].
 pub fn detect_destination_title(
     source: &SourceTitleIdentity,
     candidates: &[DestinationTitleCandidate],
     redirects: &IdentityRedirects,
 ) -> DestinationIdentityOutcome {
-    let source_identities = redirects.resolve_all(&source.identities);
-    let source_name = normalize_title_name(&source.title_name);
-
-    let mut matches: Vec<IdentityCandidate> = Vec::new();
-    let mut same_name: Option<(String, String)> = None;
-    let mut seen_title_ids: BTreeSet<&str> = BTreeSet::new();
-
-    for candidate in candidates {
-        if candidate.title_id == source.title_id {
-            continue;
-        }
-        if !facets_are_compatible(&source.facet, &candidate.facet) {
-            continue;
-        }
-        if !seen_title_ids.insert(candidate.title_id.as_str()) {
-            continue;
-        }
-
-        let shared: Vec<MetadataIdentity> = redirects
-            .resolve_all(&candidate.identities)
-            .into_iter()
-            .filter(|identity| source_identities.contains(identity))
-            .collect();
-
-        if shared.is_empty() {
-            if same_name.is_none()
-                && !source_name.is_empty()
-                && normalize_title_name(&candidate.title_name) == source_name
-            {
-                same_name = Some((candidate.title_id.clone(), candidate.title_name.clone()));
-            }
-            continue;
-        }
-
-        matches.push(IdentityCandidate {
-            title_id: candidate.title_id.clone(),
-            title_name: candidate.title_name.clone(),
-            // `resolve_all` returns a BTreeSet, so this is already sorted.
-            shared_identities: shared,
-        });
-    }
-
-    let (match_kind, matched_title_id) = match matches.len() {
-        0 if same_name.is_some() => (DestinationIdentityMatch::SameNameNoIdentity, None),
-        0 => (DestinationIdentityMatch::None, None),
-        1 => (
-            DestinationIdentityMatch::Unique,
-            Some(matches[0].title_id.clone()),
-        ),
-        _ => (DestinationIdentityMatch::Ambiguous, None),
-    };
-
-    let (same_name_title_id, same_name_title_name) = match same_name {
-        Some((id, name)) => (Some(id), Some(name)),
-        None => (None, None),
-    };
-
-    DestinationIdentityOutcome {
-        match_kind,
-        matched_title_id,
-        candidates: matches,
-        same_name_title_id,
-        same_name_title_name,
-    }
+    DestinationCandidateIndex::new(candidates, redirects).detect(source)
 }
 
 /// Detect destination titles for a whole selection, keyed by source title id.
@@ -505,20 +446,160 @@ pub fn detect_destination_title(
 /// one read of the destination library rather than one per title. The result
 /// feeds [`crate::location::classify::TitleClassificationFacts::with_destination_identity`],
 /// which is what turns an ambiguous outcome into a blocked title (FR-016).
+///
+/// The candidates are canonicalised and indexed once, so a selection of ten
+/// thousand titles against a library of ten thousand costs one pass over each,
+/// not a pass over the library per selected title.
 pub fn detect_destination_titles(
     sources: &[SourceTitleIdentity],
     candidates: &[DestinationTitleCandidate],
     redirects: &IdentityRedirects,
 ) -> BTreeMap<String, DestinationIdentityOutcome> {
+    let index = DestinationCandidateIndex::new(candidates, redirects);
     sources
         .iter()
-        .map(|source| {
-            (
-                source.title_id.clone(),
-                detect_destination_title(source, candidates, redirects),
-            )
-        })
+        .map(|source| (source.title_id.clone(), index.detect(source)))
         .collect()
+}
+
+/// One destination candidate with its identities canonicalised and its name
+/// normalised exactly once.
+struct IndexedCandidate {
+    title_id: String,
+    title_name: String,
+    facet: MediaFacet,
+    identities: BTreeSet<MetadataIdentity>,
+}
+
+/// The destination library's candidates, keyed by canonical identity and by
+/// normalised name, so detecting one source title touches only the candidates
+/// that could match it instead of the whole library.
+///
+/// Candidate order is kept: the index stores positions, and every lookup
+/// yields them ascending, so an outcome lists its matches in the order the
+/// caller supplied the candidates, exactly as a linear scan would.
+pub struct DestinationCandidateIndex<'a> {
+    redirects: &'a IdentityRedirects,
+    candidates: Vec<IndexedCandidate>,
+    by_identity: HashMap<MetadataIdentity, Vec<usize>>,
+    by_name: HashMap<String, Vec<usize>>,
+}
+
+impl<'a> DestinationCandidateIndex<'a> {
+    /// Index `candidates`, keeping the first occurrence of each title id.
+    pub fn new(candidates: &[DestinationTitleCandidate], redirects: &'a IdentityRedirects) -> Self {
+        let mut indexed: Vec<IndexedCandidate> = Vec::with_capacity(candidates.len());
+        let mut by_identity: HashMap<MetadataIdentity, Vec<usize>> = HashMap::new();
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut seen_title_ids: HashSet<&str> = HashSet::with_capacity(candidates.len());
+
+        for candidate in candidates {
+            if !seen_title_ids.insert(candidate.title_id.as_str()) {
+                continue;
+            }
+            let position = indexed.len();
+            let identities = redirects.resolve_all(&candidate.identities);
+            for identity in &identities {
+                by_identity
+                    .entry(identity.clone())
+                    .or_default()
+                    .push(position);
+            }
+            let name = normalize_title_name(&candidate.title_name);
+            if !name.is_empty() {
+                by_name.entry(name).or_default().push(position);
+            }
+            indexed.push(IndexedCandidate {
+                title_id: candidate.title_id.clone(),
+                title_name: candidate.title_name.clone(),
+                facet: candidate.facet.clone(),
+                identities,
+            });
+        }
+
+        Self {
+            redirects,
+            candidates: indexed,
+            by_identity,
+            by_name,
+        }
+    }
+
+    /// Whether this candidate may stand in for `source` at all (rules 1 and 2).
+    fn accepts(&self, candidate: &IndexedCandidate, source: &SourceTitleIdentity) -> bool {
+        candidate.title_id != source.title_id
+            && facets_are_compatible(&source.facet, &candidate.facet)
+    }
+
+    /// Detect the destination title for one source title; the rules are those
+    /// of [`detect_destination_title`].
+    pub fn detect(&self, source: &SourceTitleIdentity) -> DestinationIdentityOutcome {
+        let source_identities = self.redirects.resolve_all(&source.identities);
+        let source_name = normalize_title_name(&source.title_name);
+
+        // Positions of every candidate sharing at least one identity, ascending
+        // so the matches come out in candidate order.
+        let mut hit: BTreeSet<usize> = BTreeSet::new();
+        for identity in &source_identities {
+            if let Some(positions) = self.by_identity.get(identity) {
+                hit.extend(positions.iter().copied());
+            }
+        }
+
+        let matches: Vec<IdentityCandidate> = hit
+            .iter()
+            .map(|&position| &self.candidates[position])
+            .filter(|candidate| self.accepts(candidate, source))
+            .map(|candidate| IdentityCandidate {
+                title_id: candidate.title_id.clone(),
+                title_name: candidate.title_name.clone(),
+                // Both sides are `BTreeSet`s, so the intersection is sorted.
+                shared_identities: candidate
+                    .identities
+                    .intersection(&source_identities)
+                    .cloned()
+                    .collect(),
+            })
+            .collect();
+
+        // The first same-named candidate that shares no identity, in candidate
+        // order. One that did share an identity is a match, not a warning.
+        let same_name = if source_name.is_empty() {
+            None
+        } else {
+            self.by_name
+                .get(&source_name)
+                .into_iter()
+                .flatten()
+                .filter(|position| !hit.contains(position))
+                .map(|&position| &self.candidates[position])
+                .find(|candidate| self.accepts(candidate, source))
+                .map(|candidate| (candidate.title_id.clone(), candidate.title_name.clone()))
+        };
+
+        let (match_kind, matched_title_id) = match matches.len() {
+            0 if same_name.is_some() => (DestinationIdentityMatch::SameNameNoIdentity, None),
+            0 => (DestinationIdentityMatch::None, None),
+            1 => (
+                DestinationIdentityMatch::Unique,
+                Some(matches[0].title_id.clone()),
+            ),
+            _ => (DestinationIdentityMatch::Ambiguous, None),
+        };
+
+        let (same_name_title_id, same_name_title_name) = match same_name {
+            Some((id, name)) => (Some(id), Some(name)),
+            None => (None, None),
+        };
+
+        DestinationIdentityOutcome {
+            match_kind,
+            matched_title_id,
+            candidates: matches,
+            same_name_title_id,
+            same_name_title_name,
+        }
+    }
 }
 
 /// Case- and whitespace-insensitive title text, for the same-name warning only.
@@ -968,5 +1049,134 @@ mod tests {
             DestinationIdentityMatch::None
         );
         assert!(detected["ambiguous"].needs_resolution());
+    }
+
+    /// The indexed detection lists an ambiguity's candidates in the order the
+    /// caller supplied them, whatever order the identities hit them in, so the
+    /// resolution prompt is stable across runs.
+    #[test]
+    fn ambiguous_candidates_keep_candidate_order() {
+        let source = source("src")
+            .with_identity("imdb", "tt2")
+            .with_identity("tmdb", "2")
+            .with_identity("tvdb", "22");
+        let candidates = vec![
+            candidate("third").with_identity("tvdb", "22"),
+            candidate("first").with_identity("tmdb", "2"),
+            candidate("second").with_identity("imdb", "tt2"),
+        ];
+
+        let outcome = detect_destination_title(&source, &candidates, &no_redirects());
+
+        assert_eq!(outcome.match_kind, DestinationIdentityMatch::Ambiguous);
+        let order: Vec<&str> = outcome
+            .candidates
+            .iter()
+            .map(|candidate| candidate.title_id.as_str())
+            .collect();
+        assert_eq!(order, vec!["third", "first", "second"]);
+    }
+
+    /// A same-named candidate that also shares an identity is the match, not
+    /// the warning; the warning names the next same-named candidate without
+    /// one, and none when every same-named candidate matched.
+    #[test]
+    fn a_same_named_match_is_not_also_the_same_name_warning() {
+        let source = source("src")
+            .with_name("The Gift")
+            .with_identity("tmdb", "7");
+        let matched_only = vec![
+            candidate("dest")
+                .with_name("The Gift")
+                .with_identity("tmdb", "7"),
+        ];
+
+        let outcome = detect_destination_title(&source, &matched_only, &no_redirects());
+        assert_eq!(outcome.merge_target(), Some("dest"));
+        assert_eq!(outcome.same_name_title_id, None);
+
+        let with_a_namesake = vec![
+            candidate("dest")
+                .with_name("The Gift")
+                .with_identity("tmdb", "7"),
+            candidate("namesake")
+                .with_name("the  gift")
+                .with_identity("tmdb", "8"),
+        ];
+
+        let outcome = detect_destination_title(&source, &with_a_namesake, &no_redirects());
+        assert_eq!(outcome.merge_target(), Some("dest"));
+        assert_eq!(outcome.same_name_title_id.as_deref(), Some("namesake"));
+    }
+
+    /// A same-named candidate of an incompatible facet, or the source title
+    /// itself, raises no warning even though its name is in the index.
+    #[test]
+    fn same_name_warning_skips_incompatible_facets_and_the_source_itself() {
+        let source = source("src").with_name("Dune");
+        let candidates = vec![
+            candidate("src").with_name("Dune"),
+            DestinationTitleCandidate::new("episodic", MediaFacet::Series).with_name("Dune"),
+        ];
+
+        let outcome = detect_destination_title(&source, &candidates, &no_redirects());
+
+        assert_eq!(outcome.match_kind, DestinationIdentityMatch::None);
+        assert_eq!(outcome.same_name_title_id, None);
+    }
+
+    /// The selection entry point and the one-title convenience agree for every
+    /// title of a selection whose candidates mix matches, namesakes, redirects
+    /// and duplicates.
+    #[test]
+    fn selection_detection_agrees_with_single_detection() {
+        let redirects = IdentityRedirects::from_smg_pairs(&[(100, 202)]);
+        let sources = vec![
+            source("merges").with_identity("tmdb", "603"),
+            source("redirected").with_identity(SMG_IDENTITY_SOURCE, "100"),
+            source("namesake")
+                .with_name("Arrival")
+                .with_identity("tmdb", "9"),
+            source("ambiguous")
+                .with_identity("tmdb", "2")
+                .with_identity("imdb", "tt2"),
+            source("self").with_identity("tmdb", "5"),
+            source("nothing").with_name("Unseen"),
+        ];
+        let candidates = vec![
+            candidate("dest").with_identity("tmdb", "603"),
+            candidate("dest").with_identity("tmdb", "603"),
+            candidate("survivor").with_identity(SMG_IDENTITY_SOURCE, "202"),
+            candidate("arrival")
+                .with_name("Arrival")
+                .with_identity("tmdb", "10"),
+            candidate("a").with_identity("tmdb", "2"),
+            candidate("b").with_identity("imdb", "tt2"),
+            candidate("self").with_identity("tmdb", "5"),
+        ];
+
+        let detected = detect_destination_titles(&sources, &candidates, &redirects);
+
+        for source in &sources {
+            assert_eq!(
+                detected[&source.title_id],
+                detect_destination_title(source, &candidates, &redirects),
+                "{}",
+                source.title_id
+            );
+        }
+        assert_eq!(detected["merges"].merge_target(), Some("dest"));
+        assert_eq!(detected["merges"].candidates.len(), 1);
+        assert_eq!(detected["redirected"].merge_target(), Some("survivor"));
+        assert_eq!(
+            detected["namesake"].match_kind,
+            DestinationIdentityMatch::SameNameNoIdentity
+        );
+        assert!(detected["ambiguous"].needs_resolution());
+        assert_eq!(detected["self"].match_kind, DestinationIdentityMatch::None);
+        assert_eq!(
+            detected["nothing"].match_kind,
+            DestinationIdentityMatch::None
+        );
     }
 }
