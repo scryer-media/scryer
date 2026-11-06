@@ -4769,7 +4769,7 @@ impl SwitchableCapsPluginProvider {
 
 impl IndexerPluginProvider for SwitchableCapsPluginProvider {
     fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
-        None
+        Some(Arc::new(MockIndexerClient))
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -6645,6 +6645,56 @@ async fn routed_indexers_exclude_indexers_without_automatic_search() {
     assert!(
         scope_is_converged(&app, &title, &subject).await,
         "covering the auto-search indexer converges the scope"
+    );
+}
+
+/// Builds clients only for the loaded `newznab` plugin.
+struct PartlyLoadedPluginProvider;
+
+impl IndexerPluginProvider for PartlyLoadedPluginProvider {
+    fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+        (config.provider_type == "newznab").then(|| Arc::new(MockIndexerClient) as _)
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        vec!["newznab".to_string()]
+    }
+
+    fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+        Vec::new()
+    }
+}
+
+#[tokio::test]
+async fn routed_indexers_exclude_indexers_whose_client_cannot_be_built() {
+    // Every search reports such an indexer as unavailable without asking it,
+    // so it never earns a receipt; routing a scope to it would search that
+    // scope again on every walk.
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let mut missing_proxy = synthetic_direct_nab_indexer_config("indexer-c", "newznab");
+    missing_proxy.proxy_config_id = Some("synthetic-missing-proxy".into());
+    let configs = vec![
+        synthetic_direct_nab_indexer_config("indexer-a", "newznab"),
+        synthetic_direct_nab_indexer_config("indexer-b", "unloaded-plugin"),
+        missing_proxy,
+    ];
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings,
+        Arc::new(MockIndexerClient),
+        configs,
+    );
+    let app = app.with_test_overrides(|builder| {
+        builder.with_plugin_provider(Arc::new(PartlyLoadedPluginProvider))
+    });
+    let (title, subject) = convergence_test_title_and_subject(&app, &user).await;
+    let convergence = app
+        .resolve_scope_convergence(&title, &subject)
+        .await
+        .expect("routed convergence coordinates");
+    assert_eq!(
+        convergence.routed_indexer_ids,
+        vec!["indexer-a".to_string()],
+        "an unloaded plugin and a missing proxy both leave the indexer unsearchable"
     );
 }
 
