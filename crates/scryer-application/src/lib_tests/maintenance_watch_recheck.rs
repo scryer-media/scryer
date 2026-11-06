@@ -834,6 +834,71 @@ async fn a_second_server_without_the_title_holds_it_as_unmapped() {
         .await;
 }
 
+/// The same two servers, each with a mapped item for the title: nothing is
+/// unmapped, both are read, and an unplayed answer lets the action run.
+#[tokio::test]
+async fn a_title_mapped_on_every_server_is_read_on_each_and_runs() {
+    const OTHER_CONNECTION_ID: &str = "conn-jellyfin-second";
+    let fixture = recheck_app_with(
+        Ok(ProviderItemRecheck {
+            participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
+            history: Vec::new(),
+        }),
+        vec![
+            jellyfin_connection(true),
+            named_jellyfin_connection(OTHER_CONNECTION_ID, true),
+        ],
+        vec![viewer_link()],
+        &[viewer_link()],
+    );
+    let title = fixture
+        .app
+        .add_title(
+            &fixture.user,
+            NewTitle {
+                name: "Synthetic Feature".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    fixture.swept(0).await;
+    fixture
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: format!("/media/{}.mkv", title.id),
+            size_bytes: 1_000,
+            ..Default::default()
+        })
+        .await
+        .expect("insert media file");
+    for connection_id in [CONNECTION_ID, OTHER_CONNECTION_ID] {
+        fixture.map_item(
+            connection_id,
+            MediaServerPlaybackEntityKind::Title,
+            &title.id,
+            format!("{connection_id}-{}", title.id),
+        );
+    }
+    fixture
+        .arm_and_evaluate(
+            scryer_domain::MaintenanceRuleSubjectKind::Title,
+            NOBODY_WATCHED_MATCHER,
+        )
+        .await;
+    fixture
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("handler pass");
+
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 2);
+    assert!(!fixture.monitored(&title.id).await, "the action ran");
+}
+
 // ── Season and episode subjects ─────────────────────────────────────────────
 
 /// A season's file rows carry no episode of their own; the episodes come

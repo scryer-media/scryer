@@ -23,6 +23,9 @@ mod standby;
 pub(crate) enum PendingGrabOutcome {
     Grabbed {
         scope: SubmissionScope,
+        /// The client job holding the release: a new one, or the existing job
+        /// the submission reused.
+        job: ClientJobLocator,
     },
     /// The release remains the best choice, but its delay profile still holds
     /// it. The caller must not try a lower-ranked release.
@@ -1841,6 +1844,11 @@ impl AppUseCase {
             Ok(canonical_submission) => {
                 let newly_submitted = canonical_submission.newly_submitted;
                 let grab = canonical_submission.grab;
+                let grabbed_job = ClientJobLocator::new(
+                    grab.client_id.as_deref(),
+                    &grab.client_type,
+                    &grab.job_id,
+                );
                 if newly_submitted {
                     self.record_indexer_grab(pr.indexer_id.as_deref(), grab_indexer.as_deref());
                     if trigger == PendingGrabTrigger::StandbyOperator {
@@ -1945,6 +1953,7 @@ impl AppUseCase {
 
                 Ok(PendingGrabOutcome::Grabbed {
                     scope: pending_scope,
+                    job: grabbed_job,
                 })
             }
             Err(err) => {

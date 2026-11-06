@@ -2560,10 +2560,11 @@ export default function LibraryGraphView({
       const detailOpacity = graphDetailOpacity(spacing);
       const opacityChanged = detailOpacity !== lastDetailOpacity;
       lastDetailOpacity = detailOpacity;
-      if (tweenFrameRef.current !== null) {
-        cancelAnimationFrame(tweenFrameRef.current);
-        tweenFrameRef.current = null;
-      }
+      // A glide the sync effect started (leaving a focused view, say) is
+      // left to finish: it moves nodes in graph space, so a camera change
+      // does not disturb it, and its last frame flushes the pending
+      // selection. The first projection after subscribing always differs,
+      // so cancelling here froze every such glide on its first frame.
       const graph = graphRef.current;
       if (graph && opacityChanged) {
         const expanded = new Set<number>();

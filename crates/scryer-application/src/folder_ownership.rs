@@ -22,7 +22,13 @@ pub(crate) struct ScanFolderRoots {
 impl ScanFolderRoots {
     pub(crate) async fn load(app: &AppUseCase) -> AppResult<std::sync::Arc<Self>> {
         let libraries = app.services.catalog.libraries.list(None).await?;
-        let by_library: std::collections::HashMap<_, Vec<_>> = libraries
+        // `all` is exactly what `AppUseCase::all_library_root_folders` reads,
+        // so a check served from the snapshot matches a fresh read.
+        let all = crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None)
+            .into_iter()
+            .map(|root| root.path)
+            .collect();
+        let by_library = libraries
             .into_iter()
             .map(|library| {
                 (
@@ -31,8 +37,14 @@ impl ScanFolderRoots {
                 )
             })
             .collect();
-        let all = by_library.values().flatten().cloned().collect();
         Ok(std::sync::Arc::new(Self { all, by_library }))
+    }
+
+    /// The scan's root snapshot, when the caller runs inside one.
+    pub(crate) fn current_all() -> Option<Vec<String>> {
+        SCAN_FOLDER_ROOTS
+            .try_with(|snapshot| snapshot.all.clone())
+            .ok()
     }
 }
 
@@ -252,10 +264,7 @@ pub(crate) async fn folder_spans_a_library_root(
     app: &AppUseCase,
     folder_path: &str,
 ) -> AppResult<bool> {
-    let snapshot = SCAN_FOLDER_ROOTS
-        .try_with(std::sync::Arc::clone)
-        .ok()
-        .filter(|_| ScanOwnershipContext::current().is_none());
+    let snapshot = SCAN_FOLDER_ROOTS.try_with(std::sync::Arc::clone).ok();
     let loaded;
     let all_roots = if let Some(snapshot) = snapshot.as_ref() {
         &snapshot.all
@@ -298,8 +307,7 @@ pub(crate) async fn title_folder_is_outside_its_library(
                 .cloned()
                 .unwrap_or_default()
         })
-        .ok()
-        .filter(|_| ScanOwnershipContext::current().is_none());
+        .ok();
     let library_roots = if let Some(roots) = snapshot_roots {
         roots
     } else {
@@ -474,9 +482,9 @@ pub(crate) struct FolderOverlapKeys {
 
 impl FolderOverlapKeys {
     async fn load(app: &AppUseCase, folder_path: &str) -> AppResult<Self> {
-        let root_paths = match SCAN_FOLDER_ROOTS.try_with(|snapshot| snapshot.all.clone()) {
-            Ok(roots) => roots,
-            Err(_) => app
+        let root_paths = match ScanFolderRoots::current_all() {
+            Some(roots) => roots,
+            None => app
                 .all_library_root_folders()
                 .await?
                 .into_iter()

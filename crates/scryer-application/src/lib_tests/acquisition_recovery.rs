@@ -714,7 +714,8 @@ async fn standby_delay_parks_the_best_row_stops_the_walk_and_promotion_grabs_whe
             .await
             .expect("promotion should resolve"),
             crate::acquisition::pending::PendingGrabOutcome::Grabbed {
-                scope: SubmissionScope::Title
+                scope: SubmissionScope::Title,
+                ..
             }
         ),
         "the unchanged profile must allow promotion after delay_until"
@@ -1149,7 +1150,8 @@ async fn operator_pending_grab_ignores_the_delay_profile() {
         .await
         .expect("operator grab should resolve"),
         crate::acquisition::pending::PendingGrabOutcome::Grabbed {
-            scope: SubmissionScope::Title
+            scope: SubmissionScope::Title,
+            ..
         }
     ));
     assert_eq!(
@@ -14583,7 +14585,8 @@ async fn a_parked_release_the_profile_now_blocks_is_not_grabbed() {
         .await
         .expect("pending grab should resolve"),
         crate::acquisition::pending::PendingGrabOutcome::Grabbed {
-            scope: SubmissionScope::Title
+            scope: SubmissionScope::Title,
+            ..
         }
     ));
 

@@ -2474,7 +2474,7 @@ pub(crate) async fn try_saved_candidates_with_trigger(
             }
         };
         match outcome {
-            Ok(super::pending::PendingGrabOutcome::Grabbed { scope }) => {
+            Ok(super::pending::PendingGrabOutcome::Grabbed { scope, .. }) => {
                 let grabbed_at = now.to_rfc3339();
                 let _ = app
                     .services
