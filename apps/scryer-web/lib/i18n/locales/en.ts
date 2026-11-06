@@ -5196,7 +5196,7 @@ const en: LocaleDictionary = {
   "settings.libraryEffectiveValue": "Effective: {{value}}",
   "settings.searchLanguages": "Release search languages",
   "settings.searchLanguagesHelp":
-    "Select languages in search order. Automatic searches try these names when earlier queries find no acceptable release; interactive searches try all selected names. Metadata and audio languages are unchanged.",
+    "Release names to also search, in order. Automatic searches fall back to them; interactive searches try them all.",
   "settings.searchAliases": "Custom release names",
   "settings.searchAliasesHelp": "Separate names with semicolons",
   "settings.libraryMetadataLanguageLabel": "Metadata language",

@@ -21,6 +21,7 @@ import {
 import { AddNewButton } from "@/components/common/add-new-button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { ChangeRootDialog } from "@/components/dialogs/change-root-dialog";
+import { InfoHelp } from "@/components/common/info-help";
 import { SearchLanguagePicker } from "@/components/common/search-language-picker";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
@@ -38,7 +39,10 @@ import {
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
-import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
+import {
+  formatAudioLanguageLabels,
+  formatSearchLanguageLabels,
+} from "@/lib/constants/audio-languages";
 import { METADATA_LANGUAGES } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
@@ -1620,15 +1624,28 @@ export const MediaLibrarySettingsPanel = React.memo(
                     ) : null}
                   </div>
                   <div className="space-y-2">
-                    <Label>{t("settings.searchLanguages")}</Label>
+                    <div className="flex items-center gap-1">
+                      <Label>{t("settings.searchLanguages")}</Label>
+                      <InfoHelp
+                        text={t("settings.searchLanguagesHelp")}
+                        ariaLabel={t("settings.searchLanguages")}
+                      />
+                    </div>
                     <SearchLanguagePicker
                       value={draftSearchLanguages}
                       onChange={setDraftSearchLanguages}
                       disabled={settingsBusy}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.searchLanguagesHelp")}
-                    </p>
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveValue", {
+                          value:
+                            formatSearchLanguageLabels(
+                              savedSettings.searchLanguages ?? [],
+                            ) || t("label.none"),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
                   </div>
                   <div className="space-y-2">
                     <Label>{t("settings.libraryMetadataLanguageLabel")}</Label>

@@ -814,7 +814,7 @@ const cs: LocaleDictionary = {
   "settings.libraryEffectiveValue": "Platná hodnota: {{value}}",
   "settings.searchLanguages": "Jazyky pro vyhledávání vydání",
   "settings.searchLanguagesHelp":
-    "Vyberte jazyky v pořadí vyhledávání. Automatické vyhledávání zkouší tyto názvy, když dřívější dotazy nenajdou přijatelné vydání; interaktivní vyhledávání zkouší všechny vybrané názvy. Jazyky metadat a zvuku se nemění.",
+    "Názvy vydání, které se mají také hledat, v pořadí. Automatické vyhledávání je použije jako zálohu; interaktivní vyhledávání zkusí všechny.",
   "settings.searchAliases": "Vlastní názvy vydání",
   "settings.searchAliasesHelp": "Oddělte názvy středníky",
   "settings.libraryMetadataLanguageLabel": "Jazyk metadat",
