@@ -638,9 +638,13 @@ export default function LibraryGraphView({
   // A new facet or library set drops what was explored from the old one,
   // including a "More like this" still waiting on its reply.
   const [exploredSourceKey, setExploredSourceKey] = React.useState(sourceKey);
+  // Laid-out positions belong to one source. This runs before the layout
+  // effects below in the commit that switches source.
+  React.useLayoutEffect(() => {
+    positionsRef.current.clear();
+  }, [sourceKey]);
   if (exploredSourceKey !== sourceKey) {
     setExploredSourceKey(sourceKey);
-    positionsRef.current.clear();
     setSelectedNeighborhoods(new Set());
     // The old graph is not joined to the new listing while the new one loads.
     setResult(null);
