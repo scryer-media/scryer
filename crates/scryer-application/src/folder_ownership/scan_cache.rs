@@ -70,12 +70,17 @@ impl ScanOwnershipContext {
                     .map(|path| (owner.title_id, path))
             })
             .collect();
-        let roots: Vec<_> = app
-            .all_library_root_folders()
-            .await?
-            .into_iter()
-            .map(|root| root.path)
-            .collect();
+        // Roots come from the scan's snapshot when one is in scope, the same
+        // view the root and library-boundary checks use for this claim.
+        let roots: Vec<_> = match ScanFolderRoots::current_all() {
+            Some(roots) => roots,
+            None => app
+                .all_library_root_folders()
+                .await?
+                .into_iter()
+                .map(|root| root.path)
+                .collect(),
+        };
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let started = Instant::now();
@@ -399,6 +404,123 @@ mod tests {
         assert_eq!(context.admission.available_permits(), 1);
         assert_eq!(context.cache.lock().unwrap().checks, 0);
         assert_eq!(std::fs::read(sentinel).unwrap(), b"preserved");
+    }
+
+    async fn set_movie_roots(app: &AppUseCase, roots: &[&Path]) -> String {
+        let library_id =
+            scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Movie);
+        let library = app
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&library_id)
+            .await
+            .unwrap()
+            .unwrap();
+        app.services
+            .catalog
+            .libraries
+            .update(
+                &library_id,
+                library.name,
+                library.slug,
+                roots
+                    .iter()
+                    .enumerate()
+                    .map(|(index, root)| crate::LibraryRootDraft {
+                        id: None,
+                        path: path_to_stored_string(root),
+                        is_default: index == 0,
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        library_id
+    }
+
+    #[tokio::test]
+    async fn scan_ownership_claims_use_the_scan_root_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("library");
+        let moved_root = temp.path().join("moved-library");
+        std::fs::create_dir_all(&moved_root).unwrap();
+        let folders: Vec<_> = (0..3)
+            .map(|index| root.join(format!("Synthetic Fixture {index} (2001)")))
+            .collect();
+        for folder in &folders {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(folder.join("preserved.mkv"), b"preserved").unwrap();
+        }
+        let (app, actor) = crate::lib_tests::bootstrap();
+        let library_id = set_movie_roots(&app, &[&root]).await;
+        let mut titles = Vec::new();
+        for index in 0..folders.len() {
+            titles.push(
+                app.create_title_without_hydration_in_library(
+                    &actor,
+                    crate::NewTitle {
+                        name: format!("Synthetic Fixture {index}"),
+                        facet: scryer_domain::MediaFacet::Movie,
+                        ..Default::default()
+                    },
+                    library_id.clone(),
+                )
+                .await
+                .unwrap()
+                .title,
+            );
+        }
+        let snapshot = ScanFolderRoots::load(&app).await.unwrap();
+        let snapshot_keys =
+            FolderOverlapKeys::from_roots(&path_to_stored_string(&folders[0]), &snapshot.all)
+                .unwrap()
+                .roots;
+        // The catalog moves the library elsewhere mid-scan. Every claim in this
+        // scan still answers from the snapshot, so none of them re-reads the
+        // roots: a fresh read would place each folder outside its library.
+        set_movie_roots(&app, &[&moved_root]).await;
+        let context = ScanOwnershipContext::new();
+        SCAN_FOLDER_ROOTS
+            .scope(
+                snapshot,
+                with_scan_ownership(Some(context.clone()), async {
+                    for (title, folder) in titles.iter_mut().zip(&folders) {
+                        let candidate = path_to_stored_string(folder);
+                        assert!(
+                            !title_folder_is_outside_its_library(&app, title, &candidate)
+                                .await
+                                .unwrap()
+                        );
+                        assert!(!folder_spans_a_library_root(&app, &candidate).await.unwrap());
+                        claim_title_folder_for_scan_if_missing(&app, title, folder)
+                            .await
+                            .unwrap();
+                        assert_eq!(title.folder_path.as_deref(), Some(candidate.as_str()));
+                    }
+                }),
+            )
+            .await;
+        let cache = context.cache.lock().unwrap();
+        assert_eq!(cache.roots, snapshot_keys);
+        assert!(cache.checks >= folders.len() as u64);
+        drop(cache);
+        // Outside the scan the same check reads the catalog's current roots.
+        assert!(
+            title_folder_is_outside_its_library(
+                &app,
+                &titles[0],
+                &path_to_stored_string(&folders[0])
+            )
+            .await
+            .unwrap()
+        );
+        for folder in &folders {
+            assert_eq!(
+                std::fs::read(folder.join("preserved.mkv")).unwrap(),
+                b"preserved"
+            );
+        }
     }
 
     #[test]
