@@ -461,6 +461,43 @@ impl LocationOperationRepository for LocationOperationStore {
         Ok(())
     }
 
+    async fn upsert_transfer_titles(
+        &self,
+        operation_id: &str,
+        titles: &[scryer_application::location::live::TransferTitle],
+    ) -> AppResult<()> {
+        // Five binds per row; stay below SQLite's conservative bind limit.
+        for chunk in titles.chunks(100) {
+            let mut args = Vec::with_capacity(chunk.len() * 5);
+            for title in chunk {
+                let json = serde_json::to_string(title)
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                args.extend([
+                    SqlArg::Text(operation_id.to_owned()),
+                    SqlArg::Text(title.title_id.clone()),
+                    SqlArg::I64(title.sequence),
+                    SqlArg::I64(title.rank()),
+                    SqlArg::Text(json),
+                ]);
+            }
+            let values = vec!["({}, {}, {}, {}, {})"; chunk.len()].join(", ");
+            SqlRuntime::execute_write(
+                &self.datastore,
+                "upsert_transfer_titles",
+                &format!(
+                    "INSERT INTO location_transfer_titles
+                     (operation_id, title_id, sequence, hot_rank, summary_json)
+                     VALUES {values} ON CONFLICT(operation_id, title_id) DO UPDATE SET
+                     sequence = excluded.sequence, hot_rank = excluded.hot_rank,
+                     summary_json = excluded.summary_json"
+                ),
+                args,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn transfer_title_page(
         &self,
         operation_id: &str,
@@ -1685,6 +1722,29 @@ mod tests {
         assert_eq!(store.transfer_high_water("op").await.unwrap(), 8100);
         let first = store.allocate_transfer_generation().await.unwrap();
         assert!(store.allocate_transfer_generation().await.unwrap() > first);
+
+        // A bulk rewrite spanning more than one statement replaces the rows
+        // and their sort rank: released rows fall back behind in-flight work.
+        let mut released = store.transfer_title_page("op", 0, 150).await.unwrap();
+        assert_eq!(released.len(), 150);
+        for row in &mut released {
+            row.state = TitleCheckpointState::Completed;
+            row.copying = 0;
+            row.verifying = 0;
+        }
+        store.upsert_transfer_titles("op", &released).await.unwrap();
+        assert_eq!(store.transfer_title_count("op").await.unwrap(), 2000);
+        let rewritten = store
+            .transfer_title("op", "title-1999")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rewritten.state, TitleCheckpointState::Completed);
+        assert_eq!(rewritten.verifying, 0);
+        let page = store.transfer_title_page("op", 0, 1).await.unwrap();
+        assert_eq!(page[0].state, TitleCheckpointState::Pending);
+        // The page held title-1999 (in flight) and title-0000..=0148.
+        assert_eq!(page[0].title_id, "title-0149");
     }
 
     #[tokio::test]

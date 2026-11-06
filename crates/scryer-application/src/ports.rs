@@ -7845,6 +7845,18 @@ pub trait LocationOperationRepository: Send + Sync {
     ) -> AppResult<()> {
         Ok(())
     }
+    /// Overwrite several summaries at once. Persistent stores override this
+    /// with bounded bulk writes.
+    async fn upsert_transfer_titles(
+        &self,
+        operation_id: &str,
+        titles: &[crate::location::live::TransferTitle],
+    ) -> AppResult<()> {
+        for title in titles {
+            self.upsert_transfer_title(operation_id, title).await?;
+        }
+        Ok(())
+    }
     async fn transfer_title_page(
         &self,
         _operation_id: &str,

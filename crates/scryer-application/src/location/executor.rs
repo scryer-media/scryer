@@ -888,6 +888,7 @@ impl<'a> LocationOperationRunner<'a> {
         let mut failures: Vec<TitleFailure> = Vec::new();
 
         if let Some(hub) = self.transfers {
+            self.release_stale_transfer_rows(&operation.id).await?;
             let outcome = self
                 .run_pipeline(&operation, plan, &mut progress, hub)
                 .await?;
@@ -1122,6 +1123,62 @@ impl<'a> LocationOperationRunner<'a> {
         let detail = (!progress.warnings.is_empty()).then(|| progress.warnings.join("\n"));
         self.finish(&operation, plan, &progress, final_state, None, detail, None)
             .await
+    }
+
+    /// A run starts with nothing in flight, so a title still recorded as moving
+    /// or verifying is one a killed process left behind. It is waiting again,
+    /// so it reads Pending until this run reaches it. Titles past the catalog
+    /// update (reconciling, cleaning up) keep their state.
+    async fn release_stale_transfer_rows(&self, operation_id: &str) -> AppResult<()> {
+        const PAGE: i64 = 200;
+        let mut stale = Vec::new();
+        let mut offset = 0;
+        'pages: loop {
+            let page = self
+                .store
+                .transfer_title_page(operation_id, offset, PAGE)
+                .await?;
+            for row in &page {
+                // Pages sort in-flight rows first; nothing after the first
+                // settled or waiting row can be in flight.
+                if row.rank() > 1 {
+                    break 'pages;
+                }
+                if row.copying > 0
+                    || row.verifying > 0
+                    || row.recording > 0
+                    || matches!(
+                        row.state,
+                        TitleCheckpointState::Moving | TitleCheckpointState::Verifying
+                    )
+                {
+                    let mut row = row.clone();
+                    if matches!(
+                        row.state,
+                        TitleCheckpointState::Moving | TitleCheckpointState::Verifying
+                    ) {
+                        row.state = TitleCheckpointState::Pending;
+                    }
+                    row.copying = 0;
+                    row.verifying = 0;
+                    row.recording = 0;
+                    row.current_file = None;
+                    row.copy_bytes = 0;
+                    row.verification_bytes = 0;
+                    stale.push(row);
+                }
+            }
+            if (page.len() as i64) < PAGE {
+                break;
+            }
+            offset += PAGE;
+        }
+        if !stale.is_empty() {
+            self.store
+                .upsert_transfer_titles(operation_id, &stale)
+                .await?;
+        }
+        Ok(())
     }
 
     /// One title, in FR-031 order: move → verify → reconcile → clean up.
@@ -2524,6 +2581,32 @@ mod tests {
             Ok(self.transfer_title_row(operation_id, title_id))
         }
 
+        /// The same order as the SQL store: in-flight rows first.
+        async fn transfer_title_page(
+            &self,
+            operation_id: &str,
+            offset: i64,
+            limit: i64,
+        ) -> AppResult<Vec<crate::location::live::TransferTitle>> {
+            let mut rows: Vec<_> = self
+                .inner
+                .lock()
+                .expect("lock")
+                .transfer_titles
+                .iter()
+                .filter(|((operation, _), _)| operation == operation_id)
+                .map(|(_, row)| row.clone())
+                .collect();
+            rows.sort_by(|a, b| {
+                (a.rank(), a.sequence, &a.title_id).cmp(&(b.rank(), b.sequence, &b.title_id))
+            });
+            Ok(rows
+                .into_iter()
+                .skip(offset.max(0) as usize)
+                .take(limit.max(0) as usize)
+                .collect())
+        }
+
         async fn upsert_location_title_checkpoint(
             &self,
             checkpoint: &TitleCheckpoint,
@@ -3312,6 +3395,93 @@ mod tests {
         assert!(temp.path().join("source/movie.mkv").exists());
         assert!(temp.path().join("source/movie.en.srt").exists());
         assert!(reconciler.cleaned.lock().unwrap().is_empty());
+    }
+
+    /// A killed process leaves rows marked moving or verifying with nothing in
+    /// flight. The next run reads them as waiting, and leaves alone what is
+    /// settled or already past the catalog update.
+    #[tokio::test]
+    async fn a_run_releases_transfer_rows_a_killed_process_left_in_flight() {
+        let store = FakeStore::with_operation(operation());
+        let row =
+            |id: &str, sequence, state, copying, verifying| crate::location::live::TransferTitle {
+                title_id: id.into(),
+                name: id.into(),
+                sequence,
+                state,
+                files_total: 1,
+                files_done: 0,
+                bytes_total: 10,
+                copy_bytes: 4,
+                verification_bytes: 2,
+                current_file: Some(format!("/dest/{id}.mkv")),
+                copying,
+                verifying,
+                recording: 0,
+                detail: None,
+            };
+        // More stale rows than one page, so the release pages through them.
+        for index in 0..250 {
+            store.seed_transfer_title(
+                "op-1",
+                row(
+                    &format!("verifying-{index:03}"),
+                    index,
+                    TitleCheckpointState::Verifying,
+                    0,
+                    1,
+                ),
+            );
+        }
+        store.seed_transfer_title(
+            "op-1",
+            row("moving", 300, TitleCheckpointState::Moving, 1, 0),
+        );
+        store.seed_transfer_title(
+            "op-1",
+            row("cleaning", 301, TitleCheckpointState::CleaningUp, 0, 0),
+        );
+        store.seed_transfer_title(
+            "op-1",
+            row("done", 302, TitleCheckpointState::Completed, 0, 0),
+        );
+        store.seed_transfer_title(
+            "op-1",
+            row("waiting", 303, TitleCheckpointState::Pending, 0, 0),
+        );
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler);
+
+        runner.release_stale_transfer_rows("op-1").await.unwrap();
+
+        for id in ["verifying-000", "verifying-249", "moving"] {
+            let row = store.transfer_title_row("op-1", id).unwrap();
+            assert_eq!(row.state, TitleCheckpointState::Pending, "{id}");
+            assert_eq!(
+                (row.copying, row.verifying, row.recording),
+                (0, 0, 0),
+                "{id}"
+            );
+            assert_eq!(row.current_file, None, "{id}");
+        }
+        assert_eq!(
+            store.transfer_title_row("op-1", "cleaning").unwrap().state,
+            TitleCheckpointState::CleaningUp
+        );
+        assert_eq!(
+            store.transfer_title_row("op-1", "done").unwrap().state,
+            TitleCheckpointState::Completed
+        );
+        assert_eq!(
+            store
+                .transfer_title_row("op-1", "waiting")
+                .unwrap()
+                .current_file,
+            Some("/dest/waiting.mkv".into()),
+            "a row past the in-flight ones is not rewritten"
+        );
     }
 
     #[tokio::test(start_paused = true)]
