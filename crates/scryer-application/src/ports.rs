@@ -986,9 +986,6 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         run_id: &str,
     ) -> AppResult<Vec<DiscoverySubmittedSubjectRecord>>;
-    /// The submitted subjects of `run_id` whose key is one of
-    /// `subject_keys` and whose library is one of `library_ids`, in
-    /// `list_discovery_submitted_subjects` order.
     /// The distinct title ids `run_id` submitted from `library_ids`, for a
     /// title read that cannot select them itself. `None` means the title
     /// store resolves the submitted set in its own query.
@@ -1014,6 +1011,9 @@ pub trait DiscoveryRepository: Send + Sync {
                 .collect(),
         ))
     }
+    /// The submitted subjects of `run_id` whose key is one of
+    /// `subject_keys` and whose library is one of `library_ids`, in
+    /// `list_discovery_submitted_subjects` order.
     async fn list_discovery_submitted_subjects_for_keys(
         &self,
         run_id: &str,
