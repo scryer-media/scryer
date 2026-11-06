@@ -40,6 +40,7 @@ import {
   titleOverviewInteractiveSearchButtonId,
   titleOverviewInteractiveSearchPanelId,
   titleOverviewOpenButtonId,
+  titleOverviewLibraryId,
   titleOverviewRowId,
   titleOverviewSearchButtonId,
   titleOverviewSelectId,
@@ -722,7 +723,12 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
                       className="size-1.5 shrink-0 rounded-full bg-[var(--scry-accent)]"
                     />
                     {libraryLabel ? (
-                      <span className="min-w-0 truncate">{libraryLabel}</span>
+                      <span
+                        id={titleOverviewLibraryId(item.id)}
+                        className="min-w-0 truncate"
+                      >
+                        {libraryLabel}
+                      </span>
                     ) : null}
                     {libraryLabel && subline ? (
                       <span className="shrink-0">·</span>
@@ -827,7 +833,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ))}
           {showLibraryColumn ? (
             <TableCell className="overflow-hidden py-1.5 text-center align-middle text-[12px] text-[var(--scry-muted)]">
-              <span className="block truncate">
+              <span
+                id={titleOverviewLibraryId(item.id)}
+                className="block truncate"
+              >
                 {item.libraryName ?? item.libraryId}
               </span>
             </TableCell>

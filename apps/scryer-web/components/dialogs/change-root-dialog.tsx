@@ -63,6 +63,7 @@ import {
 } from "@/lib/root-location-operations";
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import { cn } from "@/lib/utils";
+import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 /** A configured root of the library the dialog was opened from. */
@@ -378,7 +379,14 @@ export function ChangeRootDialog({
                   </SelectTrigger>
                   <SelectContent>
                     {otherRoots.map((candidate) => (
-                      <SelectItem key={candidate.id} value={candidate.id}>
+                      <SelectItem
+                        key={candidate.id}
+                        id={selectorId(
+                          "root-change-destination-root-option",
+                          candidate.path,
+                        )}
+                        value={candidate.id}
+                      >
                         {candidate.path}
                       </SelectItem>
                     ))}

@@ -476,6 +476,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
           <Button
             variant="ghost"
             size="sm"
+            id="location-operation-titles-toggle"
             className="px-0"
             aria-expanded={open}
             aria-controls="location-transfer-titles"
@@ -685,11 +686,15 @@ function TitleFiles({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {files.map((file) => (
+              {files.map((file, index) => (
                 <React.Fragment key={file.destinationPath || file.sourcePath}>
-                  <TableRow data-ui="activity-row">
+                  <TableRow
+                    id={`location-operation-file-row-${titleId}-${index}`}
+                    data-ui="activity-row"
+                  >
                     <TableCell>
                       <FilePath
+                        id={`location-operation-file-path-${titleId}-${index}`}
                         path={file.destinationPath || file.sourcePath}
                       />
                       <span className="text-muted-foreground">
@@ -700,6 +705,7 @@ function TitleFiles({
                     </TableCell>
                     <TableCell>
                       <Badge
+                        id={`location-operation-file-state-${titleId}-${index}`}
                         tone={
                           file.state === "FAILED" || file.state === "BLOCKED"
                             ? "warning"
@@ -747,6 +753,7 @@ function TitleFiles({
                   {file.detail && (
                     <TableRow>
                       <TableCell
+                        id={`location-operation-file-detail-${titleId}-${index}`}
                         colSpan={4}
                         className="break-words text-muted-foreground"
                       >
@@ -829,12 +836,13 @@ function FileBytes({
   );
 }
 
-function FilePath({ path }: { path: string }) {
+function FilePath({ id, path }: { id?: string; path: string }) {
   const parts = splitTransferPath(path);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span
+          id={id}
           tabIndex={0}
           aria-label={path}
           className="flex min-w-0 font-[family-name:var(--font-code)]"
@@ -918,6 +926,7 @@ function TitleRow({
                 })}
                 className="shrink-0 rounded p-1 hover:bg-muted"
                 aria-expanded={expanded}
+                id={`location-operation-title-toggle-${row.titleId}`}
                 aria-controls={`transfer-detail-${row.titleId}`}
                 onClick={() => setExpanded(!expanded)}
               >

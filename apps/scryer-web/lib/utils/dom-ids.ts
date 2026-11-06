@@ -51,6 +51,11 @@ export function titleOverviewRowId(titleId: string): string {
   return selectorId("title-overview-row", titleId);
 }
 
+/** The library name an overview row shows for one title. */
+export function titleOverviewLibraryId(titleId: string): string {
+  return selectorId("title-overview-library", titleId);
+}
+
 export function wantedItemRowId(wantedItemId: string): string {
   return selectorId("wanted-item-row", wantedItemId);
 }

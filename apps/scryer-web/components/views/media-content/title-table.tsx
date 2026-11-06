@@ -40,6 +40,7 @@ import {
   titleOverviewInteractiveSearchButtonId,
   titleOverviewInteractiveSearchPanelId,
   titleOverviewOpenButtonId,
+  titleOverviewLibraryId,
   titleOverviewRowId,
   titleOverviewSearchButtonId,
   titleOverviewSelectId,
@@ -700,7 +701,10 @@ export const TitleTable = React.memo(function TitleTable({
           ))}
           {showLibraryColumn ? (
             <TableCell className="overflow-hidden text-center align-middle text-[12.5px] text-[var(--scry-muted)]">
-              <span className="block truncate">
+              <span
+                id={titleOverviewLibraryId(item.id)}
+                className="block truncate"
+              >
                 {item.libraryName ?? item.libraryId}
               </span>
             </TableCell>

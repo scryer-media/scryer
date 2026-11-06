@@ -879,7 +879,13 @@ export function MoveTitlesDialog({
                           <TableCell className="break-all">
                             {folders?.source ?? entry?.sourceFolderPath ?? "—"}
                           </TableCell>
-                          <TableCell className="break-all">
+                          <TableCell
+                            id={selectorId(
+                              "move-titles-manual-destination",
+                              id,
+                            )}
+                            className="break-all"
+                          >
                             {folders?.destination ??
                               (entry?.class === "NO_OP"
                                 ? entry.sourceFolderPath
