@@ -2732,8 +2732,6 @@ const pt_BR: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "Excluir",
   "settings.maintenanceExcluded": "{{title}} excluído da manutenção.",
   "move.dialogTitle": "Mover títulos",
-  "move.dialogDescription":
-    "Revise o plano de {{count}} título(s) selecionado(s) antes de mover qualquer coisa.",
   "move.destinationLibrary": "Biblioteca de destino",
   "move.destinationRoot": "Raiz de destino",
   "move.destinationRootPlaceholder": "Escolha uma raiz",
@@ -2741,13 +2739,8 @@ const pt_BR: LocaleDictionary = {
   "move.actionDescription":
     "Mova os arquivos deste título para outra pasta raiz ou para outra biblioteca.",
   "move.actionButton": "Mover Para…",
-  "move.wizardKindDescription": "Escolha para onde este título deve ir.",
   "move.kindRootHeading": "Mover para outra raiz",
-  "move.kindRootHelp":
-    "O título permanece nesta biblioteca e seus arquivos passam para outra pasta raiz dela.",
   "move.kindLibraryHeading": "Mover para outra biblioteca",
-  "move.kindLibraryHelp":
-    "Transfira o título para outra biblioteca, em uma das pastas raiz dessa biblioteca.",
   "move.noOtherRoots":
     "Esta biblioteca não tem outra pasta raiz para onde mover. Adicione uma à biblioteca ou mova o título para outra biblioteca.",
   "move.back": "Voltar",

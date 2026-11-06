@@ -2822,8 +2822,6 @@ const fr: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "Exclure",
   "settings.maintenanceExcluded": "{{title}} exclu de la maintenance.",
   "move.dialogTitle": "Déplacer des titres",
-  "move.dialogDescription":
-    "Vérifiez le plan pour {{count}} titre(s) sélectionné(s) avant tout déplacement.",
   "move.destinationLibrary": "Bibliothèque de destination",
   "move.destinationRoot": "Racine de destination",
   "move.destinationRootPlaceholder": "Choisir une racine",
@@ -2831,13 +2829,8 @@ const fr: LocaleDictionary = {
   "move.actionDescription":
     "Déplacez les fichiers de ce titre vers un autre dossier racine ou vers une autre bibliothèque.",
   "move.actionButton": "Déplacer vers…",
-  "move.wizardKindDescription": "Choisissez où ce titre doit aller.",
   "move.kindRootHeading": "Déplacer vers une autre racine",
-  "move.kindRootHelp":
-    "Le titre reste dans cette bibliothèque et ses fichiers passent dans un autre de ses dossiers racines.",
   "move.kindLibraryHeading": "Déplacer vers une autre bibliothèque",
-  "move.kindLibraryHelp":
-    "Transférez le titre vers une autre bibliothèque, dans l'un des dossiers racines de celle-ci.",
   "move.noOtherRoots":
     "Cette bibliothèque n'a aucun autre dossier racine vers lequel déplacer. Ajoutez-en un à la bibliothèque ou déplacez le titre vers une autre bibliothèque.",
   "move.back": "Retour",

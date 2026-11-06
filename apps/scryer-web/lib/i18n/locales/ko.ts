@@ -2606,8 +2606,6 @@ const ko: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "제외",
   "settings.maintenanceExcluded": "{{title}}을(를) 유지 관리에서 제외했습니다.",
   "move.dialogTitle": "타이틀 이동",
-  "move.dialogDescription":
-    "선택한 {{count}}개 타이틀의 계획을 확인한 뒤 이동하세요.",
   "move.destinationLibrary": "대상 라이브러리",
   "move.destinationRoot": "대상 루트",
   "move.destinationRootPlaceholder": "루트 선택",
@@ -2615,13 +2613,8 @@ const ko: LocaleDictionary = {
   "move.actionDescription":
     "이 타이틀의 파일을 다른 루트 폴더 또는 다른 라이브러리로 이동합니다.",
   "move.actionButton": "이동…",
-  "move.wizardKindDescription": "이 타이틀을 어디로 옮길지 선택하세요.",
   "move.kindRootHeading": "다른 루트로 이동",
-  "move.kindRootHelp":
-    "타이틀은 이 라이브러리에 그대로 두고 파일만 같은 라이브러리의 다른 루트 폴더로 옮깁니다.",
   "move.kindLibraryHeading": "다른 라이브러리로 이동",
-  "move.kindLibraryHelp":
-    "타이틀을 다른 라이브러리의 루트 중 하나로 전송합니다.",
   "move.noOtherRoots":
     "이 라이브러리에는 옮길 다른 루트 폴더가 없습니다. 라이브러리에 루트를 추가하거나 타이틀을 다른 라이브러리로 옮기세요.",
   "move.back": "뒤로",

@@ -2455,7 +2455,6 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "排除",
   "settings.maintenanceExcluded": "已将 {{title}} 从维护中排除。",
   "move.dialogTitle": "移动标题",
-  "move.dialogDescription": "在移动之前，请检查所选 {{count}} 个标题的计划。",
   "move.destinationLibrary": "目标库",
   "move.destinationRoot": "目标根目录",
   "move.destinationRootPlaceholder": "选择根目录",
@@ -2463,12 +2462,8 @@ const zh_CN: LocaleDictionary = {
   "move.actionDescription":
     "将该标题的文件移动到另一个根目录，或移动到另一个库。",
   "move.actionButton": "移动到…",
-  "move.wizardKindDescription": "请选择该标题的去向。",
   "move.kindRootHeading": "移动到另一个根目录",
-  "move.kindRootHelp":
-    "标题仍留在当前库中，只把它的文件移动到该库的另一个根目录。",
   "move.kindLibraryHeading": "移动到另一个库",
-  "move.kindLibraryHelp": "将该标题转移到另一个库，放入该库的某个根目录。",
   "move.noOtherRoots":
     "当前库没有其他可作为目标的根目录。请为该库添加根目录，或把该标题移动到另一个库。",
   "move.back": "返回",

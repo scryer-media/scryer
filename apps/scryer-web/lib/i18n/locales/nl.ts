@@ -1600,8 +1600,6 @@ const nl: LocaleDictionary = {
     "Bibliotheekgraaf. Gebruik de pijltjestoetsen om tussen titels in een cluster te wisselen en Enter om er een te openen.",
   "title.bulkSelectionCount": "{{count}} geselecteerd",
   "title.bulkSelectionPanelTitle": "Bulkselectie",
-  "title.bulkSelectionPanelHint":
-    "Kies een actie voor de geselecteerde titels, of wis de selectie.",
   "title.bulkEditTitle": "Geselecteerde titels bewerken",
   "title.bulkEditDescription":
     "Wijzigingen toepassen op {{count}} geselecteerde titels.",

@@ -6417,8 +6417,6 @@ const en: LocaleDictionary = {
     "Library graph. Use the arrow keys to move between titles in a cluster and Enter to open one.",
   "title.bulkSelectionCount": "{{count}} selected",
   "title.bulkSelectionPanelTitle": "Bulk selection",
-  "title.bulkSelectionPanelHint":
-    "Choose an action for the selected titles, or clear the selection.",
   "title.bulkEditTitle": "Edit Selected Titles",
   "title.bulkEditDescription": "Apply changes to {{count}} selected titles.",
   "title.editOptionsTitle": "Edit Title Options",
@@ -10483,8 +10481,6 @@ const en: LocaleDictionary = {
     "Number of titles in the target library",
 
   "move.dialogTitle": "Move titles",
-  "move.dialogDescription":
-    "Review the plan for {{count}} selected title(s) before anything moves.",
   "move.destinationLibrary": "Destination library",
   "move.destinationRoot": "Destination root",
   "move.destinationRootPlaceholder": "Choose a root",
@@ -10492,13 +10488,8 @@ const en: LocaleDictionary = {
   "move.actionDescription":
     "Move this title's files to another root folder, or to another library.",
   "move.actionButton": "Move To…",
-  "move.wizardKindDescription": "Choose where this title should go.",
   "move.kindRootHeading": "Move to another root",
-  "move.kindRootHelp":
-    "Keep the title in this library and move its files to one of its other root folders.",
   "move.kindLibraryHeading": "Move to another library",
-  "move.kindLibraryHelp":
-    "Transfer the title into a different library, onto one of that library's roots.",
   "move.noOtherRoots":
     "This library has no other root folder to move to. Add one to the library, or move the title to another library.",
   "move.back": "Back",

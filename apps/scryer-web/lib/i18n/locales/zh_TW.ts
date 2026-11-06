@@ -1647,7 +1647,6 @@ const zh_TW: LocaleDictionary = {
     "媒體庫圖譜。使用方向鍵在同一群組的作品間移動，按 Enter 開啟。",
   "title.bulkSelectionCount": "已選取 {{count}} 部",
   "title.bulkSelectionPanelTitle": "批次選取",
-  "title.bulkSelectionPanelHint": "為選取的作品選擇操作，或清除選取。",
   "title.bulkEditTitle": "編輯選取的作品",
   "title.bulkEditDescription": "將變更套用至 {{count}} 部選取的作品。",
   "title.editOptionsTitle": "編輯作品選項",
@@ -4888,7 +4887,6 @@ const zh_TW: LocaleDictionary = {
     "自請求者前次請求以來的完整天數；若為首次請求則 absent，原因為 no_previous_request",
   "settings.refReqFactsLibraryTitleCountValue": "目標媒體庫中的作品數量",
   "move.dialogTitle": "移動標題",
-  "move.dialogDescription": "在移動之前，請檢查所選 {{count}} 個標題的計劃。",
   "move.destinationLibrary": "目標庫",
   "move.destinationRoot": "目標根目錄",
   "move.destinationRootPlaceholder": "選擇根目錄",
@@ -4896,12 +4894,8 @@ const zh_TW: LocaleDictionary = {
   "move.actionDescription":
     "將該標題的檔案移動到另一個根目錄，或移動到另一個庫。",
   "move.actionButton": "移動到…",
-  "move.wizardKindDescription": "請選擇該標題的去向。",
   "move.kindRootHeading": "移動到另一個根目錄",
-  "move.kindRootHelp":
-    "標題仍留在當前庫中，只把它的檔案移動到該庫的另一個根目錄。",
   "move.kindLibraryHeading": "移動到另一個庫",
-  "move.kindLibraryHelp": "將該標題轉移到另一個庫，放入該庫的某個根目錄。",
   "move.noOtherRoots":
     "當前庫沒有其他可作為目標的根目錄。請為該庫新增根目錄，或把該標題移動到另一個庫。",
   "move.back": "返回",

@@ -1920,8 +1920,6 @@ const cs: LocaleDictionary = {
     "Graf knihovny. Šipkami se pohybujete mezi tituly v clusteru, klávesou Enter titul otevřete.",
   "title.bulkSelectionCount": "Vybráno: {{count}}",
   "title.bulkSelectionPanelTitle": "Hromadný výběr",
-  "title.bulkSelectionPanelHint":
-    "Zvolte akci pro vybrané tituly, nebo výběr zrušte.",
   "title.bulkEditTitle": "Upravit vybrané tituly",
   "title.bulkEditDescription": "Použít změny na vybrané tituly ({{count}}).",
   "title.editOptionsTitle": "Upravit možnosti titulu",
@@ -5850,8 +5848,6 @@ const cs: LocaleDictionary = {
   "settings.refReqFactsLibraryTitleCountValue":
     "Počet titulů v cílové knihovně",
   "move.dialogTitle": "Přesunout tituly",
-  "move.dialogDescription":
-    "Před jakýmkoli přesunem zkontrolujte plán. Vybraných titulů: {{count}}.",
   "move.destinationLibrary": "Cílová knihovna",
   "move.destinationRoot": "Cílový kořen",
   "move.destinationRootPlaceholder": "Vyberte kořen",
@@ -5859,13 +5855,8 @@ const cs: LocaleDictionary = {
   "move.actionDescription":
     "Přesunout soubory tohoto titulu do jiné kořenové složky nebo do jiné knihovny.",
   "move.actionButton": "Přesunout do…",
-  "move.wizardKindDescription": "Vyberte, kam by měl tento titul jít.",
   "move.kindRootHeading": "Přesunout do jiného kořene",
-  "move.kindRootHelp":
-    "Ponechte titul v této knihovně a přesuňte jeho soubory do jedné z jejích dalších kořenových složek.",
   "move.kindLibraryHeading": "Přesunout do jiné knihovny",
-  "move.kindLibraryHelp":
-    "Přesunout titul do jiné knihovny, do jednoho z kořenů dané knihovny.",
   "move.noOtherRoots":
     "Tato knihovna nemá žádnou jinou kořenovou složku, kam přesunout. Přidejte ji do knihovny, nebo přesuňte titul do jiné knihovny.",
   "move.back": "Zpět",

@@ -2746,8 +2746,6 @@ const it: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "Escludi",
   "settings.maintenanceExcluded": "{{title}} escluso dalla manutenzione.",
   "move.dialogTitle": "Sposta titoli",
-  "move.dialogDescription":
-    "Controlla il piano per {{count}} titolo/i selezionato/i prima di spostare qualcosa.",
   "move.destinationLibrary": "Libreria di destinazione",
   "move.destinationRoot": "Radice di destinazione",
   "move.destinationRootPlaceholder": "Scegli una radice",
@@ -2755,13 +2753,8 @@ const it: LocaleDictionary = {
   "move.actionDescription":
     "Sposta i file di questo titolo in un'altra cartella radice o in un'altra libreria.",
   "move.actionButton": "Sposta in…",
-  "move.wizardKindDescription": "Scegli dove deve andare questo titolo.",
   "move.kindRootHeading": "Sposta in un'altra radice",
-  "move.kindRootHelp":
-    "Il titolo resta in questa libreria e i suoi file passano a un'altra delle sue cartelle radice.",
   "move.kindLibraryHeading": "Sposta in un'altra libreria",
-  "move.kindLibraryHelp":
-    "Trasferisci il titolo in un'altra libreria, in una delle cartelle radice di quella libreria.",
   "move.noOtherRoots":
     "Questa libreria non ha altre cartelle radice in cui spostare. Aggiungine una alla libreria oppure sposta il titolo in un'altra libreria.",
   "move.back": "Indietro",

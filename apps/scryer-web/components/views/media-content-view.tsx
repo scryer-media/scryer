@@ -4152,9 +4152,6 @@ export function MediaContentView({
                             count: selectedTitleIds.size,
                           })}
                         </div>
-                        <p className="max-w-[18rem] text-[13px] text-[var(--scry-muted3)]">
-                          {t("title.bulkSelectionPanelHint")}
-                        </p>
                       </div>
                       <div className="flex w-full max-w-[18rem] flex-col gap-2">
                         <Button

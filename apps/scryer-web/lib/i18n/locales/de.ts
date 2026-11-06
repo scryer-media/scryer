@@ -2715,8 +2715,6 @@ const de: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "Ausschließen",
   "settings.maintenanceExcluded": "{{title}} von der Wartung ausgeschlossen.",
   "move.dialogTitle": "Titel verschieben",
-  "move.dialogDescription":
-    "Prüfe den Plan für {{count}} ausgewählte(n) Titel, bevor etwas verschoben wird.",
   "move.destinationLibrary": "Zielbibliothek",
   "move.destinationRoot": "Ziel-Stammverzeichnis",
   "move.destinationRootPlaceholder": "Stammverzeichnis wählen",
@@ -2724,14 +2722,8 @@ const de: LocaleDictionary = {
   "move.actionDescription":
     "Die Dateien dieses Titels in einen anderen Stammordner oder in eine andere Bibliothek verschieben.",
   "move.actionButton": "Verschieben nach …",
-  "move.wizardKindDescription":
-    "Wähle, wohin dieser Titel verschoben werden soll.",
   "move.kindRootHeading": "In einen anderen Stammordner verschieben",
-  "move.kindRootHelp":
-    "Der Titel bleibt in dieser Bibliothek; seine Dateien wandern in einen ihrer anderen Stammordner.",
   "move.kindLibraryHeading": "In eine andere Bibliothek verschieben",
-  "move.kindLibraryHelp":
-    "Den Titel in eine andere Bibliothek übertragen, in einen ihrer Stammordner.",
   "move.noOtherRoots":
     "Diese Bibliothek hat keinen weiteren Stammordner als Ziel. Füge der Bibliothek einen hinzu oder verschiebe den Titel in eine andere Bibliothek.",
   "move.back": "Zurück",

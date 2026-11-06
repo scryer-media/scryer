@@ -2663,8 +2663,6 @@ const ja: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "除外する",
   "settings.maintenanceExcluded": "{{title}} をメンテナンスから除外しました。",
   "move.dialogTitle": "タイトルを移動",
-  "move.dialogDescription":
-    "移動する前に、選択した {{count}} 件のタイトルの計画を確認してください。",
   "move.destinationLibrary": "移動先ライブラリ",
   "move.destinationRoot": "移動先ルート",
   "move.destinationRootPlaceholder": "ルートを選択",
@@ -2672,13 +2670,8 @@ const ja: LocaleDictionary = {
   "move.actionDescription":
     "このタイトルのファイルを別のルートフォルダ、または別のライブラリへ移動します。",
   "move.actionButton": "移動…",
-  "move.wizardKindDescription": "このタイトルの移動先を選択してください。",
   "move.kindRootHeading": "別のルートへ移動",
-  "move.kindRootHelp":
-    "タイトルはこのライブラリに残したまま、ファイルを同じライブラリの別のルートフォルダへ移動します。",
   "move.kindLibraryHeading": "別のライブラリへ移動",
-  "move.kindLibraryHelp":
-    "タイトルを別のライブラリへ、そのライブラリのいずれかのルートへ転送します。",
   "move.noOtherRoots":
     "このライブラリには移動先となる別のルートフォルダがありません。ライブラリにルートを追加するか、別のライブラリへ移動してください。",
   "move.back": "戻る",
