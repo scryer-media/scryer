@@ -142,7 +142,14 @@ export type LocationAmbiguousDestinationCandidate = {
 
 export type LocationClassificationGroup = {
   class: TitleLocationClass;
+  /** Every title in the class, whether or not `titles` lists it. */
   count: LongValue;
+  /**
+   * Whether `titles` lists the whole class. The server samples large groups:
+   * titles that block the start or match a destination title are always
+   * listed, the rest only up to a sample. Selected by the move preview only.
+   */
+  complete?: boolean;
   titles: LocationClassifiedTitle[];
 };
 

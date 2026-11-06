@@ -451,24 +451,25 @@ fn from_facet_conversion(conversion: &FacetConversion) -> LocationFacetConversio
     }
 }
 
-/// Groups the selection into all six classes, in a stable order, omitting no
-/// selected title (FR-015, SC-005).
+/// Groups the selection into all six classes, in a stable order, counting
+/// every selected title (FR-015, SC-005). Each group lists its titles the way
+/// plan sections are sampled.
 fn from_selection_classification(
     classification: &SelectionClassification,
 ) -> LocationSelectionClassificationPayload {
     let groups = TITLE_LOCATION_CLASSES
         .iter()
         .map(|class| {
-            let titles: Vec<LocationClassifiedTitlePayload> = classification
-                .titles
-                .iter()
-                .filter(|title| title.class == *class)
-                .map(from_classified_title)
-                .collect();
+            let sampled = classification.sampled_titles_in(*class, PLAN_SECTION_SAMPLE_LIMIT);
             LocationClassificationGroupPayload {
                 class: (*class).into(),
-                count: Long(titles.len() as i64),
-                titles,
+                count: Long(sampled.total),
+                complete: sampled.is_complete(),
+                titles: sampled
+                    .items
+                    .iter()
+                    .map(|title| from_classified_title(title))
+                    .collect(),
             }
         })
         .collect();
@@ -604,7 +605,19 @@ pub fn from_root_move_preview(preview: &RootMovePreview) -> LocationOperationPre
         from_selection_classification(&preview.classification),
         preview.warnings.clone(),
     );
-    payload.folders = preview
+    // The classification groups are sampled, so the user-moved-files table
+    // cannot read a no-op title's placement from them. A no-op title has no
+    // plan entry; its destination is the folder it already occupies.
+    let planned: std::collections::HashSet<&str> = preview
+        .execution
+        .titles
+        .iter()
+        .map(|title| title.title_id.as_str())
+        .collect();
+    let no_ops = preview.classification.titles.iter().filter(|title| {
+        title.class == TitleLocationClass::NoOp && !planned.contains(title.title_id.as_str())
+    });
+    let mut folders: Vec<crate::types::LocationTitleFoldersPayload> = preview
         .execution
         .titles
         .iter()
@@ -614,6 +627,15 @@ pub fn from_root_move_preview(preview: &RootMovePreview) -> LocationOperationPre
             destination: title.destination_folder_path.as_deref().map(display_path),
         })
         .collect();
+    folders.extend(no_ops.map(|title| {
+        let folder = title.source_folder_path.as_deref().map(display_path);
+        crate::types::LocationTitleFoldersPayload {
+            title_id: ID(title.title_id.clone()),
+            source: folder.clone(),
+            destination: folder,
+        }
+    }));
+    payload.folders = folders;
     payload
 }
 
@@ -644,6 +666,7 @@ fn from_classification_counts(
             .map(|class| LocationClassificationGroupPayload {
                 class: (*class).into(),
                 count: Long(count_for(*class)),
+                complete: count_for(*class) == 0,
                 titles: Vec::new(),
             })
             .collect(),

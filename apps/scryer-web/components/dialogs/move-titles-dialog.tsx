@@ -1408,12 +1408,15 @@ function ClassificationGroup({
   t,
 }: ClassificationGroupProps) {
   const blocking = classBlocksStart(groupClass);
-  // A bulk selection can hold thousands of titles in one class; the group
-  // renders a bounded window and grows it on request, while the badge keeps
-  // the complete count.
+  // A bulk selection can hold thousands of titles in one class. The server
+  // sends a sample of a large group (every title needing attention plus some
+  // of the rest), and the group renders a bounded window of what it received,
+  // growing it on request. The badge and the "showing" line keep the complete
+  // count, so a sampled group still says how many titles it holds.
   const [visible, setVisible] = React.useState(CLASSIFICATION_GROUP_WINDOW);
   const shown = entries.slice(0, visible);
-  const remaining = entries.length - shown.length;
+  const remaining = count - shown.length;
+  const remainingReceived = entries.length - shown.length;
   return (
     <div
       id={`move-titles-group-${groupClass}`}
@@ -1498,22 +1501,24 @@ function ClassificationGroup({
           <span>
             {t("move.groupShowing", {
               shown: shown.length,
-              total: entries.length,
+              total: count,
             })}
           </span>
-          <Button
-            id={selectorId("move-titles-group-show-more", groupClass)}
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              setVisible((current) => current + CLASSIFICATION_GROUP_WINDOW)
-            }
-          >
-            {t("move.groupShowMore", {
-              count: Math.min(remaining, CLASSIFICATION_GROUP_WINDOW),
-            })}
-          </Button>
+          {remainingReceived > 0 ? (
+            <Button
+              id={selectorId("move-titles-group-show-more", groupClass)}
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setVisible((current) => current + CLASSIFICATION_GROUP_WINDOW)
+              }
+            >
+              {t("move.groupShowMore", {
+                count: Math.min(remainingReceived, CLASSIFICATION_GROUP_WINDOW),
+              })}
+            </Button>
+          ) : null}
         </p>
       ) : null}
     </div>
