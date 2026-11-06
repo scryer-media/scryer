@@ -1900,7 +1900,8 @@ const cs: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "Doporučeno",
   "libraryGraph.notBuilt": "Graf knihovny zatím nebyl vytvořen.",
   "libraryGraph.truncated": "Tento graf pokrývá jen část knihovny.",
-  "discovery.refusal.neighborTargetKeyUnsupported": "Tento titul nelze dále prozkoumat.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "Tento titul nelze dále prozkoumat.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "Tento titul neodpovídá typu médií této knihovny, proto ho zde nelze prozkoumat.",
   "libraryGraph.moreLikeThisEmpty": "Zatím nic podobného.",
@@ -7173,16 +7174,26 @@ const cs: LocaleDictionary = {
     "Přesun souboru pod novým názvem se nezdařil. Soubor i jeho epizody zůstaly beze změny.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Číslování epizod je nejednoznačné",
-  "settings.maintenanceExecutionReason.playbackHold": "Pozdrženo: na mediálním serveru se něco přehrává.",
-  "settings.maintenanceExecutionReason.playbackUnknown": "Pozdrženo: mediálního serveru se nepodařilo zjistit, zda se něco přehrává.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Pozdrženo: mediální server ukazuje přehrání novější než uložená historie sledování.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Pozdrženo: historie mediálního serveru ukazuje přehrání účtem, který historie sledování nezapočítává.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
-  "settings.refMaintFactsWatchedByAnyone": "Zda položku přehrál kdokoli s účtem na připojeném mediálním serveru, ať je propojen se Scryerem, nebo ne; nikoho nejmenuje",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "Kdy položku naposledy přehrál kdokoli s účtem na připojeném mediálním serveru",
-  "settings.refMaintFactsWatchedByAnyoneValue": "True, když ji přehrál jakýkoli účet na povoleném mediálním serveru, bez ohledu na propojení s uživatelem Scryeru; u sérií a seriálů stačí kterákoli odvysílaná epizoda. Neznámé s důvodem audience_not_read, dokud synchronizace za posledních 48 hodin nepřečte všechny účty na všech povolených připojeních, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "Časové razítko RFC3339 posledního přehrání kterýmkoli účtem; chybí s důvodem never_watched, když ji nikdo nepřehrál, a je neznámé s důvodem play_time_missing (episode_play_time_missing u sérií a seriálů), když přehrání nemá zaznamenaný čas, nebo audience_not_read, když nebyly přečteny všechny účty",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "Pozdrženo: na mediálním serveru se něco přehrává.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "Pozdrženo: mediálního serveru se nepodařilo zjistit, zda se něco přehrává.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "Pozdrženo: mediální server ukazuje přehrání novější než uložená historie sledování.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "Pozdrženo: historie mediálního serveru ukazuje přehrání účtem, který historie sledování nezapočítává.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Zda položku přehrál kdokoli s účtem na připojeném mediálním serveru, ať je propojen se Scryerem, nebo ne; nikoho nejmenuje",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "Kdy položku naposledy přehrál kdokoli s účtem na připojeném mediálním serveru",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True, když ji přehrál jakýkoli účet na povoleném mediálním serveru, bez ohledu na propojení s uživatelem Scryeru; u sérií a seriálů stačí kterákoli odvysílaná epizoda. Neznámé s důvodem audience_not_read, dokud synchronizace za posledních 48 hodin nepřečte všechny účty na všech povolených připojeních, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "Časové razítko RFC3339 posledního přehrání kterýmkoli účtem; chybí s důvodem never_watched, když ji nikdo nepřehrál, a je neznámé s důvodem play_time_missing (episode_play_time_missing u sérií a seriálů), když přehrání nemá zaznamenaný čas, nebo audience_not_read, když nebyly přečteny všechny účty",
   "settings.maintenancePreviewFacts": "Fakta, která pravidlo četlo",
   "setup.sourceImportProgress": "Import zdrojů",
   "setup.sourceImportInvalidRequest":

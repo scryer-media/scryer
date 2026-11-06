@@ -52,10 +52,7 @@ import type {
   MetadataCatalogRequestOptions,
 } from "@/lib/hooks/use-global-search";
 import { FACET_REGISTRY } from "@/lib/facets/registry";
-import {
-  sectionLabelForFacet,
-  viewFromFacet,
-} from "@/lib/facets/helpers";
+import { sectionLabelForFacet, viewFromFacet } from "@/lib/facets/helpers";
 import { useSearchContext } from "@/lib/context/search-context";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { globalSearchMetadataResultId, selectorId } from "@/lib/utils/dom-ids";

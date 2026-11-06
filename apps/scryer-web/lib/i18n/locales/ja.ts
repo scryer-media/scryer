@@ -1200,7 +1200,8 @@ const ja: LocaleDictionary = {
   "libraryGraph.notBuilt": "ライブラリグラフはまだ作成されていません。",
   "libraryGraph.truncated":
     "このグラフはライブラリの一部のみを対象としています。",
-  "discovery.refusal.neighborTargetKeyUnsupported": "この作品はこれ以上探索できません。",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "この作品はこれ以上探索できません。",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "この作品はこのライブラリのメディアの種類と一致しないため、ここでは探索できません。",
   "libraryGraph.moreLikeThisEmpty": "似た作品はまだありません。",
@@ -3714,16 +3715,26 @@ const ja: LocaleDictionary = {
     "ファイルを新しい名前へ移動できませんでした。ファイルとエピソードは元のままです。",
   "pendingImports.reason.anime_numbering_ambiguous":
     "エピソード番号があいまいです",
-  "settings.maintenanceExecutionReason.playbackHold": "保留: メディアサーバーで再生中です。",
-  "settings.maintenanceExecutionReason.playbackUnknown": "保留: メディアサーバーに再生状況を問い合わせられませんでした。",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "保留: メディアサーバーに保存済みの視聴履歴より新しい再生があります。",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "保留: メディアサーバーの履歴に、視聴履歴の対象外のアカウントによる再生があります。",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "保留: 実行前にメディアサーバーで視聴履歴を確認できませんでした。",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "保留: 接続されたメディアサーバーに一致する項目がないため、実行前に視聴履歴を確認できませんでした。",
-  "settings.refMaintFactsWatchedByAnyone": "接続済みメディアサーバーにアカウントを持つ誰かが、Scryer とのリンクの有無にかかわらず再生したかどうか。個人は特定しません",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "接続済みメディアサーバーにアカウントを持つ誰かが最後に再生した日時",
-  "settings.refMaintFactsWatchedByAnyoneValue": "有効なメディアサーバー上のいずれかのアカウントが再生した場合に true。アカウントが Scryer ユーザーにリンクされているかは問いません。シーズンと番組では放送済みのいずれかのエピソードが対象です。過去 48 時間以内の同期がすべての有効な接続のすべてのアカウントを読み取るまでは理由 audience_not_read で不明となり、視聴ファクトが不明な場合は通常の理由で不明になります。",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "いずれかのアカウントによる最新の再生の RFC3339 タイムスタンプ。誰も再生していない場合は理由 never_watched で値なし、再生に記録時刻がない場合は理由 play_time_missing(シーズンと番組では episode_play_time_missing)、すべてのアカウントが読み取られていない場合は audience_not_read で不明になります",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "保留: メディアサーバーで再生中です。",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "保留: メディアサーバーに再生状況を問い合わせられませんでした。",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "保留: メディアサーバーに保存済みの視聴履歴より新しい再生があります。",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "保留: メディアサーバーの履歴に、視聴履歴の対象外のアカウントによる再生があります。",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "保留: 実行前にメディアサーバーで視聴履歴を確認できませんでした。",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "保留: 接続されたメディアサーバーに一致する項目がないため、実行前に視聴履歴を確認できませんでした。",
+  "settings.refMaintFactsWatchedByAnyone":
+    "接続済みメディアサーバーにアカウントを持つ誰かが、Scryer とのリンクの有無にかかわらず再生したかどうか。個人は特定しません",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "接続済みメディアサーバーにアカウントを持つ誰かが最後に再生した日時",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "有効なメディアサーバー上のいずれかのアカウントが再生した場合に true。アカウントが Scryer ユーザーにリンクされているかは問いません。シーズンと番組では放送済みのいずれかのエピソードが対象です。過去 48 時間以内の同期がすべての有効な接続のすべてのアカウントを読み取るまでは理由 audience_not_read で不明となり、視聴ファクトが不明な場合は通常の理由で不明になります。",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "いずれかのアカウントによる最新の再生の RFC3339 タイムスタンプ。誰も再生していない場合は理由 never_watched で値なし、再生に記録時刻がない場合は理由 play_time_missing(シーズンと番組では episode_play_time_missing)、すべてのアカウントが読み取られていない場合は audience_not_read で不明になります",
   "settings.maintenancePreviewFacts": "ルールが読み取ったファクト",
   "setup.sourceImportProgress": "ソースをインポート中",
   "setup.sourceImportInvalidRequest":

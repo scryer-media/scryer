@@ -1310,7 +1310,8 @@ const fr: LocaleDictionary = {
     "Le graphe de la bibliothèque n'a pas encore été construit.",
   "libraryGraph.truncated":
     "Ce graphe ne couvre qu'une partie de la bibliothèque.",
-  "discovery.refusal.neighborTargetKeyUnsupported": "Ce titre ne peut pas être exploré davantage.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "Ce titre ne peut pas être exploré davantage.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "Ce titre ne correspond pas au type de média de cette bibliothèque et ne peut pas être exploré ici.",
   "libraryGraph.moreLikeThisEmpty": "Aucun titre similaire pour l'instant.",
@@ -3895,16 +3896,26 @@ const fr: LocaleDictionary = {
     "Le déplacement du fichier vers son nouveau nom a échoué. Le fichier et ses épisodes sont restés inchangés.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numérotation des épisodes ambiguë",
-  "settings.maintenanceExecutionReason.playbackHold": "En attente : une lecture est en cours sur un serveur multimédia.",
-  "settings.maintenanceExecutionReason.playbackUnknown": "En attente : impossible de demander à un serveur multimédia si une lecture est en cours.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "En attente : le serveur multimédia indique une lecture plus récente que l'historique enregistré.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "En attente : l'historique du serveur multimédia indique une lecture par un compte que l'historique de visionnage ne compte pas.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "En attente : le serveur multimédia n'a pas pu confirmer l'historique de visionnage avant d'agir.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "En attente : un serveur multimédia connecté n'a aucun élément correspondant, l'historique de visionnage n'a donc pas pu être vérifié avant d'agir.",
-  "settings.refMaintFactsWatchedByAnyone": "Si quelqu'un ayant un compte sur un serveur multimédia connecté l'a lu, lié à Scryer ou non ; ne nomme personne",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "Quand quelqu'un ayant un compte sur un serveur multimédia connecté l'a lu pour la dernière fois",
-  "settings.refMaintFactsWatchedByAnyoneValue": "True lorsqu'un compte quelconque d'un serveur multimédia activé l'a lu, que ce compte soit lié ou non à un utilisateur Scryer ; pour les saisons et les séries, tout épisode diffusé compte. Inconnu avec le motif audience_not_read tant qu'une synchronisation des dernières 48 heures n'a pas lu tous les comptes de toutes les connexions activées, et avec les motifs habituels chaque fois que les faits de visionnage sont inconnus.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "Horodatage RFC3339 de la lecture la plus récente par un compte quelconque ; absent avec le motif never_watched lorsque personne ne l'a lu, et inconnu avec le motif play_time_missing (episode_play_time_missing pour les saisons et les séries) lorsqu'une lecture n'a pas d'heure enregistrée, ou audience_not_read lorsque tous les comptes n'ont pas été lus",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "En attente : une lecture est en cours sur un serveur multimédia.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "En attente : impossible de demander à un serveur multimédia si une lecture est en cours.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "En attente : le serveur multimédia indique une lecture plus récente que l'historique enregistré.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "En attente : l'historique du serveur multimédia indique une lecture par un compte que l'historique de visionnage ne compte pas.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "En attente : le serveur multimédia n'a pas pu confirmer l'historique de visionnage avant d'agir.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "En attente : un serveur multimédia connecté n'a aucun élément correspondant, l'historique de visionnage n'a donc pas pu être vérifié avant d'agir.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Si quelqu'un ayant un compte sur un serveur multimédia connecté l'a lu, lié à Scryer ou non ; ne nomme personne",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "Quand quelqu'un ayant un compte sur un serveur multimédia connecté l'a lu pour la dernière fois",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True lorsqu'un compte quelconque d'un serveur multimédia activé l'a lu, que ce compte soit lié ou non à un utilisateur Scryer ; pour les saisons et les séries, tout épisode diffusé compte. Inconnu avec le motif audience_not_read tant qu'une synchronisation des dernières 48 heures n'a pas lu tous les comptes de toutes les connexions activées, et avec les motifs habituels chaque fois que les faits de visionnage sont inconnus.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "Horodatage RFC3339 de la lecture la plus récente par un compte quelconque ; absent avec le motif never_watched lorsque personne ne l'a lu, et inconnu avec le motif play_time_missing (episode_play_time_missing pour les saisons et les séries) lorsqu'une lecture n'a pas d'heure enregistrée, ou audience_not_read lorsque tous les comptes n'ont pas été lus",
   "settings.maintenancePreviewFacts": "Faits lus par la règle",
   "setup.sourceImportProgress": "Importation des sources",
   "setup.sourceImportInvalidRequest":

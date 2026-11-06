@@ -18,7 +18,11 @@ import {
   settingsAcquisitionWalkIntensityOptionId,
 } from "@/lib/utils/dom-ids";
 
-const WALK_INTENSITIES: AcquisitionWalkIntensity[] = ["QUIET", "NORMAL", "EAGER"];
+const WALK_INTENSITIES: AcquisitionWalkIntensity[] = [
+  "QUIET",
+  "NORMAL",
+  "EAGER",
+];
 
 export type AcquisitionSettings = {
   enabled: boolean;

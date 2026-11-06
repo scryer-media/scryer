@@ -1580,7 +1580,8 @@ const nl: LocaleDictionary = {
   "libraryGraph.notBuilt": "De bibliotheekgraaf is nog niet opgebouwd.",
   "libraryGraph.truncated":
     "Deze graaf omvat maar een deel van de bibliotheek.",
-  "discovery.refusal.neighborTargetKeyUnsupported": "Deze titel kan niet verder worden verkend.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "Deze titel kan niet verder worden verkend.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "Deze titel past niet bij het mediatype van deze bibliotheek en kan hier niet worden verkend.",
   "libraryGraph.moreLikeThisEmpty": "Nog niets vergelijkbaars.",
@@ -4506,16 +4507,26 @@ const nl: LocaleDictionary = {
     "Het verplaatsen van het bestand naar de nieuwe naam is mislukt. Het bestand en de afleveringen zijn ongewijzigd gebleven.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Afleveringsnummering is dubbelzinnig",
-  "settings.maintenanceExecutionReason.playbackHold": "Aangehouden: er wordt iets afgespeeld op een mediaserver.",
-  "settings.maintenanceExecutionReason.playbackUnknown": "Aangehouden: een mediaserver kon niet worden gevraagd of er iets wordt afgespeeld.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "Aangehouden: de mediaserver toont een weergave die nieuwer is dan de opgeslagen kijkgeschiedenis.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "Aangehouden: de geschiedenis van de mediaserver toont een weergave door een account dat de kijkgeschiedenis niet meetelt.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "Aangehouden: de mediaserver kon de kijkgeschiedenis niet bevestigen voordat er werd gehandeld.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "Aangehouden: een verbonden mediaserver heeft geen overeenkomend item, dus de kijkgeschiedenis kon niet worden gecontroleerd voordat er werd gehandeld.",
-  "settings.refMaintFactsWatchedByAnyone": "Of iemand met een account op een verbonden mediaserver het heeft afgespeeld, gekoppeld aan Scryer of niet; noemt niemand",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "Wanneer iemand met een account op een verbonden mediaserver het voor het laatst heeft afgespeeld",
-  "settings.refMaintFactsWatchedByAnyoneValue": "True wanneer een willekeurig account op een ingeschakelde mediaserver het heeft afgespeeld, ongeacht of het account aan een Scryer-gebruiker is gekoppeld; bij seizoenen en series telt elke uitgezonden aflevering. Onbekend met reden audience_not_read totdat een synchronisatie in de afgelopen 48 uur elk account op elke ingeschakelde verbinding heeft gelezen, en met de gebruikelijke redenen wanneer kijkfeiten onbekend zijn.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "RFC3339-tijdstempel van de meest recente weergave door een willekeurig account; afwezig met reden never_watched wanneer niemand het heeft afgespeeld, en onbekend met reden play_time_missing (episode_play_time_missing bij seizoenen en series) wanneer een weergave geen vastgelegde tijd heeft, of audience_not_read wanneer niet alle accounts zijn gelezen",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "Aangehouden: er wordt iets afgespeeld op een mediaserver.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "Aangehouden: een mediaserver kon niet worden gevraagd of er iets wordt afgespeeld.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "Aangehouden: de mediaserver toont een weergave die nieuwer is dan de opgeslagen kijkgeschiedenis.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "Aangehouden: de geschiedenis van de mediaserver toont een weergave door een account dat de kijkgeschiedenis niet meetelt.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "Aangehouden: de mediaserver kon de kijkgeschiedenis niet bevestigen voordat er werd gehandeld.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "Aangehouden: een verbonden mediaserver heeft geen overeenkomend item, dus de kijkgeschiedenis kon niet worden gecontroleerd voordat er werd gehandeld.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Of iemand met een account op een verbonden mediaserver het heeft afgespeeld, gekoppeld aan Scryer of niet; noemt niemand",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "Wanneer iemand met een account op een verbonden mediaserver het voor het laatst heeft afgespeeld",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True wanneer een willekeurig account op een ingeschakelde mediaserver het heeft afgespeeld, ongeacht of het account aan een Scryer-gebruiker is gekoppeld; bij seizoenen en series telt elke uitgezonden aflevering. Onbekend met reden audience_not_read totdat een synchronisatie in de afgelopen 48 uur elk account op elke ingeschakelde verbinding heeft gelezen, en met de gebruikelijke redenen wanneer kijkfeiten onbekend zijn.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "RFC3339-tijdstempel van de meest recente weergave door een willekeurig account; afwezig met reden never_watched wanneer niemand het heeft afgespeeld, en onbekend met reden play_time_missing (episode_play_time_missing bij seizoenen en series) wanneer een weergave geen vastgelegde tijd heeft, of audience_not_read wanneer niet alle accounts zijn gelezen",
   "settings.maintenancePreviewFacts": "Feiten die de regel las",
   "setup.sourceImportProgress": "Bronnen importeren",
   "setup.sourceImportInvalidRequest":
