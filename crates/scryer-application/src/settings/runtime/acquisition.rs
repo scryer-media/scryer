@@ -8,6 +8,7 @@ const ACQUISITION_ENABLED_KEY: &str = "acquisition.enabled";
 const ACQUISITION_SAME_TIER_MIN_DELTA_KEY: &str = "acquisition.same_tier_min_delta";
 const ACQUISITION_POLL_INTERVAL_SECONDS_KEY: &str = "acquisition.poll_interval_seconds";
 pub(crate) const ACQUISITION_WALK_INTERVAL_SECONDS_KEY: &str = "acquisition.walk_interval_seconds";
+pub(crate) const ACQUISITION_WALK_INTENSITY_KEY: &str = "acquisition.walk_intensity";
 /// Download-client failure check cadence when nothing is stored.
 pub(crate) const DEFAULT_ACQUISITION_POLL_INTERVAL_SECONDS: i32 = 60;
 /// Catalog walk cadence when nothing is stored.
@@ -22,6 +23,9 @@ pub struct AcquisitionSettings {
     /// How often the catalog is scanned for missing and upgradable scopes and
     /// a batch of titles is walked. Wakes still walk at once.
     pub walk_interval_seconds: i32,
+    /// How much of the machine the walk may take: its share of wall time,
+    /// titles at once and indexer pages per cold scope.
+    pub walk_intensity: crate::acquisition::walk_intensity::AcquisitionWalkIntensity,
     /// Per-cycle evaluation cost ceiling for the convergence cursor — how many scopes may be evaluated per tick, not a rate limiter.
     pub long_tail_backfill_max_scopes_per_cycle: i32,
     /// Dormant slow re-converge backstop: coverage older than
@@ -63,6 +67,7 @@ impl AppUseCase {
                 .await?
                 .unwrap_or(DEFAULT_ACQUISITION_WALK_INTERVAL_SECONDS as i64)
                 as i32,
+            walk_intensity: self.acquisition_walk_intensity().await?,
             long_tail_backfill_max_scopes_per_cycle: self
                 .read_setting_i64_value(
                     ACQUISITION_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE_KEY,
@@ -76,6 +81,20 @@ impl AppUseCase {
                 .await?
                 .unwrap_or(0) as i32,
         })
+    }
+}
+impl AppUseCase {
+    /// The stored walk intensity; a missing or unrecognised row reads as the
+    /// default.
+    pub(crate) async fn acquisition_walk_intensity(
+        &self,
+    ) -> AppResult<crate::acquisition::walk_intensity::AcquisitionWalkIntensity> {
+        Ok(self
+            .read_setting_string_value(ACQUISITION_WALK_INTENSITY_KEY, None)
+            .await?
+            .as_deref()
+            .and_then(crate::acquisition::walk_intensity::AcquisitionWalkIntensity::parse)
+            .unwrap_or_default())
     }
 }
 impl AppUseCase {
@@ -140,6 +159,12 @@ impl AppUseCase {
         )
         .await?;
         self.upsert_system_setting_json(
+            ACQUISITION_WALK_INTENSITY_KEY,
+            &settings.walk_intensity.as_str(),
+            Some(actor.id.clone()),
+        )
+        .await?;
+        self.upsert_system_setting_json(
             ACQUISITION_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE_KEY,
             &settings.long_tail_backfill_max_scopes_per_cycle,
             Some(actor.id.clone()),
@@ -164,6 +189,7 @@ impl AppUseCase {
             ACQUISITION_SAME_TIER_MIN_DELTA_KEY.to_string(),
             ACQUISITION_POLL_INTERVAL_SECONDS_KEY.to_string(),
             ACQUISITION_WALK_INTERVAL_SECONDS_KEY.to_string(),
+            ACQUISITION_WALK_INTENSITY_KEY.to_string(),
             ACQUISITION_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE_KEY.to_string(),
             ACQUISITION_LONG_TAIL_RECONVERGE_DAYS_KEY.to_string(),
         ]);

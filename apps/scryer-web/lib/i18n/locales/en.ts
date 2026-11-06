@@ -5381,6 +5381,12 @@ const en: LocaleDictionary = {
   "settings.acquisitionWalkIntervalSeconds": "Search walk interval (seconds)",
   "settings.acquisitionWalkIntervalSecondsHelp":
     "How often the library is checked for missing and upgradable media and a batch of titles is searched. Adding a title, editing a quality profile and similar changes start a walk right away. A walk never runs more often than the poll interval.",
+  "settings.acquisitionWalkIntensity": "Search walk intensity",
+  "settings.acquisitionWalkIntensityHelp":
+    "How much of the machine the search walk may use. Normal switches to Quiet on its own once more than 10,000 items are missing or below their cutoff, so a large library stays in the background. Eager never switches.",
+  "settings.acquisitionWalkIntensity.QUIET": "Quiet: about a tenth of the time, one title at a time",
+  "settings.acquisitionWalkIntensity.NORMAL": "Normal: about a fifth of the time, two titles at a time",
+  "settings.acquisitionWalkIntensity.EAGER": "Eager: about half the time, four titles at a time",
   "settings.acquisitionMaxScopesPerCycle": "Max items evaluated per cycle",
   "settings.acquisitionMaxScopesPerCycleHelp":
     "Evaluation ceiling for one backfill cycle. Indexer rate limits — not this count — set the actual request rate.",

@@ -1165,6 +1165,10 @@ pub struct AppRuntimeAcquisitionState {
     /// The background walk's target set, kept between walks and patched on
     /// change. See [`crate::acquisition::target_cache`].
     pub(crate) target_cache: Arc<crate::acquisition::target_cache::AcquisitionTargetCache>,
+    /// Indexer pages a cold scope reads per pass at the intensity the latest
+    /// background walk runs at. Only background searches read it; one walk
+    /// runs at a time.
+    pub(crate) walk_cold_pages_per_pass: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl AppRuntimeAcquisitionState {
@@ -2684,6 +2688,10 @@ impl AppRuntimeState {
                 raw_search_budget: Arc::default(),
                 landed_bar_memo: Arc::default(),
                 target_cache: Arc::default(),
+                walk_cold_pages_per_pass: Arc::new(std::sync::atomic::AtomicU32::new(
+                    crate::acquisition::walk_intensity::AcquisitionWalkIntensity::default()
+                        .cold_pages_per_pass(),
+                )),
             },
             imports: AppRuntimeImportState {
                 execution_coordinator: ImportExecutionCoordinator::default(),

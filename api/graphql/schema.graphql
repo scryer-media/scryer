@@ -133,6 +133,10 @@ type AcquisitionSettingsPayload {
 	"""
 	walkIntervalSeconds: Int!
 	"""
+	How much of the machine the walk may take.
+	"""
+	walkIntensity: AcquisitionWalkIntensityValue!
+	"""
 	Maximum long-tail scopes processed per cycle.
 	"""
 	longTailBackfillMaxScopesPerCycle: Int!
@@ -155,6 +159,28 @@ type AcquisitionSettingsPayload {
 	`mediaSettings(scope: MOVIE)`. Removed in the next minor.
 	"""
 	movieAvailabilityDelayDays: Int! @deprecated(reason: "Moved to MediaSettings.movieAvailabilityDelayDays on the Movie facet; returns that value. Removed in the next minor.")
+}
+
+"""
+How much of the machine the background acquisition walk may take.
+"""
+enum AcquisitionWalkIntensityValue {
+	"""
+	About a tenth of the time, one title at a time, one indexer page per
+	long-tail scope.
+	"""
+	QUIET
+	"""
+	About a fifth of the time, two titles at a time, two pages per
+	long-tail scope. Walks as quiet once more than 10,000 scopes are
+	missing or below cutoff.
+	"""
+	NORMAL
+	"""
+	About half the time, four titles at a time, five pages per long-tail
+	scope, whatever the backlog.
+	"""
+	EAGER
 }
 
 """
@@ -33902,6 +33928,11 @@ input UpdateAcquisitionSettingsInput {
 	value.
 	"""
 	walkIntervalSeconds: Int
+	"""
+	How much of the machine the walk may take. Omitted by older clients,
+	which keeps the stored value.
+	"""
+	walkIntensity: AcquisitionWalkIntensityValue
 	"""
 	Maximum long-tail scopes processed per cycle.
 	"""

@@ -5574,6 +5574,10 @@ pub struct IndexerSearchLearningContext {
     /// whole reuse window, which is how an explicit upgrade search stopped
     /// finding a PROPER registered moments earlier.
     pub candidate_reuse_allowed: bool,
+    /// Pages of a paged strategy one background pass reads before it stops
+    /// and leaves the rest for the next pass. `None` reads the search
+    /// client's default depth.
+    pub background_pages_per_pass: Option<u32>,
 }
 
 #[derive(Debug, Clone)]

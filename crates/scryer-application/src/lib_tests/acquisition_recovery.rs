@@ -5745,6 +5745,14 @@ async fn rss_priority_keeps_a_fifth_title_queued_while_four_queries_drain() {
         wanted.clone(),
         indexer.clone(),
     );
+    // Four titles at once is the eager walk's concurrency.
+    app.upsert_system_setting_json(
+        crate::settings::runtime::ACQUISITION_WALK_INTENSITY_KEY,
+        &crate::acquisition::walk_intensity::AcquisitionWalkIntensity::Eager.as_str(),
+        None,
+    )
+    .await
+    .expect("set the walk intensity");
     for number in 1..=5 {
         seed_movie_wanted_for_acquisition(
             &app,
@@ -10950,7 +10958,8 @@ async fn acquisition_cycle_active_anime_scan_does_not_block_due_movie_search() {
         &app,
         &[MediaFacet::Anime],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -11135,7 +11144,8 @@ async fn acquisition_cycle_active_movie_scan_does_not_block_due_series_search() 
         &app,
         &[MediaFacet::Movie],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -11275,7 +11285,8 @@ async fn acquisition_cycle_active_series_scan_defers_due_series_search() {
         &app,
         &[MediaFacet::Series],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -11417,7 +11428,8 @@ async fn acquisition_cycle_retries_standby_candidate_during_unrelated_active_sca
         &app,
         &[MediaFacet::Anime],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -11546,7 +11558,8 @@ async fn acquisition_cycle_keeps_an_old_saved_result_for_an_in_flight_grab() {
         &app,
         &[MediaFacet::Anime],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 

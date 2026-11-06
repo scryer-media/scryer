@@ -307,6 +307,7 @@ fn from_acquisition_settings(
         forced_upgrade_delta_bypass: 0,
         poll_interval_seconds: settings.poll_interval_seconds,
         walk_interval_seconds: settings.walk_interval_seconds,
+        walk_intensity: settings.walk_intensity.into(),
         long_tail_backfill_max_scopes_per_cycle: settings.long_tail_backfill_max_scopes_per_cycle,
         long_tail_reconverge_days: settings.long_tail_reconverge_days,
         // Deprecated: these report the Movie facet values they moved to.

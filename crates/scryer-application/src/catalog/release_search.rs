@@ -1959,6 +1959,8 @@ impl AppUseCase {
                 // exists *now*, and a corpus snapshot persisted before a new
                 // release appeared would hide it for the whole reuse window.
                 candidate_reuse_allowed: background_value.is_some(),
+                background_pages_per_pass: background_value
+                    .map(|value| self.background_pages_per_pass(value)),
             })
         } else {
             None

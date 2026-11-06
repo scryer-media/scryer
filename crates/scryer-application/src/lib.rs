@@ -331,6 +331,7 @@ pub use acquisition::seed_goals::{
 };
 pub use acquisition::targets::AcquisitionDerivationProfile;
 pub use acquisition::target_cache::AcquisitionTargetCacheStats;
+pub use acquisition::walk_intensity::{AUTO_QUIET_TARGET_THRESHOLD, AcquisitionWalkIntensity};
 pub use acquisition::wanted_views::{
     AcquisitionSearchJobView, AcquisitionSearchProgress, AcquisitionSearchRequest,
     WantedConvergenceState, WantedScopeView, WantedViewConvergence,

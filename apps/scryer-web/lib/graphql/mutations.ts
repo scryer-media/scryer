@@ -891,6 +891,7 @@ export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSett
     sameTierMinDelta
     pollIntervalSeconds
     walkIntervalSeconds
+    walkIntensity
     longTailBackfillMaxScopesPerCycle
     longTailReconvergeDays
   }
