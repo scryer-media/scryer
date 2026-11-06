@@ -79,6 +79,8 @@ type PendingImportsContainerProps = {
 };
 
 const PAGE_SIZE = 50;
+/** The server's largest pending-imports page, used when selecting every import. */
+const SELECT_ALL_PAGE_SIZE = 200;
 
 type MetadataSearchResult = {
   tvdbId: string;
@@ -582,13 +584,14 @@ export const PendingImportsContainer = React.memo(
       async (
         status: PendingImportStatus,
         pageOffset: number,
+        pageSize: number = PAGE_SIZE,
       ): Promise<PendingImportConnection> => {
         const { data, error: queryError } = await client
           .query(pendingImportsQuery, {
             facet: pendingImportFacetValueForView(view),
             libraryIds: selectedLibraryIdsToQueryValue(selectedLibraryIds),
             status,
-            limit: PAGE_SIZE,
+            limit: pageSize,
             offset: pageOffset,
           })
           .toPromise();
@@ -684,6 +687,33 @@ export const PendingImportsContainer = React.memo(
         refresh("IGNORED", ignoredOffset),
       ]);
     }, [ignoredOffset, pendingOffset, refresh]);
+
+    const [selectingAll, setSelectingAll] = React.useState(false);
+    const selectAllPending = React.useCallback(async () => {
+      setSelectingAll(true);
+      setPendingError(null);
+      try {
+        const everything = new Map<string, PendingImportItem>();
+        let offset = 0;
+        for (;;) {
+          const page = await fetchPendingImportsPage(
+            "PENDING",
+            offset,
+            SELECT_ALL_PAGE_SIZE,
+          );
+          for (const item of page.items) everything.set(item.id, item);
+          offset += page.items.length;
+          if (page.items.length === 0 || offset >= page.totalCount) break;
+        }
+        setSelectedImports([...everything.values()]);
+      } catch (err) {
+        setPendingError(
+          userFacingGraphQlErrorMessage(err, t("pendingImports.loadFailed"), t),
+        );
+      } finally {
+        setSelectingAll(false);
+      }
+    }, [fetchPendingImportsPage, t]);
 
     React.useEffect(() => {
       void refresh("PENDING", pendingOffset);
@@ -1547,31 +1577,27 @@ export const PendingImportsContainer = React.memo(
                     id="pending-import-conflict-select-page"
                     size="large"
                     checked={
-                      pendingConnection.items.length > 0 &&
-                      pendingConnection.items.every((item) =>
-                        selectedImportIds.includes(item.id),
-                      )
+                      pendingConnection.totalCount > 0 &&
+                      selectedImports.length >= pendingConnection.totalCount
                         ? true
-                        : pendingConnection.items.some((item) =>
-                              selectedImportIds.includes(item.id),
-                            )
+                        : selectedImports.length > 0
                           ? "indeterminate"
                           : false
                     }
                     disabled={
-                      selectionBusy || pendingConnection.items.length === 0
+                      selectionBusy ||
+                      selectingAll ||
+                      pendingConnection.totalCount === 0
                     }
                     onCheckedChange={(checked) => {
-                      setSelectedImports((current) =>
-                        togglePendingImportSelection(
-                          current,
-                          pendingConnection.items,
-                          checked === true,
-                        ),
-                      );
+                      if (checked === true) {
+                        void selectAllPending();
+                      } else {
+                        setSelectedImports([]);
+                      }
                     }}
                   />
-                  {t("pendingImports.selectPage")}
+                  {t("pendingImports.selectAll")}
                 </label>
                 <span>
                   {t("pendingImports.conflict.selected", {

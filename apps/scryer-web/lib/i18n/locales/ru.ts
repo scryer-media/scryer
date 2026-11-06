@@ -1978,7 +1978,7 @@ const ru: LocaleDictionary = {
   "pendingImports.ignore": "Игнорировать",
   "pendingImports.ignoreConfirmTitle": "Игнорировать импорт?",
   "pendingImports.selectItem": "Выбрать {{name}}",
-  "pendingImports.selectPage": "Выбрать импорты на этой странице",
+  "pendingImports.selectAll": "Выбрать все импорты",
   "pendingImports.bulkIgnoreConfirmTitle": "Игнорировать выбранные импорты?",
   "pendingImports.bulkIgnoreConfirmDescription":
     "Переместить выбранные импорты ({{count}}) в игнорируемые?",

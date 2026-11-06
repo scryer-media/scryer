@@ -6614,7 +6614,7 @@ const en: LocaleDictionary = {
   "pendingImports.ignore": "Ignore",
   "pendingImports.ignoreConfirmTitle": "Ignore import?",
   "pendingImports.selectItem": "Select {{name}}",
-  "pendingImports.selectPage": "Select imports on this page",
+  "pendingImports.selectAll": "Select all imports",
   "pendingImports.bulkIgnoreConfirmTitle": "Ignore selected imports?",
   "pendingImports.bulkIgnoreConfirmDescription":
     "Move {{count}} selected imports to Ignored Imports?",
