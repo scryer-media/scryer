@@ -1599,52 +1599,56 @@ export const PendingImportsContainer = React.memo(
                   />
                   {t("pendingImports.selectAll")}
                 </label>
-                <span>
-                  {t("pendingImports.conflict.selected", {
-                    count: selectedImports.length,
-                  })}
-                </span>
-                {canResolveSelection && (
+                {selectedImports.length > 0 && (
                   <>
+                    <span>
+                      {t("pendingImports.conflict.selected", {
+                        count: selectedImports.length,
+                      })}
+                    </span>
+                    {canResolveSelection && (
+                      <>
+                        <Button
+                          id="pending-import-conflict-bulk"
+                          size="sm"
+                          variant="outline"
+                          disabled={selectionBusy}
+                          onClick={() =>
+                            setConflictDialog({
+                              ids: selectedImportIds,
+                              policy: "ADOPT_ALL",
+                            })
+                          }
+                        >
+                          {t("pendingImports.conflict.adoptAll")}
+                        </Button>
+                        <Button
+                          id="pending-import-conflict-keep-one-bulk"
+                          size="sm"
+                          variant="outline"
+                          disabled={selectionBusy}
+                          onClick={() =>
+                            setConflictDialog({
+                              ids: selectedImportIds,
+                              policy: "KEEP_ONE",
+                            })
+                          }
+                        >
+                          {t("pendingImports.conflict.keepOne")}
+                        </Button>
+                      </>
+                    )}
                     <Button
-                      id="pending-import-conflict-bulk"
+                      id="pending-import-ignore-selected"
                       size="sm"
-                      variant="outline"
+                      variant="destructive"
                       disabled={selectionBusy}
-                      onClick={() =>
-                        setConflictDialog({
-                          ids: selectedImportIds,
-                          policy: "ADOPT_ALL",
-                        })
-                      }
+                      onClick={() => setIgnoreTargetItems([...selectedImports])}
                     >
-                      {t("pendingImports.conflict.adoptAll")}
-                    </Button>
-                    <Button
-                      id="pending-import-conflict-keep-one-bulk"
-                      size="sm"
-                      variant="outline"
-                      disabled={selectionBusy}
-                      onClick={() =>
-                        setConflictDialog({
-                          ids: selectedImportIds,
-                          policy: "KEEP_ONE",
-                        })
-                      }
-                    >
-                      {t("pendingImports.conflict.keepOne")}
+                      {t("pendingImports.ignore")}
                     </Button>
                   </>
                 )}
-                <Button
-                  id="pending-import-ignore-selected"
-                  size="sm"
-                  variant="destructive"
-                  disabled={selectionBusy || selectedImports.length === 0}
-                  onClick={() => setIgnoreTargetItems([...selectedImports])}
-                >
-                  {t("pendingImports.ignore")}
-                </Button>
               </div>
             )}
             {conflictTask && (
