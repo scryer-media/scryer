@@ -809,9 +809,30 @@ impl TestContext {
         .await
     }
 
+    /// A context whose SQLite database lives in a file at `database_path`
+    /// instead of memory, so a measurement sees WAL, a multi-connection pool
+    /// and per-connection page caches the way an installed instance does.
+    #[allow(dead_code)]
+    pub async fn new_with_database_path(database_path: &str) -> Self {
+        Self::new_with_database(
+            Arc::new(HttpExternalIdentityVerifier::new()),
+            None,
+            database_path,
+        )
+        .await
+    }
+
     async fn new_with_dependencies(
         external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
         indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
+    ) -> Self {
+        Self::new_with_database(external_identity_verifier, indexer_provider, ":memory:").await
+    }
+
+    async fn new_with_database(
+        external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
+        indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
+        database: &str,
     ) -> Self {
         disable_platform_keystore_for_tests();
         initialize_wasm_runtime_for_tests();
@@ -823,9 +844,9 @@ impl TestContext {
         mount_default_smg_metadata_mocks(&smg_server).await;
 
         // In-memory SQLite with migrations applied
-        let db = SqliteServices::new(":memory:")
+        let db = SqliteServices::new(database)
             .await
-            .expect("failed to create in-memory SQLite");
+            .expect("failed to create test SQLite");
         // General integration fixtures represent an instance that has already
         // made its authentication decision. First-run tests explicitly reopen it.
         sqlx::query("UPDATE settings_values SET value_json = '{\"stage\":\"complete\"}' WHERE id = 'initial-authentication-setup'")
@@ -1158,6 +1179,23 @@ impl TestContext {
     }
 
     pub async fn graphql_json(&self, query: &str, variables: Value, token: Option<&str>) -> Value {
+        self.graphql_json_with(query, variables, token, false).await
+    }
+
+    /// Like [`TestContext::graphql_json`], with the request-scoped dataloaders
+    /// the production handler attaches.
+    #[allow(dead_code)]
+    pub async fn graphql_json_with_request_loaders(&self, query: &str, variables: Value) -> Value {
+        self.graphql_json_with(query, variables, None, true).await
+    }
+
+    async fn graphql_json_with(
+        &self,
+        query: &str,
+        variables: Value,
+        token: Option<&str>,
+        request_loaders: bool,
+    ) -> Value {
         let body = serde_json::to_vec(&json!({ "query": query, "variables": variables }))
             .expect("serialize graphql request");
         let mut request = HttpRequest::builder()
@@ -1175,7 +1213,7 @@ impl TestContext {
             .body(Body::from(body))
             .expect("build graphql request");
         let response = tokio::spawn(async move {
-            build_test_router(app, schema, auth_runtime)
+            build_test_router_with(app, schema, auth_runtime, request_loaders)
                 .oneshot(request)
                 .await
         })
@@ -1602,15 +1640,31 @@ fn build_test_router(
     schema: ApiSchema,
     auth_runtime: AuthRuntimeStateHandle,
 ) -> Router {
+    build_test_router_with(app, schema, auth_runtime, false)
+}
+
+/// `request_loaders` attaches the request-scoped dataloaders the production
+/// GraphQL handler attaches, so resolvers take their batched path.
+fn build_test_router_with(
+    app: AppUseCase,
+    schema: ApiSchema,
+    auth_runtime: AuthRuntimeStateHandle,
+    request_loaders: bool,
+) -> Router {
     Router::new().route(
         "/graphql",
-        post(test_graphql_handler).with_state((app, schema, auth_runtime)),
+        post(test_graphql_handler).with_state((app, schema, auth_runtime, request_loaders)),
     )
 }
 
 /// Minimal GraphQL handler that replicates default-user auth injection.
 async fn test_graphql_handler(
-    State((app, schema, auth_runtime)): State<(AppUseCase, ApiSchema, AuthRuntimeStateHandle)>,
+    State((app, schema, auth_runtime, request_loaders)): State<(
+        AppUseCase,
+        ApiSchema,
+        AuthRuntimeStateHandle,
+        bool,
+    )>,
     headers: HeaderMap,
     req: GraphQLRequest,
 ) -> Response {
@@ -1695,6 +1749,12 @@ async fn test_graphql_handler(
             }
             user.authorization.app = scryer_domain::AppPermissionMask::NONE;
             user.authorization.actor_capabilities = scryer_domain::ActorCapabilityMask::NONE;
+        }
+        if request_loaders {
+            request = request.data(scryer_interface::RequestLoaders::new(
+                app.clone(),
+                user.clone(),
+            ));
         }
         request = request.data(user);
     }
