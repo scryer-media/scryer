@@ -5464,7 +5464,7 @@ export const locationOperationQuery = `query LocationOperation($id: ID!) {
 const LOCATION_TRANSFER_FIELDS = `
   generation revision progressBasisPoints etaSeconds totalCount hasMore
   operation {${LOCATION_OPERATION_FIELDS}}
-  titles { titleId name state filesTotal filesDone bytesTotal copyBytes verificationBytes copying verifying currentFile hasException }
+  titles { titleId name state filesTotal filesDone bytesTotal copyBytes verificationBytes copying verifying recording currentFile hasException }
 `;
 export const locationOperationRetrySelectionQuery = `query LocationOperationRetrySelection($id: ID!) {
   locationOperationRetrySelection(id: $id) {

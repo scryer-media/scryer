@@ -890,6 +890,7 @@ function TitleRow({
     };
   }, [client, expanded, operationId, row.titleId, row.state, showsDetail]);
   const path = row.currentFile ? splitTransferPath(row.currentFile) : null;
+  const recording = row.recording ?? 0;
   return (
     <React.Fragment>
       <TableRow
@@ -936,18 +937,26 @@ function TitleRow({
         </TableCell>
         <TableCell>
           <Badge tone={row.hasException ? "warning" : "neutral"}>
-            {t(
-              checkpointStateLabelKey(
-                row.verifying > 0 ? "VERIFYING" : row.state,
-              ),
-            )}
+            {row.verifying === 0 && recording > 0
+              ? t("move.transferTitleRecording")
+              : t(
+                  checkpointStateLabelKey(
+                    row.verifying > 0 ? "VERIFYING" : row.state,
+                  ),
+                )}
           </Badge>
-          {(row.copying > 0 || row.verifying > 0) && (
+          {(row.copying > 0 || row.verifying > 0 || recording > 0) && (
             <p className="mt-1 text-muted-foreground">
-              {t("move.transferActive", {
-                copying: row.copying,
-                verifying: row.verifying,
-              })}
+              {recording > 0
+                ? t("move.transferActiveRecording", {
+                    copying: row.copying,
+                    verifying: row.verifying,
+                    recording,
+                  })
+                : t("move.transferActive", {
+                    copying: row.copying,
+                    verifying: row.verifying,
+                  })}
             </p>
           )}
         </TableCell>

@@ -2215,6 +2215,12 @@ mod tests {
     struct FakeStore {
         inner: Mutex<FakeStoreState>,
         writer_gate: Option<Arc<tokio::sync::Mutex<()>>>,
+        /// Scheduler turns each verification record gives up before it lands:
+        /// a recorder that is slow relative to an instant copier, measured in
+        /// scheduling steps rather than time.
+        record_yields: usize,
+        /// Verification records written so far.
+        recorded: Arc<AtomicU64>,
     }
 
     #[derive(Default)]
@@ -2551,12 +2557,16 @@ mod tests {
             &self,
             record: &FileVerificationRecord,
         ) -> AppResult<()> {
+            for _ in 0..self.record_yields {
+                tokio::task::yield_now().await;
+            }
             let mut state = self.inner.lock().expect("lock");
             state.verifications.retain(|existing| {
                 existing.operation_id != record.operation_id
                     || existing.destination_path != record.destination_path
             });
             state.verifications.push(record.clone());
+            self.recorded.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -3220,6 +3230,7 @@ mod tests {
                 current_file: None,
                 copying: 0,
                 verifying: 0,
+                recording: 0,
                 detail: None,
             },
         );
@@ -3361,6 +3372,92 @@ mod tests {
         assert_eq!(reconciler.cleaned.lock().unwrap().len(), 2);
     }
 
+    /// Copies and verifies instantly; counts how far file starts ever run
+    /// ahead of the verification records the store has written.
+    struct InstantMover {
+        recorded: Arc<AtomicU64>,
+        started: AtomicU64,
+        max_ahead: AtomicU64,
+    }
+
+    #[async_trait]
+    impl TitleFileMover for InstantMover {
+        async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+            let started = self.started.fetch_add(1, Ordering::SeqCst) + 1;
+            let ahead = started.saturating_sub(self.recorded.load(Ordering::SeqCst));
+            self.max_ahead.fetch_max(ahead, Ordering::SeqCst);
+            request.progress.phase(
+                scryer_domain::ImportTransferPhase::Copying,
+                request.file.size_bytes,
+            );
+            request
+                .progress
+                .phase(scryer_domain::ImportTransferPhase::Verifying, 0);
+            Ok(VerifiedFile {
+                source_path: request.file.source_path.clone(),
+                destination_path: request.file.destination_path.clone(),
+                hashes: None,
+                depth: AppliedVerificationDepth::exact(request.depth),
+                outcome: FileVerificationOutcome::Verified,
+                detail: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_bounds_files_waiting_to_be_recorded_behind_a_slow_recorder() {
+        let mut store = FakeStore::with_operation(operation());
+        store.record_yields = 64;
+        let mover = InstantMover {
+            recorded: store.recorded.clone(),
+            started: AtomicU64::new(0),
+            max_ahead: AtomicU64::new(0),
+        };
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        // Many small titles of many small files: copies land far faster than
+        // one loop can record them.
+        let titles = 24;
+        let files_per_title = 10;
+        let plan = OperationWorkPlan::new(
+            (0..titles)
+                .map(|index| {
+                    planned_title(
+                        &format!("synthetic-fixture-{index:04}"),
+                        index as i64,
+                        files_per_title,
+                    )
+                })
+                .collect(),
+        );
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub);
+        let result = tokio::time::timeout(
+            crate::test_wait::TEST_WAIT_DEADLINE,
+            runner.run("op-1", &plan),
+        )
+        .await
+        .expect("the recorder must keep the run moving")
+        .unwrap();
+
+        assert_eq!(result.state, LocationOperationState::Completed);
+        let total = (titles * files_per_title) as u64;
+        assert_eq!(result.counters.files_processed, total as i64);
+        assert_eq!(store.recorded.load(Ordering::SeqCst), total);
+        assert_eq!(reconciler.cleaned.lock().unwrap().len(), titles);
+        // Every admitted file is either one of the copy slots or one of the
+        // bounded files past its copy; the one being recorded is the last.
+        let bound = (super::pipeline::PIPELINE_POST_COPY_LIMIT
+            + crate::location::transfer::CopyCoordinator::shared().capacity())
+            as u64;
+        let max_ahead = mover.max_ahead.load(Ordering::SeqCst);
+        assert!(
+            max_ahead <= bound,
+            "{max_ahead} files ran ahead of their records; the bound is {bound}"
+        );
+    }
+
     #[tokio::test]
     async fn pipeline_cancel_drains_verifiers_before_returning_and_keeps_sources() {
         let store = FakeStore::with_operation(operation());
@@ -3379,6 +3476,7 @@ mod tests {
                 current_file: None,
                 copying: 0,
                 verifying: 0,
+                recording: 0,
                 detail: None,
             },
         );

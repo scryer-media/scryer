@@ -4,6 +4,17 @@ use crate::location::model::LocationExecutionMode;
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use std::sync::atomic::AtomicBool;
 
+/// How many admitted files may be past their copy — verifying, or verified and
+/// waiting for this loop to record them — before no new copy is admitted.
+///
+/// A copy gives up its slot the moment verification starts, and one loop
+/// records every result and finishes each title. With many small files copies
+/// land far faster than that loop records them, so without a bound the pile
+/// past the copy grows with the selection. With one, copying pauses until
+/// recording catches up: at most this many plus the copy slots are ever in
+/// flight.
+pub(super) const PIPELINE_POST_COPY_LIMIT: usize = 16;
+
 /// What one file's transfer future hands back to the driver.
 enum PipelineFileOutcome {
     Verified(VerifiedFile),
@@ -53,7 +64,9 @@ async fn drive_files<'a>(
 
 impl LocationOperationRunner<'_> {
     /// Bounded copy admission feeds verification futures. A file's transition to
-    /// read-back admits the next copy; verification has no semaphore. All
+    /// read-back admits the next copy; verification has no semaphore of its
+    /// own, but no copy is admitted while `PIPELINE_POST_COPY_LIMIT` files are
+    /// past their copy and not yet recorded. All
     /// futures are drained before a stop or repository error leaves this scope.
     pub(super) async fn run_pipeline(
         &self,
@@ -134,6 +147,7 @@ impl LocationOperationRunner<'_> {
                     && title_index < plan.titles.len()
                     && copying.len()
                         < crate::location::transfer::CopyCoordinator::shared().capacity()
+                    && pending.saturating_sub(copying.len()) < PIPELINE_POST_COPY_LIMIT
                 {
                     let title = &plan.titles[title_index];
                     if progress.is_settled(&title.title_id) || failed.contains_key(&title.title_id)
@@ -363,6 +377,15 @@ impl LocationOperationRunner<'_> {
                                         title,
                                         file,
                                         abandonment,
+                                    );
+                                } else {
+                                    // Verification is over; the result now
+                                    // waits for the scheduler to record it.
+                                    hub.file_recording(
+                                        &operation.id,
+                                        &title.title_id,
+                                        &file.stored_destination(),
+                                        file.size_bytes,
                                     );
                                 }
                                 signal.store(true, Ordering::Release);

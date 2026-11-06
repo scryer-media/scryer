@@ -1601,6 +1601,7 @@ mod tests {
             current_file: None,
             copying: 0,
             verifying: 0,
+            recording: 0,
             detail: None,
         };
         let mut seeds = Vec::new();

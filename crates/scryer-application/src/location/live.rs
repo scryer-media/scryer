@@ -23,12 +23,16 @@ pub struct TransferTitle {
     pub current_file: Option<String>,
     pub copying: usize,
     pub verifying: usize,
+    /// Files whose verification has finished and that wait for the runner to
+    /// record the result. Rows written before this field existed read as 0.
+    #[serde(default)]
+    pub recording: usize,
     pub detail: Option<String>,
 }
 
 impl TransferTitle {
     pub fn rank(&self) -> i64 {
-        if self.verifying > 0 {
+        if self.verifying > 0 || self.recording > 0 {
             return 0;
         }
         if self.copying > 0 {
@@ -142,6 +146,9 @@ pub struct FileTelemetry {
     /// How long the transfer sleeps between storage probes while waiting.
     pub storage_probe_interval: Option<Duration>,
     pub comparing: bool,
+    /// Verified, waiting for the runner to record the result: no longer
+    /// verifying, not yet done.
+    pub recording: bool,
     pub compared: u64,
     pub comparison_total: u64,
     pub comparison_credit: u64,
@@ -261,8 +268,9 @@ impl TransferHub {
             .files
             .entry((title.into(), path.into()))
             .or_default();
-        let changed = !file.comparing || file.done;
+        let changed = !file.comparing || file.done || file.recording;
         file.comparing = true;
+        file.recording = false;
         file.done = false;
         file.size = size;
         file.phase = Some(scryer_domain::ImportTransferPhase::Verifying);
@@ -305,6 +313,7 @@ impl TransferHub {
         file.waiting_for_storage = true;
         file.storage_probe_interval = None;
         file.comparing = false;
+        file.recording = false;
         file.done = false;
         file.size = size;
         file.phase = Some(scryer_domain::ImportTransferPhase::Waiting);
@@ -382,9 +391,13 @@ impl TransferHub {
             .abandoned_work
             .remove(&(title.to_owned(), path.to_owned()));
         file.done = false;
-        let phase_changed = file.phase != Some(phase) || file.comparing || file.waiting_for_storage;
+        let phase_changed = file.phase != Some(phase)
+            || file.comparing
+            || file.waiting_for_storage
+            || file.recording;
         file.waiting_for_storage = false;
         file.comparing = false;
+        file.recording = false;
         file.size = size;
         file.phase = Some(phase);
         let bytes = bytes.min(size);
@@ -418,6 +431,30 @@ impl TransferHub {
         }
     }
 
+    /// The file's transfer future has handed back a verified copy; the runner
+    /// has not recorded the result yet. Shown apart from verification, which
+    /// is over for this file.
+    pub fn file_recording(&self, operation: &str, title: &str, path: &str, size: u64) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let file = state
+            .operations
+            .entry(operation.to_owned())
+            .or_default()
+            .files
+            .entry((title.to_owned(), path.to_owned()))
+            .or_default();
+        if file.done || file.recording {
+            return;
+        }
+        file.size = size;
+        file.copied = size;
+        file.comparing = false;
+        file.waiting_for_storage = false;
+        file.recording = true;
+        drop(state);
+        self.changed();
+    }
+
     pub fn file_done(&self, operation: &str, title: &str, path: &str, size: u64) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let file = state
@@ -431,6 +468,7 @@ impl TransferHub {
         file.copied = size;
         file.verified = size;
         file.done = true;
+        file.recording = false;
         drop(state);
         self.changed();
     }
@@ -445,6 +483,7 @@ impl TransferHub {
         ) {
             row.copying = 0;
             row.verifying = 0;
+            row.recording = 0;
             row.current_file = None;
             return;
         }
@@ -460,12 +499,14 @@ impl TransferHub {
         let mut verified = 0u64;
         row.copying = 0;
         row.verifying = 0;
+        row.recording = 0;
         row.current_file = None;
         for ((_, path), file) in files {
             copied = copied.saturating_add(file.copied);
             verified = verified.saturating_add(file.verified);
             if !file.done {
                 match file.phase {
+                    _ if file.recording => row.recording += 1,
                     Some(scryer_domain::ImportTransferPhase::Verifying) => row.verifying += 1,
                     Some(scryer_domain::ImportTransferPhase::Copying) => row.copying += 1,
                     _ => {}
@@ -670,6 +711,7 @@ impl crate::AppUseCase {
                 current_file: None,
                 copying: 0,
                 verifying: 0,
+                recording: 0,
                 detail: None,
             });
         }
@@ -708,6 +750,7 @@ impl crate::AppUseCase {
                 current_file: None,
                 copying: 0,
                 verifying: 0,
+                recording: 0,
                 detail: None,
             });
         }
@@ -1155,6 +1198,7 @@ mod tests {
             current_file: None,
             copying: 0,
             verifying: 0,
+            recording: 0,
             detail: Some("first file failed".into()),
         };
         hub.overlay("op", &mut row);
@@ -1180,9 +1224,18 @@ mod tests {
         );
         hub.overlay("op", &mut row);
         assert_eq!((row.copying, row.verifying, row.rank()), (0, 1, 0));
+        // Verified but not yet recorded: no longer counted as verifying.
+        hub.file_recording("op", "title", "waiting", 100);
+        hub.overlay("op", &mut row);
+        assert_eq!(
+            (row.copying, row.verifying, row.recording, row.rank()),
+            (0, 0, 1, 0)
+        );
+        assert_eq!(row.current_file.as_deref(), Some("waiting"));
         hub.file_done("op", "title", "waiting", 100);
         hub.overlay("op", &mut row);
-        assert_eq!((row.copying, row.verifying, row.rank()), (0, 0, 2));
+        assert_eq!((row.copying, row.verifying, row.recording), (0, 0, 0));
+        assert_eq!(row.rank(), 2);
         assert!(row.current_file.is_none());
         assert!(row.detail.is_some());
     }
@@ -1202,6 +1255,7 @@ mod tests {
             current_file: None,
             copying: 0,
             verifying: 0,
+            recording: 0,
             detail: None,
         };
         let mut mixed = make(TitleCheckpointState::Moving);

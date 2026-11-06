@@ -10616,6 +10616,7 @@ const en: LocaleDictionary = {
   "move.transferFileState.MOVING": "Moving",
   "move.transferFileState.VERIFYING": "Verifying",
   "move.transferFileState.COMPARING": "Comparing files",
+  "move.transferFileState.RECORDING": "Recording result",
   "move.transferFileState.DONE": "Done",
   "move.transferFileState.FAILED": "Error",
   "move.transferFileState.BLOCKED": "Blocked",
@@ -10636,6 +10637,9 @@ const en: LocaleDictionary = {
   "move.transferNext": "Next",
   "move.transferException": "Show exception for {{title}}",
   "move.transferActive": "{{copying}} moving · {{verifying}} verifying",
+  "move.transferActiveRecording":
+    "{{copying}} moving · {{verifying}} verifying · {{recording}} recording",
+  "move.transferTitleRecording": "Recording results",
   "move.transferDetailPending": "No further details available.",
   "move.checkpointClass": "Classified as",
   "move.checkpointFrom": "From",
