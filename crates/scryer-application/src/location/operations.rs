@@ -1015,10 +1015,7 @@ impl AppUseCase {
                 LocationJobRunActor::Resumed(operation.initiated_by_user_id.clone()),
             )
             .await?;
-        self.services
-            .library
-            .location_operations
-            .set_location_operation_job_run(operation_id, &job_run.id)
+        self.point_location_operation_at_job_run(operation_id, &job_run)
             .await?;
 
         Ok(LocationResumeDecision::Resume(Box::new(plan)))
@@ -1414,6 +1411,48 @@ impl AppUseCase {
     // `AppUseCase::start_application_upgrade_job`). Everything Activity needs —
     // the tracker entry, the started/completed/failed domain events — is
     // written here rather than by the jobs engine, which never sees these runs.
+
+    /// Point the operation at the run its new execution reports through, and
+    /// close the run that one replaces.
+    ///
+    /// Boot reconciliation spares an interrupted operation's run so it is not
+    /// failed under a move that is about to resume. The resume then opens a
+    /// fresh run, so this is the only place left that can settle the old one;
+    /// without it the old row would read as running forever. A replaced run
+    /// that something already settled is left as it is.
+    pub(super) async fn point_location_operation_at_job_run(
+        &self,
+        operation_id: &str,
+        job_run: &crate::JobRunRecord,
+    ) -> AppResult<()> {
+        let replaced = self
+            .location_operation(operation_id)
+            .await?
+            .and_then(|operation| {
+                operation
+                    .job_run_id
+                    .filter(|run_id| run_id != &job_run.id)
+                    .map(|run_id| (run_id, operation.counters))
+            });
+        self.services
+            .library
+            .location_operations
+            .set_location_operation_job_run(operation_id, &job_run.id)
+            .await?;
+        if let Some((run_id, counters)) = replaced
+            && let Some(run) = self.location_operation_job_run(&run_id).await
+        {
+            self.close_location_operation_job_run(
+                &run,
+                crate::JobRunStatus::Failed,
+                "Interrupted before it finished; the operation continues in a new run.".to_string(),
+                Some("interrupted; resumed in a new run".to_string()),
+                Some(&counters),
+            )
+            .await;
+        }
+        Ok(())
+    }
 
     /// Open the run one execution of a location operation reports through.
     pub(super) async fn open_location_operation_job_run(

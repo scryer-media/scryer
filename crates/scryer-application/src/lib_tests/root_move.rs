@@ -2842,12 +2842,119 @@ async fn a_resumed_operation_reports_through_a_fresh_activity_run() {
 
     let closed = fixture.settled_job_run(&second_run_id).await;
     assert_eq!(closed.status, crate::JobRunStatus::Completed);
+    let earlier = fixture.job_run(&first_run_id).await;
     assert_eq!(
-        fixture.job_run(&first_run_id).await.status,
-        crate::JobRunStatus::Failed,
+        (earlier.status, earlier.error_text, earlier.completed_at),
+        (
+            crashed_run.status,
+            crashed_run.error_text.clone(),
+            crashed_run.completed_at
+        ),
         "the earlier attempt's row is left exactly as it settled"
     );
     assert_eq!(fixture.recorded_job_runs().await.len(), 2);
+}
+
+/// A killed process leaves its run open, and boot reconciliation spares it for
+/// the resume. The resume opens a fresh run, so it must settle the one it
+/// replaces; otherwise that row reads as running forever.
+#[tokio::test]
+async fn a_resume_closes_the_run_a_killed_process_left_open() {
+    let fixture = RootMoveFixture::new().await;
+    let first = fixture
+        .seed_title(
+            "Killed First",
+            2005,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Killed First (2005)",
+            &[("Killed.First.2005.mkv", 512)],
+        )
+        .await;
+    let second = fixture
+        .seed_title(
+            "Killed Second",
+            2006,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Killed Second (2006)",
+            &[("Killed.Second.2006.mkv", 512)],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&first.id, &second.id]).await;
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(2, 1));
+    let accepted = fixture
+        .app
+        .start_root_move(
+            &fixture.user,
+            StartRootMoveRequest {
+                title_ids: vec![first.id.clone(), second.id.clone()],
+                destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                confirmation: PlanConfirmationRequest {
+                    fingerprint: preview.plan.fingerprint.clone(),
+                    typed_confirmation: None,
+                },
+            },
+        )
+        .await
+        .expect("start root move");
+    let operation_id = accepted.operation.id.clone();
+    let first_run_id = accepted
+        .operation
+        .job_run_id
+        .clone()
+        .expect("an accepted operation names its Activity run");
+    fixture.settled_job_run(&first_run_id).await;
+
+    // A killed process never gets to close its run: put the row back the way
+    // it would be left.
+    {
+        let mut runs = fixture.job_runs.runs.lock().await;
+        let run = runs
+            .iter_mut()
+            .find(|run| run.id == first_run_id)
+            .expect("first run");
+        run.status = crate::JobRunStatus::Running;
+        run.completed_at = None;
+        run.error_text = None;
+        run.summary_text = None;
+    }
+
+    fixture
+        .app
+        .resume_location_operation(&operation_id)
+        .await
+        .expect("resume")
+        .plan()
+        .expect("an interrupted root move is resumable");
+
+    let second_run_id = fixture
+        .app
+        .location_operation(&operation_id)
+        .await
+        .expect("read operation")
+        .expect("operation row")
+        .job_run_id
+        .expect("a resumed operation names a run");
+    assert_ne!(second_run_id, first_run_id);
+
+    let replaced = fixture.job_run(&first_run_id).await;
+    assert_eq!(replaced.status, crate::JobRunStatus::Failed);
+    assert!(
+        replaced.completed_at.is_some(),
+        "the replaced run is settled"
+    );
+    assert!(
+        replaced.error_text.is_some(),
+        "the replaced run says why it stopped"
+    );
+    assert_eq!(
+        fixture.job_run(&second_run_id).await.status,
+        crate::JobRunStatus::Running
+    );
 }
 
 /// T036: the generic job trigger still refuses to start a location operation.

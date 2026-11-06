@@ -281,10 +281,7 @@ impl AppUseCase {
                 super::super::operations::LocationJobRunActor::Resumed(None),
             )
             .await?;
-        self.services
-            .library
-            .location_operations
-            .set_location_operation_job_run(operation_id, &job.id)
+        self.point_location_operation_at_job_run(operation_id, &job)
             .await?;
         let observer = super::super::operations::LocationJobRunProgress {
             app: self.clone(),
