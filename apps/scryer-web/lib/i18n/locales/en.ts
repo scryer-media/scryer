@@ -10602,6 +10602,8 @@ const en: LocaleDictionary = {
   "move.checkpointsShowAll": "Show all {{count}} titles",
   "move.checkpointsShowLess": "Show fewer titles",
   "move.transferShowMore": "Show more",
+  "move.groupShowing": "Showing {{shown}} of {{total}}",
+  "move.groupShowMore": "Show {{count}} more",
   "move.transferFilesForTitle": "Show files for {{title}}",
   "move.transferFilePath": "File",
   "move.transferCopyProgress": "Placement",
