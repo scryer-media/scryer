@@ -177,13 +177,17 @@ impl AppUseCase {
         self.apply_runtime_plugin_upsert(next_installation, runtime_plugin)
     }
 
+    /// Returns how long it waited for the plugin settings lock, which a
+    /// concurrent provider reload holds while it loads every enabled plugin.
     async fn publish_runtime_plugin(
         &self,
         previous: Option<&PluginInstallation>,
         installation: &PluginInstallation,
         mut plugin: RuntimePluginLoad,
-    ) -> AppResult<()> {
+    ) -> AppResult<Duration> {
+        let lock_requested_at = std::time::Instant::now();
         let _settings_guard = self.runtime.plugins.settings_write_lock.lock().await;
+        let lock_wait = lock_requested_at.elapsed();
         let current = self
             .services
             .customization
@@ -202,10 +206,11 @@ impl AppUseCase {
             .runtime_plugin_settings(&current, &plugin.descriptor)
             .await?;
         if let Some(previous) = previous {
-            self.apply_runtime_plugin_replace(previous, &current, plugin)
+            self.apply_runtime_plugin_replace(previous, &current, plugin)?;
         } else {
-            self.apply_runtime_plugin_upsert(&current, plugin)
+            self.apply_runtime_plugin_upsert(&current, plugin)?;
         }
+        Ok(lock_wait)
     }
 }
 impl AppUseCase {
