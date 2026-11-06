@@ -1325,11 +1325,21 @@ pub(crate) fn nzb_header_passwords(
     if let Some(headers) = headers.and_then(serde_json::Value::as_object) {
         for (name, value) in headers {
             if name.eq_ignore_ascii_case("x-dnzb-password") {
-                if let Some(value) = value.as_str() {
+                if let Some(value) = value
+                    .as_str()
+                    .filter(|value| !scryer_application::is_password_protection_marker(value))
+                {
                     passwords.push(value);
                 }
                 if let Some(values) = value.as_array() {
-                    passwords.extend(values.iter().filter_map(serde_json::Value::as_str));
+                    passwords.extend(
+                        values
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .filter(|value| {
+                                !scryer_application::is_password_protection_marker(value)
+                            }),
+                    );
                 }
             }
         }
@@ -1485,8 +1495,25 @@ mod tests {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
+    #[test]
+    fn nzb_header_passwords_drop_protection_markers_and_keep_literal_values() {
+        let headers = serde_json::json!({
+            "X-DNZB-Password": ["-1", "1", " synthetic "],
+            "x-dnzb-password": "true",
+            "X-DNZB-Name": "quiet.harbor"
+        });
+        let candidates = nzb_header_passwords(Some(&headers));
+        assert_eq!(
+            candidates.iter().map(String::as_str).collect::<Vec<_>>(),
+            [" synthetic "]
+        );
+
+        let marker_only = serde_json::json!({ "X-DNZB-Password": "-1" });
+        assert!(nzb_header_passwords(Some(&marker_only)).is_empty());
+    }
+
     #[tokio::test]
-    async fn final_nzb_headers_preserve_repeated_literal_passwords_and_body() {
+    async fn final_nzb_headers_keep_literal_passwords_and_drop_protection_markers() {
         let server = MockServer::start().await;
         let body = b"<?xml version=\"1.0\"?>\r\n<nzb><head><meta type=\"password\">body-only</meta></head></nzb>\r\n";
         Mock::given(method("GET"))
@@ -1505,7 +1532,8 @@ mod tests {
                     .append_header("X-DNZB-Password", "1")
                     .append_header("x-dnzb-password", "true")
                     .append_header("X-Dnzb-Password", "synthetic-雪,!".as_bytes())
-                    .append_header("x-dnzb-password", "1")
+                    .append_header("x-dnzb-password", "-1")
+                    .append_header("x-dnzb-password", "synthetic-雪,!".as_bytes())
                     .set_body_bytes(body),
             )
             .mount(&server)
@@ -1558,7 +1586,7 @@ mod tests {
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            ["1", "true", "synthetic-雪,!"]
+            ["synthetic-雪,!"]
         );
         assert!(!format!("{artifact:?}").contains("synthetic-雪"));
         assert!(!format!("{artifact:?}").contains("body-only"));

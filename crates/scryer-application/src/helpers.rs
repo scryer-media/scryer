@@ -198,6 +198,21 @@ pub fn normalize_release_password(raw: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Whether an indexer-supplied password value is a protection flag rather
+/// than a password. Indexers mix the two in one field: `1`, `true`, `yes`,
+/// `protected` and `passworded` mean "an archive password exists", `0`,
+/// `false` and `no` mean it does not, and some report `-1` for a protected
+/// release. None of them is usable as a password, so sending one to a
+/// download client only burns an extraction attempt. Applies to values that
+/// came from an indexer (search attributes, grab headers, grab payloads);
+/// passwords read from a release name stay literal.
+pub fn is_password_protection_marker(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "protected" | "passworded" | "0" | "false" | "no" | "-1"
+    )
+}
+
 pub(crate) fn is_obfuscated_release_name(parsed: &ParsedReleaseMetadata) -> bool {
     if parsed
         .release_group

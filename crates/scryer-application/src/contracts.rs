@@ -1535,7 +1535,11 @@ impl DownloadClientAddRequest {
         {
             candidates.extend(password_candidates.iter().map(String::as_str));
         }
-        if let Some(password) = self.source_password.as_deref() {
+        if let Some(password) = self
+            .source_password
+            .as_deref()
+            .filter(|password| !crate::helpers::is_password_protection_marker(password))
+        {
             candidates.push(password);
         }
         for name in [self.source_title.as_deref(), self.release_title.as_deref()]
