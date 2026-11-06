@@ -653,6 +653,16 @@ fn title_name_candidate_from_row(
 
 #[async_trait]
 impl TitleRepository for TitleStore {
+    async fn discovery_affinity_revision(&self) -> AppResult<Option<String>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT revision FROM discovery_affinity_revision WHERE id = 1",
+            &[],
+        )
+        .await?;
+        row.map(|row| row.text("revision")).transpose()
+    }
+
     async fn list_discovery_affinity_titles(
         &self,
         library_ids: &[String],
@@ -6650,6 +6660,8 @@ mod catalog_presence_tests;
 #[cfg(test)]
 mod catalog_order_tests;
 
+#[cfg(test)]
+mod affinity_revision_tests;
 #[cfg(test)]
 mod owned_probe_tests;
 

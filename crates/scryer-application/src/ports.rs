@@ -1673,6 +1673,15 @@ pub struct DiscoveryAffinityTitle {
 #[async_trait]
 pub trait TitleRepository: Send + Sync {
     /// SQL implementations join the submitted generation without hydrating titles.
+    /// A token the datastore replaces in the same transaction as any write
+    /// the affinity read depends on: a title added, removed, moved to another
+    /// library or facet, a change to its metadata tags or their sources, or a
+    /// change to a run's submitted subjects. `None` when the store keeps no
+    /// such token, which leaves affinity profiles uncached.
+    async fn discovery_affinity_revision(&self) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+
     async fn list_discovery_affinity_titles(
         &self,
         library_ids: &[String],

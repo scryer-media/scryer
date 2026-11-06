@@ -931,6 +931,8 @@ mod tests {
     }
 
     #[cfg(feature = "runtime-backups")]
+    mod affinity_revision_restore;
+    #[cfg(feature = "runtime-backups")]
     mod hydration_derived_reset;
     #[cfg(feature = "runtime-backups")]
     mod search_rebuild;

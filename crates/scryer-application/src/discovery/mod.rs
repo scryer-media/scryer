@@ -237,6 +237,7 @@ struct DiscoverySubjectParts {
     canonical: CanonicalSubject,
 }
 
+mod affinity_cache;
 mod catalog;
 mod context;
 mod home;
@@ -259,6 +260,7 @@ pub(crate) use section::DiscoverySectionCache;
 use section::*;
 use watchlist::*;
 
+pub(crate) use affinity_cache::DiscoveryAffinityCache;
 pub(crate) use catalog::discovery_library_growth_warrants_snapshot;
 pub use catalog::{
     CatalogOwnershipDecisions, catalog_owned_probe_for_targets, catalog_ownership_decisions,
@@ -1562,12 +1564,58 @@ impl AppUseCase {
         genre_rail_corroboration: bool,
     ) -> AppResult<DiscoveryLibraryAffinityProfile> {
         let library_ids = sorted_discovery_library_ids(allowed_library_ids);
+        let Some(revision) = self
+            .services
+            .catalog
+            .titles
+            .discovery_affinity_revision()
+            .await?
+        else {
+            return self
+                .discovery_library_affinity_profile_uncached(
+                    &library_ids,
+                    run_id,
+                    genre_rail_corroboration,
+                )
+                .await;
+        };
+        let key = affinity_cache::DiscoveryAffinityCacheKey {
+            run_id: run_id.map(str::to_owned),
+            library_ids: library_ids.clone(),
+            genre_rail_corroboration,
+            revision,
+        };
+        let profile = self
+            .runtime
+            .catalog
+            .discovery_affinity_cache
+            .get_or_fill(
+                key,
+                || {
+                    self.discovery_library_affinity_profile_uncached(
+                        &library_ids,
+                        run_id,
+                        genre_rail_corroboration,
+                    )
+                },
+                || self.services.catalog.titles.discovery_affinity_revision(),
+            )
+            .await?;
+        Ok((*profile).clone())
+    }
+
+    async fn discovery_library_affinity_profile_uncached(
+        &self,
+        library_ids: &[String],
+        run_id: Option<&str>,
+        genre_rail_corroboration: bool,
+    ) -> AppResult<DiscoveryLibraryAffinityProfile> {
         let title_ids = match run_id {
             Some(run_id) => self
                 .services
                 .library
                 .discovery
-                .list_discovery_submitted_title_ids(run_id, &library_ids)
+                .list_discovery_submitted_title_ids(run_id, library_ids)
                 .await?
                 .unwrap_or_default(),
             None => Vec::new(),
@@ -1577,7 +1625,7 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .list_discovery_affinity_titles(&library_ids, run_id, &title_ids)
+            .list_discovery_affinity_titles(library_ids, run_id, &title_ids)
             .await?;
         debug!(
             operation = "discovery_affinity",

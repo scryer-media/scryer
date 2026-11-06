@@ -21,7 +21,7 @@ const READABLE_MOVIES: &str = "library-probe-movies";
 const READABLE_ANIME: &str = "library-probe-anime";
 const UNREADABLE: &str = "library-probe-hidden";
 
-async fn datastore() -> StoreDatastore {
+pub(super) async fn datastore() -> StoreDatastore {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -38,13 +38,13 @@ async fn datastore() -> StoreDatastore {
     }
 }
 
-async fn run(datastore: &StoreDatastore, sql: &str, args: Vec<SqlArg>) {
+pub(super) async fn run(datastore: &StoreDatastore, sql: &str, args: Vec<SqlArg>) {
     SqlRuntime::execute_write(datastore, "owned_probe_fixture", sql, args)
         .await
         .unwrap_or_else(|error| panic!("fixture statement failed: {error}\n{sql}"));
 }
 
-async fn insert_library(datastore: &StoreDatastore, id: &str, facet: &str) {
+pub(super) async fn insert_library(datastore: &StoreDatastore, id: &str, facet: &str) {
     run(
         datastore,
         "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
@@ -59,7 +59,7 @@ async fn insert_library(datastore: &StoreDatastore, id: &str, facet: &str) {
     .await;
 }
 
-async fn insert_title(
+pub(super) async fn insert_title(
     datastore: &StoreDatastore,
     id: &str,
     library_id: &str,
