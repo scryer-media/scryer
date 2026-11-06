@@ -2221,6 +2221,8 @@ mod tests {
         record_yields: usize,
         /// Verification records written so far.
         recorded: Arc<AtomicU64>,
+        /// The size of every batched verification write, in order.
+        record_batches: Arc<std::sync::Mutex<Vec<usize>>>,
     }
 
     #[derive(Default)]
@@ -2567,6 +2569,30 @@ mod tests {
             });
             state.verifications.push(record.clone());
             self.recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn record_location_file_verifications(
+            &self,
+            records: &[FileVerificationRecord],
+        ) -> AppResult<()> {
+            for _ in 0..self.record_yields {
+                tokio::task::yield_now().await;
+            }
+            self.record_batches
+                .lock()
+                .expect("lock")
+                .push(records.len());
+            let mut state = self.inner.lock().expect("lock");
+            for record in records {
+                state.verifications.retain(|existing| {
+                    existing.operation_id != record.operation_id
+                        || existing.destination_path != record.destination_path
+                });
+                state.verifications.push(record.clone());
+            }
+            self.recorded
+                .fetch_add(records.len() as u64, Ordering::SeqCst);
             Ok(())
         }
 
@@ -3418,7 +3444,7 @@ mod tests {
         let hub = crate::location::live::TransferHub::default();
         // Many small titles of many small files: copies land far faster than
         // one loop can record them.
-        let titles = 24;
+        let titles = 60;
         let files_per_title = 10;
         let plan = OperationWorkPlan::new(
             (0..titles)
@@ -3455,6 +3481,13 @@ mod tests {
         assert!(
             max_ahead <= bound,
             "{max_ahead} files ran ahead of their records; the bound is {bound}"
+        );
+        let batches = store.record_batches.lock().unwrap().clone();
+        assert!(
+            batches
+                .iter()
+                .all(|size| (1..=super::pipeline::PIPELINE_RECORD_BATCH).contains(size)),
+            "every transaction records between one and the batch bound: {batches:?}"
         );
     }
 

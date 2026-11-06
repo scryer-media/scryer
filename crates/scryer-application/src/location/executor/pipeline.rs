@@ -8,12 +8,18 @@ use std::sync::atomic::AtomicBool;
 /// waiting for this loop to record them — before no new copy is admitted.
 ///
 /// A copy gives up its slot the moment verification starts, and one loop
-/// records every result and finishes each title. With many small files copies
-/// land far faster than that loop records them, so without a bound the pile
-/// past the copy grows with the selection. With one, copying pauses until
-/// recording catches up: at most this many plus the copy slots are ever in
-/// flight.
-pub(super) const PIPELINE_POST_COPY_LIMIT: usize = 16;
+/// records every result and finishes each title. That loop records every
+/// result already waiting in one transaction, so it normally keeps up; this
+/// bound is the safety net for when it does not, pausing copies until
+/// recording catches up so the pile past the copy never grows with the
+/// selection. It sits well above the copy slots so it never throttles a loop
+/// that is keeping up.
+pub(super) const PIPELINE_POST_COPY_LIMIT: usize = 256;
+
+/// The most verification results one transaction records. Results that land
+/// together are written together; the bound keeps one transaction short so it
+/// never holds the database writer long enough to starve other writers.
+pub(super) const PIPELINE_RECORD_BATCH: usize = 128;
 
 /// What one file's transfer future hands back to the driver.
 enum PipelineFileOutcome {
@@ -405,74 +411,109 @@ impl LocationOperationRunner<'_> {
                 continue;
             }
             tokio::select! {
-                Some((title, file, result)) = completions.recv() => {
-                    pending -= 1;
-                    let result = match result {
-                        Ok(PipelineFileOutcome::Canceled) => {
-                            // The file handed itself back untouched. Stop at
-                            // this boundary like any other observed cancel.
-                            if stop.is_none() {
-                                stop = Some((
-                                    StopReason::UserCanceled,
-                                    "canceled after draining in-flight transfers".into(),
-                                ));
-                            }
-                            None
+                Some(first) = completions.recv() => {
+                    // Take every result already waiting, up to a bound, so one
+                    // transaction records them all. The bound keeps a single
+                    // transaction from holding the writer for long.
+                    let mut batch = vec![first];
+                    while batch.len() < PIPELINE_RECORD_BATCH {
+                        match completions.try_recv() {
+                            Ok(next) => batch.push(next),
+                            Err(_) => break,
                         }
-                        Ok(PipelineFileOutcome::Verified(verified)) => Some({
-                            if verified.depth.fell_back {
-                                progress.verification_fallbacks += 1;
-                                if let Some(detail) = verified.detail.clone() {
-                                    progress.warnings.push(detail.clone());
-                                    if let Some(row) = rows.get_mut(&title.title_id) {
-                                        row.detail = Some(detail);
-                                        let mut persisted = row.clone();
-                                        persisted.copy_bytes = 0; persisted.verification_bytes = 0;
-                                        if let Err(error) = self.store.upsert_transfer_title(&operation.id, &persisted).await { fatal = Some(error); }
+                    }
+                    pending -= batch.len();
+                    // The verdict for each file before its record is written:
+                    // `Some(Ok(permitted, detail))` for a verified file whose
+                    // record is in `records`, `Some(Err(..))` for a transfer
+                    // that failed, `None` for a file handed back on a cancel.
+                    let mut verdicts = Vec::with_capacity(batch.len());
+                    let mut records = Vec::with_capacity(batch.len());
+                    for (title, file, result) in batch {
+                        let verdict = match result {
+                            Ok(PipelineFileOutcome::Canceled) => {
+                                // The file handed itself back untouched. Stop at
+                                // this boundary like any other observed cancel.
+                                if stop.is_none() {
+                                    stop = Some((
+                                        StopReason::UserCanceled,
+                                        "canceled after draining in-flight transfers".into(),
+                                    ));
+                                }
+                                None
+                            }
+                            Ok(PipelineFileOutcome::Verified(verified)) => {
+                                if verified.depth.fell_back {
+                                    progress.verification_fallbacks += 1;
+                                    if let Some(detail) = verified.detail.clone() {
+                                        progress.warnings.push(detail.clone());
+                                        if let Some(row) = rows.get_mut(&title.title_id) {
+                                            row.detail = Some(detail);
+                                            let mut persisted = row.clone();
+                                            persisted.copy_bytes = 0; persisted.verification_bytes = 0;
+                                            if let Err(error) = self.store.upsert_transfer_title(&operation.id, &persisted).await { fatal = Some(error); }
+                                        }
                                     }
                                 }
+                                let permitted = verified.permits_source_removal();
+                                let detail = verified.detail.clone();
+                                records.push(verified.into_record(FileVerificationIdentity {
+                                    operation_id: &operation.id, title_id: &title.title_id,
+                                    media_file_id: file.media_file_id.as_deref(),
+                                }, Utc::now()));
+                                Some(Ok((permitted, detail)))
                             }
-                            let permitted = verified.permits_source_removal();
-                            let detail = verified.detail.clone();
-                            let record = verified.into_record(FileVerificationIdentity {
-                                operation_id: &operation.id, title_id: &title.title_id,
-                                media_file_id: file.media_file_id.as_deref(),
-                            }, Utc::now());
-                            match self.store.record_location_file_verification(&record).await {
-                                Ok(()) if permitted => {
-                                    hub.file_done(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
-                                    Ok(())
-                                },
-                                Ok(()) => Err((
-                                    LocationReasonCode::VerificationMismatch,
-                                    AppError::validation_refused(crate::error_reasons::location::VERIFICATION_MISMATCH, detail.unwrap_or_else(|| "destination verification failed".into())),
-                                )),
-                                Err(error) => { fatal = Some(error); Ok(()) },
-                            }
-                        }),
-                        // A transfer that could not complete is a storage
-                        // problem; the source is intact.
-                        Err(error) => Some(Err((LocationReasonCode::StorageError, error))),
-                    };
-                    match result {
-                        Some(Err((reason_code, error))) => {
-                            hub.file_failed(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
-                            failed.insert(title.title_id.clone(), (reason_code, error.to_string()));
-                        }
-                        Some(Ok(())) if fatal.is_none() => progress.note_file_done(&title.title_id, file),
-                        _ => {}
+                            // A transfer that could not complete is a storage
+                            // problem; the source is intact.
+                            Err(error) => Some(Err((LocationReasonCode::StorageError, error))),
+                        };
+                        verdicts.push((title, file, verdict));
                     }
-                    let count = remaining.get_mut(&title.title_id).expect("admitted title");
-                    *count = count.saturating_sub(1);
-                    if *count == 0
-                        && stop.is_none()
-                        && fatal.is_none()
-                        && !failed.contains_key(&title.title_id)
-                        && let Err(error) = self
-                            .finish_pipeline_title(operation, title, progress, plan, &mut failed)
-                            .await
-                    {
-                        fatal = Some(error);
+                    // Every record in the batch is durable before any of its
+                    // titles is finished, so a title's records still commit
+                    // ahead of its catalog flip and its source removal.
+                    let recorded = if records.is_empty() {
+                        true
+                    } else {
+                        match self.store.record_location_file_verifications(&records).await {
+                            Ok(()) => true,
+                            Err(error) => { fatal = Some(error); false }
+                        }
+                    };
+                    for (title, file, verdict) in verdicts {
+                        let result = match verdict {
+                            None => None,
+                            Some(Ok(_)) if !recorded => Some(Ok(())),
+                            Some(Ok((true, _))) => {
+                                hub.file_done(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
+                                Some(Ok(()))
+                            }
+                            Some(Ok((false, detail))) => Some(Err((
+                                LocationReasonCode::VerificationMismatch,
+                                AppError::validation_refused(crate::error_reasons::location::VERIFICATION_MISMATCH, detail.unwrap_or_else(|| "destination verification failed".into())),
+                            ))),
+                            Some(Err(failure)) => Some(Err(failure)),
+                        };
+                        match result {
+                            Some(Err((reason_code, error))) => {
+                                hub.file_failed(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
+                                failed.insert(title.title_id.clone(), (reason_code, error.to_string()));
+                            }
+                            Some(Ok(())) if fatal.is_none() => progress.note_file_done(&title.title_id, file),
+                            _ => {}
+                        }
+                        let count = remaining.get_mut(&title.title_id).expect("admitted title");
+                        *count = count.saturating_sub(1);
+                        if *count == 0
+                            && stop.is_none()
+                            && fatal.is_none()
+                            && !failed.contains_key(&title.title_id)
+                            && let Err(error) = self
+                                .finish_pipeline_title(operation, title, progress, plan, &mut failed)
+                                .await
+                        {
+                            fatal = Some(error);
+                        }
                     }
                 },
                 () = notify.notified() => {},

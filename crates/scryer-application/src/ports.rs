@@ -7791,6 +7791,19 @@ pub trait LocationOperationRepository: Send + Sync {
         record: &FileVerificationRecord,
     ) -> AppResult<()>;
 
+    /// Persists several files' verification outcomes together, all or none.
+    /// Same idempotence as [`Self::record_location_file_verification`]; a
+    /// store that cannot write them in one transaction records them in order.
+    async fn record_location_file_verifications(
+        &self,
+        records: &[FileVerificationRecord],
+    ) -> AppResult<()> {
+        for record in records {
+            self.record_location_file_verification(record).await?;
+        }
+        Ok(())
+    }
+
     async fn location_file_verifications_for_paths(
         &self,
         operation_id: &str,
