@@ -725,14 +725,13 @@ impl AppUseCase {
                 .run_source_import(&actor, run.clone(), private)
                 .await
                 .is_err()
+                && let Ok(Some(mut failed)) = app.services.events.job_runs.get_job_run(&id).await
             {
-                if let Ok(Some(mut failed)) = app.services.events.job_runs.get_job_run(&id).await {
-                    failed.status = JobRunStatus::Failed;
-                    failed.completed_at = Some(app.runtime.environment.now());
-                    failed.error_text =
-                        Some("Source import interrupted; completed items were retained".into());
-                    let _ = app.services.events.job_runs.update_job_run(&failed).await;
-                }
+                failed.status = JobRunStatus::Failed;
+                failed.completed_at = Some(app.runtime.environment.now());
+                failed.error_text =
+                    Some("Source import interrupted; completed items were retained".into());
+                let _ = app.services.events.job_runs.update_job_run(&failed).await;
             }
             let mut active = app.runtime.imports.source_import.active.lock().await;
             if active.get(&id) == Some(&attempt) {

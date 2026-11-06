@@ -3466,11 +3466,10 @@ mod tests {
                 .respond_with(body)
                 .mount(&server)
                 .await;
-            let error = plex_source(&server)
+            plex_source(&server)
                 .read_played(&plex_connection(server.uri()), PLEX_SHARED_ID)
                 .await
-                .expect_err("a partial history is not a complete one");
-            error
+                .expect_err("a partial history is not a complete one")
         }
 
         // An entry with no rating key.
@@ -5339,7 +5338,7 @@ mod tests {
 
     #[test]
     fn the_page_ceiling_is_far_past_any_real_history() {
-        assert!(SIGNAL_PAGE_CEILING * SIGNAL_PAGE_SIZE >= 1_000_000);
+        const { assert!(SIGNAL_PAGE_CEILING * SIGNAL_PAGE_SIZE >= 1_000_000) };
     }
 
     /// A Plex history the server sorts as asked, serving plays as they stand

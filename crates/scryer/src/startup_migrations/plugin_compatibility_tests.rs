@@ -323,7 +323,7 @@ async fn plugin_compatibility_pass_leaves_the_provider_reload_to_the_boot_load()
     );
     assert_eq!(
         report.compatibility_blocked,
-        [manual.plugin_id.clone()],
+        std::slice::from_ref(&manual.plugin_id),
         "the boot load honours the blocker the pass recorded"
     );
     assert!(

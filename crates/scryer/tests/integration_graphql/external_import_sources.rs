@@ -151,8 +151,7 @@ async fn source_import_shutdown_stops_queued_indexers_and_preserves_the_receipt(
             ctx.app
                 .start_source_import(&actor, "source-after-shutdown", vec![selection(20, false)])
                 .await
-                .err()
-                .expect("new scheduling refused")
+                .expect_err("new scheduling refused")
                 .validation_reason(),
             Some(scryer_application::source_import::refusal::INTERRUPTED)
         );
@@ -719,8 +718,7 @@ async fn source_import_failure_can_be_skipped_and_backend_finish_is_gated() {
             ctx.app
                 .complete_setup_for_source_import(&actor, Some(&accepted.id))
                 .await
-                .err()
-                .expect("finish refused")
+                .expect_err("finish refused")
                 .validation_reason(),
             Some(scryer_application::source_import::refusal::UNRESOLVED)
         );
@@ -739,8 +737,7 @@ async fn source_import_failure_can_be_skipped_and_backend_finish_is_gated() {
             ctx.app
                 .complete_setup_for_source_import(&other, Some(&accepted.id))
                 .await
-                .err()
-                .expect("wrong owner refused")
+                .expect_err("wrong owner refused")
                 .validation_reason(),
             Some(scryer_application::source_import::refusal::NOT_OWNED)
         );
@@ -768,8 +765,7 @@ async fn source_import_failure_can_be_skipped_and_backend_finish_is_gated() {
             ctx.app
                 .retry_source_import(&actor, &accepted.id, Vec::new())
                 .await
-                .err()
-                .expect("resolved operation cannot be retried")
+                .expect_err("resolved operation cannot be retried")
                 .validation_reason(),
             Some(scryer_application::source_import::refusal::ITEM_NOT_RETRYABLE)
         );
@@ -865,8 +861,7 @@ async fn source_import_purges_credentials_once_resolved_and_housekeeping_prunes_
             ctx.app
                 .retry_source_import(&actor, &completed.id, Vec::new())
                 .await
-                .err()
-                .expect("nothing to retry")
+                .expect_err("nothing to retry")
                 .validation_reason(),
             Some(scryer_application::source_import::refusal::ITEM_NOT_RETRYABLE)
         );

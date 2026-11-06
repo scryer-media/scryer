@@ -331,7 +331,7 @@ mod tests {
         assert!(compare(&mut cache, root, &candidate, &owner));
         let inaccessible = root.join("restricted");
         std::fs::create_dir(&inaccessible).unwrap();
-        std::fs::set_permissions(&inaccessible, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&inaccessible, std::fs::Permissions::from_mode(0o000)).unwrap();
         compare(&mut cache, root, &candidate, &inaccessible.join("child"));
         std::fs::set_permissions(&inaccessible, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -501,10 +501,11 @@ mod tests {
                 }),
             )
             .await;
-        let cache = context.cache.lock().unwrap();
-        assert_eq!(cache.roots, snapshot_keys);
-        assert!(cache.checks >= folders.len() as u64);
-        drop(cache);
+        {
+            let cache = context.cache.lock().unwrap();
+            assert_eq!(cache.roots, snapshot_keys);
+            assert!(cache.checks >= folders.len() as u64);
+        }
         // Outside the scan the same check reads the catalog's current roots.
         assert!(
             title_folder_is_outside_its_library(

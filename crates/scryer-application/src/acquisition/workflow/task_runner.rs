@@ -526,7 +526,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             crate::acquisition::walk_metrics::WalkSection::BatchSelection,
         );
         let selection = crate::acquisition::targets::select_background_acquisition_batch(
-            &targets,
+            targets,
             hot_cursor.as_deref(),
             cursor.as_deref(),
             budget.min(scan_limit.saturating_sub(walked.len())),
@@ -559,7 +559,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         );
         let Some(round) = walk_selected_scopes(
             app,
-            &targets,
+            targets,
             &selection.indices,
             &now,
             &availability,
@@ -586,7 +586,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             // A title stopped mid-way leaves its remaining scopes here too, so
             // the next cycle resumes it at its first unwalked scope.
             let rewound_hot = rewound_lane_cursor(
-                &targets,
+                targets,
                 &selection.indices,
                 &round.undispatched,
                 true,
@@ -594,7 +594,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
                 hot_cursor.as_deref(),
             );
             let rewound_cold = rewound_lane_cursor(
-                &targets,
+                targets,
                 &selection.indices,
                 &round.undispatched,
                 false,

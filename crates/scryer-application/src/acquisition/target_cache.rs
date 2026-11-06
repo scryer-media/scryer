@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn missing_order_matches_the_full_derivation_order() {
-        let mut targets = vec![
+        let mut targets = [
             target("series_movie", "title-b", "link-a"),
             target("movie", "title-b", "title-b"),
             target("episode", "title-a", "episode-b"),
