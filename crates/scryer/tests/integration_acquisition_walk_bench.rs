@@ -285,6 +285,58 @@ async fn background_walk_derivation_at_one_hundred_thousand_files() {
         last.targets, last.hot_targets, last.target_vec_bytes
     ));
 
+    // The walk's own read: built once, then reused or patched.
+    let timed = |label: &str, elapsed: std::time::Duration, outcome: (usize, &str)| {
+        format!(
+            "{label}: {} ({} targets, source {})\n",
+            ms(elapsed),
+            outcome.0,
+            outcome.1
+        )
+    };
+    let started = std::time::Instant::now();
+    let built = ctx
+        .app
+        .refresh_acquisition_target_cache()
+        .await
+        .expect("build cache");
+    report.push_str(&timed("cache build", started.elapsed(), built));
+    let mut idle = Vec::new();
+    let mut idle_outcome = built;
+    for _ in 0..RUNS {
+        let started = std::time::Instant::now();
+        idle_outcome = ctx
+            .app
+            .refresh_acquisition_target_cache()
+            .await
+            .expect("idle read");
+        idle.push(started.elapsed());
+    }
+    report.push_str(&timed(
+        "idle walk read (median)",
+        median(idle),
+        idle_outcome,
+    ));
+    for title_id in ["synthetic-movie-000001", "synthetic-series-00001"] {
+        ctx.app.mark_acquisition_title_changed(title_id);
+        let started = std::time::Instant::now();
+        let patched = ctx
+            .app
+            .refresh_acquisition_target_cache()
+            .await
+            .expect("patch one title");
+        report.push_str(&timed(
+            &format!("one-title patch ({title_id})"),
+            started.elapsed(),
+            patched,
+        ));
+    }
+    let stats = ctx.app.acquisition_target_cache_stats().await;
+    report.push_str(&format!(
+        "cache: {} entries, {} bytes estimated, {} titles with a time recheck\n",
+        stats.entries, stats.bytes, stats.titles_with_recheck
+    ));
+
     println!("{report}");
     if let Ok(path) = std::env::var("BENCH_OUT") {
         std::fs::write(path, &report).expect("write bench report");

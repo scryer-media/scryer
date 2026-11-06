@@ -205,6 +205,7 @@ impl AppUseCase {
             self.runtime
                 .acquisition
                 .invalidate_wanted_projection_cache();
+            mark_acquisition_targets_for_event(&self.runtime.acquisition, stored);
         }
         if should_invalidate_monitored_title_matcher(&stored.payload) {
             self.invalidate_monitored_title_matcher().await;
@@ -261,6 +262,12 @@ impl AppUseCase {
             self.runtime
                 .acquisition
                 .invalidate_wanted_projection_cache();
+            for event in stored
+                .iter()
+                .filter(|event| should_invalidate_wanted_projection(&event.payload))
+            {
+                mark_acquisition_targets_for_event(&self.runtime.acquisition, event);
+            }
         }
         if stored
             .iter()
@@ -476,6 +483,11 @@ impl AppUseCase {
     }
 
     pub fn publish_settings_changed(&self, changed_keys: Vec<String>) {
+        // Availability policies, filler opt-ins and profiles are settings, and
+        // each moves the walk's target set.
+        if crate::acquisition::target_cache::settings_keys_may_move_targets(&changed_keys) {
+            self.runtime.acquisition.target_cache.mark_everything();
+        }
         let _ = self
             .runtime
             .events
@@ -1493,6 +1505,23 @@ fn should_invalidate_wanted_projection(payload: &scryer_domain::DomainEventPaylo
             "quality_profile" | "quality_profiles" | "quality_definition" | "quality_definitions"
         ),
         _ => false,
+    }
+}
+
+/// The same events that retire the wanted projection change the background
+/// walk's target set: an event on a title's stream re-derives that title, a
+/// scan or a profile change re-derives what it can move.
+fn mark_acquisition_targets_for_event(
+    acquisition: &crate::services::runtime::AppRuntimeAcquisitionState,
+    stored: &DomainEvent,
+) {
+    use scryer_domain::{DomainEventPayload, DomainEventStream};
+
+    let cache = &acquisition.target_cache;
+    match (&stored.payload, &stored.stream) {
+        (DomainEventPayload::ConfigurationChanged(_), _) => cache.mark_everything(),
+        (_, DomainEventStream::Title { title_id }) => cache.mark_title(title_id),
+        _ => cache.mark_all_missing(),
     }
 }
 

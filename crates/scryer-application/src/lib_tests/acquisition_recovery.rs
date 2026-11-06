@@ -17362,6 +17362,69 @@ async fn background_acquisition_without_download_clients_skips_the_missing_scope
     assert_eq!(outcome.titles_walked, 0);
 }
 
+/// The walk keeps its target set between cycles. A cycle after which nothing
+/// changed reads nothing to obtain it; a change that names a title re-derives
+/// that title, not the catalog.
+#[tokio::test]
+async fn background_acquisition_reuses_its_targets_while_nothing_changes() {
+    let acquisition_scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user, _, repos) = bootstrap_with_acquisition_tracking_and_indexer_and_repos(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        acquisition_scope_states.clone(),
+        Arc::new(MockIndexerClient),
+    );
+    let (title, _) = seed_movie_wanted_for_acquisition(
+        &app,
+        &user,
+        &acquisition_scope_states,
+        "Synthetic Idle Walk",
+        2024,
+    )
+    .await;
+    let sweeps = || {
+        repos
+            .media_files
+            .missing_scope_sweeps
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+
+    let first = app.run_background_acquisition_cycle_once().await;
+    assert!(first.targets_derived > 0, "the first walk builds the set");
+    let built = sweeps();
+    assert!(built > 0, "building the set derives it");
+
+    for _ in 0..3 {
+        let idle = app.run_background_acquisition_cycle_once().await;
+        assert_eq!(idle.targets_derived, first.targets_derived);
+    }
+    assert_eq!(
+        sweeps(),
+        built,
+        "walks with nothing changed must not derive the target set again"
+    );
+    let (_, source) = app
+        .refresh_acquisition_target_cache()
+        .await
+        .expect("cached targets");
+    assert_eq!(source, "reused");
+    assert_eq!(sweeps(), built);
+
+    // Positive control: a change naming the title re-derives that title only.
+    app.mark_acquisition_title_changed(&title.id);
+    let (_, source) = app
+        .refresh_acquisition_target_cache()
+        .await
+        .expect("patched targets");
+    assert_eq!(source, "patched");
+    assert_eq!(
+        sweeps(),
+        built + 1,
+        "one title-scoped read for the one title"
+    );
+}
+
 /// A scheduler tick that decides not to run must leave no durable trace: the
 /// acquisition worker wakes far faster than the cadences it serves, and a run
 /// row plus three domain events per refused tick recorded the heartbeat rather

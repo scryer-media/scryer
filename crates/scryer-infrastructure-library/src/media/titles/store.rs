@@ -1093,7 +1093,8 @@ impl TitleRepository for TitleStore {
 
     /// The projection-aware read. Everything else on this store is a fixed
     /// projection over the same query; this one lets the caller drop the
-    /// canonical-tag hydration it does not use.
+    /// canonical-tag hydration it does not use and, for an unfiltered list,
+    /// the columns it does not read.
     async fn list_with_projection(
         &self,
         facet: Option<MediaFacet>,
@@ -1101,6 +1102,38 @@ impl TitleRepository for TitleStore {
         query: Option<String>,
         projection: TitleListProjection,
     ) -> AppResult<Vec<Title>> {
+        if query.is_none()
+            && !projection.include_external_ids
+            && projection.row != scryer_application::TitleRowProjection::ALL
+        {
+            if matches!(library_ids, Some(library_ids) if library_ids.is_empty()) {
+                return Ok(Vec::new());
+            }
+            let columns = TITLE_COLUMNS
+                .split(',')
+                .map(str::trim)
+                .filter(|column| title_column_selected(column, projection))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let (sql, args) = build_title_list_sql_selecting(&columns, facet, library_ids);
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            let base_path = normalized_base_path();
+            let mut titles = rows
+                .iter()
+                .map(|row| {
+                    title_from_projection_row(
+                        &SelectedTitleRow { row, projection },
+                        PersistedTitleReadMode::Presentation,
+                        false,
+                        &base_path,
+                    )
+                })
+                .collect::<AppResult<Vec<_>>>()?;
+            if projection.include_canonical_tags {
+                attach_metadata_tags_to_titles(self.datastore.read_exec(), &mut titles).await?;
+            }
+            return Ok(titles);
+        }
         self.list_internal(
             facet,
             library_ids,
@@ -4305,7 +4338,15 @@ fn build_plain_title_list_sql(
     facet: Option<MediaFacet>,
     library_ids: Option<&[String]>,
 ) -> (String, Vec<SqlArg>) {
-    let mut sql = format!("SELECT {TITLE_COLUMNS} FROM titles");
+    build_title_list_sql_selecting(TITLE_COLUMNS, facet, library_ids)
+}
+
+fn build_title_list_sql_selecting(
+    columns: &str,
+    facet: Option<MediaFacet>,
+    library_ids: Option<&[String]>,
+) -> (String, Vec<SqlArg>) {
+    let mut sql = format!("SELECT {columns} FROM titles");
     let mut where_clauses = Vec::<String>::new();
     let mut args = Vec::new();
 

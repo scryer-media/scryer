@@ -342,16 +342,16 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     let targets_timer = crate::acquisition::walk_metrics::SectionTimer::start(
         crate::acquisition::walk_metrics::WalkSection::Targets,
     );
-    let mut targets = match app.derive_acquisition_targets(&now).await {
+    // The set is held between walks and patched on change; a walk with
+    // nothing changed since the last one reads nothing to obtain it.
+    let walk_targets = match app.walk_targets(&now, blocked_facets).await {
         Ok(targets) => targets,
         Err(err) => {
             warn!(error = %err, "failed to derive acquisition targets");
             return BackgroundAcquisitionCycleOutcome::default();
         }
     };
-    if !blocked_facets.is_empty() {
-        targets.retain(|target| !blocked_facets.contains(&target.facet));
-    }
+    let targets = walk_targets.as_slice();
     drop(targets_timer);
     if targets.is_empty() {
         return BackgroundAcquisitionCycleOutcome::default();
@@ -584,6 +584,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     tracing::debug!(
         titles_walked = outcome.titles_walked,
         targets_derived = outcome.targets_derived,
+        target_source = walk_targets.read.as_str(),
         selected_scopes = walked.len(),
         deferred_scopes = outcome.deferred_scopes,
         skipped_locked_titles = outcome.skipped_locked_titles,
@@ -6704,6 +6705,11 @@ pub async fn start_background_acquisition_poller(
                 );
             }
             changed = settings_changed.recv() => {
+                // Every settings writer reaches this broadcast, including the
+                // ones that do not go through `publish_settings_changed`.
+                if crate::acquisition::target_cache::settings_change_may_move_targets(&changed) {
+                    app.runtime.acquisition.target_cache.mark_everything();
+                }
                 if acquisition_walk_interval_may_have_changed(changed) {
                     match app.acquisition_settings().await {
                         Ok(settings) => walk_cadence.set_walk_period(std::time::Duration::from_secs(

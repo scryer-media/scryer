@@ -330,6 +330,7 @@ pub use acquisition::seed_goals::{
     release_extra_f64, release_extra_i64,
 };
 pub use acquisition::targets::AcquisitionDerivationProfile;
+pub use acquisition::target_cache::AcquisitionTargetCacheStats;
 pub use acquisition::wanted_views::{
     AcquisitionSearchJobView, AcquisitionSearchProgress, AcquisitionSearchRequest,
     WantedConvergenceState, WantedScopeView, WantedViewConvergence,

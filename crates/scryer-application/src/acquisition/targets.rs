@@ -1,6 +1,8 @@
 //! Derived acquisition targets. A scope is a target iff it is
 //! monitored and its current primary file does not satisfy the effective
-//! requirements — computed from library state on demand, never materialized.
+//! requirements — computed from library state, never persisted. The
+//! background walk keeps its copy in memory and patches it on change (see
+//! [`crate::acquisition::target_cache`]).
 //! `missing` targets have no primary file; `cutoff_upgrade` targets have a file
 //! strictly below the profile cutoff. The background acquisition cursor and the
 //! wanted views read this same derivation, so the searcher and the UI agree on
@@ -31,6 +33,70 @@ const HOT_MOVIE_RELEASE_WINDOW_DAYS: i64 = 30;
 /// of air/release age — the user just asked for it, so it converges promptly
 /// (still paced per-host by the scheduler).
 const HOT_RECENTLY_ADDED_WINDOW_DAYS: i64 = 3;
+
+/// The soonest instant, per title, at which the passage of time alone could
+/// change that title's derived targets: an episode's search window opening, a
+/// movie reaching its availability date, or a scope leaving the hot lane.
+///
+/// Derivation reads `now` in exactly these places and nowhere else, so a
+/// target set derived at `now` stays exact until the earliest instant noted
+/// here, unless the library itself changes.
+#[derive(Debug, Default)]
+pub(crate) struct TargetTransitions {
+    by_title: HashMap<String, DateTime<Utc>>,
+}
+
+impl TargetTransitions {
+    fn note(&mut self, title_id: &str, at: Option<DateTime<Utc>>, now: &DateTime<Utc>) {
+        let Some(at) = at.filter(|at| at > now) else {
+            return;
+        };
+        self.by_title
+            .entry(title_id.to_string())
+            .and_modify(|soonest| *soonest = (*soonest).min(at))
+            .or_insert(at);
+    }
+
+    /// When the recent-add window for `created_at` closes, if it is open.
+    fn note_recent_add(&mut self, title_id: &str, created_at: &str, now: &DateTime<Utc>) {
+        self.note(
+            title_id,
+            parse_schedule_baseline_date(Some(created_at))
+                .map(|created| created + Duration::days(HOT_RECENTLY_ADDED_WINDOW_DAYS)),
+            now,
+        );
+    }
+
+    /// The next edge of a movie's hot release window.
+    fn note_movie_release_window(
+        &mut self,
+        title_id: &str,
+        release: Option<&str>,
+        now: &DateTime<Utc>,
+    ) {
+        let window = Duration::days(HOT_MOVIE_RELEASE_WINDOW_DAYS);
+        if let Some(release) = parse_schedule_baseline_date(release) {
+            let opens = release - window;
+            self.note(
+                title_id,
+                Some(if *now < opens {
+                    opens
+                } else {
+                    release + window
+                }),
+                now,
+            );
+        }
+    }
+
+    pub(crate) fn soonest_for(&self, title_id: &str) -> Option<DateTime<Utc>> {
+        self.by_title.get(title_id).copied()
+    }
+
+    pub(crate) fn into_soonest(self) -> impl Iterator<Item = (String, DateTime<Utc>)> {
+        self.by_title.into_iter()
+    }
+}
 
 /// One derived acquisition target: a monitored scope whose current files do not
 /// satisfy requirements, plus the coordinates the acquisition cursor and the
@@ -684,7 +750,12 @@ impl AppUseCase {
     ) -> AppResult<Vec<AcquisitionTarget>> {
         let started = std::time::Instant::now();
         let targets = self
-            .derive_missing_targets_for_search_untimed(now, title_id, respect_title_monitoring)
+            .derive_missing_targets_with_transitions(
+                now,
+                title_id,
+                respect_title_monitoring,
+                &mut TargetTransitions::default(),
+            )
             .await;
         if title_id.is_none() {
             crate::acquisition::walk_metrics::record_derivation(
@@ -695,11 +766,32 @@ impl AppUseCase {
         targets
     }
 
-    async fn derive_missing_targets_for_search_untimed(
+    /// The library-wide missing targets with their time transitions, timed as
+    /// the missing sub-pass.
+    pub(crate) async fn derive_missing_targets_timed(
+        &self,
+        now: &DateTime<Utc>,
+        transitions: &mut TargetTransitions,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
+        let started = std::time::Instant::now();
+        let targets = self
+            .derive_missing_targets_with_transitions(now, None, true, transitions)
+            .await;
+        crate::acquisition::walk_metrics::record_derivation(
+            crate::acquisition::walk_metrics::DerivationPass::Missing,
+            started.elapsed(),
+        );
+        targets
+    }
+
+    /// The missing targets, noting in `transitions` when each title's targets
+    /// next change with time alone.
+    pub(crate) async fn derive_missing_targets_with_transitions(
         &self,
         now: &DateTime<Utc>,
         title_id: Option<&str>,
         respect_title_monitoring: bool,
+        transitions: &mut TargetTransitions,
     ) -> AppResult<Vec<AcquisitionTarget>> {
         let movie_availability = self.movie_availability_policies().await?;
         let candidates = self
@@ -724,6 +816,16 @@ impl AppUseCase {
             // An unaired (or undated) episode is not yet available — RSS still
             // grabs an early posting; active search waits for the air window.
             if !episode_search_window_is_open(episode.air_date.as_deref(), now) {
+                transitions.note(
+                    &episode.title_id,
+                    parse_schedule_baseline_date(episode.air_date.as_deref()).map(|baseline| {
+                        baseline
+                            - Duration::hours(
+                                crate::acquisition::policy::EPISODE_PRE_AIR_WINDOW_HOURS,
+                            )
+                    }),
+                    now,
+                );
                 continue;
             }
             let scope = SubmissionScope::Episode {
@@ -737,6 +839,15 @@ impl AppUseCase {
                 now,
                 HOT_EPISODE_AIR_WINDOW_DAYS,
             );
+            if hot_by_air_date {
+                transitions.note(
+                    &episode.title_id,
+                    parse_schedule_baseline_date(episode.air_date.as_deref())
+                        .map(|baseline| baseline + Duration::days(HOT_EPISODE_AIR_WINDOW_DAYS)),
+                    now,
+                );
+            }
+            transitions.note_recent_add(&episode.title_id, &episode.title_created_at, now);
             let is_hot = hot_by_air_date
                 || date_is_recent(
                     Some(episode.title_created_at.as_str()),
@@ -784,6 +895,13 @@ impl AppUseCase {
                 now,
             );
             if availability.status != MovieAvailabilityStatus::Available {
+                // A dated decision opens on its date; an undated one only
+                // changes when the title's metadata does.
+                transitions.note(
+                    &title.title_id,
+                    parse_schedule_baseline_date(availability.effective_date.as_deref()),
+                    now,
+                );
                 continue;
             }
             let Some(scope_key) = convergence_scope_key(&SubmissionScope::Title, &title.title_id)
@@ -796,6 +914,8 @@ impl AppUseCase {
                 .or(title.digital_release_date.as_deref())
                 .or(title.first_aired.as_deref());
             let hot_by_air_date = movie_release_is_hot(release_date, now);
+            transitions.note_movie_release_window(&title.title_id, release_date, now);
+            transitions.note_recent_add(&title.title_id, &title.created_at, now);
             let is_hot = hot_by_air_date
                 || date_is_recent(
                     Some(title.created_at.as_str()),
@@ -855,6 +975,12 @@ impl AppUseCase {
             };
             let hot_by_air_date =
                 movie_release_is_hot(link.movie_digital_release_date.as_deref(), now);
+            transitions.note_movie_release_window(
+                &link.title_id,
+                link.movie_digital_release_date.as_deref(),
+                now,
+            );
+            transitions.note_recent_add(&link.title_id, &link.link_created_at, now);
             let is_hot = hot_by_air_date
                 || date_is_recent(
                     Some(link.link_created_at.as_str()),
@@ -907,7 +1033,7 @@ impl AppUseCase {
 
     /// The quality-tier half of the cutoff targets: scopes whose primary
     /// file's tier sits strictly below the profile's cutoff tier.
-    async fn derive_cutoff_quality_targets_for_search(
+    pub(crate) async fn derive_cutoff_quality_targets_for_search(
         &self,
         now: &DateTime<Utc>,
         title_id: Option<&str>,
@@ -978,7 +1104,7 @@ impl AppUseCase {
 
     /// The format-score half of the cutoff targets, for scopes the quality
     /// sweep did not already nominate. Returns only the new targets.
-    async fn derive_format_cutoff_targets_for_search(
+    pub(crate) async fn derive_format_cutoff_targets_for_search(
         &self,
         now: &DateTime<Utc>,
         title_id: Option<&str>,
@@ -1057,6 +1183,24 @@ impl AppUseCase {
         // reads and fills the memo but sweeps nothing.
         let memo = &self.runtime.acquisition.landed_bar_memo;
         let full_pass = title_id.is_none().then(|| memo.begin_pass());
+
+        // No profile asks the score question: nothing to load or score. This
+        // is every install that has not set a `cutoff_score`.
+        let profile_settings = self.load_quality_profile_settings().await?;
+        let default_profile = crate::builtin_default_quality_profile();
+        if !profile_settings
+            .profiles
+            .iter()
+            .chain(std::iter::once(&default_profile))
+            .any(|profile| {
+                profile.criteria.allow_upgrades && profile.criteria.cutoff_score.is_some()
+            })
+        {
+            if let Some(pass) = full_pass {
+                memo.finish_pass(pass);
+            }
+            return Ok(Vec::new());
+        }
 
         let libraries = self.services.catalog.libraries.list(None).await?;
         let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
@@ -1192,7 +1336,10 @@ impl AppUseCase {
     /// The full derived target set the background acquisition cursor rotates over:
     /// missing ∪ cutoff-upgrade, minus scopes the user paused. Grab-blocking
     /// (active/completed submissions) is checked per selected scope during
-    /// processing, where the download-client snapshot is available.
+    /// processing, where the download-client snapshot is available. The walk
+    /// itself reads its copy from [`crate::acquisition::target_cache`]; this
+    /// is the from-scratch derivation that copy must agree with.
+    #[cfg(test)]
     pub(crate) async fn derive_acquisition_targets(
         &self,
         now: &DateTime<Utc>,
@@ -1200,6 +1347,7 @@ impl AppUseCase {
         self.derive_acquisition_targets_for_title(now, None).await
     }
 
+    #[cfg(test)]
     pub(crate) async fn derive_acquisition_targets_for_title(
         &self,
         now: &DateTime<Utc>,
@@ -1258,7 +1406,19 @@ impl AppUseCase {
     ) -> AppResult<()> {
         let locked_titles = self.location_owned_title_ids().await?;
         targets.retain(|target| !locked_titles.contains(&target.title_id));
+        let paused_keys = self.paused_scope_keys(title_id).await?;
+        if !paused_keys.is_empty() {
+            targets.retain(|target| !paused_keys.contains(&target.scope_key));
+        }
+        Ok(())
+    }
 
+    /// Scope keys the operator paused, optionally for one title. The read
+    /// returns only paused rows.
+    pub(crate) async fn paused_scope_keys(
+        &self,
+        title_id: Option<&str>,
+    ) -> AppResult<HashSet<String>> {
         let paused = self
             .services
             .workflow
@@ -1270,23 +1430,19 @@ impl AppUseCase {
                 ..AcquisitionScopeStatesQuery::default()
             })
             .await?;
-        if !paused.is_empty() {
-            let paused_keys: HashSet<String> = paused
-                .iter()
-                .filter_map(|item| {
-                    let scope = SubmissionScope::from_persisted(
-                        &item.title_id,
-                        item.episode_id.clone(),
-                        item.collection_id.clone(),
-                        item.series_movie_link_id.clone(),
-                        None,
-                    );
-                    convergence_scope_key(&scope, &item.title_id)
-                })
-                .collect();
-            targets.retain(|target| !paused_keys.contains(&target.scope_key));
-        }
-        Ok(())
+        Ok(paused
+            .iter()
+            .filter_map(|item| {
+                let scope = SubmissionScope::from_persisted(
+                    &item.title_id,
+                    item.episode_id.clone(),
+                    item.collection_id.clone(),
+                    item.series_movie_link_id.clone(),
+                    None,
+                );
+                convergence_scope_key(&scope, &item.title_id)
+            })
+            .collect())
     }
 }
 
