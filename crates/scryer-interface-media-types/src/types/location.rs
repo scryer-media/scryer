@@ -482,7 +482,11 @@ pub struct LocationClassificationGroupPayload {
     pub class: TitleLocationClassValue,
     /// How many selected titles fall into this class.
     pub count: Long,
-    /// The titles in this class, in selection order.
+    /// Whether `titles` holds every title in this class.
+    pub complete: bool,
+    /// The titles in this class, sampled like plan sections: every title that
+    /// blocks the start or has a destination-title match comes first, then a
+    /// sample of the rest, each part in selection order.
     pub titles: Vec<LocationClassifiedTitlePayload>,
 }
 
@@ -551,7 +555,9 @@ pub struct LocationPlanConfirmationPayload {
 #[derive(SimpleObject, Clone)]
 /// A read-only preview of a location operation; nothing is changed.
 pub struct LocationOperationPreviewPayload {
-    /// Source and destination folder per previewed title, in selection order.
+    /// Source and destination folder per previewed title that has a plan entry
+    /// or stays where it is, in selection order. Complete, not sampled: the
+    /// user-moved-files table lists every selected title.
     pub folders: Vec<LocationTitleFoldersPayload>,
     /// Fingerprint over the full plan, echoed back to confirm it.
     pub plan_fingerprint: String,

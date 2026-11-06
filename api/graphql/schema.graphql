@@ -12833,7 +12833,13 @@ type LocationClassificationGroupPayload {
 	"""
 	count: Long!
 	"""
-	The titles in this class, in selection order.
+	Whether `titles` holds every title in this class.
+	"""
+	complete: Boolean!
+	"""
+	The titles in this class, sampled like plan sections: every title that
+	blocks the start or has a destination-title match comes first, then a
+	sample of the rest, each part in selection order.
 	"""
 	titles: [LocationClassifiedTitlePayload!]!
 }
@@ -13684,7 +13690,9 @@ A read-only preview of a location operation; nothing is changed.
 """
 type LocationOperationPreviewPayload {
 	"""
-	Source and destination folder per previewed title, in selection order.
+	Source and destination folder per previewed title that has a plan entry
+	or stays where it is, in selection order. Complete, not sampled: the
+	user-moved-files table lists every selected title.
 	"""
 	folders: [LocationTitleFoldersPayload!]!
 	"""

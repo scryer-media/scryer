@@ -5314,6 +5314,7 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
       groups {
         class
         count
+        complete
         titles {
           titleId
           class
