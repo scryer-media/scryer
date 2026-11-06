@@ -56,6 +56,12 @@ pub mod refusal {
     pub const FILE_CHANGED: &str = "LOCATION_CONFLICT_FILE_CHANGED";
     /// A configured recycle bin cannot safely accept a file.
     pub const RECYCLE_UNAVAILABLE: &str = "LOCATION_CONFLICT_RECYCLE_UNAVAILABLE";
+    /// An untracked media file in a conflict folder names a different work, so
+    /// the folder is a collection rather than this title's duplicate.
+    pub const FOLDER_HOLDS_OTHER_WORKS: &str = "LOCATION_CONFLICT_FOLDER_HOLDS_OTHER_WORKS";
+    /// The title's media is split across parts, so keeping one file would
+    /// dispose of the others.
+    pub const MULTI_PART_MEDIA: &str = "LOCATION_CONFLICT_MULTI_PART_MEDIA";
     pub const ALL: &[&str] = &[
         SELECTION_INVALID,
         NOT_FOUND,
@@ -72,6 +78,8 @@ pub mod refusal {
         PERMANENT_CONFIRMATION_REQUIRED,
         FILE_CHANGED,
         RECYCLE_UNAVAILABLE,
+        FOLDER_HOLDS_OTHER_WORKS,
+        MULTI_PART_MEDIA,
     ];
 }
 
@@ -308,8 +316,92 @@ fn overlaps(a: &str, b: &str) -> bool {
 /// routinely disagree by one around a festival or regional premiere.
 fn folder_name_rank(title: &Title, folder: &str) -> i8 {
     let path = stored_path_to_path_buf(folder);
-    let raw = path.file_name().unwrap_or_default().to_string_lossy();
-    let parsed = crate::release_parser::parse_release_metadata(&raw);
+    name_rank(
+        title,
+        &path.file_name().unwrap_or_default().to_string_lossy(),
+    )
+}
+
+/// [`folder_name_rank`] for a media file, judged by its own stem.
+fn file_name_rank(title: &Title, file: &str) -> i8 {
+    let path = stored_path_to_path_buf(file);
+    name_rank(
+        title,
+        &path.file_stem().unwrap_or_default().to_string_lossy(),
+    )
+}
+
+/// A stem's part number when it carries a stacking marker such as `cd1`,
+/// `pt2`, `part 1` or `disc-2`.
+fn stacked_part_number(stem: &str) -> Option<u32> {
+    const MARKERS: &[&str] = &["cd", "pt", "part", "disc", "disk", "dvd"];
+    let lower = stem.to_ascii_lowercase();
+    let tokens = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let number = |digits: &str| {
+        ((1..=2).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| digits.parse().ok())
+            .flatten()
+    };
+    for (index, token) in tokens.iter().enumerate() {
+        for marker in MARKERS {
+            if let Some(rest) = token.strip_prefix(marker) {
+                if rest.is_empty() {
+                    if let Some(found) = tokens.get(index + 1).and_then(|next| number(next)) {
+                        return Some(found);
+                    }
+                } else if let Some(found) = number(rest) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Whether the media is split across parts: a part folder holding video, or
+/// media stems carrying two different part numbers. One stem saying `Part 2`
+/// is a title, not a stack.
+fn holds_multi_part_media(files: &[ConflictFile], folders: &[String]) -> bool {
+    let media = files.iter().filter(|file| file.media).collect::<Vec<_>>();
+    let in_part_folder = files.iter().any(|file| {
+        let path = stored_path_to_path_buf(&file.path);
+        // A part the feature filter left out is still part of the title.
+        if !file.media && !scryer_domain::is_standalone_video_file(&path) {
+            return false;
+        }
+        let Some(folder) = folders
+            .iter()
+            .map(|folder| stored_path_to_path_buf(folder))
+            .find(|folder| path.strip_prefix(folder).is_ok())
+        else {
+            return false;
+        };
+        path.parent()
+            .into_iter()
+            .flat_map(std::path::Path::ancestors)
+            .take_while(|ancestor| *ancestor != folder.as_path())
+            .filter_map(|ancestor| ancestor.file_name()?.to_str())
+            .any(crate::library_discovery::is_title_part_folder_name)
+    });
+    let parts = media
+        .iter()
+        .filter_map(|file| {
+            stacked_part_number(
+                &stored_path_to_path_buf(&file.path)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    in_part_folder || parts.len() > 1
+}
+
+fn name_rank(title: &Title, raw: &str) -> i8 {
+    let parsed = crate::release_parser::parse_release_metadata(raw);
     let mut identity_match = false;
     let mut carries_id = false;
     for (source, value) in [
@@ -649,6 +741,23 @@ impl AppUseCase {
             if file.media_file_id.is_some() {
                 file.media = true;
             }
+        }
+        // An untracked film whose own name identifies another work means a
+        // folder is a collection, not this title's duplicate: adopting it
+        // would claim that film, and keep-one would dispose of it.
+        if files.iter().any(|file| {
+            file.media && file.media_file_id.is_none() && file_name_rank(&title, &file.path) < 0
+        }) {
+            return Err(refused(
+                refusal::FOLDER_HOLDS_OTHER_WORKS,
+                "A conflict folder holds media that names a different work; its files were preserved",
+            ));
+        }
+        if request.policy == ConflictPolicy::KeepOne && holds_multi_part_media(&files, &folders) {
+            return Err(refused(
+                refusal::MULTI_PART_MEDIA,
+                "This title's media is split into parts, so keeping one file would dispose of the others; its files were preserved",
+            ));
         }
         let profile = self
             .resolve_quality_profile(crate::catalog::release_search::QualityProfileLookup {
@@ -1159,6 +1268,65 @@ mod folder_name_rank_tests {
 
     fn rank(title: &Title, name: &str) -> i8 {
         folder_name_rank(title, &path_to_stored_string(format!("/library/{name}")))
+    }
+
+    fn media(path: &str) -> ConflictFile {
+        ConflictFile {
+            path: path_to_stored_string(path),
+            version: String::new(),
+            size_bytes: 1,
+            media: true,
+            media_file_id: None,
+            root_path: "/library".into(),
+        }
+    }
+
+    #[test]
+    fn a_file_stem_naming_another_work_ranks_as_another_work() {
+        let title = movie("Emberfall", 2024, &[]);
+        let file = |name: &str| file_name_rank(&title, &format!("/library/A/{name}"));
+        assert_eq!(file("Emberfall.2024.2160p.BluRay.mkv"), 1);
+        assert_eq!(file("Other.Picture.2011.1080p.BluRay.mkv"), -1);
+        assert_eq!(file("movie.mkv"), 0);
+    }
+
+    #[test]
+    fn stacked_part_markers_are_read_from_stems() {
+        assert_eq!(stacked_part_number("Emberfall.2024.cd1"), Some(1));
+        assert_eq!(stacked_part_number("Emberfall 2024 pt2"), Some(2));
+        assert_eq!(stacked_part_number("Emberfall-2024-part-1"), Some(1));
+        assert_eq!(stacked_part_number("Emberfall.2024.Disc 2"), Some(2));
+        assert_eq!(stacked_part_number("Emberfall.2024.2160p"), None);
+        assert_eq!(stacked_part_number("Emberfall.Part.2001"), None);
+    }
+
+    #[test]
+    fn multi_part_media_needs_two_part_numbers_or_a_part_folder() {
+        let folders = vec![path_to_stored_string("/library/A")];
+        assert!(holds_multi_part_media(
+            &[
+                media("/library/A/Emberfall.cd1.mkv"),
+                media("/library/A/Emberfall.cd2.mkv")
+            ],
+            &folders
+        ));
+        // One stem saying `Part 2` names a sequel, not a stack.
+        assert!(!holds_multi_part_media(
+            &[
+                media("/library/A/Emberfall Part 2.mkv"),
+                media("/library/A/Emberfall Part 2.720p.mkv")
+            ],
+            &folders
+        ));
+        assert!(holds_multi_part_media(
+            &[media("/library/A/CD2/Emberfall.mkv")],
+            &folders
+        ));
+        // A part-looking conflict folder itself is not a part folder inside it.
+        assert!(!holds_multi_part_media(
+            &[media("/library/CD1/Emberfall.mkv")],
+            &[path_to_stored_string("/library/CD1")]
+        ));
     }
 
     #[test]

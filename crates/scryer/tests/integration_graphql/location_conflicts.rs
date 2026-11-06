@@ -1776,6 +1776,112 @@ async fn conflict_survivor_never_uses_a_folder_identifying_a_different_work() {
 }
 
 #[tokio::test]
+async fn conflict_bucket_holding_another_work_is_refused_for_every_policy() {
+    let fixture = ConflictFixture::new().await;
+    let other = fixture.junk.join("Other.Picture.2011.1080p.BluRay.mkv");
+    std::fs::write(&other, b"another film").unwrap();
+    for policy in [ConflictPolicy::KeepOne, ConflictPolicy::AdoptAll] {
+        let preview = fixture
+            .ctx
+            .app
+            .preview_pending_import_conflicts(
+                &fixture.actor,
+                fixture.request(policy, ConflictLeftovers::MediaOnly),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            preview.rows[0].error_reason.as_deref(),
+            Some(refusal::FOLDER_HOLDS_OTHER_WORKS),
+            "{preview:?}"
+        );
+        assert_eq!(preview.actionable_count, 0);
+    }
+    assert_eq!(std::fs::read(&other).unwrap(), b"another film");
+    assert!(
+        fixture
+            .junk
+            .join("Emberfall.2024.2160p.BluRay.mkv")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn conflict_keep_one_refuses_a_stacked_multi_part_title() {
+    let fixture = ConflictFixture::new().await;
+    std::fs::rename(
+        fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv"),
+        fixture.junk.join("Emberfall.2024.2160p.BluRay.cd1.mkv"),
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.junk.join("Emberfall.2024.2160p.BluRay.cd2.mkv"),
+        b"second part",
+    )
+    .unwrap();
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(
+            &fixture.actor,
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::MediaOnly),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::MULTI_PART_MEDIA),
+        "{preview:?}"
+    );
+    // Adopting every part keeps them all, so it stays available.
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(
+            &fixture.actor,
+            fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+        )
+        .await
+        .unwrap();
+    assert!(preview.rows[0].error_reason.is_none(), "{preview:?}");
+    assert!(
+        fixture
+            .junk
+            .join("Emberfall.2024.2160p.BluRay.cd1.mkv")
+            .exists()
+    );
+    assert!(
+        fixture
+            .junk
+            .join("Emberfall.2024.2160p.BluRay.cd2.mkv")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn conflict_keep_one_refuses_a_title_with_part_folders() {
+    let fixture = ConflictFixture::new().await;
+    let part = fixture.named.join("CD2");
+    std::fs::create_dir(&part).unwrap();
+    std::fs::write(part.join("Emberfall.2024.720p.WEB-DL.mkv"), b"second part").unwrap();
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(
+            &fixture.actor,
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::MediaOnly),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::MULTI_PART_MEDIA),
+        "{preview:?}"
+    );
+    assert!(part.join("Emberfall.2024.720p.WEB-DL.mkv").exists());
+}
+
+#[tokio::test]
 async fn conflict_keep_one_uses_each_of_three_roots_for_its_disposal_manifest() {
     let mut fixture = ConflictFixture::new().await;
     let second_temp = tempfile::tempdir().unwrap();

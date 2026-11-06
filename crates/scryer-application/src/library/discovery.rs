@@ -475,7 +475,7 @@ fn conventional_season(path: &Path) -> bool {
 /// Disc, disc-structure and anime bonus folders that hold part of their
 /// parent title's media rather than another title. Their files stay visible
 /// to the per-title walker; only boundary discovery folds them into the parent.
-fn is_title_part_folder_name(name: &str) -> bool {
+pub(crate) fn is_title_part_folder_name(name: &str) -> bool {
     const FIXED: &[&str] = &[
         "bdmv",
         "video_ts",
@@ -1007,6 +1007,11 @@ async fn discover_title_folder_boundaries(
                         Some("folder contains another title boundary or an unreadable branch; select individual title folders".into())
                     } else if frame.identity_conflicts() {
                         Some("media identity conflicts with the proposed title folder".into())
+                    } else if !episodic && frame.evidence.names_differ {
+                        // A flat folder of differently named films is a bucket,
+                        // not one movie; claiming it would make the other films
+                        // this title's media.
+                        Some("folder holds media naming different works; select individual title folders".into())
                     } else {
                         None
                     };
@@ -2759,6 +2764,28 @@ mod tests {
         let path = root.join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"synthetic media").unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_movie_bucket_of_different_works_is_rejected_not_claimed() {
+        let root = tempfile::tempdir().unwrap();
+        write_discovery_fixture(root.path(), "Bucket/Alpha.Fixture.2001.1080p.mkv");
+        write_discovery_fixture(root.path(), "Bucket/Beta.Sample.Work.2004.720p.mkv");
+        write_discovery_fixture(root.path(), "Stacked/Gamma.Fixture.2003.cd1.mkv");
+        write_discovery_fixture(root.path(), "Stacked/Gamma.Fixture.2003.cd2.mkv");
+        let entries =
+            collect_nested_boundaries(root.path(), discovery_policy(MediaFacet::Movie)).await;
+        let bucket = entries
+            .iter()
+            .find(|entry| entry.path == root.path().join("Bucket"))
+            .expect("bucket boundary");
+        assert!(bucket.rejection.is_some(), "{entries:?}");
+        assert!(bucket.evidence.is_none());
+        let stacked = entries
+            .iter()
+            .find(|entry| entry.path == root.path().join("Stacked"))
+            .expect("stacked boundary");
+        assert!(stacked.rejection.is_none(), "{entries:?}");
     }
 
     #[tokio::test]

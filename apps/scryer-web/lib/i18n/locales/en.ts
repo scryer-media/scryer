@@ -49,6 +49,10 @@ const en: LocaleDictionary = {
     "A file changed since the preview. Refresh the preview.",
   "error.reason.LOCATION_CONFLICT_RECYCLE_UNAVAILABLE":
     "The recycle destination is unavailable. Restore access and try again.",
+  "error.reason.LOCATION_CONFLICT_FOLDER_HOLDS_OTHER_WORKS":
+    "A conflict folder holds a film that names a different title. Move each film into its own folder, then refresh the preview.",
+  "error.reason.LOCATION_CONFLICT_MULTI_PART_MEDIA":
+    "This title is split into parts, so keeping one file would remove the others. Use Adopt all instead.",
 
   "pendingImports.conflict.select": "Select conflict",
   "pendingImports.conflict.adoptAll": "Adopt all",
