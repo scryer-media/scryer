@@ -1245,7 +1245,7 @@ fn title_payload_from_context(title: &TitleContextSnapshot) -> NotificationTitle
         path: None,
         overview: None,
         sort_title: None,
-        poster_url: title.poster_url.clone(),
+        poster_url: notification_artwork_url(None, title.poster_url.as_deref()),
         background_url: None,
         tags: Vec::new(),
         aliases: Vec::new(),
@@ -1265,6 +1265,24 @@ fn title_payload_from_context(title: &TitleContextSnapshot) -> NotificationTitle
             by_source_key: BTreeMap::new(),
         },
     }
+}
+
+/// Artwork URL for a notification payload: the first of `source` and `display`
+/// that is an absolute http(s) URL. Receivers such as Discord run outside
+/// Scryer and cannot resolve a Scryer-local cache path like `/images/...`
+/// (Discord rejects the whole message over one), so a cached title sends its
+/// provider URL and a value with no absolute form is left out.
+fn notification_artwork_url(source: Option<&str>, display: Option<&str>) -> Option<String> {
+    [source, display]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| {
+            let lower = value.to_ascii_lowercase();
+            (lower.starts_with("http://") && lower.len() > "http://".len())
+                || (lower.starts_with("https://") && lower.len() > "https://".len())
+        })
+        .map(str::to_string)
 }
 
 fn media_request_submitted_title_context(
@@ -1772,8 +1790,14 @@ fn title_payload_from_title(title: &Title) -> NotificationTitlePayload {
         path: title.folder_path.clone(),
         overview: title.overview.clone(),
         sort_title: title.sort_title.clone(),
-        poster_url: title.poster_url.clone(),
-        background_url: title.background_url.clone(),
+        poster_url: notification_artwork_url(
+            title.poster_source_url.as_deref(),
+            title.poster_url.as_deref(),
+        ),
+        background_url: notification_artwork_url(
+            title.background_source_url.as_deref(),
+            title.background_url.as_deref(),
+        ),
         tags: title.tags.clone(),
         aliases: title_aliases(title),
         original_language: title.language.clone(),
@@ -2084,6 +2108,132 @@ mod tests {
             ExternalId::new("imdb".to_string(), "tt7654321".to_string()),
             ExternalId::new("tvdb".to_string(), "456".to_string()),
         ]
+    }
+
+    fn artwork_title(
+        poster_url: Option<&str>,
+        poster_source_url: Option<&str>,
+        background_url: Option<&str>,
+        background_source_url: Option<&str>,
+    ) -> Title {
+        Title {
+            id: "title-1".to_string(),
+            name: "Example Show".to_string(),
+            facet: MediaFacet::Series,
+            library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+            root_folder_id: scryer_domain::root_folder_id_for_path("/data/test"),
+            monitored: true,
+            tags: vec![],
+            canonical_tags: vec![],
+            external_ids: vec![ExternalId::new("tvdb".to_string(), "123".to_string())],
+            created_by: None,
+            created_at: Utc::now(),
+            year: Some(2024),
+            overview: None,
+            poster_url: poster_url.map(str::to_string),
+            poster_source_url: poster_source_url.map(str::to_string),
+            background_url: background_url.map(str::to_string),
+            background_source_url: background_source_url.map(str::to_string),
+            sort_title: None,
+            catalog_sort_key: String::new(),
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            popularity: None,
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            movie_release_dates: None,
+            folder_path: None,
+        }
+    }
+
+    #[test]
+    fn cached_title_artwork_sends_provider_urls() {
+        let title = artwork_title(
+            Some("/images/titles/title-1/poster/w250?v=abc"),
+            Some("https://artworks.thetvdb.com/banners/example.jpg"),
+            Some("/images/titles/title-1/fanart/w1280?v=abc"),
+            Some("https://artworks.thetvdb.com/banners/example-fanart.jpg"),
+        );
+
+        let payload = title_payload_from_title(&title);
+
+        assert_eq!(
+            payload.poster_url.as_deref(),
+            Some("https://artworks.thetvdb.com/banners/example.jpg")
+        );
+        assert_eq!(
+            payload.background_url.as_deref(),
+            Some("https://artworks.thetvdb.com/banners/example-fanart.jpg")
+        );
+    }
+
+    #[test]
+    fn local_only_title_artwork_is_left_out() {
+        let title = artwork_title(
+            Some("/images/titles/title-1/poster/w250?v=abc"),
+            None,
+            Some("/images/titles/title-1/fanart/w1280?v=abc"),
+            Some("   "),
+        );
+
+        let payload = title_payload_from_title(&title);
+
+        assert_eq!(payload.poster_url, None);
+        assert_eq!(payload.background_url, None);
+    }
+
+    #[test]
+    fn uncached_title_artwork_keeps_absolute_urls() {
+        let title = artwork_title(
+            Some("https://example.invalid/poster.jpg"),
+            None,
+            Some("HTTPS://example.invalid/fanart.jpg"),
+            None,
+        );
+
+        let payload = title_payload_from_title(&title);
+
+        assert_eq!(
+            payload.poster_url.as_deref(),
+            Some("https://example.invalid/poster.jpg")
+        );
+        assert_eq!(
+            payload.background_url.as_deref(),
+            Some("HTTPS://example.invalid/fanart.jpg")
+        );
+    }
+
+    #[test]
+    fn context_snapshot_drops_local_poster_path() {
+        let mut snapshot = title_context("Example Show", MediaFacet::Series);
+        snapshot.poster_url = Some("/images/titles/title-1/poster/w250?v=abc".to_string());
+
+        let payload = title_payload_from_context(&snapshot);
+
+        assert_eq!(payload.poster_url, None);
+    }
+
+    #[test]
+    fn context_snapshot_keeps_absolute_poster_url() {
+        let snapshot = title_context("Example Show", MediaFacet::Series);
+
+        let payload = title_payload_from_context(&snapshot);
+
+        assert_eq!(
+            payload.poster_url.as_deref(),
+            Some("https://example.invalid/poster.jpg")
+        );
     }
 
     #[test]
