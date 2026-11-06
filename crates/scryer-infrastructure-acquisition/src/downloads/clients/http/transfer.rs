@@ -1678,6 +1678,8 @@ fn decode_hex(hex: &str) -> Option<Vec<u8>> {
 }
 
 /// Hash a file without holding it in memory.
+// Verifies the checksum a remote HTTP server advertised, so the server picks the algorithm (SHA-256, SHA-1 or MD5).
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 async fn hash_file(
     context: &TransferContext<'_>,
     path: &Path,

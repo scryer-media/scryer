@@ -19,6 +19,8 @@ use scryer_application::{
 use scryer_plugins::WasmPluginDescriptorLoader;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
+// Release artifact digests are published as SHA-256 (winget manifests, Sigstore trust root).
+#[allow(clippy::disallowed_types)]
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -950,6 +952,8 @@ fn load_release_dry_run_cache(ctx: &TaskContext) -> Result<ReleaseDryRunCache> {
     serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
 }
 
+// Release artifact digests are published as SHA-256 (winget manifests, Sigstore trust root).
+#[allow(clippy::disallowed_types)]
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest
@@ -2871,6 +2875,8 @@ fn write_materialized_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+// Release artifact digests are published as SHA-256 (winget manifests, Sigstore trust root).
+#[allow(clippy::disallowed_types)]
 fn materialize_sigstore_trust_root(ctx: &TaskContext, output_dir: &Path) -> Result<()> {
     step("Materializing TUF-verified Sigstore trust root");
     // The refreshed root also becomes the one artifact-trust verifies the

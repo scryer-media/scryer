@@ -157,11 +157,9 @@ pub fn media_format_for_extension(extension: &str) -> Option<&'static MediaForma
 /// keeps the stem non-empty and leaves the extension bytes untouched.
 pub fn canonical_video_extension(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_string_lossy();
-    let name = name
-        .trim()
-        .trim_end_matches(|ch: char| {
-            ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | '`' | '_' | '.')
-        });
+    let name = name.trim().trim_end_matches(|ch: char| {
+        ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | '`' | '_' | '.')
+    });
     let (stem, extension) = name.rsplit_once('.')?;
     if stem.is_empty() {
         return None;

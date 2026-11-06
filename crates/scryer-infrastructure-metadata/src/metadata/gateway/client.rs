@@ -92,6 +92,8 @@ pub use list_accounts::HttpListAccountAuthGateway;
 /// Do not reuse it for anything else. First-party hashing goes through
 /// `scryer_application::blake3_identity_hex` — see `blake3_digest` just below,
 /// which is what the *local* half of the APQ cache key uses.
+// GraphQL APQ keys the gateway registry on SHA-256 of the query text.
+#[allow(clippy::disallowed_methods)]
 fn sha256_hex(input: &str) -> String {
     let hash = digest::digest(&digest::SHA256, input.as_bytes());
     hash.as_ref()
@@ -164,6 +166,8 @@ enum MtlsState {
 }
 
 /// SHA-256 hex digest of a byte slice (for request body hashing).
+// SMG request signing fixes the body digest as SHA-256.
+#[allow(clippy::disallowed_methods)]
 fn sha256_hex_bytes(data: &[u8]) -> String {
     let hash = digest::digest(&digest::SHA256, data);
     hash.as_ref()
@@ -449,11 +453,12 @@ fn is_version_incompatible_response(body: &[u8]) -> bool {
 }
 
 fn compatibility_poll_phase(instance_id: &str) -> Duration {
-    let digest = digest::digest(&digest::SHA256, instance_id.as_bytes());
-    let mut raw = [0_u8; 8];
-    raw.copy_from_slice(&digest.as_ref()[..8]);
-    let offset_secs =
-        u64::from_be_bytes(raw) % METADATA_GATEWAY_COMPATIBILITY_POLL_INTERVAL.as_secs();
+    let digest = scryer_application::blake3_identity_hex(
+        scryer_application::HashDomain::GatewayCompatibilityPollPhase,
+        instance_id,
+    );
+    let offset_secs = u64::from_str_radix(&digest[..16], 16).unwrap_or_default()
+        % METADATA_GATEWAY_COMPATIBILITY_POLL_INTERVAL.as_secs();
     Duration::from_secs(offset_secs)
 }
 

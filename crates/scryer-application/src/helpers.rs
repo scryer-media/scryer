@@ -380,6 +380,8 @@ pub enum HashDomain {
     RawSearchScope,
     /// Stable source-qualified identity exposed to external indexer clients.
     IndexerClientRelease,
+    /// Per-instance phase offset for the metadata gateway compatibility poll.
+    GatewayCompatibilityPollPhase,
 }
 
 impl HashDomain {
@@ -408,6 +410,7 @@ impl HashDomain {
             Self::IndexerListingFamily => "scryer.indexer.listing-family.v1",
             Self::RawSearchScope => "scryer.raw-search.scope.v1",
             Self::IndexerClientRelease => "scryer.indexer-client.release.v1",
+            Self::GatewayCompatibilityPollPhase => "scryer.metadata-gateway.poll-phase.v1",
         }
     }
 }

@@ -955,6 +955,8 @@ impl AppUseCase {
     }
     /// Starts a link session. `member_app_token` is the member's own key, the
     /// application token TMDb's approval runs on. The server holds none.
+    // OAuth PKCE S256 challenge, fixed by RFC 7636.
+    #[allow(clippy::disallowed_methods)]
     async fn begin_list_account_link(
         &self,
         actor: &User,

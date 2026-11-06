@@ -137,6 +137,8 @@ fn normalize_plugin_http_ca_bundle_pem(bundle_pem: &str) -> AppResult<String> {
     }
     Ok(normalized.join("\n"))
 }
+// Certificate fingerprint a human compares with what a browser or openssl prints, which is SHA-256 by convention.
+#[allow(clippy::disallowed_methods)]
 fn summarize_plugin_http_trusted_certificates(
     bundle_pem: &str,
 ) -> AppResult<Vec<GeneralSettingsTrustedCertificate>> {

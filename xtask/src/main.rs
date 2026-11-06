@@ -2,6 +2,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
+// Dev-only fixed encryption key; existing local dev databases were sealed with it.
+#[allow(clippy::disallowed_types)]
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
@@ -1094,6 +1096,8 @@ fn prepare_serve_datastore(
     })
 }
 
+// Dev-only fixed encryption key; existing local dev databases were sealed with it.
+#[allow(clippy::disallowed_types)]
 fn serve_encryption_key() -> String {
     let digest = Sha256::digest(b"scryer-xtask-dev-encryption-key");
     base64::engine::general_purpose::STANDARD.encode(digest)

@@ -139,6 +139,8 @@ fn test_base32_decode_no_pad(input: &str) -> Vec<u8> {
     decoded
 }
 
+// TOTP (RFC 6238) fixes the HMAC algorithm.
+#[allow(clippy::disallowed_methods)]
 fn test_totp_code_for_step_offset(secret_base32: &str, step_offset: i64) -> String {
     let secret = test_base32_decode_no_pad(secret_base32);
     let step = Utc::now().timestamp() / 30 + step_offset;

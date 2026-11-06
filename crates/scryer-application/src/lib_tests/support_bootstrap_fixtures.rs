@@ -2481,6 +2481,8 @@ pub(super) enum TestPermissionPreset {
 }
 
 /// Derive a per-user JWT signing key (mirrors `AppUseCase::derive_jwt_key`).
+// Mirrors the HMAC-SHA256 JWT key derivation the fixture signs tokens with.
+#[allow(clippy::disallowed_methods)]
 pub(super) fn test_derive_jwt_key(
     salt: &str,
     password_hash: &str,

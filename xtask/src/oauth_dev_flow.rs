@@ -3,6 +3,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::Args;
 use serde::Deserialize;
+// OAuth PKCE S256 challenge, fixed by RFC 7636.
+#[allow(clippy::disallowed_types)]
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -386,6 +388,8 @@ fn generate_pkce_verifier() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+// OAuth PKCE S256 challenge, fixed by RFC 7636.
+#[allow(clippy::disallowed_types)]
 fn pkce_s256_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }

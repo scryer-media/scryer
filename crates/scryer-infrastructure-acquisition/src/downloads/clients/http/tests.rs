@@ -2216,6 +2216,8 @@ async fn an_encoded_whole_file_answer_is_stored_as_sent() {
 // a finished file whose completion was not recorded
 
 #[tokio::test]
+// Builds the SHA-256 checksum a remote HTTP server would advertise.
+#[allow(clippy::disallowed_methods)]
 async fn a_file_already_in_place_completes_without_a_request() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -2334,6 +2336,8 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+// Builds the SHA-256 checksum a remote HTTP server would advertise.
+#[allow(clippy::disallowed_methods)]
 fn sha256_hex(bytes: &[u8]) -> String {
     hex(aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes).as_ref())
 }
@@ -2401,6 +2405,8 @@ async fn a_matching_sha256_checksum_completes() {
     assert_eq!(std::fs::read(&done.files[0].final_path).unwrap(), BODY);
 }
 
+// Builds the MD5 checksum a remote HTTP server would advertise.
+#[allow(clippy::disallowed_types)]
 #[tokio::test]
 async fn a_matching_md5_checksum_completes() {
     use md5::Digest as _;
@@ -2988,6 +2994,8 @@ async fn http_recovery_refuses_same_size_replacement_and_legacy_final_only() {
 }
 
 #[test]
+// Builds the SHA-256 checksum a remote HTTP server would advertise.
+#[allow(clippy::disallowed_methods)]
 fn http_partial_path_survives_extension_change_and_old_documents() {
     let mut file = fresh_file(Path::new("/synthetic"), "https://cdn.invalid/media");
     let old = file.part_path();

@@ -82,6 +82,8 @@ fn app() -> ListProviderAppConfig {
 }
 
 #[tokio::test]
+// Mirrors the SHA-256 body digest SMG request signing fixes.
+#[allow(clippy::disallowed_methods)]
 async fn relay_start_signs_exact_path_raw_body_and_fresh_nonce() {
     let server = MockServer::start().await;
     let transport = transport(&server).await;
