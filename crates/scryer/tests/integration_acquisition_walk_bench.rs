@@ -199,7 +199,7 @@ async fn seed(ctx: &TestContext) -> Seeded {
                 .await
                 .expect("insert episode");
                 episodes += 1;
-                if episodes % EPISODE_MISSING_EVERY == 0 {
+                if episodes.is_multiple_of(EPISODE_MISSING_EVERY) {
                     continue;
                 }
                 let file_id = format!("{episode_id}-file");

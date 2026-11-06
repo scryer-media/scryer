@@ -1183,7 +1183,8 @@ const ko: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "추천",
   "libraryGraph.notBuilt": "라이브러리 그래프가 아직 생성되지 않았습니다.",
   "libraryGraph.truncated": "이 그래프는 라이브러리의 일부만 포함합니다.",
-  "discovery.refusal.neighborTargetKeyUnsupported": "이 작품은 더 이상 탐색할 수 없습니다.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "이 작품은 더 이상 탐색할 수 없습니다.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "이 작품은 이 라이브러리의 미디어 유형과 일치하지 않아 여기에서 탐색할 수 없습니다.",
   "libraryGraph.moreLikeThisEmpty": "아직 비슷한 작품이 없습니다.",
@@ -3640,16 +3641,26 @@ const ko: LocaleDictionary = {
     "파일을 새 이름으로 옮기지 못했습니다. 파일과 에피소드는 그대로 유지되었습니다.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "에피소드 번호가 모호합니다",
-  "settings.maintenanceExecutionReason.playbackHold": "보류: 미디어 서버에서 재생 중입니다.",
-  "settings.maintenanceExecutionReason.playbackUnknown": "보류: 미디어 서버에 재생 여부를 확인할 수 없었습니다.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "보류: 미디어 서버에 저장된 시청 기록보다 최신 재생이 있습니다.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "보류: 미디어 서버 기록에 시청 기록이 반영하지 않는 계정의 재생이 있습니다.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "보류: 실행 전에 미디어 서버에서 시청 기록을 확인할 수 없었습니다.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "보류: 연결된 미디어 서버에 일치하는 항목이 없어 실행 전에 시청 기록을 확인할 수 없었습니다.",
-  "settings.refMaintFactsWatchedByAnyone": "연결된 미디어 서버에 계정이 있는 누군가가 Scryer 연결 여부와 관계없이 재생했는지 여부. 누구인지는 밝히지 않습니다",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "연결된 미디어 서버에 계정이 있는 누군가가 마지막으로 재생한 시각",
-  "settings.refMaintFactsWatchedByAnyoneValue": "활성화된 미디어 서버의 어떤 계정이든 재생했으면 true이며, 계정이 Scryer 사용자에 연결되어 있는지는 상관없습니다. 시즌과 시리즈는 방영된 에피소드 중 하나라도 해당됩니다. 최근 48시간 안의 동기화가 모든 활성 연결의 모든 계정을 읽기 전까지는 audience_not_read 사유로 알 수 없으며, 시청 사실을 알 수 없을 때는 일반적인 사유로 알 수 없습니다.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "어떤 계정이든 가장 최근에 재생한 RFC3339 타임스탬프. 아무도 재생하지 않았으면 never_watched 사유로 값이 없고, 재생에 기록된 시각이 없으면 play_time_missing(시즌과 시리즈는 episode_play_time_missing), 모든 계정을 읽지 못했으면 audience_not_read 사유로 알 수 없습니다",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "보류: 미디어 서버에서 재생 중입니다.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "보류: 미디어 서버에 재생 여부를 확인할 수 없었습니다.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "보류: 미디어 서버에 저장된 시청 기록보다 최신 재생이 있습니다.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "보류: 미디어 서버 기록에 시청 기록이 반영하지 않는 계정의 재생이 있습니다.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "보류: 실행 전에 미디어 서버에서 시청 기록을 확인할 수 없었습니다.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "보류: 연결된 미디어 서버에 일치하는 항목이 없어 실행 전에 시청 기록을 확인할 수 없었습니다.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "연결된 미디어 서버에 계정이 있는 누군가가 Scryer 연결 여부와 관계없이 재생했는지 여부. 누구인지는 밝히지 않습니다",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "연결된 미디어 서버에 계정이 있는 누군가가 마지막으로 재생한 시각",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "활성화된 미디어 서버의 어떤 계정이든 재생했으면 true이며, 계정이 Scryer 사용자에 연결되어 있는지는 상관없습니다. 시즌과 시리즈는 방영된 에피소드 중 하나라도 해당됩니다. 최근 48시간 안의 동기화가 모든 활성 연결의 모든 계정을 읽기 전까지는 audience_not_read 사유로 알 수 없으며, 시청 사실을 알 수 없을 때는 일반적인 사유로 알 수 없습니다.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "어떤 계정이든 가장 최근에 재생한 RFC3339 타임스탬프. 아무도 재생하지 않았으면 never_watched 사유로 값이 없고, 재생에 기록된 시각이 없으면 play_time_missing(시즌과 시리즈는 episode_play_time_missing), 모든 계정을 읽지 못했으면 audience_not_read 사유로 알 수 없습니다",
   "settings.maintenancePreviewFacts": "규칙이 읽은 사실",
   "setup.sourceImportProgress": "소스 가져오는 중",
   "setup.sourceImportInvalidRequest":

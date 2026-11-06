@@ -13,7 +13,8 @@ const RESTART_PROBE_INTERVAL_MS = 1_500;
 /** After this long the page says Scryer may now be at another address. */
 const RESTART_PROBE_TIMEOUT_MS = 45_000;
 
-export type NetworkRestartPhase = "idle" | "requesting" | "restarting" | "unreachable";
+export type NetworkRestartPhase =
+  "idle" | "requesting" | "restarting" | "unreachable";
 
 function healthUrl(): string {
   const base = getRuntimeBasePath();

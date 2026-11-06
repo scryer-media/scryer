@@ -1340,7 +1340,7 @@ impl EpisodePayload {
             // The batch read silently drops titles outside the caller's
             // privileged libraries, matching the loader path above.
             let wanted_item = app
-                .get_title_wanted_items_for_titles(&actor, &[self.title_id.to_string()])
+                .get_title_wanted_items_for_titles(&actor, std::slice::from_ref(&*self.title_id))
                 .await
                 .map_err(to_gql_error)?
                 .into_iter()

@@ -749,6 +749,75 @@ pub fn from_discovery_facet(facet: DiscoveryFacetRecord) -> DiscoveryFacetPayloa
     }
 }
 
+pub fn discovery_neighbors_query_from_input(
+    input: DiscoveryNeighborsInput,
+) -> scryer_application::DiscoveryNeighborsQuery {
+    scryer_application::DiscoveryNeighborsQuery {
+        target_key: input.target_key,
+        facet: input.facet.into_domain(),
+        limit: input.limit.map_or(
+            scryer_application::DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
+            i64::from,
+        ),
+    }
+}
+
+pub fn library_graph_query_from_input(
+    input: LibraryGraphInput,
+) -> scryer_application::LibraryGraphQuery {
+    scryer_application::LibraryGraphQuery {
+        facet: input.facet.into_domain(),
+        library_ids: input
+            .library_ids
+            .unwrap_or_default()
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect(),
+    }
+}
+
+fn graph_int(value: i64) -> i32 {
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+pub fn from_library_graph(view: scryer_application::LibraryGraphView) -> LibraryGraph {
+    LibraryGraph {
+        generated_at: view.generated_at,
+        nodes: view
+            .nodes
+            .into_iter()
+            .map(|node| LibraryGraphNode {
+                subject_key: node.subject_key,
+                target_key: node.target_key,
+                cluster_id: graph_int(node.cluster_id),
+            })
+            .collect(),
+        edges: view
+            .edges
+            .into_iter()
+            .map(|edge| LibraryGraphEdge {
+                from: edge.from,
+                to: edge.to,
+                weight: edge.weight,
+                kinds: edge.kinds,
+            })
+            .collect(),
+        clusters: view
+            .clusters
+            .into_iter()
+            .map(|cluster| LibraryGraphCluster {
+                id: graph_int(cluster.id),
+                label_key: cluster.label_key,
+                label: cluster.label,
+                medoid: cluster.medoid,
+                size: graph_int(cluster.size),
+            })
+            .collect(),
+        subject_count: graph_int(view.subject_count),
+        truncated: view.truncated,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,74 +891,5 @@ mod tests {
             years.validation_reason(),
             Some(scryer_interface_core::refusal::INTERFACE_DISCOVERY_YEARS_INVALID)
         );
-    }
-}
-
-pub fn discovery_neighbors_query_from_input(
-    input: DiscoveryNeighborsInput,
-) -> scryer_application::DiscoveryNeighborsQuery {
-    scryer_application::DiscoveryNeighborsQuery {
-        target_key: input.target_key,
-        facet: input.facet.into_domain(),
-        limit: input.limit.map_or(
-            scryer_application::DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
-            i64::from,
-        ),
-    }
-}
-
-pub fn library_graph_query_from_input(
-    input: LibraryGraphInput,
-) -> scryer_application::LibraryGraphQuery {
-    scryer_application::LibraryGraphQuery {
-        facet: input.facet.into_domain(),
-        library_ids: input
-            .library_ids
-            .unwrap_or_default()
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect(),
-    }
-}
-
-fn graph_int(value: i64) -> i32 {
-    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
-}
-
-pub fn from_library_graph(view: scryer_application::LibraryGraphView) -> LibraryGraph {
-    LibraryGraph {
-        generated_at: view.generated_at,
-        nodes: view
-            .nodes
-            .into_iter()
-            .map(|node| LibraryGraphNode {
-                subject_key: node.subject_key,
-                target_key: node.target_key,
-                cluster_id: graph_int(node.cluster_id),
-            })
-            .collect(),
-        edges: view
-            .edges
-            .into_iter()
-            .map(|edge| LibraryGraphEdge {
-                from: edge.from,
-                to: edge.to,
-                weight: edge.weight,
-                kinds: edge.kinds,
-            })
-            .collect(),
-        clusters: view
-            .clusters
-            .into_iter()
-            .map(|cluster| LibraryGraphCluster {
-                id: graph_int(cluster.id),
-                label_key: cluster.label_key,
-                label: cluster.label,
-                medoid: cluster.medoid,
-                size: graph_int(cluster.size),
-            })
-            .collect(),
-        subject_count: graph_int(view.subject_count),
-        truncated: view.truncated,
     }
 }

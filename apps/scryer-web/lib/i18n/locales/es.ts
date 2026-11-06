@@ -1250,7 +1250,8 @@ const es: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "Recomendado",
   "libraryGraph.notBuilt": "El grafo de la biblioteca aún no se ha generado.",
   "libraryGraph.truncated": "Este grafo cubre solo una parte de la biblioteca.",
-  "discovery.refusal.neighborTargetKeyUnsupported": "Este título no se puede explorar más.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "Este título no se puede explorar más.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "Este título no coincide con el tipo de medio de esta biblioteca, así que no se puede explorar aquí.",
   "libraryGraph.moreLikeThisEmpty": "Aún no hay nada parecido.",
@@ -3822,16 +3823,26 @@ const es: LocaleDictionary = {
     "No se pudo mover el archivo a su nuevo nombre. El archivo y sus episodios quedaron como estaban.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "La numeración de episodios es ambigua",
-  "settings.maintenanceExecutionReason.playbackHold": "En espera: algo se está reproduciendo en un servidor multimedia.",
-  "settings.maintenanceExecutionReason.playbackUnknown": "En espera: no se pudo consultar a un servidor multimedia si algo se está reproduciendo.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "En espera: el servidor multimedia muestra una reproducción más reciente que el historial guardado.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "En espera: el historial del servidor multimedia muestra una reproducción de una cuenta que el historial de visualización no cuenta.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "En espera: el servidor multimedia no pudo confirmar el historial de visualización antes de actuar.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "En espera: un servidor multimedia conectado no tiene un elemento coincidente, por lo que no se pudo confirmar el historial de visualización antes de actuar.",
-  "settings.refMaintFactsWatchedByAnyone": "Si alguien con una cuenta en un servidor multimedia conectado lo ha reproducido, esté vinculado a Scryer o no; no nombra a nadie",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "Cuándo lo reprodujo por última vez alguien con una cuenta en un servidor multimedia conectado",
-  "settings.refMaintFactsWatchedByAnyoneValue": "True cuando cualquier cuenta de un servidor multimedia habilitado lo ha reproducido, esté o no vinculada a un usuario de Scryer; en temporadas y series cuenta cualquier episodio emitido. Desconocido con el motivo audience_not_read hasta que una sincronización de las últimas 48 horas haya leído todas las cuentas de todas las conexiones habilitadas, y con los motivos habituales siempre que los datos de visionado sean desconocidos.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "Marca de tiempo RFC3339 de la reproducción más reciente de cualquier cuenta; ausente con el motivo never_watched cuando nadie lo ha reproducido, y desconocida con el motivo play_time_missing (episode_play_time_missing en temporadas y series) cuando una reproducción no tiene hora registrada, o audience_not_read cuando no se han leído todas las cuentas",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "En espera: algo se está reproduciendo en un servidor multimedia.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "En espera: no se pudo consultar a un servidor multimedia si algo se está reproduciendo.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "En espera: el servidor multimedia muestra una reproducción más reciente que el historial guardado.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "En espera: el historial del servidor multimedia muestra una reproducción de una cuenta que el historial de visualización no cuenta.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "En espera: el servidor multimedia no pudo confirmar el historial de visualización antes de actuar.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "En espera: un servidor multimedia conectado no tiene un elemento coincidente, por lo que no se pudo confirmar el historial de visualización antes de actuar.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Si alguien con una cuenta en un servidor multimedia conectado lo ha reproducido, esté vinculado a Scryer o no; no nombra a nadie",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "Cuándo lo reprodujo por última vez alguien con una cuenta en un servidor multimedia conectado",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True cuando cualquier cuenta de un servidor multimedia habilitado lo ha reproducido, esté o no vinculada a un usuario de Scryer; en temporadas y series cuenta cualquier episodio emitido. Desconocido con el motivo audience_not_read hasta que una sincronización de las últimas 48 horas haya leído todas las cuentas de todas las conexiones habilitadas, y con los motivos habituales siempre que los datos de visionado sean desconocidos.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "Marca de tiempo RFC3339 de la reproducción más reciente de cualquier cuenta; ausente con el motivo never_watched cuando nadie lo ha reproducido, y desconocida con el motivo play_time_missing (episode_play_time_missing en temporadas y series) cuando una reproducción no tiene hora registrada, o audience_not_read cuando no se han leído todas las cuentas",
   "settings.maintenancePreviewFacts": "Datos que leyó la regla",
   "setup.sourceImportProgress": "Importando orígenes",
   "setup.sourceImportInvalidRequest":

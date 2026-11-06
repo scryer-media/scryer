@@ -224,16 +224,6 @@ fn channel_layout(channels: i32) -> &'static str {
     }
 }
 
-fn normalize_audio(codec: &'static str) -> &'static str {
-    match codec {
-        "opus" => "opus",
-        "vorbis" => "vorbis",
-        "mp2" => "mp2",
-        "dts" => "dts",
-        other => other,
-    }
-}
-
 fn supported_channels(codec: &str, requested: i32) -> i32 {
     if codec == "vorbis" {
         return 2;
@@ -307,12 +297,7 @@ fn build_case(
         width,
         height,
         fps: rate(index),
-        audio_codecs: audios
-            .iter()
-            .copied()
-            .map(normalize_audio)
-            .map(str::to_string)
-            .collect(),
+        audio_codecs: audios.iter().copied().map(str::to_string).collect(),
         source_audio_codecs: audios,
         audio_channels: channels,
         audio_languages,
@@ -613,7 +598,7 @@ fn build_dense_simd_case(
         width: 32,
         height: 18,
         fps: 120,
-        audio_codecs: vec![normalize_audio(audio).to_string()],
+        audio_codecs: vec![audio.to_string()],
         source_audio_codecs: vec![audio],
         audio_channels: vec![2],
         audio_languages: vec!["eng".to_string()],

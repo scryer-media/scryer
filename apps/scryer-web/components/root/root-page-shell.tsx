@@ -513,7 +513,9 @@ function MainContent({
     // Download activity and history are privileged; a caller who can only
     // resolve imports lands on the import queue instead.
     if (!canViewLibraryInternals) {
-      return <ActivityContainer key="activity-import" activitySection="import" />;
+      return (
+        <ActivityContainer key="activity-import" activitySection="import" />
+      );
     }
     if (activitySection === "history") {
       return (

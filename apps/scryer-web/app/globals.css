@@ -1141,8 +1141,8 @@ body {
    below it and take over the space its spacer would otherwise reserve. */
 @media (max-width: 1279px) {
   [data-slot="root-shell-notice"]:not(
-      [data-slot="root-shell-notice"] ~ [data-slot="root-shell-notice"]
-    ) {
+    [data-slot="root-shell-notice"] ~ [data-slot="root-shell-notice"]
+  ) {
     margin-top: var(--root-header-height, 0px);
   }
   [data-slot="root-shell-notice"]

@@ -4375,15 +4375,17 @@ mod source_review_reason_tests {
     #[test]
     fn primary_audio_rescore_does_not_borrow_unknown_fields_from_filename() {
         let parsed = crate::release_parser::parse_release_metadata("Movie.2024.FLAC2.0");
-        let mut analysis = crate::MediaFileAnalysis::default();
-        analysis.audio_streams = vec![crate::AudioStreamDetail {
-            codec: Some("aac".into()),
-            channels: None,
-            profile: None,
-            language: None,
-            name: None,
-            bitrate_kbps: None,
-        }];
+        let mut analysis = crate::MediaFileAnalysis {
+            audio_streams: vec![crate::AudioStreamDetail {
+                codec: Some("aac".into()),
+                channels: None,
+                profile: None,
+                language: None,
+                name: None,
+                bitrate_kbps: None,
+            }],
+            ..Default::default()
+        };
         let (rescored, _) = rescore_parsed_from_analysis(&parsed, Some(&analysis));
         assert_eq!(
             rescored.audio.map(|codec| codec.to_string()).as_deref(),

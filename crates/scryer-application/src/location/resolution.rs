@@ -606,51 +606,6 @@ fn numbered_name(base: &str, number: u32) -> String {
     ))
 }
 
-#[cfg(test)]
-mod native_name_tests {
-    use super::*;
-
-    #[test]
-    fn literal_codec_prefix_survives_resolver_numbering() {
-        let name = "scryer-path-v1:u:movie.mkv";
-        let encoded = path_to_stored_string(name);
-        assert_eq!(
-            stored_path_to_path_buf(&numbered_name(&encoded, 2)),
-            Path::new("scryer-path-v1:u:movie (2).mkv")
-        );
-    }
-
-    #[cfg(any(unix, windows))]
-    #[test]
-    fn native_companion_suffix_and_numbering_preserve_opaque_units() {
-        let (platform, marker) = if cfg!(windows) {
-            ("w", "%uD800")
-        } else {
-            ("u", "%FF")
-        };
-        let media = stored_path_to_path_buf(&format!(
-            "scryer-path-v1:{platform}:/library/movie{marker}.mkv"
-        ));
-        let companion = stored_path_to_path_buf(&format!(
-            "scryer-path-v1:{platform}:/library/movie{marker}.en{marker}.srt"
-        ));
-        assert_eq!(
-            companion_suffix(&companion, &media),
-            Some(
-                stored_path_to_path_buf(&format!("scryer-path-v1:{platform}:.en{marker}.srt"))
-                    .into_os_string()
-            )
-        );
-        let numbered = numbered_name(&path_to_stored_string(&media), 3);
-        assert_eq!(
-            stored_path_to_path_buf(&numbered),
-            stored_path_to_path_buf(&format!(
-                "scryer-path-v1:{platform}:/library/movie{marker} (3).mkv"
-            ))
-        );
-    }
-}
-
 fn file_error(path: &Path, error: impl std::fmt::Display) -> AppError {
     tracing::warn!(path = %path.display(), error = %error, "file comparison failed");
     AppError::validation_refused(
@@ -870,5 +825,50 @@ fn different_content(source: &Path, destination: &Path) -> VerifiedFile {
             "{} contains different content. Both files were preserved.",
             destination.display()
         )),
+    }
+}
+
+#[cfg(test)]
+mod native_name_tests {
+    use super::*;
+
+    #[test]
+    fn literal_codec_prefix_survives_resolver_numbering() {
+        let name = "scryer-path-v1:u:movie.mkv";
+        let encoded = path_to_stored_string(name);
+        assert_eq!(
+            stored_path_to_path_buf(&numbered_name(&encoded, 2)),
+            Path::new("scryer-path-v1:u:movie (2).mkv")
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn native_companion_suffix_and_numbering_preserve_opaque_units() {
+        let (platform, marker) = if cfg!(windows) {
+            ("w", "%uD800")
+        } else {
+            ("u", "%FF")
+        };
+        let media = stored_path_to_path_buf(&format!(
+            "scryer-path-v1:{platform}:/library/movie{marker}.mkv"
+        ));
+        let companion = stored_path_to_path_buf(&format!(
+            "scryer-path-v1:{platform}:/library/movie{marker}.en{marker}.srt"
+        ));
+        assert_eq!(
+            companion_suffix(&companion, &media),
+            Some(
+                stored_path_to_path_buf(&format!("scryer-path-v1:{platform}:.en{marker}.srt"))
+                    .into_os_string()
+            )
+        );
+        let numbered = numbered_name(&path_to_stored_string(&media), 3);
+        assert_eq!(
+            stored_path_to_path_buf(&numbered),
+            stored_path_to_path_buf(&format!(
+                "scryer-path-v1:{platform}:/library/movie{marker} (3).mkv"
+            ))
+        );
     }
 }

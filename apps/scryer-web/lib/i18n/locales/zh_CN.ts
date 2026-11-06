@@ -3433,16 +3433,26 @@ const zh_CN: LocaleDictionary = {
   "episodeAssign.refusal.renameFailed":
     "将文件移动到新名称失败。文件及其剧集保持原样。",
   "pendingImports.reason.anime_numbering_ambiguous": "剧集编号不明确",
-  "settings.maintenanceExecutionReason.playbackHold": "已暂缓：媒体服务器上正在播放内容。",
-  "settings.maintenanceExecutionReason.playbackUnknown": "已暂缓：无法向媒体服务器确认是否正在播放。",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay": "已暂缓：媒体服务器显示有比已存观看记录更新的播放。",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay": "已暂缓：媒体服务器的历史记录显示有观看记录未计入的账户播放。",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable": "已暂缓：执行前媒体服务器无法确认观看记录。",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped": "已暂缓：已连接的媒体服务器没有匹配的项目，执行前无法确认观看记录。",
-  "settings.refMaintFactsWatchedByAnyone": "已连接媒体服务器上的任何账户是否播放过该项目,无论是否关联 Scryer;不指明具体是谁",
-  "settings.refMaintFactsLastWatchedByAnyoneAt": "已连接媒体服务器上的任何账户最后一次播放该项目的时间",
-  "settings.refMaintFactsWatchedByAnyoneValue": "当已启用媒体服务器上的任何账户播放过它时为 true,无论该账户是否关联到 Scryer 用户;对于季和剧集,任何已播出的单集都算。在过去 48 小时内的同步读取每个已启用连接上的所有账户之前,以原因 audience_not_read 视为未知;观看事实未知时,以常规原因视为未知。",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue": "任何账户最近一次播放的 RFC3339 时间戳;无人播放时以原因 never_watched 缺失,播放没有记录时间时以原因 play_time_missing(季和剧集为 episode_play_time_missing)未知,尚未读取所有账户时以 audience_not_read 未知",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "已暂缓：媒体服务器上正在播放内容。",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "已暂缓：无法向媒体服务器确认是否正在播放。",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "已暂缓：媒体服务器显示有比已存观看记录更新的播放。",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "已暂缓：媒体服务器的历史记录显示有观看记录未计入的账户播放。",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "已暂缓：执行前媒体服务器无法确认观看记录。",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "已暂缓：已连接的媒体服务器没有匹配的项目，执行前无法确认观看记录。",
+  "settings.refMaintFactsWatchedByAnyone":
+    "已连接媒体服务器上的任何账户是否播放过该项目,无论是否关联 Scryer;不指明具体是谁",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "已连接媒体服务器上的任何账户最后一次播放该项目的时间",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "当已启用媒体服务器上的任何账户播放过它时为 true,无论该账户是否关联到 Scryer 用户;对于季和剧集,任何已播出的单集都算。在过去 48 小时内的同步读取每个已启用连接上的所有账户之前,以原因 audience_not_read 视为未知;观看事实未知时,以常规原因视为未知。",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "任何账户最近一次播放的 RFC3339 时间戳;无人播放时以原因 never_watched 缺失,播放没有记录时间时以原因 play_time_missing(季和剧集为 episode_play_time_missing)未知,尚未读取所有账户时以 audience_not_read 未知",
   "settings.maintenancePreviewFacts": "规则读取的事实",
   "setup.sourceImportProgress": "正在导入来源",
   "setup.sourceImportInvalidRequest":

@@ -9451,7 +9451,8 @@ async fn discovery_home_watchlist_needs_an_enabled_personal_linked_list() {
         true,
     ));
 
-    let variants: [(&str, fn(&mut scryer_domain::ListSubscription)); 3] = [
+    type SubscriptionVariant = (&'static str, fn(&mut scryer_domain::ListSubscription));
+    let variants: [SubscriptionVariant; 3] = [
         ("public", |subscription| {
             subscription.scope = scryer_domain::ListScope::Public;
         }),

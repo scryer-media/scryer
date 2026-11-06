@@ -2600,7 +2600,7 @@ async fn source_import_selections(
     for session_id in input.source_warmup_session_ids {
         let session_id_string = session_id.to_string();
         let snapshot = app
-            .get_external_import_monitor_warmup_status(&actor, &session_id_string)
+            .get_external_import_monitor_warmup_status(actor, &session_id_string)
             .await?;
         if snapshot.status != ExternalImportMonitorWarmupStatus::Completed {
             return Err(AppError::validation_refused(
@@ -2609,7 +2609,7 @@ async fn source_import_selections(
             ));
         }
         let warmup = app
-            .external_import_arr_source_warmup_result(&actor, &session_id_string)
+            .external_import_arr_source_warmup_result(actor, &session_id_string)
             .await?;
 
         for dc in warmup.download_clients {

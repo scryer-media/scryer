@@ -6572,6 +6572,20 @@ type EpisodeSetScopePayload {
 }
 
 """
+Selects episodes for a background automatic subtitle search.
+"""
+input EpisodeSubtitleSearchInput {
+	"""
+	Series or anime title containing every selected episode.
+	"""
+	titleId: ID!
+	"""
+	Between one and 1000 episode IDs; duplicates are searched once.
+	"""
+	episodeIds: [ID!]!
+}
+
+"""
 Episode classification.
 """
 enum EpisodeTypeValue {
@@ -7743,6 +7757,10 @@ input FileScoreSelectionInput @oneOf {
 	Media file IDs to evaluate, limited to 1000 selections.
 	"""
 	fileIds: [ID!]
+	"""
+	Episode IDs whose live files should be evaluated, limited to 1000 selections.
+	"""
+	episodeIds: [ID!]
 	"""
 	Season IDs whose live files should be evaluated, limited to 1000 selections.
 	"""
@@ -14722,7 +14740,7 @@ type LocationTransferFilePayload {
 	sizeBytes: Long!
 	"""
 	Lifecycle of this file: QUEUED, MOVING, VERIFYING, COMPARING,
-	WAITING_FOR_STORAGE, DONE, DUPLICATE, FAILED, BLOCKED, CANCELED, or
+	RECORDING, WAITING_FOR_STORAGE, DONE, DUPLICATE, FAILED, BLOCKED, CANCELED, or
 	NOT_PROCESSED.
 	"""
 	state: String!
@@ -20697,7 +20715,7 @@ type MutationRoot {
 	"""
 	refreshFileScores(
 		"""
-		Exactly one bounded selection of file, season, or title IDs.
+		Exactly one bounded selection of file, episode, season, or title IDs.
 		"""
 		selection: FileScoreSelectionInput!
 	): JobRunPayload!
@@ -21811,6 +21829,10 @@ type MutationRoot {
 		input: ScriptInterpreterSettingsInput!
 	): ScriptInterpreterSettingsPayload!
 	"""
+	Queue automatic subtitle search and download for selected episodes.
+	"""
+	startEpisodeSubtitleSearch(input: EpisodeSubtitleSearchInput!): JobRunPayload!
+	"""
 	Search configured providers for subtitles matching a media file, and
 	report why the search returned what it did.
 	"""
@@ -22848,6 +22870,14 @@ type PendingImportConflictPreviewPayload {
 	Complete number of selected conflicts.
 	"""
 	totalCount: Int!
+	"""
+	Selected conflicts with valid plans, including rows outside the sample.
+	"""
+	actionableCount: Int!
+	"""
+	Selected conflicts that could not be planned, including rows outside the sample.
+	"""
+	failedCount: Int!
 	"""
 	True when the rows are a sample of the complete selection.
 	"""
@@ -24857,7 +24887,7 @@ type QueryRoot {
 		"""
 		sort: TitleCatalogSortInput,
 		"""
-		Requested page size; defaults to 300 and is clamped to 1 through 300.
+		Requested page size; defaults to 300 and is clamped to 1 through 10000.
 		"""
 		limit: Int,
 		"""

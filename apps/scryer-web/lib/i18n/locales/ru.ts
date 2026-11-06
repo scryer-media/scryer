@@ -957,6 +957,15 @@ const ru: LocaleDictionary = {
     "Как часто клиенты загрузки проверяются на наличие неудачных загрузок.",
   "settings.acquisitionWalkIntervalSeconds":
     "Интервал поискового обхода (секунды)",
+  "settings.acquisitionWalkIntensity": "Интенсивность поискового обхода",
+  "settings.acquisitionWalkIntensityHelp":
+    "Какую долю ресурсов машины может занимать поисковый обход. «Обычный» сам переходит в «Тихий», когда отсутствующих элементов или элементов ниже порога качества становится больше 10 000, чтобы большая библиотека оставалась в фоне. «Активный» никогда не переключается.",
+  "settings.acquisitionWalkIntensity.QUIET":
+    "Тихий: примерно десятая часть времени, по одному названию",
+  "settings.acquisitionWalkIntensity.NORMAL":
+    "Обычный: примерно пятая часть времени, по два названия",
+  "settings.acquisitionWalkIntensity.EAGER":
+    "Активный: примерно половина времени, по четыре названия",
   "settings.acquisitionWalkIntervalSecondsHelp":
     "Как часто библиотека проверяется на отсутствующие и улучшаемые медиафайлы и выполняется поиск для группы тайтлов. Добавление тайтла, изменение профиля качества и подобные изменения запускают обход сразу. Обход никогда не выполняется чаще интервала опроса.",
   "settings.acquisitionMaxScopesPerCycle": "Максимум элементов за цикл",
@@ -3172,7 +3181,8 @@ const ru: LocaleDictionary = {
   "subtitle.batchRunFailed":
     "Не удалось выполнить поиск субтитров. Проверьте сведения о задаче и повторите попытку.",
   "subtitle.batchSearch": "Найти субтитры",
-  "subtitle.batchQueued": "Поиск субтитров поставлен в очередь в фоновом режиме.",
+  "subtitle.batchQueued":
+    "Поиск субтитров поставлен в очередь в фоновом режиме.",
   "subtitle.batchFailed": "Не удалось поставить поиск субтитров в очередь.",
   "subtitle.batchSelectionInvalid":
     "Выберите от одного до 1000 эпизодов одного сериала.",
@@ -11970,6 +11980,7 @@ const ru: LocaleDictionary = {
   "move.transferFileState.MOVING": "Перемещение",
   "move.transferFileState.VERIFYING": "Проверка",
   "move.transferFileState.COMPARING": "Сравнение файлов",
+  "move.transferFileState.RECORDING": "Запись результата",
   "move.transferFileState.DONE": "Готово",
   "move.transferFileState.FAILED": "Ошибка",
   "move.transferFileState.BLOCKED": "Заблокировано",
@@ -11991,6 +12002,11 @@ const ru: LocaleDictionary = {
   "move.transferException": "Показать исключение для тайтла «{{title}}»",
   "move.transferActive":
     "Перемещается: {{copying}} · проверяется: {{verifying}}",
+  "move.transferActiveRecording":
+    "Перемещается: {{copying}} · проверяется: {{verifying}} · записывается: {{recording}}",
+  "move.transferTitleRecording": "Запись результатов",
+  "move.groupShowing": "Показано {{shown}} из {{total}}",
+  "move.groupShowMore": "Показать ещё {{count}}",
   "move.transferDetailPending": "Дополнительных сведений нет.",
   "move.retryAction": "Повторить",
   "move.retryRequested": "Повтор с последней проверенной контрольной точки.",
@@ -13105,6 +13121,10 @@ const ru: LocaleDictionary = {
     "Файл изменился после предпросмотра. Обновите предпросмотр.",
   "error.reason.LOCATION_CONFLICT_RECYCLE_UNAVAILABLE":
     "Корзина недоступна. Восстановите доступ и повторите попытку.",
+  "error.reason.LOCATION_CONFLICT_FOLDER_HOLDS_OTHER_WORKS":
+    "В папке конфликта лежит фильм, относящийся к другому названию. Переместите каждый фильм в отдельную папку и обновите предпросмотр.",
+  "error.reason.LOCATION_CONFLICT_MULTI_PART_MEDIA":
+    "Это название разделено на части, поэтому сохранение одного файла удалит остальные. Используйте «Принять все».",
   "pendingImports.conflict.select": "Выбрать конфликт",
   "pendingImports.conflict.adoptAll": "Принять все",
   "pendingImports.conflict.keepOne": "Оставить одну",

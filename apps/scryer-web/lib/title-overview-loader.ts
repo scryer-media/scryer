@@ -97,7 +97,8 @@ const PRIVILEGED_OVERVIEW_ALIASES = new Set([
 ]);
 
 /** Refusal code the server raises when the caller lacks privileged library access. */
-export const LIBRARY_ACCESS_DENIED_REASON = "AUTHORIZATION_LIBRARY_ACCESS_DENIED";
+export const LIBRARY_ACCESS_DENIED_REASON =
+  "AUTHORIZATION_LIBRARY_ACCESS_DENIED";
 
 /**
  * Whether every error is the privileged-access refusal on a privileged field.

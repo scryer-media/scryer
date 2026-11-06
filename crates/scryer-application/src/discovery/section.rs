@@ -1293,7 +1293,7 @@ impl AppUseCase {
                 let owned_library_ids = &visibility.owned_library_ids;
                 let owned_visibility = self
                     .discovery_home_owned_visibility(
-                        &sorted_discovery_library_ids(&owned_library_ids),
+                        &sorted_discovery_library_ids(owned_library_ids),
                         &status.state,
                     )
                     .await?;
@@ -1416,7 +1416,7 @@ impl AppUseCase {
                 } else {
                     let owned_library_ids = &visibility.owned_library_ids;
                     self.discovery_home_owned_visibility(
-                        &sorted_discovery_library_ids(&owned_library_ids),
+                        &sorted_discovery_library_ids(owned_library_ids),
                         &status.state,
                     )
                     .await?
@@ -1468,7 +1468,7 @@ impl AppUseCase {
         self.discovery_watchlist_composition(
             actor,
             visibility,
-            &sorted_discovery_library_ids(&owned_library_ids),
+            &sorted_discovery_library_ids(owned_library_ids),
             &status.state,
             can_view_personalized,
             filters,

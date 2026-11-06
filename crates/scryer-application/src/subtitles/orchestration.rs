@@ -2359,7 +2359,7 @@ async fn search_automatic_subtitles_for_file(
 
     let embedded = embedded_subtitle_streams(mf);
 
-    let missing = compute_missing_subtitles_from_streams(&wanted_languages, &existing, &embedded);
+    let missing = compute_missing_subtitles_from_streams(wanted_languages, &existing, &embedded);
     if missing.is_empty() {
         return Ok(outcome);
     }
@@ -2400,7 +2400,7 @@ async fn search_automatic_subtitles_for_file(
         }
         let results = match search_all_subtitle_providers(
             app,
-            &providers,
+            providers,
             file_path.as_path(),
             &query,
             min_score,

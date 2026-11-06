@@ -522,7 +522,7 @@ fn pool_item(
         sort_index: index as i32,
         target_key,
         target_kind: target_kind.to_string(),
-        resolved: index % 7 != 0,
+        resolved: !index.is_multiple_of(7),
         resolved_title_id: None,
         display_title: display_title.clone(),
         original_title: None,
@@ -532,7 +532,8 @@ fn pool_item(
         poster_url: Some(format!(
             "https://example.invalid/poster-{run_id}-{index}.jpg"
         )),
-        background_url: (index % 3 == 0)
+        background_url: index
+            .is_multiple_of(3)
             .then(|| format!("https://example.invalid/backdrop-{run_id}-{index}.jpg")),
         overview: Some(format!("Synthetic overview {index}")),
         content_type: Some(target_kind.to_string()),
@@ -586,7 +587,7 @@ fn pool_item(
 /// the rest name titles the catalog does not hold.
 fn pool_target(index: usize, shape: FixtureShape) -> (String, &'static str) {
     let facet = shape.facet(index);
-    if index % 5 == 0 && index < shape.catalog_titles {
+    if index.is_multiple_of(5) && index < shape.catalog_titles {
         let value = catalog_external_value(index);
         return match facet {
             "movie" => (format!("tmdb:movie:{value}"), "movie"),

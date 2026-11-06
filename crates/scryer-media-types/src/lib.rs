@@ -406,7 +406,7 @@ mod tests {
         // Rows stored at revision 1 picked primary audio by channels and codec.
         let stored_before_policy = 1;
         assert!(stored_before_policy < ANALYSIS_REVISION);
-        assert!(ANALYSIS_REVISION >= AUTHORED_PRIMARY_AUDIO_REVISION);
+        const { assert!(ANALYSIS_REVISION >= AUTHORED_PRIMARY_AUDIO_REVISION) };
         assert_eq!(
             primary_audio_stream_index([(false, false, None), (true, false, None)]),
             Some(1)

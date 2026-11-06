@@ -977,8 +977,8 @@ impl AppUseCase {
                     IncomingItem::companion(&file.path, name, file.size_bytes)
                 }
                 .with_source_path(&file.path);
-                if !file.media {
-                    if let Some(media) = moving
+                if !file.media
+                    && let Some(media) = moving
                         .iter()
                         .filter(|media| {
                             media.media
@@ -989,9 +989,8 @@ impl AppUseCase {
                                 .is_some()
                         })
                         .max_by_key(|media| media.path.len())
-                    {
-                        item = item.with_companion_of(&media.path);
-                    }
+                {
+                    item = item.with_companion_of(&media.path);
                 }
                 item
             })

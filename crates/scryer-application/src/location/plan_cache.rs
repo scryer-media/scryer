@@ -76,6 +76,11 @@ impl<T> LocationPlanCache<T> {
     pub fn len(&self) -> usize {
         self.entries.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 fn live(stored_at: Instant, now: Instant) -> bool {
@@ -93,11 +98,13 @@ mod tests {
         assert_eq!(cache.take("actor-b", "fp-1"), None);
         assert_eq!(cache.take("actor-a", "fp-2"), None);
         assert_eq!(cache.take("actor-a", "fp-1"), Some(1));
+        assert!(cache.is_empty(), "a handed-out entry leaves the cache");
         assert_eq!(cache.take("actor-a", "fp-1"), None);
 
         cache.store("actor-a", "fp-1", 2);
         tokio::time::advance(LOCATION_PLAN_CACHE_TTL).await;
         assert_eq!(cache.take("actor-a", "fp-1"), None);
+        assert!(cache.is_empty(), "an expired entry is dropped");
     }
 
     #[tokio::test]

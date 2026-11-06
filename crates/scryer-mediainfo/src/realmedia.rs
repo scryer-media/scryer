@@ -8,7 +8,7 @@ use scryer_media_types::{AnalysisDetails, ProbeStatus, Provenance};
 use std::io::SeekFrom;
 const LIMIT: u64 = 1024 * 1024;
 enum Descriptor {
-    Track(RawTrack),
+    Track(Box<RawTrack>),
     Metadata,
     Unresolved,
 }
@@ -89,7 +89,7 @@ pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaI
                     .map(|d| f64::from(d) / 1000.0)
             }
             b"MDPR" if tracks.len() < 128 => match mdpr(body)? {
-                Descriptor::Track(track) => tracks.push(track),
+                Descriptor::Track(track) => tracks.push(*track),
                 Descriptor::Metadata => {}
                 Descriptor::Unresolved => unsupported = true,
             },
@@ -179,7 +179,7 @@ fn mdpr(data: &[u8]) -> Result<Descriptor, MediaInfoError> {
     }
     let track = decode_mdpr(data)
         .ok_or_else(|| MediaInfoError::Parse("malformed RealMedia codec header".into()))?;
-    Ok(Descriptor::Track(track))
+    Ok(Descriptor::Track(Box::new(track)))
 }
 
 fn decode_mdpr(data: &[u8]) -> Option<RawTrack> {
