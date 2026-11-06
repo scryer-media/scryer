@@ -7089,6 +7089,18 @@ pub trait DownloadSubmissionRepository: Send + Sync {
 
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>>;
 
+    /// `list_for_title` for many titles at once. Returns a flat list (each
+    /// submission carries `title_id`); callers group by that field. The
+    /// default fans out to `list_for_title`; SQL stores override with chunked
+    /// `IN` queries, so callers may pass a selection of any size.
+    async fn list_for_titles(&self, title_ids: &[String]) -> AppResult<Vec<DownloadSubmission>> {
+        let mut submissions = Vec::new();
+        for title_id in title_ids {
+            submissions.extend(self.list_for_title(title_id).await?);
+        }
+        Ok(submissions)
+    }
+
     /// On-demand recovery rows for durable password retries with an active,
     /// matching client binding, including jobs absent from the native queue.
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
@@ -7117,6 +7129,20 @@ pub trait DownloadSubmissionRepository: Send + Sync {
         _title_id: &str,
     ) -> AppResult<Vec<DownloadSubmission>> {
         Ok(Vec::new())
+    }
+
+    /// `list_active_unbound_for_title` for many titles at once, as a flat list
+    /// callers group by `title_id`. The default fans out; SQL stores override
+    /// with chunked `IN` queries.
+    async fn list_active_unbound_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        let mut submissions = Vec::new();
+        for title_id in title_ids {
+            submissions.extend(self.list_active_unbound_for_title(title_id).await?);
+        }
+        Ok(submissions)
     }
 
     /// Every Scryer submission, across titles, whose canonical client binding

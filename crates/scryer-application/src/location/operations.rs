@@ -110,6 +110,11 @@ pub const LOCATION_OPERATION_VERIFICATION_DEPTH: VerificationDepth = Verificatio
 /// Small enough that a single slow mount cannot pin the whole blocking pool.
 pub const LOCATION_PREVIEW_TITLE_CONCURRENCY: usize = 8;
 
+/// Ids per batched read while planning a location operation: under SQLite's
+/// historical 999-variable ceiling, so a selection of any size is read in
+/// bounded queries.
+pub const LOCATION_PLAN_READ_CHUNK: usize = 500;
+
 /// What the per-title draft builder borrows from the selection-wide facts
 /// `plan_root_move` gathered once, before fanning the titles out.
 #[derive(Clone, Copy)]
@@ -2048,27 +2053,15 @@ impl AppUseCase {
         // fingerprint see the selection the user made. A repeated id is one
         // title, not two: counting it twice would double its bytes and give it
         // two checkpoints for the same work.
-        let mut selection: Vec<String> = Vec::with_capacity(request.title_ids.len());
-        let mut titles: Vec<Title> = Vec::with_capacity(request.title_ids.len());
-        for title_id in &request.title_ids {
-            if selection.iter().any(|seen| seen == title_id) {
-                continue;
-            }
-            let title = self
-                .services
-                .catalog
-                .titles
-                .get_by_id(title_id)
-                .await?
-                .ok_or_else(|| {
-                    AppError::not_found_reason(
-                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
-                        format!("title {title_id}"),
-                    )
-                })?;
-            selection.push(title_id.clone());
-            titles.push(title);
-        }
+        let mut seen = std::collections::HashSet::with_capacity(request.title_ids.len());
+        let selection: Vec<String> = request
+            .title_ids
+            .iter()
+            .filter(|title_id| seen.insert(title_id.as_str()))
+            .cloned()
+            .collect();
+        drop(seen);
+        let titles = self.load_selected_titles(&selection).await?;
 
         let mut libraries: BTreeMap<String, scryer_domain::Library> = BTreeMap::new();
         for title in &titles {
@@ -2175,26 +2168,20 @@ impl AppUseCase {
             .await?;
 
         // Classification facts, including the FR-086 blockers.
+        // Every per-title fact below is read once for the selection, in bounded
+        // chunks, rather than as several round trips per title.
+        let selected_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+        let mut media_files_by_title = self.media_files_by_title(&selected_ids).await?;
+        let owners = self.title_ownership_holders().await?;
+        let mut active_work = self.active_work_blocking_moves(&titles).await?;
         let mut facts = Vec::with_capacity(titles.len());
-        let mut media_files_by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> =
-            BTreeMap::new();
         for title in &titles {
-            let media_files = self
-                .services
-                .library
-                .media_files
-                .list_media_files_for_title(&title.id)
-                .await?;
+            let media_files = media_files_by_title.entry(title.id.clone()).or_default();
             let library_name = libraries
                 .get(&title.library_id)
                 .map(|library| library.name.clone())
                 .unwrap_or_default();
-            let owner = self
-                .services
-                .library
-                .location_operations
-                .location_ownership_holder(&OwnedEntity::Title(title.id.clone()))
-                .await?;
+            let owner = owners.get(&title.id).cloned();
 
             let mut fact = TitleClassificationFacts::new(
                 title.id.clone(),
@@ -2221,7 +2208,7 @@ impl AppUseCase {
                     .filter(|path| !path.is_empty())
                     .map(str::to_string),
             );
-            if let Some(detail) = self.active_work_blocking_a_move(title).await? {
+            if let Some(detail) = active_work.remove(&title.id) {
                 fact = fact.with_active_work(detail);
             }
             if let Some(operation_id) = owner {
@@ -2245,7 +2232,6 @@ impl AppUseCase {
                 );
             }
             facts.push(fact);
-            media_files_by_title.insert(title.id.clone(), media_files);
         }
 
         let mut classification =
@@ -3013,6 +2999,73 @@ impl AppUseCase {
         ))
     }
 
+    /// The selected titles, in selection order, read in bounded chunks. A
+    /// selected id with no row refuses the whole selection, as it always has.
+    pub(crate) async fn load_selected_titles(&self, selection: &[String]) -> AppResult<Vec<Title>> {
+        let mut by_id: std::collections::HashMap<String, Title> =
+            std::collections::HashMap::with_capacity(selection.len());
+        for chunk in selection.chunks(LOCATION_PLAN_READ_CHUNK) {
+            for title in self.services.catalog.titles.get_by_ids(chunk).await? {
+                by_id.insert(title.id.clone(), title);
+            }
+        }
+        selection
+            .iter()
+            .map(|title_id| {
+                by_id.remove(title_id).ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {title_id}"),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Live media files for each title, read in bounded chunks. Every
+    /// requested title has an entry, empty when it tracks no files.
+    pub(crate) async fn media_files_by_title(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<BTreeMap<String, Vec<crate::TitleMediaFile>>> {
+        let mut by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> = title_ids
+            .iter()
+            .map(|title_id| (title_id.clone(), Vec::new()))
+            .collect();
+        for chunk in title_ids.chunks(LOCATION_PLAN_READ_CHUNK) {
+            for file in self
+                .services
+                .library
+                .media_files
+                .list_media_files_for_titles(chunk)
+                .await?
+            {
+                if let Some(files) = by_title.get_mut(&file.title_id) {
+                    files.push(file);
+                }
+            }
+        }
+        Ok(by_title)
+    }
+
+    /// The operation holding each currently owned title, from one read of the
+    /// open claims rather than one holder lookup per title.
+    pub(crate) async fn title_ownership_holders(&self) -> AppResult<BTreeMap<String, String>> {
+        let mut holders = BTreeMap::new();
+        for claim in self
+            .services
+            .library
+            .location_operations
+            .list_location_ownership_claims()
+            .await?
+        {
+            if let OwnedEntity::Title(title_id) = claim.entity {
+                holders.entry(title_id).or_insert(claim.operation_id);
+            }
+        }
+        Ok(holders)
+    }
+
     /// FR-086: an active download or import on the title blocks it from
     /// entering a move.
     ///
@@ -3026,61 +3079,104 @@ impl AppUseCase {
         &self,
         title: &Title,
     ) -> AppResult<Option<String>> {
-        let unbound = self
-            .services
-            .workflow
-            .download_submissions
-            .list_active_unbound_for_title(&title.id)
-            .await?;
-        if !unbound.is_empty() {
-            return Ok(Some(format!(
-                "\"{}\" has {} grab(s) that the download client has not confirmed; Scryer releases unconfirmed grabs after {} minutes, then the move can start",
-                title.name,
-                unbound.len(),
-                crate::acquisition_workflow::UNCONFIRMED_GRAB_RELEASE_GRACE_MINUTES
-            )));
+        Ok(self
+            .active_work_blocking_moves(std::slice::from_ref(title))
+            .await?
+            .remove(&title.id))
+    }
+
+    /// `active_work_blocking_a_move` for a whole selection, keyed by title id
+    /// (titles with nothing blocking them are absent). The same three ledger
+    /// reads, each issued once for the selection instead of once per title.
+    pub(crate) async fn active_work_blocking_moves(
+        &self,
+        titles: &[Title],
+    ) -> AppResult<BTreeMap<String, String>> {
+        let mut blocked = BTreeMap::new();
+        if titles.is_empty() {
+            return Ok(blocked);
+        }
+        let submissions_store = &self.services.workflow.download_submissions;
+        let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+
+        let mut unbound_by_title: BTreeMap<String, usize> = BTreeMap::new();
+        for submission in submissions_store
+            .list_active_unbound_for_titles(&title_ids)
+            .await?
+        {
+            *unbound_by_title.entry(submission.title_id).or_default() += 1;
         }
 
-        let submissions = self
-            .services
-            .workflow
-            .download_submissions
-            .list_for_title(&title.id)
-            .await?;
-        if submissions.is_empty() {
-            return Ok(None);
+        let mut locators_by_title: BTreeMap<String, Vec<crate::contracts::ClientJobLocator>> =
+            BTreeMap::new();
+        for submission in submissions_store.list_for_titles(&title_ids).await? {
+            if unbound_by_title.contains_key(&submission.title_id) {
+                continue;
+            }
+            let locator = crate::contracts::ClientJobLocator::from_submission(&submission);
+            let locators = locators_by_title.entry(submission.title_id).or_default();
+            // One state lookup per distinct locator, as the per-title query
+            // dedupes its own locators.
+            if !locators.contains(&locator) {
+                locators.push(locator);
+            }
         }
 
-        let locators: Vec<crate::contracts::ClientJobLocator> = submissions
-            .iter()
-            .map(crate::contracts::ClientJobLocator::from_submission)
-            .collect();
-        let states = self
-            .services
-            .workflow
-            .download_submissions
-            .list_identity_tracked_states_for_client_items(&locators)
-            .await?;
-
-        let live = states
-            .iter()
-            .filter_map(|(_, state)| scryer_domain::TrackedDownloadState::from_str_opt(state))
-            .filter(|state| {
-                // The snapshot is deliberately not consulted (see the doc
-                // comment): a submission with no ledger entry is not treated as
-                // live, and the executor's admission check plus the ownership
-                // guard catch anything that starts afterwards.
-                crate::acquisition_workflow::submission_is_queued(Some(*state), false)
-            })
-            .count();
-
-        if live > 0 {
-            return Ok(Some(format!(
-                "\"{}\" has {live} download(s) or import(s) in flight; the move can start once they finish",
-                title.name
-            )));
+        let all_locators: Vec<crate::contracts::ClientJobLocator> =
+            locators_by_title.values().flatten().cloned().collect();
+        let mut states_by_locator: std::collections::HashMap<
+            crate::contracts::ClientJobLocator,
+            Vec<String>,
+        > = std::collections::HashMap::new();
+        if !all_locators.is_empty() {
+            for (locator, state) in submissions_store
+                .list_identity_tracked_states_for_client_items(&all_locators)
+                .await?
+            {
+                states_by_locator.entry(locator).or_default().push(state);
+            }
         }
-        Ok(None)
+
+        for title in titles {
+            if let Some(count) = unbound_by_title.get(&title.id) {
+                blocked.insert(
+                    title.id.clone(),
+                    format!(
+                        "\"{}\" has {} grab(s) that the download client has not confirmed; Scryer releases unconfirmed grabs after {} minutes, then the move can start",
+                        title.name,
+                        count,
+                        crate::acquisition_workflow::UNCONFIRMED_GRAB_RELEASE_GRACE_MINUTES
+                    ),
+                );
+                continue;
+            }
+            let Some(locators) = locators_by_title.get(&title.id) else {
+                continue;
+            };
+            let live = locators
+                .iter()
+                .filter_map(|locator| states_by_locator.get(locator))
+                .flatten()
+                .filter_map(|state| scryer_domain::TrackedDownloadState::from_str_opt(state))
+                .filter(|state| {
+                    // The snapshot is deliberately not consulted (see the doc
+                    // comment): a submission with no ledger entry is not treated as
+                    // live, and the executor's admission check plus the ownership
+                    // guard catch anything that starts afterwards.
+                    crate::acquisition_workflow::submission_is_queued(Some(*state), false)
+                })
+                .count();
+            if live > 0 {
+                blocked.insert(
+                    title.id.clone(),
+                    format!(
+                        "\"{}\" has {live} download(s) or import(s) in flight; the move can start once they finish",
+                        title.name
+                    ),
+                );
+            }
+        }
+        Ok(blocked)
     }
 }
 
