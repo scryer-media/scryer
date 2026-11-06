@@ -4615,7 +4615,7 @@ mod tests {
             .test_indexer_connection(
                 &test_admin(),
                 "torrent_rss",
-                Some(r#"{"feed_url":"https://ipt.beelyrics.net/t.rss?u=2203846"}"#),
+                Some(r#"{"feed_url":"https://indexer.example/t.rss"}"#),
                 None,
                 None,
             )
