@@ -71,6 +71,8 @@ const GENRES: [&str; 8] = [
 pub struct ObservedStatement {
     pub sql: String,
     pub rows: u64,
+    /// Server-side execution time sqlx measured for the statement.
+    pub elapsed_secs: f64,
 }
 
 #[derive(Clone, Default)]
@@ -112,12 +114,19 @@ struct StatementVisitor {
     summary: String,
     statement: String,
     rows: u64,
+    elapsed_secs: f64,
 }
 
 impl Visit for StatementVisitor {
     fn record_u64(&mut self, field: &Field, value: u64) {
         if field.name() == "rows_returned" {
             self.rows = value;
+        }
+    }
+
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        if field.name() == "elapsed_secs" {
+            self.elapsed_secs = value;
         }
     }
 
@@ -178,6 +187,7 @@ impl<S: tracing::Subscriber> Layer<S> for SqlProbe {
             .push(ObservedStatement {
                 sql,
                 rows: visitor.rows,
+                elapsed_secs: visitor.elapsed_secs,
             });
     }
 }
@@ -1121,14 +1131,18 @@ async fn discovery_read_path_measurements() {
                 }
             }
             listing.push_str(&format!("\n### {} at {size} titles\n", endpoint.label()));
-            let mut grouped = BTreeMap::<String, (usize, u64)>::new();
+            let mut grouped = BTreeMap::<String, (usize, u64, f64)>::new();
             for statement in &measurement.cold.statements {
                 let entry = grouped.entry(statement_head(&statement.sql)).or_default();
                 entry.0 += 1;
                 entry.1 += statement.rows;
+                entry.2 += statement.elapsed_secs;
             }
-            for (head, (count, rows)) in grouped {
-                listing.push_str(&format!("{count:>5}x rows={rows:>7} {head}\n"));
+            for (head, (count, rows, secs)) in grouped {
+                listing.push_str(&format!(
+                    "{count:>5}x rows={rows:>7} ms={:>8.1} {head}\n",
+                    secs * 1000.0
+                ));
             }
         }
     }
@@ -1166,4 +1180,199 @@ async fn discovery_read_path_measurements() {
         }
         std::fs::write(path, full).expect("write report");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Guards
+// ---------------------------------------------------------------------------
+
+/// The Discovery endpoints whose cost must follow the pool, not the catalog.
+const POOL_BOUNDED_ENDPOINTS: [Endpoint; 5] = [
+    Endpoint::HomeFull,
+    Endpoint::HomeCards,
+    Endpoint::CatalogSidebar,
+    Endpoint::CatalogSidebarSeries,
+    Endpoint::SectionPage,
+];
+
+/// The library affinity read: the one read that summarizes the whole
+/// readable catalog, and the one the affinity cache keeps off later calls.
+fn is_affinity_read(sql: &str) -> bool {
+    sql.trim_start()
+        .starts_with("WITH scoped AS (SELECT id, facet FROM titles")
+}
+
+/// The full title projection the catalog list reads. Discovery must never
+/// hydrate titles to decide ownership.
+fn is_full_title_hydration(sql: &str) -> bool {
+    let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    sql.starts_with("SELECT id, library_id, name, facet, monitored, tags, external_ids")
+}
+
+fn bind_count(sql: &str) -> usize {
+    sql.matches('?').count()
+}
+
+fn guard_shape(catalog_titles: usize) -> FixtureShape {
+    FixtureShape {
+        catalog_titles,
+        context_pool: 300,
+        mix: FacetMix::DEFAULT,
+        episodes: false,
+    }
+}
+
+#[tokio::test]
+async fn discovery_reads_stay_pool_bounded_as_the_catalog_grows() {
+    let mut samples = BTreeMap::<Endpoint, Vec<EndpointSample>>::new();
+    for size in [1_000, 10_000] {
+        let seeded = seeded_discovery(guard_shape(size)).await;
+        for endpoint in POOL_BOUNDED_ENDPOINTS {
+            let sample = call(&seeded, endpoint).await;
+            assert!(
+                sample.error.is_none(),
+                "{} at {size} titles failed: {:?}",
+                endpoint.label(),
+                sample.error
+            );
+            for statement in &sample.statements {
+                assert!(
+                    !is_full_title_hydration(&statement.sql),
+                    "{} at {size} titles hydrated full titles: {}",
+                    endpoint.label(),
+                    statement_head(&statement.sql)
+                );
+                // The pool (300 here) may bind pool-sized lists; a list that
+                // follows the catalog would pass half of the 10k titles.
+                assert!(
+                    bind_count(&statement.sql) < 10_000 / 2,
+                    "{} at {size} titles bound a catalog-sized list ({} binds): {}",
+                    endpoint.label(),
+                    bind_count(&statement.sql),
+                    statement_head(&statement.sql)
+                );
+            }
+            samples.entry(endpoint).or_default().push(sample);
+        }
+    }
+    for (endpoint, sizes) in samples {
+        let [small, large] = &sizes[..] else {
+            panic!("two sizes per endpoint");
+        };
+        // Reads may not grow with the catalog: a per-title loop would.
+        assert_eq!(
+            small.read_count(),
+            large.read_count(),
+            "{} issued more reads at 10k titles than at 1k",
+            endpoint.label()
+        );
+        let widest = |sample: &EndpointSample| {
+            sample
+                .statements
+                .iter()
+                .map(|statement| bind_count(&statement.sql))
+                .max()
+                .unwrap_or_default()
+        };
+        assert!(
+            widest(large) <= widest(small),
+            "{} bound more values at 10k titles ({}) than at 1k ({})",
+            endpoint.label(),
+            widest(large),
+            widest(small)
+        );
+    }
+}
+
+async fn affinity_reads(seeded: &SeededDiscovery) -> usize {
+    let sample = call(seeded, Endpoint::HomeCards).await;
+    assert!(sample.error.is_none(), "home failed: {:?}", sample.error);
+    sample
+        .statements
+        .iter()
+        .filter(|statement| is_affinity_read(&statement.sql))
+        .count()
+}
+
+#[tokio::test]
+async fn the_affinity_profile_is_reused_until_one_of_its_inputs_changes() {
+    let seeded = seeded_discovery(guard_shape(1_000)).await;
+    let pool = &seeded.ctx.db.pool;
+    assert_eq!(
+        affinity_reads(&seeded).await,
+        1,
+        "the first home call fills"
+    );
+    assert_eq!(
+        affinity_reads(&seeded).await,
+        0,
+        "an unchanged catalog reuses it"
+    );
+    // The sidebar asks for the movie library alone: another scope, another fill.
+    let sidebar = call(&seeded, Endpoint::CatalogSidebar).await;
+    assert!(
+        sidebar.error.is_none(),
+        "sidebar failed: {:?}",
+        sidebar.error
+    );
+    assert!(
+        sidebar
+            .statements
+            .iter()
+            .any(|statement| is_affinity_read(&statement.sql)),
+        "a different library scope never reuses another scope's profile"
+    );
+
+    let changes = [
+        (
+            "canonical tag update",
+            "UPDATE title_metadata_tags SET name = 'Retitled Genre'
+             WHERE title_id = 'perf-title-0'",
+        ),
+        (
+            "library reassignment",
+            // perf-title-2 is a series title, so this moves a movie into
+            // the series library.
+            "UPDATE titles SET library_id = (SELECT library_id FROM titles
+                 WHERE id = 'perf-title-2') WHERE id = 'perf-title-0'",
+        ),
+        (
+            "ownership change",
+            "DELETE FROM titles WHERE id = 'perf-title-4'",
+        ),
+        (
+            "submitted subject change",
+            "DELETE FROM discovery_submitted_subjects WHERE title_id = 'perf-title-3'",
+        ),
+    ];
+    for (label, sql) in changes {
+        run_sql(pool, sql).await;
+        assert_eq!(affinity_reads(&seeded).await, 1, "{label} must refill");
+        assert_eq!(
+            affinity_reads(&seeded).await,
+            0,
+            "{label}: the refill is reused"
+        );
+    }
+
+    // A new generation is a new key even when no catalog row changed.
+    run_sql(
+        pool,
+        &format!(
+            "INSERT INTO discovery_sync_runs (id, kind, status, trigger_source, region, language)
+             SELECT 'perf-context-run-2', kind, status, trigger_source, region, language
+             FROM discovery_sync_runs WHERE id = '{CONTEXT_RUN_ID}'"
+        ),
+    )
+    .await;
+    run_sql(
+        pool,
+        "UPDATE discovery_sync_state SET last_success_generation_id = 'perf-context-run-2'",
+    )
+    .await;
+    assert_eq!(
+        affinity_reads(&seeded).await,
+        1,
+        "a generation change must refill"
+    );
 }
