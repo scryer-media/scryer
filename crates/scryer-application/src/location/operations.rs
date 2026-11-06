@@ -2142,6 +2142,21 @@ fn digest_root_move_catalog_facts(
     }
     payload.feed_json(libraries);
     payload.feed_json(destination_library);
+    feed_media_files(&mut payload, media_files_by_title);
+    // Only the selection's claims: another operation taking or releasing its
+    // own titles says nothing about this plan.
+    for title in titles {
+        payload.feed_json(&owners.get(&title.id));
+    }
+    payload.feed_json(active_work);
+    payload
+}
+
+/// The tracked media files a plan was built from, title by title.
+fn feed_media_files(
+    payload: &mut RootMoveFactsPayload,
+    media_files_by_title: &BTreeMap<String, Vec<crate::TitleMediaFile>>,
+) {
     for (title_id, files) in media_files_by_title {
         payload.feed(title_id);
         for file in files {
@@ -2160,13 +2175,6 @@ fn digest_root_move_catalog_facts(
             ));
         }
     }
-    // Only the selection's claims: another operation taking or releasing its
-    // own titles says nothing about this plan.
-    for title in titles {
-        payload.feed_json(&owners.get(&title.id));
-    }
-    payload.feed_json(active_work);
-    payload
 }
 
 impl AppUseCase {
@@ -2183,6 +2191,7 @@ impl AppUseCase {
         mode: LocationExecutionMode,
         confirming: Option<&crate::location::preview::PlanFingerprint>,
     ) -> AppResult<RootMovePlanning> {
+        let planning_started = std::time::Instant::now();
         if request.title_ids.is_empty() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::location::TITLE_SELECTION_REQUIRED,
@@ -2321,27 +2330,29 @@ impl AppUseCase {
         let mut media_files_by_title = self.media_files_by_title(&selected_ids).await?;
         let owners = self.title_ownership_holders().await?;
         let mut active_work = self.active_work_blocking_moves(&titles).await?;
-        // A plan whose titles all stay in the destination library depends on
-        // nothing but these facts, the folder walks, and the configuration read
-        // below, so it can be held for its confirmation. A transfer also
-        // depends on the destination library's catalog, and is always planned
-        // again.
-        let facts_payload = titles
-            .iter()
-            .all(|title| title.library_id == destination_library.id)
-            .then(|| {
-                digest_root_move_catalog_facts(
-                    &selection,
-                    &request.destination,
-                    mode,
-                    &titles,
-                    &libraries,
-                    &destination_library,
-                    &media_files_by_title,
-                    &owners,
-                    &active_work,
-                )
-            });
+        // A plan depends on nothing but these facts, the destination-side facts
+        // fed in below, the folder walks, and the configuration read below, so
+        // it can be held for its confirmation.
+        let mut facts_payload = digest_root_move_catalog_facts(
+            &selection,
+            &request.destination,
+            mode,
+            &titles,
+            &libraries,
+            &destination_library,
+            &media_files_by_title,
+            &owners,
+            &active_work,
+        );
+        // What a transfer read of the destination library and of the crossing
+        // titles' associations. Detection is a pure function of the selected
+        // titles (digested above) and the destination candidates, so its
+        // outcome stands for every candidate fact the plan consumes; the merge
+        // plans likewise stand for the snapshots `plan_merge` read. All three
+        // are empty for a same-library root move.
+        facts_payload.feed_json(&destination_identities);
+        facts_payload.feed_json(&association_facts);
+        facts_payload.feed_json(&merge_plans);
         let mut facts = Vec::with_capacity(titles.len());
         for title in &titles {
             let media_files = media_files_by_title.entry(title.id.clone()).or_default();
@@ -2432,28 +2443,52 @@ impl AppUseCase {
             .map(|root| root.path)
             .collect::<Vec<_>>();
 
-        let facts_digest = facts_payload.map(|mut payload| {
-            payload.feed(&folder_template);
-            payload.feed(&format!("{depth:?}"));
-            payload.feed_json(&all_root_paths);
-            payload.finish()
-        });
-        if let (Some(fingerprint), Some(digest)) = (confirming, facts_digest.as_deref())
-            && let Some(cached) = self
+        // The destination titles a merge lands in: their folder and root place
+        // the merged files, and their names feed the folder naming.
+        facts_payload.feed_json(&merge_destination_titles);
+        // Mapping files that were moved by hand into a merge target also reads
+        // the files that target already tracks.
+        if mode == LocationExecutionMode::UserMovedFiles && !merge_destination_titles.is_empty() {
+            let merge_target_ids: Vec<String> = merge_destination_titles.keys().cloned().collect();
+            feed_media_files(
+                &mut facts_payload,
+                &self.media_files_by_title(&merge_target_ids).await?,
+            );
+        }
+        facts_payload.feed(&folder_template);
+        facts_payload.feed(&format!("{depth:?}"));
+        facts_payload.feed_json(&all_root_paths);
+        let facts_digest = facts_payload.finish();
+
+        // The confirmation's cache decision, logged once per confirmation.
+        let cache_miss = match confirming {
+            None => None,
+            Some(fingerprint) => match self
                 .runtime
                 .library
                 .location_plan_cache
                 .take(&actor.id, &fingerprint.0)
-            && cached.facts_digest == digest
-            && cached.mode == mode
-        {
-            let mut planning = cached.planning;
-            planning.planned.plan.free_space = match cached.free_space {
-                Some(inputs) => self.root_move_free_space(inputs, probe).await,
-                None => FreeSpaceEstimate::unknown(),
-            };
-            return Ok(planning);
-        }
+            {
+                None => Some("no_cached_plan"),
+                Some(cached) if cached.mode != mode => Some("mode_changed"),
+                Some(cached) if cached.facts_digest != facts_digest => Some("facts_changed"),
+                Some(cached) => {
+                    let mut planning = cached.planning;
+                    planning.planned.plan.free_space = match cached.free_space {
+                        Some(inputs) => self.root_move_free_space(inputs, probe).await,
+                        None => FreeSpaceEstimate::unknown(),
+                    };
+                    tracing::info!(
+                        cache = "hit",
+                        actor_id = %actor.id,
+                        title_count = titles.len(),
+                        elapsed_ms = planning_started.elapsed().as_millis() as u64,
+                        "location root move confirmation reused the previewed plan"
+                    );
+                    return Ok(planning);
+                }
+            },
+        };
 
         let mut drafts = Vec::with_capacity(titles.len());
         let mut moved_bytes = 0_u64;
@@ -2583,9 +2618,17 @@ impl AppUseCase {
             planned,
             classification,
         };
-        if confirming.is_none()
-            && let Some(facts_digest) = facts_digest
-        {
+        if let Some(reason) = cache_miss {
+            tracing::info!(
+                cache = "miss",
+                reason,
+                actor_id = %actor.id,
+                title_count = titles.len(),
+                elapsed_ms = planning_started.elapsed().as_millis() as u64,
+                "location root move confirmation planned again"
+            );
+        }
+        if confirming.is_none() {
             self.runtime.library.location_plan_cache.store(
                 &actor.id,
                 &planning.planned.plan.fingerprint.0,

@@ -548,6 +548,26 @@ impl TransferFixture {
         self.settle(&accepted.operation.id).await
     }
 
+    async fn start_with(
+        &self,
+        title_ids: &[&str],
+        fingerprint: &crate::location::preview::PlanFingerprint,
+    ) -> AppResult<crate::location::operations::LocationOperationAccepted> {
+        self.app
+            .start_root_move(
+                &self.user,
+                StartRootMoveRequest {
+                    title_ids: title_ids.iter().map(|id| (*id).to_string()).collect(),
+                    destination: self.destination(),
+                    confirmation: PlanConfirmationRequest {
+                        fingerprint: fingerprint.clone(),
+                        typed_confirmation: None,
+                    },
+                },
+            )
+            .await
+    }
+
     async fn settle(&self, operation_id: &str) -> LocationOperation {
         settle_location_operation(&self.app, operation_id).await
     }
@@ -791,6 +811,124 @@ async fn a_same_named_destination_title_is_warned_about_and_never_merged_into() 
         "the same-named destination title is untouched; both now exist"
     );
     assert_ne!(transferred.id, survivor.id);
+}
+
+/// Confirming a transfer reuses the previewed plan, folder walks included, when
+/// nothing the plan was built from changed on either side.
+#[tokio::test]
+async fn confirming_a_transfer_preview_reuses_its_plan_instead_of_walking_the_folders_again() {
+    let fixture = TransferFixture::new().await;
+    let title = fixture
+        .seed_source_title(
+            "Synthetic Transfer 0001",
+            2001,
+            "Synthetic Transfer 0001 (2001)",
+            "Synthetic.Transfer.0001.2001.1080p.mkv",
+            2048,
+            Vec::new(),
+            vec![external_id("tmdb", "910001")],
+        )
+        .await;
+    let previewed = fixture.preview(&[&title.id]).await;
+    assert_eq!(previewed.classification.counts.cross_library_transfer, 1);
+
+    // A file the catalog does not track appears after the preview. Only a
+    // folder walk can see it, so a fresh preview states a different plan…
+    let source_folder = fixture.source_root().join("Synthetic Transfer 0001 (2001)");
+    std::fs::write(
+        source_folder.join("Synthetic.Transfer.0001.2001.nfo"),
+        b"nfo",
+    )
+    .expect("write untracked file");
+    let fresh = fixture.preview(&[&title.id]).await;
+    assert_ne!(fresh.plan.fingerprint, previewed.plan.fingerprint);
+
+    // …but confirming the first preview reuses the plan it was built from.
+    let accepted = fixture
+        .start_with(&[&title.id], &previewed.plan.fingerprint)
+        .await
+        .expect("the previewed transfer plan is reused");
+    let operation = fixture.settle(&accepted.operation.id).await;
+    assert_eq!(
+        operation.state,
+        LocationOperationState::CompletedWithWarnings,
+        "the source folder still holds a file the plan never named: {:?}",
+        operation.detail
+    );
+    assert_eq!(
+        fixture.title(&title.id).await.library_id,
+        fixture.destination_library_id
+    );
+    assert!(
+        source_folder
+            .join("Synthetic.Transfer.0001.2001.nfo")
+            .exists(),
+        "the file the plan never named is kept where it was"
+    );
+}
+
+/// A destination title that starts sharing an identity with the selected title
+/// after the preview turns the transfer into a merge, so the confirmation plans
+/// again and refuses the previewed fingerprint as stale.
+#[tokio::test]
+async fn a_destination_change_after_a_transfer_preview_refuses_the_confirmation_as_stale() {
+    let fixture = TransferFixture::new().await;
+    let title = fixture
+        .seed_source_title(
+            "Synthetic Transfer 0002",
+            2002,
+            "Synthetic Transfer 0002 (2002)",
+            "Synthetic.Transfer.0002.2002.1080p.mkv",
+            2048,
+            Vec::new(),
+            vec![external_id("tmdb", "910002")],
+        )
+        .await;
+    let previewed = fixture.preview(&[&title.id]).await;
+    assert_eq!(
+        classified_titles(&previewed)[0].merge_target_title_id(),
+        None
+    );
+
+    let arrived = fixture
+        .seed_destination_title(
+            "Synthetic Transfer 0002",
+            2002,
+            vec![external_id("tmdb", "910002")],
+        )
+        .await;
+    let fresh = fixture.preview(&[&title.id]).await;
+    assert_eq!(
+        classified_titles(&fresh)[0].merge_target_title_id(),
+        Some(arrived.id.as_str()),
+        "the destination change is one the plan depends on"
+    );
+
+    let refused = fixture
+        .start_with(&[&title.id], &previewed.plan.fingerprint)
+        .await
+        .expect_err("a transfer whose destination changed is never executed");
+    assert!(
+        matches!(
+            refused,
+            AppError::LocationPlanRefused {
+                code: crate::location::preview::PlanConfirmationError::Stale,
+                ..
+            }
+        ),
+        "expected a stale-plan refusal, got {refused:?}"
+    );
+    assert_eq!(
+        fixture.title(&title.id).await.library_id,
+        fixture.source_library_id
+    );
+    assert!(
+        fixture
+            .source_root()
+            .join("Synthetic Transfer 0002 (2002)")
+            .join("Synthetic.Transfer.0002.2002.1080p.mkv")
+            .exists()
+    );
 }
 
 // ── US7 ──────────────────────────────────────────────────────────────────────
