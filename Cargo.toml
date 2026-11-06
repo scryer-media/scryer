@@ -75,8 +75,10 @@ tokio-util = { version = "0.7", features = ["rt", "io"] }
 toml = "1"
 quick-xml = "0.42.0"
 # Native Wasmtime hosts for command-model archive plugins and legacy reactor
-# compatibility.
-wasmtime = { version = "~50.0.0", default-features = false, features = ["runtime", "cranelift", "std", "component-model-async", "cache"] }
+# compatibility. `parallel-compilation` spreads Cranelift's per-function work
+# across cores; without it every cold plugin compile, at install and at startup
+# rehydration, runs on one thread.
+wasmtime = { version = "~50.0.0", default-features = false, features = ["runtime", "cranelift", "std", "component-model-async", "cache", "parallel-compilation"] }
 wasmtime-wasi = { version = "~50.0.0", default-features = false, features = ["p1", "p2"] }
 semver = "1"
 metrics = "0.24"
@@ -322,4 +324,39 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.blake2]
+opt-level = 3
+
+# Cranelift compiles every newly installed plugin and every cache miss at
+# startup. Unoptimized, one download-client component took 34 s to compile.
+[profile.dev.package.cranelift-bforest]
+opt-level = 3
+
+[profile.dev.package.cranelift-bitset]
+opt-level = 3
+
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+
+[profile.dev.package.cranelift-control]
+opt-level = 3
+
+[profile.dev.package.cranelift-entity]
+opt-level = 3
+
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+
+[profile.dev.package.cranelift-native]
+opt-level = 3
+
+[profile.dev.package.regalloc2]
+opt-level = 3
+
+[profile.dev.package.wasmparser]
+opt-level = 3
+
+[profile.dev.package.wasmtime-environ]
+opt-level = 3
+
+[profile.dev.package.wasmtime-internal-cranelift]
 opt-level = 3
