@@ -1068,14 +1068,26 @@ impl AppUseCase {
 
 /// SABnzbd and Weaver need an API key and NZBGet a password; other clients may
 /// connect without one. A missing secret fails only this item.
+///
+/// NZBGet can run with authentication disabled, so an empty password is a
+/// real setting there: only a source that carries no password at all lacks it.
 fn require_download_client_credential(input: &NewDownloadClientConfig) -> AppResult<()> {
-    let (field, message) = match input.client_type.as_str() {
-        "sabnzbd" | "weaver" => ("api_key", "selected download client requires an API key"),
-        "nzbget" => ("password", "selected download client requires a password"),
+    let value: serde_json::Value = decode(&input.config_json)?;
+    let (present, message) = match input.client_type.as_str() {
+        "sabnzbd" | "weaver" => (
+            config_has_secret(&value, "api_key"),
+            "selected download client requires an API key",
+        ),
+        "nzbget" => (
+            value
+                .get("password")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
+            "selected download client requires a password",
+        ),
         _ => return Ok(()),
     };
-    let value: serde_json::Value = decode(&input.config_json)?;
-    if config_has_secret(&value, field) {
+    if present {
         Ok(())
     } else {
         Err(refusal(
@@ -1226,11 +1238,7 @@ mod tests {
             is_enabled: true,
             proxy_config_id: None,
         };
-        for (client_type, field) in [
-            ("sabnzbd", "api_key"),
-            ("weaver", "api_key"),
-            ("nzbget", "password"),
-        ] {
+        for (client_type, field) in [("sabnzbd", "api_key"), ("weaver", "api_key")] {
             for missing in [serde_json::json!({}), serde_json::json!({ field: "  " })] {
                 assert_eq!(
                     require_download_client_credential(&client(client_type, missing))
@@ -1248,6 +1256,20 @@ mod tests {
         }
         require_download_client_credential(&client("qbittorrent", serde_json::json!({})))
             .expect("clients without a required secret pass");
+        // NZBGet with authentication disabled exports an empty password.
+        for password in ["", "  ", "synthetic-secret"] {
+            require_download_client_credential(&client(
+                "nzbget",
+                serde_json::json!({ "password": password }),
+            ))
+            .expect("an NZBGet password, even empty, passes");
+        }
+        assert_eq!(
+            require_download_client_credential(&client("nzbget", serde_json::json!({})))
+                .expect_err("an NZBGet source without a password fails the item")
+                .validation_reason(),
+            Some(refusal::CREDENTIAL_REQUIRED)
+        );
     }
 
     #[test]
