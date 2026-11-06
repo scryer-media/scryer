@@ -151,10 +151,13 @@ pub fn media_format_for_extension(extension: &str) -> Option<&'static MediaForma
 }
 
 /// Normalizes only the established trailing filename junk, never an inner suffix.
+///
+/// Every registered extension is ASCII, so a stem that is not valid UTF-8 is
+/// still recognized: invalid sequences become replacement characters, which
+/// keeps the stem non-empty and leaves the extension bytes untouched.
 pub fn canonical_video_extension(path: &Path) -> Option<&'static str> {
-    let name = path
-        .file_name()?
-        .to_str()?
+    let name = path.file_name()?.to_string_lossy();
+    let name = name
         .trim()
         .trim_end_matches(|ch: char| {
             ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | '`' | '_' | '.')
@@ -244,6 +247,23 @@ mod tests {
             ))));
         }
         assert!(is_standalone_video_path(Path::new("Release.MKV_")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_stems_keep_their_video_extension() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = Path::new(OsStr::from_bytes(b"/library/Synthetic-\xFF.mkv"));
+        assert_eq!(canonical_video_extension(path), Some("mkv"));
+        assert!(is_standalone_video_path(path));
+        let junk = Path::new(OsStr::from_bytes(b"/library/\xFE\xFF.MKV_ "));
+        assert_eq!(canonical_video_extension(junk), Some("mkv"));
+        let not_video = Path::new(OsStr::from_bytes(b"/library/Synthetic-\xFF.nfo"));
+        assert_eq!(canonical_video_extension(not_video), None);
+        let bare = Path::new(OsStr::from_bytes(b"/library/.mkv\xFF"));
+        assert_eq!(canonical_video_extension(bare), None);
     }
 
     #[test]
