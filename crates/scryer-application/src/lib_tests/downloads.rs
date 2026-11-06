@@ -8021,6 +8021,7 @@ async fn manual_import_rejects_a_mapping_that_spans_two_seasons() {
     );
 }
 
+#[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn manual_import_upgrade_reports_transfer_progress_on_its_record() {
     // Prod 2026-08-18: every manual import that replaced an existing episode
@@ -11998,6 +11999,7 @@ impl FileImporter for PreparedSourceImporter {
 /// mode leaves the source in place, and a download whose verification is not
 /// yet satisfied is re-imported on the next poll) must reuse the copy it
 /// already made instead of minting another " (N)" file every pass.
+#[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn completed_import_retry_reuses_existing_additional_movie_file() {
     let download_client = Arc::new(StubDownloadClient::default());
@@ -12234,6 +12236,7 @@ async fn completed_import_retry_reuses_existing_additional_movie_file() {
 /// The episode additional-file path shares the movie path's destination
 /// helper, so it needs the same retry guard: a second import of the same
 /// completed download must reuse the copy it already made.
+#[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn completed_import_retry_reuses_existing_additional_episode_file() {
     let (
@@ -20054,6 +20057,7 @@ async fn a_library_override_can_turn_the_sidecar_on_for_one_library() {
     assert!(content.ends_with('\n'), "{content}");
 }
 
+#[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn a_manual_import_writes_the_episode_sidecar() {
     let FailClosedPackFixture {

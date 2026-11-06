@@ -164,8 +164,10 @@ impl FileImporter for CopyingFileImporter {
 /// [`CopyingFileImporter`] that also reports transfer progress the way the
 /// real importer does (copying 0 → total, then finalizing), so tests can
 /// observe what an import path writes onto its import record.
+#[cfg(feature = "runtime-media-analysis")]
 pub(super) struct ProgressReportingFileImporter;
 
+#[cfg(feature = "runtime-media-analysis")]
 #[async_trait]
 impl FileImporter for ProgressReportingFileImporter {
     async fn snapshot_import_source(
