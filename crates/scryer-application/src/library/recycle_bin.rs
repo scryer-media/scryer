@@ -3077,15 +3077,18 @@ mod tests {
 
     #[tokio::test]
     async fn recycle_metadata_named_payloads_roundtrip_without_overwriting_manifest() {
-        let mut names = vec![
+        let names = [
             "manifest.json",
             "Manifest.JSON",
             "MANIFEST.JSON",
             "ordinary.mkv",
             "MANIFE~1.JSO",
+            // Trailing dots and spaces are only distinct names off Windows.
+            #[cfg(unix)]
+            "manifest.json.",
+            #[cfg(unix)]
+            "manifest.json ",
         ];
-        #[cfg(unix)]
-        names.extend(["manifest.json.", "manifest.json "]);
         for name in names {
             for prepared in [false, true] {
                 let temp = TempDir::new().unwrap();
