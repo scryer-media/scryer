@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   jobInstanceKey,
+  longRunningJobs,
   mergeLatestJobRun,
   normalizeJobRun,
   preferJobRunSnapshot,
@@ -335,4 +336,70 @@ test("the newest finished run waits until its script run has settled", () => {
     null,
   );
   assert.equal(runAwaitingScriptOutput([active], []), null);
+});
+
+test("long-running jobs count each active job once it passes the threshold", () => {
+  const now = Date.parse("2026-01-01T00:10:00Z");
+  const runs = [
+    jobRun({
+      id: "scan",
+      jobKey: "LIBRARY_SCAN_MOVIES",
+      status: "DISCOVERING",
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
+    jobRun({
+      id: "move",
+      jobKey: "LOCATION_OPERATION",
+      status: "RUNNING",
+      startedAt: "2026-01-01T00:05:00Z",
+      progressJson: { operationId: "op-1" },
+    }),
+    jobRun({
+      id: "rss",
+      jobKey: "RSS_SYNC",
+      status: "RUNNING",
+      startedAt: "2026-01-01T00:09:50Z",
+    }),
+    jobRun({
+      id: "done",
+      jobKey: "HOUSEKEEPING",
+      status: "COMPLETED",
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
+    jobRun({
+      id: "queued",
+      jobKey: "ACQUISITION_SEARCH",
+      status: "QUEUED",
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
+  ];
+  assert.deepEqual(longRunningJobs(runs, now), {
+    count: 2,
+    nextChangeAtMs: Date.parse("2026-01-01T00:10:20Z"),
+  });
+  assert.deepEqual(longRunningJobs(runs, now + 20_000), {
+    count: 3,
+    nextChangeAtMs: null,
+  });
+});
+
+test("a folder conflict task counts once, not again for its current operation", () => {
+  const now = Date.parse("2026-01-01T00:10:00Z");
+  const runs = [
+    jobRun({
+      id: "task",
+      jobKey: "LOCATION_OPERATION",
+      status: "RUNNING",
+      startedAt: "2026-01-01T00:00:00Z",
+      progressJson: { current_operation_id: "conflict:task:3" },
+    }),
+    jobRun({
+      id: "child",
+      jobKey: "LOCATION_OPERATION",
+      status: "RUNNING",
+      startedAt: "2026-01-01T00:08:00Z",
+      progressJson: { operationId: "conflict:task:3" },
+    }),
+  ];
+  assert.equal(longRunningJobs(runs, now).count, 1);
 });

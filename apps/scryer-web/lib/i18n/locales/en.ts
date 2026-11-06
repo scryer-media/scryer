@@ -6732,6 +6732,7 @@ const en: LocaleDictionary = {
   "activity.loadMore": "Load more",
   "activity.staleData": "Showing the last successful result. Refresh failed.",
   "activity.countUnknown": "Import attention count is not available yet",
+  "activity.runningJobs": "Long-running jobs: {{count}}",
   "activity.countStale": "Import attention count may be out of date",
   "queue.state.importBlocked": "Import Blocked",
   "queue.state.warning": "Warning",

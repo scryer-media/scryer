@@ -2218,6 +2218,7 @@ const cs: LocaleDictionary = {
     "Zobrazuje se poslední úspěšný výsledek. Obnovení selhalo.",
   "activity.countUnknown":
     "Počet importů vyžadujících pozornost zatím není k dispozici",
+  "activity.runningJobs": "Probíhající dlouhé úlohy: {{count}}",
   "activity.countStale":
     "Počet importů vyžadujících pozornost může být zastaralý",
   "queue.state.importBlocked": "Import blokován",

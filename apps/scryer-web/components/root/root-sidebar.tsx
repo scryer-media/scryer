@@ -104,6 +104,7 @@ import {
   canAccessSystemSection,
 } from "@/lib/utils/routes";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { useLongRunningJobCount } from "@/lib/hooks/use-long-running-job-count";
 
 type NavItem = {
   id: ViewId;
@@ -598,7 +599,7 @@ const TOP_NAV_BADGE_GROUP_CLASS =
 const TOP_NAV_BADGE_BASE_CLASS =
   "inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-xs font-medium tabular-nums";
 
-type NavBadgeTone = "cta" | "danger" | "warning" | "request";
+type NavBadgeTone = "cta" | "danger" | "warning" | "request" | "info";
 
 function navBadgeToneClass(tone: NavBadgeTone) {
   switch (tone) {
@@ -608,6 +609,8 @@ function navBadgeToneClass(tone: NavBadgeTone) {
       return "bg-[var(--scry-warning-solid)] text-[var(--scry-warning-on-solid)] peer-hover/menu-button:text-[var(--scry-warning-on-solid)] peer-data-[active=true]/menu-button:text-[var(--scry-warning-on-solid)]";
     case "request":
       return "bg-primary text-primary-foreground";
+    case "info":
+      return "bg-[var(--scry-info-solid)] text-[var(--scry-info-on-solid)]";
     case "cta":
     default:
       return "bg-primary text-primary-foreground";
@@ -632,6 +635,44 @@ function TopNavBadge({
       >
         {children}
       </span>
+    </span>
+  );
+}
+
+/** Activity's badges: running jobs, then imports needing attention. */
+function ActivityNavBadges({
+  jobCount,
+  jobLabel,
+  importBadge,
+}: {
+  jobCount: number;
+  jobLabel: string;
+  importBadge: { text: string; label?: string } | null;
+}) {
+  if (jobCount <= 0 && !importBadge) {
+    return null;
+  }
+  return (
+    <span className={TOP_NAV_BADGE_GROUP_CLASS}>
+      {jobCount > 0 ? (
+        <span
+          id="root-sidebar-activity-running-jobs"
+          className={cn(TOP_NAV_BADGE_BASE_CLASS, navBadgeToneClass("info"))}
+          title={jobLabel}
+          aria-label={jobLabel}
+        >
+          {jobCount}
+        </span>
+      ) : null}
+      {importBadge ? (
+        <span
+          className={cn(TOP_NAV_BADGE_BASE_CLASS, navBadgeToneClass("cta"))}
+          title={importBadge.label}
+          aria-label={importBadge.label}
+        >
+          {importBadge.text}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -1002,6 +1043,18 @@ function RootSidebarContent({
   const activityImportBadgeText = !manualImportCountKnown
     ? "…"
     : `${activityImportBadgeCount}${manualImportCountStale ? "*" : ""}`;
+  const longRunningJobCount = useLongRunningJobCount();
+  const activityNavBadges = (
+    <ActivityNavBadges
+      jobCount={longRunningJobCount}
+      jobLabel={t("activity.runningJobs", { count: longRunningJobCount })}
+      importBadge={
+        hasActivityImportBadge
+          ? { text: activityImportBadgeText, label: activityImportBadgeLabel }
+          : null
+      }
+    />
+  );
   const visibleActivitySubPages = React.useMemo(
     () =>
       canViewLibraryInternals
@@ -1449,12 +1502,9 @@ function RootSidebarContent({
                                 <span className="min-w-0 flex-1 truncate">
                                   {item.label}
                                 </span>
-                                {item.id === "activity" &&
-                                hasActivityImportBadge ? (
-                                  <TopNavBadge label={activityImportBadgeLabel}>
-                                    {activityImportBadgeText}
-                                  </TopNavBadge>
-                                ) : null}
+                                {item.id === "activity"
+                                  ? activityNavBadges
+                                  : null}
                               </SidebarMenuButton>
                             </SidebarMenuItem>
                           </React.Fragment>
@@ -1531,12 +1581,9 @@ function RootSidebarContent({
                               <span className="min-w-0 flex-1 truncate">
                                 {item.label}
                               </span>
-                              {item.id === "activity" &&
-                              hasActivityImportBadge ? (
-                                <TopNavBadge label={activityImportBadgeLabel}>
-                                  {activityImportBadgeText}
-                                </TopNavBadge>
-                              ) : null}
+                              {item.id === "activity"
+                                ? activityNavBadges
+                                : null}
                               {isSettingsTop && pluginBlockedCount > 0 ? (
                                 // Only one badge fits the collapsed row; a plugin
                                 // that is not running outranks one with an update.

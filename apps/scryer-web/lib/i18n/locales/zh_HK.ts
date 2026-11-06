@@ -1918,6 +1918,7 @@ const zh_HK: LocaleDictionary = {
   "activity.loadMore": "載入更多",
   "activity.staleData": "顯示上次成功的結果。重新整理失敗。",
   "activity.countUnknown": "匯入關注計數尚無法使用",
+  "activity.runningJobs": "長時間執行的工作：{{count}}",
   "activity.countStale": "匯入關注計數可能已過期",
   "queue.state.importBlocked": "進口受阻",
   "queue.state.warning": "警告",

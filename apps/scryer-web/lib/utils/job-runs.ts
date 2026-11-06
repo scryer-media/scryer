@@ -435,3 +435,54 @@ export function runAwaitingScriptOutput(
   if (scriptRun && scriptRun.status !== "running") return null;
   return newestFinished.id;
 }
+
+/** A run counts as long-running once it has been active at least this long. */
+export const LONG_RUNNING_JOB_THRESHOLD_MS = 30_000;
+
+function progressString(run: Pick<JobRun, "progressJson">, key: string) {
+  const progress = run.progressJson;
+  if (!isRecord(progress)) return null;
+  const value = progress[key];
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+/**
+ * Jobs that have been running for at least the threshold, one per job. A
+ * folder conflict task reports through its own run and runs each conflict as
+ * a child location operation with a run of its own; the child is part of the
+ * task, so it is not counted again.
+ */
+export function longRunningJobs(
+  runs: readonly Pick<
+    JobRun,
+    "id" | "jobKey" | "status" | "startedAt" | "progressJson"
+  >[],
+  nowMs: number,
+): { count: number; nextChangeAtMs: number | null } {
+  const active = runs.filter(
+    (run) => run.status === "RUNNING" || run.status === "DISCOVERING",
+  );
+  const childOperationIds = new Set(
+    active
+      .map((run) => progressString(run, "current_operation_id"))
+      .filter((id): id is string => id !== null),
+  );
+  let count = 0;
+  let nextChangeAtMs: number | null = null;
+  for (const run of active) {
+    const operationId =
+      run.jobKey === "LOCATION_OPERATION"
+        ? progressString(run, "operationId")
+        : null;
+    if (operationId !== null && childOperationIds.has(operationId)) continue;
+    const startedAtMs = Date.parse(run.startedAt);
+    if (!Number.isFinite(startedAtMs)) continue;
+    const longRunningAtMs = startedAtMs + LONG_RUNNING_JOB_THRESHOLD_MS;
+    if (longRunningAtMs <= nowMs) {
+      count += 1;
+    } else if (nextChangeAtMs === null || longRunningAtMs < nextChangeAtMs) {
+      nextChangeAtMs = longRunningAtMs;
+    }
+  }
+  return { count, nextChangeAtMs };
+}
