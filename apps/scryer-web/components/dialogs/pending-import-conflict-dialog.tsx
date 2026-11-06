@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -159,6 +158,7 @@ export function PendingImportConflictDialog({
       <DialogContent
         id="pending-import-conflict-dialog"
         className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl"
+        aria-describedby={undefined}
         showCloseButton={!applying}
         onEscapeKeyDown={(event) => {
           if (applying) event.preventDefault();
@@ -178,11 +178,6 @@ export function PendingImportConflictDialog({
               {t("settings.pluginBeta")}
             </Badge>
           </DialogTitle>
-          <DialogDescription>
-            {t("pendingImports.conflict.description", {
-              count: pendingImportIds.length,
-            })}
-          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
           <SingleSelectField
@@ -204,11 +199,6 @@ export function PendingImportConflictDialog({
                 label: t("pendingImports.conflict.keepOne"),
               },
             ]}
-            description={t(
-              policy === "ADOPT_ALL"
-                ? "pendingImports.conflict.adoptHelp"
-                : "pendingImports.conflict.keepHelp",
-            )}
           />
           <SingleSelectField
             id="pending-import-conflict-leftovers"
@@ -229,11 +219,6 @@ export function PendingImportConflictDialog({
                 label: t("pendingImports.conflict.mediaOnly"),
               },
             ]}
-            description={t(
-              leftovers === "PRESERVE_ALL"
-                ? "pendingImports.conflict.preserveHelp"
-                : "pendingImports.conflict.mediaOnlyHelp",
-            )}
           />
         </div>
         {loading && (
@@ -249,31 +234,25 @@ export function PendingImportConflictDialog({
         )}
         {preview && (
           <>
-            <p className="text-sm text-muted-foreground">
-              {t("pendingImports.conflict.previewCount", {
-                count: preview.totalCount,
-                shown: preview.rows.length,
-              })}
-            </p>
-            <p className="text-sm text-muted-foreground">
-              {t("pendingImports.conflict.actionableCount", {
-                actionable: preview.actionableCount,
-                failed: preview.failedCount,
-              })}
-            </p>
+            {preview.failedCount > 0 && (
+              <p className="text-sm text-muted-foreground">
+                {t("pendingImports.conflict.actionableCount", {
+                  actionable: preview.actionableCount,
+                  failed: preview.failedCount,
+                })}
+              </p>
+            )}
             {preview.sampled && (
               <p className="text-sm">{t("pendingImports.conflict.sampled")}</p>
             )}
-            <Table wrapperClassName="overflow-x-auto" className="min-w-[760px]">
+            <Table wrapperClassName="overflow-x-auto" className="min-w-[640px]">
               <TableHeader>
                 <TableRow>
                   {[
                     "titleColumn",
-                    "survivor",
                     "primary",
                     "moveBytes",
                     "recycleBytes",
-                    "renames",
                     "leftoverFiles",
                   ].map((column) => (
                     <TableHead key={column}>
@@ -299,14 +278,8 @@ export function PendingImportConflictDialog({
                       )}
                     </TableCell>
                     <TableCell
-                      id={`pending-import-conflict-survivor-${row.pendingImportId}`}
-                      className="max-w-60 break-all font-mono text-xs"
-                    >
-                      {row.errorReason ? "—" : row.survivorPath}
-                    </TableCell>
-                    <TableCell
                       id={`pending-import-conflict-primary-${row.pendingImportId}`}
-                      className="max-w-60 break-all font-mono text-xs"
+                      className="max-w-72 break-all font-mono text-xs"
                     >
                       {row.errorReason ? "—" : row.primaryPath}
                     </TableCell>
@@ -328,11 +301,22 @@ export function PendingImportConflictDialog({
                       />
                     </TableCell>
                     <TableCell>
-                      {row.errorReason ? "—" : row.collisionRenames}
+                      {row.errorReason
+                        ? "—"
+                        : t("pendingImports.conflict.filesBytes", {
+                            count: row.leftoverCount,
+                            bytes: formatByteCount(toCount(row.leftoverBytes)),
+                          })}
+                      <PathList
+                        paths={row.leftoverPaths}
+                        sampled={row.filesSampled}
+                      />
                       {row.collisionRenameSamples.length > 0 && (
                         <details className="mt-2 text-xs">
                           <summary>
-                            {t("pendingImports.conflict.showFiles")}
+                            {t("pendingImports.conflict.renamedFiles", {
+                              count: row.collisionRenames,
+                            })}
                           </summary>
                           <ul className="space-y-2">
                             {row.collisionRenameSamples.map((rename) => (
@@ -351,27 +335,6 @@ export function PendingImportConflictDialog({
                           )}
                         </details>
                       )}
-                    </TableCell>
-                    <TableCell>
-                      {row.errorReason
-                        ? "—"
-                        : t("pendingImports.conflict.filesBytes", {
-                            count: row.leftoverCount,
-                            bytes: formatByteCount(toCount(row.leftoverBytes)),
-                          })}
-                      {!row.errorReason && (
-                        <p>
-                          {t(
-                            leftovers === "PRESERVE_ALL"
-                              ? "pendingImports.conflict.preserveAll"
-                              : "pendingImports.conflict.mediaOnly",
-                          )}
-                        </p>
-                      )}
-                      <PathList
-                        paths={row.leftoverPaths}
-                        sampled={row.filesSampled}
-                      />
                     </TableCell>
                   </TableRow>
                 ))}

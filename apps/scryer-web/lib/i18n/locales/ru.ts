@@ -13092,7 +13092,7 @@ const ru: LocaleDictionary = {
   "error.reason.LOCATION_CONFLICT_PLAN_FAILED":
     "Не удалось подготовить предпросмотр конфликта. Обновите предпросмотр; если ошибка повторится, проверьте журнал сервера.",
   "pendingImports.conflict.actionableCount":
-    "Готовы к разрешению: {{actionable}}; не могут быть разрешены: {{failed}}. Будут применены только готовые конфликты.",
+    "Не могут быть разрешены и будут пропущены: {{failed}}.",
   "error.reason.LOCATION_CONFLICT_FOLDER_UNSAFE":
     "Папка находится вне разрешённых корневых папок или к ней нельзя безопасно обратиться.",
   "error.reason.LOCATION_CONFLICT_OWNERSHIP_CHANGED":
@@ -13111,32 +13111,19 @@ const ru: LocaleDictionary = {
   "pendingImports.conflict.adoptAll": "Принять все",
   "pendingImports.conflict.keepOne": "Оставить одну",
   "pendingImports.conflict.title": "Разрешение конфликтов папок",
-  "pendingImports.conflict.description":
-    "Предпросмотр разрешения конфликтов ({{count}}). Каждый конфликт выполняется как отдельная операция с расположением в разделе «Активность».",
   "pendingImports.conflict.policy": "Политика для медиафайлов",
   "pendingImports.conflict.leftovers": "Остальные файлы",
-  "pendingImports.conflict.adoptHelp":
-    "Переместить все медиафайлы в сохраняемую папку. Лучший файл станет основным, остальные файлы фильма — дополнительными.",
-  "pendingImports.conflict.keepHelp":
-    "Оставить лучший медиафайл в сохраняемой папке, при необходимости переместив его туда. Худшие медиафайлы переместить в корзину.",
-  "pendingImports.conflict.preserveAll": "Сохранить все файлы (по умолчанию)",
+  "pendingImports.conflict.preserveAll": "Сохранить все файлы",
   "pendingImports.conflict.mediaOnly": "Сохранить только медиафайлы",
-  "pendingImports.conflict.preserveHelp":
-    "Переместить остальные файлы в сохраняемую папку, разрешая совпадения имён без перезаписи файлов.",
-  "pendingImports.conflict.mediaOnlyHelp":
-    "Переместить в корзину показанные в предпросмотре немедийные файлы только после того, как медиафайлы благополучно окажутся на месте.",
   "pendingImports.conflict.preview": "Обновить предпросмотр",
-  "pendingImports.conflict.previewCount":
-    "Конфликтов: {{count}}; показано строк: {{shown}}.",
   "pendingImports.conflict.sampled":
     "Это выборка. Счётчики учитывают весь выбор.",
   "pendingImports.conflict.titleColumn": "Тайтл",
-  "pendingImports.conflict.survivor": "Сохраняемая папка",
   "pendingImports.conflict.primary": "Основной файл",
   "pendingImports.conflict.moveBytes": "К перемещению",
   "pendingImports.conflict.recycleBytes": "В корзину",
-  "pendingImports.conflict.renames": "Переименования из-за совпадений",
   "pendingImports.conflict.leftoverFiles": "Остальные файлы",
+  "pendingImports.conflict.renamedFiles": "Переименовано: {{count}}",
   "pendingImports.conflict.filesBytes": "Файлов: {{count}} · {{bytes}}",
   "pendingImports.conflict.apply": "Применить разрешение",
   "pendingImports.conflict.permanentTitle": "Удалить файлы безвозвратно?",

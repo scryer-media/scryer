@@ -34,7 +34,7 @@ const en: LocaleDictionary = {
   "error.reason.LOCATION_CONFLICT_PLAN_FAILED":
     "The conflict preview could not be prepared. Refresh the preview and check the server logs if it still fails.",
   "pendingImports.conflict.actionableCount":
-    "{{actionable}} ready to resolve; {{failed}} cannot be resolved. Only ready conflicts will be applied.",
+    "{{failed}} cannot be resolved and will be skipped.",
   "error.reason.LOCATION_CONFLICT_FOLDER_UNSAFE":
     "A folder is outside the permitted roots or cannot be safely accessed.",
   "error.reason.LOCATION_CONFLICT_OWNERSHIP_CHANGED":
@@ -58,32 +58,19 @@ const en: LocaleDictionary = {
   "pendingImports.conflict.adoptAll": "Adopt all",
   "pendingImports.conflict.keepOne": "Keep one",
   "pendingImports.conflict.title": "Resolve folder conflicts",
-  "pendingImports.conflict.description":
-    "Preview how {{count}} conflicts will be settled. Each conflict runs as its own location operation in Activity.",
   "pendingImports.conflict.policy": "Media policy",
   "pendingImports.conflict.leftovers": "Remaining files",
-  "pendingImports.conflict.adoptHelp":
-    "Move every media file into the survivor folder. The best file becomes Primary; other movie files become Additional.",
-  "pendingImports.conflict.keepHelp":
-    "Keep the best media in the survivor folder, moving it there if needed. Recycle inferior media.",
-  "pendingImports.conflict.preserveAll": "Preserve all files (default)",
+  "pendingImports.conflict.preserveAll": "Preserve all files",
   "pendingImports.conflict.mediaOnly": "Preserve media files only",
-  "pendingImports.conflict.preserveHelp":
-    "Move remaining files into the survivor folder, resolving collisions without overwriting files.",
-  "pendingImports.conflict.mediaOnlyHelp":
-    "Recycle the previewed non-media remainder only after the media is safe at its destination.",
   "pendingImports.conflict.preview": "Refresh preview",
-  "pendingImports.conflict.previewCount":
-    "{{count}} conflicts; showing {{shown}} rows.",
   "pendingImports.conflict.sampled":
     "This is a sample. Counts include the entire selection.",
   "pendingImports.conflict.titleColumn": "Title",
-  "pendingImports.conflict.survivor": "Survivor folder",
   "pendingImports.conflict.primary": "Primary file",
   "pendingImports.conflict.moveBytes": "To move",
   "pendingImports.conflict.recycleBytes": "To recycle",
-  "pendingImports.conflict.renames": "Collision renames",
   "pendingImports.conflict.leftoverFiles": "Remaining files",
+  "pendingImports.conflict.renamedFiles": "{{count}} renamed",
   "pendingImports.conflict.filesBytes": "{{count}} files · {{bytes}}",
   "pendingImports.conflict.apply": "Apply resolution",
   "pendingImports.conflict.permanentTitle": "Delete files permanently?",
