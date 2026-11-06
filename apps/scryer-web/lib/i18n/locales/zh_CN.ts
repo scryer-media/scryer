@@ -2504,7 +2504,6 @@ const zh_CN: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "这些文件在此处登记在两个剧集下，而在目标处它们是同一剧集。在那里每个文件只登记一次。",
   "move.mergeRoleUnnamedFile": "文件 {{id}}",
-  "move.operationTransferNote": "这些标题正在移动到其他库。",
   "move.modeHeading": "文件应如何到达那里？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移动",
   "move.mode.FILES_ALREADY_THERE": "文件已经在那里",

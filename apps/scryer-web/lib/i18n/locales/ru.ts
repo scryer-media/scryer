@@ -5398,7 +5398,6 @@ const ru: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "Эти файлы числятся здесь под двумя сериями, которые в месте назначения являются одной. Там каждый из них числится один раз.",
   "move.mergeRoleUnnamedFile": "файл {{id}}",
-  "move.operationTransferNote": "Эти тайтлы перемещаются в другую библиотеку.",
   "move.modeHeading": "Как файлы должны туда попасть?",
   "move.mode.MOVE_WITH_SCRYER": "Переместить через Scryer",
   "move.mode.FILES_ALREADY_THERE": "Файлы уже на месте",

@@ -10528,7 +10528,6 @@ const en: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "These files are listed under two episodes here that are one episode at the destination. Each is listed once there.",
   "move.mergeRoleUnnamedFile": "file {{id}}",
-  "move.operationTransferNote": "These titles are moving into another library.",
   "move.modeHeading": "How should the files get there?",
   "move.mode.MOVE_WITH_SCRYER": "Move with Scryer",
   "move.mode.FILES_ALREADY_THERE": "Files are already there",

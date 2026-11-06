@@ -2715,8 +2715,6 @@ const ja: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "これらのファイルはここでは 2 つのエピソードに登録されていますが、移動先では 1 つのエピソードです。移動先では各ファイルが 1 回だけ登録されます。",
   "move.mergeRoleUnnamedFile": "ファイル {{id}}",
-  "move.operationTransferNote":
-    "これらのタイトルは別のライブラリへ移動しています。",
   "move.modeHeading": "ファイルをどのように移しますか？",
   "move.mode.MOVE_WITH_SCRYER": "Scryer で移動",
   "move.mode.FILES_ALREADY_THERE": "ファイルは既にそこにある",

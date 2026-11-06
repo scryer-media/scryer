@@ -464,14 +464,6 @@ function OperationPanel({ operationId, onDismiss }: Props) {
             )}
           </p>
         )}
-        {operation.operationType === "CROSS_LIBRARY_TRANSFER" && (
-          <p
-            id="location-operation-transfer-note"
-            className="text-sm text-muted-foreground"
-          >
-            {t("move.operationTransferNote")}
-          </p>
-        )}
         <div>
           <Button
             variant="ghost"

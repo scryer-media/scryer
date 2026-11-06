@@ -2657,8 +2657,6 @@ const ko: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "이 파일들은 여기서는 두 에피소드에 등록되어 있지만 대상에서는 하나의 에피소드입니다. 대상에서는 각 파일이 한 번만 등록됩니다.",
   "move.mergeRoleUnnamedFile": "파일 {{id}}",
-  "move.operationTransferNote":
-    "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
   "move.modeHeading": "파일을 어떻게 옮길까요?",
   "move.mode.MOVE_WITH_SCRYER": "Scryer로 이동",
   "move.mode.FILES_ALREADY_THERE": "파일이 이미 그곳에 있음",

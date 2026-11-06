@@ -2798,8 +2798,6 @@ const it: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "Questi file sono elencati qui sotto due episodi che nella destinazione sono uno solo. Lì ciascuno compare una volta sola.",
   "move.mergeRoleUnnamedFile": "file {{id}}",
-  "move.operationTransferNote":
-    "Questi titoli si stanno spostando in un'altra libreria.",
   "move.modeHeading": "Come devono arrivare i file?",
   "move.mode.MOVE_WITH_SCRYER": "Sposta con Scryer",
   "move.mode.FILES_ALREADY_THERE": "I file sono già lì",

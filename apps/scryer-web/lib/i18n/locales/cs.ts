@@ -5900,7 +5900,6 @@ const cs: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "Tyto soubory jsou zde uvedeny pod dvěma epizodami, které jsou v cíli jednou epizodou. Tam je každý uveden jednou.",
   "move.mergeRoleUnnamedFile": "soubor {{id}}",
-  "move.operationTransferNote": "Tyto tituly se přesouvají do jiné knihovny.",
   "move.modeHeading": "Jak se tam mají soubory dostat?",
   "move.mode.MOVE_WITH_SCRYER": "Přesunout pomocí Scryeru",
   "move.mode.FILES_ALREADY_THERE": "Soubory jsou již tam",

@@ -4936,7 +4936,6 @@ const zh_TW: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "這些檔案在此處登記在兩個劇集下，而在目標處它們是同一劇集。在那裡每個檔案只登記一次。",
   "move.mergeRoleUnnamedFile": "檔案 {{id}}",
-  "move.operationTransferNote": "這些標題正在移動到其他庫。",
   "move.modeHeading": "檔案應如何到達那裡？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移動",
   "move.mode.FILES_ALREADY_THERE": "檔案已經在那裡",
