@@ -372,6 +372,21 @@ fn other_media_within(media: &str, folder: &str) -> bool {
         ) && crate::folder_ownership::folder_case_insensitive(&stored_path_to_path_buf(folder)))
 }
 
+/// The most specific root holding `folder`: with nested roots the inner one
+/// owns it, the way title folder recovery resolves them.
+fn deepest_containing_root<'a>(
+    roots: &'a [scryer_domain::LibraryRoot],
+    folder: &str,
+) -> Option<&'a scryer_domain::LibraryRoot> {
+    roots
+        .iter()
+        .filter(|root| {
+            crate::stored_paths::stored_path_is_native(&root.path)
+                && crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
+        })
+        .max_by_key(|root| root.path.len())
+}
+
 /// Whether `folder` is, or contains, any configured root of any library.
 fn folder_spans_any_root(folder: &str, roots: &[scryer_domain::LibraryRoot]) -> bool {
     let all = roots
@@ -723,19 +738,12 @@ impl AppUseCase {
                     "The folder path uses another platform's native encoding; its files were preserved",
                 ));
             }
-            let root = library
-                .roots
-                .iter()
-                .find(|root| {
-                    crate::stored_paths::stored_path_is_native(&root.path)
-                        && crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
-                })
-                .ok_or_else(|| {
-                    refused(
-                        refusal::FOLDER_UNSAFE,
-                        "Every conflict folder must be strictly within this library's roots",
-                    )
-                })?;
+            let root = deepest_containing_root(&library.roots, folder).ok_or_else(|| {
+                refused(
+                    refusal::FOLDER_UNSAFE,
+                    "Every conflict folder must be strictly within this library's roots",
+                )
+            })?;
             // A root added to any library after the pending row was written
             // can make a conflict folder a whole root or hold one; consolidating
             // it would treat that root's titles as this title's files.
@@ -906,11 +914,8 @@ impl AppUseCase {
             )
         })?)
         .clone();
-        let destination_root = library
-            .roots
-            .iter()
-            .find(|root| crate::title_folder_rules::path_is_strictly_within(&survivor, &root.path))
-            .expect("validated folder root");
+        let destination_root =
+            deepest_containing_root(&library.roots, &survivor).expect("validated folder root");
         let source_root = library
             .roots
             .iter()
@@ -1479,6 +1484,20 @@ mod folder_name_rank_tests {
                 .unwrap(),
             case_insensitive
         );
+    }
+
+    #[test]
+    fn nested_roots_resolve_to_the_deepest_one() {
+        let roots = vec![
+            root("outer", "movie-lib", "/library"),
+            root("inner", "movie-lib", "/library/Nested"),
+        ];
+        let deepest = |folder: &str| {
+            deepest_containing_root(&roots, &path_to_stored_string(folder)).map(|r| r.id.as_str())
+        };
+        assert_eq!(deepest("/library/Nested/Emberfall"), Some("inner"));
+        assert_eq!(deepest("/library/Emberfall"), Some("outer"));
+        assert_eq!(deepest("/elsewhere/Emberfall"), None);
     }
 
     #[test]
