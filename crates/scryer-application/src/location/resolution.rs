@@ -735,11 +735,27 @@ pub async fn compare_existing(
                 "The source and destination are the same path.",
             ));
         }
-        return Ok(VerifiedFile::same_filesystem_rename(
-            source.to_path_buf(),
-            destination.to_path_buf(),
-            VerificationDepth::Full,
-        ));
+        match super::execution::shared_inode(
+            source,
+            destination,
+            &source_metadata,
+            &destination_metadata,
+        )
+        .await
+        {
+            super::execution::SharedInode::SecondLink => {
+                return Ok(VerifiedFile::same_filesystem_rename(
+                    source.to_path_buf(),
+                    destination.to_path_buf(),
+                    VerificationDepth::Full,
+                ));
+            }
+            super::execution::SharedInode::OneEntry => {
+                return Err(super::execution::one_entry_refusal());
+            }
+            // Synthesized inodes: prove the pair by content below.
+            super::execution::SharedInode::Distinct => {}
+        }
     }
     // The quick check first (FR-073): a size difference or a differing
     // head/tail sample proves different content without reading either file

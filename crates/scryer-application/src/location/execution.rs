@@ -551,7 +551,13 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
                 "source and destination are the same path",
             ));
         }
-        return Ok(same_regular_file(&source_metadata, &destination_metadata));
+        return match shared_inode(source, destination, &source_metadata, &destination_metadata)
+            .await
+        {
+            SharedInode::SecondLink => Ok(true),
+            SharedInode::OneEntry => Err(one_entry_refusal()),
+            SharedInode::Distinct => Ok(false),
+        };
     }
     match tokio::fs::hard_link(source, destination).await {
         Ok(()) => {
@@ -573,6 +579,113 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
         }
         Err(_) => Ok(false),
     }
+}
+
+/// What a source/destination pair that may share one inode is to the mover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SharedInode {
+    /// Not provably one file: the pair is compared by content.
+    Distinct,
+    /// Two directory entries for one file; removing the source keeps the bytes.
+    SecondLink,
+    /// One directory entry reached under two spellings (a case-folding or
+    /// normalizing mount, or an alias path). Removing either name removes the
+    /// only entry, so the pair is refused.
+    OneEntry,
+}
+
+/// Decide a pair from the facts alone. Equal dev/ino is not trusted by itself:
+/// mounts that synthesize inodes (CIFS without serverino, mergerfs, rclone) can
+/// report it for two different files, so a length mismatch sends the pair to
+/// the content comparison. A shared inode counts as a second link only with a
+/// known link count of two or more; an unknown count is never assumed to be.
+pub(super) fn shared_inode_decision(
+    same_identity: bool,
+    source_len: u64,
+    destination_len: u64,
+    link_count: Option<u64>,
+) -> SharedInode {
+    let _ = (source_len, destination_len);
+    if !same_identity {
+        return SharedInode::Distinct;
+    }
+    match link_count {
+        Some(count) if count >= 2 => SharedInode::SecondLink,
+        _ => SharedInode::OneEntry,
+    }
+}
+
+/// Classify a pair by metadata, then prove a claimed second link is really a
+/// second directory entry: two names in one directory must both be listed
+/// under their exact spelling, which a case-folding mount does not do.
+pub(super) async fn shared_inode(
+    source: &Path,
+    destination: &Path,
+    source_metadata: &std::fs::Metadata,
+    destination_metadata: &std::fs::Metadata,
+) -> SharedInode {
+    let decision = shared_inode_decision(
+        same_regular_file(source_metadata, destination_metadata),
+        source_metadata.len(),
+        destination_metadata.len(),
+        super::hardlinks::link_count_from_metadata(destination_metadata).count(),
+    );
+    #[cfg(unix)]
+    if decision == SharedInode::SecondLink && !distinct_directory_entries(source, destination).await
+    {
+        return SharedInode::OneEntry;
+    }
+    #[cfg(not(unix))]
+    let _ = (source, destination);
+    decision
+}
+
+pub(super) fn one_entry_refusal() -> AppError {
+    AppError::validation_refused(
+        crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
+        "source and destination are one directory entry under two spellings",
+    )
+}
+
+/// Whether two paths are two directory entries. Names in two different
+/// directories are; names in one directory are only when they differ and the
+/// listing holds both exactly.
+#[cfg(unix)]
+async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
+    let (Some(source_parent), Some(destination_parent)) = (source.parent(), destination.parent())
+    else {
+        return false;
+    };
+    let (Ok(source_dir), Ok(destination_dir)) = (
+        tokio::fs::metadata(source_parent).await,
+        tokio::fs::metadata(destination_parent).await,
+    ) else {
+        return false;
+    };
+    use std::os::unix::fs::MetadataExt;
+    if source_dir.dev() != destination_dir.dev() || source_dir.ino() != destination_dir.ino() {
+        return true;
+    }
+    let (Some(source_name), Some(destination_name)) = (source.file_name(), destination.file_name())
+    else {
+        return false;
+    };
+    if source_name == destination_name {
+        return false;
+    }
+    let Ok(mut entries) = tokio::fs::read_dir(source_parent).await else {
+        return false;
+    };
+    let (mut saw_source, mut saw_destination) = (false, false);
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        saw_source |= name == source_name;
+        saw_destination |= name == destination_name;
+        if saw_source && saw_destination {
+            return true;
+        }
+    }
+    false
 }
 
 pub(super) fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
@@ -1059,7 +1172,21 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 } else {
                     false
                 };
-                if !same_regular_file(&source_metadata, &destination_metadata) && !same_link {
+                let same_file = same_regular_file(&source_metadata, &destination_metadata);
+                if same_file
+                    && shared_inode(
+                        &source,
+                        &file.destination(),
+                        &source_metadata,
+                        &destination_metadata,
+                    )
+                    .await
+                        != SharedInode::SecondLink
+                {
+                    // Removing the source would remove the only entry.
+                    return Err(one_entry_refusal());
+                }
+                if !same_file && !same_link {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
                         format!(

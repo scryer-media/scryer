@@ -2485,3 +2485,95 @@ async fn a_run_that_has_not_reached_a_terminal_state_notifies_nothing() {
     .await;
     assert!(refresh.requests().is_empty());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_real_second_link_is_a_second_link() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("movie.mkv");
+    let destination = temp.path().join("linked.mkv");
+    write_file(&source, b"hello world");
+    std::fs::hard_link(&source, &destination).unwrap();
+    let source_metadata = std::fs::symlink_metadata(&source).unwrap();
+    let destination_metadata = std::fs::symlink_metadata(&destination).unwrap();
+    assert_eq!(
+        shared_inode(
+            &source,
+            &destination,
+            &source_metadata,
+            &destination_metadata
+        )
+        .await,
+        SharedInode::SecondLink
+    );
+    assert!(
+        stage_same_filesystem_file(&source, &destination)
+            .await
+            .expect("an existing second link is a placement")
+    );
+}
+
+/// One directory entry reached through a second spelling (here `sub/..`, as a
+/// case-folding mount does with `Movie.mkv` and `movie.mkv`) shares its inode
+/// with itself and has a link count of one. Removing either name would remove
+/// the only entry, so it is never a second link.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_alias_of_the_only_entry_is_never_a_second_link() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("sub")).unwrap();
+    let source = temp.path().join("movie.mkv");
+    let alias = temp.path().join("sub").join("..").join("movie.mkv");
+    write_file(&source, b"hello world");
+    let source_metadata = std::fs::symlink_metadata(&source).unwrap();
+    let alias_metadata = std::fs::symlink_metadata(&alias).unwrap();
+    assert_eq!(
+        shared_inode(&source, &alias, &source_metadata, &alias_metadata).await,
+        SharedInode::OneEntry
+    );
+    // The staging path refuses it (canonicalize already matches here).
+    stage_same_filesystem_file(&source, &alias)
+        .await
+        .expect_err("an alias of the only entry is refused");
+    assert_eq!(std::fs::read(&source).unwrap(), b"hello world");
+}
+
+/// A link count of two does not make two names in one directory two entries:
+/// the listing must hold both spellings exactly.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_file_reached_by_an_unlisted_spelling_is_one_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("sub")).unwrap();
+    let source = temp.path().join("movie.mkv");
+    write_file(&source, b"hello world");
+    // A seeding copy elsewhere raises the link count to two.
+    std::fs::hard_link(&source, temp.path().join("sub").join("seed.mkv")).unwrap();
+    let alias = temp.path().join("sub").join("..").join("movie.mkv");
+    let source_metadata = std::fs::symlink_metadata(&source).unwrap();
+    let alias_metadata = std::fs::symlink_metadata(&alias).unwrap();
+    assert_eq!(
+        shared_inode(&source, &alias, &source_metadata, &alias_metadata).await,
+        SharedInode::OneEntry
+    );
+}
+
+#[test]
+fn a_shared_inode_needs_a_known_link_count_of_two() {
+    assert_eq!(
+        shared_inode_decision(true, 5, 5, Some(2)),
+        SharedInode::SecondLink
+    );
+    assert_eq!(
+        shared_inode_decision(true, 5, 5, Some(1)),
+        SharedInode::OneEntry
+    );
+    assert_eq!(
+        shared_inode_decision(true, 5, 5, None),
+        SharedInode::OneEntry
+    );
+    assert_eq!(
+        shared_inode_decision(false, 5, 5, Some(2)),
+        SharedInode::Distinct
+    );
+}
