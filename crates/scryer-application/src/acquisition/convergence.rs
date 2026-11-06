@@ -1473,6 +1473,10 @@ impl AppUseCase {
                 CoverageReopen::All => self.prune_scope_key_coverage(&scope_key, None).await,
             }
         }
+        self.runtime
+            .acquisition
+            .target_cache
+            .mark_title(&item.title_id);
         self.runtime.acquisition.acquisition_wake.notify_one();
     }
 

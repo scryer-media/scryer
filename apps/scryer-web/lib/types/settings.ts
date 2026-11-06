@@ -39,11 +39,14 @@ export type MovieAvailabilitySettings = {
   movieAvailabilityDelayDays: number | null;
 };
 
+export type AcquisitionWalkIntensity = "QUIET" | "NORMAL" | "EAGER";
+
 export type AcquisitionSettings = {
   enabled: boolean;
   sameTierMinDelta: number;
   pollIntervalSeconds: number;
   walkIntervalSeconds: number;
+  walkIntensity: AcquisitionWalkIntensity;
   syncIntervalSeconds: number;
   batchSize: number;
 };

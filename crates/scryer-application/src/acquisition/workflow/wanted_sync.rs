@@ -640,6 +640,10 @@ impl AppUseCase {
                 item.grabbed_release.as_deref(),
             )
             .await?;
+        self.runtime
+            .acquisition
+            .target_cache
+            .mark_title(&item.title_id);
         self.runtime.acquisition.acquisition_wake.notify_one();
         Ok(())
     }

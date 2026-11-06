@@ -851,6 +851,7 @@ async fn reopen_lost_file_coverage(
             title_id,
             reopened, "re-opened search coverage for monitored items whose files were lost"
         );
+        app.runtime.acquisition.target_cache.mark_title(title_id);
         app.runtime.acquisition.acquisition_wake.notify_one();
     }
 }

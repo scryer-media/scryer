@@ -403,6 +403,18 @@ export function titleClaimReleaseId(claimId: string): string {
 export const TITLE_CLAIM_EXTEND_DATE_ID = "title-claim-extend-date";
 export const TITLE_CLAIM_RELEASE_REASON_ID = "title-claim-release-reason";
 
+/** The acquisition walk intensity picker on the acquisition settings page. */
+export function settingsAcquisitionWalkIntensityId(): string {
+  return selectorId("settings-acquisition-walk-intensity");
+}
+
+/** One option of the acquisition walk intensity picker. */
+export function settingsAcquisitionWalkIntensityOptionId(
+  intensity: string,
+): string {
+  return selectorId("settings-acquisition-walk-intensity-option", intensity);
+}
+
 export function settingsRequestRuleRowId(ruleSetId: string): string {
   return selectorId("settings-request-rule-row", ruleSetId);
 }

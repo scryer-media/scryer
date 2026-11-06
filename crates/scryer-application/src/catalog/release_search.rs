@@ -76,6 +76,438 @@ pub(crate) struct ScoredReleaseBatch {
     pub quota_exhausted_by_indexer: HashMap<String, usize>,
 }
 
+/// Results one blocking task parses or scores before the walk yields the
+/// runtime back. Small enough that one chunk stays well under a millisecond
+/// of work on a large title, large enough that the hand-off cost is noise.
+const SCORING_CHUNK_RESULTS: usize = 32;
+
+/// Which search a scoring pass serves, and so how many results it scores.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScoringLane {
+    /// An operator's search, RSS, or anything else that is not the background
+    /// walk: every result is scored.
+    Full,
+    /// A background walk search. `cap` bounds the results it scores; `None`
+    /// for a hot scope, which is scored in full.
+    Walk { cap: Option<usize> },
+}
+
+impl ScoringLane {
+    fn evaluation_cap(self) -> Option<usize> {
+        match self {
+            Self::Full => None,
+            Self::Walk { cap } => cap,
+        }
+    }
+
+    fn record_evaluated(self, duplicates: usize, blocklisted: usize, over_cap: usize, kept: usize) {
+        if self == Self::Full {
+            return;
+        }
+        for (outcome, count) in [
+            ("duplicate", duplicates),
+            ("blocklisted", blocklisted),
+            ("over_cap", over_cap),
+            ("evaluated", kept),
+        ] {
+            if count > 0 {
+                metrics::counter!(
+                    crate::acquisition::walk_metrics::EVALUATED_RESULTS_TOTAL,
+                    "outcome" => outcome
+                )
+                .increment(count as u64);
+            }
+        }
+    }
+}
+
+/// Keeps at most `cap` results, taken a round at a time across indexers in
+/// the order each indexer returned them, so one indexer's long feed cannot
+/// crowd out another's first page. Kept results stay in their original order.
+/// Returns the kept results and how many were dropped.
+fn cap_evaluated_results(
+    results: Vec<IndexerSearchResult>,
+    cap: Option<usize>,
+) -> (Vec<IndexerSearchResult>, usize) {
+    let Some(cap) = cap.filter(|cap| results.len() > *cap) else {
+        return (results, 0);
+    };
+    let mut keep = vec![false; results.len()];
+    {
+        let mut slots: HashMap<Option<&str>, usize> = HashMap::new();
+        let mut positions: Vec<Vec<usize>> = Vec::new();
+        for (index, result) in results.iter().enumerate() {
+            let slot = *slots
+                .entry(result.indexer_id.as_deref())
+                .or_insert_with(|| {
+                    positions.push(Vec::new());
+                    positions.len() - 1
+                });
+            positions[slot].push(index);
+        }
+        let mut kept = 0usize;
+        let mut round = 0usize;
+        'rounds: while kept < cap {
+            let mut any = false;
+            for indexer in &positions {
+                if let Some(&index) = indexer.get(round) {
+                    keep[index] = true;
+                    kept += 1;
+                    any = true;
+                    if kept == cap {
+                        break 'rounds;
+                    }
+                }
+            }
+            if !any {
+                break;
+            }
+            round += 1;
+        }
+    }
+    let total = results.len();
+    let kept = results
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(result, keep)| keep.then_some(result))
+        .collect::<Vec<_>>();
+    let dropped = total - kept.len();
+    (kept, dropped)
+}
+
+/// Runs `step` over `items` on the blocking pool, [`SCORING_CHUNK_RESULTS`]
+/// at a time, yielding to the runtime between chunks. The prepared scoring
+/// snapshot moves into each chunk and back, so every item sees the same
+/// snapshot and its one rule evaluator, exactly as a sequential loop would.
+/// If the caller is dropped mid-chunk the snapshot is gone and the next
+/// scoring pass prepares a fresh one.
+async fn score_in_blocking_chunks<I, O, F>(
+    prepared: &mut Option<PreparedReleaseScoringInputs>,
+    items: Vec<I>,
+    step: F,
+) -> AppResult<Vec<O>>
+where
+    I: Send + 'static,
+    O: Send + 'static,
+    F: Fn(&mut PreparedReleaseScoringInputs, I) -> Option<O> + Send + Sync + 'static,
+{
+    let step = Arc::new(step);
+    let mut output = Vec::with_capacity(items.len());
+    let mut items = items.into_iter().peekable();
+    while items.peek().is_some() {
+        let chunk = items
+            .by_ref()
+            .take(SCORING_CHUNK_RESULTS)
+            .collect::<Vec<_>>();
+        let mut inputs = prepared.take().expect("release scoring inputs initialized");
+        let step = Arc::clone(&step);
+        let joined = tokio::task::spawn_blocking(move || {
+            let produced = chunk
+                .into_iter()
+                .filter_map(|item| step(&mut inputs, item))
+                .collect::<Vec<_>>();
+            (inputs, produced)
+        })
+        .await;
+        match joined {
+            Ok((inputs, produced)) => {
+                *prepared = Some(inputs);
+                output.extend(produced);
+            }
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(_) => return Err(AppError::canceled("release scoring was canceled")),
+        }
+        tokio::task::yield_now().await;
+    }
+    Ok(output)
+}
+
+/// A search result after parsing and numbering translation, before scoring.
+struct ParsedCandidate {
+    result: IndexerSearchResult,
+    metadata: ParsedReleaseMetadata,
+    numbering_ambiguous: bool,
+    is_series_pack: bool,
+}
+
+/// A scored result with the rank it sorts by.
+struct EvaluatedCandidate {
+    key: String,
+    rank: crate::acquisition::scoring::SearchRank,
+    result: IndexerSearchResult,
+}
+
+/// What one scoring pass is looking for, shared by every candidate in it.
+#[derive(Clone, Copy)]
+struct CandidateRequest {
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
+    multi_episode_season: Option<u32>,
+    runtime_minutes: Option<i32>,
+    /// Index into the prepared catalog episodes of the episode asked for.
+    requested_episode_index: Option<usize>,
+}
+
+fn parse_candidate(
+    inputs: &PreparedReleaseScoringInputs,
+    parse_context: &ReleaseParseContext,
+    title_id: &str,
+    result: IndexerSearchResult,
+) -> ParsedCandidate {
+    let parsed_release_metadata = parse_release_metadata_for_target(&result.title, parse_context);
+    let mut scored_release_metadata = parsed_release_metadata;
+
+    // Anime released in community (per-cour) numbering is rewritten
+    // into the catalog's TVDB numbering before anything reads it, so
+    // coverage, the numbering veto and the rank all see one numbering.
+    // A release nobody can place is refused outright rather than
+    // grabbed on a coin toss.
+    let numbering = crate::anime_numbering::translate_release_numbering(
+        inputs.anime_numbering_bridge.as_ref(),
+        &inputs.title,
+        &inputs.catalog_episodes,
+        &mut scored_release_metadata,
+        result
+            .published_at
+            .as_deref()
+            .and_then(crate::quality_profile::parse_published_at)
+            .map(|published| published.date_naive()),
+    );
+    let numbering_ambiguous = numbering.is_ambiguous();
+    if let Some(summary) = numbering.ambiguity_summary() {
+        tracing::info!(
+            title_id,
+            release = result.title.as_str(),
+            readings = summary.as_str(),
+            "release numbering has several equally-good readings; not auto-grabbing"
+        );
+    }
+
+    let is_series_pack = scored_release_metadata
+        .episode
+        .as_ref()
+        .is_some_and(|episode| episode.is_series_pack);
+    ParsedCandidate {
+        result,
+        metadata: scored_release_metadata,
+        numbering_ambiguous,
+        is_series_pack,
+    }
+}
+
+fn evaluate_candidate(
+    inputs: &mut PreparedReleaseScoringInputs,
+    request: &CandidateRequest,
+    candidate: ParsedCandidate,
+) -> Option<EvaluatedCandidate> {
+    let CandidateRequest {
+        season,
+        episode,
+        absolute_episode,
+        multi_episode_season,
+        runtime_minutes,
+        requested_episode_index,
+    } = *request;
+    let ParsedCandidate {
+        result,
+        metadata: scored_release_metadata,
+        numbering_ambiguous,
+        is_series_pack,
+    } = candidate;
+    let key = release_search_key(&result);
+    let catalog_episodes = Arc::clone(&inputs.catalog_episodes);
+    let requested_episode = requested_episode_index.map(|index| &catalog_episodes[index]);
+    let pack_below_missing_threshold = is_series_pack
+        && !inputs
+            .primary_episode_ids
+            .as_ref()
+            .and_then(Option::as_ref)
+            .is_some_and(|primary_episode_ids| {
+                crate::acquisition_coverage::series_pack_missing_ratio_qualifies(
+                    &scored_release_metadata,
+                    &inputs.catalog_episodes,
+                    primary_episode_ids,
+                )
+            });
+
+    let release_coverage = crate::acquisition_coverage::resolve_release_coverage(
+        &scored_release_metadata,
+        &inputs.catalog_episodes,
+        &inputs.catalog_collections,
+        requested_episode,
+    );
+    if let Some(wanted_episode) = requested_episode
+        && !release_coverage.covers_episode(wanted_episode)
+    {
+        return None;
+    }
+    let candidate_size_basis = crate::acquisition_coverage::coverage_size_basis(
+        &release_coverage,
+        &scored_release_metadata,
+        &inputs.catalog_episodes,
+        runtime_minutes,
+    );
+
+    if let Some(wanted_season) = multi_episode_season {
+        // Replaces the single-season check below, which passes any
+        // release that names no single season: a multi-season pack of
+        // other seasons as well as one that holds this season.
+        if !release_is_multi_episode_for_season(
+            scored_release_metadata.episode.as_ref(),
+            wanted_season,
+        ) {
+            return None;
+        }
+    } else if requested_episode.is_none()
+        && let Some(ref ep_meta) = scored_release_metadata.episode
+        && let Some(wanted_season) = season
+        && let Some(parsed_season) = ep_meta.season
+        && parsed_season != wanted_season
+    {
+        return None;
+    }
+    if requested_episode.is_none()
+        && let Some(ref ep_meta) = scored_release_metadata.episode
+        && let Some(wanted_episode) = episode
+    {
+        if !ep_meta.episode_numbers.is_empty() && !ep_meta.episode_numbers.contains(&wanted_episode)
+        {
+            return None;
+        }
+        if ep_meta.episode_numbers.is_empty()
+            && ep_meta.absolute_episode_numbers.is_empty()
+            && let (Some(parsed_abs), Some(wanted_abs)) =
+                (ep_meta.absolute_episode, absolute_episode)
+            && parsed_abs != wanted_abs
+        {
+            return None;
+        }
+    }
+
+    // One canonical score, from the same function and the same resolved
+    // context the import path uses. Everything that used to be added
+    // here and nowhere else — the freshness bonus, the single-episode
+    // pack penalty — is gone from the number; what survives of it
+    // orders the results, in `acquisition::scoring`, and never crosses
+    // a comparison. The listing facts rules read come from the frozen
+    // snapshot, captured here at the search's `now` and carried on the
+    // result, so the grab persists exactly what was scored.
+    let listing =
+        crate::quality::release_listing::ReleaseListingSnapshot::for_scoring(&result, inputs.now);
+    let scored_listing_json = listing.to_json_string();
+    let scoring_context = inputs
+        .canonical_context
+        .view(candidate_size_basis, false)
+        .without_rules();
+    let listing = crate::canonical_scoring::ListingFacts::candidate(listing, inputs.now);
+    // Shown with the result; the scorer fills the same languages in itself.
+    let displayed_release_metadata = crate::canonical_scoring::canonical_parse(
+        &scored_release_metadata,
+        Some(&listing),
+        &scoring_context,
+    );
+    let scored_release = crate::canonical_scoring::score_release_in_batch(
+        &crate::canonical_scoring::ReleaseEvidence::announced(
+            scored_release_metadata.clone(),
+            result.size_bytes,
+        )
+        .with_listing(Some(listing)),
+        &scoring_context,
+        &mut inputs.rule_evaluation_batch,
+    );
+    let decision = scored_release.announced_decision;
+
+    // Rank is built here, where the listing and the coverage are still
+    // in hand, and dropped when the search ends. It is keyed by release
+    // rather than carried on the result so it cannot leak into anything
+    // that gets stored or compared later.
+    let protocol_enabled =
+        inputs
+            .enabled_protocols
+            .is_none_or(|(usenet, torrent)| match result.source_kind {
+                Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl) => usenet,
+                Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => torrent,
+                Some(DownloadSourceKind::HttpResource) | None => true,
+            });
+    let rank = crate::acquisition::scoring::SearchRank {
+        head: crate::acquisition::scoring::RankHead {
+            blocked: !decision.allowed
+                || pack_below_missing_threshold
+                || numbering_ambiguous
+                || !protocol_enabled,
+            tier_index: decision.tier_index.unwrap_or(usize::MAX),
+            negated_revision: 0,
+            negated_score: decision.preference_score.saturating_neg(),
+            size_fit_penalty: decision.size_fit_penalty,
+        },
+        non_preferred_protocol: !source_kind_matches_preference(
+            &result,
+            &inputs.preferred_source_kind,
+        ),
+        coverage_distance: release_coverage.coverage_distance(requested_episode),
+        episode_number: scored_release_metadata
+            .episode
+            .as_ref()
+            .and_then(|episode| episode.episode_numbers.iter().min().copied())
+            .unwrap_or(0),
+        indexer_priority: source_grab_sort_priority(
+            &result,
+            inputs
+                .indexer_priority_by_name
+                .get(&result.source)
+                .copied()
+                .unwrap_or(i64::MAX),
+        ),
+        negated_seeders: crate::acquisition::scoring::listing_negated_seeders(&result),
+        usenet_age_hours: if matches!(
+            result.source_kind,
+            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
+        ) {
+            crate::acquisition::scoring::listing_age_hours(
+                result.published_at.as_deref(),
+                inputs.now,
+            )
+        } else {
+            0
+        },
+    };
+
+    let mut scored_result = IndexerSearchResult {
+        parsed_release_metadata: Some(displayed_release_metadata),
+        quality_profile_decision: Some(decision),
+        // Carry the coverage the scoring pass already resolved (D21);
+        // the auto evaluator has no catalog of its own and cannot
+        // recompute it.
+        coverage_scope: match release_coverage {
+            // `Title` and `Unknown` both map to `SubmissionScope::Title`,
+            // which would read as "this release covers the whole title"
+            // — an assertion neither of them makes. Absent is honest.
+            crate::acquisition_coverage::ReleaseCoverage::Title
+            | crate::acquisition_coverage::ReleaseCoverage::Unknown => None,
+            resolved => Some(resolved.submission_scope()),
+        },
+        release_listing_json: Some(scored_listing_json),
+        ..result
+    };
+    if numbering_ambiguous {
+        crate::acquisition_release_search::annotate_auto_decision(
+            &mut scored_result,
+            crate::acquisition_release_search::ReleaseAutoDecisionCode::AnimeNumberingAmbiguous,
+        );
+    } else if pack_below_missing_threshold {
+        crate::acquisition_release_search::annotate_auto_decision(
+            &mut scored_result,
+            crate::acquisition_release_search::ReleaseAutoDecisionCode::PackBelowMissingThreshold,
+        );
+    }
+    Some(EvaluatedCandidate {
+        key,
+        rank,
+        result: scored_result,
+    })
+}
+
 /// Removes releases no enabled download client can take and counts them per
 /// indexer and missing client family. A release with no source kind is kept.
 /// When an enabled client's plugin is unavailable, the missing family is
@@ -1294,6 +1726,7 @@ impl AppUseCase {
             false,
             None,
             now,
+            ScoringLane::Full,
         )
         .await
         .map(|batch| batch.results)
@@ -1331,6 +1764,9 @@ impl AppUseCase {
         // The lane's clock: listing age is read against it, and the snapshot a
         // grab or park persists is captured at it.
         now: chrono::DateTime<chrono::Utc>,
+        // The background walk caps how many results it scores; every other
+        // search scores them all.
+        lane: ScoringLane,
     ) -> AppResult<ScoredReleaseBatch> {
         let mut timer = crate::rules::metrics::StageTimer::new(
             "scan_batch",
@@ -1445,294 +1881,115 @@ impl AppUseCase {
                 rule_evaluation_batch,
             });
         }
-        let prepared = prepared
+        let inputs = prepared
             .as_mut()
             .expect("release scoring inputs initialized");
 
         let unroutable_by_indexer = retain_routable_releases(
             &mut raw_results,
-            prepared.has_usenet_client,
-            prepared.has_torrent_client,
-            prepared.has_http_client,
-            prepared.has_unavailable_client_plugin,
+            inputs.has_usenet_client,
+            inputs.has_torrent_client,
+            inputs.has_http_client,
+            inputs.has_unavailable_client_plugin,
         );
-        let requested_episode = resolve_requested_episode(
-            &prepared.catalog_episodes,
-            season,
-            episode,
-            absolute_episode,
-        );
-        let mut scored = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut rank_by_key: HashMap<String, crate::acquisition::scoring::SearchRank> =
-            HashMap::new();
+        let requested_episode_index =
+            resolve_requested_episode(&inputs.catalog_episodes, season, episode, absolute_episode)
+                .and_then(|found| {
+                    inputs
+                        .catalog_episodes
+                        .iter()
+                        .position(|candidate| std::ptr::eq(candidate, found))
+                });
 
+        // The cheap filters run first, on the async thread: a duplicate or a
+        // blocklisted release is dropped before anything parses it.
+        let mut seen = HashSet::new();
+        let mut duplicates = 0usize;
+        let mut blocklisted = 0usize;
+        let mut survivors = Vec::with_capacity(raw_results.len());
         for result in raw_results {
-            let key = release_search_key(&result);
-            if !seen.insert(key) {
+            if !seen.insert(release_search_key(&result)) {
+                duplicates += 1;
                 continue;
             }
-
             if is_release_blocklisted(
                 result.indexer_id.as_deref(),
                 &result.title,
                 result.info_hash(),
-                &prepared.blocklist,
+                &inputs.blocklist,
             ) {
+                blocklisted += 1;
                 continue;
             }
+            survivors.push(result);
+        }
+        let (survivors, over_cap) = cap_evaluated_results(survivors, lane.evaluation_cap());
+        lane.record_evaluated(duplicates, blocklisted, over_cap, survivors.len());
 
-            let parsed_release_metadata =
-                parse_release_metadata_for_target(&result.title, parse_context);
-            let mut scored_release_metadata = parsed_release_metadata;
+        // Parsing and rule scoring are CPU work: they run on the blocking
+        // pool, a chunk at a time, with the prepared snapshot moved into each
+        // chunk and back so every candidate is scored against the same one.
+        let parse_context = Arc::new(parse_context.clone());
+        let tracing_title_id: Arc<str> = Arc::from(title_id);
+        let parsed = score_in_blocking_chunks(prepared, survivors, move |inputs, result| {
+            Some(parse_candidate(
+                inputs,
+                &parse_context,
+                &tracing_title_id,
+                result,
+            ))
+        })
+        .await?;
 
-            // Anime released in community (per-cour) numbering is rewritten
-            // into the catalog's TVDB numbering before anything reads it, so
-            // coverage, the numbering veto and the rank all see one numbering.
-            // A release nobody can place is refused outright rather than
-            // grabbed on a coin toss.
-            let numbering = crate::anime_numbering::translate_release_numbering(
-                prepared.anime_numbering_bridge.as_ref(),
-                &prepared.title,
-                &prepared.catalog_episodes,
-                &mut scored_release_metadata,
-                result
-                    .published_at
-                    .as_deref()
-                    .and_then(crate::quality_profile::parse_published_at)
-                    .map(|published| published.date_naive()),
-            );
-            let numbering_ambiguous = numbering.is_ambiguous();
-            if let Some(summary) = numbering.ambiguity_summary() {
-                tracing::info!(
-                    title_id,
-                    release = result.title.as_str(),
-                    readings = summary.as_str(),
-                    "release numbering has several equally-good readings; not auto-grabbing"
-                );
-            }
-
-            let is_series_pack = scored_release_metadata
-                .episode
-                .as_ref()
-                .is_some_and(|episode| episode.is_series_pack);
-            let pack_below_missing_threshold = if is_series_pack {
-                if prepared.primary_episode_ids.is_none()
-                    || (catalog_reads.is_some()
-                        && matches!(prepared.primary_episode_ids, Some(None)))
-                {
-                    prepared.primary_episode_ids = Some(
-                        match reads.primary_file_cutoffs(self).await {
-                            Ok(files) => Some(
-                                files
-                                    .iter()
-                                    .filter_map(|file| file.episode_id.clone())
-                                    .collect::<std::collections::HashSet<_>>(),
-                            ),
-                            Err(error) => {
-                                tracing::warn!(
-                                    title_id,
-                                    error = %error,
-                                    "release scoring: failed to load media ownership; rejecting series packs"
-                                );
-                                None
-                            }
-                        },
+        // A series pack is judged against the episodes that already have a
+        // file. That read is async, so it is made once, before scoring, and
+        // only when some candidate is a pack.
+        let inputs = prepared
+            .as_mut()
+            .expect("release scoring inputs initialized");
+        if parsed.iter().any(|candidate| candidate.is_series_pack)
+            && (inputs.primary_episode_ids.is_none()
+                || (catalog_reads.is_some() && matches!(inputs.primary_episode_ids, Some(None))))
+        {
+            inputs.primary_episode_ids = Some(match reads.primary_file_cutoffs(self).await {
+                Ok(files) => Some(
+                    files
+                        .iter()
+                        .filter_map(|file| file.episode_id.clone())
+                        .collect::<std::collections::HashSet<_>>(),
+                ),
+                Err(error) => {
+                    tracing::warn!(
+                        title_id,
+                        error = %error,
+                        "release scoring: failed to load media ownership; rejecting series packs"
                     );
-                }
-                !prepared
-                    .primary_episode_ids
-                    .as_ref()
-                    .and_then(Option::as_ref)
-                    .is_some_and(|primary_episode_ids| {
-                        crate::acquisition_coverage::series_pack_missing_ratio_qualifies(
-                            &scored_release_metadata,
-                            &prepared.catalog_episodes,
-                            primary_episode_ids,
-                        )
-                    })
-            } else {
-                false
-            };
-
-            let release_coverage = crate::acquisition_coverage::resolve_release_coverage(
-                &scored_release_metadata,
-                &prepared.catalog_episodes,
-                &prepared.catalog_collections,
-                requested_episode,
-            );
-            if let Some(wanted_episode) = requested_episode
-                && !release_coverage.covers_episode(wanted_episode)
-            {
-                continue;
-            }
-            let candidate_size_basis = crate::acquisition_coverage::coverage_size_basis(
-                &release_coverage,
-                &scored_release_metadata,
-                &prepared.catalog_episodes,
-                runtime_minutes,
-            );
-
-            if let Some(wanted_season) = multi_episode_season {
-                // Replaces the single-season check below, which passes any
-                // release that names no single season: a multi-season pack of
-                // other seasons as well as one that holds this season.
-                if !release_is_multi_episode_for_season(
-                    scored_release_metadata.episode.as_ref(),
-                    wanted_season,
-                ) {
-                    continue;
-                }
-            } else if requested_episode.is_none()
-                && let Some(ref ep_meta) = scored_release_metadata.episode
-                && let Some(wanted_season) = season
-                && let Some(parsed_season) = ep_meta.season
-                && parsed_season != wanted_season
-            {
-                continue;
-            }
-            if requested_episode.is_none()
-                && let Some(ref ep_meta) = scored_release_metadata.episode
-                && let Some(wanted_episode) = episode
-            {
-                if !ep_meta.episode_numbers.is_empty()
-                    && !ep_meta.episode_numbers.contains(&wanted_episode)
-                {
-                    continue;
-                }
-                if ep_meta.episode_numbers.is_empty()
-                    && ep_meta.absolute_episode_numbers.is_empty()
-                    && let (Some(parsed_abs), Some(wanted_abs)) =
-                        (ep_meta.absolute_episode, absolute_episode)
-                    && parsed_abs != wanted_abs
-                {
-                    continue;
-                }
-            }
-
-            // One canonical score, from the same function and the same resolved
-            // context the import path uses. Everything that used to be added
-            // here and nowhere else — the freshness bonus, the single-episode
-            // pack penalty — is gone from the number; what survives of it
-            // orders the results, in `acquisition::scoring`, and never crosses
-            // a comparison. The listing facts rules read come from the frozen
-            // snapshot, captured here at the search's `now` and carried on the
-            // result, so the grab persists exactly what was scored.
-            let listing = crate::quality::release_listing::ReleaseListingSnapshot::for_scoring(
-                &result,
-                prepared.now,
-            );
-            let scored_listing_json = listing.to_json_string();
-            let scoring_context = prepared
-                .canonical_context
-                .view(candidate_size_basis, false)
-                .without_rules();
-            let listing = crate::canonical_scoring::ListingFacts::candidate(listing, prepared.now);
-            // Shown with the result; the scorer fills the same languages in itself.
-            let displayed_release_metadata = crate::canonical_scoring::canonical_parse(
-                &scored_release_metadata,
-                Some(&listing),
-                &scoring_context,
-            );
-            let scored_release = crate::canonical_scoring::score_release_in_batch(
-                &crate::canonical_scoring::ReleaseEvidence::announced(
-                    scored_release_metadata.clone(),
-                    result.size_bytes,
-                )
-                .with_listing(Some(listing)),
-                &scoring_context,
-                &mut prepared.rule_evaluation_batch,
-            );
-            let decision = scored_release.announced_decision;
-
-            // Rank is built here, where the listing and the coverage are still
-            // in hand, and dropped when the search ends. It is keyed by release
-            // rather than carried on the result so it cannot leak into anything
-            // that gets stored or compared later.
-            let protocol_enabled = prepared.enabled_protocols.is_none_or(|(usenet, torrent)| {
-                match result.source_kind {
-                    Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl) => usenet,
-                    Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
-                        torrent
-                    }
-                    Some(DownloadSourceKind::HttpResource) | None => true,
+                    None
                 }
             });
-            rank_by_key.insert(
-                release_search_key(&result),
-                crate::acquisition::scoring::SearchRank {
-                    head: crate::acquisition::scoring::RankHead {
-                        blocked: !decision.allowed
-                            || pack_below_missing_threshold
-                            || numbering_ambiguous
-                            || !protocol_enabled,
-                        tier_index: decision.tier_index.unwrap_or(usize::MAX),
-                        negated_revision: 0,
-                        negated_score: decision.preference_score.saturating_neg(),
-                        size_fit_penalty: decision.size_fit_penalty,
-                    },
-                    non_preferred_protocol: !source_kind_matches_preference(
-                        &result,
-                        &prepared.preferred_source_kind,
-                    ),
-                    coverage_distance: release_coverage.coverage_distance(requested_episode),
-                    episode_number: scored_release_metadata
-                        .episode
-                        .as_ref()
-                        .and_then(|episode| episode.episode_numbers.iter().min().copied())
-                        .unwrap_or(0),
-                    indexer_priority: source_grab_sort_priority(
-                        &result,
-                        prepared
-                            .indexer_priority_by_name
-                            .get(&result.source)
-                            .copied()
-                            .unwrap_or(i64::MAX),
-                    ),
-                    negated_seeders: crate::acquisition::scoring::listing_negated_seeders(&result),
-                    usenet_age_hours: if matches!(
-                        result.source_kind,
-                        Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
-                    ) {
-                        crate::acquisition::scoring::listing_age_hours(
-                            result.published_at.as_deref(),
-                            prepared.now,
-                        )
-                    } else {
-                        0
-                    },
-                },
-            );
+        }
 
-            let mut scored_result = IndexerSearchResult {
-                parsed_release_metadata: Some(displayed_release_metadata),
-                quality_profile_decision: Some(decision),
-                // Carry the coverage the scoring pass already resolved (D21);
-                // the auto evaluator has no catalog of its own and cannot
-                // recompute it.
-                coverage_scope: match release_coverage {
-                    // `Title` and `Unknown` both map to `SubmissionScope::Title`,
-                    // which would read as "this release covers the whole title"
-                    // — an assertion neither of them makes. Absent is honest.
-                    crate::acquisition_coverage::ReleaseCoverage::Title
-                    | crate::acquisition_coverage::ReleaseCoverage::Unknown => None,
-                    resolved => Some(resolved.submission_scope()),
-                },
-                release_listing_json: Some(scored_listing_json),
-                ..result
-            };
-            if numbering_ambiguous {
-                crate::acquisition_release_search::annotate_auto_decision(
-                    &mut scored_result,
-                    crate::acquisition_release_search::ReleaseAutoDecisionCode::AnimeNumberingAmbiguous,
-                );
-            } else if pack_below_missing_threshold {
-                crate::acquisition_release_search::annotate_auto_decision(
-                    &mut scored_result,
-                    crate::acquisition_release_search::ReleaseAutoDecisionCode::PackBelowMissingThreshold,
-                );
-            }
-            scored.push(scored_result);
+        let request = CandidateRequest {
+            season,
+            episode,
+            absolute_episode,
+            multi_episode_season,
+            runtime_minutes,
+            requested_episode_index,
+        };
+        let evaluated = score_in_blocking_chunks(prepared, parsed, move |inputs, candidate| {
+            evaluate_candidate(inputs, &request, candidate)
+        })
+        .await?;
+        let prepared = prepared
+            .as_mut()
+            .expect("release scoring inputs initialized");
+        let mut rank_by_key: HashMap<String, crate::acquisition::scoring::SearchRank> =
+            HashMap::with_capacity(evaluated.len());
+        let mut scored = Vec::with_capacity(evaluated.len());
+        for candidate in evaluated {
+            rank_by_key.insert(candidate.key, candidate.rank);
+            scored.push(candidate.result);
         }
 
         let mut quota_exhausted_by_indexer: HashMap<String, usize> = HashMap::new();
@@ -1959,6 +2216,8 @@ impl AppUseCase {
                 // exists *now*, and a corpus snapshot persisted before a new
                 // release appeared would hide it for the whole reuse window.
                 candidate_reuse_allowed: background_value.is_some(),
+                background_pages_per_pass: background_value
+                    .map(|value| self.background_pages_per_pass(value)),
             })
         } else {
             None
@@ -2130,6 +2389,12 @@ impl AppUseCase {
                     mode == SearchMode::Auto,
                     multi_episode_season,
                     scoring_now,
+                    match background_value {
+                        Some(value) => ScoringLane::Walk {
+                            cap: self.background_evaluation_cap(value),
+                        },
+                        None => ScoringLane::Full,
+                    },
                 )
                 .await?;
             scored_results = batch.results;

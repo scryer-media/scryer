@@ -329,6 +329,9 @@ pub use acquisition::seed_goals::{
     SeedGoalResolver, prowlarr_managed_goal_profile, prowlarr_managed_minimum_seeders,
     release_extra_f64, release_extra_i64,
 };
+pub use acquisition::targets::AcquisitionDerivationProfile;
+pub use acquisition::target_cache::AcquisitionTargetCacheStats;
+pub use acquisition::walk_intensity::{AUTO_QUIET_TARGET_THRESHOLD, AcquisitionWalkIntensity};
 pub use acquisition::wanted_views::{
     AcquisitionSearchJobView, AcquisitionSearchProgress, AcquisitionSearchRequest,
     WantedConvergenceState, WantedScopeView, WantedViewConvergence,

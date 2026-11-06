@@ -5824,12 +5824,25 @@ async fn background_acquisition_within_budget_walks_the_whole_batch() {
     assert_eq!(indexer_client.requested_indexer_id_sets().await.len(), 1);
 }
 
+/// Walks at the eager intensity, whose top-up and concurrency are the ones
+/// these tests count on.
+async fn walk_eagerly(app: &AppUseCase) {
+    app.upsert_system_setting_json(
+        crate::settings::runtime::ACQUISITION_WALK_INTENSITY_KEY,
+        &crate::acquisition::walk_intensity::AcquisitionWalkIntensity::Eager.as_str(),
+        None,
+    )
+    .await
+    .expect("set the walk intensity");
+}
+
 /// A scope whose walk had nothing to do does not use up the batch: the cycle
 /// carries on along the rotation until it has spent the batch on a scope that
 /// needed it.
 #[tokio::test]
 async fn covered_scopes_do_not_use_up_the_batch() {
     let (app, indexer_client) = covered_movies_ahead_of_an_open_movie(2).await;
+    walk_eagerly(&app).await;
 
     let outcome = app.run_background_acquisition_cycle_once().await;
 
@@ -5849,6 +5862,8 @@ async fn covered_scopes_do_not_use_up_the_batch() {
 #[tokio::test]
 async fn a_cycle_stops_following_covered_scopes_at_its_bound() {
     let (app, indexer_client) = covered_movies_ahead_of_an_open_movie(5).await;
+    // An eager walk follows four times its batch; normal follows two.
+    walk_eagerly(&app).await;
 
     let first = app.run_background_acquisition_cycle_once().await;
     assert_eq!(first.titles_walked, 4, "a batch of one follows four scopes");
@@ -5860,6 +5875,17 @@ async fn a_cycle_stops_following_covered_scopes_at_its_bound() {
         "the last covered movie, then the open one"
     );
     assert_eq!(indexer_client.requested_indexer_id_sets().await.len(), 1);
+}
+
+/// The default walk follows covered scopes for twice its batch, and a large
+/// backlog would lower that further; eager keeps four times.
+#[tokio::test]
+async fn a_normal_walk_follows_covered_scopes_for_twice_its_batch() {
+    let (app, indexer_client) = covered_movies_ahead_of_an_open_movie(5).await;
+
+    let first = app.run_background_acquisition_cycle_once().await;
+    assert_eq!(first.titles_walked, 2, "a batch of one follows two scopes");
+    assert!(indexer_client.requested_indexer_id_sets().await.is_empty());
 }
 
 /// The failure loop never costs an indexer query. A grab that fails is

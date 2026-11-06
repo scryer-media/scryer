@@ -935,6 +935,67 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
     );
 }
 
+/// The walk intensity defaults to normal, round-trips each value, and a
+/// client that predates it (so never sends it) keeps whatever is stored.
+#[tokio::test]
+async fn graphql_acquisition_walk_intensity_defaults_and_survives_older_clients() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let defaults = gql(
+        &ctx,
+        "query { acquisitionSettings { walkIntensity } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&defaults);
+    assert_eq!(
+        defaults["data"]["acquisitionSettings"]["walkIntensity"],
+        "NORMAL"
+    );
+
+    let mutation = r#"
+        mutation UpdateAcquisitionSettings($input: UpdateAcquisitionSettingsInput!) {
+          updateAcquisitionSettings(input: $input) {
+            walkIntensity
+          }
+        }
+        "#;
+    let input = |intensity: Option<&str>| {
+        let mut input = json!({
+            "enabled": true,
+            "sameTierMinDelta": 120,
+            "pollIntervalSeconds": 60,
+            "longTailBackfillMaxScopesPerCycle": 500,
+            "longTailReconvergeDays": 0
+        });
+        if let Some(intensity) = intensity {
+            input["walkIntensity"] = json!(intensity);
+        }
+        json!({ "input": input })
+    };
+    for intensity in ["QUIET", "EAGER", "NORMAL", "QUIET"] {
+        let set = gql(&ctx, mutation, input(Some(intensity))).await;
+        assert_no_errors(&set);
+        assert_eq!(
+            set["data"]["updateAcquisitionSettings"]["walkIntensity"],
+            intensity
+        );
+    }
+
+    let older_client = gql(&ctx, mutation, input(None)).await;
+    assert_no_errors(&older_client);
+    assert_eq!(
+        older_client["data"]["updateAcquisitionSettings"]["walkIntensity"],
+        "QUIET"
+    );
+
+    let rejected = gql(&ctx, mutation, input(Some("LOUD"))).await;
+    assert!(
+        rejected["errors"].is_array(),
+        "an unknown intensity is rejected: {rejected}"
+    );
+}
+
 /// The movie availability settings live on the Movie facet. The acquisition
 /// fields they moved from stay in the schema for 0.21.18 clients: reads
 /// report the Movie facet values and writes are ignored.

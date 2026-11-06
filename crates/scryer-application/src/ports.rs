@@ -5574,6 +5574,10 @@ pub struct IndexerSearchLearningContext {
     /// whole reuse window, which is how an explicit upgrade search stopped
     /// finding a PROPER registered moments earlier.
     pub candidate_reuse_allowed: bool,
+    /// Pages of a paged strategy one background pass reads before it stops
+    /// and leaves the rest for the next pass. `None` reads the search
+    /// client's default depth.
+    pub background_pages_per_pass: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -9346,6 +9350,22 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(states)
     }
 
+    /// The status of each acquisition scope state in `ids`, without the rest
+    /// of the row. Missing ids are absent from the result. The default reads
+    /// whole rows; SQL stores override it with a primary-key read of two
+    /// columns.
+    async fn list_acquisition_scope_statuses_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, AcquisitionScopeStatus>> {
+        Ok(self
+            .list_acquisition_scope_states_by_ids(ids)
+            .await?
+            .into_iter()
+            .map(|state| (state.id, state.status))
+            .collect())
+    }
+
     async fn list_acquisition_scope_states(
         &self,
         query: AcquisitionScopeStatesQuery,
@@ -9561,6 +9581,20 @@ pub trait PendingReleaseRepository: Send + Sync {
         wanted_item_id: &str,
     ) -> AppResult<()>;
     async fn list_all_standby_pending_releases(&self) -> AppResult<Vec<PendingRelease>>;
+    /// The wanted items that hold at least one `standby` row, each once,
+    /// without reading the rows. The default reads them; SQL stores override
+    /// it with a distinct read of the wanted-item index.
+    async fn list_standby_wanted_item_ids(&self) -> AppResult<Vec<String>> {
+        let mut ids = self
+            .list_all_standby_pending_releases()
+            .await?
+            .into_iter()
+            .map(|release| release.wanted_item_id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
     async fn compare_and_set_pending_release_status(
         &self,
         id: &str,

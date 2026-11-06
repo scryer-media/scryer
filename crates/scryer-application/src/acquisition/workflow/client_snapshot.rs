@@ -1989,49 +1989,66 @@ async fn unconfirmed_grab_wanted_items(
 /// grab fails). Anything else — completed, paused, or removed — has no use for
 /// them. There is deliberately no age or count limit: the whole ranked list is
 /// kept until one of its releases lands or every one of them has been tried.
-async fn prune_standby_candidates(app: &AppUseCase) {
-    let all_standby = app
+pub(crate) async fn prune_standby_candidates(app: &AppUseCase) {
+    // Runs every poll tick, so it reads only ids and statuses: the distinct
+    // wanted items that hold saved results, then those items' statuses in
+    // primary-key batches. The saved rows themselves are never loaded here.
+    let wanted_item_ids = match app
         .services
         .workflow
         .pending_releases
-        .list_all_standby_pending_releases()
+        .list_standby_wanted_item_ids()
         .await
-        .unwrap_or_default();
+    {
+        Ok(ids) => ids,
+        Err(error) => {
+            warn!(error = %error, "failed to list scopes holding saved search results");
+            return;
+        }
+    };
 
-    if all_standby.is_empty() {
-        return;
-    }
-
-    let wanted_item_ids: std::collections::HashSet<String> = all_standby
-        .into_iter()
-        .map(|release| release.wanted_item_id)
-        .collect();
-
-    for wanted_item_id in wanted_item_ids {
-        let wanted = app
+    for batch in wanted_item_ids.chunks(STANDBY_PRUNE_STATUS_BATCH) {
+        let statuses = match app
             .services
             .workflow
             .acquisition_scope_states
-            .get_acquisition_scope_state_by_id(&wanted_item_id)
+            .list_acquisition_scope_statuses_by_ids(batch)
             .await
-            .ok()
-            .flatten();
-        let still_useful = wanted.as_ref().is_some_and(|wanted| {
-            matches!(
-                wanted.status,
-                AcquisitionScopeStatus::Wanted | AcquisitionScopeStatus::Grabbed
-            )
-        });
-        if !still_useful {
-            let _ = app
-                .services
-                .workflow
-                .pending_releases
-                .delete_standby_pending_releases_for_wanted_item(&wanted_item_id)
-                .await;
+        {
+            Ok(statuses) => statuses,
+            Err(error) => {
+                // Unknown is not unused: these scopes keep their saved
+                // results until a later tick can read them.
+                warn!(
+                    error = %error,
+                    scopes = batch.len(),
+                    "failed to read scope statuses; their saved search results are kept"
+                );
+                continue;
+            }
+        };
+        for wanted_item_id in batch {
+            let still_useful = statuses.get(wanted_item_id).is_some_and(|status| {
+                matches!(
+                    status,
+                    AcquisitionScopeStatus::Wanted | AcquisitionScopeStatus::Grabbed
+                )
+            });
+            if !still_useful {
+                let _ = app
+                    .services
+                    .workflow
+                    .pending_releases
+                    .delete_standby_pending_releases_for_wanted_item(wanted_item_id)
+                    .await;
+            }
         }
     }
 }
+
+/// Scope statuses read per query while pruning saved search results.
+const STANDBY_PRUNE_STATUS_BATCH: usize = 500;
+
 /// Walk a scope's saved search results, best first, and grab the first one
 /// that is still eligible.
 ///

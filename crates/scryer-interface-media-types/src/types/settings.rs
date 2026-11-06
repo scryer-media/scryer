@@ -130,6 +130,8 @@ pub struct AcquisitionSettingsPayload {
     /// How often, in seconds, the catalog is walked for missing and
     /// upgradable media. Changes that wake acquisition still walk at once.
     pub walk_interval_seconds: i32,
+    /// How much of the machine the walk may take.
+    pub walk_intensity: AcquisitionWalkIntensityValue,
     /// Maximum long-tail scopes processed per cycle.
     pub long_tail_backfill_max_scopes_per_cycle: i32,
     /// Number of days before long-tail scopes are reconverged.
@@ -251,6 +253,42 @@ pub struct SecuritySettingsPayload {
     pub env_override_active: bool,
     /// Description of the active override, or null when none is active.
     pub env_override_description: Option<String>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// How much of the machine the background acquisition walk may take.
+pub enum AcquisitionWalkIntensityValue {
+    /// About a tenth of the time, one title at a time, one indexer page per
+    /// long-tail scope.
+    Quiet,
+    /// About a fifth of the time, two titles at a time, two pages per
+    /// long-tail scope. Walks as quiet once more than 10,000 scopes are
+    /// missing or below cutoff.
+    Normal,
+    /// About half the time, four titles at a time, five pages per long-tail
+    /// scope, whatever the backlog.
+    Eager,
+}
+
+impl From<scryer_application::AcquisitionWalkIntensity> for AcquisitionWalkIntensityValue {
+    fn from(value: scryer_application::AcquisitionWalkIntensity) -> Self {
+        match value {
+            scryer_application::AcquisitionWalkIntensity::Quiet => Self::Quiet,
+            scryer_application::AcquisitionWalkIntensity::Normal => Self::Normal,
+            scryer_application::AcquisitionWalkIntensity::Eager => Self::Eager,
+        }
+    }
+}
+
+impl From<AcquisitionWalkIntensityValue> for scryer_application::AcquisitionWalkIntensity {
+    fn from(value: AcquisitionWalkIntensityValue) -> Self {
+        match value {
+            AcquisitionWalkIntensityValue::Quiet => Self::Quiet,
+            AcquisitionWalkIntensityValue::Normal => Self::Normal,
+            AcquisitionWalkIntensityValue::Eager => Self::Eager,
+        }
+    }
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -1594,6 +1632,9 @@ pub struct UpdateAcquisitionSettingsInput {
     /// upgradable media. Omitted by older clients, which keeps the stored
     /// value.
     pub walk_interval_seconds: Option<i32>,
+    /// How much of the machine the walk may take. Omitted by older clients,
+    /// which keeps the stored value.
+    pub walk_intensity: Option<AcquisitionWalkIntensityValue>,
     /// Maximum long-tail scopes processed per cycle.
     pub long_tail_backfill_max_scopes_per_cycle: i32,
     /// Days between long-tail reconvergence passes.

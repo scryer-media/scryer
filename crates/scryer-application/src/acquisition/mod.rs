@@ -25,6 +25,9 @@ pub(crate) mod search_queries;
 pub(crate) mod seed_goals;
 pub(crate) mod targets;
 pub(crate) mod title_reads;
+pub(crate) mod target_cache;
+pub(crate) mod walk_metrics;
+pub mod walk_intensity;
 pub(crate) mod wanted_views;
 pub(crate) mod workflow;
 

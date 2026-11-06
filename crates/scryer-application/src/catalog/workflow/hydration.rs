@@ -1610,6 +1610,10 @@ impl AppUseCase {
                 // external ids; without this the matcher would keep serving
                 // pre-hydration identities until some other write dirtied it.
                 self.invalidate_monitored_title_matcher().await;
+                self.runtime
+                    .acquisition
+                    .target_cache
+                    .mark_title(&updated.id);
                 if movie_availability_metadata_changed {
                     self.runtime.acquisition.acquisition_wake.notify_one();
                 }

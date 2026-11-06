@@ -1162,6 +1162,13 @@ pub struct AppRuntimeAcquisitionState {
     /// Landed bars the background cutoff pass already derived, keyed by every
     /// input of the derivation. See [`crate::quality::landed_bar_memo`].
     pub(crate) landed_bar_memo: Arc<crate::quality::landed_bar_memo::LandedBarMemo>,
+    /// The background walk's target set, kept between walks and patched on
+    /// change. See [`crate::acquisition::target_cache`].
+    pub(crate) target_cache: Arc<crate::acquisition::target_cache::AcquisitionTargetCache>,
+    /// The intensity the latest background walk runs at, after auto-quiet,
+    /// as [`crate::acquisition::walk_intensity::AcquisitionWalkIntensity::to_index`].
+    /// Only background searches read it; one walk runs at a time.
+    pub(crate) walk_intensity: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl AppRuntimeAcquisitionState {
@@ -2687,6 +2694,11 @@ impl AppRuntimeState {
                 interactive_release_searches: Arc::new(Mutex::new(HashMap::new())),
                 raw_search_budget: Arc::default(),
                 landed_bar_memo: Arc::default(),
+                target_cache: Arc::default(),
+                walk_intensity: Arc::new(std::sync::atomic::AtomicU8::new(
+                    crate::acquisition::walk_intensity::AcquisitionWalkIntensity::default()
+                        .to_index(),
+                )),
             },
             imports: AppRuntimeImportState {
                 execution_coordinator: ImportExecutionCoordinator::default(),

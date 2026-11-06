@@ -1336,6 +1336,8 @@ pub fn describe_acquisition_metrics() {
         "Times background acquisition yielded because a library scan owned the facet it wanted to work on."
     );
 
+    crate::acquisition::walk_metrics::describe_walk_metrics();
+
     metrics::describe_counter!(
         "scryer_wanted_projection_cache_total",
         "Wanted-projection cache lookups, labelled by result (hit or miss)."
