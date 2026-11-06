@@ -48,6 +48,7 @@ pub mod merge;
 pub mod model;
 pub mod operations;
 pub mod ownership_guard;
+pub mod plan_cache;
 pub mod preview;
 pub mod resolution;
 pub mod root_move;

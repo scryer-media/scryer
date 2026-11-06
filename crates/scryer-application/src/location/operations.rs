@@ -317,7 +317,7 @@ impl AppUseCase {
         request: RootMovePreviewRequest,
         mode: LocationExecutionMode,
     ) -> AppResult<RootMovePreview> {
-        let planned = self.plan_root_move(actor, &request, mode).await?;
+        let planned = self.plan_root_move(actor, &request, mode, None).await?;
         Ok(RootMovePreview {
             plan: planned.planned.plan,
             classification: planned.classification,
@@ -350,7 +350,14 @@ impl AppUseCase {
             title_ids: request.title_ids.clone(),
             destination: request.destination.clone(),
         };
-        let planned = self.plan_root_move(actor, &preview_request, mode).await?;
+        let planned = self
+            .plan_root_move(
+                actor,
+                &preview_request,
+                mode,
+                Some(&request.confirmation.fingerprint),
+            )
+            .await?;
         let plan = planned.planned.plan;
 
         plan.confirm(&request.confirmation)
@@ -2024,17 +2031,110 @@ fn describe_location_operation_outcome(outcome: &OperationRunOutcome) -> String 
 
 // ── Planning ─────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct RootMovePlanning {
     planned: PlannedRootMove,
     classification: SelectionClassification,
 }
 
+/// A previewed plan held for its confirmation (see `plan_cache`).
+pub struct CachedRootMovePlan {
+    /// Digest of every catalog and configuration fact the plan was built from.
+    facts_digest: [u8; 32],
+    mode: LocationExecutionMode,
+    planning: RootMovePlanning,
+    /// What the free-space probe was asked, so a confirmation re-probes the
+    /// volumes rather than trusting a figure from preview time.
+    free_space: Option<RootMoveFreeSpaceInputs>,
+}
+
+#[derive(Clone)]
+struct RootMoveFreeSpaceInputs {
+    source_path: PathBuf,
+    destination_path: PathBuf,
+    moved_bytes: u64,
+    recycle_source_root: Option<String>,
+}
+
+/// Feed one part of the planning facts into the digest, length-prefixed so
+/// adjacent parts cannot run together.
+fn feed_digest(hasher: &mut blake3::Hasher, part: &[u8]) {
+    hasher.update(&(part.len() as u64).to_le_bytes());
+    hasher.update(part);
+}
+
+fn feed_digest_json(hasher: &mut blake3::Hasher, part: &impl serde::Serialize) {
+    feed_digest(hasher, &serde_json::to_vec(part).unwrap_or_default());
+}
+
+/// The catalog half of a root move's facts digest: the selection and its
+/// destination, the title rows, their libraries, their tracked media files,
+/// who owns them, and what active work blocks them.
+#[allow(clippy::too_many_arguments)]
+fn digest_root_move_catalog_facts(
+    selection: &[String],
+    destination: &crate::location::classify::DestinationRequest,
+    mode: LocationExecutionMode,
+    titles: &[Title],
+    libraries: &BTreeMap<String, scryer_domain::Library>,
+    destination_library: &scryer_domain::Library,
+    media_files_by_title: &BTreeMap<String, Vec<crate::TitleMediaFile>>,
+    owners: &BTreeMap<String, String>,
+    active_work: &BTreeMap<String, String>,
+) -> blake3::Hasher {
+    let mut hasher = blake3::Hasher::new();
+    feed_digest_json(&mut hasher, &selection);
+    feed_digest_json(&mut hasher, destination);
+    feed_digest(&mut hasher, format!("{mode:?}").as_bytes());
+    for title in titles {
+        feed_digest_json(&mut hasher, title);
+    }
+    feed_digest_json(&mut hasher, libraries);
+    feed_digest_json(&mut hasher, destination_library);
+    for (title_id, files) in media_files_by_title {
+        feed_digest(&mut hasher, title_id.as_bytes());
+        for file in files {
+            feed_digest(
+                &mut hasher,
+                format!(
+                    "{:?}",
+                    (
+                        &file.id,
+                        &file.title_id,
+                        &file.episode_id,
+                        &file.file_path,
+                        file.size_bytes,
+                        &file.role,
+                        &file.content_hashes,
+                        &file.created_at,
+                    )
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    // Only the selection's claims: another operation taking or releasing its
+    // own titles says nothing about this plan.
+    for title in titles {
+        feed_digest_json(&mut hasher, &owners.get(&title.id));
+    }
+    feed_digest_json(&mut hasher, active_work);
+    hasher
+}
+
 impl AppUseCase {
+    /// Plan a root move. A preview (`confirming` is `None`) holds its plan for
+    /// the confirmation; a confirmation passes the fingerprint it holds and
+    /// reuses that plan — skipping the folder walks — when every catalog and
+    /// configuration fact the plan was built from reads the same again.
+    /// Otherwise it plans from scratch, and the caller's fingerprint check
+    /// refuses a plan that changed.
     async fn plan_root_move(
         &self,
         actor: &User,
         request: &RootMovePreviewRequest,
         mode: LocationExecutionMode,
+        confirming: Option<&crate::location::preview::PlanFingerprint>,
     ) -> AppResult<RootMovePlanning> {
         if request.title_ids.is_empty() {
             return Err(AppError::validation_refused(
@@ -2174,6 +2274,27 @@ impl AppUseCase {
         let mut media_files_by_title = self.media_files_by_title(&selected_ids).await?;
         let owners = self.title_ownership_holders().await?;
         let mut active_work = self.active_work_blocking_moves(&titles).await?;
+        // A plan whose titles all stay in the destination library depends on
+        // nothing but these facts, the folder walks, and the configuration read
+        // below, so it can be held for its confirmation. A transfer also
+        // depends on the destination library's catalog, and is always planned
+        // again.
+        let facts_hasher = titles
+            .iter()
+            .all(|title| title.library_id == destination_library.id)
+            .then(|| {
+                digest_root_move_catalog_facts(
+                    &selection,
+                    &request.destination,
+                    mode,
+                    &titles,
+                    &libraries,
+                    &destination_library,
+                    &media_files_by_title,
+                    &owners,
+                    &active_work,
+                )
+            });
         let mut facts = Vec::with_capacity(titles.len());
         for title in &titles {
             let media_files = media_files_by_title.entry(title.id.clone()).or_default();
@@ -2264,6 +2385,29 @@ impl AppUseCase {
             .map(|root| root.path)
             .collect::<Vec<_>>();
 
+        let facts_digest = facts_hasher.map(|mut hasher| {
+            feed_digest(&mut hasher, folder_template.as_bytes());
+            feed_digest(&mut hasher, format!("{depth:?}").as_bytes());
+            feed_digest_json(&mut hasher, &all_root_paths);
+            *hasher.finalize().as_bytes()
+        });
+        if let (Some(fingerprint), Some(digest)) = (confirming, facts_digest)
+            && let Some(cached) = self
+                .runtime
+                .library
+                .location_plan_cache
+                .take(&actor.id, &fingerprint.0)
+            && cached.facts_digest == digest
+            && cached.mode == mode
+        {
+            let mut planning = cached.planning;
+            planning.planned.plan.free_space = match cached.free_space {
+                Some(inputs) => self.root_move_free_space(inputs, probe).await,
+                None => FreeSpaceEstimate::unknown(),
+            };
+            return Ok(planning);
+        }
+
         let mut drafts = Vec::with_capacity(titles.len());
         let mut moved_bytes = 0_u64;
         let mut a_source_path: Option<PathBuf> = None;
@@ -2324,26 +2468,18 @@ impl AppUseCase {
 
         // FR-080: free space, including the recycle-copy cost when the bin is on
         // another volume.
-        let free_space = match (a_source_path.clone(), a_destination_path.clone()) {
-            (Some(source), Some(destination)) => {
-                let recycle_config = self
-                    .recycle_bin_config_for_media_root(source_root_for_recycle.as_deref())
-                    .await;
-                estimate_free_space_off_runtime(
-                    FreeSpaceRequest {
-                        source_path: source,
-                        destination_path: destination,
-                        moved_bytes,
-                        recycled_bytes: moved_bytes,
-                        recycle_base_path: recycle_config
-                            .enabled
-                            .then(|| recycle_config.base_path.clone()),
-                    },
-                    probe,
-                )
-                .await
-            }
-            _ => FreeSpaceEstimate::unknown(),
+        let free_space_inputs = match (a_source_path, a_destination_path) {
+            (Some(source_path), Some(destination_path)) => Some(RootMoveFreeSpaceInputs {
+                source_path,
+                destination_path,
+                moved_bytes,
+                recycle_source_root: source_root_for_recycle,
+            }),
+            _ => None,
+        };
+        let free_space = match free_space_inputs.clone() {
+            Some(inputs) => self.root_move_free_space(inputs, probe).await,
+            None => FreeSpaceEstimate::unknown(),
         };
 
         let case_rule = PathCaseRule::platform_default();
@@ -2396,10 +2532,50 @@ impl AppUseCase {
             naming: CollisionNaming::from_source_library(source_library_label(&libraries)),
         });
 
-        Ok(RootMovePlanning {
+        let planning = RootMovePlanning {
             planned,
             classification,
-        })
+        };
+        if confirming.is_none()
+            && let Some(facts_digest) = facts_digest
+        {
+            self.runtime.library.location_plan_cache.store(
+                &actor.id,
+                &planning.planned.plan.fingerprint.0,
+                CachedRootMovePlan {
+                    facts_digest,
+                    mode,
+                    planning: planning.clone(),
+                    free_space: free_space_inputs,
+                },
+            );
+        }
+        Ok(planning)
+    }
+
+    /// FR-080's estimate for a root move: the destination must hold the moved
+    /// bytes, plus the recycle copy when the bin is on another volume.
+    async fn root_move_free_space(
+        &self,
+        inputs: RootMoveFreeSpaceInputs,
+        probe: SystemVolumeProbe,
+    ) -> FreeSpaceEstimate {
+        let recycle_config = self
+            .recycle_bin_config_for_media_root(inputs.recycle_source_root.as_deref())
+            .await;
+        estimate_free_space_off_runtime(
+            FreeSpaceRequest {
+                source_path: inputs.source_path,
+                destination_path: inputs.destination_path,
+                moved_bytes: inputs.moved_bytes,
+                recycled_bytes: inputs.moved_bytes,
+                recycle_base_path: recycle_config
+                    .enabled
+                    .then(|| recycle_config.base_path.clone()),
+            },
+            probe,
+        )
+        .await
     }
 
     /// Destination-title detection for the selected titles that are crossing

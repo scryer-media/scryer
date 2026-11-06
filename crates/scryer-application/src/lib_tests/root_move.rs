@@ -3303,3 +3303,150 @@ mod name_collisions {
         assert_eq!(entries[0].content.sampled_proof, None);
     }
 }
+
+impl RootMoveFixture {
+    async fn start_with(
+        &self,
+        title_ids: &[&str],
+        fingerprint: &crate::location::preview::PlanFingerprint,
+    ) -> AppResult<crate::location::operations::LocationOperationAccepted> {
+        self.app
+            .start_root_move(
+                &self.user,
+                StartRootMoveRequest {
+                    title_ids: title_ids.iter().map(|id| (*id).to_string()).collect(),
+                    destination: DestinationRequest::to_root(self.root_b_id.clone()),
+                    confirmation: PlanConfirmationRequest {
+                        fingerprint: fingerprint.clone(),
+                        typed_confirmation: None,
+                    },
+                },
+            )
+            .await
+    }
+}
+
+#[tokio::test]
+async fn confirming_a_preview_reuses_its_plan_instead_of_walking_the_folders_again() {
+    let fixture = RootMoveFixture::new().await;
+    fixture
+        .app
+        .services
+        .identity
+        .users
+        .create(fixture.user.clone())
+        .await
+        .unwrap();
+    let title = fixture
+        .seed_title(
+            "Synthetic Fixture 0001",
+            2001,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Synthetic Fixture 0001 (2001)",
+            &[("Synthetic.Fixture.0001.2001.1080p.mkv", 2048)],
+        )
+        .await;
+    let previewed = fixture.preview(&[&title.id]).await;
+
+    // A file the catalog does not track appears after the preview. Only a
+    // folder walk can see it, so a fresh preview states a different plan…
+    let source_folder = fixture.root_a().join("Synthetic Fixture 0001 (2001)");
+    std::fs::write(
+        source_folder.join("Synthetic.Fixture.0001.2001.nfo"),
+        b"nfo",
+    )
+    .expect("write untracked file");
+    let fresh = fixture.preview(&[&title.id]).await;
+    assert_ne!(fresh.plan.fingerprint, previewed.plan.fingerprint);
+
+    // …but confirming the first preview reuses the plan it was built from,
+    // because no catalog or configuration fact behind it changed.
+    let accepted = fixture
+        .start_with(&[&title.id], &previewed.plan.fingerprint)
+        .await
+        .expect("the previewed plan is reused");
+    // The source folder still holds a file the plan never named, so the move
+    // finishes with a warning rather than removing that folder.
+    let operation = fixture.settle(&accepted.operation.id).await;
+    assert_eq!(
+        operation.state,
+        LocationOperationState::CompletedWithWarnings
+    );
+
+    let destination_folder = fixture.root_b().join("Synthetic Fixture 0001 (2001)");
+    assert!(
+        destination_folder
+            .join("Synthetic.Fixture.0001.2001.1080p.mkv")
+            .exists()
+    );
+    // The file the plan never named is kept where it was.
+    assert!(
+        source_folder
+            .join("Synthetic.Fixture.0001.2001.nfo")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn a_catalog_change_after_the_preview_refuses_the_confirmation_as_stale() {
+    let fixture = RootMoveFixture::new().await;
+    fixture
+        .app
+        .services
+        .identity
+        .users
+        .create(fixture.user.clone())
+        .await
+        .unwrap();
+    let title = fixture
+        .seed_title(
+            "Synthetic Fixture 0002",
+            2002,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Synthetic Fixture 0002 (2002)",
+            &[("Synthetic.Fixture.0002.2002.1080p.mkv", 2048)],
+        )
+        .await;
+    let previewed = fixture.preview(&[&title.id]).await;
+
+    // A second tracked file joins the title after the preview.
+    let source_folder = fixture.root_a().join("Synthetic Fixture 0002 (2002)");
+    let added = source_folder.join("Synthetic.Fixture.0002.2002.2160p.mkv");
+    std::fs::write(&added, vec![b'x'; 1024]).expect("write added file");
+    fixture
+        .app
+        .services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: added.to_string_lossy().to_string(),
+            size_bytes: 1024,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("seed added media file row");
+
+    let refused = fixture
+        .start_with(&[&title.id], &previewed.plan.fingerprint)
+        .await
+        .expect_err("a plan whose facts changed is never executed");
+    assert!(
+        matches!(
+            refused,
+            AppError::LocationPlanRefused {
+                code: crate::location::preview::PlanConfirmationError::Stale,
+                ..
+            }
+        ),
+        "expected a stale-plan refusal, got {refused:?}"
+    );
+    assert!(
+        source_folder
+            .join("Synthetic.Fixture.0002.2002.1080p.mkv")
+            .exists()
+    );
+}
