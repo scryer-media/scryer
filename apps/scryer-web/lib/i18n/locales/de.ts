@@ -2810,10 +2810,6 @@ const de: LocaleDictionary = {
     "Alle {{files}} Datei(en) ({{bytes}}) werden anhand von Anfang, Ende und Größe geprüft.",
   "move.verificationNotApplicable":
     "Es werden keine Dateien verschoben, also ist nichts zu prüfen.",
-  "move.verificationStampFull": "geprüft (vollständig)",
-  "move.verificationStampQuick": "geprüft (schnell)",
-  "move.verificationFallbackCount":
-    "{{count}} Datei(en) fielen auf die Schnellprüfung zurück",
   "move.typedConfirmationPrompt": "Gib den Satz zum Bestätigen ein",
   "move.confirm": "Verschieben starten",
   "move.startFailed": "Das Verschieben konnte nicht gestartet werden.",

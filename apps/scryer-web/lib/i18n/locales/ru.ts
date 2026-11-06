@@ -5439,10 +5439,6 @@ const ru: LocaleDictionary = {
   "move.verificationStatementQuick":
     "Все {{files}} файлов ({{bytes}}) будут проверены по началу, концу и размеру.",
   "move.verificationNotApplicable": "Файлы не перемещаются, проверять нечего.",
-  "move.verificationStampFull": "проверено (полностью)",
-  "move.verificationStampQuick": "проверено (быстро)",
-  "move.verificationFallbackCount":
-    "{{count}} файлов перешли на быструю проверку",
   "move.typedConfirmationPrompt": "Введите фразу для подтверждения",
   "move.confirm": "Начать перемещение",
   "move.startFailed": "Не удалось начать перемещение.",

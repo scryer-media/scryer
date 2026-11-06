@@ -50,7 +50,6 @@ import {
   operationGuidanceKey,
   operationStateLabelKey,
   retrySelectionTitleRefs,
-  verificationStampText,
   toCount,
   type LocationRetrySelection,
 } from "@/lib/location-operations";
@@ -452,18 +451,6 @@ function OperationPanel({ operationId, onDismiss }: Props) {
             })}
           </p>
         </div>
-        {operation.mode !== "USER_MOVED_FILES" && (
-          <p
-            id="location-operation-verification-stamp"
-            className="text-xs text-muted-foreground"
-          >
-            {verificationStampText(
-              operation.verificationDepth,
-              toCount(operation.verificationFallbackCount),
-              t,
-            )}
-          </p>
-        )}
         <div>
           <Button
             variant="ghost"

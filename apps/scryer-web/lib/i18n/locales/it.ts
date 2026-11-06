@@ -2843,10 +2843,6 @@ const it: LocaleDictionary = {
     "Tutti i {{files}} file ({{bytes}}) verranno verificati su inizio, fine e dimensione.",
   "move.verificationNotApplicable":
     "Non si sposta alcun file, quindi non c'è nulla da verificare.",
-  "move.verificationStampFull": "verificato (completo)",
-  "move.verificationStampQuick": "verificato (rapido)",
-  "move.verificationFallbackCount":
-    "{{count}} file sono ricaduti sul controllo rapido",
   "move.typedConfirmationPrompt": "Digita la frase per confermare",
   "move.confirm": "Avvia lo spostamento",
   "move.startFailed": "Impossibile avviare lo spostamento.",

@@ -2541,9 +2541,6 @@ const zh_CN: LocaleDictionary = {
   "move.verificationStatementQuick":
     "全部 {{files}} 个文件（{{bytes}}）都会按头部、尾部和大小进行核对。",
   "move.verificationNotApplicable": "没有文件移动，因此无需校验。",
-  "move.verificationStampFull": "已校验（完整）",
-  "move.verificationStampQuick": "已校验（快速）",
-  "move.verificationFallbackCount": "{{count}} 个文件回退到快速校验",
   "move.typedConfirmationPrompt": "输入短语以确认",
   "move.confirm": "开始移动",
   "move.startFailed": "无法开始移动。",

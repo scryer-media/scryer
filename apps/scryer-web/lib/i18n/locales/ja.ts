@@ -2757,10 +2757,6 @@ const ja: LocaleDictionary = {
     "{{files}} ファイル（{{bytes}}）を先頭・末尾・サイズで照合します。",
   "move.verificationNotApplicable":
     "移動するファイルがないため、検証するものはありません。",
-  "move.verificationStampFull": "検証済み（完全）",
-  "move.verificationStampQuick": "検証済み（簡易）",
-  "move.verificationFallbackCount":
-    "{{count}} ファイルが簡易チェックにフォールバックしました",
   "move.typedConfirmationPrompt": "確認のためフレーズを入力してください",
   "move.confirm": "移動を開始",
   "move.startFailed": "移動を開始できませんでした。",

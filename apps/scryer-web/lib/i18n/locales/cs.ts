@@ -5955,10 +5955,6 @@ const cs: LocaleDictionary = {
     "Všechny soubory ({{files}}, {{bytes}}) budou zkontrolovány podle začátku, konce a velikosti.",
   "move.verificationNotApplicable":
     "Žádné soubory se nepřesouvají, takže není co ověřovat.",
-  "move.verificationStampFull": "ověřeno (úplně)",
-  "move.verificationStampQuick": "ověřeno (rychle)",
-  "move.verificationFallbackCount":
-    "Souborů přepnutých na rychlou kontrolu: {{count}}",
   "move.typedConfirmationPrompt": "Pro potvrzení napište frázi",
   "move.confirm": "Spustit přesun",
   "move.startFailed": "Spuštění přesunu se nezdařilo.",

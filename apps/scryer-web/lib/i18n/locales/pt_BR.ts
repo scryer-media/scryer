@@ -2826,10 +2826,6 @@ const pt_BR: LocaleDictionary = {
     "Todos os {{files}} arquivo(s) ({{bytes}}) serão conferidos pelo início, pelo fim e pelo tamanho.",
   "move.verificationNotApplicable":
     "Nenhum arquivo é movido, então não há nada a verificar.",
-  "move.verificationStampFull": "verificado (completo)",
-  "move.verificationStampQuick": "verificado (rápido)",
-  "move.verificationFallbackCount":
-    "{{count}} arquivo(s) recorreram à verificação rápida",
   "move.typedConfirmationPrompt": "Digite a frase para confirmar",
   "move.confirm": "Iniciar movimentação",
   "move.startFailed": "Falha ao iniciar a movimentação.",

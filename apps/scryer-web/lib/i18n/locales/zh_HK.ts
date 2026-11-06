@@ -4978,9 +4978,6 @@ const zh_HK: LocaleDictionary = {
   "move.verificationStatementQuick":
     "全部 {{files}} 個檔案（{{bytes}}）都會按頭部、尾部和大小進行核對。",
   "move.verificationNotApplicable": "沒有檔案移動，因此無需校驗。",
-  "move.verificationStampFull": "已校驗（完整）",
-  "move.verificationStampQuick": "已校驗（快速）",
-  "move.verificationFallbackCount": "{{count}} 個檔案回退到快速校驗",
   "move.typedConfirmationPrompt": "輸入短語以確認",
   "move.confirm": "開始移動",
   "move.startFailed": "無法開始移動。",

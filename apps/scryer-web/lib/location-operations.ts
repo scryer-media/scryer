@@ -8,8 +8,6 @@
  * Activity panel; this file stays testable with `node --test`.
  */
 
-import type { Translate } from "@/components/root/types";
-
 /** GraphQL `Long` arrives as a number or a string depending on magnitude. */
 export type LongValue = number | string;
 
@@ -1594,26 +1592,6 @@ export function checkpointStateLabelKey(
   value: LocationTitleCheckpointState,
 ): string {
   return `move.checkpointState.${value}`;
-}
-
-/**
- * The depth stamp Activity and the preview both show: "verified (full)" or
- * "verified (quick)", with the fallback count when full dropped to the quick
- * floor for some files (FR-043).
- */
-export function verificationStampText(
-  depth: VerificationDepth,
-  fallbackCount: number,
-  t: Translate,
-): string {
-  const stamp =
-    depth === "FULL"
-      ? t("move.verificationStampFull")
-      : t("move.verificationStampQuick");
-  if (fallbackCount > 0) {
-    return `${stamp} · ${t("move.verificationFallbackCount", { count: fallbackCount })}`;
-  }
-  return stamp;
 }
 
 /**

@@ -2698,10 +2698,6 @@ const ko: LocaleDictionary = {
     "{{files}}개 파일({{bytes}})을 앞부분, 뒷부분, 크기로 확인합니다.",
   "move.verificationNotApplicable":
     "이동하는 파일이 없어 검증할 것이 없습니다.",
-  "move.verificationStampFull": "검증됨(전체)",
-  "move.verificationStampQuick": "검증됨(빠름)",
-  "move.verificationFallbackCount":
-    "{{count}}개 파일이 빠른 검사로 대체되었습니다",
   "move.typedConfirmationPrompt": "확인하려면 문구를 입력하세요",
   "move.confirm": "이동 시작",
   "move.startFailed": "이동을 시작하지 못했습니다.",

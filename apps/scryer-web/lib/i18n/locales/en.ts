@@ -10583,10 +10583,6 @@ const en: LocaleDictionary = {
     "All {{files}} file(s) ({{bytes}}) will be checked against their head, tail, and size.",
   "move.verificationNotApplicable":
     "No files move, so nothing needs verifying.",
-  "move.verificationStampFull": "verified (full)",
-  "move.verificationStampQuick": "verified (quick)",
-  "move.verificationFallbackCount":
-    "{{count}} file(s) fell back to the quick check",
   "move.typedConfirmationPrompt": "Type the phrase to confirm",
   "move.confirm": "Start move",
   "move.startFailed": "Failed to start the move.",
