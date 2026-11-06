@@ -453,6 +453,7 @@ mod tests {
                 cutoff_tier: None,
                 min_score_to_grab: None,
                 cutoff_score: None,
+                min_upgrade_score_delta: None,
                 facet_persona_overrides: HashMap::new(),
             },
         }

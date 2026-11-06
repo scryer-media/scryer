@@ -991,10 +991,9 @@ const cs: LocaleDictionary = {
   "settings.acquisitionEnabled": "Zapnout automatické získávání",
   "settings.acquisitionEnabledHelp":
     "Spouští smyčku získávání na pozadí: konvergenční vyhledávací průchody a párování přes RSS.",
-  "settings.acquisitionThresholds": "Prahy pro upgrade",
-  "settings.acquisitionSameTierMinDelta":
+  "qualityProfile.minUpgradeScoreDelta":
     "Minimální rozdíl skóre ve stejné úrovni",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "Vydání ve stejné úrovni kvality musí překonat skóre aktuálního souboru alespoň o tuto hodnotu.",
   "settings.acquisitionConvergence": "Konvergence a tempo",
   "settings.acquisitionPollIntervalSeconds": "Interval kontroly (sekundy)",

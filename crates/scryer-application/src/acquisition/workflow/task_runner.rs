@@ -6421,7 +6421,6 @@ pub async fn start_background_acquisition_poller(
             warn!(error = %err, "failed to load acquisition settings, using defaults");
             crate::AcquisitionSettings {
                 enabled: true,
-                same_tier_min_delta: 120,
                 poll_interval_seconds:
                     crate::settings::runtime::DEFAULT_ACQUISITION_POLL_INTERVAL_SECONDS,
                 walk_interval_seconds:

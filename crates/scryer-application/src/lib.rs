@@ -735,12 +735,12 @@ pub use quality::release_parser::{
 };
 pub use quality::scoring_weights::{ScoringOverrides, ScoringPersona};
 pub use quality_profile::{
-    BLOCK_SCORE, BUILTIN_DEFAULT_QUALITY_PROFILE_ID, QUALITY_PROFILE_CATALOG_KEY,
-    QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE, QualityProfile, QualityProfileCriteria,
-    QualityProfileDecision, REQUEST_QUALITY_PROFILE_IDS_KEY, ScoringConfig, ScoringEntry,
-    ScoringEntryKind, ScoringSource, builtin_4k_profile, builtin_8k_profile, builtin_1080p_profile,
-    builtin_anime_profile, builtin_default_quality_profile, parse_profile_catalog_from_json,
-    parse_published_at,
+    BLOCK_SCORE, BUILTIN_DEFAULT_QUALITY_PROFILE_ID, DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+    QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE,
+    QualityProfile, QualityProfileCriteria, QualityProfileDecision,
+    REQUEST_QUALITY_PROFILE_IDS_KEY, ScoringConfig, ScoringEntry, ScoringEntryKind, ScoringSource,
+    builtin_4k_profile, builtin_8k_profile, builtin_1080p_profile, builtin_anime_profile,
+    builtin_default_quality_profile, parse_profile_catalog_from_json, parse_published_at,
 };
 pub use rate_limit_signal::{RateLimitSignal, RateLimitSignalSource, destination_cooldown_until};
 pub use services::{

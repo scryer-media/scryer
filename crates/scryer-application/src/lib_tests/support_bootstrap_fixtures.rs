@@ -1987,6 +1987,7 @@ pub(super) fn cutoff_projection_test_profile(id: &str, cutoff_tier: &str) -> Qua
             cutoff_tier: Some(cutoff_tier.to_string()),
             min_score_to_grab: None,
             cutoff_score: None,
+            min_upgrade_score_delta: None,
             facet_persona_overrides: HashMap::new(),
         },
     }

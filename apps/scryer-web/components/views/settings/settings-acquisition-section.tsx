@@ -26,7 +26,6 @@ const WALK_INTENSITIES: AcquisitionWalkIntensity[] = [
 
 export type AcquisitionSettings = {
   enabled: boolean;
-  sameTierMinDelta: number;
   pollIntervalSeconds: number;
   walkIntervalSeconds: number;
   walkIntensity: AcquisitionWalkIntensity;
@@ -126,20 +125,6 @@ export function SettingsAcquisitionSection({
           checked={draft.enabled}
           disabled={disabled}
           onChange={(enabled) => update({ enabled })}
-        />
-      </div>
-
-      <div className="space-y-4">
-        <h2 className="text-sm font-semibold text-foreground">
-          {t("settings.acquisitionThresholds")}
-        </h2>
-        <NumberField
-          id="settings-acquisition-same-tier-delta"
-          label={t("settings.acquisitionSameTierMinDelta")}
-          help={t("settings.acquisitionSameTierMinDeltaHelp")}
-          value={draft.sameTierMinDelta}
-          disabled={disabled}
-          onChange={(sameTierMinDelta) => update({ sameTierMinDelta })}
         />
       </div>
 

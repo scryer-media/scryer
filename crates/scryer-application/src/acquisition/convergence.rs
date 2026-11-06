@@ -1869,12 +1869,17 @@ mod tests {
         let mut unknown = base.clone();
         unknown.allow_unknown_quality = !base.allow_unknown_quality;
 
+        let mut upgrade_delta = base.clone();
+        assert_eq!(upgrade_delta.min_upgrade_score_delta, None);
+        upgrade_delta.min_upgrade_score_delta = Some(5);
+
         for (label, edited) in [
             ("quality_tiers", tiers),
             ("allow_upgrades", upgrades),
             ("required_audio_languages", audio),
             ("cutoff_score", cutoff),
             ("allow_unknown_quality", unknown),
+            ("min_upgrade_score_delta", upgrade_delta),
         ] {
             assert_ne!(
                 baseline,
@@ -1920,6 +1925,11 @@ mod tests {
         assert!(
             serialized.get("cutoff_score").is_none(),
             "an unset `cutoff_score` must not appear in the fingerprint input at all"
+        );
+        assert_eq!(base.min_upgrade_score_delta, None);
+        assert!(
+            serialized.get("min_upgrade_score_delta").is_none(),
+            "an unset `min_upgrade_score_delta` must not appear in the fingerprint input at all"
         );
         for ranking_key in [
             "scoring_persona",

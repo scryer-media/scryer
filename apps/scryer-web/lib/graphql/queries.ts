@@ -2789,7 +2789,8 @@ const qualityProfileCriteriaFields = `
         blockUpscaled
       }
       cutoffTier
-      minScoreToGrab`;
+      minScoreToGrab
+      minUpgradeScoreDelta`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
@@ -3122,7 +3123,6 @@ export const publicUrlChangePreviewQuery = `query PublicUrlChangePreview($public
 export const acquisitionSettingsQuery = `query AcquisitionSettings {
   acquisitionSettings {
     enabled
-    sameTierMinDelta
     pollIntervalSeconds
     walkIntervalSeconds
     walkIntensity

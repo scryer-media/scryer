@@ -816,10 +816,9 @@ const nl: LocaleDictionary = {
   "settings.acquisitionEnabled": "Automatisch ophalen inschakelen",
   "settings.acquisitionEnabledHelp":
     "Voert de ophaallus op de achtergrond uit: convergentiezoekacties en RSS-matching.",
-  "settings.acquisitionThresholds": "Opwaarderingsdrempels",
-  "settings.acquisitionSameTierMinDelta":
+  "qualityProfile.minUpgradeScoreDelta":
     "Minimale scoreverschil binnen niveau",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "Een release in dezelfde kwaliteitsniveaumoet de score van het huidige bestand met minstens deze waarde overtreffen.",
   "settings.acquisitionConvergence": "Convergentie & timing",
   "settings.acquisitionPollIntervalSeconds": "Pollinterval (seconden)",

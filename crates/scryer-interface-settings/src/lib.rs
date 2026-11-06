@@ -302,7 +302,7 @@ fn from_acquisition_settings(
         enabled: settings.enabled,
         // Deprecated no-op fields: nothing backs them, so they report 0.
         upgrade_cooldown_hours: 0,
-        same_tier_min_delta: settings.same_tier_min_delta,
+        same_tier_min_delta: 0,
         cross_tier_min_delta: 0,
         forced_upgrade_delta_bypass: 0,
         poll_interval_seconds: settings.poll_interval_seconds,

@@ -660,9 +660,8 @@ const zh_CN: LocaleDictionary = {
   "settings.acquisitionEnabled": "启用自动获取",
   "settings.acquisitionEnabledHelp":
     "运行后台获取循环：收敛搜索扫描与 RSS 匹配。",
-  "settings.acquisitionThresholds": "升级阈值",
-  "settings.acquisitionSameTierMinDelta": "同级最小分数差",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "同级最小分数差",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一质量级别的资源必须比当前文件的分数至少高出此值。",
   "settings.acquisitionConvergence": "收敛与节奏",
   "settings.acquisitionPollIntervalSeconds": "轮询间隔（秒）",

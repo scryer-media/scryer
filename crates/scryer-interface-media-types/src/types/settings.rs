@@ -110,7 +110,12 @@ pub struct AcquisitionSettingsPayload {
         deprecation = "Inert: the stored value is no longer read; removed in the next minor."
     )]
     pub upgrade_cooldown_hours: i32,
-    /// Minimum score delta for same-tier upgrades.
+    /// Deprecated and inert. The same-tier upgrade delta is set per quality
+    /// profile through `QualityProfileCriteria.minUpgradeScoreDelta`; this
+    /// always returns 0 and the value carries no meaning.
+    #[graphql(
+        deprecation = "Moved to QualityProfileCriteria.minUpgradeScoreDelta; always returns 0. Removed in the next minor."
+    )]
     pub same_tier_min_delta: i32,
     /// Deprecated and inert. Quality tier is compared before score, so no
     /// cross-tier delta is consulted; this always returns 0 and the value
@@ -920,6 +925,9 @@ pub struct QualityProfileCriteriaPayload {
     /// Score past which a file is good enough and same-tier upgrades stop, or
     /// null when upgrades never stop (Sonarr's `CutoffFormatScore`).
     pub cutoff_score: Option<i32>,
+    /// Score a same-tier candidate must beat the current file by to count as
+    /// an upgrade. Profiles that never set it report the default, 120.
+    pub min_upgrade_score_delta: i32,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1612,8 +1620,13 @@ pub struct UpdateAcquisitionSettingsInput {
         deprecation = "Inert: the stored value is no longer read; removed in the next minor."
     )]
     pub upgrade_cooldown_hours: Option<i32>,
-    /// Minimum score improvement for a same-tier upgrade.
-    pub same_tier_min_delta: i32,
+    /// Deprecated and inert: accepted and ignored; nothing is read or stored.
+    /// Set `minUpgradeScoreDelta` on the quality profile instead. Removed in
+    /// the next minor.
+    #[graphql(
+        deprecation = "Ignored: set minUpgradeScoreDelta on the quality profile through saveQualityProfileSettings. Removed in the next minor."
+    )]
+    pub same_tier_min_delta: Option<i32>,
     /// Deprecated and inert: accepted and ignored; nothing is read or stored.
     /// Removed in the next minor.
     #[graphql(
@@ -1718,6 +1731,11 @@ pub struct QualityProfileCriteriaInput {
     /// stored value rather than clearing it, so a UI save cannot wipe a value
     /// set through the API before the editor exposes the field.
     pub cutoff_score: Option<i32>,
+    /// Optional score a same-tier candidate must beat the current file by to
+    /// count as an upgrade; must not be negative. Omitting it keeps the stored
+    /// value, and sending the default (120) stores the profile as using the
+    /// default.
+    pub min_upgrade_score_delta: Option<i32>,
 }
 
 #[derive(InputObject, Clone)]

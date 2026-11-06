@@ -4,7 +4,6 @@ use super::keys::{
     default_indexer_routing_categories_for_scope,
 };
 use super::*;
-use crate::acquisition_policy::AcquisitionThresholds;
 use crate::location::model::VerificationDepth;
 use crate::ports::ImportFilePermissions;
 use crate::scoring_weights::ScoringPersona;
