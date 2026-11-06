@@ -302,6 +302,56 @@ async fn pending_conflict_folder(path: &str) -> AppResult<String> {
     Ok(folder)
 }
 
+/// Execution-time check of one confirmed conflict folder against the current
+/// catalog: roots may have been added and owners may have changed since the
+/// preview was confirmed.
+fn revalidate_conflict_folder(
+    folder: &str,
+    title: &Title,
+    catalog: &super::title_folder_recovery::RecoveryCatalog,
+) -> AppResult<()> {
+    if folder_spans_any_root(folder, &catalog.roots) {
+        return Err(refused(
+            refusal::FOLDER_UNSAFE,
+            "A conflict folder is or contains a library root",
+        ));
+    }
+    if !catalog.roots.iter().any(|root| {
+        root.library_id == title.library_id
+            && crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
+    }) || catalog.owners.iter().any(|owner| {
+        owner.id != title.id
+            && owner
+                .folder_path
+                .as_deref()
+                .is_some_and(|other| overlaps(folder, other))
+    }) || catalog.media.iter().any(|media| {
+        media.title_id != title.id
+            && crate::title_folder_rules::path_is_strictly_within(&media.file_path, folder)
+    }) {
+        return Err(refused(
+            refusal::OWNERSHIP_CHANGED,
+            "Conflict folder ownership or roots changed",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `folder` is, or contains, any configured root of any library.
+fn folder_spans_any_root(folder: &str, roots: &[scryer_domain::LibraryRoot]) -> bool {
+    let all = roots
+        .iter()
+        .map(|root| root.path.as_str())
+        .collect::<Vec<_>>();
+    matches!(
+        crate::title_folder_rules::title_folder_root_violation(folder, &all, &all),
+        Some(
+            crate::title_folder_rules::TitleFolderRootViolation::EqualsRoot
+                | crate::title_folder_rules::TitleFolderRootViolation::ContainsRoot
+        )
+    )
+}
+
 fn overlaps(a: &str, b: &str) -> bool {
     folder_paths_match(a, b)
         || crate::title_folder_rules::path_is_strictly_within(a, b)
@@ -651,6 +701,15 @@ impl AppUseCase {
                         "Every conflict folder must be strictly within this library's roots",
                     )
                 })?;
+            // A root added to any library after the pending row was written
+            // can make a conflict folder a whole root or hold one; consolidating
+            // it would treat that root's titles as this title's files.
+            if folder_spans_any_root(folder, &catalog.roots) {
+                return Err(refused(
+                    refusal::FOLDER_UNSAFE,
+                    "A conflict folder is or contains a library root",
+                ));
+            }
             if folders
                 .iter()
                 .any(|other| folder != other && overlaps(folder, other))
@@ -1278,6 +1337,66 @@ mod folder_name_rank_tests {
             media: true,
             media_file_id: None,
             root_path: "/library".into(),
+        }
+    }
+
+    fn root(id: &str, library_id: &str, path: &str) -> scryer_domain::LibraryRoot {
+        scryer_domain::LibraryRoot {
+            id: id.into(),
+            library_id: library_id.into(),
+            path: path_to_stored_string(path),
+            is_default: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn catalog(
+        roots: Vec<scryer_domain::LibraryRoot>,
+    ) -> crate::location::title_folder_recovery::RecoveryCatalog {
+        crate::location::title_folder_recovery::RecoveryCatalog {
+            roots,
+            owners: vec![],
+            media: vec![],
+        }
+    }
+
+    #[test]
+    fn a_folder_that_is_or_holds_any_librarys_root_spans_a_root() {
+        let roots = vec![
+            root("movies", "movie-lib", "/library"),
+            root("series", "series-lib", "/library/Bucket/Inner"),
+            root("anime", "anime-lib", "/library/Exact"),
+        ];
+        assert!(folder_spans_any_root(
+            &path_to_stored_string("/library/Bucket"),
+            &roots
+        ));
+        assert!(folder_spans_any_root(
+            &path_to_stored_string("/library/Exact"),
+            &roots
+        ));
+        assert!(!folder_spans_any_root(
+            &path_to_stored_string("/library/Alone"),
+            &roots
+        ));
+    }
+
+    #[test]
+    fn revalidation_refuses_a_folder_that_became_another_librarys_root() {
+        let mut title = movie("Emberfall", 2024, &[]);
+        title.library_id = "movie-lib".into();
+        let folder = path_to_stored_string("/library/Bucket");
+        let before = catalog(vec![root("movies", "movie-lib", "/library")]);
+        revalidate_conflict_folder(&folder, &title, &before).expect("still safe");
+        for added in ["/library/Bucket", "/library/Bucket/Inner"] {
+            let after = catalog(vec![
+                root("movies", "movie-lib", "/library"),
+                root("series", "series-lib", added),
+            ]);
+            let error = revalidate_conflict_folder(&folder, &title, &after)
+                .expect_err("a root inside the folder is refused");
+            assert_eq!(error.validation_reason(), Some(refusal::FOLDER_UNSAFE));
         }
     }
 
@@ -2254,24 +2373,7 @@ impl AppUseCase {
         for folder in &conflict.folders {
             super::title_folder_recovery::inspect_path(&stored_path_to_path_buf(folder), true)
                 .await?;
-            if !catalog.roots.iter().any(|root| {
-                root.library_id == title.library_id
-                    && crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
-            }) || catalog.owners.iter().any(|owner| {
-                owner.id != title.id
-                    && owner
-                        .folder_path
-                        .as_deref()
-                        .is_some_and(|other| overlaps(folder, other))
-            }) || catalog.media.iter().any(|media| {
-                media.title_id != title.id
-                    && crate::title_folder_rules::path_is_strictly_within(&media.file_path, folder)
-            }) {
-                return Err(refused(
-                    refusal::OWNERSHIP_CHANGED,
-                    "Conflict folder ownership or roots changed",
-                ));
-            }
+            revalidate_conflict_folder(folder, &title, &catalog)?;
         }
         let expected_paths: BTreeSet<_> = conflict
             .files

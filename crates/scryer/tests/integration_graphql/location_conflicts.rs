@@ -1859,6 +1859,33 @@ async fn conflict_keep_one_refuses_a_stacked_multi_part_title() {
 }
 
 #[tokio::test]
+async fn conflict_preview_refuses_a_folder_that_became_another_librarys_root() {
+    let fixture = ConflictFixture::new().await;
+    // Added after the pending row was written.
+    configure_default_library_root(&fixture.ctx, MediaFacet::Series, &fixture.junk).await;
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(
+            &fixture.actor,
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::MediaOnly),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::FOLDER_UNSAFE),
+        "{preview:?}"
+    );
+    assert!(
+        fixture
+            .junk
+            .join("Emberfall.2024.2160p.BluRay.mkv")
+            .exists()
+    );
+}
+
+#[tokio::test]
 async fn conflict_keep_one_refuses_a_title_with_part_folders() {
     let fixture = ConflictFixture::new().await;
     let part = fixture.named.join("CD2");
