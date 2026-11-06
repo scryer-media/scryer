@@ -38,15 +38,17 @@ impl TransferTitle {
         if self.copying > 0 {
             return 1;
         }
+        // Hot work, then the queue, then finished titles (those needing a look
+        // ahead of clean completions).
         match self.state {
             TitleCheckpointState::Verifying => 0,
             TitleCheckpointState::Moving
             | TitleCheckpointState::Reconciling
             | TitleCheckpointState::CleaningUp => 1,
+            TitleCheckpointState::Pending => 2,
             TitleCheckpointState::Failed
             | TitleCheckpointState::Blocked
-            | TitleCheckpointState::CompletedWithWarnings => 2,
-            TitleCheckpointState::Pending => 3,
+            | TitleCheckpointState::CompletedWithWarnings => 3,
             _ => 4,
         }
     }
@@ -1202,7 +1204,7 @@ mod tests {
             detail: Some("first file failed".into()),
         };
         hub.overlay("op", &mut row);
-        assert_eq!(row.rank(), 2);
+        assert_eq!(row.rank(), 3);
         hub.file_update(
             "op",
             "title",
@@ -1235,7 +1237,7 @@ mod tests {
         hub.file_done("op", "title", "waiting", 100);
         hub.overlay("op", &mut row);
         assert_eq!((row.copying, row.verifying, row.recording), (0, 0, 0));
-        assert_eq!(row.rank(), 2);
+        assert_eq!(row.rank(), 3);
         assert!(row.current_file.is_none());
         assert!(row.detail.is_some());
     }
@@ -1265,8 +1267,8 @@ mod tests {
         let states = [
             TitleCheckpointState::Verifying,
             TitleCheckpointState::Moving,
-            TitleCheckpointState::Failed,
             TitleCheckpointState::Pending,
+            TitleCheckpointState::Failed,
             TitleCheckpointState::Completed,
         ];
         assert_eq!(states.map(|state| make(state).rank()), [0, 1, 2, 3, 4]);

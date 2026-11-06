@@ -1703,6 +1703,7 @@ impl<'a> LocationOperationRunner<'a> {
                 if state.is_settled() || state == TitleCheckpointState::Failed {
                     row.copying = 0;
                     row.verifying = 0;
+                    row.recording = 0;
                     row.current_file = None;
                 }
                 self.store
