@@ -301,6 +301,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
   return (
     <Card
       id="location-operation-panel"
+      data-operation-state={operation.state}
       className="overflow-hidden rounded-[14px] border-[var(--scry-border2)] bg-[var(--scry-surfC)] shadow-none"
     >
       <CardContent className="space-y-4 p-4 sm:p-5">
@@ -312,25 +313,22 @@ function OperationPanel({ operationId, onDismiss }: Props) {
             >
               {t(`move.operationType.${operation.operationType}`)}
             </span>
-            <Badge
-              id="location-operation-beta"
-              tone="warning"
-              className="text-[11px]"
-            >
-              {t("settings.pluginBeta")}
-            </Badge>
-            <Badge
-              id="location-operation-state"
-              tone={
-                operation.state === "FAILED"
-                  ? "negative"
-                  : operation.state === "COMPLETED"
-                    ? "positive"
-                    : "neutral"
-              }
-            >
-              {t(operationStateLabelKey(operation.state))}
-            </Badge>
+            {/* A running operation's state flips with every title it finishes,
+                so only the outcome is shown. */}
+            {terminal && (
+              <Badge
+                id="location-operation-state"
+                tone={
+                  operation.state === "FAILED"
+                    ? "negative"
+                    : operation.state === "COMPLETED"
+                      ? "positive"
+                      : "neutral"
+                }
+              >
+                {t(operationStateLabelKey(operation.state))}
+              </Badge>
+            )}
             {operation.cancelRequested && !terminal && (
               <Badge tone="warning">{t("move.cancelDraining")}</Badge>
             )}
