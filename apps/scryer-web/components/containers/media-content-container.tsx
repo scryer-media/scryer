@@ -798,61 +798,64 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     isMediaView && contentSettingsSection === "overview";
   const shouldLoadMediaSettingsForSection =
     isMediaView && isMediaSettingsSection(contentSettingsSection);
-  const refreshCatalogDiscovery = React.useCallback(async (refresh = false) => {
-    const requestId = catalogDiscoveryRequestIdRef.current + 1;
-    catalogDiscoveryRequestIdRef.current = requestId;
-    if (
-      !shouldLoadCatalogTitles ||
-      (!canManageCatalogDiscovery && !canRequestCatalogDiscovery)
-    ) {
-      setCatalogDiscoveryGroups([]);
-      return;
-    }
-    setCatalogDiscoveryGroups([]);
-    const libraryIds = selectedLibraryIds.filter(
-      (libraryId) => libraryId !== ALL_LIBRARIES_VALUE,
-    );
-    const input: CatalogDiscoveryInput = {
-      facet: activeFacet,
-      libraryIds,
-      includeUnresolved: true,
-      limitPerGroup: CATALOG_DISCOVERY_LIMIT_PER_GROUP,
-      maxGroups: CATALOG_DISCOVERY_MAX_GROUPS,
-    };
-    try {
-      const payload = await catalogDiscoveryInFlight.current.run(
-        JSON.stringify([authorizationSignature, input]),
-        async () => {
-          const { data, error } = await client
-            .query<{ catalogDiscovery?: CatalogDiscoveryPayload }>(
-              catalogDiscoveryQuery,
-              { input },
-              { requestPolicy: "network-only" },
-            )
-            .toPromise();
-          if (error) throw error;
-          return data?.catalogDiscovery;
-        },
-        refresh,
-      );
-      if (catalogDiscoveryRequestIdRef.current === requestId) {
-        setCatalogDiscoveryGroups(payload?.groups ?? []);
-      }
-    } catch (error) {
-      console.error("[catalog-discovery] refresh failed:", error);
-      if (catalogDiscoveryRequestIdRef.current === requestId) {
+  const refreshCatalogDiscovery = React.useCallback(
+    async (refresh = false) => {
+      const requestId = catalogDiscoveryRequestIdRef.current + 1;
+      catalogDiscoveryRequestIdRef.current = requestId;
+      if (
+        !shouldLoadCatalogTitles ||
+        (!canManageCatalogDiscovery && !canRequestCatalogDiscovery)
+      ) {
         setCatalogDiscoveryGroups([]);
+        return;
       }
-    }
-  }, [
-    activeFacet,
-    authorizationSignature,
-    canManageCatalogDiscovery,
-    canRequestCatalogDiscovery,
-    client,
-    selectedLibraryIds,
-    shouldLoadCatalogTitles,
-  ]);
+      setCatalogDiscoveryGroups([]);
+      const libraryIds = selectedLibraryIds.filter(
+        (libraryId) => libraryId !== ALL_LIBRARIES_VALUE,
+      );
+      const input: CatalogDiscoveryInput = {
+        facet: activeFacet,
+        libraryIds,
+        includeUnresolved: true,
+        limitPerGroup: CATALOG_DISCOVERY_LIMIT_PER_GROUP,
+        maxGroups: CATALOG_DISCOVERY_MAX_GROUPS,
+      };
+      try {
+        const payload = await catalogDiscoveryInFlight.current.run(
+          JSON.stringify([authorizationSignature, input]),
+          async () => {
+            const { data, error } = await client
+              .query<{ catalogDiscovery?: CatalogDiscoveryPayload }>(
+                catalogDiscoveryQuery,
+                { input },
+                { requestPolicy: "network-only" },
+              )
+              .toPromise();
+            if (error) throw error;
+            return data?.catalogDiscovery;
+          },
+          refresh,
+        );
+        if (catalogDiscoveryRequestIdRef.current === requestId) {
+          setCatalogDiscoveryGroups(payload?.groups ?? []);
+        }
+      } catch (error) {
+        console.error("[catalog-discovery] refresh failed:", error);
+        if (catalogDiscoveryRequestIdRef.current === requestId) {
+          setCatalogDiscoveryGroups([]);
+        }
+      }
+    },
+    [
+      activeFacet,
+      authorizationSignature,
+      canManageCatalogDiscovery,
+      canRequestCatalogDiscovery,
+      client,
+      selectedLibraryIds,
+      shouldLoadCatalogTitles,
+    ],
+  );
 
   const refreshTitleCatalogFilterOptions = React.useCallback(async () => {
     const requestId = titleCatalogFilterOptionsRequestIdRef.current + 1;
@@ -1441,33 +1444,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       ),
     [canManageTitlesInLibrary, selectedTitleLibraryIds],
   );
-  const editDialogTitleLibraryIds = React.useMemo(
-    () => Array.from(new Set(editDialogTitles.map((title) => title.libraryId))),
-    [editDialogTitles],
-  );
-  const editDialogRootFolders = React.useMemo(() => {
-    if (editDialogTitleLibraryIds.length !== 1) {
-      return [];
-    }
-    return (
-      libraries.find((library) => library.id === editDialogTitleLibraryIds[0])
-        ?.roots ?? []
-    );
-  }, [editDialogTitleLibraryIds, libraries]);
-  // Bulk move workflow (FR-010–FR-011): picking a destination root in the bulk
-  // edit dialog opens the preview instead of staging a root rewrite.
-  const [bulkMoveRootId, setBulkMoveRootId] = React.useState<string | null>(
-    null,
-  );
-  const editDialogLibraryName = React.useMemo(() => {
-    if (editDialogTitleLibraryIds.length !== 1) {
-      return null;
-    }
-    return (
-      libraries.find((library) => library.id === editDialogTitleLibraryIds[0])
-        ?.name ?? null
-    );
-  }, [editDialogTitleLibraryIds, libraries]);
+  // Moving rewrites files on disk, so it needs the same rights as renaming.
+  const canMoveSelectedTitles = canRenameSelectedTitles;
+  const [bulkMoveDialogOpen, setBulkMoveDialogOpen] = React.useState(false);
   const bulkMoveLibraries = React.useMemo(
     () =>
       libraries.map((library) => ({
@@ -4266,6 +4245,27 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setGlobalStatus,
   ]);
 
+  const openBulkTitleMove = React.useCallback(() => {
+    if (
+      selectedTitles.length === 0 ||
+      bulkActionBusy ||
+      !canMoveSelectedTitles
+    ) {
+      return;
+    }
+    if (selectedTitleLibraryIds.length !== 1) {
+      setGlobalStatus("Bulk actions require titles from one library.");
+      return;
+    }
+    setBulkMoveDialogOpen(true);
+  }, [
+    bulkActionBusy,
+    canMoveSelectedTitles,
+    selectedTitleLibraryIds.length,
+    selectedTitles.length,
+    setGlobalStatus,
+  ]);
+
   const requestDeleteTitle = React.useCallback(
     (title: TitleRecord) => {
       setTitleToDelete(title);
@@ -5453,6 +5453,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           openBulkTitleDelete,
           openBulkTitleRename,
           canRenameSelectedTitles,
+          openBulkTitleMove,
+          canMoveSelectedTitles,
         }}
       />
       {canManageTitle ? (
@@ -5492,7 +5494,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               options,
             );
             if (accepted) {
-              await Promise.all([refreshTitles(), refreshCatalogDiscovery(true)]);
+              await Promise.all([
+                refreshTitles(),
+                refreshCatalogDiscovery(true),
+              ]);
             }
             return accepted;
           }}
@@ -5504,25 +5509,15 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         view={view}
         selectedTitles={editDialogTitles}
         qualityProfiles={qualityProfiles}
-        rootFolders={editDialogRootFolders}
         busy={bulkActionBusy}
         onSubmit={applyBulkTitleOptions}
-        destinationLibraryName={editDialogLibraryName}
-        onRequestMove={(rootFolderId) => {
-          setBulkEditDialogOpen(false);
-          setBulkMoveRootId(rootFolderId);
-        }}
       />
       <MoveTitlesDialog
-        open={bulkMoveRootId !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setBulkMoveRootId(null);
-          }
-        }}
+        open={bulkMoveDialogOpen}
+        onOpenChange={setBulkMoveDialogOpen}
         titles={bulkMoveTitles}
         libraries={bulkMoveLibraries}
-        initialRootId={bulkMoveRootId}
+        initialRootId={null}
       />
       <ConfirmDialog
         open={bulkDeleteDialogOpen}

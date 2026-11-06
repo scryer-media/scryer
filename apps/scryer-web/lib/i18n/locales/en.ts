@@ -6304,6 +6304,7 @@ const en: LocaleDictionary = {
   "title.monitorAction": "Monitor",
   "title.unmonitorAction": "Unmonitor",
   "title.renameAction": "Rename",
+  "title.moveAction": "Move",
   "title.filterPlaceholder": "Filter managed titles",
   "title.loading": "No data loaded",
   "title.noManaged": "No titles found for this section.",
@@ -10502,15 +10503,11 @@ const en: LocaleDictionary = {
     "This library has no other root folder to move to. Add one to the library, or move the title to another library.",
   "move.back": "Back",
   "move.next": "Next",
-  "move.destinationRootHelp":
-    "Changing the destination opens the move workflow instead of saving the title.",
   "move.destinationNoSelection": "No titles are selected.",
   "move.destinationMixedSourceLibraries":
     "The selection spans several libraries; move one library at a time.",
   "move.destinationCrossLibraryNotice":
     "These titles leave their current library and become part of {{library}}.",
-  "move.destinationLibraryInMoveWorkflow":
-    "Choose a different library in the move workflow, after picking a destination root.",
   "move.transferIntoLibrary": "Transfers into {{library}}.",
   "move.sameNameWarning":
     "{{library}} already has a title named “{{title}}”. Scryer never merges by name, so this transfer leaves two titles with that name.",

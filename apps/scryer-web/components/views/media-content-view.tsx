@@ -11,6 +11,7 @@ import {
   Columns3,
   Eye,
   EyeOff,
+  FolderInput,
   FolderPen,
   LayoutGrid,
   LayoutList,
@@ -2095,6 +2096,8 @@ export function MediaContentView({
     openBulkTitleDelete: () => void;
     openBulkTitleRename: () => void;
     canRenameSelectedTitles: boolean;
+    openBulkTitleMove: () => void;
+    canMoveSelectedTitles: boolean;
   };
 }) {
   const t = useTranslate();
@@ -2300,6 +2303,8 @@ export function MediaContentView({
     openBulkTitleDelete,
     openBulkTitleRename,
     canRenameSelectedTitles,
+    openBulkTitleMove,
+    canMoveSelectedTitles,
   } = state;
   const [titleFilterInputValue, setTitleFilterInputValue] =
     React.useState(titleFilter);
@@ -3484,6 +3489,18 @@ export function MediaContentView({
                       <FolderPen className="h-4 w-4" />
                     </TitleTableActionButton>
                   ) : null}
+                  {canMoveSelectedTitles ? (
+                    <TitleTableActionButton
+                      id="title-overview-bulk-move-inline"
+                      tone="accent"
+                      label={t("title.moveAction")}
+                      onClick={openBulkTitleMove}
+                      disabled={bulkActionBusy}
+                      className="rounded-md"
+                    >
+                      <FolderInput className="h-4 w-4" />
+                    </TitleTableActionButton>
+                  ) : null}
                   <TitleTableActionButton
                     tone="delete"
                     label={t("label.delete")}
@@ -4185,6 +4202,18 @@ export function MediaContentView({
                           >
                             <FolderPen className="h-4 w-4" />
                             {t("title.renameAction")}
+                          </Button>
+                        ) : null}
+                        {canMoveSelectedTitles ? (
+                          <Button
+                            id="title-overview-bulk-move"
+                            variant="outline"
+                            onClick={openBulkTitleMove}
+                            disabled={bulkActionBusy}
+                            className="justify-center gap-2"
+                          >
+                            <FolderInput className="h-4 w-4" />
+                            {t("title.moveAction")}
                           </Button>
                         ) : null}
                         <Button

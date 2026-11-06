@@ -5357,15 +5357,11 @@ const ru: LocaleDictionary = {
     "В этой библиотеке нет другого корневого каталога для перемещения. Добавьте его в библиотеку или переместите тайтл в другую библиотеку.",
   "move.back": "Назад",
   "move.next": "Далее",
-  "move.destinationRootHelp":
-    "Смена назначения открывает процесс перемещения вместо сохранения тайтла.",
   "move.destinationNoSelection": "Тайтлы не выбраны.",
   "move.destinationMixedSourceLibraries":
     "Выбор охватывает несколько библиотек; перемещайте по одной библиотеке за раз.",
   "move.destinationCrossLibraryNotice":
     "Эти тайтлы покинут текущую библиотеку и станут частью библиотеки {{library}}.",
-  "move.destinationLibraryInMoveWorkflow":
-    "Выберите другую библиотеку в мастере перемещения, после выбора корневой папки назначения.",
   "move.transferIntoLibrary": "Переносится в библиотеку {{library}}.",
   "move.sameNameWarning":
     "В библиотеке {{library}} уже есть тайтл с названием «{{title}}». Scryer никогда не объединяет по названию, поэтому после переноса останутся два тайтла с этим названием.",
@@ -11116,6 +11112,7 @@ const ru: LocaleDictionary = {
   "toast.titleImported": "Тайтл импортирован",
   "toast.viewInCatalog": "Открыть в каталоге",
   "title.renameAction": "Переименовать",
+  "title.moveAction": "Переместить",
   "title.topBilledCast": "В главных ролях",
   "title.dubCast": "Актёры дубляжа",
   "title.dubCastLanguage": "Язык",
