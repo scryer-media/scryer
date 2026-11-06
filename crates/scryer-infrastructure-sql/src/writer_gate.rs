@@ -25,11 +25,6 @@ pub const WRITER_GATE_WAIT_SECONDS: &str = "scryer_datastore_writer_gate_wait_se
 pub const WRITER_GATE_HOLD_SECONDS: &str = "scryer_datastore_writer_gate_hold_seconds";
 pub const WRITER_TRANSACTIONS_TOTAL: &str = "scryer_datastore_writer_transactions_total";
 
-/// A wait for, or hold of, the writer gate at least this long is logged with
-/// its transaction name, so a stalled write can be matched to whatever held
-/// the gate.
-const SLOW_WRITER_GATE: std::time::Duration = std::time::Duration::from_secs(2);
-
 const OUTCOME_COMMITTED: &str = "committed";
 const OUTCOME_ROLLED_BACK: &str = "rolled_back";
 
@@ -82,16 +77,11 @@ impl<'gate> WriterGateHold<'gate> {
         let requested_at = Instant::now();
         let guard = gate.lock().await;
         let acquired_at = Instant::now();
-        let wait = acquired_at.saturating_duration_since(requested_at);
-        metrics::histogram!(WRITER_GATE_WAIT_SECONDS, "transaction" => transaction)
-            .record(wait.as_secs_f64());
-        if wait >= SLOW_WRITER_GATE {
-            tracing::info!(
-                transaction,
-                wait_ms = wait.as_millis() as u64,
-                "sqlite write waited a long time for the writer gate"
-            );
-        }
+        metrics::histogram!(WRITER_GATE_WAIT_SECONDS, "transaction" => transaction).record(
+            acquired_at
+                .saturating_duration_since(requested_at)
+                .as_secs_f64(),
+        );
         WriterGateHold {
             _guard: guard,
             transaction,
@@ -109,17 +99,8 @@ impl<'gate> WriterGateHold<'gate> {
 
 impl Drop for WriterGateHold<'_> {
     fn drop(&mut self) {
-        let hold = self.acquired_at.elapsed();
         metrics::histogram!(WRITER_GATE_HOLD_SECONDS, "transaction" => self.transaction)
-            .record(hold.as_secs_f64());
-        if hold >= SLOW_WRITER_GATE {
-            tracing::info!(
-                transaction = self.transaction,
-                hold_ms = hold.as_millis() as u64,
-                outcome = self.outcome,
-                "sqlite write held the writer gate a long time"
-            );
-        }
+            .record(self.acquired_at.elapsed().as_secs_f64());
         metrics::counter!(
             WRITER_TRANSACTIONS_TOTAL,
             "transaction" => self.transaction,
