@@ -6125,7 +6125,6 @@ const cs: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Sloučení kořenů",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Přesun mezi knihovnami",
   "move.toastPreparing": "Příprava…",
-  "move.toastTransferred": "Přesunuto",
   "move.toastTitlesProgress": "Tituly: {{current}} / {{total}}",
   "move.toastDoneSubtitle": "Přesun dokončen · titulů: {{count}}",
   "move.toastWarningsSubtitle": "Dokončeno s upozorněními · titulů: {{count}}",

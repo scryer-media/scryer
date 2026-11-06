@@ -5140,7 +5140,6 @@ const zh_HK: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "根目錄合併",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "跨庫轉移",
   "move.toastPreparing": "正在準備…",
-  "move.toastTransferred": "已傳輸",
   "move.toastTitlesProgress": "{{current}} / {{total}} 個標題",
   "move.toastDoneSubtitle": "移動完成 · {{count}} 個標題",
   "move.toastWarningsSubtitle": "已完成（有警告）· {{count}} 個標題",

@@ -10750,7 +10750,6 @@ const en: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Root consolidation",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Cross-library transfer",
   "move.toastPreparing": "Preparing…",
-  "move.toastTransferred": "Transferred",
   "move.toastTitlesProgress": "{{current}} / {{total}} titles",
   "move.toastDoneSubtitle": "Move complete · {{count}} titles",
   "move.toastWarningsSubtitle": "Completed with warnings · {{count}} titles",

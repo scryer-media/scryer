@@ -2917,7 +2917,6 @@ const pt_BR: LocaleDictionary = {
   "move.operationType.CROSS_LIBRARY_TRANSFER":
     "Transferência entre bibliotecas",
   "move.toastPreparing": "Preparando…",
-  "move.toastTransferred": "Transferido",
   "move.toastTitlesProgress": "{{current}} / {{total}} títulos",
   "move.toastDoneSubtitle": "Movimentação concluída · {{count}} títulos",
   "move.toastWarningsSubtitle": "Concluído com avisos · {{count}} títulos",

@@ -2787,7 +2787,6 @@ const ko: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "루트 통합",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "라이브러리 간 전송",
   "move.toastPreparing": "준비 중…",
-  "move.toastTransferred": "전송됨",
   "move.toastTitlesProgress": "{{current}} / {{total}}개 타이틀",
   "move.toastDoneSubtitle": "이동 완료 · {{count}}개 타이틀",
   "move.toastWarningsSubtitle": "경고와 함께 완료됨 · {{count}}개 타이틀",

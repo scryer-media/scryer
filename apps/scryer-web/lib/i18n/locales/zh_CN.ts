@@ -2626,7 +2626,6 @@ const zh_CN: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "根目录合并",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "跨库转移",
   "move.toastPreparing": "正在准备…",
-  "move.toastTransferred": "已传输",
   "move.toastTitlesProgress": "{{current}} / {{total}} 个标题",
   "move.toastDoneSubtitle": "移动完成 · {{count}} 个标题",
   "move.toastWarningsSubtitle": "已完成（有警告）· {{count}} 个标题",

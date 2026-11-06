@@ -2932,7 +2932,6 @@ const it: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Consolidamento radici",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Trasferimento tra librerie",
   "move.toastPreparing": "Preparazione…",
-  "move.toastTransferred": "Trasferito",
   "move.toastTitlesProgress": "{{current}} / {{total}} titoli",
   "move.toastDoneSubtitle": "Spostamento completato · {{count}} titoli",
   "move.toastWarningsSubtitle": "Completato con avvisi · {{count}} titoli",

@@ -2846,7 +2846,6 @@ const ja: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "ルート統合",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "ライブラリ間転送",
   "move.toastPreparing": "準備中…",
-  "move.toastTransferred": "転送済み",
   "move.toastTitlesProgress": "{{current}} / {{total}} 件のタイトル",
   "move.toastDoneSubtitle": "移動完了 · {{count}} 件のタイトル",
   "move.toastWarningsSubtitle": "警告付きで完了 · {{count}} 件のタイトル",

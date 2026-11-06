@@ -5530,7 +5530,6 @@ const ru: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Объединение корневых каталогов",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Перенос между библиотеками",
   "move.toastPreparing": "Подготовка…",
-  "move.toastTransferred": "Передано",
   "move.toastTitlesProgress": "{{current}} / {{total}} тайтлов",
   "move.toastDoneSubtitle": "Перемещение завершено · {{count}} тайтлов",
   "move.toastWarningsSubtitle":
