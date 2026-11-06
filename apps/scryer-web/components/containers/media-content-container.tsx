@@ -1,7 +1,11 @@
 import { hasGraphQlErrorReason } from "@/lib/graphql/error-message";
 import { titleDeleteErrorMessage } from "@/lib/utils/title-delete-error-message";
 import * as React from "react";
-import { DiscoveryInFlight } from "@/lib/utils/discovery-in-flight";
+import {
+  DiscoveryInFlight,
+  DiscoveryResponseGate,
+  catalogDiscoveryScope,
+} from "@/lib/utils/discovery-in-flight";
 import { useCatalogFilterState } from "@/lib/hooks/use-catalog-filter-state";
 import { createCatalogPageRequestGate } from "@/lib/utils/catalog-page-request";
 import { loadCatalogBulk } from "@/lib/utils/catalog-bulk-load";
@@ -759,7 +763,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     },
     [advancedTitleFilters, setAdvancedTitleFilters],
   );
-  const catalogDiscoveryRequestIdRef = React.useRef(0);
+  const catalogDiscoveryGate = React.useRef(new DiscoveryResponseGate());
   const catalogDiscoveryInFlight = React.useRef(
     new DiscoveryInFlight<CatalogDiscoveryPayload | undefined>(),
   );
@@ -777,7 +781,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const authorizationSignatureRef = React.useRef(authorizationSignature);
   React.useLayoutEffect(() => {
     authorizationSignatureRef.current = authorizationSignature;
-    catalogDiscoveryRequestIdRef.current += 1;
+    catalogDiscoveryGate.current.invalidate();
     catalogDiscoveryInFlight.current.clear();
     setCatalogDiscoveryGroups([]);
     setAddDiscoveryDialogTarget(null);
@@ -799,12 +803,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const shouldLoadMediaSettingsForSection =
     isMediaView && isMediaSettingsSection(contentSettingsSection);
   const refreshCatalogDiscovery = React.useCallback(async (refresh = false) => {
-    const requestId = catalogDiscoveryRequestIdRef.current + 1;
-    catalogDiscoveryRequestIdRef.current = requestId;
     if (
       !shouldLoadCatalogTitles ||
       (!canManageCatalogDiscovery && !canRequestCatalogDiscovery)
     ) {
+      catalogDiscoveryGate.current.invalidate();
       setCatalogDiscoveryGroups([]);
       return;
     }
@@ -819,9 +822,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       limitPerGroup: CATALOG_DISCOVERY_LIMIT_PER_GROUP,
       maxGroups: CATALOG_DISCOVERY_MAX_GROUPS,
     };
+    const scope = catalogDiscoveryScope(authorizationSignature, input);
+    const ticket = catalogDiscoveryGate.current.begin(scope);
     try {
       const payload = await catalogDiscoveryInFlight.current.run(
-        JSON.stringify([authorizationSignature, input]),
+        scope,
         async () => {
           const { data, error } = await client
             .query<{ catalogDiscovery?: CatalogDiscoveryPayload }>(
@@ -835,12 +840,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         },
         refresh,
       );
-      if (catalogDiscoveryRequestIdRef.current === requestId) {
+      if (catalogDiscoveryGate.current.accepts(ticket, scope)) {
         setCatalogDiscoveryGroups(payload?.groups ?? []);
       }
     } catch (error) {
       console.error("[catalog-discovery] refresh failed:", error);
-      if (catalogDiscoveryRequestIdRef.current === requestId) {
+      if (catalogDiscoveryGate.current.accepts(ticket, scope)) {
         setCatalogDiscoveryGroups([]);
       }
     }
@@ -1290,11 +1295,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       catalogSurfaceState.phase === "empty");
   catalogDependentRequestsAllowedRef.current =
     catalogSurfaceAllowsDependentRequests;
+  // The sidebar waits for the viewer and library scope only, never for the
+  // title grid, so both requests run side by side.
   React.useEffect(() => {
     if (librariesLoading || librariesFacet !== activeFacet) return;
+    const gate = catalogDiscoveryGate.current;
     void refreshCatalogDiscovery();
     return () => {
-      catalogDiscoveryRequestIdRef.current += 1;
+      gate.invalidate();
     };
   }, [
     activeFacet,

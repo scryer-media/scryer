@@ -21,3 +21,37 @@ export class DiscoveryInFlight<T> {
     this.pending.clear();
   }
 }
+
+/**
+ * Lets a response land only while it is the newest request of the current
+ * scope. The scope is everything the response depends on (viewer,
+ * permissions, facet, libraries), so a newer request or any scope change
+ * leaves older responses stale, even ones sharing a coalesced request.
+ */
+export class DiscoveryResponseGate {
+  private ticket = 0;
+  private scope: string | null = null;
+
+  begin(scope: string): number {
+    this.ticket += 1;
+    this.scope = scope;
+    return this.ticket;
+  }
+
+  invalidate(): void {
+    this.ticket += 1;
+    this.scope = null;
+  }
+
+  accepts(ticket: number, scope: string): boolean {
+    return ticket === this.ticket && scope === this.scope;
+  }
+}
+
+/** The request scope a catalog Discovery response belongs to. */
+export function catalogDiscoveryScope(
+  authorizationSignature: string,
+  input: unknown,
+): string {
+  return JSON.stringify([authorizationSignature, input]);
+}
