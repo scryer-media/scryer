@@ -108,6 +108,9 @@ pub const MEDIA_LIBRARY_ROOT_PATH_EMPTY: &str = "MEDIA_LIBRARY_ROOT_PATH_EMPTY";
 /// library root cannot be removed while titles reference it
 pub const MEDIA_LIBRARY_ROOT_REFERENCED: &str = "MEDIA_LIBRARY_ROOT_REFERENCED";
 
+/// stored library root was resubmitted by path without its id
+pub const MEDIA_LIBRARY_ROOT_ID_REQUIRED: &str = "MEDIA_LIBRARY_ROOT_ID_REQUIRED";
+
 /// lifecycle claim is no longer live
 pub const MEDIA_LIFECYCLE_CLAIM_NOT_LIVE: &str = "MEDIA_LIFECYCLE_CLAIM_NOT_LIVE";
 
@@ -310,6 +313,7 @@ const ALL: &[&str] = &[
     MEDIA_LIBRARY_ROOT_NOT_FOUND,
     MEDIA_LIBRARY_ROOT_PATH_EMPTY,
     MEDIA_LIBRARY_ROOT_REFERENCED,
+    MEDIA_LIBRARY_ROOT_ID_REQUIRED,
     MEDIA_LIFECYCLE_CLAIM_NOT_LIVE,
     MEDIA_LIST_ACCOUNT_NOT_FOUND,
     MEDIA_LIST_EXCLUSION_NOT_FOUND,

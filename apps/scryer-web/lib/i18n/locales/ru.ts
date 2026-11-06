@@ -8238,6 +8238,8 @@ const ru: LocaleDictionary = {
     "Корневой каталог библиотеки с выбранным значением нельзя использовать.",
   "error.reason.LIBRARY_ROOT_DUPLICATED":
     "Корневые каталоги внутри библиотеки должны быть уникальными.",
+  "error.reason.LIBRARY_ROOT_ID_REQUIRED":
+    "Эта папка уже является корневой папкой библиотеки. Оставьте существующую корневую папку вместо повторного добавления.",
   "error.reason.LIBRARY_ROOT_REQUIRED":
     "Для библиотеки требуется хотя бы одна корневая папка.",
   "error.reason.LIBRARY_ROOT_TITLES_BUSY":
@@ -8709,6 +8711,8 @@ const ru: LocaleDictionary = {
     "Этот корневой каталог библиотеки уже настроен.",
   "error.reason.MEDIA_LIBRARY_ROOT_NOT_FOUND":
     "Корневой каталог библиотеки не найден.",
+  "error.reason.MEDIA_LIBRARY_ROOT_ID_REQUIRED":
+    "Эта папка уже является корневой папкой библиотеки. Оставьте существующую корневую папку вместо повторного добавления.",
   "error.reason.MEDIA_LIBRARY_ROOT_PATH_EMPTY":
     "Путь к корневому каталогу библиотеки не может быть пустым.",
   "error.reason.MEDIA_LIBRARY_ROOT_REFERENCED":

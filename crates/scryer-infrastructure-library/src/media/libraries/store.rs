@@ -356,9 +356,11 @@ async fn update_library_tx(
 
     // The stored ids have to be read before the rows are deleted: a root's
     // identity is permanent, so reinserting it must land it back on the id it
-    // already had rather than deriving a new one from its path (FR-078).
+    // already had. Existing roots resolve by stored id only, never by path
+    // (FR-078).
     let existing_root_ids = existing_root_ids_by_normalized_path_tx(tx, library_id).await?;
 
+    reject_stored_roots_without_ids(&existing_root_ids, &roots)?;
     let resolved_root_ids = resolve_root_ids(&existing_root_ids, &roots);
     reject_referenced_root_removals_tx(tx, library_id, &existing_root_ids, &resolved_root_ids)
         .await?;
@@ -448,40 +450,53 @@ async fn existing_root_ids_by_normalized_path_tx(
         .collect()
 }
 
+/// Refuse a draft that sits at one of the library's stored roots without
+/// naming that root's id. Stored roots are identified by id only, so such a
+/// draft is neither a match nor a new root.
+fn reject_stored_roots_without_ids(
+    existing_root_ids: &HashMap<String, String>,
+    roots: &[LibraryRootDraft],
+) -> AppResult<()> {
+    let known_ids = existing_root_ids.values().collect::<HashSet<_>>();
+    for root in roots {
+        if root.id.as_ref().is_some_and(|id| known_ids.contains(id)) {
+            continue;
+        }
+        if existing_root_ids.contains_key(&normalize_library_root_path(&root.path)) {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_LIBRARY_ROOT_ID_REQUIRED,
+                format!(
+                    "library root '{}' is already configured; send its id to keep it",
+                    root.path
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The id each draft lands on, in draft order.
 ///
-/// A draft that names one of the library's stored roots by id keeps that id
-/// whatever its path says: that is how an operator points a root at a new
-/// folder without the titles under it losing their `root_folder_id`. A draft
-/// without an id (or with one this library does not have) takes the id of the
-/// stored root at the same normalized path, unless another draft already
-/// claimed it by id, and is otherwise a new root.
+/// Existing roots resolve by stored id only. A draft that names one of the
+/// library's stored roots by id keeps that id whatever its path says: that is
+/// how an operator points a root at a new folder without the titles under it
+/// losing their `root_folder_id`. Any other draft is a new root and is
+/// allocated an id; a path never resolves to a stored root.
 fn resolve_root_ids(
     existing_root_ids: &HashMap<String, String>,
     roots: &[LibraryRootDraft],
 ) -> Vec<String> {
     let known_ids = existing_root_ids.values().collect::<HashSet<_>>();
     let mut claimed = HashSet::new();
-    let mut resolved = roots
+    roots
         .iter()
         .map(|root| {
             root.id
                 .as_ref()
                 .filter(|id| known_ids.contains(id) && claimed.insert((*id).clone()))
                 .cloned()
+                .unwrap_or_else(allocate_root_folder_id)
         })
-        .collect::<Vec<_>>();
-    for (slot, root) in resolved.iter_mut().zip(roots) {
-        if slot.is_none() {
-            *slot = existing_root_ids
-                .get(&normalize_library_root_path(&root.path))
-                .filter(|id| claimed.insert((*id).clone()))
-                .cloned();
-        }
-    }
-    resolved
-        .into_iter()
-        .map(|id| id.unwrap_or_else(allocate_root_folder_id))
         .collect()
 }
 
@@ -866,6 +881,25 @@ mod tests {
             .id
             .clone();
 
+        // A stored root is identified by its id only: resubmitting its path
+        // without the id is refused, never matched.
+        let refused = store
+            .update(
+                "stable-root-library",
+                "Stable Renamed".to_string(),
+                "stable-renamed".to_string(),
+                vec![
+                    draft("/mnt/stable", true),
+                    draft("/mnt/stable-extra", false),
+                ],
+            )
+            .await
+            .expect_err("a stored root resubmitted by path alone must be refused");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_LIBRARY_ROOT_ID_REQUIRED)
+        );
+
         // The update path deletes and reinserts every root row, so this is where
         // a derived id would silently mint a new identity.
         let updated = store
@@ -874,7 +908,11 @@ mod tests {
                 "Stable Renamed".to_string(),
                 "stable-renamed".to_string(),
                 vec![
-                    draft("/mnt/stable", true),
+                    LibraryRootDraft {
+                        id: Some(original_root_id.clone()),
+                        path: "/mnt/stable".to_string(),
+                        is_default: true,
+                    },
                     draft("/mnt/stable-extra", false),
                 ],
             )

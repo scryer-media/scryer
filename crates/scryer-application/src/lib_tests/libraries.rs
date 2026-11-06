@@ -3287,8 +3287,10 @@ async fn update_library_dropping_a_root_removes_its_titles_and_leaves_files_alon
 }
 
 #[tokio::test]
-async fn update_library_keeps_a_root_resubmitted_by_path_without_its_id() {
+async fn update_library_refuses_a_stored_root_resubmitted_without_its_id() {
     let fixture = RootRemovalFixture::new().await;
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+    // Root B keeps its id; root A comes back at its own path with none.
     let library = fixture
         .app
         .services
@@ -3298,32 +3300,51 @@ async fn update_library_keeps_a_root_resubmitted_by_path_without_its_id() {
         .await
         .expect("library lookup")
         .expect("library exists");
-    let by_path = library
+    let drafts = library
         .roots
         .iter()
         .map(|root| LibraryRootDraft {
-            id: None,
+            id: (root.id == fixture.root_b_id).then(|| root.id.clone()),
             path: format!("{}/", root.path),
             is_default: root.is_default,
         })
         .collect::<Vec<_>>();
 
-    let updated = fixture
+    let error = fixture
         .app
-        .update_library_with_outcome(
-            &fixture.user,
-            &fixture.library_id,
-            None,
-            Some(by_path),
-            None,
-        )
+        .update_library_with_outcome(&fixture.user, &fixture.library_id, None, Some(drafts), None)
         .await
-        .expect("resubmitting roots by path succeeds");
+        .expect_err("a stored root sent by path alone is refused");
 
-    assert_eq!(updated.removed_title_count, 0);
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::ROOT_ID_REQUIRED)
+    );
     for title in fixture.titles_on_a.iter().chain([&fixture.title_on_b]) {
         assert!(fixture.title_exists(&title.id).await, "{} kept", title.name);
     }
+    let after = fixture
+        .app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&fixture.library_id)
+        .await
+        .expect("library lookup")
+        .expect("library exists");
+    assert_eq!(
+        after
+            .roots
+            .iter()
+            .map(|root| (root.id.as_str(), root.path.as_str()))
+            .collect::<Vec<_>>(),
+        library
+            .roots
+            .iter()
+            .map(|root| (root.id.as_str(), root.path.as_str()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(root_removal_disk_snapshot(fixture.temp.path()), before);
 }
 
 #[tokio::test]

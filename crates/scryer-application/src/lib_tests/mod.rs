@@ -117,6 +117,7 @@ use support_events_requests::*;
 pub(crate) use support_imports::MockMediaFileRepo;
 use support_imports::*;
 use support_indexers_metadata::*;
+pub(crate) use support_library_show::with_stored_root_ids;
 use support_library_show::*;
 use support_settings_scan::*;
 

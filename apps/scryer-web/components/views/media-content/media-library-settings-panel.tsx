@@ -1012,8 +1012,28 @@ export const MediaLibrarySettingsPanel = React.memo(
         if (current.some((rf) => rf.path === trimmed)) {
           return current;
         }
+        // Re-adding a stored root the draft dropped brings back its id, so
+        // the save keeps that root instead of sending its path without one.
+        const comparable = normalizeComparableLibraryRootPath(
+          trimmed,
+          localPathStyle,
+        );
+        const stored = savedRoots.find(
+          (root) =>
+            root.id &&
+            !current.some((candidate) => candidate.id === root.id) &&
+            normalizeComparableLibraryRootPath(root.path, localPathStyle) ===
+              comparable,
+        );
         return normalizeRoots(
-          [...current, { path: trimmed, isDefault: current.length === 0 }],
+          [
+            ...current,
+            {
+              ...(stored?.id ? { id: stored.id } : {}),
+              path: trimmed,
+              isDefault: current.length === 0,
+            },
+          ],
           localPathStyle,
         );
       });
@@ -1256,34 +1276,18 @@ export const MediaLibrarySettingsPanel = React.memo(
     };
 
     // Stored roots the draft drops. The server takes the titles under them
-    // out of the catalog, so the save asks first. A draft root keeps a stored
-    // root when it carries its id, or, without one, when it has its path.
+    // out of the catalog, so the save asks first. Stored roots are identified
+    // by id only: a stored root no draft root names by id is removed.
     const rootsRemovedByDraft = (): RootFolderOption[] => {
       if (mode !== "existing" || !activeLibrary) {
         return [];
       }
-      const draft = normalizeRoots(draftRoots, localPathStyle);
-      const storedIds = new Set(
-        savedRoots.map((root) => root.id).filter(Boolean),
+      const keptIds = new Set(
+        normalizeRoots(draftRoots, localPathStyle)
+          .map((root) => root.id)
+          .filter(Boolean),
       );
-      const keptIds = new Set<string>();
-      const draftPathsWithoutId = new Set<string>();
-      draft.forEach((root) => {
-        if (root.id && storedIds.has(root.id)) {
-          keptIds.add(root.id);
-        } else {
-          draftPathsWithoutId.add(
-            normalizeComparableLibraryRootPath(root.path, localPathStyle),
-          );
-        }
-      });
-      return savedRoots.filter(
-        (root) =>
-          !(root.id && keptIds.has(root.id)) &&
-          !draftPathsWithoutId.has(
-            normalizeComparableLibraryRootPath(root.path, localPathStyle),
-          ),
-      );
+      return savedRoots.filter((root) => !(root.id && keptIds.has(root.id)));
     };
 
     const requestSaveLibrary = async (scan: boolean) => {

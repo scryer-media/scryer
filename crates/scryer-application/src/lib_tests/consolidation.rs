@@ -88,18 +88,27 @@ impl ConsolidationFixture {
                 &library_id,
                 "Movies".to_string(),
                 "movies".to_string(),
-                vec![
-                    LibraryRootDraft {
-                        id: None,
-                        path: source.to_string_lossy().to_string(),
-                        is_default: source_is_default,
-                    },
-                    LibraryRootDraft {
-                        id: None,
-                        path: destination.to_string_lossy().to_string(),
-                        is_default: !source_is_default,
-                    },
-                ],
+                crate::lib_tests::with_stored_root_ids(
+                    &app.services
+                        .catalog
+                        .libraries
+                        .get_by_id(&library_id)
+                        .await
+                        .expect("library lookup")
+                        .expect("library exists"),
+                    vec![
+                        LibraryRootDraft {
+                            id: None,
+                            path: source.to_string_lossy().to_string(),
+                            is_default: source_is_default,
+                        },
+                        LibraryRootDraft {
+                            id: None,
+                            path: destination.to_string_lossy().to_string(),
+                            is_default: !source_is_default,
+                        },
+                    ],
+                ),
             )
             .await
             .expect("configure two roots");

@@ -1118,7 +1118,10 @@ async fn updating_a_library_refuses_only_new_roots_that_conflict_with_the_custom
         &user,
         &library.id,
         None,
-        Some(vec![root_draft(&disk), root_draft(&fixture.root_b())]),
+        Some(with_stored_root_ids(
+            &library,
+            vec![root_draft(&disk), root_draft(&fixture.root_b())],
+        )),
         None,
     )
     .await
@@ -1129,7 +1132,10 @@ async fn updating_a_library_refuses_only_new_roots_that_conflict_with_the_custom
             &user,
             &library.id,
             None,
-            Some(vec![root_draft(&disk), root_draft(&bin.join("inside"))]),
+            Some(with_stored_root_ids(
+                &library,
+                vec![root_draft(&disk), root_draft(&bin.join("inside"))],
+            )),
             None,
         )
         .await

@@ -8292,11 +8292,14 @@ async fn reconcile_default_library_roots_backfills_legacy_root_folders_when_boot
             &anime_library_id,
             anime_library.name.clone(),
             anime_library.slug.clone(),
-            vec![LibraryRootDraft {
-                id: None,
-                path: "/data/anime".to_string(),
-                is_default: true,
-            }],
+            crate::lib_tests::with_stored_root_ids(
+                &anime_library,
+                vec![LibraryRootDraft {
+                    id: None,
+                    path: "/data/anime".to_string(),
+                    is_default: true,
+                }],
+            ),
         )
         .await
         .expect("seed bootstrap root");

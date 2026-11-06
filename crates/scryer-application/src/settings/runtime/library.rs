@@ -315,7 +315,25 @@ impl AppUseCase {
             )));
         };
 
-        let roots = root_folder_entries_to_library_root_drafts(root_folders)?;
+        let mut roots = root_folder_entries_to_library_root_drafts(root_folders)?;
+        // The legacy facet root setting stores paths only. Carry each stored
+        // root's id onto the entry at its path, since the store identifies a
+        // stored root by id alone.
+        let stored_ids_by_path = library
+            .roots
+            .iter()
+            .map(|root| {
+                (
+                    scryer_domain::normalize_library_root_path(&root.path),
+                    root.id.clone(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        for root in &mut roots {
+            root.id = stored_ids_by_path
+                .get(&scryer_domain::normalize_library_root_path(&root.path))
+                .cloned();
+        }
         self.validate_library_root_conflicts(Some(&library.id), &roots)
             .await?;
         if refuse_recycle_bin_conflicts {

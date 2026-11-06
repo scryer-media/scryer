@@ -4227,6 +4227,7 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
     )
     .await;
     let library_id = library_id(&library);
+    let default_root_id = library_root_id(&library, "/library/root-lifecycle-default");
     let custom_root_id = library_root_id(&library, "/library/root-lifecycle-custom");
 
     let add_body = gql(
@@ -4272,10 +4273,12 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                 "libraryId": library_id,
                 "roots": [
                     {
+                        "id": default_root_id,
                         "path": "/library/root-lifecycle-default",
                         "isDefault": true
                     },
                     {
+                        "id": custom_root_id,
                         "path": "/library/root-lifecycle-custom",
                         "isDefault": false
                     },
@@ -4315,14 +4318,17 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                 "libraryId": library_id,
                 "roots": [
                     {
+                        "id": default_root_id,
                         "path": "/library/root-lifecycle-default",
                         "isDefault": true
                     },
                     {
+                        "id": custom_root_id,
                         "path": "/library/root-lifecycle-custom",
                         "isDefault": false
                     },
                     {
+                        "id": unreferenced_root_id,
                         "path": "/library/root-lifecycle-unreferenced-renamed",
                         "isDefault": false
                     }
@@ -4336,15 +4342,9 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         &renamed_unreferenced_root["data"]["updateLibrary"],
         "/library/root-lifecycle-unreferenced-renamed",
     );
-    // The bulk root replace still cannot express "this root moved", so an
-    // unreferenced root swapped for another path reads as a removal plus an
-    // addition and the addition is allocated a fresh id. Identity across a
-    // deliberate path change is the move workflow's job, not this mutation's.
-    assert_ne!(renamed_unreferenced_root_id, unreferenced_root_id);
-    assert!(
-        renamed_unreferenced_root_id.starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
-        "a newly configured root should carry an allocated id, got {renamed_unreferenced_root_id}"
-    );
+    // A root is identified by its id, so a path change under the same id
+    // keeps the root's identity.
+    assert_eq!(renamed_unreferenced_root_id, unreferenced_root_id);
 
     let removed_unreferenced_root = gql(
         &ctx,
@@ -4358,10 +4358,12 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                 "libraryId": library_id,
                 "roots": [
                     {
+                        "id": default_root_id,
                         "path": "/library/root-lifecycle-default",
                         "isDefault": true
                     },
                     {
+                        "id": custom_root_id,
                         "path": "/library/root-lifecycle-custom",
                         "isDefault": false
                     }
@@ -4422,8 +4424,53 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         .expect("kept title id")
         .to_string();
 
-    // Rewriting a referenced root's path without its id drops that root and
-    // configures a new one: the titles under the dropped root leave the
+    // A stored root resubmitted by path without its id is refused, never
+    // matched by path, and nothing leaves the catalog.
+    let path_only_rename = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) {
+                roots { id path isDefault }
+                removedTitleCount
+            }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "roots": [
+                    {
+                        "id": default_root_id,
+                        "path": "/library/root-lifecycle-default",
+                        "isDefault": true
+                    },
+                    {
+                        "path": "/library/root-lifecycle-custom",
+                        "isDefault": false
+                    }
+                ]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        path_only_rename["errors"][0]["extensions"]["reason"], "LIBRARY_ROOT_ID_REQUIRED",
+        "{path_only_rename}"
+    );
+    let after_refusal = gql(
+        &ctx,
+        r#"query($id: ID!) {
+            title(id: $id) { id rootFolderId }
+        }"#,
+        json!({ "id": title_id }),
+    )
+    .await;
+    assert_no_errors(&after_refusal);
+    assert_eq!(
+        after_refusal["data"]["title"]["rootFolderId"],
+        custom_root_id
+    );
+
+    // Leaving the custom root out drops it: the titles under it leave the
     // catalog, and the mutation says how many.
     let dropped_custom_root = gql(
         &ctx,
@@ -4438,12 +4485,9 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                 "libraryId": library_id,
                 "roots": [
                     {
+                        "id": default_root_id,
                         "path": "/library/root-lifecycle-default",
                         "isDefault": true
-                    },
-                    {
-                        "path": "/library/root-lifecycle-renamed",
-                        "isDefault": false
                     }
                 ]
             }
@@ -4453,10 +4497,7 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
     assert_no_errors(&dropped_custom_root);
     let dropped = &dropped_custom_root["data"]["updateLibrary"];
     assert_eq!(dropped["removedTitleCount"], 1);
-    assert_ne!(
-        library_root_id(dropped, "/library/root-lifecycle-renamed"),
-        custom_root_id
-    );
+    assert_eq!(dropped["roots"].as_array().map(Vec::len), Some(1));
 
     let after_drop = gql(
         &ctx,

@@ -484,45 +484,54 @@ fn normalize_library_root_path(path: &str) -> String {
     scryer_domain::normalize_library_root_path(path)
 }
 
-/// The stored roots an edit drops. Mirrors how the store resolves drafts: a
-/// draft naming a stored root's id keeps that root, and a draft without a
-/// known id keeps the stored root at the same normalized path.
+/// The stored roots an edit drops. Stored roots are identified by id only: a
+/// draft naming a stored root's id keeps that root, and every stored root no
+/// draft names is removed.
 fn removed_library_root_ids(
     existing: &[scryer_domain::LibraryRoot],
     drafts: &[LibraryRootDraft],
 ) -> Vec<String> {
-    let known_ids = existing
+    let kept = drafts
         .iter()
-        .map(|root| root.id.as_str())
+        .filter_map(|draft| draft.id.as_deref())
         .collect::<HashSet<_>>();
-    let ids_by_path = existing
-        .iter()
-        .map(|root| (normalize_library_root_path(&root.path), root.id.as_str()))
-        .collect::<HashMap<_, _>>();
-    let mut kept = HashSet::new();
-    let mut unresolved = Vec::new();
-    for draft in drafts {
-        match draft
-            .id
-            .as_deref()
-            .filter(|id| known_ids.contains(id) && !kept.contains(id))
-        {
-            Some(id) => {
-                kept.insert(id);
-            }
-            None => unresolved.push(draft),
-        }
-    }
-    for draft in unresolved {
-        if let Some(id) = ids_by_path.get(&normalize_library_root_path(&draft.path)) {
-            kept.insert(*id);
-        }
-    }
     existing
         .iter()
         .filter(|root| !kept.contains(root.id.as_str()))
         .map(|root| root.id.clone())
         .collect()
+}
+
+/// Refuse a draft that sits at a stored root's path without naming that
+/// root's id. A path never identifies a stored root, so such a draft would
+/// otherwise read as removing the root and adding a new one at the same place.
+fn refuse_stored_roots_without_ids(
+    existing: &[scryer_domain::LibraryRoot],
+    drafts: &[LibraryRootDraft],
+) -> AppResult<()> {
+    let known_ids = existing
+        .iter()
+        .map(|root| root.id.as_str())
+        .collect::<HashSet<_>>();
+    let stored_paths = existing
+        .iter()
+        .map(|root| normalize_library_root_path(&root.path))
+        .collect::<HashSet<_>>();
+    for draft in drafts {
+        if draft.id.as_deref().is_some_and(|id| known_ids.contains(id)) {
+            continue;
+        }
+        if stored_paths.contains(&normalize_library_root_path(&draft.path)) {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOT_ID_REQUIRED,
+                format!(
+                    "library root '{}' is already configured; send its id to keep it",
+                    draft.path
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn conflicting_library_names_for_roots(
@@ -791,6 +800,9 @@ impl AppUseCase {
         // A root dropped from the list takes the titles under it out of the
         // catalog; their files stay where they are. The store still refuses a
         // removal that leaves a title behind, so this runs before it.
+        if roots_were_provided {
+            refuse_stored_roots_without_ids(&existing.roots, &roots)?;
+        }
         let removed_title_count = if roots_were_provided {
             self.delete_titles_under_removed_roots(actor, &existing, &roots)
                 .await?

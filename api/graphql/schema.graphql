@@ -34230,9 +34230,11 @@ Replacement library root path and default marker.
 """
 input UpdateLibraryRootInput {
 	"""
-	Id of the stored root this entry edits. A root keeps its identity, and the
-	titles under it keep their root, when its path changes under the same id.
-	Omit it for a new root; an entry without one is matched by path.
+	Id of the stored root this entry edits. Stored roots are identified by
+	this id and must carry it; a root keeps its identity, and the titles under
+	it keep their root, when its path changes under the same id. A root
+	without an id is a new root, and a root without an id at a stored root's
+	path is refused.
 	"""
 	id: ID
 	"""
