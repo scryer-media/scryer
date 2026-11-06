@@ -173,6 +173,6 @@ pub fn describe_walk_metrics() {
     );
     metrics::describe_counter!(
         EVALUATED_RESULTS_TOTAL,
-        "Search results seen by background release scoring, labelled by outcome (scored, duplicate, blocklisted, over_cap)."
+        "Search results seen by background release evaluation, labelled by outcome (evaluated, duplicate, blocklisted, over_cap)."
     );
 }
