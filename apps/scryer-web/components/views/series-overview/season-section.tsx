@@ -89,7 +89,11 @@ const EPISODE_TABLE_MIN_WIDTH = 720;
 
 export { SeriesMovieTimelineSection } from "./series-movie-row";
 
-const SEASON_ACTIONS_MENU_MAX_WIDTH = 720;
+// The inline actions, size and progress take about 340px and the heading
+// truncates into the rest, so they still fit a desktop side panel (about
+// 620px at a 1440px window). Below this the heading would be squeezed to a
+// few characters, so phones get the actions menu instead.
+const SEASON_ACTIONS_MENU_MAX_WIDTH = 600;
 
 function SeasonActionsMenuItem(
   props: Omit<React.ComponentProps<typeof Button>, "size" | "variant">,
