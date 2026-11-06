@@ -59,6 +59,24 @@ impl AcquisitionWalkIntensity {
             .find(|intensity| intensity.as_str() == value.trim())
     }
 
+    /// A compact form for an atomic: the position in [`Self::ALL`].
+    pub(crate) fn to_index(self) -> u8 {
+        match self {
+            Self::Quiet => 0,
+            Self::Normal => 1,
+            Self::Eager => 2,
+        }
+    }
+
+    /// [`Self::to_index`] back to the value; anything out of range is the
+    /// default.
+    pub(crate) fn from_index(index: u8) -> Self {
+        Self::ALL
+            .get(usize::from(index))
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// The intensity a walk over `cached_targets` targets actually runs at.
     pub(crate) fn effective(self, cached_targets: usize) -> Self {
         match self {
@@ -106,8 +124,10 @@ impl AcquisitionWalkIntensity {
         }
     }
 
-    /// Search results one search scores, best-ranked first. Results past the
-    /// cap are dropped before parsing.
+    /// Search results one cold-scope search scores. The cap is taken a round
+    /// at a time across indexers, each in the order it returned them, after
+    /// duplicates and blocklisted releases are dropped and before anything is
+    /// parsed. Hot scopes are scored in full.
     pub(crate) fn evaluated_results_per_search(self) -> usize {
         match self {
             Self::Quiet => 150,
@@ -166,6 +186,10 @@ mod tests {
             assert_eq!(
                 AcquisitionWalkIntensity::parse(intensity.as_str()),
                 Some(intensity)
+            );
+            assert_eq!(
+                AcquisitionWalkIntensity::from_index(intensity.to_index()),
+                intensity
             );
         }
         assert_eq!(AcquisitionWalkIntensity::parse("loud"), None);

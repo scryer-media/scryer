@@ -456,10 +456,10 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     // A large backlog turns `normal` quiet; the walk reads its slice, its
     // concurrency and its cold page depth from what it actually runs at.
     let intensity = settings.walk_intensity.effective(targets.len());
-    app.runtime.acquisition.walk_cold_pages_per_pass.store(
-        intensity.cold_pages_per_pass(),
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    app.runtime
+        .acquisition
+        .walk_intensity
+        .store(intensity.to_index(), std::sync::atomic::Ordering::Relaxed);
     let deadlines = WalkDeadlines::new(
         started,
         budget.slice(intensity),
@@ -1123,12 +1123,27 @@ impl AppUseCase {
         if background_value >= BACKGROUND_HOT_TARGET_VALUE {
             crate::acquisition::walk_intensity::HOT_PAGES_PER_PASS
         } else {
+            self.current_walk_intensity().cold_pages_per_pass().max(1)
+        }
+    }
+
+    /// Search results one background search scores, from its lane's value
+    /// hint: a hot scope scores everything it found, a cold one at most the
+    /// cap of the intensity the walk runs at.
+    pub(crate) fn background_evaluation_cap(&self, background_value: f64) -> Option<usize> {
+        (background_value < BACKGROUND_HOT_TARGET_VALUE)
+            .then(|| self.current_walk_intensity().evaluated_results_per_search())
+    }
+
+    fn current_walk_intensity(
+        &self,
+    ) -> crate::acquisition::walk_intensity::AcquisitionWalkIntensity {
+        crate::acquisition::walk_intensity::AcquisitionWalkIntensity::from_index(
             self.runtime
                 .acquisition
-                .walk_cold_pages_per_pass
-                .load(std::sync::atomic::Ordering::Relaxed)
-                .max(1)
-        }
+                .walk_intensity
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 }
 

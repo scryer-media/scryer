@@ -3111,6 +3111,7 @@ impl AppUseCase {
                     false,
                     None,
                     *now,
+                    crate::catalog::release_search::ScoringLane::Full,
                 )
                 .await
             {
@@ -3197,6 +3198,7 @@ impl AppUseCase {
             false,
             None,
             now,
+            crate::catalog::release_search::ScoringLane::Full,
         )
         .await
         .map(|batch| batch.results)
