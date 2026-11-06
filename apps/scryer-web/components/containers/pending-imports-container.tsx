@@ -27,7 +27,6 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { PendingImportCard } from "@/components/containers/pending-import-card";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -1581,16 +1580,10 @@ export const PendingImportsContainer = React.memo(
                 </span>
                 {canResolveSelection && (
                   <>
-                    <Badge
-                      id="pending-import-conflict-bulk-beta"
-                      tone="warning"
-                      className="text-[11px]"
-                    >
-                      {t("settings.pluginBeta")}
-                    </Badge>
                     <Button
                       id="pending-import-conflict-bulk"
                       size="sm"
+                      variant="outline"
                       disabled={selectionBusy}
                       onClick={() =>
                         setConflictDialog({
@@ -1625,14 +1618,6 @@ export const PendingImportsContainer = React.memo(
                   onClick={() => setIgnoreTargetItems([...selectedImports])}
                 >
                   {t("pendingImports.ignore")}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={selectionBusy || !selectedImports.length}
-                  onClick={() => setSelectedImports([])}
-                >
-                  {t("label.clear")}
                 </Button>
               </div>
             )}
