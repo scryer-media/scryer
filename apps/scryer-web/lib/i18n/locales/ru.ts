@@ -3167,6 +3167,21 @@ const ru: LocaleDictionary = {
   "mediaFile.subtitleCount": "{{count}} субтитров",
   "mediaFile.delete": "Удалить файл",
   "mediaFile.pathNotRecorded": "Путь не сохранён",
+  "subtitle.batchProgress":
+    "Поиск субтитров: обработано {{completed}} из {{total}}.",
+  "subtitle.batchCompleted":
+    "Поиск субтитров завершён: загружено {{downloaded}}, элементов с предупреждениями: {{warnings}}.",
+  "subtitle.batchRunFailed":
+    "Не удалось выполнить поиск субтитров. Проверьте сведения о задаче и повторите попытку.",
+  "subtitle.batchSearch": "Найти субтитры",
+  "subtitle.batchQueued": "Поиск субтитров поставлен в очередь в фоновом режиме.",
+  "subtitle.batchFailed": "Не удалось поставить поиск субтитров в очередь.",
+  "subtitle.batchSelectionInvalid":
+    "Выберите от одного до 1000 эпизодов одного сериала.",
+  "subtitle.batchLanguagesRequired":
+    "Перед поиском настройте нужные языки субтитров.",
+  "subtitle.batchAlreadyRunning":
+    "Пакетный поиск субтитров для эпизодов уже выполняется.",
   "subtitle.search": "Поиск субтитров",
   "subtitle.searching": "Поиск...",
   "subtitle.download": "Скачать",
