@@ -12,10 +12,10 @@ mod auth_runtime_passkeys;
 mod backups;
 #[path = "integration_graphql/dashboard.rs"]
 mod dashboard;
-#[path = "integration_graphql/discovery_browse.rs"]
-mod discovery_browse;
 #[path = "integration_graphql/dataloader_enrichment.rs"]
 mod dataloader_enrichment;
+#[path = "integration_graphql/discovery_browse.rs"]
+mod discovery_browse;
 #[path = "integration_graphql/downloads_housekeeping_system.rs"]
 mod downloads_housekeeping_system;
 #[path = "integration_graphql/emby_contract.rs"]
