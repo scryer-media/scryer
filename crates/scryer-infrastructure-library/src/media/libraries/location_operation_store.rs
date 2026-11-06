@@ -71,6 +71,66 @@ pub struct LocationOperationStore {
     datastore: StoreDatastore,
 }
 
+/// One verification record's upsert, idempotent on (operation, destination
+/// path) — the 0206 unique index.
+const VERIFICATION_UPSERT: &str = "INSERT INTO location_operation_verifications
+             (id, operation_id, title_id, media_file_id, source_path, destination_path,
+              size_bytes, requested_depth, applied_depth, fell_back, fallback_reason,
+              outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, detail,
+              verified_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+             ON CONFLICT(operation_id, destination_path) DO UPDATE SET
+                title_id = excluded.title_id,
+                media_file_id = excluded.media_file_id,
+                source_path = excluded.source_path,
+                size_bytes = excluded.size_bytes,
+                requested_depth = excluded.requested_depth,
+                applied_depth = excluded.applied_depth,
+                fell_back = excluded.fell_back,
+                fallback_reason = excluded.fallback_reason,
+                outcome = excluded.outcome,
+                move_crc = excluded.move_crc,
+                move_crc_algorithm = excluded.move_crc_algorithm,
+                full_blake3 = excluded.full_blake3,
+                failure_reason = excluded.failure_reason,
+                detail = excluded.detail,
+                verified_at = excluded.verified_at";
+
+fn verification_upsert_args(record: &FileVerificationRecord) -> Vec<SqlArg> {
+    let fell_back = record.depth.fell_back;
+    // One explanation, one column: why the quick floor was used, why the
+    // destination was not accepted, or how a clean verification was proven.
+    let (fallback_reason, failure_reason, detail) = if fell_back {
+        (record.detail.clone(), None, None)
+    } else if record.outcome.permits_source_removal() {
+        (None, None, record.detail.clone())
+    } else {
+        (None, record.detail.clone(), None)
+    };
+    let hashes = record.hashes.as_ref();
+
+    vec![
+        SqlArg::Text(uuid::Uuid::new_v4().to_string()),
+        SqlArg::Text(record.operation_id.clone()),
+        SqlArg::Text(record.title_id.clone()),
+        SqlArg::OptText(record.media_file_id.clone()),
+        SqlArg::Text(record.source_path.clone()),
+        SqlArg::Text(record.destination_path.clone()),
+        SqlArg::I64(hashes.map(|hashes| hashes.size_bytes as i64).unwrap_or(0)),
+        SqlArg::Text(record.depth.requested.as_str().to_string()),
+        SqlArg::Text(record.depth.applied.as_str().to_string()),
+        SqlArg::Bool(fell_back),
+        SqlArg::OptText(fallback_reason),
+        SqlArg::Text(record.outcome.as_str().to_string()),
+        SqlArg::OptText(hashes.map(|hashes| hashes.move_crc.to_string())),
+        SqlArg::OptText(hashes.map(|hashes| hashes.crc_algorithm.as_str().to_string())),
+        SqlArg::OptText(hashes.map(|hashes| hashes.full_blake3.clone())),
+        SqlArg::OptText(failure_reason),
+        SqlArg::OptText(detail),
+        SqlArg::Timestamp(record.verified_at),
+    ]
+}
+
 #[cfg(test)]
 #[path = "location_operation_store/tests.rs"]
 mod resolution_tests;
@@ -874,66 +934,39 @@ impl LocationOperationRepository for LocationOperationStore {
         &self,
         record: &FileVerificationRecord,
     ) -> AppResult<()> {
-        let fell_back = record.depth.fell_back;
-        // One explanation, one column: why the quick floor was used, why the
-        // destination was not accepted, or how a clean verification was proven.
-        let (fallback_reason, failure_reason, detail) = if fell_back {
-            (record.detail.clone(), None, None)
-        } else if record.outcome.permits_source_removal() {
-            (None, None, record.detail.clone())
-        } else {
-            (None, record.detail.clone(), None)
-        };
-        let hashes = record.hashes.as_ref();
-
         SqlRuntime::execute_write(
             &self.datastore,
             "record_location_file_verification",
-            "INSERT INTO location_operation_verifications
-             (id, operation_id, title_id, media_file_id, source_path, destination_path,
-              size_bytes, requested_depth, applied_depth, fell_back, fallback_reason,
-              outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, detail,
-              verified_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-             ON CONFLICT(operation_id, destination_path) DO UPDATE SET
-                title_id = excluded.title_id,
-                media_file_id = excluded.media_file_id,
-                source_path = excluded.source_path,
-                size_bytes = excluded.size_bytes,
-                requested_depth = excluded.requested_depth,
-                applied_depth = excluded.applied_depth,
-                fell_back = excluded.fell_back,
-                fallback_reason = excluded.fallback_reason,
-                outcome = excluded.outcome,
-                move_crc = excluded.move_crc,
-                move_crc_algorithm = excluded.move_crc_algorithm,
-                full_blake3 = excluded.full_blake3,
-                failure_reason = excluded.failure_reason,
-                detail = excluded.detail,
-                verified_at = excluded.verified_at",
-            vec![
-                SqlArg::Text(uuid::Uuid::new_v4().to_string()),
-                SqlArg::Text(record.operation_id.clone()),
-                SqlArg::Text(record.title_id.clone()),
-                SqlArg::OptText(record.media_file_id.clone()),
-                SqlArg::Text(record.source_path.clone()),
-                SqlArg::Text(record.destination_path.clone()),
-                SqlArg::I64(hashes.map(|hashes| hashes.size_bytes as i64).unwrap_or(0)),
-                SqlArg::Text(record.depth.requested.as_str().to_string()),
-                SqlArg::Text(record.depth.applied.as_str().to_string()),
-                SqlArg::Bool(fell_back),
-                SqlArg::OptText(fallback_reason),
-                SqlArg::Text(record.outcome.as_str().to_string()),
-                SqlArg::OptText(hashes.map(|hashes| hashes.move_crc.to_string())),
-                SqlArg::OptText(hashes.map(|hashes| hashes.crc_algorithm.as_str().to_string())),
-                SqlArg::OptText(hashes.map(|hashes| hashes.full_blake3.clone())),
-                SqlArg::OptText(failure_reason),
-                SqlArg::OptText(detail),
-                SqlArg::Timestamp(record.verified_at),
-            ],
+            VERIFICATION_UPSERT,
+            verification_upsert_args(record),
         )
         .await?;
         Ok(())
+    }
+
+    async fn record_location_file_verifications(
+        &self,
+        records: &[FileVerificationRecord],
+    ) -> AppResult<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let batch: std::sync::Arc<Vec<Vec<SqlArg>>> =
+            std::sync::Arc::new(records.iter().map(verification_upsert_args).collect());
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "record_location_file_verifications",
+            move |tx| {
+                let batch = batch.clone();
+                Box::pin(async move {
+                    for args in batch.iter() {
+                        tx.execute(VERIFICATION_UPSERT, args).await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
 
     async fn location_file_verifications_for_paths(
@@ -1601,6 +1634,7 @@ mod tests {
             current_file: None,
             copying: 0,
             verifying: 0,
+            recording: 0,
             detail: None,
         };
         let mut seeds = Vec::new();
@@ -2542,6 +2576,52 @@ mod tests {
             "a CRC above i64::MAX must survive the text column"
         );
         assert_eq!(loaded[0].outcome, FileVerificationOutcome::Verified);
+    }
+
+    #[tokio::test]
+    async fn a_batch_of_verifications_lands_together_and_re_recording_it_updates_in_place() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Moving), None)
+            .await
+            .expect("the operation should persist");
+
+        let records: Vec<_> = (1..=3)
+            .map(|index| {
+                verification(
+                    &format!("/archive/Synthetic.Fixture.000{index}.mkv"),
+                    FileVerificationOutcome::Verified,
+                )
+            })
+            .collect();
+        store
+            .record_location_file_verifications(&records)
+            .await
+            .expect("the batch should persist");
+        store
+            .record_location_file_verifications(&records)
+            .await
+            .expect("re-recording the batch should update in place");
+        store
+            .record_location_file_verifications(&[])
+            .await
+            .expect("an empty batch writes nothing");
+
+        let mut loaded: Vec<_> = store
+            .list_location_file_verifications("op-1", None)
+            .await
+            .expect("the read should succeed")
+            .into_iter()
+            .map(|record| record.destination_path)
+            .collect();
+        loaded.sort();
+        assert_eq!(
+            loaded,
+            records
+                .iter()
+                .map(|record| record.destination_path.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]

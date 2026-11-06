@@ -87,7 +87,6 @@ use crate::location::operations::{
     LOCATION_PREVIEW_TITLE_CONCURRENCY, LocationOperationAccepted, LocationOperationAdmission,
     TitleMoveFacts, confirmation_error, source_folder_refusal,
 };
-use crate::location::ownership_guard::OwnedEntity;
 use crate::location::preview::{
     FreeSpaceRequest, PlanConfirmationRequest, SystemVolumeProbe, estimate_free_space_off_runtime,
 };
@@ -426,12 +425,30 @@ impl AppUseCase {
             .into_iter()
             .map(|root| root.path)
             .collect::<Vec<_>>();
-        let (merge_summaries, resolved_by_title, identities, scope_library, all_root_paths) = (
+        // The per-title ledger and catalog reads, once for the root's titles in
+        // bounded chunks rather than several round trips per title.
+        let scope_title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+        let media_files_by_title = self.media_files_by_title(&scope_title_ids).await?;
+        let blocker_facts = RootScopeBlockerFacts {
+            active_work: self.active_work_blocking_moves(&titles).await?,
+            owners: self.title_ownership_holders().await?,
+        };
+        let (
+            merge_summaries,
+            resolved_by_title,
+            identities,
+            scope_library,
+            all_root_paths,
+            media_files_by_title,
+            blocker_facts,
+        ) = (
             &merge_summaries,
             &resolved_by_title,
             &identities,
             &library,
             &all_root_paths,
+            &media_files_by_title,
+            &blocker_facts,
         );
         let pending: Vec<_> = titles
             .iter()
@@ -445,10 +462,11 @@ impl AppUseCase {
                             Some(reason),
                             Some(reason_codes::SOURCE_FOLDER_NOT_A_TITLE_FOLDER.to_string()),
                         ),
-                        None => {
-                            self.root_scope_title_blockers(title, merge_summaries.get(&title.id))
-                                .await?
-                        }
+                        None => root_scope_title_blockers(
+                            title,
+                            blocker_facts,
+                            merge_summaries.get(&title.id),
+                        ),
                     };
 
                 let resolved = resolved_by_title
@@ -460,15 +478,13 @@ impl AppUseCase {
                 let facts = if blocked_reason.is_some() {
                     TitleMoveFacts::default()
                 } else {
-                    let media_files = self
-                        .services
-                        .library
-                        .media_files
-                        .list_media_files_for_title(&title.id)
-                        .await?;
+                    let media_files = media_files_by_title
+                        .get(&title.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
                     self.title_move_facts(
                         source_folder_path.as_deref(),
-                        &media_files,
+                        media_files,
                         resolved
                             .as_ref()
                             .and_then(|resolved| resolved.destination_folder.as_deref()),
@@ -632,53 +648,6 @@ impl AppUseCase {
             None => planned.tail(&library.id, &call.root_id, assigned_title_ids, None),
         });
         Ok(planned)
-    }
-
-    /// Why this title cannot enter the operation yet, if it cannot (FR-023).
-    ///
-    /// The same blockers `classify_title` reads, from the same sources: an
-    /// active download or import (FR-086), another operation already owning the
-    /// title (FR-084) — plus a merge the engine refuses to plan (FR-066), which
-    /// only a fold can have.
-    async fn root_scope_title_blockers(
-        &self,
-        title: &Title,
-        merge_summary: Option<&MergePreviewSummary>,
-    ) -> AppResult<(Option<String>, Option<String>)> {
-        if let Some(detail) = self.active_work_blocking_a_move(title).await? {
-            return Ok((
-                Some(detail),
-                Some(reason_codes::ACTIVE_DOWNLOAD_OR_IMPORT.to_string()),
-            ));
-        }
-        if let Some(operation_id) = self
-            .services
-            .library
-            .location_operations
-            .location_ownership_holder(&OwnedEntity::Title(title.id.clone()))
-            .await?
-        {
-            return Ok((
-                Some(format!(
-                    "\"{}\" is already owned by location operation {operation_id}",
-                    title.name
-                )),
-                Some(reason_codes::OWNED_BY_LOCATION_OPERATION.to_string()),
-            ));
-        }
-        if let Some(summary) = merge_summary.filter(|summary| summary.is_blocked()) {
-            return Ok((
-                Some(format!(
-                    "\"{}\" cannot merge into the destination title yet: {}",
-                    title.name,
-                    summary
-                        .blocked_reason()
-                        .unwrap_or_else(|| "unmappable records".to_string())
-                )),
-                Some(reason_codes::MERGE_RECORDS_UNMAPPED.to_string()),
-            ));
-        }
-        Ok((None, None))
     }
 
     /// The `stat`s and configuration facts FR-020's rules are asked about.
@@ -1450,4 +1419,52 @@ pub(super) fn resumes_through_root_move_runner(operation_type: LocationOperation
             | LocationOperationType::RootConsolidation
             | LocationOperationType::CrossLibraryTransfer
     )
+}
+
+/// The selection-wide facts behind a root-scoped title's FR-023 blockers,
+/// read once before the titles fan out.
+struct RootScopeBlockerFacts {
+    active_work: BTreeMap<String, String>,
+    owners: BTreeMap<String, String>,
+}
+
+/// Why this title cannot enter the operation yet, if it cannot (FR-023).
+///
+/// The same blockers `classify_title` reads, from the same sources: an
+/// active download or import (FR-086), another operation already owning the
+/// title (FR-084) — plus a merge the engine refuses to plan (FR-066), which
+/// only a fold can have.
+fn root_scope_title_blockers(
+    title: &Title,
+    facts: &RootScopeBlockerFacts,
+    merge_summary: Option<&MergePreviewSummary>,
+) -> (Option<String>, Option<String>) {
+    if let Some(detail) = facts.active_work.get(&title.id) {
+        return (
+            Some(detail.clone()),
+            Some(reason_codes::ACTIVE_DOWNLOAD_OR_IMPORT.to_string()),
+        );
+    }
+    if let Some(operation_id) = facts.owners.get(&title.id) {
+        return (
+            Some(format!(
+                "\"{}\" is already owned by location operation {operation_id}",
+                title.name
+            )),
+            Some(reason_codes::OWNED_BY_LOCATION_OPERATION.to_string()),
+        );
+    }
+    if let Some(summary) = merge_summary.filter(|summary| summary.is_blocked()) {
+        return (
+            Some(format!(
+                "\"{}\" cannot merge into the destination title yet: {}",
+                title.name,
+                summary
+                    .blocked_reason()
+                    .unwrap_or_else(|| "unmappable records".to_string())
+            )),
+            Some(reason_codes::MERGE_RECORDS_UNMAPPED.to_string()),
+        );
+    }
+    (None, None)
 }

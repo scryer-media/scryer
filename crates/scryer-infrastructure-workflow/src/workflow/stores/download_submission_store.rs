@@ -2069,6 +2069,22 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
         .await
     }
 
+    async fn list_for_titles(&self, title_ids: &[String]) -> AppResult<Vec<DownloadSubmission>> {
+        let mut out = Vec::new();
+        for chunk in title_ids.chunks(DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE) {
+            let sql = download_submission_select_sql(
+                &self.datastore,
+                &format!(
+                    "WHERE title_id IN ({}) AND download_client_item_id IS NOT NULL",
+                    placeholders(chunk.len())
+                ),
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            out.extend(fetch_download_submissions(self.datastore.read_exec(), &sql, &args).await?);
+        }
+        Ok(out)
+    }
+
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
         let sql = download_submission_select_sql(
             &self.datastore,
@@ -2133,6 +2149,34 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
             &[SqlArg::Text(title_id.to_string())],
         )
         .await
+    }
+
+    async fn list_active_unbound_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        let mut out = Vec::new();
+        for chunk in title_ids.chunks(DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE) {
+            let sql = download_submission_select_sql(
+                &self.datastore,
+                &format!(
+                    "WHERE title_id IN ({})
+                       AND download_client_item_id IS NULL
+                       AND EXISTS (
+                           SELECT 1
+                             FROM download_client_bindings binding
+                            WHERE binding.download_id = download_submissions.id
+                              AND binding.native_item_id IS NULL
+                              AND binding.ended_at IS NULL
+                       )
+                     ORDER BY title_id, submitted_at, id",
+                    placeholders(chunk.len())
+                ),
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            out.extend(fetch_download_submissions(self.datastore.read_exec(), &sql, &args).await?);
+        }
+        Ok(out)
     }
 
     async fn list_active_unbound_submitted_before(
@@ -4554,6 +4598,76 @@ mod seed_goal_tests {
         .await
         .expect("fixture rows should be readable")
         .len()
+    }
+
+    #[tokio::test]
+    async fn batched_title_lookups_match_the_per_title_lookups_across_chunks() {
+        let store = store().await;
+        // Enough titles to cross a bind chunk, each with one accepted grab.
+        let title_ids: Vec<String> = (0..=DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE)
+            .map(|index| format!("batch-title-{index:04}"))
+            .collect();
+        for (index, title_id) in title_ids.iter().enumerate() {
+            let download_id = DownloadId::new();
+            store
+                .record_submission_with_identity(
+                    submission(download_id, &format!("batch-job-{index:04}"), title_id),
+                    submission_identity(download_id),
+                    None,
+                )
+                .await
+                .expect("the grab should persist");
+        }
+        // One unconfirmed intent, on a title outside the batch and on one in it.
+        let unbound_in_batch = DownloadId::new();
+        store
+            .record_pending_submission(DownloadSubmission {
+                title_id: title_ids[3].clone(),
+                ..pending_intent(unbound_in_batch)
+            })
+            .await
+            .expect("the intent should persist");
+        store
+            .record_pending_submission(pending_intent(DownloadId::new()))
+            .await
+            .expect("the intent should persist");
+
+        let batched = store
+            .list_for_titles(&title_ids)
+            .await
+            .expect("batched submissions should list");
+        assert_eq!(batched.len(), title_ids.len());
+        for title_id in &title_ids {
+            let single = store
+                .list_for_title(title_id)
+                .await
+                .expect("per-title submissions should list");
+            let from_batch: Vec<_> = batched
+                .iter()
+                .filter(|submission| &submission.title_id == title_id)
+                .map(|submission| submission.download_id)
+                .collect();
+            assert_eq!(
+                from_batch,
+                single
+                    .iter()
+                    .map(|submission| submission.download_id)
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        let unbound = store
+            .list_active_unbound_for_titles(&title_ids)
+            .await
+            .expect("batched unbound intents should list");
+        assert_eq!(
+            unbound
+                .iter()
+                .map(|submission| (submission.title_id.clone(), submission.download_id))
+                .collect::<Vec<_>>(),
+            vec![(title_ids[3].clone(), unbound_in_batch)],
+            "only the batch's own unconfirmed intent is listed"
+        );
     }
 
     #[tokio::test]

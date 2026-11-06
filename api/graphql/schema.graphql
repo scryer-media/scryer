@@ -14806,6 +14806,11 @@ type LocationTransferTitlePayload {
 	"""
 	verifying: Int!
 	"""
+	Files whose verification has finished and that wait for the runner to
+	record the result.
+	"""
+	recording: Int!
+	"""
 	Path of the file the runner is working on, when one is in flight.
 	"""
 	currentFile: String

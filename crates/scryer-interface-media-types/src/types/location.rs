@@ -34,6 +34,9 @@ pub struct LocationTransferTitlePayload {
     pub copying: i32,
     /// Files currently being verified.
     pub verifying: i32,
+    /// Files whose verification has finished and that wait for the runner to
+    /// record the result.
+    pub recording: i32,
     /// Path of the file the runner is working on, when one is in flight.
     pub current_file: Option<String>,
     /// True when the title carries a detail worth reading; fetch it with
@@ -60,7 +63,7 @@ pub struct LocationTransferFilePayload {
     /// Size of the file in bytes.
     pub size_bytes: Long,
     /// Lifecycle of this file: QUEUED, MOVING, VERIFYING, COMPARING,
-    /// WAITING_FOR_STORAGE, DONE, DUPLICATE, FAILED, BLOCKED, CANCELED, or
+    /// RECORDING, WAITING_FOR_STORAGE, DONE, DUPLICATE, FAILED, BLOCKED, CANCELED, or
     /// NOT_PROCESSED.
     pub state: String,
     /// Bytes copied so far.

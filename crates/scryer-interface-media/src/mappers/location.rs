@@ -144,6 +144,7 @@ pub fn from_location_transfer(
                 verification_bytes: bytes(row.verification_bytes),
                 copying: row.copying.min(i32::MAX as usize) as i32,
                 verifying: row.verifying.min(i32::MAX as usize) as i32,
+                recording: row.recording.min(i32::MAX as usize) as i32,
                 current_file: row.current_file.as_deref().map(display_path),
             })
             .collect(),

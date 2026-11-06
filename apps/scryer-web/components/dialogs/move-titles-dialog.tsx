@@ -375,6 +375,15 @@ export function MoveTitlesDialog({
     () => populatedClassificationGroups(preview?.classification),
     [preview],
   );
+  const classifiedById = React.useMemo(
+    () =>
+      new Map(
+        groups.flatMap((group) =>
+          group.titles.map((entry) => [entry.titleId, entry] as const),
+        ),
+      ),
+    [groups],
+  );
   // The titles the classification refuses, which the user must deselect before
   // the plan can start (FR-086).
   const blocked = React.useMemo(() => blockingTitleRows(preview), [preview]);
@@ -869,9 +878,7 @@ export function MoveTitlesDialog({
                   .map((id) => {
                     const folders = foldersByTitle.get(id);
                     const summary = mergesByTitle.get(id);
-                    const entry = groups
-                      .flatMap((group) => group.titles)
-                      .find((row) => row.titleId === id);
+                    const entry = classifiedById.get(id);
                     return (
                       <React.Fragment key={id}>
                         <TableRow>
@@ -1383,6 +1390,9 @@ type ClassificationGroupProps = {
   t: (key: string, values?: Record<string, string | number>) => string;
 };
 
+/** Titles a classification group renders before asking to show more. */
+const CLASSIFICATION_GROUP_WINDOW = 100;
+
 function ClassificationGroup({
   groupClass,
   count,
@@ -1398,6 +1408,12 @@ function ClassificationGroup({
   t,
 }: ClassificationGroupProps) {
   const blocking = classBlocksStart(groupClass);
+  // A bulk selection can hold thousands of titles in one class; the group
+  // renders a bounded window and grows it on request, while the badge keeps
+  // the complete count.
+  const [visible, setVisible] = React.useState(CLASSIFICATION_GROUP_WINDOW);
+  const shown = entries.slice(0, visible);
+  const remaining = entries.length - shown.length;
   return (
     <div
       id={`move-titles-group-${groupClass}`}
@@ -1414,7 +1430,7 @@ function ClassificationGroup({
         <Badge tone={blocking ? "negative" : "info"}>{count}</Badge>
       </p>
       <ul className="mt-1 space-y-1">
-        {entries.map((entry) => {
+        {shown.map((entry) => {
           const stats = files.get(entry.titleId);
           const where = placement(entry);
           return (
@@ -1477,6 +1493,29 @@ function ClassificationGroup({
           );
         })}
       </ul>
+      {remaining > 0 ? (
+        <p className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>
+            {t("move.groupShowing", {
+              shown: shown.length,
+              total: entries.length,
+            })}
+          </span>
+          <Button
+            id={selectorId("move-titles-group-show-more", groupClass)}
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setVisible((current) => current + CLASSIFICATION_GROUP_WINDOW)
+            }
+          >
+            {t("move.groupShowMore", {
+              count: Math.min(remaining, CLASSIFICATION_GROUP_WINDOW),
+            })}
+          </Button>
+        </p>
+      ) : null}
     </div>
   );
 }

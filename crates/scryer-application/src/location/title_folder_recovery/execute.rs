@@ -317,6 +317,7 @@ impl AppUseCase {
                     current_file: None,
                     copying: 0,
                     verifying: 0,
+                    recording: 0,
                     detail: plan.unresolved.clone(),
                 }],
             )

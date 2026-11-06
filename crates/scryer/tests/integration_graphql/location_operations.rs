@@ -929,6 +929,7 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
                     current_file: None,
                     copying: 0,
                     verifying: 0,
+                    recording: 0,
                     detail: (sequence == 50).then(|| "destination conflict".into()),
                 },
             )
@@ -2355,4 +2356,106 @@ async fn graphql_conflict_schema_exposes_operation_types_and_explicit_disposal_c
         consent["defaultValue"], "false",
         "permanent deletion is never implicit"
     );
+}
+
+/// Counts the SQL statements sqlx runs, across every thread, so a measurement
+/// can state how many round trips a request costs.
+#[derive(Clone, Default)]
+struct StatementCounter(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl StatementCounter {
+    fn get(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for StatementCounter {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if event.metadata().target() == "sqlx::query" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// A measurement, not a regression check: previews and confirms a root move of
+/// a large synthetic selection on SQLite and prints wall time and statement
+/// counts. Run it on demand with
+/// `cargo nextest run -p scryer --run-ignored only measure_a_bulk_root_move`;
+/// `SCRYER_MEASURE_TITLES` sets the selection size (default 5000).
+#[tokio::test]
+#[ignore = "measurement; run on demand"]
+async fn measure_a_bulk_root_move_preview_and_confirmation() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let counter = StatementCounter::default();
+    tracing::subscriber::set_global_default(tracing_subscriber::registry().with(counter.clone()))
+        .expect("install the statement counter");
+
+    let total: usize = std::env::var("SCRYER_MEASURE_TITLES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5000);
+    let ctx = TestContext::new().await;
+    let first_root = tempfile::tempdir().expect("first root tempdir");
+    let second_root = tempfile::tempdir().expect("second root tempdir");
+    let (_, destination_root_id) =
+        configure_two_movie_roots(&ctx, first_root.path(), second_root.path()).await;
+
+    let mut title_ids = Vec::with_capacity(total);
+    for index in 1..=total {
+        let name = format!("Synthetic Fixture {index:04}");
+        let folder = make_folder(first_root.path(), &format!("{name} (2001)"));
+        let title = movable_title(
+            &ctx,
+            &name,
+            &folder,
+            &format!("Synthetic.Fixture.{index:04}.2001.mkv"),
+        )
+        .await;
+        title_ids.push(title.id);
+    }
+
+    let input = json!({ "input": {
+        "titleIds": title_ids,
+        "destination": { "rootId": destination_root_id }
+    }});
+    let before = counter.get();
+    let started = std::time::Instant::now();
+    let preview = gql(&ctx, PREVIEW_QUERY, input.clone()).await;
+    let preview_wall = started.elapsed();
+    let preview_statements = counter.get() - before;
+    assert_no_errors(&preview);
+    let fingerprint = preview["data"]["locationOperationPreview"]["planFingerprint"]
+        .as_str()
+        .expect("preview fingerprint")
+        .to_string();
+
+    let mut start_input = input;
+    start_input["input"]["planFingerprint"] = json!(fingerprint);
+    let before = counter.get();
+    let started = std::time::Instant::now();
+    let start = gql(&ctx, START_MUTATION, start_input).await;
+    let start_wall = started.elapsed();
+    let start_statements = counter.get() - before;
+    assert_no_errors(&start);
+
+    let line = format!(
+        "bulk root move of {total} titles: preview {preview_wall:?} / {preview_statements} statements; confirmation {start_wall:?} / {start_statements} statements"
+    );
+    println!("{line}");
+    // `SCRYER_MEASURE_OUT` also appends the line to a file, for runners that
+    // swallow test output.
+    if let Ok(path) = std::env::var("SCRYER_MEASURE_OUT") {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open the measurement output");
+        writeln!(file, "{line}").expect("write the measurement");
+    }
 }

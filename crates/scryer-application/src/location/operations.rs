@@ -110,6 +110,11 @@ pub const LOCATION_OPERATION_VERIFICATION_DEPTH: VerificationDepth = Verificatio
 /// Small enough that a single slow mount cannot pin the whole blocking pool.
 pub const LOCATION_PREVIEW_TITLE_CONCURRENCY: usize = 8;
 
+/// Ids per batched read while planning a location operation: under SQLite's
+/// historical 999-variable ceiling, so a selection of any size is read in
+/// bounded queries.
+pub const LOCATION_PLAN_READ_CHUNK: usize = 500;
+
 /// What the per-title draft builder borrows from the selection-wide facts
 /// `plan_root_move` gathered once, before fanning the titles out.
 #[derive(Clone, Copy)]
@@ -312,7 +317,7 @@ impl AppUseCase {
         request: RootMovePreviewRequest,
         mode: LocationExecutionMode,
     ) -> AppResult<RootMovePreview> {
-        let planned = self.plan_root_move(actor, &request, mode).await?;
+        let planned = self.plan_root_move(actor, &request, mode, None).await?;
         Ok(RootMovePreview {
             plan: planned.planned.plan,
             classification: planned.classification,
@@ -345,7 +350,14 @@ impl AppUseCase {
             title_ids: request.title_ids.clone(),
             destination: request.destination.clone(),
         };
-        let planned = self.plan_root_move(actor, &preview_request, mode).await?;
+        let planned = self
+            .plan_root_move(
+                actor,
+                &preview_request,
+                mode,
+                Some(&request.confirmation.fingerprint),
+            )
+            .await?;
         let plan = planned.planned.plan;
 
         plan.confirm(&request.confirmation)
@@ -2058,17 +2070,110 @@ fn describe_location_operation_outcome(outcome: &OperationRunOutcome) -> String 
 
 // ── Planning ─────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct RootMovePlanning {
     planned: PlannedRootMove,
     classification: SelectionClassification,
 }
 
+/// A previewed plan held for its confirmation (see `plan_cache`).
+pub struct CachedRootMovePlan {
+    /// Digest of every catalog and configuration fact the plan was built from.
+    facts_digest: [u8; 32],
+    mode: LocationExecutionMode,
+    planning: RootMovePlanning,
+    /// What the free-space probe was asked, so a confirmation re-probes the
+    /// volumes rather than trusting a figure from preview time.
+    free_space: Option<RootMoveFreeSpaceInputs>,
+}
+
+#[derive(Clone)]
+struct RootMoveFreeSpaceInputs {
+    source_path: PathBuf,
+    destination_path: PathBuf,
+    moved_bytes: u64,
+    recycle_source_root: Option<String>,
+}
+
+/// Feed one part of the planning facts into the digest, length-prefixed so
+/// adjacent parts cannot run together.
+fn feed_digest(hasher: &mut blake3::Hasher, part: &[u8]) {
+    hasher.update(&(part.len() as u64).to_le_bytes());
+    hasher.update(part);
+}
+
+fn feed_digest_json(hasher: &mut blake3::Hasher, part: &impl serde::Serialize) {
+    feed_digest(hasher, &serde_json::to_vec(part).unwrap_or_default());
+}
+
+/// The catalog half of a root move's facts digest: the selection and its
+/// destination, the title rows, their libraries, their tracked media files,
+/// who owns them, and what active work blocks them.
+#[allow(clippy::too_many_arguments)]
+fn digest_root_move_catalog_facts(
+    selection: &[String],
+    destination: &crate::location::classify::DestinationRequest,
+    mode: LocationExecutionMode,
+    titles: &[Title],
+    libraries: &BTreeMap<String, scryer_domain::Library>,
+    destination_library: &scryer_domain::Library,
+    media_files_by_title: &BTreeMap<String, Vec<crate::TitleMediaFile>>,
+    owners: &BTreeMap<String, String>,
+    active_work: &BTreeMap<String, String>,
+) -> blake3::Hasher {
+    let mut hasher = blake3::Hasher::new();
+    feed_digest_json(&mut hasher, &selection);
+    feed_digest_json(&mut hasher, destination);
+    feed_digest(&mut hasher, format!("{mode:?}").as_bytes());
+    for title in titles {
+        feed_digest_json(&mut hasher, title);
+    }
+    feed_digest_json(&mut hasher, libraries);
+    feed_digest_json(&mut hasher, destination_library);
+    for (title_id, files) in media_files_by_title {
+        feed_digest(&mut hasher, title_id.as_bytes());
+        for file in files {
+            feed_digest(
+                &mut hasher,
+                format!(
+                    "{:?}",
+                    (
+                        &file.id,
+                        &file.title_id,
+                        &file.episode_id,
+                        &file.file_path,
+                        file.size_bytes,
+                        &file.role,
+                        &file.content_hashes,
+                        &file.created_at,
+                    )
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    // Only the selection's claims: another operation taking or releasing its
+    // own titles says nothing about this plan.
+    for title in titles {
+        feed_digest_json(&mut hasher, &owners.get(&title.id));
+    }
+    feed_digest_json(&mut hasher, active_work);
+    hasher
+}
+
 impl AppUseCase {
+    /// Plan a root move. A preview (`confirming` is `None`) holds its plan for
+    /// the confirmation; a confirmation passes the fingerprint it holds and
+    /// reuses that plan — skipping the folder walks — when every catalog and
+    /// configuration fact the plan was built from reads the same again.
+    /// Otherwise it plans from scratch, and the caller's fingerprint check
+    /// refuses a plan that changed.
     async fn plan_root_move(
         &self,
         actor: &User,
         request: &RootMovePreviewRequest,
         mode: LocationExecutionMode,
+        confirming: Option<&crate::location::preview::PlanFingerprint>,
     ) -> AppResult<RootMovePlanning> {
         if request.title_ids.is_empty() {
             return Err(AppError::validation_refused(
@@ -2087,27 +2192,15 @@ impl AppUseCase {
         // fingerprint see the selection the user made. A repeated id is one
         // title, not two: counting it twice would double its bytes and give it
         // two checkpoints for the same work.
-        let mut selection: Vec<String> = Vec::with_capacity(request.title_ids.len());
-        let mut titles: Vec<Title> = Vec::with_capacity(request.title_ids.len());
-        for title_id in &request.title_ids {
-            if selection.iter().any(|seen| seen == title_id) {
-                continue;
-            }
-            let title = self
-                .services
-                .catalog
-                .titles
-                .get_by_id(title_id)
-                .await?
-                .ok_or_else(|| {
-                    AppError::not_found_reason(
-                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
-                        format!("title {title_id}"),
-                    )
-                })?;
-            selection.push(title_id.clone());
-            titles.push(title);
-        }
+        let mut seen = std::collections::HashSet::with_capacity(request.title_ids.len());
+        let selection: Vec<String> = request
+            .title_ids
+            .iter()
+            .filter(|title_id| seen.insert(title_id.as_str()))
+            .cloned()
+            .collect();
+        drop(seen);
+        let titles = self.load_selected_titles(&selection).await?;
 
         let mut libraries: BTreeMap<String, scryer_domain::Library> = BTreeMap::new();
         for title in &titles {
@@ -2214,26 +2307,41 @@ impl AppUseCase {
             .await?;
 
         // Classification facts, including the FR-086 blockers.
+        // Every per-title fact below is read once for the selection, in bounded
+        // chunks, rather than as several round trips per title.
+        let selected_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+        let mut media_files_by_title = self.media_files_by_title(&selected_ids).await?;
+        let owners = self.title_ownership_holders().await?;
+        let mut active_work = self.active_work_blocking_moves(&titles).await?;
+        // A plan whose titles all stay in the destination library depends on
+        // nothing but these facts, the folder walks, and the configuration read
+        // below, so it can be held for its confirmation. A transfer also
+        // depends on the destination library's catalog, and is always planned
+        // again.
+        let facts_hasher = titles
+            .iter()
+            .all(|title| title.library_id == destination_library.id)
+            .then(|| {
+                digest_root_move_catalog_facts(
+                    &selection,
+                    &request.destination,
+                    mode,
+                    &titles,
+                    &libraries,
+                    &destination_library,
+                    &media_files_by_title,
+                    &owners,
+                    &active_work,
+                )
+            });
         let mut facts = Vec::with_capacity(titles.len());
-        let mut media_files_by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> =
-            BTreeMap::new();
         for title in &titles {
-            let media_files = self
-                .services
-                .library
-                .media_files
-                .list_media_files_for_title(&title.id)
-                .await?;
+            let media_files = media_files_by_title.entry(title.id.clone()).or_default();
             let library_name = libraries
                 .get(&title.library_id)
                 .map(|library| library.name.clone())
                 .unwrap_or_default();
-            let owner = self
-                .services
-                .library
-                .location_operations
-                .location_ownership_holder(&OwnedEntity::Title(title.id.clone()))
-                .await?;
+            let owner = owners.get(&title.id).cloned();
 
             let mut fact = TitleClassificationFacts::new(
                 title.id.clone(),
@@ -2260,7 +2368,7 @@ impl AppUseCase {
                     .filter(|path| !path.is_empty())
                     .map(str::to_string),
             );
-            if let Some(detail) = self.active_work_blocking_a_move(title).await? {
+            if let Some(detail) = active_work.remove(&title.id) {
                 fact = fact.with_active_work(detail);
             }
             if let Some(operation_id) = owner {
@@ -2284,7 +2392,6 @@ impl AppUseCase {
                 );
             }
             facts.push(fact);
-            media_files_by_title.insert(title.id.clone(), media_files);
         }
 
         let mut classification =
@@ -2316,6 +2423,29 @@ impl AppUseCase {
             .into_iter()
             .map(|root| root.path)
             .collect::<Vec<_>>();
+
+        let facts_digest = facts_hasher.map(|mut hasher| {
+            feed_digest(&mut hasher, folder_template.as_bytes());
+            feed_digest(&mut hasher, format!("{depth:?}").as_bytes());
+            feed_digest_json(&mut hasher, &all_root_paths);
+            *hasher.finalize().as_bytes()
+        });
+        if let (Some(fingerprint), Some(digest)) = (confirming, facts_digest)
+            && let Some(cached) = self
+                .runtime
+                .library
+                .location_plan_cache
+                .take(&actor.id, &fingerprint.0)
+            && cached.facts_digest == digest
+            && cached.mode == mode
+        {
+            let mut planning = cached.planning;
+            planning.planned.plan.free_space = match cached.free_space {
+                Some(inputs) => self.root_move_free_space(inputs, probe).await,
+                None => FreeSpaceEstimate::unknown(),
+            };
+            return Ok(planning);
+        }
 
         let mut drafts = Vec::with_capacity(titles.len());
         let mut moved_bytes = 0_u64;
@@ -2377,26 +2507,18 @@ impl AppUseCase {
 
         // FR-080: free space, including the recycle-copy cost when the bin is on
         // another volume.
-        let free_space = match (a_source_path.clone(), a_destination_path.clone()) {
-            (Some(source), Some(destination)) => {
-                let recycle_config = self
-                    .recycle_bin_config_for_media_root(source_root_for_recycle.as_deref())
-                    .await;
-                estimate_free_space_off_runtime(
-                    FreeSpaceRequest {
-                        source_path: source,
-                        destination_path: destination,
-                        moved_bytes,
-                        recycled_bytes: moved_bytes,
-                        recycle_base_path: recycle_config
-                            .enabled
-                            .then(|| recycle_config.base_path.clone()),
-                    },
-                    probe,
-                )
-                .await
-            }
-            _ => FreeSpaceEstimate::unknown(),
+        let free_space_inputs = match (a_source_path, a_destination_path) {
+            (Some(source_path), Some(destination_path)) => Some(RootMoveFreeSpaceInputs {
+                source_path,
+                destination_path,
+                moved_bytes,
+                recycle_source_root: source_root_for_recycle,
+            }),
+            _ => None,
+        };
+        let free_space = match free_space_inputs.clone() {
+            Some(inputs) => self.root_move_free_space(inputs, probe).await,
+            None => FreeSpaceEstimate::unknown(),
         };
 
         let case_rule = PathCaseRule::platform_default();
@@ -2449,10 +2571,50 @@ impl AppUseCase {
             naming: CollisionNaming::from_source_library(source_library_label(&libraries)),
         });
 
-        Ok(RootMovePlanning {
+        let planning = RootMovePlanning {
             planned,
             classification,
-        })
+        };
+        if confirming.is_none()
+            && let Some(facts_digest) = facts_digest
+        {
+            self.runtime.library.location_plan_cache.store(
+                &actor.id,
+                &planning.planned.plan.fingerprint.0,
+                CachedRootMovePlan {
+                    facts_digest,
+                    mode,
+                    planning: planning.clone(),
+                    free_space: free_space_inputs,
+                },
+            );
+        }
+        Ok(planning)
+    }
+
+    /// FR-080's estimate for a root move: the destination must hold the moved
+    /// bytes, plus the recycle copy when the bin is on another volume.
+    async fn root_move_free_space(
+        &self,
+        inputs: RootMoveFreeSpaceInputs,
+        probe: SystemVolumeProbe,
+    ) -> FreeSpaceEstimate {
+        let recycle_config = self
+            .recycle_bin_config_for_media_root(inputs.recycle_source_root.as_deref())
+            .await;
+        estimate_free_space_off_runtime(
+            FreeSpaceRequest {
+                source_path: inputs.source_path,
+                destination_path: inputs.destination_path,
+                moved_bytes: inputs.moved_bytes,
+                recycled_bytes: inputs.moved_bytes,
+                recycle_base_path: recycle_config
+                    .enabled
+                    .then(|| recycle_config.base_path.clone()),
+            },
+            probe,
+        )
+        .await
     }
 
     /// Destination-title detection for the selected titles that are crossing
@@ -3052,6 +3214,73 @@ impl AppUseCase {
         ))
     }
 
+    /// The selected titles, in selection order, read in bounded chunks. A
+    /// selected id with no row refuses the whole selection, as it always has.
+    pub(crate) async fn load_selected_titles(&self, selection: &[String]) -> AppResult<Vec<Title>> {
+        let mut by_id: std::collections::HashMap<String, Title> =
+            std::collections::HashMap::with_capacity(selection.len());
+        for chunk in selection.chunks(LOCATION_PLAN_READ_CHUNK) {
+            for title in self.services.catalog.titles.get_by_ids(chunk).await? {
+                by_id.insert(title.id.clone(), title);
+            }
+        }
+        selection
+            .iter()
+            .map(|title_id| {
+                by_id.remove(title_id).ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {title_id}"),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Live media files for each title, read in bounded chunks. Every
+    /// requested title has an entry, empty when it tracks no files.
+    pub(crate) async fn media_files_by_title(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<BTreeMap<String, Vec<crate::TitleMediaFile>>> {
+        let mut by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> = title_ids
+            .iter()
+            .map(|title_id| (title_id.clone(), Vec::new()))
+            .collect();
+        for chunk in title_ids.chunks(LOCATION_PLAN_READ_CHUNK) {
+            for file in self
+                .services
+                .library
+                .media_files
+                .list_media_files_for_titles(chunk)
+                .await?
+            {
+                if let Some(files) = by_title.get_mut(&file.title_id) {
+                    files.push(file);
+                }
+            }
+        }
+        Ok(by_title)
+    }
+
+    /// The operation holding each currently owned title, from one read of the
+    /// open claims rather than one holder lookup per title.
+    pub(crate) async fn title_ownership_holders(&self) -> AppResult<BTreeMap<String, String>> {
+        let mut holders = BTreeMap::new();
+        for claim in self
+            .services
+            .library
+            .location_operations
+            .list_location_ownership_claims()
+            .await?
+        {
+            if let OwnedEntity::Title(title_id) = claim.entity {
+                holders.entry(title_id).or_insert(claim.operation_id);
+            }
+        }
+        Ok(holders)
+    }
+
     /// FR-086: an active download or import on the title blocks it from
     /// entering a move.
     ///
@@ -3065,61 +3294,104 @@ impl AppUseCase {
         &self,
         title: &Title,
     ) -> AppResult<Option<String>> {
-        let unbound = self
-            .services
-            .workflow
-            .download_submissions
-            .list_active_unbound_for_title(&title.id)
-            .await?;
-        if !unbound.is_empty() {
-            return Ok(Some(format!(
-                "\"{}\" has {} grab(s) that the download client has not confirmed; Scryer releases unconfirmed grabs after {} minutes, then the move can start",
-                title.name,
-                unbound.len(),
-                crate::acquisition_workflow::UNCONFIRMED_GRAB_RELEASE_GRACE_MINUTES
-            )));
+        Ok(self
+            .active_work_blocking_moves(std::slice::from_ref(title))
+            .await?
+            .remove(&title.id))
+    }
+
+    /// `active_work_blocking_a_move` for a whole selection, keyed by title id
+    /// (titles with nothing blocking them are absent). The same three ledger
+    /// reads, each issued once for the selection instead of once per title.
+    pub(crate) async fn active_work_blocking_moves(
+        &self,
+        titles: &[Title],
+    ) -> AppResult<BTreeMap<String, String>> {
+        let mut blocked = BTreeMap::new();
+        if titles.is_empty() {
+            return Ok(blocked);
+        }
+        let submissions_store = &self.services.workflow.download_submissions;
+        let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+
+        let mut unbound_by_title: BTreeMap<String, usize> = BTreeMap::new();
+        for submission in submissions_store
+            .list_active_unbound_for_titles(&title_ids)
+            .await?
+        {
+            *unbound_by_title.entry(submission.title_id).or_default() += 1;
         }
 
-        let submissions = self
-            .services
-            .workflow
-            .download_submissions
-            .list_for_title(&title.id)
-            .await?;
-        if submissions.is_empty() {
-            return Ok(None);
+        let mut locators_by_title: BTreeMap<String, Vec<crate::contracts::ClientJobLocator>> =
+            BTreeMap::new();
+        for submission in submissions_store.list_for_titles(&title_ids).await? {
+            if unbound_by_title.contains_key(&submission.title_id) {
+                continue;
+            }
+            let locator = crate::contracts::ClientJobLocator::from_submission(&submission);
+            let locators = locators_by_title.entry(submission.title_id).or_default();
+            // One state lookup per distinct locator, as the per-title query
+            // dedupes its own locators.
+            if !locators.contains(&locator) {
+                locators.push(locator);
+            }
         }
 
-        let locators: Vec<crate::contracts::ClientJobLocator> = submissions
-            .iter()
-            .map(crate::contracts::ClientJobLocator::from_submission)
-            .collect();
-        let states = self
-            .services
-            .workflow
-            .download_submissions
-            .list_identity_tracked_states_for_client_items(&locators)
-            .await?;
-
-        let live = states
-            .iter()
-            .filter_map(|(_, state)| scryer_domain::TrackedDownloadState::from_str_opt(state))
-            .filter(|state| {
-                // The snapshot is deliberately not consulted (see the doc
-                // comment): a submission with no ledger entry is not treated as
-                // live, and the executor's admission check plus the ownership
-                // guard catch anything that starts afterwards.
-                crate::acquisition_workflow::submission_is_queued(Some(*state), false)
-            })
-            .count();
-
-        if live > 0 {
-            return Ok(Some(format!(
-                "\"{}\" has {live} download(s) or import(s) in flight; the move can start once they finish",
-                title.name
-            )));
+        let all_locators: Vec<crate::contracts::ClientJobLocator> =
+            locators_by_title.values().flatten().cloned().collect();
+        let mut states_by_locator: std::collections::HashMap<
+            crate::contracts::ClientJobLocator,
+            Vec<String>,
+        > = std::collections::HashMap::new();
+        if !all_locators.is_empty() {
+            for (locator, state) in submissions_store
+                .list_identity_tracked_states_for_client_items(&all_locators)
+                .await?
+            {
+                states_by_locator.entry(locator).or_default().push(state);
+            }
         }
-        Ok(None)
+
+        for title in titles {
+            if let Some(count) = unbound_by_title.get(&title.id) {
+                blocked.insert(
+                    title.id.clone(),
+                    format!(
+                        "\"{}\" has {} grab(s) that the download client has not confirmed; Scryer releases unconfirmed grabs after {} minutes, then the move can start",
+                        title.name,
+                        count,
+                        crate::acquisition_workflow::UNCONFIRMED_GRAB_RELEASE_GRACE_MINUTES
+                    ),
+                );
+                continue;
+            }
+            let Some(locators) = locators_by_title.get(&title.id) else {
+                continue;
+            };
+            let live = locators
+                .iter()
+                .filter_map(|locator| states_by_locator.get(locator))
+                .flatten()
+                .filter_map(|state| scryer_domain::TrackedDownloadState::from_str_opt(state))
+                .filter(|state| {
+                    // The snapshot is deliberately not consulted (see the doc
+                    // comment): a submission with no ledger entry is not treated as
+                    // live, and the executor's admission check plus the ownership
+                    // guard catch anything that starts afterwards.
+                    crate::acquisition_workflow::submission_is_queued(Some(*state), false)
+                })
+                .count();
+            if live > 0 {
+                blocked.insert(
+                    title.id.clone(),
+                    format!(
+                        "\"{}\" has {live} download(s) or import(s) in flight; the move can start once they finish",
+                        title.name
+                    ),
+                );
+            }
+        }
+        Ok(blocked)
     }
 }
 

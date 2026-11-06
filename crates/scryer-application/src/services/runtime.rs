@@ -2310,6 +2310,13 @@ pub struct AppRuntimeLibraryState {
     pub location_runners: crate::location::ownership_guard::LocationRunnerRegistry,
     /// Composed discovery section lists for paging past the first page.
     pub(crate) discovery_section_cache: Arc<crate::discovery::DiscoverySectionCache>,
+    /// Previewed root-move plans a confirmation may reuse instead of walking
+    /// every title folder again.
+    pub(crate) location_plan_cache: Arc<
+        crate::location::plan_cache::LocationPlanCache<
+            crate::location::operations::CachedRootMovePlan,
+        >,
+    >,
 }
 
 #[derive(Clone)]
@@ -2705,6 +2712,7 @@ impl AppRuntimeState {
                     crate::location::ownership_guard::LocationOwnershipRegistry::new(),
                 location_runners: crate::location::ownership_guard::LocationRunnerRegistry::new(),
                 discovery_section_cache: Arc::default(),
+                location_plan_cache: Arc::default(),
             },
             jobs: AppRuntimeJobState {
                 job_run_tracker: JobRunTracker::new(),
