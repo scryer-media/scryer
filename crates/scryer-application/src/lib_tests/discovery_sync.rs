@@ -6756,6 +6756,27 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
             .collect())
     }
 
+    async fn list_discovery_item_targets(
+        &self,
+        _run_ids: &[String],
+    ) -> AppResult<Vec<crate::DiscoveryItemTargetRecord>> {
+        // The double's list reads ignore generations, so every stored item
+        // is a candidate.
+        let mut targets = self
+            .items
+            .lock()
+            .await
+            .iter()
+            .map(|item| crate::DiscoveryItemTargetRecord {
+                target_key: item.target_key.clone(),
+                resolved_title_id: item.resolved_title_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets.dedup();
+        Ok(targets)
+    }
+
     async fn upsert_pending_discovery_context_change(
         &self,
         change: &DiscoveryPendingContextChangeRecord,

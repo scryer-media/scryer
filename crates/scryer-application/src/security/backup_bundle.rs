@@ -531,6 +531,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "discovery_presentation_selection",
         classification: BackupTableClassification::ResetOnRestore,
     },
+    // A cache-validity token. A restore clears it, and the restored rows it
+    // covers create a fresh one; an exported token could repeat one in use.
+    BackupTableCatalogEntry {
+        table: "discovery_affinity_revision",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "title_search_terms",
         classification: BackupTableClassification::Rebuild,

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AppError, AppResult, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord, CreateTitleOutcome,
-    MAX_USER_TAGS_PER_TITLE, MetadataFieldUpdate, PendingImportStatus, PendingTitleHydration,
-    SortDirection, TitleArtworkUrlUpdate, TitleCatalogContentStatus, TitleCatalogFilter,
-    TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogPresence,
+    AppError, AppResult, CatalogOwnedExternalIdRecord, CatalogOwnedProbe, CatalogOwnedTitleRecord,
+    CreateTitleOutcome, MAX_USER_TAGS_PER_TITLE, MetadataFieldUpdate, PendingImportStatus,
+    PendingTitleHydration, SortDirection, TitleArtworkUrlUpdate, TitleCatalogContentStatus,
+    TitleCatalogFilter, TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogPresence,
     TitleCatalogProfileNames, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleDeletePreviewInfo, TitleExternalIdLookup,
     TitleExternalIdLookupMatch, TitleListProjection, TitleMetadataUpdate, TitleOptionsPatch,
@@ -34,6 +34,7 @@ use crate::media::monitor_selections::{
 };
 use crate::media::shows::bridge_cache::AnimeNumberingBridgeCache;
 use crate::media::title_credits::{load_title_credits, replace_title_credits_tx};
+use crate::media::titles::owned_probe;
 use crate::queries::{
     common::parse_utc_datetime,
     sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err},
@@ -652,6 +653,16 @@ fn title_name_candidate_from_row(
 
 #[async_trait]
 impl TitleRepository for TitleStore {
+    async fn discovery_affinity_revision(&self) -> AppResult<Option<String>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT revision FROM discovery_affinity_revision WHERE id = 1",
+            &[],
+        )
+        .await?;
+        row.map(|row| row.text("revision")).transpose()
+    }
+
     async fn list_discovery_affinity_titles(
         &self,
         library_ids: &[String],
@@ -1275,30 +1286,25 @@ impl TitleRepository for TitleStore {
             .map(SqlArg::Text)
             .collect::<Vec<_>>();
         let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
-        let mut titles = Vec::<CatalogOwnedTitleRecord>::new();
-        for row in rows {
-            let title_id = row.text("title_id")?;
-            if titles.last().is_none_or(|title| title.id != title_id) {
-                titles.push(CatalogOwnedTitleRecord {
-                    id: title_id.clone(),
-                    facet: parse_facet(&row.text("facet")?),
-                    imdb_id: row.opt_text("imdb_id")?,
-                    external_ids: Vec::new(),
-                });
-            }
-            let (Some(source), Some(value)) = (
-                row.opt_text("external_source")?,
-                row.opt_text("external_id")?,
-            ) else {
-                continue;
-            };
-            if let Some(title) = titles.last_mut() {
-                title
-                    .external_ids
-                    .push(CatalogOwnedExternalIdRecord { source, value });
-            }
+        catalog_owned_title_records_from_rows(rows)
+    }
+
+    async fn list_catalog_owned_title_records_matching(
+        &self,
+        library_ids: &[String],
+        probe: &CatalogOwnedProbe,
+    ) -> AppResult<Vec<CatalogOwnedTitleRecord>> {
+        if library_ids.is_empty() || probe.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(titles)
+        let postgres = matches!(self.datastore, StoreDatastore::Postgres { .. });
+        let sql = catalog_owned_title_records_matching_sql(postgres, library_ids.len());
+        let args = owned_probe::probe_args(probe)
+            .into_iter()
+            .chain(library_ids.iter().cloned().map(SqlArg::Text))
+            .collect::<Vec<_>>();
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        catalog_owned_title_records_from_rows(rows)
     }
 
     async fn list_for_libraries_without_external_ids(
@@ -3504,6 +3510,90 @@ fn normalized_external_id_entries(
         }
     }
     out
+}
+
+/// The probe-scoped ownership read, binding the three probe arrays and then
+/// `library_count` library ids.
+pub(crate) fn catalog_owned_title_records_matching_sql(
+    postgres: bool,
+    library_count: usize,
+) -> String {
+    let library_placeholders = std::iter::repeat_n("{}", library_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Each branch is one indexed lookup (migration 0328); the union is
+    // bounded by what the probe names, never by the catalog.
+    format!(
+        "WITH {ctes},
+         matched(title_id) AS (
+            SELECT external_ids.title_id
+            FROM title_external_ids external_ids
+            WHERE {external_value} IN (SELECT value FROM probe_values)
+            UNION
+            SELECT external_ids.title_id
+            FROM title_external_ids external_ids
+            WHERE {external_number} IN (SELECT value FROM probe_numbers)
+            UNION
+            SELECT titles.id
+            FROM titles
+            WHERE titles.imdb_id IS NOT NULL
+              AND {imdb_value} IN (SELECT value FROM probe_values)
+            UNION
+            SELECT titles.id
+            FROM titles
+            WHERE titles.imdb_id IS NOT NULL
+              AND {imdb_number} IN (SELECT value FROM probe_numbers)
+            UNION
+            SELECT id FROM probe_titles
+         )
+         SELECT titles.id AS title_id,
+                titles.facet AS facet,
+                titles.imdb_id AS imdb_id,
+                external_ids.source AS external_source,
+                external_ids.external_id AS external_id
+           FROM matched
+           JOIN titles
+             ON titles.id = matched.title_id
+           LEFT JOIN title_external_ids external_ids
+             ON external_ids.title_id = titles.id
+          WHERE titles.library_id IN ({library_placeholders})
+          ORDER BY titles.id ASC, external_ids.source ASC, external_ids.external_id ASC",
+        ctes = owned_probe::probe_ctes(postgres),
+        external_value = owned_probe::probe_value_expression("external_ids.external_id"),
+        external_number =
+            owned_probe::probe_numeric_expression(postgres, "external_ids.external_id"),
+        imdb_value = owned_probe::probe_value_expression("titles.imdb_id"),
+        imdb_number = owned_probe::probe_numeric_expression(postgres, "titles.imdb_id"),
+    )
+}
+
+fn catalog_owned_title_records_from_rows(
+    rows: Vec<SqlRow>,
+) -> AppResult<Vec<CatalogOwnedTitleRecord>> {
+    let mut titles = Vec::<CatalogOwnedTitleRecord>::new();
+    for row in rows {
+        let title_id = row.text("title_id")?;
+        if titles.last().is_none_or(|title| title.id != title_id) {
+            titles.push(CatalogOwnedTitleRecord {
+                id: title_id.clone(),
+                facet: parse_facet(&row.text("facet")?),
+                imdb_id: row.opt_text("imdb_id")?,
+                external_ids: Vec::new(),
+            });
+        }
+        let (Some(source), Some(value)) = (
+            row.opt_text("external_source")?,
+            row.opt_text("external_id")?,
+        ) else {
+            continue;
+        };
+        if let Some(title) = titles.last_mut() {
+            title
+                .external_ids
+                .push(CatalogOwnedExternalIdRecord { source, value });
+        }
+    }
+    Ok(titles)
 }
 
 fn normalized_external_ids(external_ids: &[ExternalId]) -> Vec<NormalizedExternalId> {
@@ -6610,6 +6700,11 @@ mod catalog_presence_tests;
 
 #[cfg(test)]
 mod catalog_order_tests;
+
+#[cfg(test)]
+mod affinity_revision_tests;
+#[cfg(test)]
+mod owned_probe_tests;
 
 #[cfg(test)]
 mod tests {

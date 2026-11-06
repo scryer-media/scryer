@@ -8,9 +8,11 @@ mod contracts;
 pub mod delete_refusal;
 mod discovery;
 pub use discovery::{
-    DISCOVERY_CREDIBLE_RATING_MIN_VOTES, DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT,
-    DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery, DiscoveryNeighborsView,
-    LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
+    CatalogOwnershipDecisions, DISCOVERY_CREDIBLE_RATING_MIN_VOTES,
+    DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT, DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
+    DiscoveryNeighborsQuery, DiscoveryNeighborsView, LibraryGraphCluster, LibraryGraphEdge,
+    LibraryGraphNode, LibraryGraphQuery, LibraryGraphView, catalog_owned_probe_for_targets,
+    catalog_ownership_decisions,
 };
 #[cfg(test)]
 pub(crate) use discovery::{
@@ -120,7 +122,8 @@ pub use acquisition::anime_numbering::{ExactCourTitleMatch, exact_cour_title_mat
 pub use ports::ObservationTouch;
 pub use ports::UnfinishedLibraryScanSession;
 pub use ports::{
-    AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
+    AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedProbe,
+    CatalogOwnedSeriesMovieRecord, CatalogOwnedTitleRecord, DiscoveryItemTargetRecord,
     IndexerSearchNumberingContext, TitleOptionsPatch,
 };
 pub use ports::{ClientPresenceScopeUpdate, ClientPresenceTransition};

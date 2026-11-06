@@ -59,6 +59,8 @@ pub struct AppRuntimeCatalogState {
     /// the tracked-download sweep, which re-resolves an unmatched download
     /// when the answer is yes.
     pub(crate) catalog_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Library affinity profiles, keyed by the datastore's affinity revision.
+    pub(crate) discovery_affinity_cache: crate::discovery::DiscoveryAffinityCache,
     pub poster_wake: Arc<tokio::sync::Notify>,
     pub fanart_wake: Arc<tokio::sync::Notify>,
     pub(crate) title_hydration_wake: Arc<tokio::sync::Notify>,
@@ -2635,6 +2637,7 @@ impl AppRuntimeState {
             catalog: AppRuntimeCatalogState {
                 quality_profile_reference_lock: Arc::new(tokio::sync::Mutex::new(())),
                 catalog_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                discovery_affinity_cache: Default::default(),
                 poster_wake: Arc::new(tokio::sync::Notify::new()),
                 fanart_wake: Arc::new(tokio::sync::Notify::new()),
                 title_hydration_wake: Arc::new(tokio::sync::Notify::new()),

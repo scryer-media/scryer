@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DiscoveryInFlight } from "./discovery-in-flight.ts";
+import {
+  DiscoveryInFlight,
+  DiscoveryResponseGate,
+  catalogDiscoveryScope,
+} from "./discovery-in-flight.ts";
 
 test("shares pending requests but never caches completed data", async () => {
   const requests = new DiscoveryInFlight<number>();
@@ -80,4 +84,58 @@ test("different scopes proceed independently and failures permit retry", async (
   assert.equal(await requests.run("failure", async () => 3), 3);
   blocked.resolve(1);
   await waiting;
+});
+
+test("only the newest request of the current scope may land", () => {
+  const gate = new DiscoveryResponseGate();
+  const scope = catalogDiscoveryScope("viewer-a", { facet: "MOVIE" });
+  const first = gate.begin(scope);
+  const second = gate.begin(scope);
+  assert.equal(gate.accepts(first, scope), false);
+  assert.equal(gate.accepts(second, scope), true);
+});
+
+test("a scope change rejects responses still in flight", () => {
+  const base = { facet: "MOVIE", libraryIds: ["library-a"] };
+  const changes: Array<[string, unknown]> = [
+    ["viewer-a", { ...base, facet: "SERIES" }],
+    ["viewer-a", { ...base, libraryIds: ["library-b"] }],
+    ["viewer-b", base],
+    ["viewer-a:revoked", base],
+  ];
+  for (const [signature, input] of changes) {
+    const gate = new DiscoveryResponseGate();
+    const before = catalogDiscoveryScope("viewer-a", base);
+    const ticket = gate.begin(before);
+    const after = catalogDiscoveryScope(signature, input);
+    assert.notEqual(after, before);
+    gate.begin(after);
+    assert.equal(gate.accepts(ticket, before), false);
+  }
+});
+
+test("invalidation rejects every outstanding response", () => {
+  const gate = new DiscoveryResponseGate();
+  const scope = catalogDiscoveryScope("viewer-a", { facet: "ANIME" });
+  const ticket = gate.begin(scope);
+  gate.invalidate();
+  assert.equal(gate.accepts(ticket, scope), false);
+  const next = gate.begin(scope);
+  assert.equal(gate.accepts(next, scope), true);
+});
+
+test("coalesced callers each land only while current", async () => {
+  const requests = new DiscoveryInFlight<number>();
+  const gate = new DiscoveryResponseGate();
+  const pending = Promise.withResolvers<number>();
+  const scope = catalogDiscoveryScope("viewer-a", { facet: "MOVIE" });
+  const oldTicket = gate.begin(scope);
+  const oldRequest = requests.run(scope, () => pending.promise);
+  const newTicket = gate.begin(scope);
+  const newRequest = requests.run(scope, async () => 2);
+  assert.equal(oldRequest, newRequest);
+  pending.resolve(1);
+  assert.equal(await newRequest, 1);
+  assert.equal(gate.accepts(oldTicket, scope), false);
+  assert.equal(gate.accepts(newTicket, scope), true);
 });

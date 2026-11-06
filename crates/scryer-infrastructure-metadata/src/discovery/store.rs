@@ -6,12 +6,13 @@ use scryer_application::{
     DiscoveryContextSnapshotCommit, DiscoveryExternalIdRecord, DiscoveryFacetRecord,
     DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeFilters,
     DiscoveryHomeSectionCandidatesRecord, DiscoveryItemLibraryProvenanceRecord,
-    DiscoveryItemRecord, DiscoveryItemsPageRecord, DiscoveryItemsStorageQuery,
-    DiscoveryNeighborCacheRecord, DiscoveryNeighborItemRecord, DiscoveryPendingContextChangeRecord,
-    DiscoveryPruneReport, DiscoveryPublicFeedCommit, DiscoveryRankComponentRecord,
-    DiscoveryRelatedGroup, DiscoveryRepository, DiscoverySectionRecord, DiscoverySourceTagRecord,
-    DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord, DiscoverySyncStateRecord,
-    LibraryGraphRunRecord, LibraryGraphSnapshotRecord, TitleRatingSummary,
+    DiscoveryItemRecord, DiscoveryItemTargetRecord, DiscoveryItemsPageRecord,
+    DiscoveryItemsStorageQuery, DiscoveryNeighborCacheRecord, DiscoveryNeighborItemRecord,
+    DiscoveryPendingContextChangeRecord, DiscoveryPruneReport, DiscoveryPublicFeedCommit,
+    DiscoveryRankComponentRecord, DiscoveryRelatedGroup, DiscoveryRepository,
+    DiscoverySectionRecord, DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord,
+    DiscoverySyncRunRecord, DiscoverySyncStateRecord, LibraryGraphRunRecord,
+    LibraryGraphSnapshotRecord, TitleRatingSummary,
 };
 use scryer_infrastructure_sql::json::{decode_compressed_json, encode_compressed_json};
 use serde_json::Value as JsonValue;
@@ -734,6 +735,94 @@ impl DiscoveryRepository for DiscoveryStore {
         )
         .await?;
         rows.iter().map(submitted_subject_from_row).collect()
+    }
+
+    async fn list_discovery_submitted_title_ids(
+        &self,
+        _run_id: &str,
+        _library_ids: &[String],
+    ) -> AppResult<Option<Vec<String>>> {
+        // TitleStore::list_discovery_affinity_titles joins the run's
+        // submitted subjects itself.
+        Ok(None)
+    }
+
+    async fn list_discovery_submitted_subjects_for_keys(
+        &self,
+        run_id: &str,
+        library_ids: &[String],
+        subject_keys: &[String],
+    ) -> AppResult<Vec<DiscoverySubmittedSubjectRecord>> {
+        if library_ids.is_empty() || subject_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let json_values = match self.datastore {
+            StoreDatastore::Sqlite { .. } => "SELECT value FROM json_each({})",
+            StoreDatastore::Postgres { .. } => {
+                "SELECT value FROM jsonb_array_elements_text(CAST({} AS JSONB)) AS values_list(value)"
+            }
+        };
+        // Reads through idx_discovery_submitted_subjects_run_key, one probe
+        // per requested key, so the cost follows the keys and not the run.
+        let sql = format!(
+            "SELECT run_id, subject_key, title_id, library_id, library_facet, title_kind, display_title,
+                    external_ids_json, raw_subject_json
+             FROM discovery_submitted_subjects
+             WHERE run_id = {{}} AND subject_key IN ({json_values}) AND library_id IN ({json_values})
+             ORDER BY subject_key ASC, library_id ASC, title_id ASC"
+        );
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &sql,
+            &[
+                SqlArg::Text(run_id.to_string()),
+                excluded_identity_keys_arg(subject_keys),
+                excluded_identity_keys_arg(library_ids),
+            ],
+        )
+        .await?;
+        rows.iter().map(submitted_subject_from_row).collect()
+    }
+
+    async fn list_discovery_item_targets(
+        &self,
+        run_ids: &[String],
+    ) -> AppResult<Vec<DiscoveryItemTargetRecord>> {
+        if run_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Two branches so each uses its own index; an item counts whether
+        // the run wrote it or it carried over into that generation.
+        let run_placeholders = placeholders(run_ids.len());
+        let sql = format!(
+            "SELECT t.target_key AS target_key, t.resolved_title_id AS resolved_title_id
+             FROM discovery_items i
+             JOIN discovery_titles t ON t.id = i.discovery_title_id
+             WHERE i.base_generation_id IN ({run_placeholders})
+             UNION
+             SELECT t.target_key AS target_key, t.resolved_title_id AS resolved_title_id
+             FROM discovery_items i
+             JOIN discovery_titles t ON t.id = i.discovery_title_id
+             WHERE i.run_id IN ({run_placeholders})"
+        );
+        let args = run_ids
+            .iter()
+            .chain(run_ids)
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        let mut targets = rows
+            .iter()
+            .map(|row| {
+                Ok(DiscoveryItemTargetRecord {
+                    target_key: row.text("target_key")?,
+                    resolved_title_id: row.opt_text("resolved_title_id")?,
+                })
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        targets.sort();
+        Ok(targets)
     }
 
     async fn upsert_pending_discovery_context_change(
@@ -8050,6 +8139,46 @@ mod tests {
             read_subjects[1].library_id.as_deref(),
             Some("series-library-b")
         );
+        let keyed = |library_ids: &[&str], keys: &[&str]| {
+            let store = &store;
+            let library_ids = library_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>();
+            let keys = keys.iter().map(|key| key.to_string()).collect::<Vec<_>>();
+            async move {
+                store
+                    .list_discovery_submitted_subjects_for_keys("run-1", &library_ids, &keys)
+                    .await
+                    .expect("keyed submitted subjects should list")
+                    .into_iter()
+                    .map(|subject| subject.display_title.unwrap_or_default())
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(
+            keyed(
+                &["series-library-b", "series-library-a"],
+                &["tvdb:series:1"]
+            )
+            .await,
+            ["Example Series A", "Example Series B"]
+        );
+        assert_eq!(
+            keyed(
+                &["series-library-b", "other-library"],
+                &["tvdb:series:1", "tvdb:series:2"]
+            )
+            .await,
+            ["Example Series B"]
+        );
+        assert!(
+            keyed(&["series-library-a"], &["tvdb:series:2"])
+                .await
+                .is_empty()
+        );
+        assert!(keyed(&[], &["tvdb:series:1"]).await.is_empty());
+        assert!(keyed(&["series-library-a"], &[]).await.is_empty());
         store
             .replace_discovery_sections(
                 "run-1",

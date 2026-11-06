@@ -396,6 +396,13 @@ impl DiscoveryRepository for NullDiscoveryRepository {
         Ok(Vec::new())
     }
 
+    async fn list_discovery_item_targets(
+        &self,
+        _run_ids: &[String],
+    ) -> AppResult<Vec<crate::DiscoveryItemTargetRecord>> {
+        Ok(Vec::new())
+    }
+
     async fn upsert_pending_discovery_context_change(
         &self,
         _change: &DiscoveryPendingContextChangeRecord,
