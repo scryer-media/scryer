@@ -11,7 +11,7 @@ use scryer_application::{
     AppError, AppResult, ClientJobLocator, DownloadClient, DownloadClientAddRequest,
     DownloadClientFeedbackScope, DownloadClientMarkImportedRequest, DownloadClientObservation,
     DownloadClientStatus, DownloadGrabResult, DownloadSourceKind, ResolvedDownloadArtifact,
-    StagedNzbRef, plugin_codes,
+    StagedNzbRef, is_reserved_title_tag, plugin_codes,
 };
 use scryer_domain::{
     CompletedDownload, DownloadQueueItem, DownloadQueueState, DownloadSeedingSnapshot,
@@ -1023,7 +1023,15 @@ fn build_plugin_add_request(
             year: request.title.year,
             language: request.title.language.clone(),
             network: request.title.network.clone(),
-            tags: request.title.tags.clone(),
+            // Reserved `scryer:` entries are title settings (quality profile,
+            // monitor type, ...), not membership; clients only see user tags.
+            tags: request
+                .title
+                .tags
+                .iter()
+                .filter(|tag| !is_reserved_title_tag(tag))
+                .cloned()
+                .collect(),
         },
         routing: PluginDownloadRouting {
             isolation_value: request.category.clone(),
@@ -2441,6 +2449,39 @@ mod tests {
                 .as_ref()
                 .map(|torrent| torrent.source_preference.clone()),
             Some(vec![DownloadInputKind::MagnetUri])
+        );
+    }
+
+    #[test]
+    fn build_plugin_add_request_sends_only_user_title_tags() {
+        let mut request = sample_request();
+        request.title.tags = vec![
+            "scryer:quality-profile:4k".to_string(),
+            "favorites".to_string(),
+            "scryer:monitor-type:all".to_string(),
+            "needs review".to_string(),
+        ];
+        let plugin_request = build_plugin_add_request(
+            &request,
+            DownloadSourceKind::MagnetUri,
+            ResolvedTorrentSource {
+                download_url: None,
+                magnet_uri: Some(
+                    "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef01".to_string(),
+                ),
+                torrent_bytes_base64: None,
+                torrent_url: None,
+                torrent_file_name: None,
+                torrent_content_type: None,
+                nzb_bytes_base64: None,
+                nzb_file_name: None,
+                nzb_content_type: None,
+            },
+        );
+
+        assert_eq!(
+            plugin_request.title.tags,
+            vec!["favorites".to_string(), "needs review".to_string()]
         );
     }
 
