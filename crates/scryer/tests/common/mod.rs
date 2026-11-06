@@ -163,6 +163,16 @@ pub struct TestLibraryStateStore {
 
 #[async_trait]
 impl AcquisitionScopeStateRepository for TestLibraryStateStore {
+    async fn list_acquisition_scope_statuses_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, scryer_application::AcquisitionScopeStatus>>
+    {
+        self.wanted
+            .list_acquisition_scope_statuses_by_ids(ids)
+            .await
+    }
+
     async fn upsert_acquisition_scope_state(
         &self,
         item: &scryer_application::AcquisitionScopeState,
@@ -455,6 +465,10 @@ impl PendingReleaseRepository for TestLibraryStateStore {
         self.pending_releases
             .delete_standby_pending_releases_for_wanted_item(wanted_item_id)
             .await
+    }
+
+    async fn list_standby_wanted_item_ids(&self) -> AppResult<Vec<String>> {
+        self.pending_releases.list_standby_wanted_item_ids().await
     }
 
     async fn list_all_standby_pending_releases(

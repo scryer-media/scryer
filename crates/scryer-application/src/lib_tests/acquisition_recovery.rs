@@ -6123,6 +6123,114 @@ async fn title_walk_preparation_refreshes_changed_profile_routing_and_blocklist(
     );
 }
 
+#[tokio::test]
+async fn pruning_keeps_saved_results_only_for_open_scopes() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, _user) = bootstrap_with_acquisition_tracking(
+        download_client,
+        download_submissions,
+        pending_releases.clone(),
+        wanted_items.clone(),
+    );
+    let scope = |id: &str, status: AcquisitionScopeStatus| AcquisitionScopeState {
+        id: id.to_string(),
+        title_id: "synthetic-prune-title".to_string(),
+        title_name: None,
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".to_string(),
+        last_search_at: None,
+        status,
+        grabbed_release: None,
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: Utc::now().to_rfc3339(),
+        updated_at: Utc::now().to_rfc3339(),
+    };
+    for (id, status) in [
+        ("synthetic-scope-wanted", AcquisitionScopeStatus::Wanted),
+        ("synthetic-scope-grabbed", AcquisitionScopeStatus::Grabbed),
+        (
+            "synthetic-scope-completed",
+            AcquisitionScopeStatus::Completed,
+        ),
+    ] {
+        wanted_items
+            .upsert_acquisition_scope_state(&scope(id, status))
+            .await
+            .expect("seed scope");
+    }
+    for (index, wanted_item_id) in [
+        "synthetic-scope-wanted",
+        "synthetic-scope-grabbed",
+        "synthetic-scope-completed",
+        "synthetic-scope-missing",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        pending_releases
+            .insert_pending_release(&PendingRelease {
+                http_release: None,
+                id: format!("synthetic-standby-{index}"),
+                wanted_item_id: wanted_item_id.to_string(),
+                title_id: "synthetic-prune-title".to_string(),
+                release_title: format!("Synthetic.Prune.Release.{index}.1080p.WEB-DL"),
+                release_url: Some(format!("https://example.invalid/{index}.nzb")),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                release_size_bytes: Some(1_000),
+                release_score: 100,
+                scoring_log_json: None,
+                indexer_source: None,
+                indexer_id: None,
+                release_guid: Some(format!("synthetic-guid-{index}")),
+                added_at: Utc::now().to_rfc3339(),
+                last_observed_at: Utc::now().to_rfc3339(),
+                delay_until: Utc::now().to_rfc3339(),
+                status: PendingReleaseStatus::Standby,
+                grabbed_at: None,
+                source_password: None,
+                published_at: None,
+                info_hash: None,
+                seed_minimums: Default::default(),
+                seeders: None,
+                release_identity: format!("synthetic-guid-{index}"),
+                coverage_identity: format!("scope:{wanted_item_id}"),
+                role: crate::types::PendingReleaseRole::Fallback,
+                last_decision_code: None,
+                release_age_unknown: false,
+                release_listing_json: None,
+            })
+            .await
+            .expect("seed standby");
+    }
+
+    crate::acquisition_workflow::prune_standby_candidates(&app).await;
+
+    let mut kept = pending_releases
+        .list_standby_wanted_item_ids()
+        .await
+        .expect("standby ids");
+    kept.sort();
+    assert_eq!(
+        kept,
+        ["synthetic-scope-grabbed", "synthetic-scope-wanted"],
+        "a completed or vanished scope loses its saved results; open scopes keep theirs"
+    );
+}
+
 /// A spread of synthetic releases for the recent-failed-season-pack fixture:
 /// three indexers, several qualities and sources, season packs, a release for
 /// another episode, and duplicates, so a scoring pass crosses chunk

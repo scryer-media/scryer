@@ -1201,6 +1201,30 @@ impl AcquisitionScopeStateRepository for WantedStore {
             .collect()
     }
 
+    async fn list_acquisition_scope_statuses_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, AcquisitionScopeStatus>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let sql = format!(
+            "SELECT id, status FROM wanted_items WHERE id IN ({})",
+            placeholders(ids.len())
+        );
+        let args = ids.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.text("id")?,
+                    AcquisitionScopeStatus::parse(&row.text("status")?).unwrap_or_default(),
+                ))
+            })
+            .collect()
+    }
+
     async fn list_acquisition_scope_states(
         &self,
         query: AcquisitionScopeStatesQuery,
@@ -2572,6 +2596,21 @@ impl PendingReleaseRepository for PendingReleaseStore {
         )
         .await?;
         Ok(())
+    }
+
+    async fn list_standby_wanted_item_ids(&self) -> AppResult<Vec<String>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT DISTINCT wanted_item_id
+               FROM pending_releases
+              WHERE status = 'standby'
+              ORDER BY wanted_item_id ASC",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("wanted_item_id"))
+        .collect()
     }
 
     async fn list_all_standby_pending_releases(&self) -> AppResult<Vec<PendingRelease>> {
