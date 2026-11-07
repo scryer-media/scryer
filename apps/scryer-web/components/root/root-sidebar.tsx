@@ -599,7 +599,7 @@ const TOP_NAV_BADGE_GROUP_CLASS =
 const TOP_NAV_BADGE_BASE_CLASS =
   "inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-xs font-medium tabular-nums";
 
-type NavBadgeTone = "cta" | "danger" | "warning" | "request" | "info";
+type NavBadgeTone = "cta" | "danger" | "warning" | "request";
 
 function navBadgeToneClass(tone: NavBadgeTone) {
   switch (tone) {
@@ -609,8 +609,6 @@ function navBadgeToneClass(tone: NavBadgeTone) {
       return "bg-[var(--scry-warning-solid)] text-[var(--scry-warning-on-solid)] peer-hover/menu-button:text-[var(--scry-warning-on-solid)] peer-data-[active=true]/menu-button:text-[var(--scry-warning-on-solid)]";
     case "request":
       return "bg-primary text-primary-foreground";
-    case "info":
-      return "bg-[var(--scry-info-solid)] text-[var(--scry-info-on-solid)]";
     case "cta":
     default:
       return "bg-primary text-primary-foreground";
@@ -657,7 +655,7 @@ function ActivityNavBadges({
       {jobCount > 0 ? (
         <span
           id="root-sidebar-activity-running-jobs"
-          className={cn(TOP_NAV_BADGE_BASE_CLASS, navBadgeToneClass("info"))}
+          className={cn(TOP_NAV_BADGE_BASE_CLASS, navBadgeToneClass("cta"))}
           title={jobLabel}
           aria-label={jobLabel}
         >
