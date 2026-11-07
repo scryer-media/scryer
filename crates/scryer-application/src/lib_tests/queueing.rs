@@ -644,6 +644,62 @@ async fn add_title_and_queue_download_records_accepted_torrent_hash_fingerprint(
     assert_eq!(identities.len(), 1);
     let identity = identities.values().next().expect("submission identity");
     assert_eq!(identity.download_id.as_deref(), Some(info_hash));
+    drop(identities);
+    // The indexer gave no hash, so the submission keeps the one the client
+    // accepted: terminal cleanup proves the client entry against it.
+    let store = download_submissions.store.lock().await;
+    let accepted = store
+        .iter()
+        .find(|submission| !submission.download_client_item_id.is_empty())
+        .expect("accepted submission");
+    assert_eq!(accepted.info_hash.as_deref(), Some(info_hash));
+}
+
+#[tokio::test]
+async fn queued_torrent_submission_prefers_the_client_accepted_hash_over_the_indexer_hint() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    download_client
+        .set_grab_info_hash(Some("ABCDEF0123456789ABCDEF0123456789ABCDEF01"))
+        .await;
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let request = NewTitle {
+        name: "Hinted Torrent".into(),
+        facet: MediaFacet::Movie,
+        monitored: true,
+        tags: vec![],
+        external_ids: vec![ExternalId::new("tmdb".to_string(), "987655".to_string())],
+        min_availability: None,
+        ..Default::default()
+    };
+    let queued_release = QueuedReleaseSelection {
+        indexer_id: None,
+        source_hint: Some("https://example.invalid/releases/hinted-torrent.torrent".to_string()),
+        source_kind: Some(DownloadSourceKind::TorrentFile),
+        source_title: Some("Hinted.Torrent.2026.1080p.WEB-DL".to_string()),
+        source_password: None,
+        info_hash_hint: Some("1111111111111111111111111111111111111111".to_string()),
+        size_bytes: None,
+        seeders: None,
+    };
+
+    app.add_title_and_queue_download_with_outcome(&user, request, queued_release)
+        .await
+        .expect("queued torrent add should succeed");
+
+    let store = download_submissions.store.lock().await;
+    let accepted = store
+        .iter()
+        .find(|submission| !submission.download_client_item_id.is_empty())
+        .expect("accepted submission");
+    assert_eq!(
+        accepted.info_hash.as_deref(),
+        Some("abcdef0123456789abcdef0123456789abcdef01")
+    );
 }
 
 #[tokio::test]

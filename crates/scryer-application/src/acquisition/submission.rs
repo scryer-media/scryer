@@ -70,13 +70,27 @@ fn submission_for_grab(
         source_provider_name: intent.source_provider_name.clone(),
         source_kind: intent.request.source_kind,
         source_title: request.source_title_without_password(),
-        info_hash: request.info_hash_hint.clone(),
+        info_hash: submission_info_hash(request, grab),
         release_size_bytes: intent.release_size_bytes,
         release_listing_json: intent.release_listing_json.clone(),
         request_signature: intent.request_signature.clone(),
         purpose: request.purpose,
         scope: intent.scope.clone(),
     }
+}
+
+/// The content hash a grab's submission records.
+///
+/// The hash the client accepted is the torrent's true identity, so it wins
+/// over the indexer's hint. Many indexers publish no hash, and a hint can be
+/// stale or wrong; the client's answer is what terminal cleanup later proves
+/// the entry against. The hint stands only when the client reported none.
+fn submission_info_hash(
+    request: &DownloadClientAddRequest,
+    grab: &DownloadGrabResult,
+) -> Option<String> {
+    crate::normalize_torrent_info_hash(grab.info_hash.as_deref())
+        .or_else(|| request.info_hash_hint.clone())
 }
 
 fn accepted_identity_for_grab(
@@ -875,7 +889,7 @@ impl AppUseCase {
                 source_provider_name: intent.source_provider_name.clone(),
                 source_kind,
                 source_title: request.source_title_without_password(),
-                info_hash: request.info_hash_hint.clone(),
+                info_hash: submission_info_hash(&request, &grab),
                 release_size_bytes: intent.release_size_bytes,
                 release_listing_json: intent.release_listing_json.clone(),
                 request_signature: intent.request_signature.clone(),
