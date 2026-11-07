@@ -3,6 +3,7 @@ import test from "node:test";
 import type { LibraryGraphEdge } from "../types/library-graph.ts";
 import {
   assignRelatedSpiralSlots,
+  packRelatedCircles,
   relatedSpiralSlotPasses,
 } from "./library-graph-spiral-slots.ts";
 import { largeLibraryGraphLayout } from "./library-graph-model.ts";
@@ -108,8 +109,7 @@ test("coarse related groups occupy shorter links on exactly the same point cloud
           distance(
             slots[positions[index.get(edge.from)!]],
             slots[positions[index.get(edge.to)!]],
-          ) **
-            2,
+          ),
       0,
     );
   let previousCost = weightedCost(original);
@@ -173,10 +173,107 @@ test("layout keeps neighbourhood boundaries and overview dots while assigning re
     assert.deepEqual(points(related), points(original));
   }
   // A relation crossing two neighbourhoods cannot move a title into the other.
+  const crossing = largeLibraryGraphLayout({
+    ...graph,
+    edges: [link(keys[0], keys[1])],
+  });
+  for (const node of graph.nodes) {
+    const region = crossing.regions.find(
+      (region) => region.id === node.clusterId,
+    )!;
+    const point = crossing.positions.get(node.subjectKey)!;
+    assert.ok(
+      point.x >= region.left &&
+        point.x <= region.right &&
+        point.y >= region.top &&
+        point.y <= region.bottom,
+    );
+  }
+});
+
+test("related neighbourhoods sit together and bridging titles face each other", () => {
+  const { keys } = fixture(160);
+  const cluster = (id: number) => ({
+    id,
+    labelKey: "theme:thriller",
+    label: "Fixture",
+    medoid: keys[id * 40],
+    size: 40,
+  });
+  const nodes = keys.map((key, index) => ({
+    subjectKey: key,
+    targetKey: `tmdb:movie:${index + 1}`,
+    clusterId: Math.floor(index / 40),
+    ghost: false,
+  }));
+  const edges: LibraryGraphEdge[] = [];
+  for (let group = 0; group < 4; group++)
+    for (let a = 1; a < 40; a++)
+      edges.push(link(keys[group * 40], keys[group * 40 + a], 0.6));
+  // Neighbourhoods 0 and 3 share several titles; 1 and 2 relate to nothing
+  // outside themselves.
+  for (let a = 1; a <= 6; a++) edges.push(link(keys[a], keys[120 + a], 0.8));
+  const layout = largeLibraryGraphLayout({
+    clusters: [0, 1, 2, 3].map(cluster),
+    nodes,
+    edges,
+  });
+  const centre = (id: number) => layout.positions.get(`cluster:${id}`)!;
+  const gaps = [1, 2, 3].map((id) => distance(centre(0), centre(id)));
+  assert.equal(Math.min(...gaps), gaps[2]);
+  // Regions never overlap.
+  for (const a of layout.regions)
+    for (const b of layout.regions)
+      if (a.id < b.id)
+        assert.ok(
+          distance(centre(a.id), centre(b.id)) >=
+            (a.right - a.left) / 2 + (b.right - b.left) / 2,
+        );
+  const facing = (key: string, own: number, other: number) => {
+    const point = layout.positions.get(key)!;
+    const from = centre(own);
+    const to = centre(other);
+    return (
+      (point.x - from.x) * (to.x - from.x) +
+        (point.y - from.y) * (to.y - from.y) >
+      0
+    );
+  };
+  for (let a = 1; a <= 6; a++) {
+    assert.ok(facing(keys[a], 0, 3));
+    assert.ok(facing(keys[120 + a], 3, 0));
+  }
   assert.deepEqual(
-    largeLibraryGraphLayout({ ...graph, edges: [link(keys[0], keys[1])] }),
-    original,
+    largeLibraryGraphLayout({
+      clusters: [3, 2, 1, 0].map(cluster),
+      nodes: [...nodes].reverse(),
+      edges: edges
+        .map((edge) => ({ ...edge, from: edge.to, to: edge.from }))
+        .reverse(),
+    }),
+    layout,
   );
+});
+
+test("circle packing places each circle once without overlap", () => {
+  const radii = Array.from({ length: 40 }, (_, index) => 20 + (index % 7) * 30);
+  const affinity = new Float64Array(radii.length * radii.length);
+  for (let a = 0; a < radii.length; a++) {
+    const b = (a * 7 + 3) % radii.length;
+    if (a === b) continue;
+    affinity[a * radii.length + b] += 1;
+    affinity[b * radii.length + a] += 1;
+  }
+  const centres = packRelatedCircles(radii, affinity, 10);
+  assert.equal(centres.length, radii.length);
+  for (let a = 0; a < radii.length; a++)
+    for (let b = a + 1; b < radii.length; b++)
+      assert.ok(
+        distance(centres[a], centres[b]) >= radii[a] + radii[b] + 10 - 1e-6,
+      );
+  assert.deepEqual(packRelatedCircles([5], new Float64Array(1), 10), [
+    { x: 0, y: 0 },
+  ]);
 });
 
 test("local refinements bring isolated pairs together after a dense component fills the center", () => {

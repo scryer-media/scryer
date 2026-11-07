@@ -12,7 +12,9 @@ import {
   type LibraryGraphResult,
 } from "../types/library-graph.ts";
 import {
+  clampEdgeWeight,
   clustersToCollapse,
+  edgePairKey,
   collapseClusters,
   graphStateFromResult,
   pruneToVisible,
@@ -21,7 +23,10 @@ import {
 } from "./library-graph-merge.ts";
 import { discoveryBrowseLabelTitle } from "./discovery-sections.ts";
 import { convexHull, type LayoutPoint } from "./library-graph-layout.ts";
-import { assignRelatedSpiralSlots } from "./library-graph-spiral-slots.ts";
+import {
+  assignRelatedSpiralSlots,
+  packRelatedCircles,
+} from "./library-graph-spiral-slots.ts";
 
 /** Above this many nodes, clusters collapse to one node each until expanded. */
 export const LIBRARY_GRAPH_COLLAPSE_THRESHOLD = 5000;
@@ -477,6 +482,10 @@ export function isCollapsedClusterNode(node: GraphNode): boolean {
   return node.collapsedClusterId !== undefined;
 }
 
+/** How strongly cross-neighbourhood ties pull a title toward its spiral's
+ * facing side, relative to its ties within the neighbourhood. */
+const CROSS_LEAN = 0.1;
+
 /** Stable nested positions at library scale; zoom never restarts a force
  * simulation or moves the neighbourhood being inspected. */
 export function largeLibraryGraphLayout(graph: GraphState) {
@@ -490,33 +499,67 @@ export function largeLibraryGraphLayout(graph: GraphState) {
     groups.set(id, members);
     groupByKey.set(node.subjectKey, id);
   }
-  // Partition once, so each neighbourhood only examines its own relations.
+  const ids = [...groups.keys()].sort((a, b) => a - b);
+  const slotOf = new Map(ids.map((id, index) => [id, index]));
+  // Partition once, so each neighbourhood only examines its own relations;
+  // relations across neighbourhoods decide which neighbourhoods sit together.
   const edgesByGroup = new Map<number, LibraryGraphEdge[]>();
+  const crossing = new Map<string, LibraryGraphEdge>();
   for (const edge of graph.edges) {
     const id = groupByKey.get(edge.from);
-    if (id === undefined || id !== groupByKey.get(edge.to)) continue;
+    const other = groupByKey.get(edge.to);
+    if (id === undefined || other === undefined) continue;
+    if (id !== other) {
+      const pair = edgePairKey(edge.from, edge.to);
+      const weight = clampEdgeWeight(edge.weight);
+      if (weight > clampEdgeWeight(crossing.get(pair)?.weight ?? 0))
+        crossing.set(pair, edge);
+      continue;
+    }
     const edges = edgesByGroup.get(id) ?? [];
     edges.push(edge);
     edgesByGroup.set(id, edges);
   }
-  const ids = [...groups.keys()].sort((a, b) => a - b);
-  const columns = Math.max(1, Math.ceil(Math.sqrt(ids.length)));
-  const cell =
-    48 *
-      Math.sqrt(
-        Math.max(1, ...[...groups.values()].map((nodes) => nodes.length)),
-      ) +
-    160;
+  // Canonical order keeps the floating-point sums independent of arrival.
+  const crossLinks = [...crossing]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, edge]) => edge);
+  const affinity = new Float64Array(ids.length * ids.length);
+  for (const edge of crossLinks) {
+    const a = slotOf.get(groupByKey.get(edge.from)!)!;
+    const b = slotOf.get(groupByKey.get(edge.to)!)!;
+    const weight = clampEdgeWeight(edge.weight);
+    affinity[a * ids.length + b] += weight;
+    affinity[b * ids.length + a] += weight;
+  }
+  const radii = ids.map((id) => 24 * Math.sqrt(groups.get(id)!.length));
+  const centres = packRelatedCircles(radii, affinity, 160);
+  // A title related to other neighbourhoods leans toward the side of its own
+  // spiral that faces them, so cross-neighbourhood relations stay short.
+  const lean = new Map<string, { x: number; y: number; weight: number }>();
+  for (const edge of crossLinks) {
+    const weight = clampEdgeWeight(edge.weight);
+    for (const [key, otherKey] of [
+      [edge.from, edge.to],
+      [edge.to, edge.from],
+    ]) {
+      const own = centres[slotOf.get(groupByKey.get(key)!)!];
+      const other = centres[slotOf.get(groupByKey.get(otherKey)!)!];
+      const length = Math.hypot(other.x - own.x, other.y - own.y);
+      if (length < 1e-9) continue;
+      const entry = lean.get(key) ?? { x: 0, y: 0, weight: 0 };
+      entry.x += ((other.x - own.x) / length) * weight;
+      entry.y += ((other.y - own.y) / length) * weight;
+      entry.weight += weight;
+      lean.set(key, entry);
+    }
+  }
   const positions = new Map<string, { x: number; y: number }>();
   const hulls = new Map<number, LayoutPoint[]>();
   const dots = new Map<number, LayoutPoint[]>();
   const regions: GraphDetailRegion[] = [];
   ids.forEach((id, index) => {
-    const x = ((index % columns) - (columns - 1) / 2) * cell;
-    const y =
-      (Math.floor(index / columns) -
-        (Math.ceil(ids.length / columns) - 1) / 2) *
-      cell;
+    const { x, y } = centres[index];
     const members = groups
       .get(id)!
       .slice()
@@ -542,6 +585,17 @@ export function largeLibraryGraphLayout(graph: GraphState) {
       members.map((node) => node.subjectKey),
       edgesByGroup.get(id) ?? [],
       points,
+      members.map((node) => {
+        const entry = lean.get(node.subjectKey);
+        if (!entry) return undefined;
+        // Opposing directions cancel toward the centre; the pull is weaker
+        // than the title's own neighbourhood ties.
+        return {
+          x: x + (entry.x / entry.weight) * radius,
+          y: y + (entry.y / entry.weight) * radius,
+          weight: Math.min(1, entry.weight * CROSS_LEAN),
+        };
+      }),
     );
     members.forEach((node, index) => {
       positions.set(node.subjectKey, points[assignment[index]]);
@@ -559,7 +613,7 @@ export function largeLibraryGraphLayout(graph: GraphState) {
     );
   });
   const extent = Math.max(
-    cell,
+    160,
     ...regions.flatMap((region) => [
       Math.abs(region.left),
       Math.abs(region.right),
