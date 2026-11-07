@@ -10,12 +10,12 @@ use quick_xml::events::{BytesStart, Event};
 use reqwest::StatusCode;
 use scryer_application::{
     AppError, AppResult, CapturedIndexerHttpHeader, CapturedIndexerHttpResponse,
-    ExternalPluginWasm, IndexerClient, IndexerErrorOperation, IndexerErrorRepository,
-    IndexerManagementClient, IndexerPluginProvider, IndexerRequestResult, IndexerRequestTally,
-    IndexerRoutingPlan, IndexerSearchResponse, IndexerStatsTracker, IndexerSyncPlan,
-    IndexerValidationResult, ManagedIndexerChildPlan, ManagedIndexerRoutingScope, NewIndexerError,
-    NullIndexerErrorRepository, NullIndexerStatsTracker, RateLimitCooldownAction,
-    RuntimePluginLoad, SearchMode, classify_indexer_http_response,
+    IndexerAccountingContext, IndexerClient, IndexerErrorOperation, IndexerErrorRepository,
+    IndexerManagementClient, IndexerRequestResult, IndexerRequestTally, IndexerRoutingPlan,
+    IndexerSearchResponse, IndexerStatsTracker, IndexerSyncPlan, IndexerValidationResult,
+    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, NativeIndexerProvider, NewIndexerError,
+    NullIndexerErrorRepository, NullIndexerStatsTracker, RateLimitCooldownAction, SearchMode,
+    classify_indexer_http_response,
     external_import::{EXTERNAL_IMPORT_HOST_RPS_LANE, EXTERNAL_IMPORT_HOST_RPS_PROFILE},
     indexer_error_history_is_persistable, indexer_response_content_type, unknown_indexer_error,
 };
@@ -625,23 +625,28 @@ impl RoutingScope {
     }
 }
 
+/// Prowlarr as a host-native indexer provider: a management-only parent
+/// that syncs child Newznab and Torznab indexers.
 pub struct NativeProwlarrIndexerProvider {
-    delegate: Arc<dyn IndexerPluginProvider>,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
     indexer_stats: Arc<dyn IndexerStatsTracker>,
 }
 
+impl Default for NativeProwlarrIndexerProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NativeProwlarrIndexerProvider {
-    pub fn new(delegate: Arc<dyn IndexerPluginProvider>) -> Self {
-        Self::new_with_indexer_error_repository(delegate, Arc::new(NullIndexerErrorRepository))
+    pub fn new() -> Self {
+        Self::new_with_indexer_error_repository(Arc::new(NullIndexerErrorRepository))
     }
 
     pub fn new_with_indexer_error_repository(
-        delegate: Arc<dyn IndexerPluginProvider>,
         indexer_errors: Arc<dyn IndexerErrorRepository>,
     ) -> Self {
         Self {
-            delegate,
             indexer_errors,
             indexer_stats: Arc::new(NullIndexerStatsTracker),
         }
@@ -1476,310 +1481,58 @@ impl IndexerManagementClient for ProwlarrManagementClient {
     }
 }
 
-impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
-    fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
-        if is_prowlarr_provider(&config.provider_type) {
-            return Some(Arc::new(ProwlarrSearchStub));
-        }
-        self.delegate.client_for_provider(config)
+impl NativeIndexerProvider for NativeProwlarrIndexerProvider {
+    fn provider_type(&self) -> &str {
+        PROWLARR_PROVIDER_TYPE
     }
 
-    fn client_for_provider_with_proxy(
+    fn display_name(&self) -> String {
+        "Prowlarr".to_string()
+    }
+
+    fn description(&self) -> String {
+        "First-party Prowlarr provider that syncs managed Newznab and Torznab indexers".to_string()
+    }
+
+    fn config_fields(&self) -> Vec<ConfigFieldDef> {
+        prowlarr_config_fields()
+    }
+
+    fn management_capabilities(&self) -> scryer_domain::IndexerManagementCapabilities {
+        scryer_domain::IndexerManagementCapabilities {
+            supports_validate_config: true,
+            supports_managed_children_sync: true,
+        }
+    }
+
+    fn capabilities(&self) -> scryer_domain::IndexerProviderCapabilities {
+        scryer_domain::IndexerProviderCapabilities::default()
+    }
+
+    fn client(
         &self,
-        config: &IndexerConfig,
-        proxy_config: Option<&scryer_domain::ProxyConfig>,
+        _config: &IndexerConfig,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
+        _accounting: Option<&IndexerAccountingContext>,
     ) -> Option<Arc<dyn IndexerClient>> {
-        if is_prowlarr_provider(&config.provider_type) {
-            return Some(Arc::new(ProwlarrSearchStub));
-        }
-        self.delegate
-            .client_for_provider_with_proxy(config, proxy_config)
+        // The parent never searches; its synced children do.
+        Some(Arc::new(ProwlarrSearchStub))
     }
 
-    fn management_client_for_provider(
+    fn management_client(
         &self,
         config: &IndexerConfig,
+        accounting: Option<&IndexerAccountingContext>,
     ) -> Option<Arc<dyn IndexerManagementClient>> {
-        self.management_client_for_provider_with_accounting(
-            config,
-            scryer_application::IndexerAccountingContext::for_config(config).as_ref(),
-        )
+        Some(Arc::new(
+            ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+                config,
+                Arc::clone(&self.indexer_errors),
+                Arc::clone(&self.indexer_stats),
+            )
+            .with_accounting(accounting),
+        ))
     }
-
-    fn client_for_provider_with_accounting(
-        &self,
-        config: &IndexerConfig,
-        proxy_config: Option<&scryer_domain::ProxyConfig>,
-        accounting: Option<&scryer_application::IndexerAccountingContext>,
-    ) -> Option<Arc<dyn IndexerClient>> {
-        if is_prowlarr_provider(&config.provider_type) {
-            return Some(Arc::new(ProwlarrSearchStub));
-        }
-        self.delegate
-            .client_for_provider_with_accounting(config, proxy_config, accounting)
-    }
-
-    fn management_client_for_provider_with_accounting(
-        &self,
-        config: &IndexerConfig,
-        accounting: Option<&scryer_application::IndexerAccountingContext>,
-    ) -> Option<Arc<dyn IndexerManagementClient>> {
-        if is_prowlarr_provider(&config.provider_type) {
-            return Some(Arc::new(
-                ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
-                    config,
-                    Arc::clone(&self.indexer_errors),
-                    Arc::clone(&self.indexer_stats),
-                )
-                .with_accounting(accounting),
-            ));
-        }
-        self.delegate
-            .management_client_for_provider_with_accounting(config, accounting)
-    }
-
-    fn available_provider_types(&self) -> Vec<String> {
-        let mut providers = self
-            .delegate
-            .available_provider_types()
-            .into_iter()
-            .filter(|provider| !is_prowlarr_provider(provider))
-            .collect::<Vec<_>>();
-        providers.push(PROWLARR_PROVIDER_TYPE.to_string());
-        providers.sort();
-        providers.dedup();
-        providers
-    }
-
-    fn builtin_provider_types(&self) -> Vec<String> {
-        self.delegate
-            .builtin_provider_types()
-            .into_iter()
-            .filter(|provider| !is_prowlarr_provider(provider))
-            .collect()
-    }
-
-    fn plugin_version_for_provider(&self, provider_type: &str) -> Option<String> {
-        (!is_prowlarr_provider(provider_type))
-            .then(|| self.delegate.plugin_version_for_provider(provider_type))
-            .flatten()
-    }
-
-    fn search_semantics_version_for_provider(&self, provider_type: &str) -> Option<u32> {
-        (!is_prowlarr_provider(provider_type))
-            .then(|| {
-                self.delegate
-                    .search_semantics_version_for_provider(provider_type)
-            })
-            .flatten()
-    }
-
-    fn plugin_sdk_version_for_provider(&self, provider_type: &str) -> Option<String> {
-        (!is_prowlarr_provider(provider_type))
-            .then(|| self.delegate.plugin_sdk_version_for_provider(provider_type))
-            .flatten()
-    }
-
-    fn plugin_sdk_constraint_for_provider(&self, provider_type: &str) -> Option<String> {
-        (!is_prowlarr_provider(provider_type))
-            .then(|| {
-                self.delegate
-                    .plugin_sdk_constraint_for_provider(provider_type)
-            })
-            .flatten()
-    }
-
-    fn plugin_type_for_provider(&self, provider_type: &str) -> Option<String> {
-        if is_prowlarr_provider(provider_type) {
-            return Some("indexer".to_string());
-        }
-        self.delegate.plugin_type_for_provider(provider_type)
-    }
-
-    fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
-        self.delegate.scoring_policies()
-    }
-
-    fn upsert_runtime_plugin(&self, plugin: RuntimePluginLoad) -> Result<(), String> {
-        if is_prowlarr_provider(plugin.descriptor.provider_type()) {
-            tracing::warn!(
-                "ignoring runtime plugin that tried to claim reserved provider 'prowlarr'"
-            );
-            return Ok(());
-        }
-        self.delegate.upsert_runtime_plugin(plugin)
-    }
-
-    fn remove_runtime_plugin(&self, provider_type: &str) -> Result<(), String> {
-        if is_prowlarr_provider(provider_type) {
-            return Ok(());
-        }
-        self.delegate.remove_runtime_plugin(provider_type)
-    }
-
-    fn restore_builtin_plugin(&self, provider_type: &str) -> Result<(), String> {
-        if is_prowlarr_provider(provider_type) {
-            return Ok(());
-        }
-        self.delegate.restore_builtin_plugin(provider_type)
-    }
-
-    fn prepare_builtin_plugin(&self, provider_type: &str) -> Result<(), String> {
-        if is_prowlarr_provider(provider_type) {
-            return Ok(());
-        }
-        self.delegate.prepare_builtin_plugin(provider_type)
-    }
-
-    fn restore_builtin_plugin_with_settings(
-        &self,
-        provider_type: &str,
-        settings: std::collections::BTreeMap<String, String>,
-    ) -> Result<(), String> {
-        if is_prowlarr_provider(provider_type) {
-            return Ok(());
-        }
-        self.delegate
-            .restore_builtin_plugin_with_settings(provider_type, settings)
-    }
-
-    fn reload_runtime_plugins_with_builtin_settings(
-        &self,
-        runtime_plugins: &[RuntimePluginLoad],
-        disabled_builtins: &[String],
-        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
-    ) -> Result<(), String> {
-        let runtime_plugins = runtime_plugins
-            .iter()
-            .filter(|plugin| !is_prowlarr_provider(plugin.descriptor.provider_type()))
-            .cloned()
-            .collect::<Vec<_>>();
-        let disabled_builtins = filter_reserved_prowlarr(disabled_builtins);
-        self.delegate.reload_runtime_plugins_with_builtin_settings(
-            &runtime_plugins,
-            &disabled_builtins,
-            settings,
-        )
-    }
-
-    fn builtin_descriptor_for_provider(
-        &self,
-        provider_type: &str,
-    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
-        if is_prowlarr_provider(provider_type) {
-            return None;
-        }
-        self.delegate.builtin_descriptor_for_provider(provider_type)
-    }
-
-    fn reload_plugins(
-        &self,
-        external_wasm_bytes: &[ExternalPluginWasm<'_>],
-        disabled_builtins: &[String],
-    ) -> Result<(), String> {
-        let disabled_builtins = filter_reserved_prowlarr(disabled_builtins);
-        self.delegate
-            .reload_plugins(external_wasm_bytes, &disabled_builtins)
-    }
-
-    fn reload_runtime_plugins(
-        &self,
-        runtime_plugins: &[RuntimePluginLoad],
-        disabled_builtins: &[String],
-    ) -> Result<(), String> {
-        let runtime_plugins = runtime_plugins
-            .iter()
-            .filter(|plugin| !is_prowlarr_provider(plugin.descriptor.provider_type()))
-            .cloned()
-            .collect::<Vec<_>>();
-        let disabled_builtins = filter_reserved_prowlarr(disabled_builtins);
-        self.delegate
-            .reload_runtime_plugins(&runtime_plugins, &disabled_builtins)
-    }
-
-    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<ConfigFieldDef> {
-        if is_prowlarr_provider(provider_type) {
-            return prowlarr_config_fields();
-        }
-        self.delegate.config_fields_for_provider(provider_type)
-    }
-
-    fn dynamic_config_trigger_keys_for_provider(&self, provider_type: &str) -> Vec<String> {
-        if is_prowlarr_provider(provider_type) {
-            return Vec::new();
-        }
-        self.delegate
-            .dynamic_config_trigger_keys_for_provider(provider_type)
-    }
-
-    fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
-        if is_prowlarr_provider(provider_type) {
-            return Some("Prowlarr".to_string());
-        }
-        self.delegate.plugin_name_for_provider(provider_type)
-    }
-
-    fn plugin_description_for_provider(&self, provider_type: &str) -> Option<String> {
-        if is_prowlarr_provider(provider_type) {
-            return Some(
-                "First-party Prowlarr provider that syncs managed Newznab and Torznab indexers"
-                    .to_string(),
-            );
-        }
-        self.delegate.plugin_description_for_provider(provider_type)
-    }
-
-    fn default_base_url_for_provider(&self, provider_type: &str) -> Option<String> {
-        if is_prowlarr_provider(provider_type) {
-            return None;
-        }
-        self.delegate.default_base_url_for_provider(provider_type)
-    }
-
-    fn rate_limit_seconds_for_provider(&self, provider_type: &str) -> Option<i64> {
-        if is_prowlarr_provider(provider_type) {
-            return None;
-        }
-        self.delegate.rate_limit_seconds_for_provider(provider_type)
-    }
-
-    fn management_capabilities_for_provider(
-        &self,
-        provider_type: &str,
-    ) -> scryer_domain::IndexerManagementCapabilities {
-        if is_prowlarr_provider(provider_type) {
-            return scryer_domain::IndexerManagementCapabilities {
-                supports_validate_config: true,
-                supports_managed_children_sync: true,
-            };
-        }
-        self.delegate
-            .management_capabilities_for_provider(provider_type)
-    }
-
-    fn capabilities_for_provider(
-        &self,
-        provider_type: &str,
-    ) -> scryer_domain::IndexerProviderCapabilities {
-        if is_prowlarr_provider(provider_type) {
-            return scryer_domain::IndexerProviderCapabilities::default();
-        }
-        self.delegate.capabilities_for_provider(provider_type)
-    }
-}
-
-fn is_prowlarr_provider(provider_type: &str) -> bool {
-    provider_type
-        .trim()
-        .eq_ignore_ascii_case(PROWLARR_PROVIDER_TYPE)
-}
-
-fn filter_reserved_prowlarr(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .filter(|value| !is_prowlarr_provider(value))
-        .cloned()
-        .collect()
 }
 
 fn prowlarr_config_fields() -> Vec<ConfigFieldDef> {
@@ -2288,7 +2041,6 @@ mod tests {
     use chrono::Utc;
     use scryer_domain::IndexerConfig;
     use serde_json::json;
-    use std::collections::BTreeMap;
     use std::sync::Mutex;
     use std::time::Instant;
     use wiremock::matchers::{method, path, query_param};
@@ -2297,11 +2049,6 @@ mod tests {
     const SYSTEM_STATUS_PATH: &str = ProwlarrApiGeneration::ApiV1.system_status_path();
     const INDEXER_PATH: &str = ProwlarrApiGeneration::ApiV1.indexer_path();
     const APP_PROFILE_PATH: &str = ProwlarrApiGeneration::ApiV1.app_profile_path();
-
-    #[derive(Default)]
-    struct ProxyRecordingProvider {
-        observed_proxy_id: Arc<std::sync::Mutex<Option<String>>>,
-    }
 
     #[derive(Default)]
     struct RecordingIndexerErrorRepository {
@@ -2365,157 +2112,20 @@ mod tests {
         }
     }
 
-    impl IndexerPluginProvider for ProxyRecordingProvider {
-        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
-            None
-        }
-
-        fn client_for_provider_with_proxy(
-            &self,
-            _config: &IndexerConfig,
-            proxy_config: Option<&scryer_domain::ProxyConfig>,
-        ) -> Option<Arc<dyn IndexerClient>> {
-            *self.observed_proxy_id.lock().expect("proxy observation") =
-                proxy_config.map(|config| config.id.clone());
-            None
-        }
-
-        fn available_provider_types(&self) -> Vec<String> {
-            vec!["newznab".to_string()]
-        }
-
-        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
-            Vec::new()
-        }
-    }
-
-    #[derive(Default)]
-    struct BuiltinRecordingProvider {
-        prepared: std::sync::Mutex<Vec<String>>,
-        restored_settings: std::sync::Mutex<Vec<(String, BTreeMap<String, String>)>>,
-    }
-
-    impl IndexerPluginProvider for BuiltinRecordingProvider {
-        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
-            None
-        }
-
-        fn available_provider_types(&self) -> Vec<String> {
-            vec!["newznab".to_string()]
-        }
-
-        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
-            Vec::new()
-        }
-
-        fn prepare_builtin_plugin(&self, provider_type: &str) -> Result<(), String> {
-            self.prepared
-                .lock()
-                .expect("prepared calls")
-                .push(provider_type.to_string());
-            Ok(())
-        }
-
-        fn restore_builtin_plugin_with_settings(
-            &self,
-            provider_type: &str,
-            settings: BTreeMap<String, String>,
-        ) -> Result<(), String> {
-            self.restored_settings
-                .lock()
-                .expect("restored calls")
-                .push((provider_type.to_string(), settings));
-            Ok(())
-        }
-
-        fn search_semantics_version_for_provider(&self, _provider_type: &str) -> Option<u32> {
-            Some(7)
-        }
-    }
-
     #[test]
-    fn builtin_runtime_operations_reach_the_wrapped_provider() {
-        let delegate = Arc::new(BuiltinRecordingProvider::default());
-        let provider = NativeProwlarrIndexerProvider::new(delegate.clone());
-        let settings = BTreeMap::from([("mode".to_string(), "strict".to_string())]);
+    fn native_prowlarr_provider_returns_the_search_stub_and_a_prowlarr_management_client() {
+        let provider = NativeProwlarrIndexerProvider::new();
+        let config = test_indexer_config("http://127.0.0.1:9696");
 
-        provider
-            .prepare_builtin_plugin("newznab")
-            .expect("re-enabling a built-in indexer prepares it on the wrapped provider");
-        provider
-            .restore_builtin_plugin_with_settings("newznab", settings.clone())
-            .expect("built-in settings reach the wrapped provider");
-        provider
-            .prepare_builtin_plugin(PROWLARR_PROVIDER_TYPE)
-            .expect("the reserved provider needs no preparation");
-
-        assert_eq!(
-            *delegate.prepared.lock().expect("prepared calls"),
-            vec!["newznab".to_string()]
-        );
-        assert_eq!(
-            *delegate.restored_settings.lock().expect("restored calls"),
-            vec![("newznab".to_string(), settings)]
-        );
-        assert_eq!(
-            provider.search_semantics_version_for_provider("newznab"),
-            Some(7)
-        );
-        assert_eq!(
-            provider.search_semantics_version_for_provider(PROWLARR_PROVIDER_TYPE),
-            None
-        );
-    }
-
-    #[test]
-    fn non_prowlarr_clients_preserve_proxy_configuration() {
-        let delegate = Arc::new(ProxyRecordingProvider::default());
-        let observed_proxy_id = Arc::clone(&delegate.observed_proxy_id);
-        let provider = NativeProwlarrIndexerProvider::new(delegate);
-        let mut config = test_indexer_config("http://newznab:8088");
-        config.provider_type = "newznab".to_string();
-        let now = Utc::now();
-        let proxy_config = scryer_domain::ProxyConfig {
-            id: "proxy-1".to_string(),
-            name: "Byparr".to_string(),
-            provider_type: scryer_domain::ProxyProviderType::Byparr,
-            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
-            username_encrypted: None,
-            password_encrypted: None,
-            remote_dns: false,
-            base_url: "http://byparr:8191".to_string(),
-            request_timeout_seconds: 60,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-            host_key_fingerprint: None,
-            host_key_pinned_at: None,
-            private_key_encrypted: None,
-            private_key_passphrase_encrypted: None,
-            peer_public_key: None,
-            preshared_key_encrypted: None,
-            tunnel_public_key: None,
-            tunnel_addresses: Vec::new(),
-            tunnel_dns_servers: Vec::new(),
-            tunnel_mtu: None,
-            tunnel_keepalive_seconds: None,
-        };
-
+        assert_eq!(provider.provider_type(), PROWLARR_PROVIDER_TYPE);
         assert!(
-            provider
-                .client_for_provider_with_proxy(&config, Some(&proxy_config))
-                .is_none()
+            provider.client(&config, None, None).is_some(),
+            "a Prowlarr parent gets the management-only search stub"
         );
-        assert_eq!(
-            observed_proxy_id
-                .lock()
-                .expect("proxy observation")
-                .as_deref(),
-            Some("proxy-1")
-        );
+        let management = provider
+            .management_client(&config, None)
+            .expect("Prowlarr management client");
+        assert_eq!(management.name(), PROWLARR_PROVIDER_TYPE);
     }
 
     #[test]

@@ -73,7 +73,9 @@ mod image_proxy;
 mod import;
 mod indexer_category;
 mod indexer_errors;
+mod indexer_provider_registry;
 mod indexer_requests;
+pub use indexer_provider_registry::{IndexerProviderRegistry, NativeIndexerProvider};
 pub mod transport_proxy;
 pub mod tunnel_proxy;
 pub use indexer_category::{
