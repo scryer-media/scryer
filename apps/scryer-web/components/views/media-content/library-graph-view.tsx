@@ -148,6 +148,8 @@ const CLUSTER_COLORS = [
 const UNPLACED_COLOR = "#7a8499";
 /** How long the zoom must rest before posters load a sharper variant. */
 const POSTER_UPGRADE_REST_MS = 150;
+/** A reload of an already drawn graph that finishes sooner shows nothing. */
+const REFRESH_INDICATOR_DELAY_MS = 600;
 const LAYOUT_STEPS_PER_FRAME = 6;
 const MIN_POSTER_RADIUS_PX = 18;
 const HULL_PADDING_PX = 18;
@@ -3411,6 +3413,22 @@ export default function LibraryGraphView({
           : visibleNodeCount === 0
             ? "empty"
             : "ready";
+  // Once a graph is drawn, reloads (a library scan refetching titles, say)
+  // keep it on screen; only one that lasts gets the small corner indicator.
+  const loadingShown = graphStatus === "loading" || previewing;
+  const refreshing = loadingShown && paintedJoin !== null;
+  const [refreshIndicatorDue, setRefreshIndicatorDue] = React.useState(false);
+  React.useEffect(() => {
+    if (!refreshing) return;
+    const timer = window.setTimeout(
+      () => setRefreshIndicatorDue(true),
+      REFRESH_INDICATOR_DELAY_MS,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      setRefreshIndicatorDue(false);
+    };
+  }, [refreshing]);
 
   const crumbs = React.useMemo(
     () =>
@@ -3646,11 +3664,11 @@ export default function LibraryGraphView({
             ))}
           </div>
         ) : null}
-        {graphStatus === "loading" || previewing ? (
+        {loadingShown && (!refreshing || refreshIndicatorDue) ? (
           <div
             role="status"
             className={
-              previewing && paintedJoin === join
+              refreshing
                 ? "pointer-events-none absolute right-4 top-4 w-48 rounded-lg bg-[var(--scry-surfD)] p-3 text-[13px] text-[var(--scry-muted2)]"
                 : "pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-[13px] text-[var(--scry-muted2)]"
             }
