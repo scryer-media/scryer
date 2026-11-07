@@ -31,10 +31,11 @@ async fn seed_episode_delete_fixture_for(facet: MediaFacet) -> EpisodeDeleteFixt
     let job_runs = Arc::new(RecordingJobRunRepo::default());
     let app = base_app.with_test_overrides(|services| services.with_job_runs(job_runs.clone()));
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &admin,
         facet.clone(),
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&root, true)]),
+        vec![build_root_folder_entry(&root, true)],
     )
     .await
     .expect("save series roots");

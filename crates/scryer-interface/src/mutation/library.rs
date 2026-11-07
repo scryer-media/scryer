@@ -172,8 +172,8 @@ impl LibraryMutations {
                 })
                 .collect()
         });
-        let library = app
-            .update_library(
+        let updated = app
+            .update_library_with_outcome(
                 &actor,
                 input.library_id.as_ref(),
                 input.name,
@@ -182,7 +182,10 @@ impl LibraryMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(from_library(library))
+        let mut payload = from_library(updated.library);
+        payload.removed_title_count =
+            i32::try_from(updated.removed_title_count).unwrap_or(i32::MAX);
+        Ok(payload)
     }
 
     /// Delete the library configuration identified by the supplied ID.

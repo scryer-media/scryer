@@ -80,7 +80,6 @@ export type UseMediaSettingsResult = {
   seriesPath: string;
   setSeriesPath: (value: string) => void;
   rootFolders: RootFolderOption[];
-  saveRootFolders: (folders: RootFolderOption[]) => void;
   localPathStyle: LocalPathStyle | undefined;
   mediaSettingsLoading: boolean;
   mediaSettingsSaving: boolean;
@@ -399,32 +398,6 @@ export function useMediaSettings({
     SERIES: "",
     ANIME: "",
   });
-
-  const saveRootFolders = React.useCallback(
-    (folders: RootFolderOption[]) => {
-      setRootFolders(folders);
-      client
-        .mutation(updateMediaSettingsMutation, {
-          input: {
-            scope: activeQualityScopeId,
-            rootFolders: folders.map((folder) => ({
-              path: folder.path,
-              isDefault: folder.isDefault,
-            })),
-          },
-        })
-        .toPromise()
-        .then(({ error }) => {
-          if (error) {
-            setGlobalStatus(
-              userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
-              { level: "ERROR" },
-            );
-          }
-        });
-    },
-    [activeQualityScopeId, client, setGlobalStatus, t],
-  );
 
   const [generalSaveGuard] = React.useState(() => new SettingsSaveGuard());
   const saveSetting = React.useCallback(
@@ -1489,7 +1462,6 @@ export function useMediaSettings({
     seriesPath,
     setSeriesPath,
     rootFolders,
-    saveRootFolders,
     localPathStyle,
     mediaSettingsLoading,
     mediaSettingsSaving,

@@ -37,8 +37,10 @@ import {
   externalImportWarmupStatusQuery,
   externalImportSetupSecretDraftQuery,
   externalImportSetupSecretDraftStatusQuery,
+  librariesQuery,
   wizardQualityProfilesQuery,
 } from "@/lib/graphql/queries";
+import { normalizeComparableLibraryRootPath } from "@/lib/utils/library-root-validation";
 import type {
   ExternalArrSourceKind,
   ExternalImportConnectionKind,
@@ -1763,12 +1765,54 @@ export function useExternalImportSetup({
       // libraries that already exist. Existing/default libraries are UPDATED with
       // their mapped roots; user-added libraries are CREATED.
       const createdByDraftId = createdLibrariesRef.current;
+      // The server identifies a stored root by its id only, so an update sends
+      // each existing library's stored roots back with their ids; only a path
+      // the library does not have yet goes without one.
+      const storedRootIds = new Map<string, Map<string, string>>();
+      if (
+        librariesToCreate.some(
+          ({ draft }) =>
+            draft.existingLibraryId && !createdByDraftId.has(draft.id),
+        )
+      ) {
+        const { data, error } = await client
+          .query(librariesQuery, {}, { requestPolicy: "network-only" })
+          .toPromise();
+        if (error) {
+          return fail(
+            gqlError(error, t) || t("error.fallback.failedToCreateLibrary"),
+          );
+        }
+        for (const library of (data?.libraries ?? []) as {
+          id: string;
+          roots: { id: string; path: string }[];
+        }[]) {
+          storedRootIds.set(
+            library.id,
+            new Map(
+              library.roots.map((root) => [
+                normalizeComparableLibraryRootPath(root.path),
+                root.id,
+              ]),
+            ),
+          );
+        }
+      }
       for (const { draft, rootPaths } of librariesToCreate) {
         if (createdByDraftId.has(draft.id)) continue;
         const roots = rootPaths.map((path, index) => ({
           path,
           isDefault: index === 0,
         }));
+        const storedIds = draft.existingLibraryId
+          ? storedRootIds.get(draft.existingLibraryId)
+          : undefined;
+        const updateRoots = roots.map((root) => {
+          const id = storedIds?.get(
+            normalizeComparableLibraryRootPath(root.path),
+          );
+          return id ? { id, ...root } : root;
+        });
         const settings = {
           qualityProfileId: draft.qualityProfileId,
           scoringPersona: draft.scoringPersona,
@@ -1779,7 +1823,11 @@ export function useExternalImportSetup({
         if (draft.existingLibraryId) {
           const { data } = await client
             .mutation(updateLibraryMutation, {
-              input: { libraryId: draft.existingLibraryId, roots, settings },
+              input: {
+                libraryId: draft.existingLibraryId,
+                roots: updateRoots,
+                settings,
+              },
             })
             .toPromise();
           if (data?.updateLibrary?.id) {

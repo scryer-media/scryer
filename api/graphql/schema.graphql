@@ -10560,6 +10560,10 @@ type LibraryPayload {
 	"""
 	roots: [LibraryRootPayload!]!
 	"""
+	Titles removed from the catalog because the root under them was dropped by this mutation; zero everywhere else.
+	"""
+	removedTitleCount: Int!
+	"""
 	Effective title quality-profile ID for this library; requires title-management or catalog-settings access.
 	"""
 	qualityProfileId: ID!
@@ -20169,15 +20173,6 @@ type MutationRoot {
 		input: UpdateMediaSettingsInput!
 	): MediaSettingsPayload!
 	"""
-	Replace nonblank default library roots for movie, series, and anime facets.
-	"""
-	updateLibraryPaths(
-		"""
-		Default facet root paths; blank movie or series values and a null or blank anime value leave that facet unchanged.
-		"""
-		input: UpdateLibraryPathsInput!
-	): LibraryPathsPayload!
-	"""
 	Saves service TLS paths after checking the system-settings permission.
 	"""
 	updateServiceSettings(
@@ -28495,20 +28490,6 @@ type RevokeMyOauthAppPayload {
 }
 
 """
-Library root path and default marker.
-"""
-input RootFolderInput {
-	"""
-	Absolute filesystem path for the library root.
-	"""
-	path: String!
-	"""
-	Whether this root is the library default.
-	"""
-	isDefault: Boolean!
-}
-
-"""
 Root-folder path and default marker.
 """
 type RootFolderPayload {
@@ -34228,31 +34209,15 @@ input UpdateLibraryInput {
 }
 
 """
-Root paths for movie, series, and optional anime libraries.
-"""
-input UpdateLibraryPathsInput {
-	"""
-	Movie library path.
-	"""
-	moviePath: String!
-	"""
-	Series library path.
-	"""
-	seriesPath: String!
-	"""
-	Anime library path, when configured.
-	"""
-	animePath: String
-}
-
-"""
 Replacement library root path and default marker.
 """
 input UpdateLibraryRootInput {
 	"""
-	Id of the stored root this entry edits. A root keeps its identity, and the
-	titles under it keep their root, when its path changes under the same id.
-	Omit it for a new root; an entry without one is matched by path.
+	Id of the stored root this entry edits. Stored roots are identified by
+	this id and must carry it; a root keeps its identity, and the titles under
+	it keep their root, when its path changes under the same id. A root
+	without an id is a new root, and a root without an id at a stored root's
+	path is refused.
 	"""
 	id: ID
 	"""
@@ -34499,14 +34464,6 @@ input UpdateMediaSettingsInput {
 	Content scope receiving the settings.
 	"""
 	scope: ContentScopeValue!
-	"""
-	Optional library path override.
-	"""
-	libraryPath: String
-	"""
-	Optional replacement list of library roots; null leaves existing roots unchanged.
-	"""
-	rootFolders: [RootFolderInput!]
 	"""
 	Optional required audio-language codes; use `original` to resolve per title.
 	"""

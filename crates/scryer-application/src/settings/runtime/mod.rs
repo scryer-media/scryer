@@ -45,6 +45,5 @@ include!("media.rs");
 include!("movie_availability.rs");
 include!("quality_profiles.rs");
 include!("routing.rs");
-include!("external_import_paths.rs");
 include!("title_image_cache.rs");
 include!("script_interpreters.rs");

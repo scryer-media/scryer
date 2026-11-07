@@ -25,7 +25,12 @@ export const SETUP_MEDIA_PATH_LABEL_KEYS: Record<SetupMediaPathField, string> =
     anime: "setup.animePath",
   };
 
-export type SetupRoot = { path: string; isDefault: boolean };
+/**
+ * One root row. A row read from a library carries that stored root's `id`,
+ * which every save sends back: the server identifies stored roots by id only.
+ * A row the operator added has none and is a new root.
+ */
+export type SetupRoot = { id?: string; path: string; isDefault: boolean };
 export type SetupMediaRoots = Record<SetupMediaPathField, SetupRoot[]>;
 
 /** Each facet's default library: where setup writes that facet's roots. */
@@ -62,7 +67,11 @@ export function setupMediaLibraries(
       result[field] = {
         id: library.id,
         roots: normalizeLibraryRootDrafts(
-          library.roots.map(({ path, isDefault }) => ({ path, isDefault })),
+          library.roots.map(({ id, path, isDefault }) => ({
+            ...(id ? { id } : {}),
+            path,
+            isDefault,
+          })),
         ),
       };
     }

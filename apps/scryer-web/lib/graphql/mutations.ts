@@ -783,6 +783,7 @@ export const createLibraryMutation = `mutation CreateLibrary($input: CreateLibra
 
 export const updateLibraryMutation = `mutation UpdateLibrary($input: UpdateLibraryInput!) {
   updateLibrary(input: $input) {${LIBRARY_FIELDS}
+    removedTitleCount
   }
 }`;
 
@@ -1446,11 +1447,6 @@ const mediaSettingsFieldSelection = `
     folderChmod
     chownGroup`;
 
-const libraryPathsFieldSelection = `
-    moviePath
-    seriesPath
-    animePath`;
-
 const serviceSettingsFieldSelection = `
     tlsCertPath
     tlsKeyPath
@@ -1504,11 +1500,6 @@ export const updateIndexerRoutingMutation = `mutation UpdateIndexerRouting($inpu
 
 export const updateMediaSettingsMutation = `mutation UpdateMediaSettings($input: UpdateMediaSettingsInput!) {
   updateMediaSettings(input: $input) {${mediaSettingsFieldSelection}
-  }
-}`;
-
-export const updateLibraryPathsMutation = `mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-  updateLibraryPaths(input: $input) {${libraryPathsFieldSelection}
   }
 }`;
 

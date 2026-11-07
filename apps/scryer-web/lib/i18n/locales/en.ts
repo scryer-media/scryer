@@ -1968,8 +1968,12 @@ const en: LocaleDictionary = {
     "Library root the selected item cannot be used.",
   "error.reason.LIBRARY_ROOT_DUPLICATED":
     "Library roots must be unique within a library.",
+  "error.reason.LIBRARY_ROOT_ID_REQUIRED":
+    "That folder is already a root of this library. Keep the existing root instead of adding it again.",
   "error.reason.LIBRARY_ROOT_REQUIRED":
     "Libraries require at least one root folder.",
+  "error.reason.LIBRARY_ROOT_TITLES_BUSY":
+    "A title under a root being removed is busy with a move or a deletion. Try again when it finishes.",
   "error.reason.LIBRARY_SCAN_ALREADY_RUNNING":
     "A library scan is already running.",
   "error.reason.LIBRARY_SCAN_CANCEL_UNAVAILABLE":
@@ -2428,6 +2432,8 @@ const en: LocaleDictionary = {
     "This library root is already configured.",
   "error.reason.MEDIA_LIBRARY_ROOT_NOT_FOUND":
     "The library root could not be found.",
+  "error.reason.MEDIA_LIBRARY_ROOT_ID_REQUIRED":
+    "That folder is already a root of this library. Keep the existing root instead of adding it again.",
   "error.reason.MEDIA_LIBRARY_ROOT_PATH_EMPTY":
     "A library root path cannot be empty.",
   "error.reason.MEDIA_LIBRARY_ROOT_REFERENCED":
@@ -5185,6 +5191,11 @@ const en: LocaleDictionary = {
   "settings.libraryDeleteButton": "Delete library",
   "settings.libraryDeleteConfirm":
     "Delete {{name}}? Media files on disk will not be removed.",
+  "settings.libraryRemoveRootsTitle": "Remove root folders",
+  "settings.libraryRemoveRootsConfirm":
+    "Removing {{paths}} also removes every title under it from the catalog. Media files on disk will not be removed.",
+  "settings.libraryRootsRemovedTitles":
+    "Library saved. Titles removed from the catalog: {{count}}.",
   "settings.libraryEmpty": "No libraries available.",
   "settings.libraryCreated": "Library created.",
   "settings.librarySaved": "Library saved.",

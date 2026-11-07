@@ -204,6 +204,76 @@ async fn gql_with_token(ctx: &TestContext, query: &str, variables: Value, token:
 }
 
 /// Assert no GraphQL errors in response body.
+/// Replaces a facet default library's roots through `updateLibrary`; the
+/// first path is the default. A path that is already configured is sent with
+/// its stored root id.
+async fn set_default_library_roots(ctx: &TestContext, facet: &str, paths: &[&str]) {
+    let libraries = gql(
+        ctx,
+        r#"query($facet: MediaFacetValue!) {
+            libraries(facet: $facet, permission: MANAGE_LIBRARY) {
+                id isDefault roots { id path }
+            }
+        }"#,
+        json!({ "facet": facet }),
+    )
+    .await;
+    assert_no_errors(&libraries);
+    let library = libraries["data"]["libraries"]
+        .as_array()
+        .expect("libraries list")
+        .iter()
+        .find(|library| library["isDefault"] == true)
+        .unwrap_or_else(|| panic!("default {facet} library: {libraries}"))
+        .clone();
+    let comparable = |value: &str| value.trim_end_matches(['/', '\\']).to_string();
+    let stored_roots = library["roots"].as_array().expect("library roots").clone();
+    let roots = paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let mut root = json!({ "path": path, "isDefault": index == 0 });
+            if let Some(stored) = stored_roots
+                .iter()
+                .find(|stored| stored["path"].as_str().map(comparable) == Some(comparable(path)))
+            {
+                root["id"] = stored["id"].clone();
+            }
+            root
+        })
+        .collect::<Vec<_>>();
+    let update = gql(
+        ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) { id }
+        }"#,
+        json!({ "input": { "libraryId": library["id"], "roots": roots } }),
+    )
+    .await;
+    assert_no_errors(&update);
+}
+
+/// Points a facet's default library at one root; a blank path leaves the
+/// facet as it is.
+async fn set_default_library_root_path(ctx: &TestContext, facet: &str, path: &str) {
+    let path = path.trim();
+    if !path.is_empty() {
+        set_default_library_roots(ctx, facet, &[path]).await;
+    }
+}
+
+/// Points the movie, series and anime default libraries at one root each.
+async fn set_default_library_root_paths(
+    ctx: &TestContext,
+    movie_path: &str,
+    series_path: &str,
+    anime_path: &str,
+) {
+    set_default_library_root_path(ctx, "MOVIE", movie_path).await;
+    set_default_library_root_path(ctx, "SERIES", series_path).await;
+    set_default_library_root_path(ctx, "ANIME", anime_path).await;
+}
+
 fn assert_no_errors(body: &Value) {
     assert!(
         body.get("errors").is_none(),

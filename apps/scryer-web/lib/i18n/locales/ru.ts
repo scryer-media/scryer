@@ -740,6 +740,11 @@ const ru: LocaleDictionary = {
   "settings.libraryDeleteButton": "Удалить библиотеку",
   "settings.libraryDeleteConfirm":
     "Удалить библиотеку {{name}}? Медиафайлы на диске удалены не будут.",
+  "settings.libraryRemoveRootsTitle": "Удаление корневых папок",
+  "settings.libraryRemoveRootsConfirm":
+    "Удаление {{paths}} также удалит из каталога все тайтлы в этой папке. Медиафайлы на диске удалены не будут.",
+  "settings.libraryRootsRemovedTitles":
+    "Библиотека сохранена. Тайтлов удалено из каталога: {{count}}.",
   "settings.libraryEmpty": "Нет доступных библиотек.",
   "settings.libraryCreated": "Библиотека создана.",
   "settings.librarySaved": "Библиотека сохранена.",
@@ -8232,8 +8237,12 @@ const ru: LocaleDictionary = {
     "Корневой каталог библиотеки с выбранным значением нельзя использовать.",
   "error.reason.LIBRARY_ROOT_DUPLICATED":
     "Корневые каталоги внутри библиотеки должны быть уникальными.",
+  "error.reason.LIBRARY_ROOT_ID_REQUIRED":
+    "Эта папка уже является корневой папкой библиотеки. Оставьте существующую корневую папку вместо повторного добавления.",
   "error.reason.LIBRARY_ROOT_REQUIRED":
     "Для библиотеки требуется хотя бы одна корневая папка.",
+  "error.reason.LIBRARY_ROOT_TITLES_BUSY":
+    "Тайтл в удаляемой корневой папке занят перемещением или удалением. Повторите попытку после его завершения.",
   "error.reason.LIBRARY_SCAN_ALREADY_RUNNING":
     "Сканирование библиотеки уже выполняется.",
   "error.reason.LIBRARY_SCAN_CANCEL_UNAVAILABLE":
@@ -8701,6 +8710,8 @@ const ru: LocaleDictionary = {
     "Этот корневой каталог библиотеки уже настроен.",
   "error.reason.MEDIA_LIBRARY_ROOT_NOT_FOUND":
     "Корневой каталог библиотеки не найден.",
+  "error.reason.MEDIA_LIBRARY_ROOT_ID_REQUIRED":
+    "Эта папка уже является корневой папкой библиотеки. Оставьте существующую корневую папку вместо повторного добавления.",
   "error.reason.MEDIA_LIBRARY_ROOT_PATH_EMPTY":
     "Путь к корневому каталогу библиотеки не может быть пустым.",
   "error.reason.MEDIA_LIBRARY_ROOT_REFERENCED":

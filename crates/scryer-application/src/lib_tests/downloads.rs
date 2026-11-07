@@ -5688,34 +5688,31 @@ async fn build_fail_closed_pack_fixture(
         .expect("seed import actor");
 
     let library_dir = tempfile::tempdir().expect("library tempdir");
-    {
-        let current_paths = app.get_library_paths(&user).await.expect("library paths");
-        app.update_library_paths(
-            &user,
-            UpdateLibraryPaths {
-                movie_path: if options.facet == MediaFacet::Movie {
-                    library_dir.path().to_string_lossy().into_owned()
-                } else {
-                    current_paths.movie_path
-                },
-                series_path: if options.series_root_at_library_dir
-                    || options.facet == MediaFacet::Series
-                {
-                    library_dir.path().to_string_lossy().into_owned()
-                } else {
-                    current_paths.series_path
-                },
-                anime_path: Some(
-                    if options.anime_root_at_library_dir || options.facet == MediaFacet::Anime {
-                        library_dir.path().to_string_lossy().into_owned()
-                    } else {
-                        current_paths.anime_path
-                    },
-                ),
-            },
-        )
-        .await
-        .expect("point the series library root at the fixture dir");
+    let library_root = library_dir.path().to_string_lossy().into_owned();
+    for (facet, at_library_dir) in [
+        (MediaFacet::Movie, options.facet == MediaFacet::Movie),
+        (
+            MediaFacet::Series,
+            options.series_root_at_library_dir || options.facet == MediaFacet::Series,
+        ),
+        (
+            MediaFacet::Anime,
+            options.anime_root_at_library_dir || options.facet == MediaFacet::Anime,
+        ),
+    ] {
+        if at_library_dir {
+            update_default_library_roots(
+                &app,
+                &user,
+                facet,
+                vec![RootFolderEntry {
+                    path: library_root.clone(),
+                    is_default: true,
+                }],
+            )
+            .await
+            .expect("point the default library root at the fixture dir");
+        }
     }
     let title_folder = library_dir.path().join("Fail Closed Pack");
     let title = app

@@ -69,18 +69,27 @@ impl RootMoveFixture {
                 &library_id,
                 "Movies".to_string(),
                 "movies".to_string(),
-                vec![
-                    LibraryRootDraft {
-                        id: None,
-                        path: root_a.to_string_lossy().to_string(),
-                        is_default: true,
-                    },
-                    LibraryRootDraft {
-                        id: None,
-                        path: root_b.to_string_lossy().to_string(),
-                        is_default: false,
-                    },
-                ],
+                crate::lib_tests::with_stored_root_ids(
+                    &app.services
+                        .catalog
+                        .libraries
+                        .get_by_id(&library_id)
+                        .await
+                        .expect("library lookup")
+                        .expect("library exists"),
+                    vec![
+                        LibraryRootDraft {
+                            id: None,
+                            path: root_a.to_string_lossy().to_string(),
+                            is_default: true,
+                        },
+                        LibraryRootDraft {
+                            id: None,
+                            path: root_b.to_string_lossy().to_string(),
+                            is_default: false,
+                        },
+                    ],
+                ),
             )
             .await
             .expect("configure two roots");
@@ -113,8 +122,8 @@ impl RootMoveFixture {
     }
 
     /// A third configured root, so a selection can genuinely span more than one
-    /// source root. `update` re-keys root identity by normalized path, so the
-    /// two existing roots keep their ids (FR-078).
+    /// source root. The two existing roots are sent back with their ids, so
+    /// they keep them (FR-078).
     async fn add_third_root(&self) -> String {
         let root_c = self.root_c();
         std::fs::create_dir_all(&root_c).expect("create root c");
@@ -129,12 +138,12 @@ impl RootMoveFixture {
                 "movies".to_string(),
                 vec![
                     LibraryRootDraft {
-                        id: None,
+                        id: Some(self.root_a_id.clone()),
                         path: self.root_a().to_string_lossy().to_string(),
                         is_default: true,
                     },
                     LibraryRootDraft {
-                        id: None,
+                        id: Some(self.root_b_id.clone()),
                         path: self.root_b().to_string_lossy().to_string(),
                         is_default: false,
                     },

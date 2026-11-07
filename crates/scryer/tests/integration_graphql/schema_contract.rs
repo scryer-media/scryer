@@ -1389,7 +1389,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         "public types: {public_type_names:?}"
     );
     assert_eq!(kind_count("OBJECT"), 551);
-    assert_eq!(kind_count("INPUT_OBJECT"), 248);
+    // Library roots are no longer sent by path: UpdateLibraryPathsInput and
+    // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
+    // without a census update (+1).
+    assert_eq!(kind_count("INPUT_OBJECT"), 247);
     assert_eq!(kind_count("ENUM"), 208);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
@@ -6567,7 +6570,7 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
     assert!(mutation_names.contains(&"updateAcquisitionSettings"));
     assert!(mutation_names.contains(&"updateGeneralSettings"));
     assert!(mutation_names.contains(&"updateMediaSettings"));
-    assert!(mutation_names.contains(&"updateLibraryPaths"));
+    assert!(!mutation_names.contains(&"updateLibraryPaths"));
     assert!(mutation_names.contains(&"updateServiceSettings"));
     assert!(mutation_names.contains(&"saveQualityProfileSettings"));
     assert!(mutation_names.contains(&"updateDownloadClientRouting"));

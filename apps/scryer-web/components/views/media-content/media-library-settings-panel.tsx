@@ -330,6 +330,10 @@ export const MediaLibrarySettingsPanel = React.memo(
     // covers the panel adopting the saved library afterwards.
     const [saveInProgress, setSaveInProgress] = React.useState(false);
     const [deleteLibraryOpen, setDeleteLibraryOpen] = React.useState(false);
+    const [pendingRootRemoval, setPendingRootRemoval] = React.useState<{
+      paths: string[];
+      scan: boolean;
+    } | null>(null);
     const [pendingLibrarySelection, setPendingLibrarySelection] =
       React.useState<string | null>(null);
     const [activeLibraryId, setActiveLibraryId] = React.useState<string | null>(
@@ -1008,8 +1012,28 @@ export const MediaLibrarySettingsPanel = React.memo(
         if (current.some((rf) => rf.path === trimmed)) {
           return current;
         }
+        // Re-adding a stored root the draft dropped brings back its id, so
+        // the save keeps that root instead of sending its path without one.
+        const comparable = normalizeComparableLibraryRootPath(
+          trimmed,
+          localPathStyle,
+        );
+        const stored = savedRoots.find(
+          (root) =>
+            root.id &&
+            !current.some((candidate) => candidate.id === root.id) &&
+            normalizeComparableLibraryRootPath(root.path, localPathStyle) ===
+              comparable,
+        );
         return normalizeRoots(
-          [...current, { path: trimmed, isDefault: current.length === 0 }],
+          [
+            ...current,
+            {
+              ...(stored?.id ? { id: stored.id } : {}),
+              path: trimmed,
+              isDefault: current.length === 0,
+            },
+          ],
           localPathStyle,
         );
       });
@@ -1249,6 +1273,50 @@ export const MediaLibrarySettingsPanel = React.memo(
         return;
       }
       await onDeleteLibrary(activeLibrary.id);
+    };
+
+    // Stored roots the draft drops. The server takes the titles under them
+    // out of the catalog, so the save asks first. Stored roots are identified
+    // by id only: a stored root no draft root names by id is removed.
+    const rootsRemovedByDraft = (): RootFolderOption[] => {
+      if (mode !== "existing" || !activeLibrary) {
+        return [];
+      }
+      const keptIds = new Set(
+        normalizeRoots(draftRoots, localPathStyle)
+          .map((root) => root.id)
+          .filter(Boolean),
+      );
+      return savedRoots.filter((root) => !(root.id && keptIds.has(root.id)));
+    };
+
+    const requestSaveLibrary = async (scan: boolean) => {
+      const removedRoots = rootsRemovedByDraft();
+      if (removedRoots.length > 0) {
+        setPendingRootRemoval({
+          paths: removedRoots.map((root) => root.path),
+          scan,
+        });
+        return;
+      }
+      if (scan) {
+        await handleSaveAndScanLibrary();
+      } else {
+        await handleSaveLibrary();
+      }
+    };
+
+    const handleConfirmRootRemoval = async () => {
+      const pending = pendingRootRemoval;
+      setPendingRootRemoval(null);
+      if (!pending) {
+        return;
+      }
+      if (pending.scan) {
+        await handleSaveAndScanLibrary();
+      } else {
+        await handleSaveLibrary();
+      }
     };
 
     const handleConfirmDiscardLibraryChanges = React.useCallback(() => {
@@ -2468,7 +2536,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       id="media-library-save"
                       type="button"
                       variant="outline"
-                      onClick={handleSaveLibrary}
+                      onClick={() => void requestSaveLibrary(false)}
                       disabled={
                         settingsBusy ||
                         downloadClientRoutingBusy ||
@@ -2485,7 +2553,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       id="media-library-save-scan"
                       type="button"
                       variant="primary"
-                      onClick={handleSaveAndScanLibrary}
+                      onClick={() => void requestSaveLibrary(true)}
                       disabled={
                         settingsBusy ||
                         downloadClientRoutingBusy ||
@@ -2545,6 +2613,20 @@ export const MediaLibrarySettingsPanel = React.memo(
           cancelLabel={t("label.cancel")}
           onConfirm={handleConfirmDeleteLibrary}
           onCancel={() => setDeleteLibraryOpen(false)}
+        />
+        <ConfirmDialog
+          open={pendingRootRemoval !== null}
+          title={t("settings.libraryRemoveRootsTitle")}
+          description={t("settings.libraryRemoveRootsConfirm", {
+            paths: pendingRootRemoval?.paths.join(", ") ?? "",
+          })}
+          confirmLabel={t("label.remove")}
+          cancelLabel={t("label.cancel")}
+          contentId="media-library-remove-roots-dialog"
+          confirmButtonId="media-library-remove-roots-confirm"
+          cancelButtonId="media-library-remove-roots-cancel"
+          onConfirm={handleConfirmRootRemoval}
+          onCancel={() => setPendingRootRemoval(null)}
         />
         <ConfirmDialog
           open={libraryDiscardPrompt === "open"}

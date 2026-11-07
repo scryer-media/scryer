@@ -1991,10 +1991,11 @@ async fn title_delete_takes_its_pending_imports_and_password_retry_with_it() {
             .with_download_registry(registry.clone())
             .with_imports(imports.clone())
     });
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&root, true)]),
+        vec![build_root_folder_entry(&root, true)],
     )
     .await
     .unwrap();

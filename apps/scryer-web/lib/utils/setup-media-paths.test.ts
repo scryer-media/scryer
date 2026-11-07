@@ -110,10 +110,12 @@ test("a configured instance shows every root of each default library", () => {
   const roots = setupMediaRootsFromLibraries(libraries);
 
   assert.deepEqual(roots.movies, [
-    { path: "/media/films", isDefault: true },
-    { path: "/media/films-4k", isDefault: false },
+    { id: "movies-0", path: "/media/films", isDefault: true },
+    { id: "movies-1", path: "/media/films-4k", isDefault: false },
   ]);
-  assert.deepEqual(roots.series, [{ path: "/media/tv", isDefault: true }]);
+  assert.deepEqual(roots.series, [
+    { id: "series-0", path: "/media/tv", isDefault: true },
+  ]);
   // No default anime library was read, so the bootstrap folder stands in.
   assert.deepEqual(roots.anime, defaultRoots.anime);
 });
@@ -168,16 +170,42 @@ test("setup saves only the libraries whose roots changed", () => {
         field: "movies",
         libraryId: "movies",
         roots: [
-          { path: "/media/films", isDefault: false },
-          { path: "/media/films-4k", isDefault: true },
+          { id: "movies-0", path: "/media/films", isDefault: false },
+          { id: "movies-1", path: "/media/films-4k", isDefault: true },
         ],
       },
       {
         field: "series",
         libraryId: "series",
         roots: [
-          { path: "/media/tv", isDefault: true },
+          { id: "series-0", path: "/media/tv", isDefault: true },
           { path: "/media/tv-2", isDefault: false },
+        ],
+      },
+    ],
+  );
+});
+
+test("a stored root keeps its id through a path edit and a new row has none", () => {
+  const libraries: SetupMediaLibraries = setupMediaLibraries([
+    library("movies", "MOVIE", ["/media/films", "/media/films-4k"]),
+  ]);
+  const roots = setupMediaRootsFromLibraries(libraries);
+  const edited = addSetupRoot(
+    setDefaultSetupRoot(replaceSetupRoot(roots.movies, 0, "/media/movies"), 1),
+    "/media/movies-extra",
+  );
+
+  assert.deepEqual(
+    plannedSetupRootSaves({ ...roots, movies: edited }, libraries),
+    [
+      {
+        field: "movies",
+        libraryId: "movies",
+        roots: [
+          { id: "movies-0", path: "/media/movies", isDefault: false },
+          { id: "movies-1", path: "/media/films-4k", isDefault: true },
+          { path: "/media/movies-extra", isDefault: false },
         ],
       },
     ],

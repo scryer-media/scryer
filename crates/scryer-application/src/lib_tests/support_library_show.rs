@@ -123,19 +123,17 @@ impl LibraryRepository for MockLibraryRepo {
     /// Replace-on-write of a library's root list, with the real store's
     /// identity semantics.
     ///
-    /// `update_library_tx` reads the stored root ids **before** it rewrites the
-    /// rows and re-keys them by normalized path, so a root whose path is
-    /// resubmitted lands back on the id it already had; only a genuinely new
-    /// path is allocated one (FR-078, `existing_root_ids_by_normalized_path_tx`).
-    /// A mock that allocated a fresh id for every submitted root would make
-    /// every `update` look like "delete every root, create new ones" — exactly
-    /// the identity change synthetic root ids exist to prevent, and exactly the
-    /// bug a story test over a consolidation (US5) has to be able to catch.
+    /// Stored roots resolve by id only, as in `update_library_tx`: a draft
+    /// naming a stored root's id keeps that id, any other draft is a new root
+    /// with a fresh id, and a draft without a known id at a stored root's path
+    /// is refused (FR-078). A mock that allocated a fresh id for every
+    /// submitted root would make every `update` look like "delete every root,
+    /// create new ones", exactly the identity change synthetic root ids exist
+    /// to prevent.
     ///
-    /// The real store's second guard — refusing to remove a root any title still
-    /// references — is not reproduced here, because this double holds no titles.
-    /// The consolidation tail asks that question itself, before it calls
-    /// `update`, so the story tests still exercise the rule.
+    /// The real store's other guard, refusing to remove a root any title still
+    /// references, is not reproduced here, because this double holds no titles.
+    /// The application removes those titles itself before it calls `update`.
     async fn update(
         &self,
         library_id: &str,
@@ -148,25 +146,33 @@ impl LibraryRepository for MockLibraryRepo {
             .iter_mut()
             .find(|library| library.id == library_id)
             .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
-        let existing_root_ids: HashMap<String, String> = library
+        let known_ids: HashSet<String> = library.roots.iter().map(|root| root.id.clone()).collect();
+        let stored_paths: HashSet<String> = library
             .roots
             .iter()
-            .map(|root| {
-                (
-                    scryer_domain::normalize_library_root_path(&root.path),
-                    root.id.clone(),
-                )
-            })
+            .map(|root| scryer_domain::normalize_library_root_path(&root.path))
             .collect();
+        for root in &roots {
+            let known = root.id.as_ref().is_some_and(|id| known_ids.contains(id));
+            if !known
+                && stored_paths.contains(&scryer_domain::normalize_library_root_path(&root.path))
+            {
+                return Err(AppError::validation_refused(
+                    "MEDIA_LIBRARY_ROOT_ID_REQUIRED",
+                    format!("library root '{}' is already configured", root.path),
+                ));
+            }
+        }
         let now = Utc::now();
+        let mut claimed = HashSet::new();
         library.name = name;
         library.slug = slug;
         library.roots = roots
             .into_iter()
             .map(|root| {
-                let id = existing_root_ids
-                    .get(&scryer_domain::normalize_library_root_path(&root.path))
-                    .cloned()
+                let id = root
+                    .id
+                    .filter(|id| known_ids.contains(id) && claimed.insert(id.clone()))
                     .unwrap_or_else(|| Id::new().0);
                 scryer_domain::LibraryRoot {
                     id,
@@ -984,4 +990,27 @@ impl ShowRepository for MockShowRepo {
         *self.episode_external_ids.lock().await = episode_ids;
         Ok(())
     }
+}
+
+/// `drafts` with each stored root of `library` carrying its id, matched by
+/// path. Stored roots are identified by id only, so a test that resubmits a
+/// root it configured earlier has to send that root's id back.
+pub(crate) fn with_stored_root_ids(
+    library: &Library,
+    drafts: Vec<LibraryRootDraft>,
+) -> Vec<LibraryRootDraft> {
+    drafts
+        .into_iter()
+        .map(|mut draft| {
+            if draft.id.is_none() {
+                let path = scryer_domain::normalize_library_root_path(&draft.path);
+                draft.id = library
+                    .roots
+                    .iter()
+                    .find(|root| scryer_domain::normalize_library_root_path(&root.path) == path)
+                    .map(|root| root.id.clone());
+            }
+            draft
+        })
+        .collect()
 }

@@ -37,9 +37,9 @@ use scryer_interface_core::{
     totp_management_actor_from_ctx,
 };
 use scryer_interface_media::mappers::{
-    from_download_client_routing_entry, from_indexer_routing_entry, from_library_paths_settings,
-    from_media_server_connection, from_media_settings, from_plex_server_discovery,
-    from_quality_profile_settings, from_service_settings, from_user_with_auth_factor_status,
+    from_download_client_routing_entry, from_indexer_routing_entry, from_media_server_connection,
+    from_media_settings, from_plex_server_discovery, from_quality_profile_settings,
+    from_service_settings, from_user_with_auth_factor_status,
 };
 use scryer_interface_media::types::*;
 
@@ -1685,16 +1685,6 @@ impl SettingsMutations {
             &actor,
             scope.into_media_facet(),
             scryer_application::UpdateMediaSettings {
-                library_path: input.library_path,
-                root_folders: input.root_folders.map(|entries| {
-                    entries
-                        .into_iter()
-                        .map(|entry| scryer_domain::RootFolderEntry {
-                            path: entry.path,
-                            is_default: entry.is_default,
-                        })
-                        .collect()
-                }),
                 required_audio_languages: input.required_audio_languages,
                 use_season_folders: input.use_season_folders,
                 folder_template: input.folder_template,
@@ -1733,32 +1723,6 @@ impl SettingsMutations {
         )
         .await
         .map(|settings| from_media_settings(scope, settings))
-        .map_err(to_gql_error)
-    }
-
-    /// Replace nonblank default library roots for movie, series, and anime facets.
-    async fn update_library_paths(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(
-            desc = "Default facet root paths; blank movie or series values and a null or blank anime value leave that facet unchanged."
-        )]
-        input: UpdateLibraryPathsInput,
-    ) -> GqlResult<LibraryPathsPayload> {
-        let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
-                .await?;
-        app.update_library_paths(
-            &actor,
-            scryer_application::UpdateLibraryPaths {
-                movie_path: input.movie_path,
-                series_path: input.series_path,
-                anime_path: input.anime_path,
-            },
-        )
-        .await
-        .map(from_library_paths_settings)
         .map_err(to_gql_error)
     }
 
