@@ -696,3 +696,111 @@ async fn title_root_folder_path_is_null_for_viewers() {
             .is_err()
     );
 }
+
+// ── Activity stream ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn activity_stream_sends_viewers_a_bare_catalog_refresh_signal() {
+    use crate::domain_events::{new_title_domain_event, title_context_snapshot};
+    use scryer_domain::{
+        ImportRejectedEventData, ImportStatus, MediaFileAnalyzedEventData, MediaPathUpdate,
+        MediaUpdateType,
+    };
+
+    let fixture = seed_fixture().await;
+    let title = &fixture.series_title;
+    let snapshot = title_context_snapshot(title);
+
+    let analyzed = fixture
+        .app
+        .append_domain_event(new_title_domain_event(
+            &fixture.admin,
+            title,
+            DomainEventPayload::MediaFileAnalyzed(MediaFileAnalyzedEventData {
+                title: snapshot.clone(),
+                media_updates: vec![MediaPathUpdate {
+                    path: format!("/series/Harbor Lantern/Season 01/{SERIES_FILE_NAME}"),
+                    update_type: MediaUpdateType::Modified,
+                }],
+                file_id: "privacy-series-file".to_string(),
+                analysis_status: "scanned".to_string(),
+                episode_ids: vec![EPISODE_ID.to_string()],
+            }),
+        ))
+        .await
+        .expect("append analyzed event");
+    let rejected = fixture
+        .app
+        .append_domain_event(new_title_domain_event(
+            &fixture.admin,
+            title,
+            DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                title: Some(snapshot),
+                status: ImportStatus::Failed,
+                import_id: Some("privacy-import".to_string()),
+                source_system: Some("sabnzbd".to_string()),
+                source_ref: Some("privacy-job".to_string()),
+                source_title: Some("Harbor.Lantern.S01E01.1080p-PRIVGRP".to_string()),
+                source_path: Some("/downloads/complete/privacy".to_string()),
+                dest_path: None,
+                quality: Some("1080p".to_string()),
+                reason: Some("Policy mismatch".to_string()),
+                skip_reason: None,
+                episode_ids: vec![EPISODE_ID.to_string()],
+            }),
+        ))
+        .await
+        .expect("append rejected event");
+
+    // Only the events appended here; seeding writes its own.
+    let watermark = analyzed.sequence - 1;
+
+    // A viewer learns that the title changed, and nothing about the file,
+    // who acted, or the rejected import.
+    let viewer = viewer_for(&fixture.series_library_id);
+    let viewer_events = fixture
+        .app
+        .list_activity_events_after_sequence(&viewer, watermark, 100)
+        .await
+        .expect("viewer reads the stream");
+    let viewer_sequences: Vec<i64> = viewer_events.iter().map(|(seq, _)| *seq).collect();
+    assert_eq!(viewer_sequences, vec![analyzed.sequence]);
+    let (_, signal) = &viewer_events[0];
+    assert_eq!(signal.kind, ActivityKind::FileAnalyzed);
+    assert_eq!(signal.title_id.as_deref(), Some(title.id.as_str()));
+    assert_eq!(signal.message, "");
+    assert!(signal.channels.is_empty(), "no notification channels");
+    assert_eq!(signal.actor_user_id, None);
+    assert_eq!(signal.actor_display_name, "System");
+
+    // A viewer of the other library hears nothing about this title.
+    let outsider = viewer_for(&fixture.movie_library_id);
+    let outsider_events = fixture
+        .app
+        .list_activity_events_after_sequence(&outsider, watermark, 100)
+        .await
+        .expect("outsider reads the stream");
+    assert!(
+        outsider_events
+            .iter()
+            .all(|(_, event)| event.title_id.as_deref() != Some(title.id.as_str())),
+        "another library's title leaked: {outsider_events:?}"
+    );
+
+    // A title manager still gets the full events.
+    let manager = title_manager_for(&fixture.series_library_id);
+    let manager_events = fixture
+        .app
+        .list_activity_events_after_sequence(&manager, watermark, 100)
+        .await
+        .expect("manager reads the stream");
+    let manager_sequences: Vec<i64> = manager_events.iter().map(|(seq, _)| *seq).collect();
+    assert!(manager_sequences.contains(&analyzed.sequence));
+    assert!(manager_sequences.contains(&rejected.sequence));
+    let full = manager_events
+        .iter()
+        .find(|(seq, _)| *seq == analyzed.sequence)
+        .map(|(_, event)| event)
+        .expect("analyzed event");
+    assert!(full.message.contains("Harbor Lantern"), "{}", full.message);
+}

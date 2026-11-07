@@ -692,7 +692,12 @@ export const PendingImportsContainer = React.memo(
     }, [ignoredOffset, pendingOffset, refresh]);
 
     const [selectingAll, setSelectingAll] = React.useState(false);
+    // Bumped whenever the library filter or view changes. A select-all that
+    // started under an older filter drops its results instead of selecting
+    // items the operator no longer sees.
+    const filterGenerationRef = React.useRef(0);
     const selectAllPending = React.useCallback(async () => {
+      const generation = filterGenerationRef.current;
       setSelectingAll(true);
       setPendingError(null);
       try {
@@ -704,12 +709,15 @@ export const PendingImportsContainer = React.memo(
             offset,
             SELECT_ALL_PAGE_SIZE,
           );
+          if (filterGenerationRef.current !== generation) return;
           for (const item of page.items) everything.set(item.id, item);
           offset += page.items.length;
           if (page.items.length === 0 || offset >= page.totalCount) break;
         }
+        if (filterGenerationRef.current !== generation) return;
         setSelectedImports([...everything.values()]);
       } catch (err) {
+        if (filterGenerationRef.current !== generation) return;
         setPendingError(
           userFacingGraphQlErrorMessage(err, t("pendingImports.loadFailed"), t),
         );
@@ -727,6 +735,7 @@ export const PendingImportsContainer = React.memo(
     }, [ignoredOffset, refresh]);
 
     React.useEffect(() => {
+      filterGenerationRef.current += 1;
       setPendingOffset(0);
       setIgnoredOffset(0);
       setPendingLoaded(false);
