@@ -15,6 +15,7 @@ import {
   graphPosterUrls,
   graphPosterVariant,
   isOriginalGraphPosterUrl,
+  isThumbnailGraphPosterUrl,
   prepareGraphPosterImages,
 } from "./library-graph-posters.ts";
 
@@ -471,8 +472,7 @@ test("offscreen full-size posters keep a smaller allowance than thumbnails", () 
     () => new TestPosterImage() as unknown as HTMLImageElement,
     12,
     240,
-    isOriginalGraphPosterUrl,
-    2,
+    { isLarge: isOriginalGraphPosterUrl, maxOffscreenLarge: 2 },
   );
   const kept = [...cache.keys()];
   // The visible one stays, plus the two most recent offscreen originals.
@@ -485,4 +485,36 @@ test("offscreen full-size posters keep a smaller allowance than thumbnails", () 
     ],
   );
   assert.equal(kept.filter((url) => url.endsWith("/w70")).length, 6);
+});
+
+test("offscreen thumbnails keep their own allowance", () => {
+  const cache = new Map<string, HTMLImageElement>();
+  const add = (url: string) => {
+    const image = new TestPosterImage();
+    image.complete = true;
+    image.naturalWidth = 70;
+    cache.set(url, image as unknown as HTMLImageElement);
+  };
+  for (let i = 0; i < 8; i++) add(`/images/media/h${i}/w70`);
+  for (let i = 0; i < 4; i++) add(`/images/media/h${i}/w250`);
+  prepareGraphPosterImages(
+    cache,
+    new Set(),
+    () => {},
+    () => new TestPosterImage() as unknown as HTMLImageElement,
+    12,
+    2,
+    { isThumbnail: isThumbnailGraphPosterUrl, maxOffscreenThumbnails: 6 },
+  );
+  const kept = [...cache.keys()];
+  // Thumbnails leaving the view are not crowded out by the other sizes'
+  // allowance; each pool drops its own oldest entries.
+  assert.deepEqual(
+    kept.filter((url) => url.endsWith("/w70")),
+    [2, 3, 4, 5, 6, 7].map((i) => `/images/media/h${i}/w70`),
+  );
+  assert.deepEqual(
+    kept.filter((url) => url.endsWith("/w250")),
+    ["/images/media/h2/w250", "/images/media/h3/w250"],
+  );
 });

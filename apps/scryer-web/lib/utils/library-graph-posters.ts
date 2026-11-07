@@ -139,6 +139,10 @@ export function isOriginalGraphPosterUrl(url: string): boolean {
   return /\/original(?:[?#]|$)/.test(url);
 }
 
+export function isThumbnailGraphPosterUrl(url: string): boolean {
+  return /\/w70(?:[?#]|$)/.test(url);
+}
+
 /** Admission precedes image loading, so pending requests count toward the
  * viewport budget just like decoded images. Create once per frame. */
 export function createGraphPosterAdmission(
@@ -160,10 +164,22 @@ export function createGraphPosterAdmission(
   };
 }
 
+export type GraphPosterCacheLimits = {
+  /** Full-size images, several times the pixels of the others. */
+  isLarge?: (url: string) => boolean;
+  maxOffscreenLarge?: number;
+  /** The thumbnails every poster falls back to while a zoom moves. */
+  isThumbnail?: (url: string) => boolean;
+  maxOffscreenThumbnails?: number;
+};
+
 /** Keep the visible working set, plus a bounded offscreen cache. Requests are
  * admitted separately from drawing so a busy viewport can finish every poster.
- * Full-size images, several times the pixels of the others, keep a smaller
- * offscreen allowance of their own. */
+ * Full-size images keep a smaller offscreen allowance of their own, and
+ * thumbnails a much larger one: they are a small fraction of the pixels, and
+ * a poster drawn from a sharper variant leaves its thumbnail offscreen, so
+ * sharing one allowance would drop every thumbnail in a zoomed-in view and
+ * load them all again on the way back out. */
 export function prepareGraphPosterImages(
   cache: Map<string, HTMLImageElement>,
   visible: ReadonlySet<string>,
@@ -171,33 +187,37 @@ export function prepareGraphPosterImages(
   createImage: () => HTMLImageElement = () => new Image(),
   maxPending = 12,
   maxOffscreen = 240,
-  isLarge: (url: string) => boolean = () => false,
-  maxOffscreenLarge = 16,
+  {
+    isLarge = () => false,
+    maxOffscreenLarge = 16,
+    isThumbnail = () => false,
+    maxOffscreenThumbnails = 2000,
+  }: GraphPosterCacheLimits = {},
 ) {
-  let offscreen = 0;
-  let offscreenLarge = 0;
+  const pool = (url: string) =>
+    isThumbnail(url) ? "thumbnail" : isLarge(url) ? "large" : "standard";
+  const limits = {
+    thumbnail: maxOffscreenThumbnails,
+    large: maxOffscreenLarge,
+    standard: maxOffscreen,
+  };
+  const offscreen = { thumbnail: 0, large: 0, standard: 0 };
   for (const url of cache.keys()) {
-    if (visible.has(url)) continue;
-    offscreen++;
-    if (isLarge(url)) offscreenLarge++;
+    if (!visible.has(url)) offscreen[pool(url)]++;
   }
   let pending = 0;
   for (const [url, image] of cache) {
-    const large = !visible.has(url) && isLarge(url);
-    if (
-      !visible.has(url) &&
-      (!image.complete ||
-        offscreen > maxOffscreen ||
-        (large && offscreenLarge > maxOffscreenLarge))
-    ) {
+    if (visible.has(url)) {
+      if (!image.complete) pending++;
+      continue;
+    }
+    const kind = pool(url);
+    if (!image.complete || offscreen[kind] > limits[kind]) {
       image.onload = null;
       image.onerror = null;
       if (!image.complete) image.src = "";
       cache.delete(url);
-      offscreen--;
-      if (large) offscreenLarge--;
-    } else if (!image.complete) {
-      pending++;
+      offscreen[kind]--;
     }
   }
   for (const url of visible) {

@@ -37,6 +37,7 @@ import {
   graphPosterUrls,
   graphPosterVariantUrls,
   isOriginalGraphPosterUrl,
+  isThumbnailGraphPosterUrl,
   createGraphPosterAdmission,
   prepareGraphPosterImages,
   graphPosterBounds,
@@ -1606,8 +1607,13 @@ export default function LibraryGraphView({
           break;
         }
       }
+      // A poster's thumbnail stays in the working set while it is in view,
+      // drawn or not, so the next zoom always has it to stand in.
+      const thumbnail = graphPosterVariantUrls(url).w70;
+      if (!image || posterCacheRef.current.has(thumbnail)) {
+        visiblePosters.add(thumbnail);
+      }
       if (zoomResting) visiblePosters.add(urls[0]);
-      else if (!image) visiblePosters.add(graphPosterVariantUrls(url).w70);
       if (!image) {
         return;
       }
@@ -1662,7 +1668,10 @@ export default function LibraryGraphView({
       undefined,
       undefined,
       undefined,
-      isOriginalGraphPosterUrl,
+      {
+        isLarge: isOriginalGraphPosterUrl,
+        isThumbnail: isThumbnailGraphPosterUrl,
+      },
     );
     hoverableNodesRef.current = hoverableNodes;
     if (
