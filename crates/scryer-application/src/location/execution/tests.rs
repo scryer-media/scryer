@@ -1106,11 +1106,10 @@ async fn cross_filesystem_moves_copy_verify_then_flip_the_catalog() {
         ]
     );
 
-    // The verified-redundant source copy was recycled, not deleted silently.
-    assert_eq!(
-        recycler.recycled(),
-        vec![plan.titles[0].files[0].source_path.clone()]
-    );
+    // The verified-redundant source copy is removed, not recycled: the bin
+    // would only hold a second copy of what the destination already has.
+    assert!(!plan.titles[0].files[0].source().exists());
+    assert!(recycler.recycled().is_empty());
     assert!(
         !source_root.join("Movie").exists(),
         "empty source dir pruned"
@@ -1571,11 +1570,11 @@ async fn a_destination_left_unrecorded_by_a_crash_is_proven_and_the_move_continu
         "proving a placed destination recovers the hashes a copy would have streamed"
     );
     assert_eq!(catalog.writes().len(), 3, "the catalog still flipped");
-    assert_eq!(
-        recycler.recycled(),
-        vec![plan.titles[0].files[0].source_path.clone()],
+    assert!(
+        !plan.titles[0].files[0].source().exists(),
         "the source is redundant once the destination is proven"
     );
+    assert!(recycler.recycled().is_empty());
 }
 
 /// The same window with a file that is not this operation's work: it does not
@@ -2024,9 +2023,10 @@ async fn a_quick_floor_fallback_is_counted_on_the_operation() {
             .verification_fallback_count,
         1
     );
-    // Even at the quick floor, the source is still recycled: the floor is a
+    // Even at the quick floor, the source is still removed: the floor is a
     // pass, just a weaker one (FR-042/044).
-    assert_eq!(recycler.recycled().len(), 1);
+    assert!(!plan.titles[0].files[0].source().exists());
+    assert!(recycler.recycled().is_empty());
 }
 
 /// The cache-bypass note travels with a full verification rather than
@@ -2244,7 +2244,8 @@ async fn a_quick_depth_copy_records_the_reduced_guarantee_and_still_settles() {
     assert!(!hashes.full_blake3.is_empty());
 
     assert!(records[0].outcome.permits_source_removal());
-    assert_eq!(recycler.recycled().len(), 1);
+    assert!(!plan.titles[0].files[0].source().exists());
+    assert!(recycler.recycled().is_empty());
     assert_eq!(
         catalog.writes().len(),
         3,
@@ -2288,7 +2289,7 @@ async fn corruption_in_the_unsampled_middle_needs_full_depth() {
     let middle = crate::fs_integrity::IMPORT_CONTENT_PROOF_SAMPLE_BYTES + 17;
 
     let quick_temp = tempfile::tempdir().expect("temp dir");
-    let (quick, _, quick_store, _, quick_recycler) =
+    let (quick, quick_plan, quick_store, _, quick_recycler) =
         run_copy_at_depth(quick_temp.path(), VerificationDepth::Quick, Some(middle)).await;
     assert_eq!(
         quick.state,
@@ -2300,7 +2301,8 @@ async fn corruption_in_the_unsampled_middle_needs_full_depth() {
             .outcome
             .permits_source_removal()
     );
-    assert_eq!(quick_recycler.recycled().len(), 1);
+    assert!(!quick_plan.titles[0].files[0].source().exists());
+    assert!(quick_recycler.recycled().is_empty());
 
     let full_temp = tempfile::tempdir().expect("temp dir");
     let (full, full_plan, full_store, _, full_recycler) =

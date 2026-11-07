@@ -1233,45 +1233,25 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     "Source or destination changed before cleanup; preserved the source.",
                 ));
             }
-            let mut source_title = planned.clone();
-            let mut media_file_id = file.media_file_id.as_deref();
-            if let Some(conflict) = &self.plan.conflict
-                && let Some(source_file) = conflict
-                    .files
-                    .iter()
-                    .find(|source_file| source_file.path == file.source_path)
-            {
-                source_title.source_root_path = Some(source_file.root_path.clone());
-                media_file_id = source_file.media_file_id.as_deref();
-            }
-            let disposal = self
-                .recycler
-                .recycle_source(
-                    &operation.id,
-                    &source_title,
-                    &source,
-                    media_file_id,
-                    file.size_bytes,
-                )
-                .await?;
-            if let SourceDisposal::RemovedRecycleUnavailable(reason) = disposal {
-                outcome.warnings.push(format!(
-                    "The old copy at {} was deleted outright instead of going to the recycle bin: {reason}",
-                    file.source_path
-                ));
-            }
-            if disposal == SourceDisposal::PreservedRecycleUnavailable {
-                let warning = format!(
-                    "An extra copy remains at {} because it could not be recycled. The destination copy is complete.",
-                    file.source_path
-                );
-                if let Some(resolution) = resolution {
-                    let mut resolution = resolution.clone();
-                    resolution.warning = Some(warning.clone());
-                    resolution.reason_code = Some("recycle_unavailable".into());
-                    self.store.save_file_resolution(&resolution).await?;
+            // The destination was just proven to hold the source's bytes, so the
+            // source is the redundant half of a finished move and is removed,
+            // not recycled: a recycle entry would only be a second copy of
+            // content the library already holds.
+            match tokio::fs::remove_file(&source).await {
+                Ok(()) => tracing::info!(
+                    operation_id = %operation.id,
+                    title_id = %title.title_id,
+                    source = %file.source_path,
+                    destination = %file.destination_path,
+                    "removed a source copy verified at its destination"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AppError::Repository(format!(
+                        "failed to remove the verified source {}: {error}",
+                        file.source_path
+                    )));
                 }
-                outcome.warnings.push(warning);
             }
         }
 
