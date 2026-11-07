@@ -4139,6 +4139,8 @@ enum ReleaseValidationStage {
     RustFmt,
     WebLint,
     GraphqlCompare,
+    /// After the schema refresh: the web tests validate documents against it.
+    WebTest,
     Hygiene,
     WebBuild,
     ClippyWindows,
@@ -4159,13 +4161,16 @@ fn run_validation_stages(
             RustFmt,
             WebLint,
             GraphqlCompare,
+            WebTest,
             Hygiene,
             WebBuild,
             ClippyWindows,
             ClippyHost,
             Nextest,
         ],
-        ReleaseValidationScope::WebOnly => &[VersionBump, WebAudit, WebLint, Hygiene, WebBuild],
+        ReleaseValidationScope::WebOnly => {
+            &[VersionBump, WebAudit, WebLint, WebTest, Hygiene, WebBuild]
+        }
         ReleaseValidationScope::MetaOnly => &[VersionBump, Hygiene],
     };
     for &stage in stages {
@@ -4197,6 +4202,7 @@ fn run_scryer_validation(
             next_version,
             allow_breaking_api,
         ),
+        ReleaseValidationStage::WebTest => run_scryer_web_tests(ctx, "[web] "),
         ReleaseValidationStage::Hygiene => run_scryer_release_hygiene_validation(ctx, "[hygiene] "),
         ReleaseValidationStage::WebBuild => run_scryer_web_build(ctx, "[web] "),
         ReleaseValidationStage::ClippyWindows => run_clippy_windows(ctx),
@@ -4234,6 +4240,18 @@ fn run_scryer_web_validation(ctx: &TaskContext, prefix: &'static str) -> Result<
     graphql_compat_tests.args(["run", "test:graphql-compat"]);
     run_streaming(&mut graphql_compat_tests, prefix)?;
     prefixed_ok(prefix, "GraphQL compatibility checker tests passed");
+    Ok(())
+}
+
+/// The web unit suite CI runs, so a failing web test stops the release here
+/// rather than in the tag workflow.
+fn run_scryer_web_tests(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
+    let web_dir = ctx.path("apps/scryer-web");
+    prefixed_step(prefix, "Running web unit tests");
+    let mut tests = ctx.release_command_in("npm", &web_dir);
+    tests.args(["run", "test"]);
+    run_streaming(&mut tests, prefix)?;
+    prefixed_ok(prefix, "Web unit tests passed");
     Ok(())
 }
 
@@ -4696,6 +4714,7 @@ mod tests {
                 RustFmt,
                 WebLint,
                 GraphqlCompare,
+                WebTest,
                 Hygiene,
                 WebBuild,
                 ClippyWindows,
@@ -4711,7 +4730,7 @@ mod tests {
         for (scope, expected) in [
             (
                 ReleaseValidationScope::WebOnly,
-                vec![VersionBump, WebAudit, WebLint, Hygiene, WebBuild],
+                vec![VersionBump, WebAudit, WebLint, WebTest, Hygiene, WebBuild],
             ),
             (ReleaseValidationScope::MetaOnly, vec![VersionBump, Hygiene]),
         ] {
