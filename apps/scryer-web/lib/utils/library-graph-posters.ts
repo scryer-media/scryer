@@ -150,38 +150,186 @@ export function traceGraphPoster(
   context.roundRect(box.left, box.top, box.width, box.height, box.cornerRadius);
 }
 
+type SpriteCanvas = {
+  width: number;
+  height: number;
+  getContext(kind: "2d"): CanvasRenderingContext2D | null;
+};
+
+// The shared rounded shapes are drawn once at this size and scaled per poster.
+const SHAPE_SPRITE_HEIGHT = 384;
+
+function roundedSprite(
+  createCanvas: () => SpriteCanvas,
+  width: number,
+  height: number,
+  paint: (context: CanvasRenderingContext2D) => void,
+) {
+  const canvas = createCanvas();
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.beginPath();
+    context.roundRect(
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+      (canvas.height / 2) * GRAPH_POSTER_CORNER_RADIUS_RATIO,
+    );
+    context.clip();
+    paint(context);
+  }
+  return canvas;
+}
+
+type DecodedImage = {
+  source: CanvasImageSource;
+  width: number;
+  height: number;
+};
+
+// `decode` works off the main thread; `createImageBitmap` of an image
+// element decodes on it, about a millisecond a poster.
+function decodeOffThread(image: HTMLImageElement): Promise<DecodedImage> {
+  return image.decode().then(() => ({
+    source: image,
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+  }));
+}
+
+/**
+ * Posters pre-cut to their rounded shape. Clipping each poster as it is drawn
+ * costs a clip and a restore per poster per frame, which in a zoomed-in view
+ * of a few hundred posters takes most of the frame. Cut once, a poster is
+ * three plain image draws. Artwork is decoded off the main thread before it
+ * is cut, so a poster arriving mid-zoom never stalls a frame; `onReady` asks
+ * for the frame that shows it.
+ */
+export function createGraphPosterSprites(
+  onReady: () => void,
+  createCanvas: () => SpriteCanvas = () => document.createElement("canvas"),
+  decode: (image: HTMLImageElement) => Promise<DecodedImage> = decodeOffThread,
+) {
+  const shapeWidth = SHAPE_SPRITE_HEIGHT * GRAPH_POSTER_ASPECT_RATIO;
+  let mask: SpriteCanvas | null = null;
+  let backing: { color: string; canvas: SpriteCanvas } | null = null;
+  const artwork = new WeakMap<HTMLImageElement, SpriteCanvas | "decoding">();
+  const cut = (image: DecodedImage) => {
+    // The image's own resolution, cropped to fill the poster's shape.
+    const height = image.height;
+    const width = height * GRAPH_POSTER_ASPECT_RATIO;
+    return roundedSprite(createCanvas, width, height, (context) => {
+      const scale = Math.max(width / image.width, height / image.height);
+      const drawnWidth = image.width * scale;
+      const drawnHeight = image.height * scale;
+      context.drawImage(
+        image.source,
+        (width - drawnWidth) / 2,
+        (height - drawnHeight) / 2,
+        drawnWidth,
+        drawnHeight,
+      );
+    });
+  };
+  return {
+    mask() {
+      mask ??= roundedSprite(
+        createCanvas,
+        shapeWidth,
+        SHAPE_SPRITE_HEIGHT,
+        (context) => {
+          context.fillStyle = "#000";
+          context.fillRect(0, 0, shapeWidth, SHAPE_SPRITE_HEIGHT);
+        },
+      );
+      return mask;
+    },
+    backing(color: string) {
+      if (backing?.color !== color) {
+        backing = {
+          color,
+          canvas: roundedSprite(
+            createCanvas,
+            shapeWidth,
+            SHAPE_SPRITE_HEIGHT,
+            (context) => {
+              context.fillStyle = color;
+              context.fillRect(0, 0, shapeWidth, SHAPE_SPRITE_HEIGHT);
+            },
+          ),
+        };
+      }
+      return backing.canvas;
+    },
+    /** The cut artwork, or null while the image is still being decoded. */
+    artwork(image: HTMLImageElement): SpriteCanvas | null {
+      const sprite = artwork.get(image);
+      if (sprite === "decoding") return null;
+      if (sprite) return sprite;
+      artwork.set(image, "decoding");
+      decode(image).then(
+        (decoded) => {
+          artwork.set(image, cut(decoded));
+          onReady();
+        },
+        // An image that cannot be decoded is drawn without a poster.
+        () => undefined,
+      );
+      return null;
+    },
+  };
+}
+
+export type GraphPosterSprites = ReturnType<typeof createGraphPosterSprites>;
+
+/**
+ * Draws a poster at the context's opacity, once its artwork is ready, and
+ * says whether it did. The context's opacity and compositing are left as
+ * they were.
+ */
 export function drawGraphPoster(
   context: CanvasRenderingContext2D,
+  sprites: GraphPosterSprites,
   image: HTMLImageElement,
   point: Point,
   size: number,
   background: string,
 ) {
-  if (context.globalAlpha <= 0) return;
-  const box = graphPosterBounds(point, size);
-  const scale = Math.max(
-    box.width / image.naturalWidth,
-    box.height / image.naturalHeight,
-  );
-  const width = image.naturalWidth * scale;
-  const height = image.naturalHeight * scale;
-  context.save();
-  traceGraphPoster(context, point, size);
-  context.clip();
-  // Theme surfaces can be translucent. Remove zones and relation lines
-  // inside the rounded clip so they cannot bleed through fading artwork.
-  context.clearRect(box.left, box.top, box.width, box.height);
   const opacity = context.globalAlpha;
+  if (opacity <= 0) return false;
+  const artwork = sprites.artwork(image);
+  if (!artwork) return false;
+  const box = graphPosterBounds(point, size);
+  const composite = context.globalCompositeOperation;
+  // Theme surfaces can be translucent. Remove zones and relation lines
+  // under the poster's shape so they cannot bleed through fading artwork.
   context.globalAlpha = 1;
-  context.fillStyle = background;
-  context.fillRect(box.left, box.top, box.width, box.height);
+  context.globalCompositeOperation = "destination-out";
+  context.drawImage(
+    sprites.mask() as CanvasImageSource,
+    box.left,
+    box.top,
+    box.width,
+    box.height,
+  );
+  context.globalCompositeOperation = composite;
+  context.drawImage(
+    sprites.backing(background) as CanvasImageSource,
+    box.left,
+    box.top,
+    box.width,
+    box.height,
+  );
   context.globalAlpha = opacity;
   context.drawImage(
-    image,
-    point.x - width / 2,
-    point.y - height / 2,
-    width,
-    height,
+    artwork as CanvasImageSource,
+    box.left,
+    box.top,
+    box.width,
+    box.height,
   );
-  context.restore();
+  return true;
 }

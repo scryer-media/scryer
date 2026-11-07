@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createGraphPosterSprites,
   drawGraphPoster,
+  type GraphPosterSprites,
   graphPosterArtworkOpacity,
   graphPosterBounds,
   graphPosterInViewport,
@@ -28,67 +30,152 @@ test("readable posters have artwork without waiting for the neighborhood crossfa
   for (let i = 1; i < values.length; i++) assert.ok(values[i] >= values[i - 1]);
 });
 
+function fakeSprites() {
+  const sprite = (name: string) => ({ name }) as unknown as HTMLCanvasElement;
+  return {
+    mask: () => sprite("mask"),
+    backing: (color: string) => sprite(`backing ${color}`),
+    artwork: () => sprite("artwork"),
+  } as unknown as GraphPosterSprites;
+}
+
 test("zero-opacity artwork cannot leave a visible empty backing", () => {
+  const drawn: unknown[] = [];
   drawGraphPoster(
-    { globalAlpha: 0 } as CanvasRenderingContext2D,
+    {
+      globalAlpha: 0,
+      drawImage: (...args: unknown[]) => drawn.push(args),
+    } as unknown as CanvasRenderingContext2D,
+    fakeSprites(),
     {} as HTMLImageElement,
     { x: 0, y: 0 },
     30,
     "#000",
   );
+  assert.deepEqual(drawn, []);
 });
 
-test("a fading poster clears zones within its rounded clip even with a translucent surface", () => {
-  const calls: { operation: string; opacity: number; color: string }[] = [];
+test("a fading poster clears zones under its shape even with a translucent surface", () => {
+  const calls: { sprite: string; opacity: number; composite: string }[] = [];
   const context = {
     globalAlpha: 0.18,
-    fillStyle: "#ff00ff",
-    save() {},
-    restore() {},
-    beginPath() {},
-    roundRect() {},
-    clip() {
+    globalCompositeOperation: "source-over",
+    drawImage(sprite: { name: string }) {
       calls.push({
-        operation: "clip",
+        sprite: sprite.name,
         opacity: this.globalAlpha,
-        color: this.fillStyle,
-      });
-    },
-    clearRect() {
-      calls.push({
-        operation: "clear",
-        opacity: this.globalAlpha,
-        color: this.fillStyle,
-      });
-    },
-    fillRect() {
-      calls.push({
-        operation: "backing",
-        opacity: this.globalAlpha,
-        color: this.fillStyle,
-      });
-    },
-    drawImage() {
-      calls.push({
-        operation: "poster",
-        opacity: this.globalAlpha,
-        color: this.fillStyle,
+        composite: this.globalCompositeOperation,
       });
     },
   };
   drawGraphPoster(
     context as unknown as CanvasRenderingContext2D,
+    fakeSprites(),
     { naturalWidth: 70, naturalHeight: 105 } as HTMLImageElement,
     { x: 50, y: 50 },
     30,
     "rgba(8, 13, 25, 0.35)",
   );
   assert.deepEqual(calls, [
-    { operation: "clip", opacity: 0.18, color: "#ff00ff" },
-    { operation: "clear", opacity: 0.18, color: "#ff00ff" },
-    { operation: "backing", opacity: 1, color: "rgba(8, 13, 25, 0.35)" },
-    { operation: "poster", opacity: 0.18, color: "rgba(8, 13, 25, 0.35)" },
+    { sprite: "mask", opacity: 1, composite: "destination-out" },
+    {
+      sprite: "backing rgba(8, 13, 25, 0.35)",
+      opacity: 1,
+      composite: "source-over",
+    },
+    { sprite: "artwork", opacity: 0.18, composite: "source-over" },
   ]);
+  assert.equal(context.globalAlpha, 0.18);
+  assert.equal(context.globalCompositeOperation, "source-over");
+});
+
+test("poster artwork is decoded before it is cut, once per image", async () => {
+  let created = 0;
+  let ready = 0;
+  const decoding: (() => void)[] = [];
+  const createCanvas = () => {
+    created += 1;
+    return {
+      width: 0,
+      height: 0,
+      getContext: () =>
+        ({
+          beginPath() {},
+          roundRect() {},
+          clip() {},
+          fillRect() {},
+          drawImage() {},
+        }) as unknown as CanvasRenderingContext2D,
+    };
+  };
+  const sprites = createGraphPosterSprites(
+    () => {
+      ready += 1;
+    },
+    createCanvas,
+    (image) =>
+      new Promise((resolve) =>
+        decoding.push(() =>
+          resolve({
+            source: image,
+            width: image.naturalWidth,
+            height: image.naturalHeight,
+          }),
+        ),
+      ),
+  );
+  const image = { naturalWidth: 70, naturalHeight: 105 } as HTMLImageElement;
+  assert.equal(sprites.artwork(image), null);
+  assert.equal(sprites.artwork(image), null);
+  assert.equal(decoding.length, 1);
+  assert.equal(created, 0);
+  decoding[0]();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ready, 1);
+  const sprite = sprites.artwork(image);
+  assert.equal(sprite?.height, 105);
+  assert.equal(sprite?.width, 70);
+  assert.equal(sprites.artwork(image), sprite);
+  assert.equal(created, 1);
+});
+
+test("poster shapes are cut once, and the backing once per colour", () => {
+  let created = 0;
+  const sprites = createGraphPosterSprites(
+    () => {},
+    () => {
+      created += 1;
+      return { width: 0, height: 0, getContext: () => null };
+    },
+  );
+  sprites.mask();
+  sprites.mask();
+  sprites.backing("#000");
+  sprites.backing("#000");
+  sprites.backing("#111");
+  assert.equal(created, 3);
+});
+
+test("a poster still being decoded is not drawn", () => {
+  const drawn: unknown[] = [];
+  const sprites = {
+    ...fakeSprites(),
+    artwork: () => null,
+  } as unknown as GraphPosterSprites;
+  const shown = drawGraphPoster(
+    {
+      globalAlpha: 1,
+      globalCompositeOperation: "source-over",
+      drawImage: (...args: unknown[]) => drawn.push(args),
+    } as unknown as CanvasRenderingContext2D,
+    sprites,
+    {} as HTMLImageElement,
+    { x: 0, y: 0 },
+    30,
+    "#000",
+  );
+  assert.equal(shown, false);
+  assert.deepEqual(drawn, []);
 });
 
 test("viewport relations require both poster bounds, including partially visible posters", () => {

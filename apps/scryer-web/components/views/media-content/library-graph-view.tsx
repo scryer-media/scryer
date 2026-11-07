@@ -17,7 +17,10 @@ import type { DiscoveryItem, DiscoveryNeighbors } from "@/lib/types/discovery";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
 import { discoveryErrorMessage } from "@/lib/utils/discovery-error-message";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
-import { showOverviewTitleLabels } from "@/lib/utils/library-graph-labels";
+import {
+  createRectIndex,
+  showOverviewTitleLabels,
+} from "@/lib/utils/library-graph-labels";
 import { graphSelectionCatalogTitle } from "@/lib/utils/library-graph-selection";
 import {
   LIBRARY_PERMISSIONS,
@@ -27,7 +30,9 @@ import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import {
   GRAPH_POSTER_ASPECT_RATIO,
   GRAPH_POSTER_CORNER_RADIUS_RATIO,
+  createGraphPosterSprites,
   drawGraphPoster,
+  type GraphPosterSprites,
   graphPosterArtworkOpacity,
   createGraphPosterAdmission,
   prepareGraphPosterImages,
@@ -71,6 +76,7 @@ import {
   largeLibraryGraphLayout,
   libraryGraphOverviewPreview,
   joinLibraryGraphToTitles,
+  sameTitleRecords,
   libraryGraphEdgeKindLabels,
   libraryGraphGroupName,
   libraryGraphNamedClusterIds,
@@ -322,6 +328,48 @@ function framingCamera(
   };
 }
 
+/**
+ * Fade every drawn title together. The renderer's node layer holds only
+ * titles (folded neighbourhoods are transparent there and painted on the
+ * overlay), so the layer's opacity stands for each title's.
+ */
+const SELECTION_HINTS: { attributes: (keyof NodeAttributes)[] } = {
+  attributes: ["color", "size"],
+};
+
+function applyDetailOpacity(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  ref: { current: number },
+  opacity: number,
+) {
+  ref.current = opacity;
+  sigma.getStageCanvas().style.opacity = opacity >= 1 ? "" : String(opacity);
+}
+
+/**
+ * The overview's poster geometry for one frame: graph coordinates to
+ * viewport pixels, and graph sizes to pixel radii. Sigma's projection is
+ * affine, so three projected points fix it exactly, and each title then
+ * costs a few multiplications instead of the per-call matrix work and
+ * allocations of `graphToViewport`.
+ */
+function viewportProjection(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
+  const origin = sigma.graphToViewport({ x: 0, y: 0 });
+  const alongX = sigma.graphToViewport({ x: 1, y: 0 });
+  const alongY = sigma.graphToViewport({ x: 0, y: 1 });
+  return {
+    x0: origin.x,
+    y0: origin.y,
+    xx: alongX.x - origin.x,
+    xy: alongX.y - origin.y,
+    yx: alongY.x - origin.x,
+    yy: alongY.y - origin.y,
+    // Sizes scale linearly with the camera; the node reducer leaves them
+    // as stored, so the stored size is the drawn one.
+    sizeScale: sigma.scaleSize(1),
+  };
+}
+
 function withAlpha(hex: string, alpha: number): string {
   const value = Number.parseInt(hex.slice(1), 16);
   return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
@@ -459,6 +507,11 @@ export default function LibraryGraphView({
     null,
   );
   const transitionBlobsRef = React.useRef<NodeAttributes[]>([]);
+  // How far the titles of unfolded neighbourhoods have faded in. One value
+  // for every title: the renderer's node layer fades as a whole through its
+  // canvas opacity, so a zoom never rewrites thousands of node colours.
+  const detailOpacityRef = React.useRef(1);
+  const posterSpritesRef = React.useRef<GraphPosterSprites | null>(null);
   // The title under the pointer and the titles one link from it, which stay
   // bright while the rest of the graph fades.
   const hoverFocusRef = React.useRef<{
@@ -522,8 +575,18 @@ export default function LibraryGraphView({
   const [titles, setTitles] = React.useState<readonly TitleRecord[] | null>(
     titlesComplete ? currentTitles : null,
   );
-  if (titlesComplete && titles !== currentTitles) {
-    setTitles(currentTitles);
+  // The last listing compared, so an unchanged refetch is compared once.
+  const [seenTitles, setSeenTitles] = React.useState<
+    readonly TitleRecord[] | null
+  >(titlesComplete ? currentTitles : null);
+  if (
+    titlesComplete &&
+    titles !== currentTitles &&
+    seenTitles !== currentTitles
+  ) {
+    setSeenTitles(currentTitles);
+    if (!titles || !sameTitleRecords(titles, currentTitles))
+      setTitles(currentTitles);
   }
   const [result, setResult] = React.useState<LibraryGraphResult | null>(null);
   const [loadStatus, setLoadStatus] =
@@ -579,7 +642,7 @@ export default function LibraryGraphView({
           (attributes.unselectedSize ?? attributes.baseSize) *
           (isSelected ? 1.35 : 1),
       };
-    });
+    }, SELECTION_HINTS);
   }, []);
 
   React.useEffect(() => {
@@ -1045,13 +1108,17 @@ export default function LibraryGraphView({
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
 
+    const { x0, y0, xx, xy, yx, yy, sizeScale } = viewportProjection(sigma);
+    const project = (point: LayoutPoint): LayoutPoint => ({
+      x: x0 + xx * point.x + yx * point.y,
+      y: y0 + xy * point.x + yy * point.y,
+    });
+    const detailOpacity = detailOpacityRef.current;
     // Scale the margin with the title cloud instead of leaving a wide
     // screen-space border around tiny overview clusters.
-    const origin = sigma.graphToViewport({ x: 0, y: 0 });
-    const paddingPoint = sigma.graphToViewport({ x: HULL_PADDING_PX, y: 0 });
     const hullPadding = Math.min(
       HULL_PADDING_PX,
-      Math.hypot(paddingPoint.x - origin.x, paddingPoint.y - origin.y),
+      Math.hypot(xx * HULL_PADDING_PX, xy * HULL_PADDING_PX),
     );
     const pointsByCluster = new Map<number, LayoutPoint[]>();
     const viewportByNode = new Map<string, LayoutPoint>();
@@ -1065,16 +1132,12 @@ export default function LibraryGraphView({
       y: number;
       r: number;
     })[] = [];
+    // Built once the titles are all drawn, on the first name that needs it.
+    let titleIndex: ReturnType<typeof createRectIndex> | null = null;
     const drawNode = (key: string, attributes: NodeAttributes) => {
-      const point = sigma.graphToViewport({
-        x: attributes.x as number,
-        y: attributes.y as number,
-      });
+      const point = project(attributes);
       viewportByNode.set(key, point);
-      // Match the WebGL size after style and reducer adjustments.
-      const size = sigma.scaleSize(
-        sigma.getNodeDisplayData(key)?.size ?? attributes.size,
-      );
+      const size = attributes.size * sizeScale;
       sizesByNode.set(key, size);
       if (
         graph.hasNode(key) &&
@@ -1085,7 +1148,7 @@ export default function LibraryGraphView({
         const opacity =
           attributes.collapsedClusterId !== undefined
             ? 1
-            : graphRelationOpacity(size, attributes.detailOpacity ?? 1);
+            : graphRelationOpacity(size, detailOpacity);
         relationNodes.set(key, { point, size, opacity });
         nodeDiscs.push({
           x: point.x,
@@ -1105,9 +1168,7 @@ export default function LibraryGraphView({
           return;
         drawZones.push(() => {
           const color = attributes.baseColor;
-          const hull = attributes.hull?.map((point) =>
-            sigma.graphToViewport(point),
-          );
+          const hull = attributes.hull?.map(project);
           context.save();
           context.globalAlpha = attributes.detailOpacity ?? 1;
           context.beginPath();
@@ -1150,8 +1211,12 @@ export default function LibraryGraphView({
           context.fillStyle = color;
           if (attributes.dots) {
             for (const dot of attributes.dots) {
-              const position = sigma.graphToViewport(dot);
-              context.fillRect(position.x, position.y, 1.5, 2);
+              context.fillRect(
+                x0 + xx * dot.x + yx * dot.y,
+                y0 + xy * dot.x + yy * dot.y,
+                1.5,
+                2,
+              );
             }
           } else
             for (let i = 0; i < count; i++) {
@@ -1279,9 +1344,7 @@ export default function LibraryGraphView({
         continue;
       }
       const cachedHull = largeLayoutRef.current?.hulls.get(group.id);
-      const hull = cachedHull
-        ? cachedHull.map((point) => sigma.graphToViewport(point))
-        : convexHull(points);
+      const hull = cachedHull ? cachedHull.map(project) : convexHull(points);
       const opacity =
         1 -
         (transitionBlobsRef.current.find(
@@ -1340,12 +1403,11 @@ export default function LibraryGraphView({
         const baseY = median(points.map((point) => point.y));
         // A spot is clear when the name covers no title and no other name.
         const coversTitle = (cx: number, cy: number) =>
-          nodeDiscs.some(
-            (poster) =>
-              poster.left < cx + w / 2 + 3 &&
-              poster.right > cx - w / 2 - 3 &&
-              poster.top < cy + h / 2 + 3 &&
-              poster.bottom > cy - h / 2 - 3,
+          (titleIndex ??= createRectIndex(nodeDiscs, width, height)).overlaps(
+            cx - w / 2 - 3,
+            cy - h / 2 - 3,
+            cx + w / 2 + 3,
+            cy + h / 2 + 3,
           );
         const coversName = (cx: number, cy: number) =>
           placedHullLabels.some(
@@ -1505,7 +1567,7 @@ export default function LibraryGraphView({
       if (!image?.complete || image.naturalWidth === 0) {
         return;
       }
-      context.save();
+      const alpha = context.globalAlpha;
       if (attributes.ghost) {
         context.globalAlpha = 0.55;
       }
@@ -1514,8 +1576,11 @@ export default function LibraryGraphView({
         context.globalAlpha = HOVER_FADE_ALPHA;
       }
       context.globalAlpha *= posterOpacity;
-      drawGraphPoster(
+      const drawn = drawGraphPoster(
         context,
+        (posterSpritesRef.current ??= createGraphPosterSprites(() =>
+          sigmaRef.current?.scheduleRender(),
+        )),
         image,
         point,
         radius,
@@ -1526,10 +1591,10 @@ export default function LibraryGraphView({
           "#0b0e15",
         ),
       );
-      if (graphPosterHoverable(radius, posterOpacity, true)) {
+      if (graphPosterHoverable(radius, posterOpacity, drawn)) {
         hoverableNodes.add(key);
       }
-      context.restore();
+      context.globalAlpha = alpha;
       if (
         selectedKeyRef.current !== null
           ? key === selectedKeyRef.current
@@ -1748,7 +1813,7 @@ export default function LibraryGraphView({
         "#e6e8ef",
       );
       for (const key of order) {
-        context.globalAlpha = graph.getNodeAttribute(key, "detailOpacity") ?? 1;
+        context.globalAlpha = detailOpacity;
         const point = viewportByNode.get(key);
         const raw = graph.getNodeAttribute(key, "label");
         if (!point || !raw) {
@@ -1890,10 +1955,7 @@ export default function LibraryGraphView({
           ? { ...attributes, zIndex: 1 }
           : {
               ...attributes,
-              color: withAlpha(
-                node.baseColor,
-                HOVER_FADE_ALPHA * (node.detailOpacity ?? 1),
-              ),
+              color: withAlpha(node.baseColor, HOVER_FADE_ALPHA),
               zIndex: 0,
             };
       },
@@ -2064,6 +2126,11 @@ export default function LibraryGraphView({
     };
   }, [drawOverlay]);
 
+  const nodeSizes = React.useMemo(
+    () => nodeSizesByTitleId(Array.from(titlesById.values()), metric),
+    [metric, titlesById],
+  );
+
   // Sync the drawn graph. The overview lets its force layout settle from the
   // last positions; a focused view sets the focused node's neighbours on
   // rings round it. Either way nodes already drawn glide to their new place.
@@ -2077,7 +2144,7 @@ export default function LibraryGraphView({
     focusCenterRef.current = focusCenterKey;
     selectedKeyRef.current = focusCenterKey;
     const focusing = focusCenterKey !== null;
-    const sizes = nodeSizesByTitleId(Array.from(titlesById.values()), metric);
+    const sizes = nodeSizes;
     const mutedEdge = readCssColor(
       sigma.getContainer(),
       "--scry-muted2",
@@ -2323,12 +2390,6 @@ export default function LibraryGraphView({
           attributes.size =
             graphDetailPosterSize(attributes.baseSize, zoomSpacing) /
             sigma.scaleSize(1);
-        attributes.detailOpacity = initialDetailOpacity;
-        if (initialDetailOpacity < 1)
-          attributes.color = withAlpha(
-            attributes.baseColor,
-            initialDetailOpacity,
-          );
       }
       // Selection decorates the prepared geometry, not the rating metric.
       // Restoring baseSize here would undo the calibrated poster scale.
@@ -2382,6 +2443,9 @@ export default function LibraryGraphView({
     }
 
     relationsStoreRef.current = relations;
+    // Decorate before attaching, so attaching is the one full redraw.
+    applySelection();
+    applyDetailOpacity(sigma, detailOpacityRef, initialDetailOpacity);
     sigma.setGraph(graph);
     layoutRef.current = layout;
     const container = sigma.getContainer();
@@ -2498,8 +2562,6 @@ export default function LibraryGraphView({
           .getCamera()
           .animate(restCamera(sigma), { duration: FOCUS_TWEEN_MS });
     }
-    applySelection();
-    sigma.refresh();
     if (largeLayout && focusCenterKey === null && fitWhenSettledRef.current) {
       fitWhenSettledRef.current = false;
       sigma.getCamera().setState(restCamera(sigma));
@@ -2516,8 +2578,8 @@ export default function LibraryGraphView({
     focusRings,
     join,
     largeLayout,
-    metric,
     nodeLabel,
+    nodeSizes,
     titlesById,
     traversal,
   ]);
@@ -2583,18 +2645,9 @@ export default function LibraryGraphView({
           spacing,
           sigma.scaleSize(1),
         );
-        graph.updateEachNodeAttributes(
-          (_key, attributes) => {
-            if (attributes.collapsedClusterId !== undefined) return attributes;
-            return {
-              ...attributes,
-              detailOpacity,
-              color: withAlpha(attributes.baseColor, detailOpacity),
-              unselectedColor: withAlpha(attributes.baseColor, detailOpacity),
-            };
-          },
-          { attributes: ["color", "detailOpacity", "unselectedColor"] },
-        );
+        // The titles fade as one layer; their colours stay as they are.
+        applyDetailOpacity(sigma, detailOpacityRef, detailOpacity);
+        sigma.scheduleRender();
       }
       const { width, height } = sigma.getDimensions();
       setExpandedClusterIds((previous) =>

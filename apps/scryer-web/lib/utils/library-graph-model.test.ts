@@ -26,6 +26,7 @@ import {
   largeLibraryGraphLayout,
   libraryGraphOverviewPreview,
   joinLibraryGraphToTitles,
+  sameTitleRecords,
   libraryGraphClusterName,
   libraryGraphEdgeKindLabel,
   libraryGraphEdgeKindLabels,
@@ -1061,4 +1062,37 @@ test("only labelled clusters of three or more titles are named neighbourhoods", 
     { id: 4, labelKey: null, label: "Synthetic Many", medoid: "s:e", size: 9 },
   ]);
   assert.deepEqual([...named].sort(), [0, 1]);
+});
+
+test("a refetched listing with the same titles is recognised as unchanged", () => {
+  const title = (id: string, name: string) =>
+    ({
+      id,
+      name,
+      externalIds: [{ source: "tvdb", value: id }],
+      tags: ["a"],
+      posterUrl: null,
+    }) as unknown as TitleRecord;
+  const previous = [title("1", "One"), title("2", "Two")];
+  assert.equal(
+    sameTitleRecords(previous, [title("1", "One"), title("2", "Two")]),
+    true,
+  );
+  assert.equal(
+    sameTitleRecords(previous, [title("1", "One"), title("2", "Deux")]),
+    false,
+  );
+  assert.equal(sameTitleRecords(previous, [title("1", "One")]), false);
+  assert.equal(
+    sameTitleRecords(previous, [title("2", "Two"), title("1", "One")]),
+    false,
+  );
+  const withTag = title("2", "Two");
+  (withTag as unknown as { tags: string[] }).tags = ["a", "b"];
+  assert.equal(sameTitleRecords(previous, [title("1", "One"), withTag]), false);
+  const withField = { ...title("2", "Two"), year: 2001 } as TitleRecord;
+  assert.equal(
+    sameTitleRecords(previous, [title("1", "One"), withField]),
+    false,
+  );
 });
