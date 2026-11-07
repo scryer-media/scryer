@@ -444,8 +444,47 @@ export function displayedLibraryGraph(
   owned: GraphState = graph,
   selectedClusters: ReadonlySet<number> = new Set(),
 ): GraphState {
-  const named = libraryGraphNamedClusterIds(owned.clusters);
   const large = owned.nodes.length > threshold;
+  const selected = Array.from(selectedClusters)
+    .sort((a, b) => a - b)
+    .join(",");
+  let filtered = foldBases.get(graph);
+  if (
+    !filtered ||
+    filtered.owned !== owned ||
+    filtered.large !== large ||
+    filtered.selected !== selected
+  ) {
+    filtered = {
+      owned,
+      large,
+      selected,
+      graph: foldBase(graph, owned, large, selectedClusters),
+    };
+    foldBases.set(graph, filtered);
+  }
+  return collapseClusters(
+    filtered.graph,
+    large
+      ? clustersToCollapse(filtered.graph, -1, expandedClusterIds)
+      : new Set(),
+  );
+}
+
+/** The graph a fold starts from, kept per graph so each fold reuses the
+ * collapse index built for it. */
+const foldBases = new WeakMap<
+  GraphState,
+  { owned: GraphState; large: boolean; selected: string; graph: GraphState }
+>();
+
+function foldBase(
+  graph: GraphState,
+  owned: GraphState,
+  large: boolean,
+  selectedClusters: ReadonlySet<number>,
+): GraphState {
+  const named = libraryGraphNamedClusterIds(owned.clusters);
   // Unnamed communities are not meaningful neighbourhoods. Keep their
   // titles reachable through the existing unplaced group, without inventing
   // thousands of "Around …" neighbourhoods.
@@ -460,21 +499,16 @@ export function displayedLibraryGraph(
         clusters: graph.clusters.filter((cluster) => named.has(cluster.id)),
       }
     : graph;
-  const filtered =
-    selectedClusters.size === 0
-      ? grouped
-      : pruneToVisible(
-          grouped,
-          new Set(
-            grouped.nodes
-              .filter((node) => selectedClusters.has(node.clusterId))
-              .map((node) => node.subjectKey),
-          ),
-        );
-  return collapseClusters(
-    filtered,
-    large ? clustersToCollapse(filtered, -1, expandedClusterIds) : new Set(),
-  );
+  return selectedClusters.size === 0
+    ? grouped
+    : pruneToVisible(
+        grouped,
+        new Set(
+          grouped.nodes
+            .filter((node) => selectedClusters.has(node.clusterId))
+            .map((node) => node.subjectKey),
+        ),
+      );
 }
 
 /** Whether a node stands in for a collapsed cluster. */

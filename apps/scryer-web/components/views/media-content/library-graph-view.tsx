@@ -68,6 +68,7 @@ import {
   toggleClusterExpanded,
   type GraphNode,
 } from "@/lib/utils/library-graph-merge";
+import { GraphAdjacency } from "@/lib/utils/library-graph-adjacency";
 import {
   LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
   LIBRARY_GRAPH_MAX_NODE_SIZE,
@@ -603,7 +604,8 @@ export default function LibraryGraphView({
     null,
   );
   const graphRef = React.useRef<LibraryGraphStore | null>(null);
-  const relationsStoreRef = React.useRef<LibraryGraphStore | null>(null);
+  const relationsStoreRef =
+    React.useRef<GraphAdjacency<EdgeAttributes> | null>(null);
   const layoutRef = React.useRef<LayoutState | null>(null);
   const frameRef = React.useRef<number | null>(null);
   const tweenFrameRef = React.useRef<number | null>(null);
@@ -2140,7 +2142,7 @@ export default function LibraryGraphView({
       },
     });
     graphRef.current = graph;
-    relationsStoreRef.current = graph.copy();
+    relationsStoreRef.current = new GraphAdjacency();
     sigmaRef.current = sigma;
     const hoverIntent = createGraphHoverIntent();
     hoverIntentRef.current = hoverIntent;
@@ -2498,7 +2500,18 @@ export default function LibraryGraphView({
           zoomSpacing,
           sigma.scaleSize(1),
         );
+    // Selection decorates each node as it is built, so attaching the graph
+    // is the one pass over it.
+    const accent = readCssColor(
+      sigma.getContainer(),
+      "--scry-accent",
+      "#5b64ff",
+    );
+    const selectedTitle = selectedTitleIdRef.current;
+    const selectedKey = selectedKeyRef.current;
+    const ghosts = new Set<string>();
     for (const node of displayed.nodes) {
+      if (node.ghost) ghosts.add(node.subjectKey);
       const position = from.get(node.subjectKey) ?? { x: 0, y: 0 };
       const color = clusterColor(node.clusterId, clusterOrder);
       let attributes: NodeAttributes;
@@ -2588,8 +2601,15 @@ export default function LibraryGraphView({
       }
       attributes.unselectedSize = attributes.size;
       attributes.unselectedColor = attributes.color;
-      if (focusing && node.subjectKey === focusCenterKey)
+      const isSelected =
+        selectedKey !== null
+          ? node.subjectKey === selectedKey
+          : attributes.titleId !== undefined &&
+            attributes.titleId === selectedTitle;
+      if (isSelected) {
+        attributes.color = accent;
         attributes.size *= 1.35;
+      }
       if (graph.hasNode(node.subjectKey)) {
         graph.replaceNodeAttributes(node.subjectKey, attributes);
       } else {
@@ -2598,14 +2618,12 @@ export default function LibraryGraphView({
     }
     // Keep adjacency and edge metadata off the renderer: even hidden WebGL
     // edges run a frame pass on every camera update.
-    const relations = graph.copy();
+    const relations = new GraphAdjacency<EdgeAttributes>(graph.nodes());
     for (const edge of displayed.edges) {
-      if (relations.hasEdge(edge.from, edge.to)) {
+      if (relations.hasEdgeBetween(edge.from, edge.to)) {
         continue;
       }
-      const toGhost =
-        graph.getNodeAttribute(edge.from, "ghost") === true ||
-        graph.getNodeAttribute(edge.to, "ghost") === true;
+      const toGhost = ghosts.has(edge.from) || ghosts.has(edge.to);
       const weight = Math.min(1, Math.max(0, edge.weight));
       // In a focused view, links between the neighbours sit behind the
       // focused title's own links.
@@ -2622,12 +2640,10 @@ export default function LibraryGraphView({
           : mutedEdge,
         kinds: edge.kinds,
       };
-      relations.addUndirectedEdge(edge.from, edge.to, attributes);
+      relations.add(edge.from, edge.to, attributes);
     }
 
     relationsStoreRef.current = relations;
-    // Decorate before attaching, so attaching is the one full redraw.
-    applySelection();
     applyDetailOpacity(sigma, detailOpacityRef, initialDetailOpacity);
     sigma.setGraph(graph);
     applyZoomLimits(sigma, graph);
@@ -2753,7 +2769,6 @@ export default function LibraryGraphView({
     resumeLayoutRef.current();
   }, [
     allClusterIds,
-    applySelection,
     clusterOrder,
     displayed,
     flushPendingSelect,

@@ -290,62 +290,131 @@ export function collapseClusters(
   if (collapsedClusterIds.size === 0) {
     return graph;
   }
-  const clusterById = new Map(
-    graph.clusters.map((cluster) => [cluster.id, cluster]),
-  );
-  const targetBySubject = new Map<string, string>();
-  for (const node of graph.nodes) {
-    if (!targetBySubject.has(node.subjectKey))
-      targetBySubject.set(node.subjectKey, node.targetKey);
-  }
-  const redirect = new Map<string, string>();
-  const collapsed = new Map<number, GraphNode>();
+  const index = collapseIndex(graph);
+  const collapsed = new Set<number>();
   const nodes: GraphNode[] = [];
   for (const node of graph.nodes) {
     if (!collapsedClusterIds.has(node.clusterId)) {
       nodes.push(node);
       continue;
     }
-    const key = clusterNodeKey(node.clusterId);
-    redirect.set(node.subjectKey, key);
-    // A collapsed cluster counts the library's titles only; explored ones
-    // folded into it are not members.
-    const member = node.ghost ? 0 : 1;
-    const existing = collapsed.get(node.clusterId);
-    if (existing) {
-      existing.memberCount = (existing.memberCount ?? 0) + member;
-      continue;
-    }
-    const cluster = clusterById.get(node.clusterId);
-    const stand: GraphNode = {
-      subjectKey: key,
-      targetKey: "",
+    if (collapsed.has(node.clusterId)) continue;
+    collapsed.add(node.clusterId);
+    nodes.push({
+      subjectKey: clusterNodeKey(node.clusterId),
+      targetKey: index.standTargets.get(node.clusterId) ?? "",
       clusterId: node.clusterId,
       ghost: false,
       collapsedClusterId: node.clusterId,
-      memberCount: member,
-    };
-    if (cluster) {
-      stand.targetKey = targetBySubject.get(cluster.medoid) ?? "";
-    }
-    collapsed.set(node.clusterId, stand);
-    nodes.push(stand);
+      memberCount: index.memberCounts.get(node.clusterId) ?? 0,
+    });
   }
-  function* redirectedEdges() {
-    for (const edge of graph.edges) {
-      const from = redirect.get(edge.from) ?? edge.from;
-      const to = redirect.get(edge.to) ?? edge.to;
-      if (from !== to) yield { ...edge, from, to };
+  const edges: LibraryGraphEdge[] = [];
+  for (const { edge, a, b } of index.direct) {
+    if (!collapsedClusterIds.has(a) && !collapsedClusterIds.has(b)) {
+      edges.push(edge);
     }
   }
-  return {
-    nodes,
-    edges: dedupeEdges(
-      redirectedEdges(),
-      new Set(nodes.map((node) => node.subjectKey)),
-    ),
-    clusters: graph.clusters,
+  for (const { edge, a, b } of index.toNode) {
+    if (collapsedClusterIds.has(a) && !collapsedClusterIds.has(b)) {
+      edges.push(edge);
+    }
+  }
+  for (const { edge, a, b } of index.between) {
+    if (collapsedClusterIds.has(a) && collapsedClusterIds.has(b)) {
+      edges.push(edge);
+    }
+  }
+  return { nodes, edges, clusters: graph.clusters };
+}
+
+type IndexedEdge = { edge: LibraryGraphEdge; a: number; b: number };
+
+/**
+ * Every edge a collapse can draw, merged once per graph. A fold then only
+ * picks among them: `direct` edges join two titles (clusters `a` and `b`),
+ * `toNode` edges join cluster `a`'s node to a title in cluster `b`, and
+ * `between` edges join the nodes of clusters `a` and `b`. Merging keeps the
+ * strongest weight and every kind, so the pick matches collapsing afresh.
+ */
+type CollapseIndex = {
+  standTargets: Map<number, string>;
+  memberCounts: Map<number, number>;
+  direct: IndexedEdge[];
+  toNode: IndexedEdge[];
+  between: IndexedEdge[];
+};
+
+const collapseIndexes = new WeakMap<GraphState, CollapseIndex>();
+
+function collapseIndex(graph: GraphState): CollapseIndex {
+  const cached = collapseIndexes.get(graph);
+  if (cached) return cached;
+  const clusterOf = new Map<string, number>();
+  const targetBySubject = new Map<string, string>();
+  const memberCounts = new Map<number, number>();
+  for (const node of graph.nodes) {
+    const key = node.subjectKey;
+    if (!targetBySubject.has(key)) targetBySubject.set(key, node.targetKey);
+    if (!clusterOf.has(key)) clusterOf.set(key, node.clusterId);
+    // A collapsed cluster counts the library's titles only; explored ones
+    // folded into it are not members.
+    memberCounts.set(
+      node.clusterId,
+      (memberCounts.get(node.clusterId) ?? 0) + (node.ghost ? 0 : 1),
+    );
+  }
+  const standTargets = new Map<number, string>();
+  for (const cluster of graph.clusters) {
+    standTargets.set(cluster.id, targetBySubject.get(cluster.medoid) ?? "");
+  }
+  const direct = new Map<string, IndexedEdge>();
+  const toNode = new Map<string, IndexedEdge>();
+  const between = new Map<string, IndexedEdge>();
+  const merge = (
+    into: Map<string, IndexedEdge>,
+    from: string,
+    to: string,
+    a: number,
+    b: number,
+    source: LibraryGraphEdge,
+  ) => {
+    const key = edgePairKey(from, to);
+    const weight = clampEdgeWeight(source.weight);
+    const existing = into.get(key);
+    if (!existing) {
+      into.set(key, {
+        edge: { from, to, weight, kinds: sortedUnion([], source.kinds) },
+        a,
+        b,
+      });
+      return;
+    }
+    existing.edge.weight = Math.max(existing.edge.weight, weight);
+    existing.edge.kinds = sortedUnion(existing.edge.kinds, source.kinds);
   };
+  for (const edge of graph.edges) {
+    if (edge.from === edge.to) continue;
+    const a = clusterOf.get(edge.from);
+    const b = clusterOf.get(edge.to);
+    if (a === undefined || b === undefined) continue;
+    merge(direct, edge.from, edge.to, a, b, edge);
+    if (a === b) continue;
+    const fromCluster = clusterNodeKey(a);
+    const toCluster = clusterNodeKey(b);
+    merge(toNode, fromCluster, edge.to, a, b, edge);
+    merge(toNode, toCluster, edge.from, b, a, edge);
+    merge(between, fromCluster, toCluster, a, b, edge);
+  }
+  const index: CollapseIndex = {
+    standTargets,
+    memberCounts,
+    direct: Array.from(direct.values()),
+    toNode: Array.from(toNode.values()),
+    between: Array.from(between.values()),
+  };
+  collapseIndexes.set(graph, index);
+  return index;
 }
 
 /**
