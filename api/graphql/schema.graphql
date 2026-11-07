@@ -21840,7 +21840,12 @@ type MutationRoot {
 	"""
 	Queue automatic subtitle search and download for selected episodes.
 	"""
-	startEpisodeSubtitleSearch(input: EpisodeSubtitleSearchInput!): JobRunPayload!
+	startEpisodeSubtitleSearch(
+		"""
+		The series or anime title and the episodes in it to search.
+		"""
+		input: EpisodeSubtitleSearchInput!
+	): JobRunPayload!
 	"""
 	Search configured providers for subtitles matching a media file, and
 	report why the search returned what it did.
