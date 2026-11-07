@@ -34,6 +34,8 @@ import {
   drawGraphPoster,
   type GraphPosterSprites,
   graphPosterArtworkOpacity,
+  graphPosterUrls,
+  isOriginalGraphPosterUrl,
   createGraphPosterAdmission,
   prepareGraphPosterImages,
   graphPosterBounds,
@@ -1562,9 +1564,27 @@ export default function LibraryGraphView({
       if (radius < threshold || !point || !admitPoster(point, radius)) {
         return;
       }
-      visiblePosters.add(url);
-      const image = posterCacheRef.current.get(url);
-      if (!image?.complete || image.naturalWidth === 0) {
+      // Load the variant this size needs; a loaded smaller or larger one
+      // stands in meanwhile, so zooming sharpens a poster instead of
+      // blanking it.
+      const [wanted, ...others] = graphPosterUrls(url, radius, ratio);
+      visiblePosters.add(wanted);
+      const ready = (image: HTMLImageElement | undefined) =>
+        image?.complete && image.naturalWidth > 0 ? image : undefined;
+      const sprites = (posterSpritesRef.current ??= createGraphPosterSprites(
+        () => sigmaRef.current?.scheduleRender(),
+      ));
+      const loaded = ready(posterCacheRef.current.get(wanted));
+      let image = loaded && sprites.artwork(loaded) ? loaded : undefined;
+      for (const other of others) {
+        if (image) break;
+        const candidate = ready(posterCacheRef.current.get(other));
+        if (candidate && sprites.artwork(candidate)) {
+          image = candidate;
+          visiblePosters.add(other);
+        }
+      }
+      if (!image) {
         return;
       }
       const alpha = context.globalAlpha;
@@ -1578,9 +1598,7 @@ export default function LibraryGraphView({
       context.globalAlpha *= posterOpacity;
       const drawn = drawGraphPoster(
         context,
-        (posterSpritesRef.current ??= createGraphPosterSprites(() =>
-          sigmaRef.current?.scheduleRender(),
-        )),
+        sprites,
         image,
         point,
         radius,
@@ -1613,8 +1631,14 @@ export default function LibraryGraphView({
       }
     });
 
-    prepareGraphPosterImages(posterCacheRef.current, visiblePosters, () =>
-      sigmaRef.current?.scheduleRender(),
+    prepareGraphPosterImages(
+      posterCacheRef.current,
+      visiblePosters,
+      () => sigmaRef.current?.scheduleRender(),
+      undefined,
+      undefined,
+      undefined,
+      isOriginalGraphPosterUrl,
     );
     hoverableNodesRef.current = hoverableNodes;
     if (

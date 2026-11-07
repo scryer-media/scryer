@@ -1,3 +1,8 @@
+import {
+  selectPosterVariantUrl,
+  type LocalPosterVariant,
+} from "./poster-images.ts";
+
 export const GRAPH_POSTER_ASPECT_RATIO = 2 / 3;
 export const GRAPH_POSTER_CORNER_RADIUS_RATIO = 0.12;
 
@@ -77,6 +82,46 @@ export function graphPosterInViewport(
   );
 }
 
+// Stored poster heights, in pixels; `original` is whatever the source was.
+const GRAPH_POSTER_VARIANT_HEIGHTS: readonly [LocalPosterVariant, number][] = [
+  ["w70", 102],
+  ["w250", 367],
+];
+
+/** The smallest stored variant that covers the poster's drawn height on the
+ * device, allowing a slight upscale before stepping to the next one. */
+export function graphPosterVariant(
+  size: number,
+  pixelRatio: number,
+): LocalPosterVariant {
+  const height = size * 2 * (pixelRatio > 0 ? pixelRatio : 1);
+  for (const [variant, stored] of GRAPH_POSTER_VARIANT_HEIGHTS)
+    if (height <= stored * 1.25) return variant;
+  return "original";
+}
+
+/** The poster URL to load at this size, then the other variants, largest
+ * first, any one of which can stand in while the wanted one loads. */
+export function graphPosterUrls(
+  url: string,
+  size: number,
+  pixelRatio: number,
+): string[] {
+  const wanted = graphPosterVariant(size, pixelRatio);
+  const urls = [selectPosterVariantUrl(url, wanted) ?? url];
+  for (const variant of ["original", "w250", "w70"] as const) {
+    if (variant === wanted) continue;
+    const other = selectPosterVariantUrl(url, variant) ?? url;
+    if (!urls.includes(other)) urls.push(other);
+  }
+  return urls;
+}
+
+/** Whether a poster URL names the full-size source image. */
+export function isOriginalGraphPosterUrl(url: string): boolean {
+  return /\/original(?:[?#]|$)/.test(url);
+}
+
 /** Admission precedes image loading, so pending requests count toward the
  * viewport budget just like decoded images. Create once per frame. */
 export function createGraphPosterAdmission(
@@ -99,7 +144,9 @@ export function createGraphPosterAdmission(
 }
 
 /** Keep the visible working set, plus a bounded offscreen cache. Requests are
- * admitted separately from drawing so a busy viewport can finish every poster. */
+ * admitted separately from drawing so a busy viewport can finish every poster.
+ * Full-size images, several times the pixels of the others, keep a smaller
+ * offscreen allowance of their own. */
 export function prepareGraphPosterImages(
   cache: Map<string, HTMLImageElement>,
   visible: ReadonlySet<string>,
@@ -107,16 +154,31 @@ export function prepareGraphPosterImages(
   createImage: () => HTMLImageElement = () => new Image(),
   maxPending = 12,
   maxOffscreen = 240,
+  isLarge: (url: string) => boolean = () => false,
+  maxOffscreenLarge = 16,
 ) {
-  let offscreen = [...cache.keys()].filter((url) => !visible.has(url)).length;
+  let offscreen = 0;
+  let offscreenLarge = 0;
+  for (const url of cache.keys()) {
+    if (visible.has(url)) continue;
+    offscreen++;
+    if (isLarge(url)) offscreenLarge++;
+  }
   let pending = 0;
   for (const [url, image] of cache) {
-    if (!visible.has(url) && (!image.complete || offscreen > maxOffscreen)) {
+    const large = !visible.has(url) && isLarge(url);
+    if (
+      !visible.has(url) &&
+      (!image.complete ||
+        offscreen > maxOffscreen ||
+        (large && offscreenLarge > maxOffscreenLarge))
+    ) {
       image.onload = null;
       image.onerror = null;
       if (!image.complete) image.src = "";
       cache.delete(url);
       offscreen--;
+      if (large) offscreenLarge--;
     } else if (!image.complete) {
       pending++;
     }

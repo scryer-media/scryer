@@ -12,6 +12,9 @@ import {
   graphRelationOpacity,
   changedGraphViewportEdges,
   createGraphPosterAdmission,
+  graphPosterUrls,
+  graphPosterVariant,
+  isOriginalGraphPosterUrl,
   prepareGraphPosterImages,
 } from "./library-graph-posters.ts";
 
@@ -410,4 +413,76 @@ test("rounded corners scale with the poster without consuming its straight edges
   assert.ok(small.cornerRadius > 0);
   assert.ok(small.cornerRadius < small.width / 2);
   assert.equal(large.cornerRadius, small.cornerRadius * 2);
+});
+
+test("posters load the smallest stored variant that stays sharp at their drawn size", () => {
+  // Size is the poster's half-height in CSS pixels.
+  assert.equal(graphPosterVariant(12, 1), "w70");
+  assert.equal(graphPosterVariant(60, 1), "w70");
+  assert.equal(graphPosterVariant(60, 2), "w250");
+  assert.equal(graphPosterVariant(200, 1), "w250");
+  assert.equal(graphPosterVariant(170, 2), "original");
+  assert.equal(graphPosterVariant(60, 0), "w70");
+  const sizes = Array.from({ length: 400 }, (_, i) => i);
+  const order = ["w70", "w250", "original"];
+  const ranks = sizes.map((size) => order.indexOf(graphPosterVariant(size, 2)));
+  for (let i = 1; i < ranks.length; i++) assert.ok(ranks[i] >= ranks[i - 1]);
+});
+
+test("a growing poster asks for its sharper variant and keeps the others as stand-ins", () => {
+  const url = "/images/media/fixture-hash/w70";
+  assert.deepEqual(graphPosterUrls(url, 12, 1), [
+    "/images/media/fixture-hash/w70",
+    "/images/media/fixture-hash/original",
+    "/images/media/fixture-hash/w250",
+  ]);
+  assert.deepEqual(graphPosterUrls(url, 300, 2), [
+    "/images/media/fixture-hash/original",
+    "/images/media/fixture-hash/w250",
+    "/images/media/fixture-hash/w70",
+  ]);
+  // A URL without stored variants has only itself to offer.
+  assert.deepEqual(graphPosterUrls("https://example.test/a.jpg", 300, 2), [
+    "https://example.test/a.jpg",
+  ]);
+  assert.equal(isOriginalGraphPosterUrl("/images/media/h/original"), true);
+  assert.equal(isOriginalGraphPosterUrl("/images/media/h/original?v=2"), true);
+  assert.equal(isOriginalGraphPosterUrl("/images/media/h/w250"), false);
+});
+
+test("offscreen full-size posters keep a smaller allowance than thumbnails", () => {
+  const cache = new Map<string, HTMLImageElement>();
+  for (let i = 0; i < 6; i++) {
+    for (const variant of ["original", "w70"]) {
+      const image = new TestPosterImage();
+      image.complete = true;
+      image.naturalWidth = 70;
+      cache.set(
+        `/images/media/h${i}/${variant}`,
+        image as unknown as HTMLImageElement,
+      );
+    }
+  }
+  const visible = new Set(["/images/media/h5/original"]);
+  prepareGraphPosterImages(
+    cache,
+    visible,
+    () => {},
+    () => new TestPosterImage() as unknown as HTMLImageElement,
+    12,
+    240,
+    isOriginalGraphPosterUrl,
+    2,
+  );
+  const kept = [...cache.keys()];
+  // The visible one stays, plus the two most recent offscreen originals.
+  assert.deepEqual(
+    kept.filter((url) => url.endsWith("/original")),
+    [
+      "/images/media/h3/original",
+      "/images/media/h4/original",
+      "/images/media/h5/original",
+    ],
+  );
+  assert.equal(kept.filter((url) => url.endsWith("/w70")).length, 6);
 });
