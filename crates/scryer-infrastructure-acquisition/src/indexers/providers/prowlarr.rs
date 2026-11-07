@@ -1565,6 +1565,15 @@ impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
             .flatten()
     }
 
+    fn search_semantics_version_for_provider(&self, provider_type: &str) -> Option<u32> {
+        (!is_prowlarr_provider(provider_type))
+            .then(|| {
+                self.delegate
+                    .search_semantics_version_for_provider(provider_type)
+            })
+            .flatten()
+    }
+
     fn plugin_sdk_version_for_provider(&self, provider_type: &str) -> Option<String> {
         (!is_prowlarr_provider(provider_type))
             .then(|| self.delegate.plugin_sdk_version_for_provider(provider_type))
@@ -1613,6 +1622,54 @@ impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
             return Ok(());
         }
         self.delegate.restore_builtin_plugin(provider_type)
+    }
+
+    fn prepare_builtin_plugin(&self, provider_type: &str) -> Result<(), String> {
+        if is_prowlarr_provider(provider_type) {
+            return Ok(());
+        }
+        self.delegate.prepare_builtin_plugin(provider_type)
+    }
+
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if is_prowlarr_provider(provider_type) {
+            return Ok(());
+        }
+        self.delegate
+            .restore_builtin_plugin_with_settings(provider_type, settings)
+    }
+
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        let runtime_plugins = runtime_plugins
+            .iter()
+            .filter(|plugin| !is_prowlarr_provider(plugin.descriptor.provider_type()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let disabled_builtins = filter_reserved_prowlarr(disabled_builtins);
+        self.delegate.reload_runtime_plugins_with_builtin_settings(
+            &runtime_plugins,
+            &disabled_builtins,
+            settings,
+        )
+    }
+
+    fn builtin_descriptor_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
+        if is_prowlarr_provider(provider_type) {
+            return None;
+        }
+        self.delegate.builtin_descriptor_for_provider(provider_type)
     }
 
     fn reload_plugins(
@@ -2231,6 +2288,7 @@ mod tests {
     use chrono::Utc;
     use scryer_domain::IndexerConfig;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
     use std::time::Instant;
     use wiremock::matchers::{method, path, query_param};
@@ -2329,6 +2387,84 @@ mod tests {
         fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
             Vec::new()
         }
+    }
+
+    #[derive(Default)]
+    struct BuiltinRecordingProvider {
+        prepared: std::sync::Mutex<Vec<String>>,
+        restored_settings: std::sync::Mutex<Vec<(String, BTreeMap<String, String>)>>,
+    }
+
+    impl IndexerPluginProvider for BuiltinRecordingProvider {
+        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+            None
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["newznab".to_string()]
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            Vec::new()
+        }
+
+        fn prepare_builtin_plugin(&self, provider_type: &str) -> Result<(), String> {
+            self.prepared
+                .lock()
+                .expect("prepared calls")
+                .push(provider_type.to_string());
+            Ok(())
+        }
+
+        fn restore_builtin_plugin_with_settings(
+            &self,
+            provider_type: &str,
+            settings: BTreeMap<String, String>,
+        ) -> Result<(), String> {
+            self.restored_settings
+                .lock()
+                .expect("restored calls")
+                .push((provider_type.to_string(), settings));
+            Ok(())
+        }
+
+        fn search_semantics_version_for_provider(&self, _provider_type: &str) -> Option<u32> {
+            Some(7)
+        }
+    }
+
+    #[test]
+    fn builtin_runtime_operations_reach_the_wrapped_provider() {
+        let delegate = Arc::new(BuiltinRecordingProvider::default());
+        let provider = NativeProwlarrIndexerProvider::new(delegate.clone());
+        let settings = BTreeMap::from([("mode".to_string(), "strict".to_string())]);
+
+        provider
+            .prepare_builtin_plugin("newznab")
+            .expect("re-enabling a built-in indexer prepares it on the wrapped provider");
+        provider
+            .restore_builtin_plugin_with_settings("newznab", settings.clone())
+            .expect("built-in settings reach the wrapped provider");
+        provider
+            .prepare_builtin_plugin(PROWLARR_PROVIDER_TYPE)
+            .expect("the reserved provider needs no preparation");
+
+        assert_eq!(
+            *delegate.prepared.lock().expect("prepared calls"),
+            vec!["newznab".to_string()]
+        );
+        assert_eq!(
+            *delegate.restored_settings.lock().expect("restored calls"),
+            vec![("newznab".to_string(), settings)]
+        );
+        assert_eq!(
+            provider.search_semantics_version_for_provider("newznab"),
+            Some(7)
+        );
+        assert_eq!(
+            provider.search_semantics_version_for_provider(PROWLARR_PROVIDER_TYPE),
+            None
+        );
     }
 
     #[test]
