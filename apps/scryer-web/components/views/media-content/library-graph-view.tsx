@@ -299,9 +299,10 @@ const HOVER_FADE_ALPHA = 0.18;
 /** Room around the titles when the overview is fitted to them. */
 const OVERVIEW_FIT_PADDING = 1.25;
 
-// Zoom stops where a typical (median) title fills this share of the view's
-// height, and a little past the framing of the whole graph (ratio 1).
-const MAX_POSTER_VIEW_SHARE = 0.85;
+// Zoom stops where a typical (median) title is this many times the view's
+// height, close enough to look over a small poster's detail, and a little
+// past the framing of the whole graph (ratio 1).
+const MAX_POSTER_VIEW_SHARE = 2;
 const MAX_ZOOM_OUT_RATIO = 1.5;
 
 function applyZoomLimits(
@@ -1426,9 +1427,6 @@ export default function LibraryGraphView({
         return;
       }
       const clusterId = attributes.clusterId as number;
-      if (clusterId === UNPLACED_CLUSTER_ID) {
-        return;
-      }
       const list = pointsByCluster.get(clusterId);
       if (list) {
         list.push(point);
@@ -1489,11 +1487,12 @@ export default function LibraryGraphView({
       const label = hullLabelRefs.current.get(group.id);
       const points = pointsByCluster.get(group.id);
       // A focused view draws no cluster hulls, and neither does a graph
-      // with one neighbourhood, which would only outline everything.
+      // with one neighbourhood, which would only outline everything. The
+      // unplaced titles keep the zone their folded blob drew.
       if (
         focusCenter !== null ||
         !showsNeighbourhoodsRef.current ||
-        !group.named ||
+        !(group.named || group.id === UNPLACED_CLUSTER_ID) ||
         !points ||
         points.length === 0
       ) {
