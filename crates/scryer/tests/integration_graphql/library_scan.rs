@@ -757,9 +757,9 @@ async fn library_series_scan_hydrates_without_creating_wanted_for_unmonitored_ti
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
+        "/tmp/movies-unused",
         &media_root.path().display().to_string(),
-        &"/tmp/anime-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -897,8 +897,8 @@ async fn library_anime_scan_hydrates_and_relinks_files_from_discovered_folder_pa
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
-        &"/tmp/series-unused",
+        "/tmp/movies-unused",
+        "/tmp/series-unused",
         &media_root.path().display().to_string(),
     )
     .await;
@@ -1110,8 +1110,8 @@ async fn library_anime_scan_prefers_tvshow_nfo_identity_for_nightfall_fixture() 
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
-        &"/tmp/series-unused",
+        "/tmp/movies-unused",
+        "/tmp/series-unused",
         &media_root.path().display().to_string(),
     )
     .await;
@@ -1216,8 +1216,8 @@ async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_fol
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
-        &"/tmp/series-unused",
+        "/tmp/movies-unused",
+        "/tmp/series-unused",
         &media_root.path().display().to_string(),
     )
     .await;
@@ -1326,9 +1326,9 @@ async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_fo
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
+        "/tmp/movies-unused",
         &media_root.path().display().to_string(),
-        &"/tmp/anime-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -1450,9 +1450,9 @@ async fn library_series_scan_existing_unhydrated_title_without_episodes_complete
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
+        "/tmp/movies-unused",
         &media_root.path().display().to_string(),
-        &"/tmp/anime-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -1512,9 +1512,9 @@ async fn library_series_scan_creates_unmonitored_titles() {
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
+        "/tmp/movies-unused",
         &media_root.path().display().to_string(),
-        &"/tmp/anime-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -1561,9 +1561,9 @@ async fn library_series_scan_counts_new_title_files_before_post_hydration_scan_p
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
+        "/tmp/movies-unused",
         &media_root.path().display().to_string(),
-        &"/tmp/anime-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -1843,8 +1843,8 @@ async fn library_movie_scan_records_owned_folder_conflict_without_rehoming_title
     set_default_library_root_paths(
         &ctx,
         &media_root.path().display().to_string(),
-        &"/tmp/series-unused",
-        &"/tmp/anime-unused",
+        "/tmp/series-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -1960,8 +1960,8 @@ async fn library_movie_scan_matches_existing_title_from_movie_nfo_when_folder_mi
     set_default_library_root_paths(
         &ctx,
         &media_root.path().display().to_string(),
-        &"/tmp/series-unused",
-        &"/tmp/anime-unused",
+        "/tmp/series-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -2037,8 +2037,8 @@ async fn library_movie_scan_creates_unmonitored_title_and_collection() {
     set_default_library_root_paths(
         &ctx,
         &media_root.path().display().to_string(),
-        &"/tmp/series-unused",
-        &"/tmp/anime-unused",
+        "/tmp/series-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -2140,9 +2140,9 @@ async fn library_series_scan_handles_more_than_one_batch_of_titles() {
 
     set_default_library_root_paths(
         &ctx,
-        &"/tmp/movies-unused",
+        "/tmp/movies-unused",
         &media_root.path().display().to_string(),
-        &"/tmp/anime-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
@@ -2192,8 +2192,8 @@ async fn library_movie_scan_handles_more_than_one_batch_of_titles() {
     set_default_library_root_paths(
         &ctx,
         &media_root.path().display().to_string(),
-        &"/tmp/series-unused",
-        &"/tmp/anime-unused",
+        "/tmp/series-unused",
+        "/tmp/anime-unused",
     )
     .await;
 
