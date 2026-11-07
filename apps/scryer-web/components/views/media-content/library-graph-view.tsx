@@ -322,8 +322,11 @@ function applyZoomLimits(
           (sigma.scaleSize(typical, 1) * 2) / (MAX_POSTER_VIEW_SHARE * height),
         )
       : null;
-  sigma.setSetting("minCameraRatio", minRatio);
-  sigma.setSetting("maxCameraRatio", MAX_ZOOM_OUT_RATIO);
+  // Set on the camera itself: `setSetting` refreshes every node, and this
+  // runs each time a neighbourhood unfolds during a zoom.
+  const camera = sigma.getCamera();
+  camera.minRatio = minRatio;
+  camera.maxRatio = MAX_ZOOM_OUT_RATIO;
 }
 
 // Panning keeps the view's centre over the titles' extent, widened by this
