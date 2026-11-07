@@ -244,6 +244,37 @@ fn title_event_is_catalog_level(payload: &DomainEventPayload) -> bool {
     )
 }
 
+/// Activity kinds that change what the catalog shows for a title: a file
+/// arrived, was replaced or analyzed, or a subtitle landed. A reader with only
+/// `View` cannot see these events, but the live stream still owes them the
+/// signal to reload the title, or their open page stays stale.
+fn activity_kind_refreshes_catalog(kind: &ActivityKind) -> bool {
+    matches!(
+        kind,
+        ActivityKind::MovieDownloaded
+            | ActivityKind::SeriesEpisodeImported
+            | ActivityKind::FileAnalyzed
+            | ActivityKind::FileUpgraded
+            | ActivityKind::SubtitleDownloaded
+    )
+}
+
+/// The refresh signal sent in place of a privileged activity: which title and
+/// episodes changed, and how, with no message, actor or channel. The message
+/// carries paths and release detail; the rest is already visible in the
+/// catalog once the reader reloads.
+fn catalog_refresh_signal(activity: ActivityEvent) -> ActivityEvent {
+    ActivityEvent {
+        severity: ActivitySeverity::Info,
+        channels: Vec::new(),
+        actor_kind: scryer_domain::DomainEventActorKind::System,
+        actor_user_id: None,
+        actor_display_name: "System".to_string(),
+        message: String::new(),
+        ..activity
+    }
+}
+
 /// Library ids an actor may read events for: `view` for catalog-level events,
 /// `privileged` for everything that describes acquisition or files.
 struct EventVisibility {
@@ -1423,23 +1454,60 @@ impl AppUseCase {
         limit: usize,
     ) -> AppResult<Vec<(i64, ActivityEvent)>> {
         require_actor_view_library(self, actor).await?;
-        let user_facing_event_types = user_facing_domain_event_types();
+        let target_len = limit.clamp(1, 500);
+        let visibility = EventVisibility::load(self, actor).await?;
+        let mut title_library_cache = HashMap::new();
         let mut visible = Vec::new();
-        let events = self
-            .list_domain_events(
-                actor,
-                &DomainEventFilter {
-                    event_types: Some(user_facing_event_types),
-                    after_sequence: Some(after_sequence),
-                    limit: limit.max(1),
-                    ..DomainEventFilter::default()
-                },
-            )
-            .await?;
-        for event in events {
-            if let Some(activity) = activity_event_from_domain_event(&event) {
+        let mut page_filter = DomainEventFilter {
+            event_types: Some(user_facing_domain_event_types()),
+            after_sequence: Some(after_sequence),
+            limit: 500,
+            ..DomainEventFilter::default()
+        };
+
+        loop {
+            let events = self
+                .services
+                .events
+                .domain_events
+                .list(&page_filter)
+                .await?;
+            let Some(last_sequence) = events.last().map(|event| event.sequence) else {
+                break;
+            };
+            let batch_len = events.len();
+            for event in events {
+                let Some(activity) = activity_event_from_domain_event(&event) else {
+                    continue;
+                };
+                let activity =
+                    if event_allowed(self, actor, &event, &visibility, &mut title_library_cache)
+                        .await?
+                    {
+                        activity
+                    } else if !matches!(event.stream, scryer_domain::DomainEventStream::User { .. })
+                        && activity_kind_refreshes_catalog(&activity.kind)
+                        && event_title_allowed(
+                            self,
+                            event.title_id.as_deref(),
+                            &visibility.view,
+                            &mut title_library_cache,
+                        )
+                        .await?
+                    {
+                        catalog_refresh_signal(activity)
+                    } else {
+                        continue;
+                    };
                 visible.push((event.sequence, activity));
+                if visible.len() >= target_len {
+                    return Ok(visible);
+                }
             }
+            if batch_len < 500 {
+                break;
+            }
+            page_filter.after_sequence = Some(last_sequence);
         }
         Ok(visible)
     }
