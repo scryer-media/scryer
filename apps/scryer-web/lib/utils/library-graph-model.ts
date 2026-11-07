@@ -364,6 +364,45 @@ export function libraryGraphOverviewPreview(
   };
 }
 
+function sameData(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null ||
+    Array.isArray(a) !== Array.isArray(b)
+  )
+    return false;
+  if (Array.isArray(a)) {
+    const other = b as unknown[];
+    if (a.length !== other.length) return false;
+    for (let index = 0; index < a.length; index += 1)
+      if (!sameData(a[index], other[index])) return false;
+    return true;
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  for (const key of keys)
+    if (!Object.hasOwn(right, key) || !sameData(left[key], right[key]))
+      return false;
+  return true;
+}
+
+/**
+ * Whether a refetched catalog listing says exactly what the last one did. A
+ * refetch builds new title objects even when nothing changed, and joining a
+ * large library again re-lays out and redraws the whole graph.
+ */
+export function sameTitleRecords(
+  previous: readonly TitleRecord[],
+  next: readonly TitleRecord[],
+) {
+  return sameData(previous, next);
+}
+
 /**
  * The graph joined to the catalog's current titles. Nodes whose target is not
  * among the titles (filtered out by facet chips, library filters or search)
