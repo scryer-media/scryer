@@ -31556,6 +31556,10 @@ input TitleCatalogFilterInput {
 	Keep titles holding a file whose scan failed or that needs review when true, and titles holding none when false; null keeps both.
 	"""
 	needsAttention: Boolean
+	"""
+	Restrict results to these title IDs; null or empty keeps every title. Lets a client refresh a few titles under its other filters without reloading the whole list.
+	"""
+	titleIds: [ID!]
 }
 
 """

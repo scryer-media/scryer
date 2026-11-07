@@ -2912,6 +2912,10 @@ fn title_catalog_status_sort_value(title: &Title) -> String {
 }
 
 fn title_matches_catalog_filter(title: &Title, filter: &TitleCatalogFilter) -> bool {
+    if !filter.title_ids.is_empty() && !filter.title_ids.iter().any(|id| id == &title.id) {
+        return false;
+    }
+
     if !filter.root_folder_ids.is_empty()
         && !filter
             .root_folder_ids

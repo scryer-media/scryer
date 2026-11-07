@@ -5019,6 +5019,14 @@ fn build_title_catalog_where_sql(
         args.extend(filter.root_folder_ids.iter().cloned().map(SqlArg::Text));
     }
 
+    if !filter.title_ids.is_empty() {
+        let placeholders = std::iter::repeat_n("{}", filter.title_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        clauses.push(format!("titles.id IN ({placeholders})"));
+        args.extend(filter.title_ids.iter().cloned().map(SqlArg::Text));
+    }
+
     if let Some(minimum_year) = filter.minimum_year {
         clauses.push("titles.year >= {}".to_string());
         args.push(SqlArg::I32(minimum_year));
