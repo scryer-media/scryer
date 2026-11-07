@@ -955,7 +955,15 @@ pub(crate) fn match_parsed_release_with_asserted_ids(
     });
     let mut evidence_match =
         contextual_release_matches_title_evidence(parsed, evidence, root_or_episode_year)
-            .or_else(|| relaxed_release_matches_title_evidence(parsed, evidence, asserted_ids))?;
+            .or_else(|| relaxed_release_matches_title_evidence(parsed, evidence, asserted_ids))
+            .or_else(|| {
+                trailing_leftover_release_matches_title_evidence(
+                    parsed,
+                    evidence,
+                    asserted_ids,
+                    root_or_episode_year,
+                )
+            })?;
 
     if let (Some(parsed_year), Some(expected_year)) = (parsed.year, evidence.year)
         && parsed_year != expected_year
@@ -1094,6 +1102,147 @@ fn relaxed_release_matches_title_evidence(
                             &evidence.canonical_key,
                         ))),
         spelling: Some(matched),
+    })
+}
+
+/// Most trailing words an id-corroborated release may carry past a title key.
+const MAX_TRAILING_LEFTOVER_TOKENS: usize = 2;
+
+/// Words that, after a show's name, name a different catalog entry of it (a
+/// film, an OVA, a later season or cour) rather than a stray release tag.
+const IDENTITY_EXTENDING_LEFTOVER_WORDS: &[&str] = &[
+    "movie",
+    "film",
+    "gekijouban",
+    "ova",
+    "oad",
+    "ona",
+    "special",
+    "specials",
+    "season",
+    "part",
+    "cour",
+];
+
+fn is_roman_numeral_token(token: &str) -> bool {
+    matches!(
+        token,
+        "ii" | "iii" | "iv" | "v" | "vi" | "vii" | "viii" | "ix" | "x"
+    )
+}
+
+/// A trailing leftover is tolerable only when it looks like a stray tag: plain
+/// letters, never a number or numeral that could carry sequel or season
+/// numbering, and never a word that names another entry of the same show.
+fn trailing_leftover_token_is_tolerable(token: &str) -> bool {
+    !token.is_empty()
+        && token.chars().all(|ch| ch.is_ascii_alphabetic())
+        && !is_roman_numeral_token(token)
+        && !IDENTITY_EXTENDING_LEFTOVER_WORDS.contains(&token)
+}
+
+/// A bare group tag written as a trailing title word (`Title GRP S01E21`)
+/// keeps the neutral extraction one or two words longer than any key of the
+/// title. Text alone cannot tell such a tag from a word that belongs to the
+/// name (`Title SVU`, `Title Shippuden`), and an indexer text search returns
+/// those spin-offs for the base show, so this lane never accepts on text: it
+/// needs external ids that agree with the subject and conflict with nothing.
+/// The title key must still cover the head of the context-free extraction,
+/// so bias and ids refine an anchored identity and never manufacture one.
+fn trailing_leftover_release_matches_title_evidence(
+    parsed: &ParsedReleaseMetadata,
+    evidence: &CanonicalTitleEvidence,
+    asserted_ids: Option<bool>,
+    year_corroborated: bool,
+) -> Option<TitleEvidenceMatch> {
+    if evidence.spelling_identity.facet == MediaFacet::Movie.as_str() {
+        return None;
+    }
+    let ids = match (asserted_ids, evidence.spelling_identity.parsed_ids(parsed)) {
+        (Some(false), _) | (_, Some(false)) => return None,
+        (Some(true), _) | (_, Some(true)) => true,
+        _ => false,
+    };
+    if !ids {
+        return None;
+    }
+
+    let mut best: Option<(String, String, String)> = None;
+    for anchor_key in context_free_identity_anchor_keys(&parsed.raw_title) {
+        let tokens = anchor_key.split_whitespace().collect::<Vec<_>>();
+        let shortest_prefix = tokens
+            .len()
+            .saturating_sub(MAX_TRAILING_LEFTOVER_TOKENS)
+            .max(1);
+        for prefix_len in (shortest_prefix..tokens.len()).rev() {
+            let leftover = &tokens[prefix_len..];
+            if !leftover
+                .iter()
+                .all(|token| trailing_leftover_token_is_tolerable(token))
+            {
+                continue;
+            }
+            let prefix = tokens[..prefix_len].join(" ");
+            let Some(matched_key) = evidence_key_for_normalized(evidence, &prefix) else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .is_none_or(|(_, best_prefix, _)| prefix.len() > best_prefix.len())
+            {
+                best = Some((matched_key, prefix, leftover.join(" ")));
+            }
+            break;
+        }
+    }
+    let (matched_key, prefix, leftover) = best?;
+
+    // The target-biased parse must read that same key at the head of a title
+    // zone, so the leftover is the tail of the zone and not its start. A
+    // catalog alias can be written so that the parser never reads it back
+    // (`Name／Other (ABBR)`), so, as in the relaxed lane, the prefix that the
+    // context-free extraction already tied to a catalog key joins the context
+    // for this one parse only. Its position is still the parser's to decide.
+    let mut context = evidence.parse_context.clone();
+    context.aliases.push(crate::release_parser::ContextAlias {
+        name: prefix.clone(),
+    });
+    let contextual = crate::analyze_release_for_target(&parsed.raw_title, &context);
+    let candidate = contextual.best_candidate()?;
+    let confirmed = candidate.context_title_matches.iter().any(|hit| {
+        hit.kind != crate::release_parser::ContextTitleMatchKind::EpisodeTitle
+            && crate::title_matching::canonical_lookup_key(&hit.raw) == prefix
+            && candidate.zones.title_zones.iter().any(|zone| {
+                hit.token_range.start_token == zone.start_token
+                    && hit.token_range.end_token <= zone.end_token
+            })
+    });
+    if !confirmed {
+        tracing::debug!(
+            release = parsed.raw_title,
+            matched_alias = matched_key,
+            leftover,
+            "release title trailing leftover rejected: title key not at the head of a title zone"
+        );
+        return None;
+    }
+
+    let year_corroborated = year_corroborated
+        || (candidate.projected.year.is_some()
+            && evidence.year.is_some()
+            && candidate.projected.year == evidence.year);
+    tracing::debug!(
+        release = parsed.raw_title,
+        matched_alias = matched_key,
+        leftover,
+        "release title matched with a trailing leftover on external id agreement"
+    );
+    Some(TitleEvidenceMatch {
+        spelling: None,
+        matched_key,
+        year_corroborated,
+        id_corroborated: true,
+        requires_external_id: false,
     })
 }
 
@@ -6477,6 +6626,191 @@ mod tests {
             decision_for(&live_action, &subject, &candidate),
             ReleaseAutoDecisionCode::AmbiguousIdentity
         );
+    }
+
+    fn leftover_series_title(id: &str, name: &str, tvdb_id: &str) -> Title {
+        let mut title = make_title();
+        title.id = id.to_string();
+        title.name = name.to_string();
+        title.facet = MediaFacet::Anime;
+        title.year = Some(2014);
+        title.tagged_aliases.clear();
+        title.external_ids = vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())];
+        title
+    }
+
+    fn tvdb_response(tvdb_id: &str) -> IndexerResponseAttributes {
+        IndexerResponseAttributes {
+            tvdb_id: Some(tvdb_id.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn leftover_match(title: &Title, raw: &str, response: IndexerResponseAttributes) -> bool {
+        candidate_title_match(
+            &series_episode_candidate(raw, response),
+            &canonical_title_evidence(title),
+        )
+        .is_some()
+    }
+
+    #[test]
+    fn trailing_group_word_matches_only_on_external_id_agreement() {
+        let title = leftover_series_title("aokumo", "Aokumo no Kiroku", "900001");
+        let raw = "Aokumo no Kiroku TQX S01E21 1080p";
+
+        let matched = candidate_title_match(
+            &series_episode_candidate(raw, tvdb_response("900001")),
+            &canonical_title_evidence(&title),
+        )
+        .and_then(|title_match| title_match.evidence_match)
+        .expect("an agreeing indexer id corroborates the head-anchored key");
+        assert_eq!(matched.matched_key, "aokumo no kiroku");
+        assert!(matched.id_corroborated);
+        assert!(!matched.requires_external_id);
+
+        assert!(
+            !leftover_match(&title, raw, IndexerResponseAttributes::default()),
+            "text alone never accepts an extra trailing word"
+        );
+        assert!(
+            !leftover_match(&title, raw, tvdb_response("900002")),
+            "a conflicting id refuses the lane"
+        );
+        let mut mixed = tvdb_response("900001");
+        mixed.tmdb_id = Some("123456".to_string());
+        let mut with_tmdb = title.clone();
+        with_tmdb
+            .external_ids
+            .push(ExternalId::new("tmdb".to_string(), "654321".to_string()));
+        assert!(
+            !leftover_match(&with_tmdb, raw, mixed),
+            "any conflicting id refuses the lane even when another agrees"
+        );
+    }
+
+    #[test]
+    fn trailing_group_word_with_agreeing_ids_clears_the_automatic_title_gate() {
+        let title = leftover_series_title("aokumo", "Aokumo no Kiroku", "900001");
+        let subject = numbering_scoped_subject(&title, Some(1), Some(21));
+        let raw = "Aokumo.no.Kiroku.TQX.S01E21.1080p.WEB-DL";
+
+        assert_eq!(
+            decision_for(
+                &title,
+                &subject,
+                &series_episode_candidate(raw, tvdb_response("900001"))
+            ),
+            ReleaseAutoDecisionCode::QualityBlocked,
+            "identity passes, so only the default profile refuses it"
+        );
+        assert_eq!(
+            decision_for(&title, &subject, &make_candidate(raw, None)),
+            ReleaseAutoDecisionCode::TitleMismatch
+        );
+    }
+
+    #[test]
+    fn spin_off_carrying_its_own_id_is_refused_for_the_base_show() {
+        let base = leftover_series_title("hoshikage", "Hoshikage", "900010");
+        let raw = "Hoshikage Shippuden S01E05 1080p";
+
+        assert!(!leftover_match(&base, raw, tvdb_response("900011")));
+        assert!(!leftover_match(
+            &base,
+            raw,
+            IndexerResponseAttributes::default()
+        ));
+    }
+
+    #[test]
+    fn trailing_leftover_lane_refuses_numbering_and_identity_extending_words() {
+        let base = leftover_series_title("hoshikage", "Hoshikage Kiroku", "900010");
+        for raw in [
+            "Hoshikage Kiroku 2 S01E05 1080p",
+            "Hoshikage Kiroku II S01E05 1080p",
+            "Hoshikage Kiroku Movie S01E05 1080p",
+            "Hoshikage Kiroku OVA S01E05 1080p",
+            "Hoshikage Kiroku Final Arc Saga S01E05 1080p",
+            "Ryuusei Hoshikage Kiroku S01E05 1080p",
+        ] {
+            assert!(
+                !leftover_match(&base, raw, tvdb_response("900010")),
+                "{raw}"
+            );
+        }
+        assert!(leftover_match(
+            &base,
+            "Hoshikage Kiroku Ryu Grp S01E05 1080p",
+            tvdb_response("900010")
+        ));
+    }
+
+    #[test]
+    fn trailing_leftover_lane_keeps_the_year_veto() {
+        let base = leftover_series_title("hoshikage", "Hoshikage Kiroku", "900010");
+        assert!(leftover_match(
+            &base,
+            "Hoshikage Kiroku TQX 2014 S01E05 1080p",
+            tvdb_response("900010")
+        ));
+        assert!(!leftover_match(
+            &base,
+            "Hoshikage Kiroku TQX 2009 S01E05 1080p",
+            tvdb_response("900010")
+        ));
+    }
+
+    #[test]
+    fn trailing_group_word_after_a_slashed_abbreviation_alias_matches_on_id_agreement() {
+        // The catalog spells the alias with a fullwidth slash and a bracketed
+        // abbreviation, a form the target-biased parse never reads back from
+        // a release on its own.
+        let mut title =
+            leftover_series_title("tsukikage", "Tsukikage Yoru Mugen Kenseikai", "900030");
+        title.aliases.push("Tsukikage／Yoru (MKS)".to_string());
+        title.tagged_aliases.push(TaggedAlias {
+            name: "Tsukikage／Yoru (MKS)".to_string(),
+            language: "jpn".to_string(),
+            country: None,
+        });
+        let raw = "Tsukikage Yoru MKS TQX S01E21 1080p";
+
+        let matched = candidate_title_match(
+            &series_episode_candidate(raw, tvdb_response("900030")),
+            &canonical_title_evidence(&title),
+        )
+        .and_then(|title_match| title_match.evidence_match)
+        .expect("an agreeing indexer id corroborates the abbreviated alias");
+        assert_eq!(matched.matched_key, "tsukikage yoru mks");
+        assert!(matched.id_corroborated);
+        assert!(!matched.requires_external_id);
+
+        assert!(
+            !leftover_match(&title, raw, IndexerResponseAttributes::default()),
+            "text alone never accepts an extra trailing word"
+        );
+        assert!(
+            !leftover_match(&title, raw, tvdb_response("900031")),
+            "a conflicting id refuses the lane"
+        );
+    }
+
+    #[test]
+    fn trailing_leftover_lane_never_applies_to_movie_subjects() {
+        let mut movie = leftover_series_title("amber", "Amber Circuit", "900020");
+        movie.facet = MediaFacet::Movie;
+        movie.year = Some(2026);
+        movie.external_ids = vec![ExternalId::new("tmdb".to_string(), "900020".to_string())];
+        let response = IndexerResponseAttributes {
+            tmdb_id: Some("900020".to_string()),
+            ..Default::default()
+        };
+        assert!(!leftover_match(
+            &movie,
+            "Amber.Circuit.TQX.2026.1080p.WEB-DL",
+            response
+        ));
     }
 
     #[tokio::test]

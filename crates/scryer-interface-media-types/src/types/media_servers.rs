@@ -133,10 +133,39 @@ pub struct MediaServerConnectionPayload {
     pub emby_connect_enabled: bool,
     /// Configured external-to-local path mappings.
     pub path_mappings: Vec<MediaServerPathMappingPayload>,
+    /// Watch-history sweep state; null until the connection has been swept,
+    /// and on payloads returned by connection mutations.
+    pub watch_signal_sync: Option<MediaServerWatchSignalSyncPayload>,
     /// Creation timestamp in RFC 3339 format.
     pub created_at: DateTime<Utc>,
     /// Last update timestamp in RFC 3339 format.
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Watch-history sweep state of one media-server connection. Lifecycle rules
+/// treat watch facts as unobserved until every enabled connection has swept
+/// cleanly, so this is where an operator sees why they still are.
+pub struct MediaServerWatchSignalSyncPayload {
+    /// When the latest sweep started.
+    pub last_started_at: Option<DateTime<Utc>>,
+    /// When a sweep last read every linked account in full.
+    pub last_clean_sweep_at: Option<DateTime<Utc>>,
+    /// Why the latest sweep was incomplete, as a sentence for people; null
+    /// after a clean sweep. Explain the condition from `lastErrorCode`.
+    pub last_error: Option<String>,
+    /// Stable code for why the latest sweep was incomplete (`WATCH_SYNC_*`);
+    /// null after a clean sweep and on sweeps recorded before codes were
+    /// stored, which only have `lastError`.
+    pub last_error_code: Option<String>,
+    /// A clean sweep is on record but no longer counts: it is older than the
+    /// window lifecycle rules accept, or the connection was disabled when it
+    /// was last swept. False when there is no clean sweep at all.
+    pub clean_sweep_stale: bool,
+    /// Linked accounts the latest sweep considered.
+    pub participant_count: i64,
+    /// Watch signals stored for this connection by the latest sweep.
+    pub signal_count: i64,
 }
 
 #[derive(SimpleObject, Clone)]

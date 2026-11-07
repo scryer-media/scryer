@@ -188,6 +188,86 @@ async fn score_evaluation_rechecks_permissions_before_queued_work() {
 }
 
 #[tokio::test]
+async fn score_evaluation_episode_selection_validates_before_acceptance() {
+    let (app, user, files, file_id) = fixture().await;
+    let title_id = files
+        .get_media_file_by_id(&file_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .title_id;
+    app.services
+        .catalog
+        .shows
+        .create_episode(scryer_domain::Episode {
+            id: "selected-episode".into(),
+            title_id,
+            collection_id: None,
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: None,
+            season_number: Some("1".into()),
+            episode_label: None,
+            title: None,
+            air_date: None,
+            duration_seconds: Some(1800),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored: false,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    for ids in [
+        vec![],
+        vec!["selected-episode".into(); 1001],
+        vec!["missing".into()],
+    ] {
+        assert!(
+            app.refresh_selected_file_scores(&user, ScoreRefreshSelection::Episodes(ids))
+                .await
+                .is_err()
+        );
+    }
+    let worker = app.runtime.jobs.score_refresh.worker.lock().await;
+    let run = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        app.refresh_selected_file_scores(
+            &user,
+            ScoreRefreshSelection::Episodes(vec!["selected-episode".into(); 2]),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(app.cancel_file_score_refresh(&user, &run.id).await.unwrap());
+    assert_eq!(terminal(&app, &run.id).await.status, JobRunStatus::Warning);
+    drop(worker);
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, AppPermissionMask::NONE)
+        .await
+        .unwrap();
+    let denied = app.attach_user_authorization(user).await.unwrap();
+    assert!(
+        app.refresh_selected_file_scores(
+            &denied,
+            ScoreRefreshSelection::Episodes(vec!["selected-episode".into()])
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
 async fn score_evaluation_selection_limits_and_cancellation_are_owner_scoped() {
     let (app, user, files, id) = fixture().await;
     assert!(

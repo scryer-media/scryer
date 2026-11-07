@@ -1,3 +1,7 @@
+export function buildRecycleBinItemHref(itemId: string): string {
+  return `/system/recycle-bin?${new URLSearchParams({ itemId })}`;
+}
+
 export type RecycleBinFilterItem = {
   id: string;
   fileName: string;

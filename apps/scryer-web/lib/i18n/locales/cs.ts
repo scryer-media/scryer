@@ -3,6 +3,46 @@ import type { LocaleDictionary } from "../types";
 const cs: LocaleDictionary = {
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Tato verze Prowlarru není podporována. Aktualizujte Prowlarr na verzi 2.0 nebo novější.",
+  "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "Uložené vydání se nepodařilo zařadit do fronty. Zůstává dostupné pro další pokus.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Toto vydání je na seznamu blokovaných pro tento titul. Pro zařazení do fronty jej ze seznamu odeberte.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Toto vydání už je ve frontě stahování.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Pro tento titul právě probíhá jiné hledání nebo zařazení do fronty. Zkuste to znovu, až skončí.",
+  "wanted.downloadStandby": "Stáhnout",
+  "wanted.downloadStandbyLabel": "Stáhnout {{name}}",
+  "wanted.standbyConflictTitle": "Stahování již probíhá",
+  "wanted.standbyConflictDescription":
+    "Zařadit {{name}} do fronty vedle těchto stahování, nebo je zrušit a zařadit místo nich.",
+  "wanted.standbyQueue": "Zařadit do fronty",
+  "wanted.standbyQueuedRefreshFailed":
+    "Vydání bylo zařazeno do fronty, ale seznam se nepodařilo obnovit. Obnovte stránku, abyste viděli aktuální stav.",
+  "wanted.standbyCancelAndQueue": "Zrušit a zařadit do fronty",
+  "wanted.standbyQueuedCancelFailed":
+    "Vydání bylo zařazeno do fronty, ale {{count}} konfliktních stahování se nepodařilo zrušit a stále běží.",
+  "settings.oauthJellyfinCallbackCopied":
+    "URL zpětného volání Jellyfin zkopírována.",
+  "settings.oauthClientIdCopied": "ID klienta OAuth zkopírováno.",
+  "status.copyFailedSelected":
+    "Kopírování se nezdařilo. Text je vybraný; stiskněte Ctrl+C nebo ⌘C.",
+  "status.copyFailed":
+    "Kopírování se nezdařilo: prohlížeč odmítl přístup ke schránce.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Médium se nepodařilo ověřit, a proto nemůže nahradit existující soubor v knihovně.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Tento seznam skladeb nebo doprovodný soubor je nutné zkontrolovat, protože může záviset na dalších souborech.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Médium nelze přečíst. Zkontrolujte přístup ke zdroji a zkuste to znovu.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "Struktura média je poškozená. Před importem zkontrolujte zdrojový soubor.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Médium je zašifrované a nelze je ověřit.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer se nemůže připojit k bráně metadat, protože se systémové hodiny liší o více než 5 minut. Synchronizujte systémové hodiny a restartujte Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -143,7 +183,7 @@ const cs: LocaleDictionary = {
   "settings.pluginSettingsSaveFailed":
     "Nastavení pluginu se nepodařilo uložit.",
   "settings.regoValidationUnavailable":
-    "Validace není dostupná. Zkontrolujte připojení a zkuste Ověřit znovu.",
+    "Validace není dostupná. Zkontrolujte připojení a zkuste uložit znovu.",
   "settings.regoValidationFailed": "Ověření pravidla selhalo. Zobrazit chyby.",
   "settings.regoFileAvailability":
     "Dostupné pouze při hodnocení importovaného souboru s mediálními informacemi. Při vyhledávání vydání je input.file null; před čtením polí to ošetřete.",
@@ -306,7 +346,8 @@ const cs: LocaleDictionary = {
   "nav.logs": "Protokoly",
   "nav.serviceLogs": "Protokoly služby",
   "nav.auditLogs": "Auditní protokoly",
-  "nav.usersAccess": "Uživatelé a přístup",
+  "nav.users": "Uživatelé",
+  "nav.securityAccess": "Zabezpečení a přístup",
   "nav.mobileTitle": "Navigace Scryer",
   "nav.mobileDescription": "Hlavní navigace Scryer",
   "nav.mobileTrigger": "Otevřít navigaci",
@@ -416,6 +457,7 @@ const cs: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "Oblíbené všech dob",
   "discovery.section.rightNow": "Právě teď",
   "discovery.section.fromYourTaste": "Podle vašeho vkusu",
+  "discovery.section.fromYourWatchlist": "Z vašeho seznamu ke zhlédnutí",
   "discovery.section.almostComplete": "Téměř dokončené",
   "discovery.section.nextAnimeSeason": "Příští sezóna anime",
   "discovery.section.popularInAnime": "Oblíbené v anime",
@@ -434,7 +476,6 @@ const cs: LocaleDictionary = {
   "settings.profile": "Profil",
   "settings.general": "Obecné",
   "settings.backups": "Zálohy",
-  "settings.security": "Zabezpečení",
   "settings.enableFormLogin": "Zapnout přihlašování",
   "settings.securityLoginSettings": "Nastavení přihlašování",
   "settings.securityEnableFormLoginHelp":
@@ -699,8 +740,6 @@ const cs: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Keepalive je celé číslo sekund, hodnota 0 jej vypíná.",
   "status.proxyTunnelPublicKeyCopied": "Veřejný klíč zkopírován.",
-  "status.proxyTunnelPublicKeyCopyFailed":
-    "Veřejný klíč se nepodařilo zkopírovat.",
   "settings.qualityProfiles": "Profily kvality",
   "settings.downloadClients": "Klienti pro stahování",
   "settings.mediaServers": "Mediální servery",
@@ -775,7 +814,7 @@ const cs: LocaleDictionary = {
   "settings.libraryEffectiveValue": "Platná hodnota: {{value}}",
   "settings.searchLanguages": "Jazyky pro vyhledávání vydání",
   "settings.searchLanguagesHelp":
-    "Vyberte jazyky v pořadí vyhledávání. Automatické vyhledávání zkouší tyto názvy, když dřívější dotazy nenajdou přijatelné vydání; interaktivní vyhledávání zkouší všechny vybrané názvy. Jazyky metadat a zvuku se nemění.",
+    "Názvy vydání, které se mají také hledat, v pořadí. Automatické vyhledávání je použije jako zálohu; interaktivní vyhledávání zkusí všechny.",
   "settings.searchAliases": "Vlastní názvy vydání",
   "settings.searchAliasesHelp": "Oddělte názvy středníky",
   "settings.libraryMetadataLanguageLabel": "Jazyk metadat",
@@ -952,10 +991,9 @@ const cs: LocaleDictionary = {
   "settings.acquisitionEnabled": "Zapnout automatické získávání",
   "settings.acquisitionEnabledHelp":
     "Spouští smyčku získávání na pozadí: konvergenční vyhledávací průchody a párování přes RSS.",
-  "settings.acquisitionThresholds": "Prahy pro upgrade",
-  "settings.acquisitionSameTierMinDelta":
+  "qualityProfile.minUpgradeScoreDelta":
     "Minimální rozdíl skóre ve stejné úrovni",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "Vydání ve stejné úrovni kvality musí překonat skóre aktuálního souboru alespoň o tuto hodnotu.",
   "settings.acquisitionConvergence": "Konvergence a tempo",
   "settings.acquisitionPollIntervalSeconds": "Interval kontroly (sekundy)",
@@ -1491,16 +1529,78 @@ const cs: LocaleDictionary = {
     "Když automatický import ze SABnzbd nebo NZBGet obsahuje video soubory se zamaskovanými názvy, Scryer odešle kontrolní součet CRC-32 a velikost každého souboru na srrdb.com, službu třetí strany, aby vyhledala původní název souboru. Nic jiného o vaší knihovně ani o souboru se neodesílá. Soubory na disku se nikdy nepřejmenovávají.",
   "discovery.personalizedDisabled":
     "Personalizované objevování je pro tuto instanci vypnuto.",
+  "discovery.rail.becauseYouLike.action": "Protože máte rádi akci",
+  "discovery.rail.becauseYouLike.adventure": "Protože máte rádi dobrodružství",
+  "discovery.rail.becauseYouLike.comedy": "Protože máte rádi komedie",
+  "discovery.rail.becauseYouLike.crime": "Protože máte rádi krimi",
+  "discovery.rail.becauseYouLike.documentary": "Protože máte rádi dokumenty",
+  "discovery.rail.becauseYouLike.drama": "Protože máte rádi dramata",
+  "discovery.rail.becauseYouLike.family": "Protože máte rádi rodinnou zábavu",
+  "discovery.rail.becauseYouLike.fantasy": "Protože máte rádi fantasy",
+  "discovery.rail.becauseYouLike.history": "Protože máte rádi historii",
+  "discovery.rail.becauseYouLike.horror": "Protože máte rádi horory",
+  "discovery.rail.becauseYouLike.mystery": "Protože máte rádi záhady",
+  "discovery.rail.becauseYouLike.romance": "Protože máte rádi romantiku",
+  "discovery.rail.becauseYouLike.science-fiction": "Protože máte rádi sci-fi",
+  "discovery.rail.becauseYouLike.thriller": "Protože máte rádi thrillery",
+  "discovery.rail.becauseYouLike.war": "Protože máte rádi válečné příběhy",
+  "discovery.rail.becauseYouLike.western": "Protože máte rádi westerny",
+  "discovery.rail.becauseYouLike.sports": "Protože máte rádi sportovní příběhy",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Protože máte rádi nadpřirozeno",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Protože máte rádi příběhy o dospívání",
+  "discovery.rail.becauseYouLike.found-family":
+    "Protože máte rádi nalezené rodiny",
+  "discovery.rail.becauseYouLike.revenge": "Protože máte rádi příběhy o pomstě",
+  "discovery.rail.becauseYouLike.heist": "Protože máte rádi loupeže",
+  "discovery.rail.becauseYouLike.time-travel":
+    "Protože máte rádi cestování časem",
+  "discovery.rail.becauseYouLike.dystopia": "Protože máte rádi dystopie",
+  "discovery.rail.becauseYouLike.cyberpunk": "Protože máte rádi kyberpunk",
+  "discovery.rail.becauseYouLike.superhero": "Protože máte rádi superhrdiny",
+  "discovery.rail.becauseYouLike.vampire": "Protože máte rádi upíry",
+  "discovery.rail.becauseYouLike.zombie": "Protože máte rádi zombie",
+  "discovery.rail.becauseYouLike.survival":
+    "Protože máte rádi příběhy o přežití",
+  "discovery.rail.becauseYouLike.space":
+    "Protože máte rádi vesmírná dobrodružství",
+  "discovery.rail.becauseYouLike.detective": "Protože máte rádi detektivky",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Protože máte rádi organizovaný zločin",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Protože máte rádi dobová dramata",
+  "discovery.rail.becauseYouLike.psychological":
+    "Protože máte rádi psychologické příběhy",
+  "discovery.rail.becauseYouLike.mythology": "Protože máte rádi mytologii",
+  "discovery.rail.becauseYouLike.isekai": "Protože máte rádi isekai",
+  "discovery.rail.becauseYouLike.mecha": "Protože máte rádi mecha",
+  "discovery.rail.becauseYouLike.martial-arts":
+    "Protože máte rádi bojová umění",
+  "discovery.rail.becauseYouLike.music": "Protože máte rádi hudební příběhy",
+  "discovery.rail.becauseYouLike.workplace":
+    "Protože máte rádi příběhy z pracovního prostředí",
+  "discovery.rail.becauseYouLike.medical": "Protože máte rádi lékařská dramata",
+  "discovery.rail.becauseYouLike.military":
+    "Protože máte rádi vojenské příběhy",
+  "discovery.rail.becauseYouLike.spy": "Protože máte rádi špionážní příběhy",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Protože máte rádi královské intriky",
+  "discovery.rail.becauseYouLike.first-love":
+    "Protože máte rádi příběhy o první lásce",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Protože máte rádi zakázanou lásku",
+  "discovery.rail.becauseYouLike.lgbtq": "Protože máte rádi LGBTQ+ příběhy",
+  "discovery.rail.becauseYouLike.samurai": "Protože máte rádi samuraje",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Protože máte rádi kouzelné dívky",
   "settings.keepHistoryForever": "Uchovávat historii navždy",
   "settings.historyRetentionDaysHeader": "Uchovávat historii po dobu",
   "settings.historyRetentionDaysSuffix": "dní",
   "settings.securitySessionDurationSuffix": "dní",
   "settings.generalSaved": "Obecná nastavení uložena.",
-  "settings.verificationDepthTitle": "Ověřování kopie při importu",
   "settings.verificationDepthHelp":
     "Jak důkladně Scryer ověří zkopírovaný soubor, než se dotkne zdroje.",
-  "settings.verificationDepthScope":
-    "Toto platí pouze pro kopie při importu z klienta pro stahování. Přesuny knihovny a kořenové složky se vždy ověřují plně, bez ohledu na tuto volbu.",
   "settings.verificationDepthLabel": "Hloubka ověření",
   "settings.verificationDepthFull": "Plné zpětné čtení",
   "settings.verificationDepthFullHelp":
@@ -1669,6 +1769,8 @@ const cs: LocaleDictionary = {
   "toast.viewInCatalog": "Zobrazit v katalogu",
   "label.back": "Zpět",
   "label.close": "Zavřít",
+  "label.copy": "Kopírovat",
+  "label.copied": "Zkopírováno",
   "label.dismiss": "Zavřít",
   "pwa.offline": "Jste offline. Některé funkce nemusí být dostupné.",
   "pwa.installApp": "Nainstalovat Scryer",
@@ -1771,10 +1873,52 @@ const cs: LocaleDictionary = {
   "title.viewModeCompact": "Kompaktní",
   "title.viewModePosterTable": "Seznam",
   "title.viewModePoster": "Zobrazení plakátů",
+  "title.viewModeGraph": "Zobrazení grafu",
+  "libraryGraph.regionLabel": "Graf knihovny",
+  "libraryGraph.sizeByLabel": "Velikost podle",
+  "libraryGraph.sizeBy.ratingEvidence": "Podklad hodnocení",
+  "libraryGraph.sizeBy.rating": "Hodnocení",
+  "libraryGraph.sizeBy.popularity": "Popularita",
+  "libraryGraph.resetView": "Přizpůsobit graf",
+  "libraryGraph.clustersLabel": "Skupiny",
+  "libraryGraph.clusterAroundTitle": "Kolem titulu {{title}}",
+  "libraryGraph.unplaced": "Nezařazené tituly",
+  "libraryGraph.collapsedCluster": "{{name}} (titulů: {{count}})",
+  "libraryGraph.collapseCluster": "Sbalit {{name}}",
+  "libraryGraph.linkedBy": "Propojeno přes",
+  "libraryGraph.empty":
+    "Žádný titul v tomto zobrazení zatím není v grafu knihovny.",
+  "libraryGraph.edgeKind.semantic": "Podobné",
+  "libraryGraph.edgeKind.sequel": "Pokračování",
+  "libraryGraph.edgeKind.prequel": "Prequel",
+  "libraryGraph.edgeKind.coWatch": "Často sledováno společně",
+  "libraryGraph.edgeKind.relation": "Související",
+  "libraryGraph.edgeKind.affinity": "Společný zájem: {{label}}",
+  "libraryGraph.edgeKind.sharedTaste": "Společný zájem",
+  "libraryGraph.edgeKind.other": "Propojeno",
+  "libraryGraph.edgeKind.recommendation": "Doporučeno",
+  "libraryGraph.notBuilt": "Graf knihovny zatím nebyl vytvořen.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "Tento titul nelze dále prozkoumat.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Tento titul neodpovídá typu médií této knihovny, proto ho zde nelze prozkoumat.",
+  "libraryGraph.moreLikeThisEmpty": "Zatím nic podobného.",
+  "libraryGraph.backToOverview": "Zpět na přehled",
+  "libraryGraph.findingMoreLikeThis": "Hledám podobné tituly…",
+  "libraryGraph.reason.recommendedBy": "Doporučeno na {{sources}}",
+  "libraryGraph.reason.similarOn": "Podobné na {{sources}}",
+  "libraryGraph.reason.shares": "Společné: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Skupiny doporučení",
+  "libraryGraph.notInLibrary": "Není ve vaší knihovně",
+  "libraryGraph.inLibrary": "Ve vaší knihovně",
+  "libraryGraph.openTitle": "Otevřít titul",
+  "libraryGraph.exploredGroup": "Prozkoumáno",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, není ve vaší knihovně",
+  "libraryGraph.trailLabel": "Prozkoumáno",
+  "libraryGraph.canvasLabel":
+    "Graf knihovny. Šipkami se pohybujete mezi tituly v clusteru, klávesou Enter titul otevřete.",
   "title.bulkSelectionCount": "Vybráno: {{count}}",
   "title.bulkSelectionPanelTitle": "Hromadný výběr",
-  "title.bulkSelectionPanelHint":
-    "Zvolte akci pro vybrané tituly, nebo výběr zrušte.",
   "title.bulkEditTitle": "Upravit vybrané tituly",
   "title.bulkEditDescription": "Použít změny na vybrané tituly ({{count}}).",
   "title.editOptionsTitle": "Upravit možnosti titulu",
@@ -2073,6 +2217,7 @@ const cs: LocaleDictionary = {
     "Zobrazuje se poslední úspěšný výsledek. Obnovení selhalo.",
   "activity.countUnknown":
     "Počet importů vyžadujících pozornost zatím není k dispozici",
+  "activity.runningJobs": "Probíhající dlouhé úlohy: {{count}}",
   "activity.countStale":
     "Počet importů vyžadujících pozornost může být zastaralý",
   "queue.state.importBlocked": "Import blokován",
@@ -2383,7 +2528,6 @@ const cs: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Platí pro oblasti",
   "settings.ruleAppliedFacetsHelp":
     "Ponechte prázdné pro použití na všechny typy médií.",
-  "settings.ruleValidate": "Ověřit",
   "settings.ruleValidating": "Ověřování…",
   "settings.ruleValid": "Pravidlo je platné.",
   "settings.ruleValidationRequired": "Název a zdrojový kód Rego jsou povinné.",
@@ -5122,13 +5266,13 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsActiveDownloadsValue":
     "True, pokud u subjektu právě probíhá stahování",
   "settings.refMaintFactsWatchedByUserIdsValue":
-    "Identifikátory všech, kdo to přehráli, seřazené a bez duplicit; prázdný seznam znamená, že to nikdo neudělal. Dokončení řady vyžaduje, aby stejná osoba shlédla každou odvysílanou epizodu, včetně chybějících souborů. Budoucí epizody jsou vyloučeny; chybějící historie sledování nebo nevyřešená data vysílání jsou neznámé. Fakty sledování jsou neznámé u titulů v rozsahu seriálu (show_watch_rollup_unavailable), když není připojen žádný mediální server (no_media_server_connection), když se připojení nikdy čistě nesynchronizovalo (signal_sync_never_succeeded), když je poslední čistá synchronizace starší než 48 hodin (signals_stale), když nikdo nemá ověřený propojený účet mediálního serveru (no_linked_participants) a když přehrání nelze přiřadit uživateli Scryer (signal_identity_missing).",
+    "Identifikátory všech, kdo to přehráli, seřazené a bez duplicit; prázdný seznam znamená, že to nikdo neudělal. Dokončení řady vyžaduje, aby stejná osoba shlédla každou odvysílanou epizodu, včetně chybějících souborů. Budoucí epizody jsou vyloučeny; chybějící historie sledování nebo nevyřešená data vysílání jsou neznámé. Fakty sledování jsou neznámé u titulů v rozsahu seriálu (show_watch_rollup_unavailable), když není připojen žádný mediální server (no_media_server_connection), když se připojení nikdy čistě nesynchronizovalo (signal_sync_never_succeeded), když je poslední čistá synchronizace starší než 48 hodin (signals_stale), když nikdo nemá ověřený propojený účet mediálního serveru (no_linked_participants), když propojené účty existují, ale žádná synchronizace je ještě nenačetla (participants_not_yet_swept), a když přehrání nelze přiřadit uživateli Scryer (signal_identity_missing).",
   "settings.refMaintFactsLastWatchedAtValue":
-    "Časové razítko RFC3339 posledního přehrání; chybí s důvodem never_watched, pokud to nikdo nepřehrál",
+    "Časové razítko RFC3339 posledního přehrání; chybí s důvodem never_watched, pokud to nikdo nepřehrál, a unknown s důvodem play_time_missing, pokud přehrání nemá zaznamenaný čas",
   "settings.refMaintFactsWatchedByAnyRequesterValue":
-    "True, pokud to přehrál alespoň jeden žadatel; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru",
+    "True, pokud to přehrál alespoň jeden žadatel; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru, nebo requester_not_yet_swept, pokud propojený účet žadatele ještě žádná synchronizace nenačetla",
   "settings.refMaintFactsWatchedByAllRequestersValue":
-    "True, pokud to přehráli úplně všichni žadatelé; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru",
+    "True, pokud to přehráli úplně všichni žadatelé; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru, nebo requester_not_yet_swept, pokud propojený účet žadatele ještě žádná synchronizace nenačetla",
   "settings.refMaintFactsRequestLeaseStateValue":
     "none, pokud pro subjekt nikdy nebyl zapsán žádný nárok žádosti, dormant, pokud nárok čeká na první import, active, dokud nárok běží, a expired, jakmile vyprší úplně každý nárok. Nárok, který byl uvolněn nebo převeden, je stažen, ne vyčerpán, takže stav expired nezpůsobí. Vypršení se měří vůči času vyhodnocení, takže nárok se jeví jako expired ve chvíli, kdy se jeho okno uzavře.",
   "settings.refMaintFactsRequestLeaseExpiresAtValue":
@@ -5704,8 +5848,6 @@ const cs: LocaleDictionary = {
   "settings.refReqFactsLibraryTitleCountValue":
     "Počet titulů v cílové knihovně",
   "move.dialogTitle": "Přesunout tituly",
-  "move.dialogDescription":
-    "Před jakýmkoli přesunem zkontrolujte plán. Vybraných titulů: {{count}}.",
   "move.destinationLibrary": "Cílová knihovna",
   "move.destinationRoot": "Cílový kořen",
   "move.destinationRootPlaceholder": "Vyberte kořen",
@@ -5713,13 +5855,8 @@ const cs: LocaleDictionary = {
   "move.actionDescription":
     "Přesunout soubory tohoto titulu do jiné kořenové složky nebo do jiné knihovny.",
   "move.actionButton": "Přesunout do…",
-  "move.wizardKindDescription": "Vyberte, kam by měl tento titul jít.",
   "move.kindRootHeading": "Přesunout do jiného kořene",
-  "move.kindRootHelp":
-    "Ponechte titul v této knihovně a přesuňte jeho soubory do jedné z jejích dalších kořenových složek.",
   "move.kindLibraryHeading": "Přesunout do jiné knihovny",
-  "move.kindLibraryHelp":
-    "Přesunout titul do jiné knihovny, do jednoho z kořenů dané knihovny.",
   "move.noOtherRoots":
     "Tato knihovna nemá žádnou jinou kořenovou složku, kam přesunout. Přidejte ji do knihovny, nebo přesuňte titul do jiné knihovny.",
   "move.back": "Zpět",
@@ -5763,7 +5900,6 @@ const cs: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "Tyto soubory jsou zde uvedeny pod dvěma epizodami, které jsou v cíli jednou epizodou. Tam je každý uveden jednou.",
   "move.mergeRoleUnnamedFile": "soubor {{id}}",
-  "move.operationTransferNote": "Tyto tituly se přesouvají do jiné knihovny.",
   "move.modeHeading": "Jak se tam mají soubory dostat?",
   "move.mode.MOVE_WITH_SCRYER": "Přesunout pomocí Scryeru",
   "move.mode.FILES_ALREADY_THERE": "Soubory jsou již tam",
@@ -5819,10 +5955,6 @@ const cs: LocaleDictionary = {
     "Všechny soubory ({{files}}, {{bytes}}) budou zkontrolovány podle začátku, konce a velikosti.",
   "move.verificationNotApplicable":
     "Žádné soubory se nepřesouvají, takže není co ověřovat.",
-  "move.verificationStampFull": "ověřeno (úplně)",
-  "move.verificationStampQuick": "ověřeno (rychle)",
-  "move.verificationFallbackCount":
-    "Souborů přepnutých na rychlou kontrolu: {{count}}",
   "move.typedConfirmationPrompt": "Pro potvrzení napište frázi",
   "move.confirm": "Spustit přesun",
   "move.startFailed": "Spuštění přesunu se nezdařilo.",
@@ -5988,7 +6120,6 @@ const cs: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Sloučení kořenů",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Přesun mezi knihovnami",
   "move.toastPreparing": "Příprava…",
-  "move.toastTransferred": "Přesunuto",
   "move.toastTitlesProgress": "Tituly: {{current}} / {{total}}",
   "move.toastDoneSubtitle": "Přesun dokončen · titulů: {{count}}",
   "move.toastWarningsSubtitle": "Dokončeno s upozorněními · titulů: {{count}}",
@@ -7041,6 +7172,62 @@ const cs: LocaleDictionary = {
     "Přesun souboru pod novým názvem se nezdařil. Soubor i jeho epizody zůstaly beze změny.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Číslování epizod je nejednoznačné",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "Pozdrženo: na mediálním serveru se něco přehrává.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "Pozdrženo: mediálního serveru se nepodařilo zjistit, zda se něco přehrává.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "Pozdrženo: mediální server ukazuje přehrání novější než uložená historie sledování.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "Pozdrženo: historie mediálního serveru ukazuje přehrání účtem, který historie sledování nezapočítává.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Zda položku přehrál kdokoli s účtem na připojeném mediálním serveru, ať je propojen se Scryerem, nebo ne; nikoho nejmenuje",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "Kdy položku naposledy přehrál kdokoli s účtem na připojeném mediálním serveru",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True, když ji přehrál jakýkoli účet na povoleném mediálním serveru, bez ohledu na propojení s uživatelem Scryeru; u sérií a seriálů stačí kterákoli odvysílaná epizoda. Neznámé s důvodem audience_not_read, dokud synchronizace za posledních 48 hodin nepřečte všechny účty na všech povolených připojeních, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "Časové razítko RFC3339 posledního přehrání kterýmkoli účtem; chybí s důvodem never_watched, když ji nikdo nepřehrál, a je neznámé s důvodem play_time_missing (episode_play_time_missing u sérií a seriálů), když přehrání nemá zaznamenaný čas, nebo audience_not_read, když nebyly přečteny všechny účty",
+  "settings.maintenancePreviewFacts": "Fakta, která pravidlo četlo",
+  "setup.sourceImportProgress": "Import zdrojů",
+  "setup.sourceImportInvalidRequest":
+    "Vybraný zdroj není dostupný. Obnovte vyhledávání zdrojů a vyberte ho znovu.",
+  "setup.sourceImportSelectionChanged":
+    "Odeslaný výběr zdrojů nelze změnit. Neúspěšné zdroje zopakujte v Souhrnu.",
+  "setup.sourceImportNotOwned":
+    "Tento import zdrojů není pro váš účet dostupný.",
+  "setup.sourceImportQueueFull":
+    "Kapacita importu zdrojů je plná. Zkuste to znovu, až skončí jiný import.",
+  "setup.sourceImportActive": "Tento import zdrojů stále probíhá.",
+  "setup.sourceImportNotRetryable":
+    "Zopakovat nebo přeskočit lze pouze neúspěšné nebo přerušené zdroje.",
+  "setup.sourceImportUnresolved":
+    "Před dokončením nastavení zopakujte nebo výslovně přeskočte nevyřešené zdroje.",
+  "setup.sourceImportCredentialRequired":
+    "Před pokračováním zadejte přihlašovací údaj zdroje.",
+  "setup.sourceImportConfigConflict":
+    "Rezervovaná konfigurace se změnila. Před opakováním zdroj zkontrolujte.",
+  "setup.sourceImportSourceNotReady":
+    "Před pokračováním počkejte na dokončení vyhledávání zdrojů.",
+  "setup.sourceImportResume": "Znovu připojit k průběhu",
+  "setup.sourceImportLoading": "Načítání průběhu importu zdrojů",
+  "setup.sourceImportCredential": "Opravený přihlašovací údaj pro {{name}}",
+  "setup.sourceImportRetry": "Zopakovat neúspěšné zdroje",
+  "setup.sourceImportSkip": "Přeskočit tento zdroj",
+  "setup.sourceImportItemFailed":
+    "Zkontrolujte připojení a přihlašovací údaje, poté zopakujte nebo přeskočte.",
+  "setup.sourceImportState.queued": "Ve frontě",
+  "setup.sourceImportState.installing": "Instalace poskytovatele",
+  "setup.sourceImportState.checking": "Kontrola připojení",
+  "setup.sourceImportState.saving": "Ukládání konfigurace",
+  "setup.sourceImportState.succeeded": "Importováno",
+  "setup.sourceImportState.failed": "Selhalo",
+  "setup.sourceImportState.interrupted": "Přerušeno",
+  "setup.sourceImportState.skipped": "Přeskočeno",
 };
 
 export default cs;

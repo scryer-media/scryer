@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ChevronDown, TriangleAlertIcon } from "lucide-react";
 import { useClient } from "urql";
+import { useSearchParams } from "react-router";
 
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
@@ -10,6 +11,20 @@ import {
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import type { EpisodeTargetEpisode } from "@/lib/utils/episode-target";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import {
+  PendingImportConflictDialog,
+  PendingImportConflictProgress,
+} from "@/components/dialogs/pending-import-conflict-dialog";
+import {
+  type ConflictPolicy,
+  type ConflictTask,
+} from "@/lib/pending-import-conflicts";
+import {
+  ignorePendingImportBatch,
+  resolvablePendingImportSelection,
+  togglePendingImportSelection,
+} from "@/lib/pending-import-selection";
+import { Checkbox } from "@/components/ui/checkbox";
 import { PendingImportCard } from "@/components/containers/pending-import-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -64,6 +79,8 @@ type PendingImportsContainerProps = {
 };
 
 const PAGE_SIZE = 50;
+/** The server's largest pending-imports page, used when selecting every import. */
+const SELECT_ALL_PAGE_SIZE = 200;
 
 type MetadataSearchResult = {
   tvdbId: string;
@@ -341,6 +358,7 @@ export const PendingImportsContainer = React.memo(
     onNavigateBackToOverview,
   }: PendingImportsContainerProps) {
     const client = useClient();
+    const [searchParams, setSearchParams] = useSearchParams();
     const setGlobalStatus = useGlobalStatus();
     const t = useTranslate();
     const facet = facetForView(view);
@@ -403,8 +421,56 @@ export const PendingImportsContainer = React.memo(
     const [ignoringItemId, setIgnoringItemId] = React.useState<string | null>(
       null,
     );
-    const [ignoreTargetItem, setIgnoreTargetItem] =
-      React.useState<PendingImportItem | null>(null);
+    const [ignoreTargetItems, setIgnoreTargetItems] = React.useState<
+      PendingImportItem[]
+    >([]);
+    const [selectedImports, setSelectedImports] = React.useState<
+      PendingImportItem[]
+    >([]);
+    const selectedImportIds = selectedImports.map((item) => item.id);
+    const selectedConflicts = React.useMemo(
+      () => resolvablePendingImportSelection(selectedImports),
+      [selectedImports],
+    );
+    const selectedConflictIds = selectedConflicts.map((item) => item.id);
+    const [conflictDialog, setConflictDialog] = React.useState<{
+      ids: string[];
+      policy: ConflictPolicy;
+    } | null>(null);
+    const [conflictTask, setConflictTask] = React.useState<ConflictTask | null>(
+      () => {
+        const jobRunId = searchParams.get("conflictTask");
+        return jobRunId
+          ? {
+              jobRunId,
+              totalCount: 0,
+              settledCount: 0,
+              failedCount: 0,
+              operationIds: [],
+              completed: false,
+            }
+          : null;
+      },
+    );
+    const selectionBusy =
+      pendingLoading ||
+      Boolean(ignoringItemId || resolvingItemId) ||
+      bindingLoading ||
+      (conflictTask !== null && !conflictTask.completed);
+    const toggleSelection = React.useCallback(
+      (item: PendingImportItem, checked: boolean) => {
+        setSelectedImports((current) =>
+          togglePendingImportSelection(current, [item], checked),
+        );
+      },
+      [],
+    );
+    const openConflict = React.useCallback(
+      (item: PendingImportItem, policy: ConflictPolicy) => {
+        setConflictDialog({ ids: [item.id], policy });
+      },
+      [],
+    );
     const [assignItem, setAssignItem] =
       React.useState<PendingImportItem | null>(null);
     const [assignEpisodes, setAssignEpisodes] = React.useState<
@@ -484,7 +550,7 @@ export const PendingImportsContainer = React.memo(
       setBindingError(null);
       setSelectedEpisodeIds([]);
       setExpandedBindingSeasonKeys([]);
-      setIgnoreTargetItem(null);
+      setIgnoreTargetItems([]);
     }, []);
 
     const activeItem = React.useMemo(() => {
@@ -521,13 +587,14 @@ export const PendingImportsContainer = React.memo(
       async (
         status: PendingImportStatus,
         pageOffset: number,
+        pageSize: number = PAGE_SIZE,
       ): Promise<PendingImportConnection> => {
         const { data, error: queryError } = await client
           .query(pendingImportsQuery, {
             facet: pendingImportFacetValueForView(view),
             libraryIds: selectedLibraryIdsToQueryValue(selectedLibraryIds),
             status,
-            limit: PAGE_SIZE,
+            limit: pageSize,
             offset: pageOffset,
           })
           .toPromise();
@@ -591,6 +658,14 @@ export const PendingImportsContainer = React.memo(
 
           setOffset(nextOffset);
           setConnection(nextConnection);
+          const refreshedItems = new Map(
+            nextConnection.items.map((item) => [item.id, item]),
+          );
+          setSelectedImports((current) =>
+            status === "IGNORED"
+              ? current.filter((item) => !refreshedItems.has(item.id))
+              : current.map((item) => refreshedItems.get(item.id) ?? item),
+          );
           return nextConnection;
         } catch (err) {
           setError(
@@ -616,6 +691,41 @@ export const PendingImportsContainer = React.memo(
       ]);
     }, [ignoredOffset, pendingOffset, refresh]);
 
+    const [selectingAll, setSelectingAll] = React.useState(false);
+    // Bumped whenever the library filter or view changes. A select-all that
+    // started under an older filter drops its results instead of selecting
+    // items the operator no longer sees.
+    const filterGenerationRef = React.useRef(0);
+    const selectAllPending = React.useCallback(async () => {
+      const generation = filterGenerationRef.current;
+      setSelectingAll(true);
+      setPendingError(null);
+      try {
+        const everything = new Map<string, PendingImportItem>();
+        let offset = 0;
+        for (;;) {
+          const page = await fetchPendingImportsPage(
+            "PENDING",
+            offset,
+            SELECT_ALL_PAGE_SIZE,
+          );
+          if (filterGenerationRef.current !== generation) return;
+          for (const item of page.items) everything.set(item.id, item);
+          offset += page.items.length;
+          if (page.items.length === 0 || offset >= page.totalCount) break;
+        }
+        if (filterGenerationRef.current !== generation) return;
+        setSelectedImports([...everything.values()]);
+      } catch (err) {
+        if (filterGenerationRef.current !== generation) return;
+        setPendingError(
+          userFacingGraphQlErrorMessage(err, t("pendingImports.loadFailed"), t),
+        );
+      } finally {
+        setSelectingAll(false);
+      }
+    }, [fetchPendingImportsPage, t]);
+
     React.useEffect(() => {
       void refresh("PENDING", pendingOffset);
     }, [pendingOffset, refresh]);
@@ -625,11 +735,14 @@ export const PendingImportsContainer = React.memo(
     }, [ignoredOffset, refresh]);
 
     React.useEffect(() => {
+      filterGenerationRef.current += 1;
       setPendingOffset(0);
       setIgnoredOffset(0);
       setPendingLoaded(false);
       setIgnoredLoaded(false);
       setIgnoredOpen(false);
+      setSelectedImports([]);
+      setConflictDialog(null);
       clearActiveItem();
     }, [clearActiveItem, selectedLibraryIds, view]);
 
@@ -827,11 +940,14 @@ export const PendingImportsContainer = React.memo(
         return;
       }
 
-      setIgnoreTargetItem(item);
+      setIgnoreTargetItems([item]);
     }, []);
 
     const applyMatchedTitle = React.useCallback(
       (item: PendingImportItem, title: ResolvePendingImportResult["title"]) => {
+        setSelectedImports((current) =>
+          current.filter((selected) => selected.id !== item.id),
+        );
         if (item.facet === "MOVIE") {
           const removeMatchedItem = (
             current: PendingImportConnection,
@@ -1135,61 +1251,73 @@ export const PendingImportsContainer = React.memo(
     );
 
     const handleIgnore = React.useCallback(async () => {
-      if (!ignoreTargetItem || ignoreTargetItem.status !== "PENDING") {
+      const targets = ignoreTargetItems.filter(
+        (item) => item.status === "PENDING",
+      );
+      if (
+        !targets.length ||
+        targets.some((item) =>
+          inFlightPendingImportActionsRef.current.has(item.id),
+        )
+      )
         return;
-      }
-
-      const itemId = ignoreTargetItem.id;
-      if (inFlightPendingImportActionsRef.current.has(itemId)) {
-        return;
-      }
-      inFlightPendingImportActionsRef.current.add(itemId);
-
-      setIgnoringItemId(itemId);
+      for (const item of targets)
+        inFlightPendingImportActionsRef.current.add(item.id);
+      setIgnoringItemId(targets[0]!.id);
       try {
-        const { error: mutationError } = await client
-          .mutation(ignorePendingImportMutation, {
-            pendingImportId: itemId,
-          })
-          .toPromise();
-        if (mutationError) {
-          throw mutationError;
-        }
-
+        const { ignored, failed } = await ignorePendingImportBatch(
+          targets,
+          async (itemId) => {
+            const { error: mutationError } = await client
+              .mutation(ignorePendingImportMutation, {
+                pendingImportId: itemId,
+              })
+              .toPromise();
+            if (mutationError) throw mutationError;
+          },
+        );
+        const ignoredIds = new Set(ignored.map((item) => item.id));
+        setSelectedImports((current) =>
+          current.filter((item) => !ignoredIds.has(item.id)),
+        );
+        if (
+          activeItemRef?.status === "PENDING" &&
+          ignoredIds.has(activeItemRef.id)
+        )
+          clearActiveItem();
+        setIgnoreTargetItems(failed.map(({ item }) => item));
         dispatchNavigationBadgesRefresh();
         await refreshAll();
+        const summary =
+          targets.length === 1 && ignored.length === 1
+            ? t("pendingImports.ignoreSuccess", {
+                name: targets[0]!.displayName,
+              })
+            : t("pendingImports.bulkIgnoreResult", {
+                ignored: ignored.length,
+                failed: failed.length,
+              });
+        const detail = failed.length
+          ? userFacingGraphQlErrorMessage(
+              failed[0]!.error,
+              t("pendingImports.ignoreFailed"),
+              t,
+            )
+          : "";
         setGlobalStatus(
-          t("pendingImports.ignoreSuccess", {
-            name: ignoreTargetItem.displayName,
-          }),
-        );
-
-        if (
-          activeItemRef?.id === ignoreTargetItem.id &&
-          activeItemRef.status === "PENDING"
-        ) {
-          clearActiveItem();
-        } else {
-          setIgnoreTargetItem(null);
-        }
-      } catch (err) {
-        setGlobalStatus(
-          userFacingGraphQlErrorMessage(
-            err,
-            t("pendingImports.ignoreFailed"),
-            t,
-          ),
-          { level: "ERROR" },
+          detail ? `${summary} ${detail}` : summary,
+          failed.length ? { level: "ERROR" } : undefined,
         );
       } finally {
-        inFlightPendingImportActionsRef.current.delete(itemId);
-        setIgnoringItemId((current) => (current === itemId ? null : current));
+        for (const item of targets)
+          inFlightPendingImportActionsRef.current.delete(item.id);
+        setIgnoringItemId(null);
       }
     }, [
       activeItemRef,
       clearActiveItem,
       client,
-      ignoreTargetItem,
+      ignoreTargetItems,
       refreshAll,
       setGlobalStatus,
       t,
@@ -1274,7 +1402,7 @@ export const PendingImportsContainer = React.memo(
                 item.status === activeItemRef.status
               : false;
             const isResolving = resolvingItemId === item.id;
-            const isIgnoring = ignoringItemId === item.id;
+            const isIgnoring = ignoringItemId !== null;
             const isBusy =
               isResolving || isIgnoring || (isActive && bindingLoading);
             const knownTitleHref = pendingImportKnownTitleHref(item);
@@ -1291,6 +1419,12 @@ export const PendingImportsContainer = React.memo(
                 isActive={isActive}
                 isResolving={isResolving}
                 isBusy={isBusy}
+                conflictBusy={selectionBusy}
+                selected={selectedImportIds.includes(item.id)}
+                onSelectedChange={toggleSelection}
+                onResolveConflict={
+                  facetId === "MOVIE" ? openConflict : undefined
+                }
                 libraryLabel={libraryLabel}
                 knownTitleHref={knownTitleHref}
                 knownTitleLabel={knownTitleLabel}
@@ -1327,6 +1461,11 @@ export const PendingImportsContainer = React.memo(
       ),
       [
         activeItemRef,
+        facetId,
+        selectedImportIds,
+        toggleSelection,
+        openConflict,
+        selectionBusy,
         bindingError,
         bindingGroups,
         bindingLoading,
@@ -1354,6 +1493,26 @@ export const PendingImportsContainer = React.memo(
 
     return (
       <>
+        {conflictDialog && (
+          <PendingImportConflictDialog
+            pendingImportIds={conflictDialog.ids}
+            initialPolicy={conflictDialog.policy}
+            onClose={() => setConflictDialog(null)}
+            onStarted={(task) => {
+              setConflictTask(task);
+              setSelectedImports([]);
+              setSearchParams(
+                (current) => {
+                  const next = new URLSearchParams(current);
+                  next.set("conflictTask", task.jobRunId);
+                  return next;
+                },
+                { replace: true },
+              );
+              void refreshAll();
+            }}
+          />
+        )}
         <div className="min-h-0 flex-1 bg-transparent">
           <div className="mx-auto w-full max-w-[1180px] space-y-5 px-4 py-5 sm:px-6 md:px-[30px] md:py-[26px] md:pb-12">
             <div className="flex flex-wrap items-end gap-4">
@@ -1422,6 +1581,118 @@ export const PendingImportsContainer = React.memo(
               </Card>
             ) : null}
 
+            {(selectedImports.length > 0 ||
+              pendingConnection.items.length > 0) && (
+              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3 text-sm">
+                <label className="flex items-center gap-2">
+                  <Checkbox
+                    id="pending-import-conflict-select-page"
+                    size="large"
+                    // Match the bar's small buttons (h-8) exactly.
+                    className="size-8"
+                    checked={
+                      pendingConnection.totalCount > 0 &&
+                      selectedImports.length >= pendingConnection.totalCount
+                        ? true
+                        : selectedImports.length > 0
+                          ? "indeterminate"
+                          : false
+                    }
+                    disabled={
+                      selectionBusy ||
+                      selectingAll ||
+                      pendingConnection.totalCount === 0
+                    }
+                    onCheckedChange={(checked) => {
+                      if (checked === true) {
+                        void selectAllPending();
+                      } else {
+                        setSelectedImports([]);
+                      }
+                    }}
+                  />
+                  {t("pendingImports.selectAll")}
+                </label>
+                {selectedImports.length > 0 && (
+                  <>
+                    <span>
+                      {t("pendingImports.conflict.selected", {
+                        count: selectedImports.length,
+                      })}
+                    </span>
+                    {selectedConflicts.length > 0 && (
+                      <>
+                        {selectedConflicts.length < selectedImports.length && (
+                          <span className="text-muted-foreground">
+                            {t("pendingImports.conflict.selectedConflicts", {
+                              count: selectedConflicts.length,
+                            })}
+                          </span>
+                        )}
+                        <Button
+                          id="pending-import-conflict-bulk"
+                          size="sm"
+                          variant="outline"
+                          disabled={selectionBusy}
+                          onClick={() =>
+                            setConflictDialog({
+                              ids: selectedConflictIds,
+                              policy: "ADOPT_ALL",
+                            })
+                          }
+                        >
+                          {t("pendingImports.conflict.adoptAll")}
+                        </Button>
+                        <Button
+                          id="pending-import-conflict-keep-one-bulk"
+                          size="sm"
+                          variant="outline"
+                          disabled={selectionBusy}
+                          onClick={() =>
+                            setConflictDialog({
+                              ids: selectedConflictIds,
+                              policy: "KEEP_ONE",
+                            })
+                          }
+                        >
+                          {t("pendingImports.conflict.keepOne")}
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      id="pending-import-ignore-selected"
+                      size="sm"
+                      variant="destructive"
+                      disabled={selectionBusy}
+                      onClick={() => setIgnoreTargetItems([...selectedImports])}
+                    >
+                      {t("pendingImports.ignore")}
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
+            {conflictTask && (
+              <PendingImportConflictProgress
+                key={conflictTask.jobRunId}
+                initialTask={conflictTask}
+                onDismiss={() => {
+                  setConflictTask(null);
+                  setSearchParams(
+                    (current) => {
+                      const next = new URLSearchParams(current);
+                      next.delete("conflictTask");
+                      return next;
+                    },
+                    { replace: true },
+                  );
+                }}
+                onChanged={(task) => {
+                  setConflictTask(task);
+                  void refreshAll();
+                }}
+              />
+            )}
             {renderItems(pendingConnection.items)}
 
             {renderPagination(
@@ -1475,18 +1746,22 @@ export const PendingImportsContainer = React.memo(
           </div>
         </div>
         <ConfirmDialog
-          open={Boolean(
-            ignoreTargetItem && ignoreTargetItem.status === "PENDING",
+          open={ignoreTargetItems.length > 0}
+          title={t(
+            ignoreTargetItems.length === 1
+              ? "pendingImports.ignoreConfirmTitle"
+              : "pendingImports.bulkIgnoreConfirmTitle",
           )}
-          title={t("pendingImports.ignoreConfirmTitle")}
-          description=""
+          description={t("pendingImports.bulkIgnoreConfirmDescription", {
+            count: ignoreTargetItems.length,
+          })}
           confirmLabel={t("pendingImports.ignore")}
           cancelLabel={t("label.cancel")}
-          isBusy={Boolean(
-            ignoreTargetItem && ignoringItemId === ignoreTargetItem.id,
-          )}
+          isBusy={ignoringItemId !== null}
           onConfirm={() => void handleIgnore()}
-          onCancel={() => setIgnoreTargetItem(null)}
+          onCancel={() => {
+            if (!ignoringItemId) setIgnoreTargetItems([]);
+          }}
         />
         <AssignEpisodeFileDialog
           open={assignItem !== null}

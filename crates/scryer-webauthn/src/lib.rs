@@ -959,6 +959,8 @@ struct AttestedCredential {
     public_key_cose: Vec<u8>,
 }
 
+// WebAuthn fixes rpIdHash and clientDataHash as SHA-256.
+#[allow(clippy::disallowed_methods)]
 fn parse_authenticator_data(
     authenticator_data: &[u8],
     expected_rp_id: Option<&str>,
@@ -1084,6 +1086,8 @@ fn verify_es256_assertion_signature(
         .map_err(|_| WebauthnError::InvalidSignature)
 }
 
+// WebAuthn fixes rpIdHash and clientDataHash as SHA-256.
+#[allow(clippy::disallowed_methods)]
 fn assertion_signed_bytes(authenticator_data: &[u8], client_data_json: &[u8]) -> Vec<u8> {
     let mut signed_bytes = Vec::with_capacity(authenticator_data.len() + 32);
     signed_bytes.extend_from_slice(authenticator_data);
@@ -1206,6 +1210,8 @@ mod tests {
         signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair, KeyPair},
     };
 
+    // WebAuthn fixes rpIdHash and clientDataHash as SHA-256.
+    #[allow(clippy::disallowed_methods)]
     fn authenticator_data_for(rp_id: &str, flags: u8, counter: u32) -> Vec<u8> {
         let mut authenticator_data = Vec::with_capacity(37);
         authenticator_data

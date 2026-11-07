@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  preferSourceImportSnapshot,
+  sourceImportPollingSettled,
   FINALIZE_POLL_INTERVAL_MS,
   canRetryProwlarrDiscovery,
   continueExternalImportFromConnect,
+  continueExternalImportFromSources,
   finalizeProgressPercent,
   isFinalizeBlocked,
   isFinalizeSettled,
@@ -13,6 +16,74 @@ import {
   runFinalizeStart,
   type FinalizeStatusSample,
 } from "./external-import-wizard-orchestration.ts";
+import type { ExternalImportSourceJob } from "./types/external-import.ts";
+
+test("Sources navigates after acceptance while connection workers remain blocked", async () => {
+  let accept!: (outcome: { ok: boolean; error: string | null }) => void;
+  const accepted = new Promise<{ ok: boolean; error: string | null }>(
+    (resolve) => {
+      accept = resolve;
+    },
+  );
+  let navigationCount = 0;
+  const continuation = continueExternalImportFromSources(
+    () => accepted,
+    () => {
+      navigationCount += 1;
+    },
+  );
+  assert.equal(navigationCount, 0);
+  accept({ ok: true, error: null });
+  assert.equal((await continuation).ok, true);
+  assert.equal(navigationCount, 1);
+});
+
+test("a lost acceptance response stays on Sources so the same request can be recovered", async () => {
+  let navigationCount = 0;
+  const result = await continueExternalImportFromSources(
+    async () => ({ ok: false, error: "Connection lost" }),
+    () => {
+      navigationCount += 1;
+    },
+  );
+  assert.equal(result.error, "Connection lost");
+  assert.equal(navigationCount, 0);
+});
+
+const sourceSnapshot = (
+  overrides: Partial<ExternalImportSourceJob> = {},
+): ExternalImportSourceJob => ({
+  runId: "source-operation",
+  active: true,
+  ready: false,
+  updatedAt: "2026-01-01T00:00:00.001Z",
+  items: [],
+  ...overrides,
+});
+
+test("a retry replaces a terminal snapshot while delayed pre-retry responses are ignored", () => {
+  const failed = sourceSnapshot({ active: false });
+  const retry = sourceSnapshot({ updatedAt: "2026-01-01T00:00:00.002Z" });
+  assert.equal(preferSourceImportSnapshot(failed, retry), retry);
+  assert.equal(preferSourceImportSnapshot(retry, failed), retry);
+  assert.equal(
+    preferSourceImportSnapshot(retry, sourceSnapshot({ runId: "unrelated" })),
+    retry,
+  );
+});
+
+test("terminal unresolved imports stop polling and retry restarts it", () => {
+  assert.equal(
+    sourceImportPollingSettled(
+      sourceSnapshot({ active: false, ready: false }),
+      false,
+    ),
+    true,
+  );
+  assert.equal(sourceImportPollingSettled(sourceSnapshot(), false), false);
+  assert.equal(sourceImportPollingSettled(null, true), true);
+  assert.equal(sourceImportPollingSettled(null, false), false);
+});
 
 test("an unresolved preview cannot delay Connect navigation", () => {
   const events: string[] = [];

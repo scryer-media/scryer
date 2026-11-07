@@ -173,7 +173,7 @@ function TableCodeCell({
     <TableCell
       data-slot="table-code-cell"
       className={cn(
-        "whitespace-nowrap font-[var(--font-code)] tabular-nums",
+        "whitespace-nowrap font-[family-name:var(--font-code)] tabular-nums",
         className,
       )}
       {...props}

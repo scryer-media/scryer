@@ -1,6 +1,6 @@
 pub(crate) const HYDRATION_BULK_BATCH_SIZE: usize = 20;
-const TITLE_MORE_LIKE_THIS_HYDRATION_LIMIT: usize = 24;
-const TITLE_MORE_LIKE_THIS_BACKGROUND_REFRESH_HOURS: i64 = 24;
+pub(crate) const TITLE_MORE_LIKE_THIS_HYDRATION_LIMIT: usize = 24;
+pub(crate) const TITLE_MORE_LIKE_THIS_BACKGROUND_REFRESH_HOURS: i64 = 24;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HydrationCompletionOptions {
     sync_wanted_after_completion: bool,
@@ -1610,6 +1610,10 @@ impl AppUseCase {
                 // external ids; without this the matcher would keep serving
                 // pre-hydration identities until some other write dirtied it.
                 self.invalidate_monitored_title_matcher().await;
+                self.runtime
+                    .acquisition
+                    .target_cache
+                    .mark_title(&updated.id);
                 if movie_availability_metadata_changed {
                     self.runtime.acquisition.acquisition_wake.notify_one();
                 }

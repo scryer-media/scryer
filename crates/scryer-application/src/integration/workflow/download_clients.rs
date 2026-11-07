@@ -9,7 +9,10 @@ impl AppUseCase {
     fn normalize_download_client_type(&self, client_type: impl AsRef<str>) -> AppResult<String> {
         let normalized = client_type.as_ref().trim().to_lowercase();
         if normalized.is_empty() {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_TYPE_REQUIRED, "client type is required"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::CLIENT_TYPE_REQUIRED,
+                "client type is required",
+            ));
         }
 
         if NATIVE_DOWNLOAD_CLIENT_TYPES
@@ -34,10 +37,13 @@ impl AppUseCase {
             return Ok(normalized);
         }
 
-        Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_TYPE_UNSUPPORTED, format!(
-            "unsupported download client type '{}'",
-            client_type.as_ref()
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::integration::DOWNLOAD_CLIENT_TYPE_UNSUPPORTED,
+            format!(
+                "unsupported download client type '{}'",
+                client_type.as_ref()
+            ),
+        ))
     }
 }
 impl AppUseCase {
@@ -47,8 +53,12 @@ impl AppUseCase {
             return Ok("{}".to_string());
         }
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(raw).map_err(|error| AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_CONFIG_INVALID, error.to_string()))?;
+        let parsed: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::integration::DOWNLOAD_CLIENT_CONFIG_INVALID,
+                error.to_string(),
+            )
+        })?;
         serde_json::to_string(&parsed).map_err(|error| AppError::Repository(error.to_string()))
     }
 }
@@ -66,7 +76,10 @@ impl AppUseCase {
             .has_any_app_permission(actor, settings_permissions)
             .await?
         {
-            return Err(AppError::unauthorized_reason(crate::error_reasons::integration::ACTION_PERMISSION_DENIED, "You do not have permission to perform this action".to_string()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::integration::ACTION_PERMISSION_DENIED,
+                "You do not have permission to perform this action".to_string(),
+            ));
         }
 
         let client_type = client_type
@@ -124,7 +137,10 @@ impl AppUseCase {
             .has_any_app_permission(actor, settings_permissions)
             .await?
         {
-            return Err(AppError::unauthorized_reason(crate::error_reasons::integration::ACTION_PERMISSION_DENIED, "You do not have permission to perform this action".to_string()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::integration::ACTION_PERMISSION_DENIED,
+                "You do not have permission to perform this action".to_string(),
+            ));
         }
 
         self.services
@@ -251,7 +267,10 @@ impl AppUseCase {
             .await?;
         let client_id = client_id.trim();
         if client_id.is_empty() {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_ID_REQUIRED, "client id is required"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::CLIENT_ID_REQUIRED,
+                "client id is required",
+            ));
         }
 
         self.services
@@ -269,7 +288,10 @@ impl AppUseCase {
     async fn validate_enabled_download_client_proxy(&self, raw_id: &str) -> AppResult<String> {
         let id = raw_id.trim();
         if id.is_empty() {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ID_REQUIRED, "proxy config id cannot be empty"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROXY_CONFIG_ID_REQUIRED,
+                "proxy config id cannot be empty",
+            ));
         }
         let config = self
             .services
@@ -277,9 +299,17 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIGURATION_NOT_FOUND, "Proxy configuration was not found."))?;
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::integration::PROXY_CONFIGURATION_NOT_FOUND,
+                    "Proxy configuration was not found.",
+                )
+            })?;
         if !config.is_enabled {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_DISABLED_DOWNLOAD_CLIENT, "Proxy is disabled for this download client."));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROXY_DISABLED_DOWNLOAD_CLIENT,
+                "Proxy is disabled for this download client.",
+            ));
         }
         Ok(config.id)
     }
@@ -290,12 +320,80 @@ impl AppUseCase {
         actor: &User,
         input: NewDownloadClientConfig,
     ) -> AppResult<DownloadClientConfig> {
+        self.create_download_client_config_with_id(actor, input, Id::new().0)
+            .await
+    }
+
+    pub(crate) async fn create_source_import_download_client(
+        &self,
+        actor: &User,
+        input: NewDownloadClientConfig,
+        id: &str,
+        update_existing: bool,
+    ) -> AppResult<DownloadClientConfig> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let created = match self
+            .services
+            .integrations
+            .download_client_configs
+            .get_by_id(id)
+            .await?
+        {
+            Some(existing)
+                if existing.name == input.name.trim()
+                    && existing.client_type == input.client_type =>
+            {
+                if update_existing {
+                    self.update_download_client_config(
+                        actor,
+                        DownloadClientConfigUpdate {
+                            id: id.into(),
+                            config_json: Some(input.config_json),
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                } else {
+                    existing
+                }
+            }
+            Some(_) => {
+                return Err(AppError::validation_refused(
+                    crate::source_import::refusal::CONFIG_CONFLICT,
+                    "source configuration identity changed",
+                ));
+            }
+            None => {
+                self.create_download_client_config_with_id(actor, input, id.into())
+                    .await?
+            }
+        };
+        if matches!(
+            created.client_type.as_str(),
+            "nzbget" | "sabnzbd" | "weaver"
+        ) {
+            self.ensure_download_client_routing_entry_for_client(actor, &created.id)
+                .await?;
+        }
+        Ok(created)
+    }
+
+    async fn create_download_client_config_with_id(
+        &self,
+        actor: &User,
+        input: NewDownloadClientConfig,
+        id: String,
+    ) -> AppResult<DownloadClientConfig> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
 
         let name = input.name.trim().to_string();
         if name.is_empty() {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_NAME_REQUIRED, "download client name is required"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::DOWNLOAD_CLIENT_NAME_REQUIRED,
+                "download client name is required",
+            ));
         }
 
         let client_type = self.normalize_download_client_type(input.client_type)?;
@@ -327,7 +425,7 @@ impl AppUseCase {
             + 1;
 
         let config = DownloadClientConfig {
-            id: Id::new().0,
+            id,
             name,
             client_type,
             config_json,
@@ -371,11 +469,17 @@ impl AppUseCase {
             .await?;
         let client_id = update.id.trim();
         if client_id.is_empty() {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_ID_REQUIRED, "client id is required"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::CLIENT_ID_REQUIRED,
+                "client id is required",
+            ));
         }
 
         if !update.has_changes() {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_FIELD_REQUIRED, "at least one download client field must be provided"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::DOWNLOAD_CLIENT_FIELD_REQUIRED,
+                "at least one download client field must be provided",
+            ));
         }
 
         let normalized_name = update.name.map(|value| value.trim().to_string());
@@ -383,7 +487,10 @@ impl AppUseCase {
             .as_ref()
             .is_some_and(|value| value.is_empty())
         {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_NAME_REQUIRED, "client name cannot be empty"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::CLIENT_NAME_REQUIRED,
+                "client name cannot be empty",
+            ));
         }
 
         let normalized_client_type = match update.client_type {
@@ -425,9 +532,10 @@ impl AppUseCase {
                     .get_by_id(client_id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::not_found_reason(crate::error_reasons::integration::DOWNLOAD_CLIENT_CONFIG_NOT_FOUND, format!(
-                            "download client config '{client_id}' not found"
-                        ))
+                        AppError::not_found_reason(
+                            crate::error_reasons::integration::DOWNLOAD_CLIENT_CONFIG_NOT_FOUND,
+                            format!("download client config '{client_id}' not found"),
+                        )
                     })?,
             )
         } else {
@@ -516,7 +624,10 @@ impl AppUseCase {
             .await?;
         let client_id = client_id.trim();
         if client_id.is_empty() {
-            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_ID_REQUIRED, "client id is required"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::CLIENT_ID_REQUIRED,
+                "client id is required",
+            ));
         }
 
         let mapped_indexer_ids = self

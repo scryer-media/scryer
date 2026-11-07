@@ -5688,34 +5688,31 @@ async fn build_fail_closed_pack_fixture(
         .expect("seed import actor");
 
     let library_dir = tempfile::tempdir().expect("library tempdir");
-    {
-        let current_paths = app.get_library_paths(&user).await.expect("library paths");
-        app.update_library_paths(
-            &user,
-            UpdateLibraryPaths {
-                movie_path: if options.facet == MediaFacet::Movie {
-                    library_dir.path().to_string_lossy().into_owned()
-                } else {
-                    current_paths.movie_path
-                },
-                series_path: if options.series_root_at_library_dir
-                    || options.facet == MediaFacet::Series
-                {
-                    library_dir.path().to_string_lossy().into_owned()
-                } else {
-                    current_paths.series_path
-                },
-                anime_path: Some(
-                    if options.anime_root_at_library_dir || options.facet == MediaFacet::Anime {
-                        library_dir.path().to_string_lossy().into_owned()
-                    } else {
-                        current_paths.anime_path
-                    },
-                ),
-            },
-        )
-        .await
-        .expect("point the series library root at the fixture dir");
+    let library_root = library_dir.path().to_string_lossy().into_owned();
+    for (facet, at_library_dir) in [
+        (MediaFacet::Movie, options.facet == MediaFacet::Movie),
+        (
+            MediaFacet::Series,
+            options.series_root_at_library_dir || options.facet == MediaFacet::Series,
+        ),
+        (
+            MediaFacet::Anime,
+            options.anime_root_at_library_dir || options.facet == MediaFacet::Anime,
+        ),
+    ] {
+        if at_library_dir {
+            update_default_library_roots(
+                &app,
+                &user,
+                facet,
+                vec![RootFolderEntry {
+                    path: library_root.clone(),
+                    is_default: true,
+                }],
+            )
+            .await
+            .expect("point the default library root at the fixture dir");
+        }
     }
     let title_folder = library_dir.path().join("Fail Closed Pack");
     let title = app
@@ -7104,11 +7101,13 @@ async fn automatic_disc_import_holds_unmapped_encrypted_and_unknown_images() {
         )
         .await
         .unwrap();
-        assert!(
-            result
-                .error_message
-                .as_deref()
-                .is_some_and(|message| message.contains("disc")),
+        // Held for review: encrypted media is held before the disc checks run.
+        assert_eq!(
+            (result.decision.clone(), result.skip_reason.clone()),
+            (
+                scryer_domain::ImportDecision::Skipped,
+                Some(scryer_domain::ImportSkipReason::PolicyMismatch)
+            ),
             "{kind}: {result:?}"
         );
         assert!(source.exists(), "{kind}: source must survive review hold");
@@ -8021,6 +8020,7 @@ async fn manual_import_rejects_a_mapping_that_spans_two_seasons() {
     );
 }
 
+#[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn manual_import_upgrade_reports_transfer_progress_on_its_record() {
     // Prod 2026-08-18: every manual import that replaced an existing episode
@@ -11814,18 +11814,24 @@ async fn additional_movie_preparation_preserves_files_on_inconclusive_or_changed
         assert!(
             !matches!(result, Ok(ref r) if r.decision == scryer_domain::ImportDecision::Imported)
         );
-        let message = match result {
-            Ok(result) => result.error_message.unwrap_or_default(),
-            Err(error) => error.to_string(),
-        };
-        assert!(
-            message.contains(if changed_source {
-                "source changed"
-            } else {
-                "inconclusive"
-            }),
-            "{message}"
-        );
+        if changed_source {
+            let message = match result {
+                Ok(result) => result.error_message.unwrap_or_default(),
+                Err(error) => error.to_string(),
+            };
+            assert!(message.contains("source changed"), "{message}");
+        } else {
+            // Unverified media never replaces the incumbent: held for review.
+            let result = result.expect("an inconclusive source is held, not failed");
+            assert_eq!(
+                (result.decision.clone(), result.skip_reason.clone()),
+                (
+                    scryer_domain::ImportDecision::Skipped,
+                    Some(scryer_domain::ImportSkipReason::PolicyMismatch)
+                ),
+                "{result:?}"
+            );
+        }
         let files = app
             .services
             .library
@@ -11998,6 +12004,7 @@ impl FileImporter for PreparedSourceImporter {
 /// mode leaves the source in place, and a download whose verification is not
 /// yet satisfied is re-imported on the next poll) must reuse the copy it
 /// already made instead of minting another " (N)" file every pass.
+#[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn completed_import_retry_reuses_existing_additional_movie_file() {
     let download_client = Arc::new(StubDownloadClient::default());
@@ -12234,6 +12241,7 @@ async fn completed_import_retry_reuses_existing_additional_movie_file() {
 /// The episode additional-file path shares the movie path's destination
 /// helper, so it needs the same retry guard: a second import of the same
 /// completed download must reuse the copy it already made.
+#[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn completed_import_retry_reuses_existing_additional_episode_file() {
     let (
@@ -17664,14 +17672,19 @@ async fn download_history_applies_permission_filtering_to_durable_rows() {
     ));
     publish_test_download_queue_snapshot(&app, Vec::new()).await;
 
-    let movie_viewer = library_permission_user(
-        "movie-viewer",
+    // Download history is privileged: the restricted actor manages titles in
+    // the movie library only, and must not see the series row.
+    let movie_manager = library_permission_user(
+        "movie-manager",
         &scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
-        &[scryer_domain::LibraryPermission::View],
+        &[
+            scryer_domain::LibraryPermission::View,
+            scryer_domain::LibraryPermission::ManageTitles,
+        ],
     );
     let page = app
         .list_download_history_page(
-            &movie_viewer,
+            &movie_manager,
             50,
             0,
             Some(vec![DownloadHistoryFilter::All]),
@@ -17680,7 +17693,7 @@ async fn download_history_applies_permission_filtering_to_durable_rows() {
             None,
         )
         .await
-        .expect("history page should load for the restricted viewer");
+        .expect("history page should load for the restricted manager");
 
     assert_eq!(
         page.items
@@ -19529,7 +19542,7 @@ impl RecordingDownloadClientStatusRepo {
 
 /// A native-client probe that answers with a fixed outcome.
 struct FixedOutcomeConnectionTester {
-    answers: bool,
+    failure: Option<crate::AppError>,
 }
 
 #[async_trait::async_trait]
@@ -19540,18 +19553,30 @@ impl crate::BuiltinDownloadClientConnectionTester for FixedOutcomeConnectionTest
         _config_json: &str,
         _proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> crate::AppResult<()> {
-        if self.answers {
-            Ok(())
-        } else {
-            Err(crate::AppError::Repository(
-                "synthetic client did not answer".to_string(),
-            ))
+        match &self.failure {
+            None => Ok(()),
+            Some(failure) => Err(failure.clone()),
         }
     }
 }
 
 async fn app_with_blocked_download_client(
     tester_answers: bool,
+) -> (
+    AppUseCase,
+    User,
+    Arc<RecordingDownloadClientStatusRepo>,
+    DownloadClientConfig,
+) {
+    app_with_blocked_download_client_failing(
+        (!tester_answers)
+            .then(|| crate::AppError::Repository("synthetic client did not answer".to_string())),
+    )
+    .await
+}
+
+async fn app_with_blocked_download_client_failing(
+    failure: Option<crate::AppError>,
 ) -> (
     AppUseCase,
     User,
@@ -19568,9 +19593,7 @@ async fn app_with_blocked_download_client(
         services
             .with_download_client_status(status.clone())
             .with_builtin_download_client_connection_tester(Arc::new(
-                FixedOutcomeConnectionTester {
-                    answers: tester_answers,
-                },
+                FixedOutcomeConnectionTester { failure },
             ))
     });
     let config =
@@ -19628,6 +19651,71 @@ async fn a_failed_connection_test_keeps_the_clients_failure_backoff() {
     );
     assert!(status.successes.lock().expect("successes mutex").is_empty());
     assert!(status.failures.lock().expect("failures mutex").is_empty());
+}
+
+/// What a built-in client could not classify reaches the operator as a coded
+/// refusal, never as a `Repository` error the GraphQL boundary would mask.
+#[tokio::test]
+async fn an_unclassified_native_probe_failure_is_a_coded_refusal() {
+    let (app, user, _status, config) = app_with_blocked_download_client(false).await;
+
+    let error = app
+        .test_download_client_connection(
+            &user,
+            Some(&config.id),
+            &config.client_type,
+            &config.config_json,
+            None,
+        )
+        .await
+        .expect_err("connection test fails");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::integration::DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED),
+        "{error:?}"
+    );
+    match error {
+        crate::AppError::ValidationRefused { message, .. } => assert_eq!(
+            message,
+            "download client connection test failed: synthetic client did not answer"
+        ),
+        other => panic!("expected a coded refusal, got {other:?}"),
+    }
+}
+
+/// A failure the built-in client already named keeps its reason, so the web
+/// can say "the API key was rejected" rather than a generic failure.
+#[tokio::test]
+async fn a_native_probe_keeps_the_failure_the_client_named() {
+    let (app, user, _status, config) =
+        app_with_blocked_download_client_failing(Some(crate::AppError::native_client_failed(
+            crate::PluginFailureReason::AuthFailed,
+            "synthetic client rejected the API key",
+        )))
+        .await;
+
+    let error = app
+        .test_download_client_connection(
+            &user,
+            Some(&config.id),
+            &config.client_type,
+            &config.config_json,
+            None,
+        )
+        .await
+        .expect_err("connection test fails");
+
+    match error {
+        crate::AppError::PluginFailed { message, failure } => {
+            assert_eq!(failure.reason, crate::PluginFailureReason::AuthFailed);
+            assert_eq!(
+                message,
+                "download client connection test failed: synthetic client rejected the API key"
+            );
+        }
+        other => panic!("expected the named failure, got {other:?}"),
+    }
 }
 
 /// Saving an enabled client is the operator's correction; the next refresh
@@ -19974,6 +20062,7 @@ async fn a_library_override_can_turn_the_sidecar_on_for_one_library() {
     assert!(content.ends_with('\n'), "{content}");
 }
 
+#[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn a_manual_import_writes_the_episode_sidecar() {
     let FailClosedPackFixture {

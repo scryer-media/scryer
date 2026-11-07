@@ -11,9 +11,11 @@ import {
   Columns3,
   Eye,
   EyeOff,
+  FolderInput,
   FolderPen,
   LayoutGrid,
   LayoutList,
+  Maximize2,
   PanelLeftOpen,
   PanelRightOpen,
   Pencil,
@@ -24,6 +26,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { GraphStar } from "@/components/common/graph-star";
 import { deriveInteractiveSearchPresentation } from "@/lib/utils/interactive-search-presentation";
 import {
   AnidbExternalLink,
@@ -36,7 +39,6 @@ import {
 } from "@/components/common/external-media-links";
 import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useActiveDownloadTitleIds } from "@/lib/hooks/use-active-download-title-ids";
@@ -72,6 +74,7 @@ import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { TitleCard } from "@/components/title-card";
 import { TitleCastStrip } from "@/components/views/title-cast-strip";
+import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "@/components/views/title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
@@ -168,12 +171,24 @@ import {
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
+import { discoveryRailLabelTitle } from "@/lib/utils/discovery-sections";
+import {
+  mergeMoviePopularGroups,
+  MOVIE_POPULAR_GROUP_ID,
+} from "@/lib/utils/catalog-popular-groups";
 import { titleGenreLabels } from "@/lib/utils/title-genres";
 import { cn } from "@/lib/utils";
 import { persistOverviewWindowScroll } from "@/lib/hooks/use-overview-window-scroll-restoration";
 import { releaseSupportsAdditionalFileQueue } from "@/lib/utils/release-queue-scope";
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
 import type { ContentViewMode } from "./media-content/content-view-mode";
+import { catalogViewModeOptions } from "@/lib/utils/catalog-view-preferences";
+import {
+  INITIAL_GRAPH_PAGING_STATE,
+  graphPagingStep,
+  graphTitlesComplete,
+  type GraphPagingState,
+} from "@/lib/utils/library-graph-paging";
 import { TitleSettingsPanel } from "./title-settings-panel";
 import { TitleOverviewActions } from "./title-overview-actions";
 import { TitleBlockedReleasesSection } from "@/components/common/title-blocked-releases-section";
@@ -188,7 +203,10 @@ import {
 } from "@/components/common/title-rename-controls";
 import { InteractiveSearchDialog } from "@/components/common/interactive-search-dialog";
 import { TitleSearchDownloadClientNotice } from "@/components/common/title-search-download-client-notice";
-import { useCanManageOverviewTitle } from "@/lib/hooks/use-title-overview-access";
+import {
+  useCanManageOverviewTitle,
+  useCanViewTitleInternals,
+} from "@/lib/hooks/use-title-overview-access";
 import {
   useDownloadClientsConfigured,
   useTitleDownloadFeedback,
@@ -262,6 +280,10 @@ type ParsedQualityProfile = {
 };
 
 const TITLE_OVERVIEW_PANE_MIN_WIDTH = 700;
+// The graph view carries its WebGL renderer; load it only when it is shown.
+const LibraryGraphView = React.lazy(
+  () => import("./media-content/library-graph-view"),
+);
 const TITLE_WORKSPACE_PANE_GAP = 16;
 const TITLE_POSTER_GRID_MIN_COLUMN_WIDTH = 200;
 const CATALOG_DISCOVERY_INLINE_MIN_WIDTH = 900;
@@ -270,6 +292,11 @@ const SELECTED_POSTER_INLINE_MIN_WIDTH =
   TITLE_OVERVIEW_PANE_MIN_WIDTH +
   TITLE_WORKSPACE_PANE_GAP +
   TITLE_POSTER_GRID_MIN_COLUMN_WIDTH;
+const TITLE_LIST_PANE_MIN_WIDTH = 340;
+const SELECTED_TITLE_LIST_INLINE_MIN_WIDTH =
+  TITLE_OVERVIEW_PANE_MIN_WIDTH +
+  TITLE_WORKSPACE_PANE_GAP +
+  TITLE_LIST_PANE_MIN_WIDTH;
 
 type QualityProfileOption = {
   value: string;
@@ -425,19 +452,28 @@ function catalogDiscoveryGroupLabel(
   view: ViewId,
   t: Translate,
 ) {
+  if (group.id === MOVIE_POPULAR_GROUP_ID) {
+    return t("title.contextPopular");
+  }
   switch (group.kind) {
     case "PUBLIC_TOP":
       return group.labelValue ?? titleContextWeeklyLabel(view, t);
     case "PUBLIC_SECTION":
       return group.labelValue ?? titleContextWeeklyLabel(view, t);
     case "GENRE_AFFINITY":
-      return t("title.contextForYouGenre", {
-        genre: group.labelValue ?? "",
-      });
+      return (
+        discoveryRailLabelTitle(group.labelKey, t) ??
+        t("title.contextForYouGenre", {
+          genre: group.labelValue ?? "",
+        })
+      );
     case "THEME_AFFINITY":
-      return t("title.contextForYouTag", {
-        tag: group.labelValue ?? "",
-      });
+      return (
+        discoveryRailLabelTitle(group.labelKey, t) ??
+        t("title.contextForYouTag", {
+          tag: group.labelValue ?? "",
+        })
+      );
     case "ACCLAIMED":
       return t("title.contextForYouAcclaimed");
     case "COMPLETE_COLLECTION":
@@ -1092,9 +1128,6 @@ function TitleContextPanel({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const dateTimeFormat = useUiDateTimeFormat();
-  // Library and root moves are still being finished, so the panel's move entry
-  // point only exists when the instance has opted in.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [releaseSearchRequestId, setReleaseSearchRequestId] = React.useState(0);
   const [releaseSearchLoading, setReleaseSearchLoading] = React.useState(false);
   const [releaseSearchTitleId, setReleaseSearchTitleId] = React.useState<
@@ -1110,6 +1143,7 @@ function TitleContextPanel({
   const hasDownloadClients = useDownloadClientsConfigured(titleId);
   const downloadFeedback = useTitleDownloadFeedback({
     titleId,
+    libraryId: title?.libraryId ?? null,
     hasDownloadClients,
   });
   const refreshDownloadFeedback = downloadFeedback.refresh;
@@ -1158,7 +1192,7 @@ function TitleContextPanel({
     onImportQueued: reloadTitleAndDownloads,
   });
   const panelClassName = cn(
-    "min-h-0 w-full min-w-0 flex-col overflow-visible min-[981px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
+    "min-h-0 w-full min-w-0 flex-col overflow-visible min-[1280px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
     className,
   );
   const moreLikeThisItems = React.useMemo(
@@ -1354,16 +1388,14 @@ function TitleContextPanel({
     >
       <div
         data-slot="title-context-scroll"
-        className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[981px]:overflow-y-auto sm:p-5 sm:pb-5"
+        className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[1280px]:overflow-y-auto sm:p-5 sm:pb-5"
       >
-        {titleListDisclosure ? (
-          <div className="mb-3 flex items-center">{titleListDisclosure}</div>
-        ) : null}
         <div className="-mx-4 -mt-4 sm:-mx-5 sm:-mt-5">
           <TitleWorkspaceHero
             backgroundUrl={backgroundUrl}
             closeLabel={t("label.clear")}
             onClose={onClearSelection}
+            leadingAction={titleListDisclosure}
             headerActions={
               (title.playbackLinks?.length ?? 0) > 0 ? (
                 <WatchInMediaServerMenu
@@ -1374,7 +1406,9 @@ function TitleContextPanel({
               ) : null
             }
           >
-            <TitleWorkspacePosterFrame>
+            <TitleWorkspacePosterFrame
+              belowLeadingAction={Boolean(titleListDisclosure)}
+            >
               <TitlePosterSlot
                 src={posterUrl}
                 metadataFetchedAt={title.metadataFetchedAt}
@@ -1388,7 +1422,7 @@ function TitleContextPanel({
               />
             </TitleWorkspacePosterFrame>
             <div className="flex w-full min-w-0 flex-1 flex-col sm:w-auto">
-              <h2 className="text-[21px] font-bold leading-[1.1] tracking-normal text-white">
+              <h2 className="text-[21px] font-bold leading-[1.1] tracking-normal text-white sm:pr-12">
                 {title.name}
                 {yearLabel ? (
                   <span className="font-medium text-[var(--scry-muted3)]">
@@ -1527,7 +1561,6 @@ function TitleContextPanel({
                   Promise.resolve(onTitleOptionsChanged(title))
                 }
                 onOpenFixMatch={() => setFixMatchOpen(true)}
-                experimentalFeaturesEnabled={experimentalFeaturesEnabled}
               />
             }
             deleteLoading={isDeleting}
@@ -1547,17 +1580,23 @@ function TitleContextPanel({
           title={`${title.name} — ${t("label.interactiveSearch")}`}
         >
           <div aria-live="polite">
-            <TitleContextReleaseSearchPanel
-              title={title}
-              onInteractiveSearch={onInteractiveSearch}
-              onQueueFromInteractive={onQueueFromInteractive}
-              onQueueAdditionalFromInteractive={
-                onQueueAdditionalFromInteractive
-              }
-              disabled={bulkActionBusy}
-              runRequestId={releaseSearchRequestId}
-              onLoadingChange={setReleaseSearchLoading}
-            />
+            {/* Like the series episode panel: with no download client there is
+                nothing a search here could queue, so say what to set up. */}
+            {hasDownloadClients === false ? (
+              <TitleSearchDownloadClientNotice />
+            ) : (
+              <TitleContextReleaseSearchPanel
+                title={title}
+                onInteractiveSearch={onInteractiveSearch}
+                onQueueFromInteractive={onQueueFromInteractive}
+                onQueueAdditionalFromInteractive={
+                  onQueueAdditionalFromInteractive
+                }
+                disabled={bulkActionBusy}
+                runRequestId={releaseSearchRequestId}
+                onLoadingChange={setReleaseSearchLoading}
+              />
+            )}
           </div>
         </InteractiveSearchDialog>
 
@@ -1652,12 +1691,14 @@ function TitleContextPanel({
             onAction={onDiscoveryAction}
           />
 
-          <TitleCastStrip
-            credits={titleCastOriginalCredits(title.credits)}
-            variant="workspace"
-          />
+          <HorizontalRailScrollGroup>
+            <TitleCastStrip
+              credits={titleCastOriginalCredits(title.credits)}
+              variant="workspace"
+            />
 
-          <TitleDubCastStrip credits={title.credits} variant="workspace" />
+            <TitleDubCastStrip credits={title.credits} variant="workspace" />
+          </HorizontalRailScrollGroup>
 
           <TitleBlockedReleasesSection
             key={title.id}
@@ -1869,10 +1910,13 @@ export function MediaContentView({
     refreshTitles: (query?: string) => Promise<void> | void;
     titleLoading: boolean;
     catalogTotalTitleCount: number;
+    catalogBulkLoadedCount: number;
     catalogManagedBytes: number;
     catalogHasMoreTitles: boolean;
     catalogLoadingMoreTitles: boolean;
     catalogPageError: string | null;
+    /** Identifies the catalog listing the loaded titles belong to. */
+    catalogListingKey: string;
     retryCatalogPage: () => Promise<void>;
     loadMoreCatalogTitles: () => Promise<void> | void;
     titleCatalogSortKey: TitleTableSortKey;
@@ -1988,6 +2032,9 @@ export function MediaContentView({
     loadLibrarySettings: (
       libraryId: string,
     ) => Promise<LibrarySettingsRecord | null>;
+    loadLibraryRoots: (
+      libraryId: string,
+    ) => Promise<import("@/lib/types/titles").LibraryRootRecord[] | null>;
     loadFacetDownloadClientRouting: (
       scopeId: Facet,
     ) => Promise<DownloadClientRoutingEntry[]>;
@@ -2001,6 +2048,7 @@ export function MediaContentView({
       input: {
         name: string;
         roots: import("@/lib/types/titles").RootFolderOption[];
+        removedRootIds?: string[];
         settings?: LibrarySettingsDraft;
       },
     ) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
@@ -2039,6 +2087,8 @@ export function MediaContentView({
     isDeletingCatalogTitleById: Record<string, boolean>;
     isMobile: boolean;
     viewMode: ContentViewMode;
+    /** Whether the view mode is still loading. */
+    viewModePending: boolean;
     setViewMode: (value: ContentViewMode) => void;
     selectedTitleIds: ReadonlySet<string>;
     toggleTitleSelection: (titleId: string) => void;
@@ -2050,6 +2100,8 @@ export function MediaContentView({
     openBulkTitleDelete: () => void;
     openBulkTitleRename: () => void;
     canRenameSelectedTitles: boolean;
+    openBulkTitleMove: () => void;
+    canMoveSelectedTitles: boolean;
   };
 }) {
   const t = useTranslate();
@@ -2147,10 +2199,12 @@ export function MediaContentView({
     refreshTitles,
     titleLoading,
     catalogTotalTitleCount,
+    catalogBulkLoadedCount,
     catalogManagedBytes,
     catalogHasMoreTitles,
     catalogLoadingMoreTitles,
     catalogPageError,
+    catalogListingKey,
     retryCatalogPage,
     loadMoreCatalogTitles,
     titleCatalogSortKey,
@@ -2241,6 +2295,7 @@ export function MediaContentView({
     deleteCatalogTitle,
     isDeletingCatalogTitleById,
     viewMode,
+    viewModePending,
     setViewMode,
     selectedTitleIds,
     toggleTitleSelection,
@@ -2252,14 +2307,23 @@ export function MediaContentView({
     openBulkTitleDelete,
     openBulkTitleRename,
     canRenameSelectedTitles,
+    openBulkTitleMove,
+    canMoveSelectedTitles,
   } = state;
   const [titleFilterInputValue, setTitleFilterInputValue] =
     React.useState(titleFilter);
   const [titleLayoutRef, titleLayoutWidth] =
     useMeasuredElementWidth<HTMLDivElement>();
   const deferredTitleContextTitles = React.useDeferredValue(titleContextTitles);
+  const displayCatalogDiscoveryGroups = React.useMemo(
+    () =>
+      view === "movies"
+        ? mergeMoviePopularGroups(catalogDiscoveryGroups)
+        : catalogDiscoveryGroups,
+    [catalogDiscoveryGroups, view],
+  );
   const deferredCatalogDiscoveryGroups = React.useDeferredValue(
-    catalogDiscoveryGroups,
+    displayCatalogDiscoveryGroups,
   );
   const manageableDiscoveryFacetSet = React.useMemo(
     () => new Set(manageableDiscoveryFacets),
@@ -2288,9 +2352,15 @@ export function MediaContentView({
     () => titleTableSupportedRatingColumnsForView(view),
     [view],
   );
+  // Root folders say where media lives on disk; the server returns them only
+  // to callers with privileged library access, so the column is not offered
+  // to anyone else.
+  const canSeeRootColumn = useCanViewTitleInternals(null);
   const isTitleTableColumnSupported = React.useCallback(
-    (key: TitleTableColumnKey) => isTitleTableColumnSupportedForView(key, view),
-    [view],
+    (key: TitleTableColumnKey) =>
+      (key !== "root" || canSeeRootColumn) &&
+      isTitleTableColumnSupportedForView(key, view),
+    [canSeeRootColumn, view],
   );
   const titleTableColumnGroups = React.useMemo(
     () =>
@@ -2520,10 +2590,11 @@ export function MediaContentView({
     selectedTitleCompactLayoutActive &&
     (titleLayoutWidth == null
       ? selectedTitleListInlineViewportMatches
-      : titleLayoutWidth >= contextPanelMinimumWidth);
+      : titleLayoutWidth >= SELECTED_TITLE_LIST_INLINE_MIN_WIDTH);
   const [selectedTitleListDrawerOpen, setSelectedTitleListDrawerOpen] =
     React.useState(false);
   const selectedTitleListDrawerRef = React.useRef<HTMLDivElement | null>(null);
+  const graphControlsRef = React.useRef<{ fit: () => void } | null>(null);
   const selectedTitleListPreviousFocusRef = React.useRef<HTMLElement | null>(
     null,
   );
@@ -2637,9 +2708,16 @@ export function MediaContentView({
   // columns and scrolls horizontally when the overview pane squeezes it. The
   // narrow "compact drawer" (title/mon/size) is a separate width-gated layout,
   // not column shedding, so we keep the full column set in every table state.
-  const effectiveVisibleTitleTableColumns = visibleTitleTableColumns;
+  const effectiveVisibleTitleTableColumns = React.useMemo(
+    () =>
+      canSeeRootColumn || !visibleTitleTableColumns.root
+        ? visibleTitleTableColumns
+        : { ...visibleTitleTableColumns, root: false },
+    [canSeeRootColumn, visibleTitleTableColumns],
+  );
   const showTitleTableColumnControls =
-    effectiveViewMode !== "poster" && !selectedTitleCompactDrawerActive;
+    (effectiveViewMode === "compact" || effectiveViewMode === "poster-table") &&
+    !selectedTitleCompactDrawerActive;
   const multiSelectActive = selectedTitleIds.size > 0;
   // In multi-select mode the bulk actions live in the side panel; the inline
   // bar is only a fallback for widths too narrow to show the panel.
@@ -2647,6 +2725,48 @@ export function MediaContentView({
     multiSelectActive &&
     !contextPanelAvailable &&
     (collectionViewMode === "compact" || collectionViewMode === "poster-table");
+
+  // The graph draws the whole filtered catalog, so it keeps paging until every
+  // title of the listing in view is loaded and builds once paging is over.
+  const graphPagingRef = React.useRef<GraphPagingState>(
+    INITIAL_GRAPH_PAGING_STATE,
+  );
+  const [graphStalledListingKey, setGraphStalledListingKey] = React.useState<
+    string | null
+  >(null);
+  const graphTitlesAreComplete = graphTitlesComplete({
+    listingKey: catalogListingKey,
+    titleLoading,
+    hasMore: catalogHasMoreTitles,
+    pageFailed: catalogPageError !== null,
+    stalledListingKey: graphStalledListingKey,
+  });
+  React.useEffect(() => {
+    const step = graphPagingStep(graphPagingRef.current, {
+      active: isTitleCatalogView && collectionViewMode === "graph",
+      listingKey: catalogListingKey,
+      hasMore: catalogHasMoreTitles,
+      loadingMore: catalogLoadingMoreTitles,
+      pageFailed: catalogPageError !== null,
+      loadedCount: monitoredTitles.length,
+    });
+    graphPagingRef.current = step.state;
+    if (step.state.stalled) {
+      setGraphStalledListingKey(step.state.listingKey);
+    }
+    if (step.request) {
+      void loadMoreCatalogTitles();
+    }
+  }, [
+    catalogHasMoreTitles,
+    catalogListingKey,
+    catalogLoadingMoreTitles,
+    catalogPageError,
+    collectionViewMode,
+    isTitleCatalogView,
+    loadMoreCatalogTitles,
+    monitoredTitles.length,
+  ]);
 
   React.useEffect(() => {
     if (
@@ -3140,7 +3260,9 @@ export function MediaContentView({
       count: knownCatalogTitleCount,
       formattedCount: knownCatalogTitleCount.toLocaleString(),
     }),
-    managedStorageSummary(Math.max(0, catalogManagedBytes)),
+    ...(collectionViewMode === "graph"
+      ? []
+      : [managedStorageSummary(Math.max(0, catalogManagedBytes))]),
   ].join(" · ");
 
   const [libraryCrumb, setLibraryCrumb] = React.useState<string | null>(null);
@@ -3211,13 +3333,28 @@ export function MediaContentView({
           className="hidden h-[2.8125rem] shrink-0 sm:block sm:w-[2.8125rem]"
         />
       )}
+      {effectiveViewMode === "graph" ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => graphControlsRef.current?.fit()}
+          className="h-9 shrink-0 gap-1.5 rounded-[9px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-2.5 text-[12px] shadow-none"
+          aria-label={t("libraryGraph.resetView")}
+          title={t("libraryGraph.resetView")}
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+          <span className="max-sm:sr-only">{t("libraryGraph.resetView")}</span>
+        </Button>
+      ) : null}
       <ToggleGroup
         type="single"
         variant="outline"
         value={effectiveViewMode}
         onValueChange={(v) => {
-          if (v === "compact" || v === "poster-table" || v === "poster") {
-            setViewMode(v);
+          const next = catalogViewModeOptions().find((mode) => mode === v);
+          if (next) {
+            setViewMode(next);
           }
         }}
         size="sm"
@@ -3254,6 +3391,16 @@ export function MediaContentView({
         >
           <LayoutGrid className="h-[1.125rem] w-[1.125rem]" />
         </ToggleGroupItem>
+        <ToggleGroupItem
+          id={titleOverviewViewModeId(view, "graph")}
+          value="graph"
+          size="sm"
+          aria-label={t("title.viewModeGraph")}
+          title={t("title.viewModeGraph")}
+          className="h-9 w-9 rounded-[9px] px-0 text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] data-[state=on]:!border-transparent data-[state=on]:!bg-[var(--scry-accent)] data-[state=on]:!text-primary-foreground data-[state=on]:!shadow-none"
+        >
+          <GraphStar className="h-[1.125rem] w-[1.125rem]" />
+        </ToggleGroupItem>
       </ToggleGroup>
       {catalogContextRailCollapsed &&
       activeOverviewTitleId === null &&
@@ -3277,7 +3424,7 @@ export function MediaContentView({
     selectedTitleCompactLayoutActive && !selectedTitleListInlineActive;
   const catalogHeader = (
     <div className="relative min-h-[3.25rem] shrink-0 px-4 pb-0 pt-2 sm:min-h-[4.5rem] sm:px-5 lg:px-6">
-      <div className="flex min-w-0 items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-[22px] font-bold leading-tight tracking-normal text-[var(--scry-ink2)]">
             {mediaTitle}
@@ -3286,16 +3433,7 @@ export function MediaContentView({
             {mediaSummary}
           </p>
         </div>
-        <div
-          className={cn(
-            "shrink-0 sm:absolute sm:right-4 sm:z-10 lg:right-5",
-            showTitleBulkSelectionBar
-              ? "sm:top-3"
-              : "sm:top-1/2 sm:-translate-y-1/2",
-          )}
-        >
-          {titleTableViewControls}
-        </div>
+        <div className="ml-auto shrink-0">{titleTableViewControls}</div>
       </div>
       {showTitleBulkSelectionBar ? (
         <div className="mt-4">
@@ -3353,6 +3491,18 @@ export function MediaContentView({
                       className="rounded-md"
                     >
                       <FolderPen className="h-4 w-4" />
+                    </TitleTableActionButton>
+                  ) : null}
+                  {canMoveSelectedTitles ? (
+                    <TitleTableActionButton
+                      id="title-overview-bulk-move-inline"
+                      tone="accent"
+                      label={t("title.moveAction")}
+                      onClick={openBulkTitleMove}
+                      disabled={bulkActionBusy}
+                      className="rounded-md"
+                    >
+                      <FolderInput className="h-4 w-4" />
                     </TitleTableActionButton>
                   ) : null}
                   <TitleTableActionButton
@@ -3538,6 +3688,7 @@ export function MediaContentView({
                   canManageSystemSettings || canManageCatalogSettings
                 }
                 loadLibrarySettings={state.loadLibrarySettings}
+                loadLibraryRoots={state.loadLibraryRoots}
                 loadFacetDownloadClientRouting={
                   state.loadFacetDownloadClientRouting
                 }
@@ -3715,9 +3866,14 @@ export function MediaContentView({
                   catalogSurfacePhase === "content" ||
                   catalogSurfacePhase === "empty";
 
+                // Mount the graph while catalog bootstrap runs so its request
+                // and progress UI start in parallel with title hydration.
+                // Keep it mounted while a picked title resolves as well.
                 if (
-                  catalogSurfacePhase === "resolving" ||
-                  overviewTitleResolutionPending
+                  ((catalogSurfacePhase === "resolving" ||
+                    overviewTitleResolutionPending) &&
+                    collectionViewMode !== "graph") ||
+                  viewModePending
                 ) {
                   titleCollectionView = (
                     <div
@@ -3791,6 +3947,51 @@ export function MediaContentView({
                       scrollContainer={!selectedTitleLayoutActive}
                       activeDownloadTitleIds={activeDownloadTitleIds}
                     />
+                  );
+                } else if (collectionViewMode === "graph") {
+                  titleCollectionView = (
+                    <React.Suspense
+                      fallback={
+                        <div className="flex min-h-[22rem] items-start justify-center">
+                          <TitleCollectionLoadingState />
+                        </div>
+                      }
+                    >
+                      <LibraryGraphView
+                        key={`${view}-library-graph`}
+                        controlsRef={graphControlsRef}
+                        facet={
+                          isMovieView
+                            ? "MOVIE"
+                            : view === "anime"
+                              ? "ANIME"
+                              : "SERIES"
+                        }
+                        titles={monitoredTitles}
+                        titlesComplete={graphTitlesAreComplete}
+                        allowOverviewPreview={
+                          !hasActiveTitleDisplayFilters &&
+                          !Object.values(advancedTitleFilters).some((value) =>
+                            Array.isArray(value)
+                              ? value.length > 0
+                              : value !== null && value !== false,
+                          )
+                        }
+                        totalTitles={catalogTotalTitleCount}
+                        loadedTitles={catalogBulkLoadedCount}
+                        libraryIds={selectedLibraryIds}
+                        selectedTitleId={contextPanelSelectedTitleId}
+                        contextPanelId={selectedTitleContextPanelId}
+                        onSelectTitle={onSelectTitleForContextPanel}
+                        onOpenOverview={(title) =>
+                          handleOpenOverviewFromContext(
+                            overviewTargetView,
+                            title,
+                          )
+                        }
+                        onCatalogChanged={refreshTitles}
+                      />
+                    </React.Suspense>
                   );
                 } else if (collectionViewMode === "compact") {
                   titleCollectionView = (
@@ -3906,7 +4107,7 @@ export function MediaContentView({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-8 gap-2 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-soft)] px-3 text-[12px] shadow-none"
+                      className="h-8 gap-2 rounded-[8px] border-[var(--scry-border2)] bg-background/90 px-3 text-[12px] shadow-none backdrop-blur-md max-sm:w-8 max-sm:px-0"
                       aria-expanded={selectedTitleListDrawerOpen}
                       aria-controls={selectedTitleListDrawerId}
                       aria-label={
@@ -3924,7 +4125,9 @@ export function MediaContentView({
                       }
                     >
                       <PanelLeftOpen className="h-4 w-4" />
-                      <span>{t("title.contextListDisclosure")}</span>
+                      <span className="max-sm:sr-only">
+                        {t("title.contextListDisclosure")}
+                      </span>
                     </Button>
                   ) : undefined;
                 const titleOverviewPaneClassName = selectedTitleLayoutActive
@@ -3954,9 +4157,6 @@ export function MediaContentView({
                             count: selectedTitleIds.size,
                           })}
                         </div>
-                        <p className="max-w-[18rem] text-[13px] text-[var(--scry-muted3)]">
-                          {t("title.bulkSelectionPanelHint")}
-                        </p>
                       </div>
                       <div className="flex w-full max-w-[18rem] flex-col gap-2">
                         <Button
@@ -4006,6 +4206,18 @@ export function MediaContentView({
                             {t("title.renameAction")}
                           </Button>
                         ) : null}
+                        {canMoveSelectedTitles ? (
+                          <Button
+                            id="title-overview-bulk-move"
+                            variant="outline"
+                            onClick={openBulkTitleMove}
+                            disabled={bulkActionBusy}
+                            className="justify-center gap-2"
+                          >
+                            <FolderInput className="h-4 w-4" />
+                            {t("title.moveAction")}
+                          </Button>
+                        ) : null}
                         <Button
                           variant="destructive"
                           onClick={openBulkTitleDelete}
@@ -4040,14 +4252,10 @@ export function MediaContentView({
                       data-slot="title-context-scroll"
                       className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] sm:p-5 sm:pb-5"
                     >
-                      {titleListDisclosure ? (
-                        <div className="mb-3 flex items-center">
-                          {titleListDisclosure}
-                        </div>
-                      ) : null}
                       <SeriesOverviewContainer
                         titleId={seriesSidePanelTitleId}
                         fullBleedHero
+                        heroLeadingAction={titleListDisclosure}
                         initialEpisodeId={routeOverviewEpisodeId}
                         onTitleNotFound={handleSelectedOverviewBackToList}
                         onBackToList={handleSelectedOverviewBackToList}
@@ -4143,7 +4351,7 @@ export function MediaContentView({
                             selectedTitleListInlineActive ||
                               selectedTitlePosterInlineActive
                               ? "grid h-full items-stretch"
-                              : "flex min-h-0 flex-1 flex-col overflow-visible min-[981px]:overflow-hidden",
+                              : "flex min-h-0 flex-1 flex-col overflow-visible min-[1280px]:overflow-hidden",
                           )
                         : "grid min-h-0 gap-4",
                       !selectedTitleLayoutActive &&

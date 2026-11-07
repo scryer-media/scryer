@@ -43,8 +43,9 @@ use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::action_sequence::MaintenanceActionDefinition;
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
-    MaintenanceWatchContext, WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness,
+    MaintenanceWatchContext, WatchSignalFreshness,
     build_subject_input_with_completed_retention_episodes, unknown_reason,
+    watch_signal_sweep_is_fresh,
 };
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
 use crate::maintenance_rules::storage::{MaintenanceRootFileSummary, MaintenanceStorageFactCache};
@@ -1067,6 +1068,9 @@ impl AppUseCase {
             let signals_by_title = self
                 .maintenance_watch_signals_for_titles(&watch_context, chunk)
                 .await?;
+            let (chunk_watch_context, audience_by_title) = self
+                .maintenance_audience_plays_for_titles(&watch_context, chunk)
+                .await;
             // A claim store that cannot be read poisons the claim facts for the
             // whole chunk rather than failing the rule: the facts then read
             // unknown, and any rule that touches one is held. Failing the pass
@@ -1094,8 +1098,9 @@ impl AppUseCase {
                     usernames: &usernames,
                 };
                 let watch = MaintenanceTitleWatch {
-                    context: &watch_context,
+                    context: &chunk_watch_context,
                     signals: signals_by_title.get(&title.id).map(Vec::as_slice),
+                    audience: audience_by_title.get(&title.id).map(Vec::as_slice),
                 };
                 let claims = MaintenanceTitleClaims {
                     claims: claims_by_title
@@ -2036,7 +2041,9 @@ impl AppUseCase {
                     unknown_reason::NO_MEDIA_SERVER_CONNECTION,
                 ),
                 linked_user_ids: HashSet::new(),
+                unswept_user_ids: HashSet::new(),
                 enabled_connection_ids: HashSet::new(),
+                audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
             });
         }
 
@@ -2057,7 +2064,9 @@ impl AppUseCase {
                     unknown_reason::SIGNAL_SYNC_INCOMPLETE,
                 ),
                 linked_user_ids: HashSet::new(),
+                unswept_user_ids: HashSet::new(),
                 enabled_connection_ids: enabled_connection_ids.clone(),
+                audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
             });
         }
         // The stored `enabled` is the connection's state *as of that sweep*, so
@@ -2084,25 +2093,56 @@ impl AppUseCase {
                     unknown_reason::SIGNAL_SYNC_NEVER_SUCCEEDED,
                 ),
                 linked_user_ids: HashSet::new(),
+                unswept_user_ids: HashSet::new(),
                 enabled_connection_ids: enabled_connection_ids.clone(),
+                audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
             });
         }
-        let oldest_allowed = Utc::now() - Duration::hours(WATCH_SIGNAL_FRESHNESS_HOURS);
+        let now = Utc::now();
         if connections
             .iter()
             .filter_map(|connection| states.get(&connection.id))
-            .any(|last_success_at| *last_success_at < oldest_allowed)
+            .any(|last_success_at| !watch_signal_sweep_is_fresh(*last_success_at, now))
         {
             return Ok(MaintenanceWatchContext {
                 freshness: WatchSignalFreshness::Unavailable(unknown_reason::SIGNALS_STALE),
                 linked_user_ids: HashSet::new(),
+                unswept_user_ids: HashSet::new(),
                 enabled_connection_ids: enabled_connection_ids.clone(),
+                audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
             });
         }
 
         // Only resolved once the gate has passed: with watch facts already
         // unknown, the roster would answer a question nothing is going to ask.
+        //
+        // A link counts as observed only when the signal roster says a sweep
+        // read it: that row is written in the same transaction as the signals
+        // read through it, and retired with them. A link made after the last
+        // sweep listed its participants has no row however its timestamps
+        // fall, so "this requester did not watch it" is never a known answer
+        // about someone whose plays Scryer has not read. The match is on the
+        // link and the identity it reads, not on `verified_at`: a login
+        // refreshes that without changing whose plays are read, while a link
+        // re-pointed at another server account no longer matches its row.
+        let read_links: HashSet<(String, String, String, String)> = self
+            .services
+            .integrations
+            .media_server_signals
+            .signal_roster()
+            .await?
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.connection_id,
+                    entry.link.link_id,
+                    entry.external_user_id,
+                    entry.link.scryer_user_id,
+                )
+            })
+            .collect();
         let mut linked_user_ids = HashSet::new();
+        let mut unswept_user_ids = HashSet::new();
         for connection in &connections {
             let Some(provider) = connection.provider.external_account_provider() else {
                 continue;
@@ -2114,28 +2154,62 @@ impl AppUseCase {
                 .list_verified_by_connection(provider, &connection.id)
                 .await?
             {
+                let read = account
+                    .external_user_id
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|external_user_id| {
+                        read_links.contains(&(
+                            connection.id.clone(),
+                            account.id.clone(),
+                            external_user_id.to_string(),
+                            account.user_id.clone(),
+                        ))
+                    });
+                if !read {
+                    unswept_user_ids.insert(account.user_id.clone());
+                }
                 linked_user_ids.insert(account.user_id);
             }
         }
+        // A user is observed only when every one of their links was read.
+        linked_user_ids.retain(|user_id| !unswept_user_ids.contains(user_id));
+
+        // The audience read is every account's, linked or not, so it is
+        // judged on its own and stands whatever the links' state.
+        let audience = self.maintenance_audience_freshness(&connections, now).await;
 
         // A fresh sweep over nobody is not a watch picture. With no verified
         // link on any enabled connection, every subject would come back "no
         // plays recorded" — which reads as "nobody watched it" while Scryer is
         // in fact observing nobody at all.
-        if linked_user_ids.is_empty() {
+        //
+        // A link no sweep has read yet is the same gap with a different
+        // remedy (wait for the next sweep). It closes the per-user facts even
+        // beside links that were read: that person's plays have never been
+        // seen, so "nobody watched it" and every watcher list would leave
+        // them out while reading as complete.
+        if linked_user_ids.is_empty() || !unswept_user_ids.is_empty() {
+            let reason = if unswept_user_ids.is_empty() {
+                unknown_reason::NO_LINKED_PARTICIPANTS
+            } else {
+                unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
+            };
             return Ok(MaintenanceWatchContext {
-                freshness: WatchSignalFreshness::Unavailable(
-                    unknown_reason::NO_LINKED_PARTICIPANTS,
-                ),
+                freshness: WatchSignalFreshness::Unavailable(reason),
                 linked_user_ids,
+                unswept_user_ids,
                 enabled_connection_ids,
+                audience,
             });
         }
 
         Ok(MaintenanceWatchContext {
             freshness: WatchSignalFreshness::Fresh,
             linked_user_ids,
+            unswept_user_ids,
             enabled_connection_ids,
+            audience,
         })
     }
 
@@ -2154,6 +2228,17 @@ impl AppUseCase {
         if context.freshness != WatchSignalFreshness::Fresh {
             return Ok(HashMap::new());
         }
+        self.maintenance_stored_watch_signals_for_titles(titles)
+            .await
+    }
+
+    /// Every stored watch row for `titles`, whatever the watch gate says.
+    /// Only the live re-check reads these past a closed gate, as the baseline
+    /// a live answer is compared against; facts never come from them then.
+    pub(crate) async fn maintenance_stored_watch_signals_for_titles(
+        &self,
+        titles: &[Title],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
         let title_ids: Vec<String> = titles
             .iter()
             .filter(|title| title.facet == scryer_domain::MediaFacet::Movie)
@@ -2183,6 +2268,92 @@ impl AppUseCase {
             );
         }
         Ok(signals)
+    }
+
+    /// Whether every enabled connection's full audience was read recently.
+    ///
+    /// A store that cannot answer leaves only the anonymous facts unknown;
+    /// the rest of the watch picture does not depend on it.
+    async fn maintenance_audience_freshness(
+        &self,
+        connections: &[scryer_domain::MediaServerConnection],
+        now: DateTime<Utc>,
+    ) -> WatchSignalFreshness {
+        let reads = match self
+            .services
+            .integrations
+            .media_server_signals
+            .audience_reads()
+            .await
+        {
+            Ok(reads) => reads,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "audience reads could not be loaded; the anonymous watch facts are unknown"
+                );
+                return WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ);
+            }
+        };
+        let read_at: HashMap<&str, DateTime<Utc>> = reads
+            .iter()
+            .map(|read| (read.connection_id.as_str(), read.read_at))
+            .collect();
+        let every_connection_read = connections.iter().all(|connection| {
+            read_at
+                .get(connection.id.as_str())
+                .is_some_and(|read_at| watch_signal_sweep_is_fresh(*read_at, now))
+        });
+        if every_connection_read {
+            WatchSignalFreshness::Fresh
+        } else {
+            WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ)
+        }
+    }
+
+    /// One batched audience load per chunk, keyed by owning title. Skipped
+    /// when the anonymous facts are already unknown.
+    ///
+    /// A load that fails does not fail the pass: the returned context has the
+    /// audience gate closed, so the anonymous facts read unknown for this
+    /// chunk rather than "nobody watched it".
+    pub(crate) async fn maintenance_audience_plays_for_titles<'c>(
+        &self,
+        context: &'c MaintenanceWatchContext,
+        titles: &[Title],
+    ) -> (
+        std::borrow::Cow<'c, MaintenanceWatchContext>,
+        HashMap<String, Vec<crate::ports::AudiencePlay>>,
+    ) {
+        let unread = || {
+            std::borrow::Cow::Owned(MaintenanceWatchContext {
+                audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
+                ..context.clone()
+            })
+        };
+        if context.audience_unavailable_reason().is_some() {
+            return (std::borrow::Cow::Borrowed(context), HashMap::new());
+        }
+        let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+        if title_ids.is_empty() {
+            return (std::borrow::Cow::Borrowed(context), HashMap::new());
+        }
+        match self
+            .services
+            .integrations
+            .media_server_signals
+            .audience_plays_for_titles(&title_ids)
+            .await
+        {
+            Ok(plays) => (std::borrow::Cow::Borrowed(context), plays),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "audience plays could not be loaded; the anonymous watch facts are unknown"
+                );
+                (unread(), HashMap::new())
+            }
+        }
     }
 
     /// Username by user id, read once per evaluation run.

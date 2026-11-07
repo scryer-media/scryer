@@ -150,7 +150,11 @@ impl LibraryMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(from_library(library))
+        let root_title_counts = app
+            .library_root_title_counts()
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_library(library, &root_title_counts))
     }
 
     /// Patch a library while preserving omitted fields.
@@ -172,17 +176,28 @@ impl LibraryMutations {
                 })
                 .collect()
         });
-        let library = app
-            .update_library(
+        let removed_root_ids = input
+            .removed_root_ids
+            .map(|ids| ids.into_iter().map(|id| id.to_string()).collect());
+        let updated = app
+            .update_library_with_outcome(
                 &actor,
                 input.library_id.as_ref(),
                 input.name,
                 roots,
+                removed_root_ids,
                 input.settings.map(library_settings_draft).transpose()?,
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(from_library(library))
+        let root_title_counts = app
+            .library_root_title_counts()
+            .await
+            .map_err(to_gql_error)?;
+        let mut payload = from_library(updated.library, &root_title_counts);
+        payload.removed_title_count =
+            i32::try_from(updated.removed_title_count).unwrap_or(i32::MAX);
+        Ok(payload)
     }
 
     /// Delete the library configuration identified by the supplied ID.
@@ -471,13 +486,16 @@ impl LibraryMutations {
     async fn refresh_file_scores(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Exactly one bounded selection of file, season, or title IDs.")]
+        #[graphql(desc = "Exactly one bounded selection of file, episode, season, or title IDs.")]
         selection: FileScoreSelectionInput,
     ) -> GqlResult<JobRunPayload> {
         use scryer_application::ScoreRefreshSelection;
         let selection = match selection {
             FileScoreSelectionInput::FileIds(ids) => {
                 ScoreRefreshSelection::Files(ids.into_iter().map(String::from).collect())
+            }
+            FileScoreSelectionInput::EpisodeIds(ids) => {
+                ScoreRefreshSelection::Episodes(ids.into_iter().map(String::from).collect())
             }
             FileScoreSelectionInput::SeasonIds(ids) => {
                 ScoreRefreshSelection::Seasons(ids.into_iter().map(String::from).collect())

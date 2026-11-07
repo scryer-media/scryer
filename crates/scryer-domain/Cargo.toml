@@ -1,9 +1,10 @@
 [package]
 name = "scryer-domain"
-version = "0.21.24"
+version = "0.22.1"
 edition.workspace = true
 
 [dependencies]
+scryer-media-types = { path = "../scryer-media-types" }
 serde = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -13,8 +14,10 @@ blake3 = "1"
 # NOTE: `catalog_sort_key` bytes depend on the icu/CLDR collation data version. Bumping these
 # (or their transitive `*_data` crates) can change stored sort keys and requires a new backfill
 # migration to regenerate existing rows — see crates/scryer-domain/src/title_sort.rs.
-icu_collator = "2.3"
-icu_locale = "2.3"
+# Pinned exactly and excluded from Renovate for that reason: a bump is a deliberate
+# migration, never a routine dependency update.
+icu_collator = "=2.4.0"
+icu_locale = "=2.4.0"
 regex = "1"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"

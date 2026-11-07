@@ -886,7 +886,7 @@ export function SystemView({
                     >
                       {t("system.dbPathLabel")}
                     </p>
-                    <p className="mt-1 break-all font-[var(--font-code)] text-xs text-[var(--scry-ink2)]">
+                    <p className="mt-1 break-all font-[family-name:var(--font-code)] text-xs text-[var(--scry-ink2)]">
                       {systemHealth?.dbPath ?? healthPlaceholder}
                     </p>
                   </div>

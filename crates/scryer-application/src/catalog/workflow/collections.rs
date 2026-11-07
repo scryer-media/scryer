@@ -994,6 +994,8 @@ impl AppUseCase {
 impl AppUseCase {
     /// Batch-load media files for many titles, keyed by `title_id`. Titles the
     /// actor cannot `View` are silently dropped (their key is simply absent).
+    /// Files of titles in libraries the actor holds no privileged access to are
+    /// [redacted](crate::TitleMediaFile::redacted_for_viewer).
     pub async fn list_media_files_for_titles(
         &self,
         actor: &User,
@@ -1006,6 +1008,27 @@ impl AppUseCase {
                 scryer_domain::LibraryPermission::View,
             )
             .await?;
+        if title_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let privileged_library_ids = self
+            .privileged_library_ids(actor, None)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let privileged_title_ids = if privileged_library_ids.is_empty() {
+            HashSet::new()
+        } else {
+            self.services
+                .catalog
+                .titles
+                .get_by_ids(&title_ids)
+                .await?
+                .into_iter()
+                .filter(|title| privileged_library_ids.contains(&title.library_id))
+                .map(|title| title.id)
+                .collect::<HashSet<_>>()
+        };
         let mut grouped: HashMap<String, Vec<crate::TitleMediaFile>> = HashMap::new();
         for file in self
             .services
@@ -1014,6 +1037,11 @@ impl AppUseCase {
             .list_media_files_for_titles(&title_ids)
             .await?
         {
+            let file = if privileged_title_ids.contains(&file.title_id) {
+                file
+            } else {
+                file.redacted_for_viewer()
+            };
             grouped.entry(file.title_id.clone()).or_default().push(file);
         }
         Ok(grouped)
@@ -1598,6 +1626,7 @@ impl AppUseCase {
                         crate::TitleListProjection {
                             include_external_ids: false,
                             include_canonical_tags: false,
+                            ..Default::default()
                         },
                         crate::TitleCatalogAggregates::default(),
                     )

@@ -988,7 +988,7 @@ function TokenAutocompleteInput({
                     setDismissedKey(null);
                   }}
                 >
-                  <code className="font-[var(--font-code)] text-[var(--scry-accent-text)]">
+                  <code className="font-[family-name:var(--font-code)] text-[var(--scry-accent-text)]">
                     {item.code}
                   </code>
                   <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
@@ -1039,7 +1039,7 @@ function RenameTokenReferenceList({
             className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-muted/40 px-2.5 py-2"
           >
             <div className="min-w-0 space-y-1">
-              <code className="block font-[var(--font-code)] text-xs text-[var(--scry-accent-text)]">
+              <code className="block font-[family-name:var(--font-code)] text-xs text-[var(--scry-accent-text)]">
                 {`{${item.token}}`}
               </code>
               <p className="text-xs leading-snug text-muted-foreground">
@@ -1076,7 +1076,7 @@ function RenameFunctionReference({ t }: { t: Translate }) {
           <p className="text-sm font-medium text-card-foreground">
             {t("settings.renameFunctionTruncateTitle")}
           </p>
-          <code className="mt-1 block break-all font-[var(--font-code)] text-xs text-[var(--scry-accent-text)]">
+          <code className="mt-1 block break-all font-[family-name:var(--font-code)] text-xs text-[var(--scry-accent-text)]">
             {"{title|truncate:N}"}
           </code>
           <p className="mt-1 text-xs leading-snug text-muted-foreground">
@@ -1088,7 +1088,7 @@ function RenameFunctionReference({ t }: { t: Translate }) {
           <p className="text-sm font-medium text-card-foreground">
             {t("settings.renameFunctionOptionalGroupTitle")}
           </p>
-          <code className="mt-1 block break-all font-[var(--font-code)] text-xs text-[var(--scry-accent-text)]">
+          <code className="mt-1 block break-all font-[family-name:var(--font-code)] text-xs text-[var(--scry-accent-text)]">
             {"{?absolute_episode: ({absolute_episode})}"}
           </code>
           <p className="mt-1 text-xs leading-snug text-muted-foreground">
@@ -1109,7 +1109,7 @@ function RenameFunctionReference({ t }: { t: Translate }) {
                 key={item.code}
                 className="rounded border border-border/60 bg-background/50 px-2 py-1.5"
               >
-                <code className="font-[var(--font-code)] text-xs text-[var(--scry-accent-text)]">
+                <code className="font-[family-name:var(--font-code)] text-xs text-[var(--scry-accent-text)]">
                   {item.code}
                 </code>
                 <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
@@ -1125,7 +1125,7 @@ function RenameFunctionReference({ t }: { t: Translate }) {
             <p className="text-sm font-medium text-card-foreground">
               {t("settings.renameFunctionPaddingTitle")}
             </p>
-            <code className="mt-1 block break-all font-[var(--font-code)] text-xs text-[var(--scry-accent-text)]">
+            <code className="mt-1 block break-all font-[family-name:var(--font-code)] text-xs text-[var(--scry-accent-text)]">
               {"{season:2}"}
             </code>
             <p className="mt-1 text-xs leading-snug text-muted-foreground">
@@ -1137,7 +1137,7 @@ function RenameFunctionReference({ t }: { t: Translate }) {
             <p className="text-sm font-medium text-card-foreground">
               {t("settings.renameFunctionChainTitle")}
             </p>
-            <code className="mt-1 block break-all font-[var(--font-code)] text-xs text-[var(--scry-accent-text)]">
+            <code className="mt-1 block break-all font-[family-name:var(--font-code)] text-xs text-[var(--scry-accent-text)]">
               {"{title|truncate:64|space:_}"}
             </code>
             <p className="mt-1 text-xs leading-snug text-muted-foreground">
@@ -1149,7 +1149,7 @@ function RenameFunctionReference({ t }: { t: Translate }) {
             <p className="text-sm font-medium text-card-foreground">
               {t("settings.renameFunctionBracesTitle")}
             </p>
-            <code className="mt-1 block break-all font-[var(--font-code)] text-xs text-[var(--scry-accent-text)]">
+            <code className="mt-1 block break-all font-[family-name:var(--font-code)] text-xs text-[var(--scry-accent-text)]">
               {"{{edition-{edition}}}"}
             </code>
             <p className="mt-1 text-xs leading-snug text-muted-foreground">
@@ -1238,7 +1238,7 @@ function TemplateExample({
         <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] px-3.5 py-2.5">
           <p
             id={outputId}
-            className="break-all font-[var(--font-code)] text-[13.5px] text-[var(--scry-text2)]"
+            className="break-all font-[family-name:var(--font-code)] text-[13.5px] text-[var(--scry-text2)]"
           >
             {value}
           </p>
@@ -1593,7 +1593,7 @@ export function RenameSettingsPanel({
                     onChange={handleUseSeasonFoldersChange}
                   />
                 </div>
-                <div className="grid gap-5 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-5 @xl/facet-page:grid-cols-2">
                   <div className="space-y-3">
                     <div className="space-y-2.5">
                       <Label className="text-sm text-card-foreground">
@@ -1737,7 +1737,7 @@ export function RenameSettingsPanel({
               </div>
 
               <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] p-4">
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 @xl/facet-page:grid-cols-2">
                   <label className="space-y-2">
                     <Label className="text-sm text-card-foreground">
                       {t("settings.renameCollisionPolicyLabel")}

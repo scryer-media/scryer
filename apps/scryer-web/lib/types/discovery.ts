@@ -107,12 +107,34 @@ export type DiscoveryItem = {
   contextTerms: string[];
   studioSlug: string | null;
   personIds: number[];
+  /** The neighbourhood an anchor's related title falls into; only on discoveryNeighbors items. */
+  groupId?: number | null;
+};
+
+/** One neighbourhood among an anchor's related titles. */
+export type DiscoveryNeighborGroup = {
+  id: number;
+  /** Key of the genre or theme naming the group, or null when the label is the medoid's title. */
+  labelKey: string | null;
+  label: string;
+  /** Target key of the related title that best represents the group. */
+  medoid: string;
+  /** How many of the returned related titles are in the group. */
+  size: number;
+};
+
+/** An anchor's related titles and the neighbourhoods they fall into. */
+export type DiscoveryNeighbors = {
+  items: DiscoveryItem[];
+  groups: DiscoveryNeighborGroup[];
 };
 
 export type DiscoverySection = {
   sectionId: string;
   sectionType: string;
   title: string;
+  /** Rail-label key of a "because you like" section; null for the rest. */
+  labelKey?: string | null;
   surface: string;
   totalCount: number;
   items: DiscoveryItem[];
@@ -129,8 +151,26 @@ export type DiscoveryHomePayload = {
   publicSections: DiscoveryHomeSection[];
   personalizedSections: DiscoveryHomeSection[];
   completeCollection: DiscoveryHomeSection | null;
+  /** "Browse by" genre and theme cards, in allowlist order. */
+  browseLabels: DiscoveryBrowseLabel[];
   canViewPersonalized: boolean;
 };
+
+export type DiscoveryBrowseLabelFamily = "GENRE" | "THEME";
+
+/** One "browse by" card: an allowlisted label the viewer's pool holds. */
+export type DiscoveryBrowseLabel = {
+  family: DiscoveryBrowseLabelFamily;
+  /** Canonical hyphenated label key; translated, with `title` as fallback. */
+  labelKey: string;
+  /** Section id to page with `discoveryItems.sectionId`. */
+  sectionId: string;
+  title: string;
+  itemCount: number;
+};
+
+export type DiscoverySectionSort =
+  "RELEVANCE" | "POPULARITY" | "RATING" | "RELEASE_DATE" | "TITLE";
 
 export type DiscoveryHomeCard = {
   id: string;
@@ -160,9 +200,13 @@ export type DiscoveryHomeSection = {
   sectionId: string;
   sectionType: string;
   title: string;
+  /** Rail-label key of a "because you like" section; null for the rest. */
+  labelKey?: string | null;
   surface: CatalogDiscoverySurface;
   totalCount: number;
   items: DiscoveryHomeCard[];
+  /** Generations a section page was composed from; only section pages ask. */
+  generationIds?: string[];
 };
 
 export type DiscoveryItemsInput = {
@@ -179,12 +223,26 @@ export type DiscoveryItemsInput = {
   includePublic?: boolean | null;
   limit?: number | null;
   offset?: number | null;
+  /** Page one home section in full; see `DiscoveryItemsPayload.section`. */
+  sectionId?: string | null;
+  /** The home's `limitPerSection` the section was opened from. */
+  sectionRailLimit?: number | null;
+  homeFilters?: DiscoveryHomeFilters | null;
+  sort?: DiscoverySectionSort | null;
+  hideRequested?: boolean | null;
 };
 
 export type DiscoveryItemsPayload = {
   items: DiscoveryItem[];
   totalCount: number;
   canViewPersonalized: boolean;
+};
+
+/** A `discoveryItems` page of one home section, as cards. */
+export type DiscoverySectionPagePayload = {
+  totalCount: number;
+  canViewPersonalized: boolean;
+  section: DiscoveryHomeSection | null;
 };
 
 export type CatalogDiscoveryInput = {
@@ -245,6 +303,7 @@ export type CatalogDiscoveryGroup = {
   kind: CatalogDiscoveryGroupKind;
   surface: CatalogDiscoverySurface;
   labelValue: string | null;
+  labelKey?: string | null;
   totalCount: number;
   items: CatalogDiscoveryItem[];
 };

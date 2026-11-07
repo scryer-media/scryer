@@ -1,8 +1,9 @@
 use super::*;
 use crate::discovery::{
-    DiscoveryContextDefaults, DiscoveryLibraryContext, build_projected_discovery_library_context,
-    coalesce_pending_context_change, discovery_library_growth_warrants_snapshot,
-    incremental_item_records, pending_context_change_from_domain_event,
+    DiscoveryContextDefaults, DiscoveryLibraryContext, LibraryGraphRebuildSummary,
+    build_projected_discovery_library_context, coalesce_pending_context_change,
+    discovery_library_growth_warrants_snapshot, incremental_item_records,
+    library_graph_facets_for_changes, pending_context_change_from_domain_event,
     pending_context_changes_need_snapshot_reconciliation, public_feed_item_records,
     public_feed_section_records, snapshot_facet_records, snapshot_item_records,
 };
@@ -121,6 +122,22 @@ fn job_run_library_id(run: &JobRunRecord) -> Option<&str> {
         .strip_prefix(run.job_key.as_str())
         .and_then(|value| value.strip_prefix(':'))
         .filter(|value| !value.trim().is_empty())
+}
+
+/// Set to a true value in a debug build to have every discovery sync rebuild
+/// each owned facet's library graph, so a new gateway build shows at once.
+#[cfg(debug_assertions)]
+const DEV_LIBRARY_GRAPH_REBUILD_ENV: &str = "SCRYER_DEV_LIBRARY_GRAPH_REBUILD";
+
+/// Whether the development rebuild override's value asks for a rebuild.
+#[cfg(debug_assertions)]
+fn dev_library_graph_rebuild_requested(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn background_library_refresh_enabled() -> bool {
@@ -538,6 +555,9 @@ struct DiscoverySyncRunSummary {
     context_snapshot: Option<DiscoveryContextSnapshotRunSummary>,
     context_incremental: Option<DiscoveryContextIncrementalRunSummary>,
     public_feed: Option<DiscoveryPublicFeedRunSummary>,
+    /// Library graph rebuilds this run asked for; empty when none was due.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    library_graphs: Vec<LibraryGraphRebuildSummary>,
     next_run_at: String,
     next_incremental_reload_eligible_at: String,
     next_context_snapshot_eligible_at: String,
@@ -858,6 +878,31 @@ impl AppUseCase {
             return Ok(false);
         }
         match run.job_key {
+            JobKey::SubtitleSearch => {
+                let Some(scope) = run.operation_type.strip_prefix("episode_subtitle_search:")
+                else {
+                    return Ok(false);
+                };
+                let Some((library_id, _title_id)) = scope.split_once(':') else {
+                    return Ok(false);
+                };
+                let actor = self.attach_user_authorization(actor.clone()).await?;
+                match self
+                    .require_library_permission(
+                        &actor,
+                        library_id,
+                        scryer_domain::LibraryPermission::ManageSubtitles,
+                    )
+                    .await
+                {
+                    Ok(()) => Ok(true),
+                    Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+                        Ok(false)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+
             JobKey::TitleDeletion | JobKey::TitleRename => Ok(true),
             JobKey::MediaFileRescore
             | JobKey::MediaFileDeletion
@@ -964,7 +1009,8 @@ impl AppUseCase {
         if !can_manage_system
             && !matches!(
                 job_key,
-                JobKey::TitleDeletion
+                JobKey::SubtitleSearch
+                    | JobKey::TitleDeletion
                     | JobKey::TitleRename
                     | JobKey::MediaFileDeletion
                     | JobKey::MediaFileRescore
@@ -1788,6 +1834,37 @@ impl AppUseCase {
         }
     }
 
+    /// Finishes a scheduled library job cleanly when its library's only root
+    /// was never created, so an unused facet does not show up as a failure on
+    /// every run. A manual run still fails, since someone asked for that scan.
+    async fn scheduled_library_job_skip(
+        &self,
+        run: &JobRunRecord,
+    ) -> AppResult<Option<JobExecutionOutcome>> {
+        if run.trigger_source == JobTriggerSource::Manual {
+            return Ok(None);
+        }
+        let Some(facet) = job_key_library_facet(run.job_key) else {
+            return Ok(None);
+        };
+        let Some(library_path) = self
+            .sole_missing_library_root(&facet, job_run_library_id(run))
+            .await?
+        else {
+            return Ok(None);
+        };
+        info!(
+            job_key = run.job_key.as_str(),
+            library_path = %library_path,
+            "skipping scheduled library job: the only root folder does not exist"
+        );
+        let mut outcome = JobExecutionOutcome::from_library_scan(&LibraryScanSummary::default());
+        outcome.summary_text = Some(format!(
+            "Skipped: library folder {library_path} does not exist"
+        ));
+        Ok(Some(outcome))
+    }
+
     async fn execute_job_body(
         &self,
         run: &JobRunRecord,
@@ -1799,6 +1876,9 @@ impl AppUseCase {
         match job_key {
             JobKey::CustomJob => self.execute_custom_job(run).await,
             JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime => {
+                if let Some(outcome) = self.scheduled_library_job_skip(run).await? {
+                    return Ok(outcome);
+                }
                 let summary = if let Some(library_id) = job_run_library_id(run) {
                     self.scan_library_by_id_with_tracking(
                         &actor,
@@ -1827,6 +1907,9 @@ impl AppUseCase {
                         crate::error_reasons::jobs::BACKGROUND_LIBRARY_REFRESH_TEMPORARILY_DISABLED,
                         "background library refresh is temporarily disabled",
                     ));
+                }
+                if let Some(outcome) = self.scheduled_library_job_skip(run).await? {
+                    return Ok(outcome);
                 }
                 let summary = if let Some(library_id) = job_run_library_id(run) {
                     self.background_library_refresh_by_id_with_tracking(&actor, library_id, run_id)
@@ -2197,6 +2280,10 @@ impl AppUseCase {
             JobKey::LocationOperation => Err(AppError::validation_refused(
                 crate::error_reasons::jobs::LOCATION_OPERATIONS_INVALID,
                 "location operations must be started from the location operation mutation",
+            )),
+            JobKey::SourceImport => Err(AppError::validation_refused(
+                crate::source_import::refusal::INVALID_REQUEST,
+                "source imports must be started from setup",
             )),
         }
     }
@@ -2732,6 +2819,63 @@ impl AppUseCase {
         self.set_job_next_run_at(JobKey::DiscoverySync, next_run_at)
             .await;
 
+        // A committed full snapshot rebuilds every facet's library graph; a
+        // committed incremental reload rebuilds the facets its changes
+        // touched. Any run also rebuilds a facet whose graph never landed or
+        // whose last build failed, once its backoff has passed. Graph
+        // failures are recorded per facet and never fail this run.
+        let owned_graph_facets = library_context
+            .subject_provenance
+            .iter()
+            .map(|subject| subject.facet.clone())
+            .collect::<BTreeSet<_>>();
+        let mut library_graph_facets = if context_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.committed)
+        {
+            // Every facet, so one left with no owned titles drops its graph.
+            [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime]
+                .iter()
+                .map(|facet| facet.as_str().to_string())
+                .chain(owned_graph_facets.iter().cloned())
+                .collect::<BTreeSet<_>>()
+        } else if context_incremental
+            .as_ref()
+            .is_some_and(|incremental| incremental.committed)
+        {
+            library_graph_facets_for_changes(&pending_changes)
+        } else {
+            BTreeSet::new()
+        };
+        if personalized_discovery_enabled
+            && !scans_active
+            && state.last_success_generation_id.is_some()
+        {
+            let unscheduled = owned_graph_facets
+                .difference(&library_graph_facets)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            library_graph_facets.extend(
+                self.library_graph_facets_due_for_retry(&unscheduled, now)
+                    .await,
+            );
+        }
+        // Debug builds only, set by `cargo xtask serve`:
+        // every sync rebuilds every owned facet's graph, past the cooldowns,
+        // backoffs and scan gate above. Release builds never compile it.
+        #[cfg(debug_assertions)]
+        if dev_library_graph_rebuild_requested(
+            std::env::var(DEV_LIBRARY_GRAPH_REBUILD_ENV).ok().as_deref(),
+        ) {
+            library_graph_facets.extend(owned_graph_facets.iter().cloned());
+        }
+        let library_graphs = if library_graph_facets.is_empty() {
+            Vec::new()
+        } else {
+            self.rebuild_library_graphs(&titles, &library_context, &library_graph_facets)
+                .await
+        };
+
         let summary = DiscoverySyncRunSummary {
             state_created,
             personalized_discovery_enabled,
@@ -2743,6 +2887,7 @@ impl AppUseCase {
             context_snapshot,
             context_incremental,
             public_feed,
+            library_graphs,
             next_run_at: next_run_at.to_rfc3339(),
             next_incremental_reload_eligible_at: effective_next_incremental.to_rfc3339(),
             next_context_snapshot_eligible_at: effective_next_context.to_rfc3339(),
@@ -4429,5 +4574,17 @@ mod tests {
         assert_eq!(first, second);
         assert_ne!(first, different_stream);
         assert!((0..4 * 60 * 60).contains(&first));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn dev_library_graph_rebuild_reads_only_true_values() {
+        for value in ["1", "true", " TRUE ", "yes", "on"] {
+            assert!(dev_library_graph_rebuild_requested(Some(value)), "{value}");
+        }
+        for value in ["", "0", "false", "off", "rebuild"] {
+            assert!(!dev_library_graph_rebuild_requested(Some(value)), "{value}");
+        }
+        assert!(!dev_library_graph_rebuild_requested(None));
     }
 }

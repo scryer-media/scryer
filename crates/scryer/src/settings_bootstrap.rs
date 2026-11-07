@@ -830,6 +830,16 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "null",
             is_sensitive: false,
         },
+        // Null resolves to the loopback default; the saved value is a host
+        // only and is read before the listener binds.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SERVICE,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::network_bind::BIND_HOST_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SERVICE,
             scope: SETTINGS_SCOPE_SYSTEM,
@@ -1029,14 +1039,6 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_ACQUISITION,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: "acquisition.same_tier_min_delta",
-            data_type: "number",
-            default_value_json: "120",
-            is_sensitive: false,
-        },
-        ServiceSettingSeed {
-            category: SETTINGS_CATEGORY_ACQUISITION,
-            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "acquisition.poll_interval_seconds",
             data_type: "number",
             default_value_json: "60",
@@ -1048,6 +1050,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: "acquisition.walk_interval_seconds",
             data_type: "number",
             default_value_json: "300",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "acquisition.walk_intensity",
+            data_type: "string",
+            default_value_json: "\"normal\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {

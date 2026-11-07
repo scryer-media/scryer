@@ -205,12 +205,8 @@ impl AppUseCase {
                     .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", wanted.title_id)))?
                     .library_id
             };
-            self.require_library_permission(
-                actor,
-                &library_id,
-                scryer_domain::LibraryPermission::View,
-            )
-            .await?;
+            self.require_privileged_library_access(actor, &library_id)
+                .await?;
             let items = self
                 .services
                 .workflow
@@ -233,12 +229,8 @@ impl AppUseCase {
                 .get_by_id(tid)
                 .await?
                 .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {tid}")))?;
-            self.require_library_permission(
-                actor,
-                &title.library_id,
-                scryer_domain::LibraryPermission::View,
-            )
-            .await?;
+            self.require_privileged_library_access(actor, &title.library_id)
+                .await?;
             let items = self
                 .services
                 .workflow

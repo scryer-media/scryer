@@ -14,6 +14,10 @@ export type EpisodeAvailabilityPill = {
   label: string;
 };
 
+export type EpisodeRowAvailabilityPill = EpisodeAvailabilityPill & {
+  muted: boolean;
+};
+
 export function episodeAvailabilityPill(
   availability: EpisodeMediaAvailability,
   translate: (key: string) => string,
@@ -36,4 +40,25 @@ export function episodeAvailabilityPill(
     case "UNMONITORED":
       return null;
   }
+}
+
+/**
+ * Episode rows say when there is no file even for an unmonitored episode.
+ * UNMONITORED is only ever reported for an episode with no file. Having a file
+ * or not is the normal case for a season, so only states that need attention
+ * stay at full strength.
+ */
+export function episodeRowAvailabilityPill(
+  availability: EpisodeMediaAvailability,
+  translate: (key: string) => string,
+): EpisodeRowAvailabilityPill {
+  const pill = episodeAvailabilityPill(availability, translate);
+  if (!pill || availability.state === "MISSING") {
+    return {
+      tone: "warning",
+      label: translate("episode.missing"),
+      muted: true,
+    };
+  }
+  return { ...pill, muted: availability.state === "AVAILABLE" };
 }

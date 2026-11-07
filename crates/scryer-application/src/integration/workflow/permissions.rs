@@ -35,17 +35,34 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn filter_download_queue_items_for_permission(
+    /// Privileged library ids for a download queue or history read, refusing
+    /// with `INTEGRATION_LIBRARY_ACCESS_DENIED` when there are none: release
+    /// names, clients and indexers are reserved for privileged access.
+    async fn require_privileged_queue_library_ids(
         &self,
         actor: &User,
-        items: Vec<DownloadQueueItem>,
-        permission: scryer_domain::LibraryPermission,
-    ) -> AppResult<Vec<DownloadQueueItem>> {
-        let allowed_library_ids = self
-            .authorized_library_ids(actor, None, permission)
+    ) -> AppResult<HashSet<String>> {
+        let library_ids = self
+            .privileged_library_ids(actor, None)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
+        if library_ids.is_empty() {
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::integration::LIBRARY_ACCESS_DENIED,
+                "You do not have access to this library".to_string(),
+            ))
+        } else {
+            Ok(library_ids)
+        }
+    }
+
+    async fn filter_download_queue_items_for_libraries(
+        &self,
+        actor: &User,
+        items: Vec<DownloadQueueItem>,
+        allowed_library_ids: &HashSet<String>,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
         if allowed_library_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -371,14 +388,9 @@ impl AppUseCase {
     async fn collect_download_history_items_for_actor(
         &self,
         actor: &User,
-        permission: scryer_domain::LibraryPermission,
+        allowed_library_ids: &HashSet<String>,
         durable: DurableHistoryRows,
     ) -> AppResult<Vec<DownloadQueueItem>> {
-        let allowed_library_ids = self
-            .authorized_library_ids(actor, None, permission)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
         let can_view_operational_history = self
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;

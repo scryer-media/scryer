@@ -3,6 +3,60 @@ import type { LocaleDictionary } from "../types";
 const pt_BR: LocaleDictionary = {
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Esta versão do Prowlarr não é compatível. Atualize o Prowlarr para a 2.0 ou posterior.",
+  "error.reason.STANDBY_NOT_FOUND": "Este candidato salvo não existe mais.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Este candidato salvo não está mais disponível. Atualize a lista e tente novamente.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "O release salvo não pôde ser enfileirado. Ele continua disponível para nova tentativa.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Este release está na lista de bloqueio do título. Remova-o da lista de bloqueio para enfileirá-lo.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Este release já está na fila de downloads.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Outra busca ou ação de fila está em andamento neste título. Tente novamente quando terminar.",
+  "wanted.standby": "Reserva · {{count}}",
+  "wanted.standbyTooltip":
+    "{{count}} candidatos salvos serão tentados se a captura atual falhar.",
+  "wanted.standbyScopeNote":
+    "Conta as linhas deste escopo; pacotes de temporada são contados no episódio âncora da temporada.",
+  "wanted.loadingStandby": "Carregando candidatos salvos…",
+  "wanted.standbyCandidates": "Candidatos de reserva · {{count}}",
+  "wanted.downloadStandby": "Baixar",
+  "wanted.downloadStandbyLabel": "Baixar {{name}}",
+  "wanted.standbyConflictTitle": "Downloads já em andamento",
+  "wanted.standbyConflictDescription":
+    "Enfileirar {{name}} junto com esses downloads, ou cancelá-los e enfileirá-lo no lugar.",
+  "wanted.standbyQueue": "Enfileirar",
+  "wanted.standbyQueuedRefreshFailed":
+    "O release foi enfileirado, mas a lista não pôde ser atualizada. Recarregue a página para ver o status atual.",
+  "wanted.standbyCancelAndQueue": "Cancelar e enfileirar",
+  "wanted.standbyQueuedCancelFailed":
+    "O release foi enfileirado, mas {{count}} download(s) em conflito não puderam ser cancelados e continuam em andamento.",
+  "wanted.standbyRank": "Posição {{rank}}",
+  "wanted.standbyIndexer": "Indexador",
+  "wanted.standbySize": "Tamanho",
+  "wanted.standbySeeders": "Seeders",
+  "wanted.standbyScore": "Pontuação",
+  "wanted.standbyAge": "Idade",
+  "wanted.seasonPack": "Pacote de temporada",
+  "wanted.noStandbyCandidates": "sem candidatos de reserva",
+  "settings.oauthJellyfinCallbackCopied": "URL de retorno do Jellyfin copiada.",
+  "settings.oauthClientIdCopied": "ID do cliente OAuth copiado.",
+  "status.copyFailedSelected":
+    "Não foi possível copiar. O texto está selecionado; pressione Ctrl+C ou ⌘C.",
+  "status.copyFailed":
+    "Não foi possível copiar: o navegador recusou o acesso à área de transferência.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Não foi possível verificar a mídia, portanto ela não pode substituir um arquivo existente da biblioteca.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Esta lista de reprodução ou arquivo complementar precisa de revisão porque pode depender de outros arquivos.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Não foi possível ler a mídia. Verifique o acesso à origem e tente novamente.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "A estrutura da mídia está malformada. Revise o arquivo de origem antes de importar.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "A mídia está criptografada e não pôde ser verificada.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "O Scryer não consegue se conectar ao gateway de metadados porque o relógio do sistema está com uma diferença de mais de 5 minutos. Sincronize o relógio do sistema e reinicie o Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -239,7 +293,8 @@ const pt_BR: LocaleDictionary = {
   "nav.logs": "Logs",
   "nav.serviceLogs": "Logs do serviço",
   "nav.auditLogs": "Logs de auditoria",
-  "nav.usersAccess": "Usuários e acesso",
+  "nav.users": "Usuários",
+  "nav.securityAccess": "Segurança e acesso",
   "nav.mobileTitle": "Navegação do Scryer",
   "nav.mobileDescription": "Navegação principal do Scryer",
   "nav.mobileTrigger": "Abrir navegação",
@@ -321,7 +376,6 @@ const pt_BR: LocaleDictionary = {
   "dashboard.queueCountOne": "1 ativo",
   "settings.profile": "Perfil",
   "settings.general": "Geral",
-  "settings.security": "Security",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",
@@ -495,8 +549,6 @@ const pt_BR: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "O keepalive é um número inteiro de segundos; 0 o desliga.",
   "status.proxyTunnelPublicKeyCopied": "Chave pública copiada.",
-  "status.proxyTunnelPublicKeyCopyFailed":
-    "Não foi possível copiar a chave pública.",
   "settings.qualityProfiles": "Perfis de qualidade",
   "settings.downloadClients": "Clientes de download",
   "settings.downloadClientRouting": "Roteamento de clientes de download",
@@ -666,10 +718,9 @@ const pt_BR: LocaleDictionary = {
   "settings.acquisitionEnabled": "Ativar aquisição automática",
   "settings.acquisitionEnabledHelp":
     "Executa o loop de aquisição em segundo plano: varreduras de busca de convergência e correspondência RSS.",
-  "settings.acquisitionThresholds": "Limiares de upgrade",
-  "settings.acquisitionSameTierMinDelta":
+  "qualityProfile.minUpgradeScoreDelta":
     "Delta mínimo de pontuação no mesmo nível",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "Um lançamento do mesmo nível de qualidade deve superar a pontuação do arquivo atual em pelo menos este valor.",
   "settings.acquisitionConvergence": "Convergência e ritmo",
   "settings.acquisitionPollIntervalSeconds": "Intervalo de sondagem (segundos)",
@@ -895,11 +946,8 @@ const pt_BR: LocaleDictionary = {
     "{{total}} item(ns), {{renamable}} renomeáveis, {{noop}} sem alteração, {{conflicts}} conflitos, {{errors}} erros",
   "settings.sectionTitle": "Configurações • {{section}}",
   "settings.generalText": "Configurações gerais do aplicativo.",
-  "settings.verificationDepthTitle": "Verificação de cópias de importação",
   "settings.verificationDepthHelp":
     "Com que rigor o Scryer confere um arquivo copiado antes de mexer na origem.",
-  "settings.verificationDepthScope":
-    "Vale apenas para as cópias de importação dos clientes de download. Movimentações de biblioteca e de raiz sempre verificam por completo, independentemente do que for escolhido aqui.",
   "settings.verificationDepthLabel": "Profundidade da verificação",
   "settings.verificationDepthFull": "Releitura completa",
   "settings.verificationDepthFullHelp":
@@ -928,6 +976,85 @@ const pt_BR: LocaleDictionary = {
     "Quando uma importação automática do SABnzbd ou do NZBGet contém arquivos de vídeo com nomes ofuscados, o Scryer envia a soma de verificação CRC-32 e o tamanho de cada arquivo para o srrdb.com, um serviço de terceiros, para consultar o nome original. Nada mais sobre sua biblioteca ou sobre o arquivo é enviado. Os arquivos no disco nunca são renomeados.",
   "discovery.personalizedDisabled":
     "A descoberta personalizada está desativada nesta instância.",
+  "discovery.section.fromYourWatchlist": "Da sua lista para assistir",
+  "discovery.rail.becauseYouLike.action": "Porque você gosta de ação",
+  "discovery.rail.becauseYouLike.adventure": "Porque você gosta de aventura",
+  "discovery.rail.becauseYouLike.comedy": "Porque você gosta de comédias",
+  "discovery.rail.becauseYouLike.crime":
+    "Porque você gosta de histórias policiais",
+  "discovery.rail.becauseYouLike.documentary":
+    "Porque você gosta de documentários",
+  "discovery.rail.becauseYouLike.drama": "Porque você gosta de drama",
+  "discovery.rail.becauseYouLike.family":
+    "Porque você gosta de entretenimento em família",
+  "discovery.rail.becauseYouLike.fantasy": "Porque você gosta de fantasia",
+  "discovery.rail.becauseYouLike.history": "Porque você gosta de história",
+  "discovery.rail.becauseYouLike.horror": "Porque você gosta de terror",
+  "discovery.rail.becauseYouLike.mystery": "Porque você gosta de mistérios",
+  "discovery.rail.becauseYouLike.romance": "Porque você gosta de romance",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Porque você gosta de ficção científica",
+  "discovery.rail.becauseYouLike.thriller": "Porque você gosta de suspense",
+  "discovery.rail.becauseYouLike.war":
+    "Porque você gosta de histórias de guerra",
+  "discovery.rail.becauseYouLike.western": "Porque você gosta de faroeste",
+  "discovery.rail.becauseYouLike.sports":
+    "Porque você gosta de histórias de esporte",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Porque você gosta do sobrenatural",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Porque você gosta de histórias de amadurecimento",
+  "discovery.rail.becauseYouLike.found-family":
+    "Porque você gosta de famílias escolhidas",
+  "discovery.rail.becauseYouLike.revenge":
+    "Porque você gosta de histórias de vingança",
+  "discovery.rail.becauseYouLike.heist": "Porque você gosta de assaltos",
+  "discovery.rail.becauseYouLike.time-travel":
+    "Porque você gosta de viagens no tempo",
+  "discovery.rail.becauseYouLike.dystopia": "Porque você gosta de distopias",
+  "discovery.rail.becauseYouLike.cyberpunk": "Porque você gosta de cyberpunk",
+  "discovery.rail.becauseYouLike.superhero":
+    "Porque você gosta de super-heróis",
+  "discovery.rail.becauseYouLike.vampire": "Porque você gosta de vampiros",
+  "discovery.rail.becauseYouLike.zombie": "Porque você gosta de zumbis",
+  "discovery.rail.becauseYouLike.survival":
+    "Porque você gosta de histórias de sobrevivência",
+  "discovery.rail.becauseYouLike.space":
+    "Porque você gosta de aventuras espaciais",
+  "discovery.rail.becauseYouLike.detective":
+    "Porque você gosta de histórias de detetive",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Porque você gosta de crime organizado",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Porque você gosta de dramas de época",
+  "discovery.rail.becauseYouLike.psychological":
+    "Porque você gosta de histórias psicológicas",
+  "discovery.rail.becauseYouLike.mythology": "Porque você gosta de mitologia",
+  "discovery.rail.becauseYouLike.isekai": "Porque você gosta de isekai",
+  "discovery.rail.becauseYouLike.mecha": "Porque você gosta de mecha",
+  "discovery.rail.becauseYouLike.martial-arts":
+    "Porque você gosta de artes marciais",
+  "discovery.rail.becauseYouLike.music":
+    "Porque você gosta de histórias musicais",
+  "discovery.rail.becauseYouLike.workplace":
+    "Porque você gosta de histórias de escritório",
+  "discovery.rail.becauseYouLike.medical":
+    "Porque você gosta de dramas médicos",
+  "discovery.rail.becauseYouLike.military":
+    "Porque você gosta de histórias militares",
+  "discovery.rail.becauseYouLike.spy":
+    "Porque você gosta de histórias de espionagem",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Porque você gosta de intrigas da realeza",
+  "discovery.rail.becauseYouLike.first-love":
+    "Porque você gosta de histórias de primeiro amor",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Porque você gosta de amores proibidos",
+  "discovery.rail.becauseYouLike.lgbtq":
+    "Porque você gosta de histórias LGBTQ+",
+  "discovery.rail.becauseYouLike.samurai": "Porque você gosta de samurais",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Porque você gosta de garotas mágicas",
   "settings.keepHistoryForever": "Manter histórico para sempre",
   "settings.historyRetentionDaysHeader": "Manter histórico por",
   "settings.historyRetentionDaysSuffix": "dias",
@@ -1036,6 +1163,8 @@ const pt_BR: LocaleDictionary = {
   "toast.viewInCatalog": "Ver no catálogo",
 
   "label.back": "Voltar",
+  "label.copy": "Copiar",
+  "label.copied": "Copiado",
   "label.dismiss": "Dispensar",
   "pwa.offline":
     "Você está offline. Alguns recursos podem não estar disponíveis.",
@@ -1087,6 +1216,50 @@ const pt_BR: LocaleDictionary = {
   "title.viewModeCompact": "Compacta",
   "title.viewModePosterTable": "Lista",
   "title.viewModePoster": "Exibição em poster",
+  "title.viewModeGraph": "Visualização em grafo",
+  "libraryGraph.regionLabel": "Grafo da biblioteca",
+  "libraryGraph.sizeByLabel": "Tamanho por",
+  "libraryGraph.sizeBy.ratingEvidence": "Base de avaliações",
+  "libraryGraph.sizeBy.rating": "Avaliação",
+  "libraryGraph.sizeBy.popularity": "Popularidade",
+  "libraryGraph.resetView": "Ajustar grafo",
+  "libraryGraph.clustersLabel": "Grupos",
+  "libraryGraph.clusterAroundTitle": "Em torno de {{title}}",
+  "libraryGraph.unplaced": "Títulos sem grupo",
+  "libraryGraph.collapsedCluster": "{{name}} ({{count}} títulos)",
+  "libraryGraph.collapseCluster": "Recolher {{name}}",
+  "libraryGraph.linkedBy": "Ligados por",
+  "libraryGraph.empty":
+    "Nenhum título desta visualização está no grafo da biblioteca ainda.",
+  "libraryGraph.edgeKind.semantic": "Semelhante",
+  "libraryGraph.edgeKind.sequel": "Sequência",
+  "libraryGraph.edgeKind.prequel": "Prelúdio",
+  "libraryGraph.edgeKind.coWatch": "Frequentemente assistidos juntos",
+  "libraryGraph.edgeKind.relation": "Relacionado",
+  "libraryGraph.edgeKind.affinity": "Interesse em comum: {{label}}",
+  "libraryGraph.edgeKind.sharedTaste": "Interesse em comum",
+  "libraryGraph.edgeKind.other": "Ligado",
+  "libraryGraph.edgeKind.recommendation": "Recomendado",
+  "libraryGraph.notBuilt": "O grafo da biblioteca ainda não foi gerado.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "Este título não pode ser explorado mais.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Este título não corresponde ao tipo de mídia desta biblioteca, então não pode ser explorado aqui.",
+  "libraryGraph.moreLikeThisEmpty": "Ainda não há nada parecido.",
+  "libraryGraph.backToOverview": "Voltar à visão geral",
+  "libraryGraph.findingMoreLikeThis": "Buscando títulos parecidos…",
+  "libraryGraph.reason.recommendedBy": "Recomendado em {{sources}}",
+  "libraryGraph.reason.similarOn": "Semelhante em {{sources}}",
+  "libraryGraph.reason.shares": "Em comum: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Grupos de recomendações",
+  "libraryGraph.notInLibrary": "Fora da sua biblioteca",
+  "libraryGraph.inLibrary": "Na sua biblioteca",
+  "libraryGraph.openTitle": "Abrir título",
+  "libraryGraph.exploredGroup": "Explorado",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, fora da sua biblioteca",
+  "libraryGraph.trailLabel": "Explorado",
+  "libraryGraph.canvasLabel":
+    "Grafo da biblioteca. Use as setas para navegar entre os títulos de um grupo e Enter para abrir um.",
   "title.seasonMonitored": "Temporada monitorada",
   "title.episodeMonitored": "Episódio monitorado",
   "title.seriesMovieMonitored": "Filme de série monitorado",
@@ -1463,7 +1636,6 @@ const pt_BR: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Tipos aplicados",
   "settings.ruleAppliedFacetsHelp":
     "Deixe vazio para aplicar a todos os tipos de mídia.",
-  "settings.ruleValidate": "Validar",
   "settings.ruleValidating": "Validando…",
   "settings.ruleValid": "A regra é válida.",
   "settings.ruleValidationRequired": "Nome e código Rego são obrigatórios.",
@@ -2559,8 +2731,6 @@ const pt_BR: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "Excluir",
   "settings.maintenanceExcluded": "{{title}} excluído da manutenção.",
   "move.dialogTitle": "Mover títulos",
-  "move.dialogDescription":
-    "Revise o plano de {{count}} título(s) selecionado(s) antes de mover qualquer coisa.",
   "move.destinationLibrary": "Biblioteca de destino",
   "move.destinationRoot": "Raiz de destino",
   "move.destinationRootPlaceholder": "Escolha uma raiz",
@@ -2568,13 +2738,8 @@ const pt_BR: LocaleDictionary = {
   "move.actionDescription":
     "Mova os arquivos deste título para outra pasta raiz ou para outra biblioteca.",
   "move.actionButton": "Mover Para…",
-  "move.wizardKindDescription": "Escolha para onde este título deve ir.",
   "move.kindRootHeading": "Mover para outra raiz",
-  "move.kindRootHelp":
-    "O título permanece nesta biblioteca e seus arquivos passam para outra pasta raiz dela.",
   "move.kindLibraryHeading": "Mover para outra biblioteca",
-  "move.kindLibraryHelp":
-    "Transfira o título para outra biblioteca, em uma das pastas raiz dessa biblioteca.",
   "move.noOtherRoots":
     "Esta biblioteca não tem outra pasta raiz para onde mover. Adicione uma à biblioteca ou mova o título para outra biblioteca.",
   "move.back": "Voltar",
@@ -2618,8 +2783,6 @@ const pt_BR: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "Estes arquivos aparecem aqui em dois episódios que no destino são um só. Lá, cada um aparece uma única vez.",
   "move.mergeRoleUnnamedFile": "arquivo {{id}}",
-  "move.operationTransferNote":
-    "Estes títulos estão indo para outra biblioteca.",
   "move.modeHeading": "Como os arquivos devem chegar lá?",
   "move.mode.MOVE_WITH_SCRYER": "Mover com o Scryer",
   "move.mode.FILES_ALREADY_THERE": "Os arquivos já estão lá",
@@ -2662,10 +2825,6 @@ const pt_BR: LocaleDictionary = {
     "Todos os {{files}} arquivo(s) ({{bytes}}) serão conferidos pelo início, pelo fim e pelo tamanho.",
   "move.verificationNotApplicable":
     "Nenhum arquivo é movido, então não há nada a verificar.",
-  "move.verificationStampFull": "verificado (completo)",
-  "move.verificationStampQuick": "verificado (rápido)",
-  "move.verificationFallbackCount":
-    "{{count}} arquivo(s) recorreram à verificação rápida",
   "move.typedConfirmationPrompt": "Digite a frase para confirmar",
   "move.confirm": "Iniciar movimentação",
   "move.startFailed": "Falha ao iniciar a movimentação.",
@@ -2751,7 +2910,6 @@ const pt_BR: LocaleDictionary = {
   "move.operationType.CROSS_LIBRARY_TRANSFER":
     "Transferência entre bibliotecas",
   "move.toastPreparing": "Preparando…",
-  "move.toastTransferred": "Transferido",
   "move.toastTitlesProgress": "{{current}} / {{total}} títulos",
   "move.toastDoneSubtitle": "Movimentação concluída · {{count}} títulos",
   "move.toastWarningsSubtitle": "Concluído com avisos · {{count}} títulos",
@@ -3634,6 +3792,63 @@ const pt_BR: LocaleDictionary = {
     "Falha ao mover o arquivo para o novo nome. O arquivo e seus episódios ficaram como estavam.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numeração de episódios ambígua",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "Em espera: algo está sendo reproduzido em um servidor de mídia.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "Em espera: não foi possível perguntar a um servidor de mídia se algo está sendo reproduzido.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "Em espera: o servidor de mídia mostra uma reprodução mais recente que o histórico salvo.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "Em espera: o histórico do servidor de mídia mostra uma reprodução por uma conta que o histórico de exibição não conta.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "Em espera: o servidor de mídia não pôde confirmar o histórico de exibição antes de agir.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "Em espera: um servidor de mídia conectado não tem um item correspondente, então o histórico de exibição não pôde ser verificado antes de agir.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Se alguém com conta em um servidor de mídia conectado reproduziu o item, vinculado ao Scryer ou não; não identifica ninguém",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "Quando alguém com conta em um servidor de mídia conectado reproduziu o item pela última vez",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True quando qualquer conta em um servidor de mídia habilitado o reproduziu, esteja ou não vinculada a um usuário do Scryer; para temporadas e séries, qualquer episódio exibido conta. Desconhecido com o motivo audience_not_read até que uma sincronização nas últimas 48 horas tenha lido todas as contas de todas as conexões habilitadas, e com os motivos habituais sempre que os fatos de exibição forem desconhecidos.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "Carimbo de data/hora RFC3339 da reprodução mais recente por qualquer conta; ausente com o motivo never_watched quando ninguém o reproduziu, e desconhecido com o motivo play_time_missing (episode_play_time_missing para temporadas e séries) quando uma reprodução não tem horário registrado, ou audience_not_read quando nem todas as contas foram lidas",
+  "settings.maintenancePreviewFacts": "Fatos que a regra leu",
+  "setup.sourceImportProgress": "Importando fontes",
+  "setup.sourceImportInvalidRequest":
+    "Uma fonte selecionada não está disponível. Atualize a descoberta de fontes e selecione-a novamente.",
+  "setup.sourceImportSelectionChanged":
+    "As seleções de fontes enviadas são fixas. Tente novamente as fontes com falha no Resumo.",
+  "setup.sourceImportNotOwned":
+    "Esta importação de fontes não está disponível para sua conta.",
+  "setup.sourceImportQueueFull":
+    "A capacidade de importação de fontes está cheia. Tente novamente quando outra importação terminar.",
+  "setup.sourceImportActive":
+    "Esta importação de fontes ainda está em andamento.",
+  "setup.sourceImportNotRetryable":
+    "Somente fontes com falha ou interrompidas podem ser repetidas ou ignoradas.",
+  "setup.sourceImportUnresolved":
+    "Tente novamente ou ignore explicitamente as fontes pendentes antes de concluir a configuração.",
+  "setup.sourceImportCredentialRequired":
+    "Informe a credencial da fonte antes de continuar.",
+  "setup.sourceImportConfigConflict":
+    "A configuração reservada mudou. Revise a fonte antes de tentar novamente.",
+  "setup.sourceImportSourceNotReady":
+    "Aguarde a conclusão da descoberta de fontes antes de continuar.",
+  "setup.sourceImportResume": "Reconectar ao progresso",
+  "setup.sourceImportLoading": "Carregando o progresso da importação de fontes",
+  "setup.sourceImportCredential": "Credencial corrigida para {{name}}",
+  "setup.sourceImportRetry": "Tentar novamente fontes com falha",
+  "setup.sourceImportSkip": "Ignorar esta fonte",
+  "setup.sourceImportItemFailed":
+    "Verifique a conexão e as credenciais e depois tente novamente ou ignore.",
+  "setup.sourceImportState.queued": "Na fila",
+  "setup.sourceImportState.installing": "Instalando provedor",
+  "setup.sourceImportState.checking": "Verificando conexão",
+  "setup.sourceImportState.saving": "Salvando configuração",
+  "setup.sourceImportState.succeeded": "Importada",
+  "setup.sourceImportState.failed": "Falhou",
+  "setup.sourceImportState.interrupted": "Interrompida",
+  "setup.sourceImportState.skipped": "Ignorada",
 };
 
 export default pt_BR;

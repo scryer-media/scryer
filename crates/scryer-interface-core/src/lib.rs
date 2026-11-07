@@ -666,7 +666,14 @@ pub fn to_gql_error(err: AppError) -> Error {
                 );
             }
             for fact in &facts {
-                extensions.set(fact.key, fact.value.as_str());
+                match &fact.value {
+                    scryer_application::RefusalFactValue::Text(value) => {
+                        extensions.set(fact.key, value.as_str());
+                    }
+                    scryer_application::RefusalFactValue::List(values) => {
+                        extensions.set(fact.key, values.clone());
+                    }
+                }
             }
         }),
         AppError::LocationOperationBusy(message) => {
@@ -1453,6 +1460,26 @@ mod tests {
                 assert!(!detail.contains(secret), "{detail}");
             }
         }
+    }
+
+    #[test]
+    fn a_rejected_builtin_client_key_is_an_auth_failure_not_an_internal_error() {
+        use scryer_application::PluginFailureReason;
+
+        let error = to_gql_error(AppError::native_client_failed(
+            PluginFailureReason::AuthFailed,
+            "weaver rejected the API key",
+        ));
+        assert_eq!(error.message, "weaver rejected the API key");
+        assert_eq!(graphql_error_code(&error), Some("PLUGIN_FAILED"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("PLUGIN_AUTH_FAILED")
+        );
+        assert_eq!(
+            graphql_error_extension_string(&error, "detail"),
+            Some("weaver rejected the API key")
+        );
     }
 
     #[test]

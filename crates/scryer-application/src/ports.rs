@@ -30,7 +30,7 @@ use scryer_plugin_sdk::{
     SubtitleSyncOptions,
 };
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
@@ -191,6 +191,59 @@ pub struct CatalogOwnedExternalIdRecord {
     pub value: String,
 }
 
+/// The external ids of a movie linked to a series in the catalog, for the
+/// ownership check that treats such a movie as owned.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CatalogOwnedSeriesMovieRecord {
+    pub imdb_id: Option<String>,
+    pub tvdb_id: Option<String>,
+    pub tmdb_id: Option<String>,
+    pub mal_id: Option<String>,
+    pub anidb_id: Option<String>,
+}
+
+impl From<&scryer_domain::SeriesMovieLink> for CatalogOwnedSeriesMovieRecord {
+    fn from(link: &scryer_domain::SeriesMovieLink) -> Self {
+        Self {
+            imdb_id: link.movie.imdb_id.clone(),
+            tvdb_id: link.movie.tvdb_id.clone(),
+            tmdb_id: link.movie.tmdb_id.clone(),
+            mal_id: link.movie.mal_id.clone(),
+            anidb_id: link.movie.anidb_id.clone(),
+        }
+    }
+}
+
+/// The ids a set of discovery candidates could match catalog titles by, so
+/// the ownership read touches only titles those candidates can name rather
+/// than the whole catalog.
+///
+/// A store returns every title (or linked movie) whose id compares equal to
+/// one of `values` after `LOWER(TRIM(..))`, whose trailing run of digits
+/// equals one of `numeric_values`, or whose id is in `title_ids`. Returning
+/// more is always correct: the caller recomputes the exact ownership keys
+/// from what comes back.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CatalogOwnedProbe {
+    pub values: Vec<String>,
+    pub numeric_values: Vec<i64>,
+    pub title_ids: Vec<String>,
+}
+
+impl CatalogOwnedProbe {
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty() && self.numeric_values.is_empty() && self.title_ids.is_empty()
+    }
+}
+
+/// A discovery item's catalog identity: its target key and the title it
+/// resolved to, if any.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DiscoveryItemTargetRecord {
+    pub target_key: String,
+    pub resolved_title_id: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HousekeepingMediaFileRootRow {
     pub media_file_id: String,
@@ -295,6 +348,95 @@ pub struct DiscoverySyncRunRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// One build of a facet's library graph. A `complete` run owns the nodes,
+/// edges and clusters stored under its id; a `failed` run owns none and keeps
+/// the reason it failed in `error_code` and `error_text`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphRunRecord {
+    pub id: String,
+    pub facet: String,
+    pub axis: String,
+    pub status: String,
+    /// Owned subjects the facet had when the build started.
+    pub subject_count: i64,
+    /// Subjects actually sent to the gateway; below `subject_count` when the
+    /// facet was over the per-call cap.
+    pub submitted_count: i64,
+    /// The gateway's own `generated_at` stamp, kept verbatim.
+    pub generated_at: Option<String>,
+    pub error_code: Option<String>,
+    pub error_text: Option<String>,
+    /// How long the gateway asked Scryer to wait before trying a failed
+    /// build again, when it said.
+    pub retry_after_seconds: Option<i64>,
+    /// Subject keys left out because the facet was over the per-call cap.
+    pub omitted_subject_keys: Vec<String>,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphNodeRecord {
+    pub subject_key: String,
+    pub target_key: String,
+    /// The node's cluster, or -1 when it was not placed in one.
+    pub cluster_id: i64,
+    /// Owned titles that stand for this subject.
+    pub title_ids: Vec<String>,
+}
+
+/// An undirected edge between two target keys, stored once with
+/// `from_key < to_key`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphEdgeRecord {
+    pub from_key: String,
+    pub to_key: String,
+    pub weight: f64,
+    pub kinds: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphClusterRecord {
+    pub cluster_id: i64,
+    pub label_key: Option<String>,
+    pub label: String,
+    /// The target key that best represents the cluster.
+    pub medoid: String,
+    pub size: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGraphSnapshotRecord {
+    pub run: LibraryGraphRunRecord,
+    pub nodes: Vec<LibraryGraphNodeRecord>,
+    pub edges: Vec<LibraryGraphEdgeRecord>,
+    pub clusters: Vec<LibraryGraphClusterRecord>,
+}
+
+/// The related titles the gateway last returned for one discovery target
+/// key, in one metadata language, with the neighbourhoods it grouped them
+/// into. An entry cached before grouping existed reads back with every
+/// `group_id` `None` and no groups.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiscoveryNeighborCacheRecord {
+    pub target_key: String,
+    pub language: String,
+    pub items: Vec<DiscoveryNeighborItemRecord>,
+    pub groups: Vec<crate::DiscoveryRelatedGroup>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+/// One related title of an anchor and the neighbourhood it belongs to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiscoveryNeighborItemRecord {
+    pub item: DiscoveryItemRecord,
+    /// Id of the anchor's [`crate::DiscoveryRelatedGroup`] holding this
+    /// title, or `None` when the gateway did not group the results.
+    pub group_id: Option<i64>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DiscoverySyncStatus {
     pub state: DiscoverySyncStateRecord,
@@ -361,6 +503,30 @@ pub struct DiscoveryHomeResult {
     pub complete_collection: Option<DiscoverySectionResult>,
     pub facets: Vec<DiscoveryFacetRecord>,
     pub can_view_personalized: bool,
+    /// The allowlisted genres and themes the viewer's personalized pool holds
+    /// enough of to browse, in allowlist order. Each one opens a section
+    /// through [`DiscoveryItemsQuery::section`].
+    pub browse_labels: Vec<DiscoveryBrowseLabel>,
+}
+
+/// The label family a "browse by" entry lists titles under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiscoveryBrowseLabelFamily {
+    Genre,
+    Theme,
+}
+
+/// One "browse by" entry: an allowlisted label and the section that lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveryBrowseLabel {
+    pub family: DiscoveryBrowseLabelFamily,
+    /// Canonical hyphenated allowlist key, as on a rail's `label_key`.
+    pub label_key: String,
+    pub section_id: String,
+    /// English fallback noun for clients that do not know the key.
+    pub title: String,
+    /// Items the section holds before paging.
+    pub item_count: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -384,6 +550,10 @@ pub struct CatalogDiscoveryGroup {
     pub kind: CatalogDiscoveryGroupKind,
     pub surface: CatalogDiscoverySurface,
     pub label_value: Option<String>,
+    /// The allowlisted rail label a genre or theme affinity group is named
+    /// after (`coming-of-age`); `None` for every other group. Clients translate
+    /// it and fall back to `label_value`.
+    pub label_key: Option<String>,
     pub total_count: i64,
     pub items: Vec<DiscoveryItemRecord>,
 }
@@ -405,7 +575,7 @@ pub enum CatalogDiscoverySurface {
     Personalized,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DiscoveryItemsQuery {
     pub query: Option<String>,
     pub target_keys: Vec<String>,
@@ -421,6 +591,36 @@ pub struct DiscoveryItemsQuery {
     pub include_public: bool,
     pub limit: usize,
     pub offset: usize,
+    /// Page one discovery home section in full instead of the general
+    /// listing. The other filters above are ignored except `include_owned`,
+    /// `include_unresolved`, `limit` and `offset`.
+    pub section: Option<DiscoverySectionItemsQuery>,
+}
+
+/// Identity and pinned home state of a section being paged in full.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiscoverySectionItemsQuery {
+    pub section_id: String,
+    /// Items per section on the home the section was opened from; 0 means
+    /// the home default. Earlier rails claim titles at this size, so it is
+    /// what keeps the section's first page equal to its home rail.
+    pub rail_limit: usize,
+    /// The home filters the section was opened under.
+    pub filters: DiscoveryHomeFilters,
+    pub sort: DiscoverySectionSort,
+    /// Drop titles with a pending request in a library the viewer can read.
+    pub hide_requested: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DiscoverySectionSort {
+    /// The section's own order: what its home rail shows first.
+    #[default]
+    Relevance,
+    Popularity,
+    Rating,
+    ReleaseDate,
+    Title,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -428,6 +628,12 @@ pub struct DiscoveryItemsResult {
     pub items: Vec<DiscoveryItemRecord>,
     pub total_count: i64,
     pub can_view_personalized: bool,
+    /// The paged section's header with this page as its items, when the query
+    /// named a section that exists for this viewer.
+    pub section: Option<DiscoverySectionResult>,
+    /// The discovery generations a section page was composed from; empty
+    /// outside section paging.
+    pub generation_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -442,13 +648,26 @@ pub struct DiscoveryItemsPageRecord {
     pub total_count: i64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DiscoveryItemsStorageQuery {
     pub context_run_id: Option<String>,
     pub public_run_id: Option<String>,
     pub readable_library_ids: Vec<String>,
     pub allowed_media_kinds: Vec<String>,
     pub filters: DiscoveryItemsQuery,
+    /// The discovery home's filter bar (media type, genre, theme, studio, year,
+    /// rating), applied the same way the home rails apply it. Empty filters
+    /// narrow nothing.
+    pub home_filters: DiscoveryHomeFilters,
+    /// An additional mandatory browse label, independent of sidebar filters.
+    pub browse_label: Option<(String, String)>,
+    /// Browse ordering; absent for the existing general discovery query.
+    pub sort: Option<DiscoverySectionSort>,
+    /// Canonical identities excluded by current ownership or pending requests.
+    pub excluded_identity_keys: Vec<String>,
+    pub excluded_title_ids: Vec<String>,
+    /// Pending request identities as media-kind:source:external-id.
+    pub requested_keys: Vec<String>,
     pub limit: usize,
     pub offset: usize,
 }
@@ -461,6 +680,10 @@ pub struct DiscoverySectionResult {
     pub surface: String,
     pub total_count: i64,
     pub items: Vec<DiscoveryItemRecord>,
+    /// The allowlisted rail label a "because you like" section is named
+    /// after, in its canonical hyphenated form (`coming-of-age`); `None` for
+    /// every other section. Clients translate it and fall back to `title`.
+    pub label_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -763,6 +986,64 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         run_id: &str,
     ) -> AppResult<Vec<DiscoverySubmittedSubjectRecord>>;
+    /// The distinct title ids `run_id` submitted from `library_ids`, for a
+    /// title read that cannot select them itself. `None` means the title
+    /// store resolves the submitted set in its own query.
+    async fn list_discovery_submitted_title_ids(
+        &self,
+        run_id: &str,
+        library_ids: &[String],
+    ) -> AppResult<Option<Vec<String>>> {
+        let library_ids = library_ids.iter().collect::<HashSet<_>>();
+        let mut seen = HashSet::new();
+        Ok(Some(
+            self.list_discovery_submitted_subjects(run_id)
+                .await?
+                .into_iter()
+                .filter(|subject| {
+                    subject
+                        .library_id
+                        .as_ref()
+                        .is_some_and(|library_id| library_ids.contains(library_id))
+                })
+                .filter_map(|subject| subject.title_id)
+                .filter(|title_id| seen.insert(title_id.clone()))
+                .collect(),
+        ))
+    }
+    /// The submitted subjects of `run_id` whose key is one of
+    /// `subject_keys` and whose library is one of `library_ids`, in
+    /// `list_discovery_submitted_subjects` order.
+    async fn list_discovery_submitted_subjects_for_keys(
+        &self,
+        run_id: &str,
+        library_ids: &[String],
+        subject_keys: &[String],
+    ) -> AppResult<Vec<DiscoverySubmittedSubjectRecord>> {
+        if library_ids.is_empty() || subject_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let library_ids = library_ids.iter().collect::<HashSet<_>>();
+        let subject_keys = subject_keys.iter().collect::<HashSet<_>>();
+        Ok(self
+            .list_discovery_submitted_subjects(run_id)
+            .await?
+            .into_iter()
+            .filter(|subject| {
+                subject_keys.contains(&subject.subject_key)
+                    && subject
+                        .library_id
+                        .as_ref()
+                        .is_some_and(|library_id| library_ids.contains(library_id))
+            })
+            .collect())
+    }
+    /// The distinct target keys and resolved title ids of every item whose
+    /// base generation is one of `run_ids`, tombstoned or not.
+    async fn list_discovery_item_targets(
+        &self,
+        run_ids: &[String],
+    ) -> AppResult<Vec<DiscoveryItemTargetRecord>>;
     async fn upsert_pending_discovery_context_change(
         &self,
         change: &DiscoveryPendingContextChangeRecord,
@@ -807,20 +1088,27 @@ pub trait DiscoveryRepository: Send + Sync {
         run_id: &str,
         surface: Option<&str>,
     ) -> AppResult<Vec<DiscoverySectionRecord>>;
+    /// Public section candidates, `limit_per_section` deep. `section_ids`
+    /// narrows the load to those sections; empty loads every public section.
     async fn list_public_discovery_section_items(
         &self,
         run_id: &str,
+        section_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
         filters: &DiscoveryHomeFilters,
         limit_per_section: i64,
     ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>>;
+    /// The personalized pool. Rows the gateway marked as owned in the
+    /// submitted context are left out unless `include_owned` is set.
+    #[allow(clippy::too_many_arguments)]
     async fn list_personalized_discovery_home_items(
         &self,
         run_id: &str,
         readable_library_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
+        include_owned: bool,
         filters: &DiscoveryHomeFilters,
         limit: i64,
     ) -> AppResult<Vec<DiscoveryHomeCandidate>>;
@@ -870,6 +1158,14 @@ pub trait DiscoveryRepository: Send + Sync {
         allowed_media_kinds: &[String],
         include_unresolved: bool,
     ) -> AppResult<DiscoveryHomeFilterOptions>;
+    /// Enrich only sidebar cards chosen by the application composer.
+    /// In-memory repositories already return complete fixture records.
+    async fn hydrate_catalog_discovery_items(
+        &self,
+        _items: &mut [DiscoveryItemRecord],
+    ) -> AppResult<()> {
+        Ok(())
+    }
     async fn list_catalog_public_discovery_items(
         &self,
         run_id: &str,
@@ -900,6 +1196,20 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         query: &DiscoveryItemsStorageQuery,
     ) -> AppResult<DiscoveryItemsPageRecord>;
+    async fn count_discovery_browse_labels(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+        labels: &[(String, String)],
+    ) -> AppResult<Vec<i64>> {
+        let mut counts = Vec::with_capacity(labels.len());
+        for label in labels {
+            let mut query = query.clone();
+            query.browse_label = Some(label.clone());
+            query.limit = 0;
+            counts.push(self.query_discovery_items(&query).await?.total_count);
+        }
+        Ok(counts)
+    }
     async fn replace_title_more_like_this_items(
         &self,
         title_id: &str,
@@ -922,11 +1232,48 @@ pub trait DiscoveryRepository: Send + Sync {
         retain_successful_per_kind: usize,
         diagnostic_cutoff: DateTime<Utc>,
     ) -> AppResult<DiscoveryPruneReport>;
+
+    /// Records a library graph build that produced no graph. Any earlier
+    /// failed run for the facet is replaced; the last complete graph stays.
+    async fn record_failed_library_graph_run(&self, run: &LibraryGraphRunRecord) -> AppResult<()>;
+    /// Writes a complete graph under its new run id, then deletes every other
+    /// run for the facet, in one transaction.
+    async fn commit_library_graph(&self, snapshot: &LibraryGraphSnapshotRecord) -> AppResult<()>;
+    /// The newest complete graph for a facet.
+    async fn get_latest_library_graph(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<LibraryGraphSnapshotRecord>>;
+    /// The newest run for a facet, complete or failed.
+    async fn get_latest_library_graph_run(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<LibraryGraphRunRecord>>;
+    /// Whether the facet has a complete graph stored.
+    async fn has_complete_library_graph(&self, facet: &str) -> AppResult<bool>;
+    /// Deletes every run of a facet, with its graph.
+    async fn delete_library_graph_runs(&self, facet: &str) -> AppResult<()>;
+
+    /// The cached related titles of `target_key` in `language`, whatever
+    /// their age.
+    async fn get_discovery_neighbor_cache(
+        &self,
+        target_key: &str,
+        language: &str,
+    ) -> AppResult<Option<DiscoveryNeighborCacheRecord>>;
+
+    /// Stores `record` in place of any earlier entry for the same key and
+    /// language, and drops every entry fetched before `expire_before`.
+    async fn replace_discovery_neighbor_cache(
+        &self,
+        record: &DiscoveryNeighborCacheRecord,
+        expire_before: DateTime<Utc>,
+    ) -> AppResult<()>;
 }
 
-/// What a title list read projects on top of the `titles` row itself.
+/// Stored values and related metadata required by a title list consumer.
 ///
-/// Both parts default to on, so a caller that never thinks about the
+/// All fields default to on, so a caller that never thinks about the
 /// projection keeps the whole record. Turning one off is an assertion that the
 /// consumer does not read that field — the store is free to skip the query
 /// that fills it.
@@ -934,6 +1281,84 @@ pub trait DiscoveryRepository: Send + Sync {
 pub struct TitleListProjection {
     pub include_external_ids: bool,
     pub include_canonical_tags: bool,
+    pub row: TitleRowProjection,
+}
+
+/// Stored title values required by a read. Identity and authorization fields
+/// remain available to nested resolvers even when they are not displayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TitleRowProjection {
+    pub name: bool,
+    pub monitored: bool,
+    pub tags: bool,
+    pub root_folder_id: bool,
+    pub created_by: bool,
+    pub created_at: bool,
+    pub year: bool,
+    pub overview: bool,
+    pub poster: bool,
+    pub background: bool,
+    pub sort_title: bool,
+    pub catalog_sort_key: bool,
+    pub slug: bool,
+    pub imdb_id: bool,
+    pub runtime_minutes: bool,
+    pub popularity: bool,
+    pub content_status: bool,
+    pub language: bool,
+    pub first_aired: bool,
+    pub network: bool,
+    pub studio: bool,
+    pub country: bool,
+    pub aliases: bool,
+    pub tagged_aliases: bool,
+    pub metadata_language: bool,
+    pub metadata_fetched_at: bool,
+    pub min_availability: bool,
+    pub digital_release_date: bool,
+    pub movie_release_dates: bool,
+    pub folder_path: bool,
+}
+
+impl Default for TitleRowProjection {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
+impl TitleRowProjection {
+    pub const ALL: Self = Self {
+        name: true,
+        monitored: true,
+        tags: true,
+        root_folder_id: true,
+        created_by: true,
+        created_at: true,
+        year: true,
+        overview: true,
+        poster: true,
+        background: true,
+        sort_title: true,
+        catalog_sort_key: true,
+        slug: true,
+        imdb_id: true,
+        runtime_minutes: true,
+        popularity: true,
+        content_status: true,
+        language: true,
+        first_aired: true,
+        network: true,
+        studio: true,
+        country: true,
+        aliases: true,
+        tagged_aliases: true,
+        metadata_language: true,
+        metadata_fetched_at: true,
+        min_availability: true,
+        digital_release_date: true,
+        movie_release_dates: true,
+        folder_path: true,
+    };
 }
 
 impl Default for TitleListProjection {
@@ -941,6 +1366,7 @@ impl Default for TitleListProjection {
         Self {
             include_external_ids: true,
             include_canonical_tags: true,
+            row: TitleRowProjection::ALL,
         }
     }
 }
@@ -955,6 +1381,7 @@ impl TitleListProjection {
         Self {
             include_external_ids: true,
             include_canonical_tags: false,
+            row: TitleRowProjection::ALL,
         }
     }
 
@@ -1202,6 +1629,9 @@ pub struct DiscoveryContextTitle {
     pub facet: MediaFacet,
     pub external_ids: Vec<scryer_domain::ExternalId>,
     pub genres: Vec<String>,
+    /// When the title was added; the library graph prefers recent titles
+    /// when a facet is over the gateway's subject cap.
+    pub created_at: DateTime<Utc>,
 }
 
 impl From<&Title> for DiscoveryContextTitle {
@@ -1218,12 +1648,64 @@ impl From<&Title> for DiscoveryContextTitle {
                 .filter(|tag| tag.category.eq_ignore_ascii_case("genre"))
                 .map(|tag| tag.name.clone())
                 .collect(),
+            created_at: title.created_at,
         }
     }
 }
 
+/// Optional presentation work selected by the caller; authorization is always evaluated.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DiscoveryHomeProjection {
+    pub full_cards: bool,
+    pub hero: bool,
+    pub browse_labels: bool,
+    pub facets: bool,
+}
+
+/// Only the catalog evidence consumed by Discovery rail composition.
+#[derive(Clone, Debug)]
+pub struct DiscoveryAffinityTitle {
+    pub id: String,
+    pub facet: MediaFacet,
+    pub canonical_tags: Vec<CanonicalMediaTag>,
+}
+
 #[async_trait]
 pub trait TitleRepository: Send + Sync {
+    /// SQL implementations join the submitted generation without hydrating titles.
+    /// A token the datastore replaces in the same transaction as any write
+    /// the affinity read depends on: a title added, removed, moved to another
+    /// library or facet, a change to its metadata tags or their sources, or a
+    /// change to a run's submitted subjects. `None` when the store keeps no
+    /// such token, which leaves affinity profiles uncached.
+    async fn discovery_affinity_revision(&self) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+
+    async fn list_discovery_affinity_titles(
+        &self,
+        library_ids: &[String],
+        _run_id: Option<&str>,
+        submitted_title_ids: &[String],
+    ) -> AppResult<Vec<DiscoveryAffinityTitle>> {
+        let mut titles = self.list_for_libraries(None, library_ids, None).await?;
+        let submitted = submitted_title_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>();
+        let selected = titles.iter().any(|title| submitted.contains(&title.id));
+        if selected {
+            titles.retain(|title| submitted.contains(&title.id));
+        }
+        Ok(titles
+            .into_iter()
+            .map(|title| DiscoveryAffinityTitle {
+                id: title.id,
+                facet: title.facet,
+                canonical_tags: title.canonical_tags,
+            })
+            .collect())
+    }
+
     /// Identity and genre evidence for discovery, without presentation metadata.
     async fn list_discovery_context_titles(&self) -> AppResult<Vec<DiscoveryContextTitle>> {
         Ok(self
@@ -1508,6 +1990,18 @@ pub trait TitleRepository: Send + Sync {
                     .collect(),
             })
             .collect())
+    }
+    /// The catalog titles in `library_ids` that `probe` can match, with all
+    /// of their external ids. The default answers with every title in those
+    /// libraries, a superset the caller narrows; SQL stores override it with
+    /// an indexed lookup.
+    async fn list_catalog_owned_title_records_matching(
+        &self,
+        library_ids: &[String],
+        probe: &CatalogOwnedProbe,
+    ) -> AppResult<Vec<CatalogOwnedTitleRecord>> {
+        let _ = probe;
+        self.list_catalog_owned_title_records(library_ids).await
     }
     async fn list_for_libraries_without_external_ids(
         &self,
@@ -2268,6 +2762,9 @@ pub trait TitleRepository: Send + Sync {
     }
 }
 
+#[cfg(test)]
+mod catalog_order_tests;
+
 fn sort_titles_for_catalog(titles: &mut [Title], sort: &TitleCatalogSort) {
     titles.sort_by(|left, right| match sort.key {
         TitleCatalogSortKey::Year => {
@@ -2296,18 +2793,13 @@ fn sort_titles_for_catalog(titles: &mut [Title], sort: &TitleCatalogSort) {
         }
         _ => {
             let ordering = match sort.key {
-                TitleCatalogSortKey::Title => compare_titles_by_catalog_title(left, right),
-                TitleCatalogSortKey::Library => left
-                    .library_id
-                    .cmp(&right.library_id)
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
-                TitleCatalogSortKey::Monitored => left
-                    .monitored
-                    .cmp(&right.monitored)
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
+                TitleCatalogSortKey::Title => {
+                    return compare_titles_by_catalog_title_direction(left, right, sort.direction);
+                }
+                TitleCatalogSortKey::Library => left.library_id.cmp(&right.library_id),
+                TitleCatalogSortKey::Monitored => left.monitored.cmp(&right.monitored),
                 TitleCatalogSortKey::Status => title_catalog_status_sort_value(left)
-                    .cmp(&title_catalog_status_sort_value(right))
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
+                    .cmp(&title_catalog_status_sort_value(right)),
                 TitleCatalogSortKey::Quality
                 | TitleCatalogSortKey::Episodes
                 | TitleCatalogSortKey::Size
@@ -2328,22 +2820,18 @@ fn sort_titles_for_catalog(titles: &mut [Title], sort: &TitleCatalogSort) {
                 | TitleCatalogSortKey::RatingMyanimelist
                 | TitleCatalogSortKey::RatingAnilist
                 | TitleCatalogSortKey::RatingAnidb
-                | TitleCatalogSortKey::RatingMdblist => {
-                    compare_titles_by_catalog_title(left, right)
-                }
-                TitleCatalogSortKey::Added => left
-                    .created_at
-                    .cmp(&right.created_at)
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
+                | TitleCatalogSortKey::RatingMdblist => Ordering::Equal,
+                TitleCatalogSortKey::Added => left.created_at.cmp(&right.created_at),
                 TitleCatalogSortKey::Year
                 | TitleCatalogSortKey::Runtime
                 | TitleCatalogSortKey::Popularity
                 | TitleCatalogSortKey::Profile => Ordering::Equal,
             };
-            match sort.direction {
+            let ordering = match sort.direction {
                 SortDirection::Asc => ordering,
                 SortDirection::Desc => ordering.reverse(),
-            }
+            };
+            ordering.then_with(|| compare_titles_by_catalog_title(left, right))
         }
     });
 }
@@ -2384,11 +2872,27 @@ fn compare_nullable_partial_null_last(
 }
 
 fn compare_titles_by_catalog_title(left: &Title, right: &Title) -> Ordering {
-    title_catalog_sort_value(left)
-        .cmp(&title_catalog_sort_value(right))
-        .then_with(|| title_catalog_name_tie_value(left).cmp(&title_catalog_name_tie_value(right)))
-        .then_with(|| left.year.cmp(&right.year))
-        .then_with(|| left.id.cmp(&right.id))
+    compare_titles_by_catalog_title_direction(left, right, SortDirection::Asc)
+}
+
+fn compare_titles_by_catalog_title_direction(
+    left: &Title,
+    right: &Title,
+    direction: SortDirection,
+) -> Ordering {
+    let directed = |ordering: Ordering| match direction {
+        SortDirection::Asc => ordering,
+        SortDirection::Desc => ordering.reverse(),
+    };
+    directed(
+        title_catalog_sort_value(left)
+            .cmp(&title_catalog_sort_value(right))
+            .then_with(|| {
+                title_catalog_name_tie_value(left).cmp(&title_catalog_name_tie_value(right))
+            }),
+    )
+    .then_with(|| compare_nullable_ord_null_last(left.year, right.year, direction))
+    .then_with(|| directed(left.id.cmp(&right.id)))
 }
 
 fn title_catalog_sort_value(title: &Title) -> String {
@@ -2408,6 +2912,10 @@ fn title_catalog_status_sort_value(title: &Title) -> String {
 }
 
 fn title_matches_catalog_filter(title: &Title, filter: &TitleCatalogFilter) -> bool {
+    if !filter.title_ids.is_empty() && !filter.title_ids.iter().any(|id| id == &title.id) {
+        return false;
+    }
+
     if !filter.root_folder_ids.is_empty()
         && !filter
             .root_folder_ids
@@ -2608,6 +3116,10 @@ pub trait LibraryRepository: Send + Sync {
     async fn permission_masks_for_user(&self, user_id: &str) -> AppResult<Vec<LibraryGrant>>;
     async fn set_grants_for_user(&self, user_id: &str, grants: Vec<LibraryGrant>) -> AppResult<()>;
     async fn title_library_id(&self, title_id: &str) -> AppResult<Option<String>>;
+    /// The number of titles under each library root, keyed by root id. A
+    /// title counts toward a root of its own library only. Roots with no
+    /// titles are absent.
+    async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>>;
 }
 
 #[derive(Clone, Debug)]
@@ -3138,6 +3650,19 @@ pub trait ShowRepository: Send + Sync {
             links.extend(self.list_series_movie_links_for_title(title_id).await?);
         }
         Ok(links)
+    }
+    /// The movies linked to series in `library_ids` that `probe` can match
+    /// by any of their external ids. `None` means the repository has no
+    /// probe-scoped read (the default, kept for in-memory test doubles); the
+    /// caller then reads the links of every title in those libraries. SQL
+    /// stores override it.
+    async fn list_catalog_owned_series_movies_matching(
+        &self,
+        library_ids: &[String],
+        probe: &CatalogOwnedProbe,
+    ) -> AppResult<Option<Vec<CatalogOwnedSeriesMovieRecord>>> {
+        let _ = (library_ids, probe);
+        Ok(None)
     }
     async fn list_series_movie_external_id_lookup_matches(
         &self,
@@ -5202,6 +5727,10 @@ pub struct IndexerSearchLearningContext {
     /// whole reuse window, which is how an explicit upgrade search stopped
     /// finding a PROPER registered moments earlier.
     pub candidate_reuse_allowed: bool,
+    /// Pages of a paged strategy one background pass reads before it stops
+    /// and leaves the rest for the next pass. `None` reads the search
+    /// client's default depth.
+    pub background_pages_per_pass: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -6717,6 +7246,18 @@ pub trait DownloadSubmissionRepository: Send + Sync {
 
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>>;
 
+    /// `list_for_title` for many titles at once. Returns a flat list (each
+    /// submission carries `title_id`); callers group by that field. The
+    /// default fans out to `list_for_title`; SQL stores override with chunked
+    /// `IN` queries, so callers may pass a selection of any size.
+    async fn list_for_titles(&self, title_ids: &[String]) -> AppResult<Vec<DownloadSubmission>> {
+        let mut submissions = Vec::new();
+        for title_id in title_ids {
+            submissions.extend(self.list_for_title(title_id).await?);
+        }
+        Ok(submissions)
+    }
+
     /// On-demand recovery rows for durable password retries with an active,
     /// matching client binding, including jobs absent from the native queue.
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
@@ -6745,6 +7286,20 @@ pub trait DownloadSubmissionRepository: Send + Sync {
         _title_id: &str,
     ) -> AppResult<Vec<DownloadSubmission>> {
         Ok(Vec::new())
+    }
+
+    /// `list_active_unbound_for_title` for many titles at once, as a flat list
+    /// callers group by `title_id`. The default fans out; SQL stores override
+    /// with chunked `IN` queries.
+    async fn list_active_unbound_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        let mut submissions = Vec::new();
+        for title_id in title_ids {
+            submissions.extend(self.list_active_unbound_for_title(title_id).await?);
+        }
+        Ok(submissions)
     }
 
     /// Every Scryer submission, across titles, whose canonical client binding
@@ -6906,6 +7461,50 @@ pub enum MaintenanceSearchJobRunCreation {
 pub trait JobRunRepository: Send + Sync {
     async fn create_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord>;
 
+    /// Accept an idempotent job and its encrypted private input atomically.
+    async fn accept_private_job(
+        &self,
+        _run: &JobRunRecord,
+        _request_key: &str,
+        _input: &str,
+    ) -> AppResult<(JobRunRecord, bool)> {
+        Err(AppError::Repository(
+            "private job input storage is not configured".into(),
+        ))
+    }
+
+    async fn private_job_input(&self, _run_id: &str, _actor_id: &str) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+
+    async fn update_private_job_input(
+        &self,
+        _run_id: &str,
+        _actor_id: &str,
+        _input: &str,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "private job input storage is not configured".into(),
+        ))
+    }
+
+    /// Erase a job's private input once nothing can need it again. The
+    /// idempotency receipt survives so a replayed request still finds its run.
+    async fn purge_private_job_input(&self, _run_id: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn list_unresolved_private_jobs(&self, _job_key: JobKey) -> AppResult<Vec<JobRunRecord>> {
+        Ok(Vec::new())
+    }
+    async fn find_private_job(
+        &self,
+        _actor_id: &str,
+        _request_key: &str,
+    ) -> AppResult<Option<JobRunRecord>> {
+        Ok(None)
+    }
+
     /// Atomically creates a policy Search job and its durable accepted receipt.
     /// A duplicate `(step key, dispatch attempt)` returns the original receipt
     /// and must never create or spawn another Search job. Implementations may
@@ -6952,6 +7551,32 @@ pub trait JobRunRepository: Send + Sync {
             .filter(|run| run.operation_type == operation_type)
             .take(limit)
             .collect())
+    }
+
+    /// Stable history pages, so recovery can find unfinished work behind completed runs.
+    async fn list_job_runs_by_operation_type_before(
+        &self,
+        job_key: JobKey,
+        operation_type: &str,
+        before: Option<(DateTime<Utc>, String)>,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        let mut runs = self
+            .list_job_runs(Some(job_key), limit.saturating_add(1))
+            .await?;
+        if runs.len() > limit {
+            return Err(AppError::Repository(
+                "This job repository does not support paginated history recovery".into(),
+            ));
+        }
+        runs.retain(|run| {
+            run.operation_type == operation_type
+                && before.as_ref().is_none_or(|(started_at, id)| {
+                    (run.started_at, run.id.as_str()) < (*started_at, id.as_str())
+                })
+        });
+        runs.sort_by(|left, right| (right.started_at, &right.id).cmp(&(left.started_at, &left.id)));
+        Ok(runs)
     }
 
     /// The newest run of each operation type recorded under `job_key`, in
@@ -7001,6 +7626,35 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
     async fn delete_for_library(&self, library_id: &str) -> AppResult<u32>;
     /// Remove every row bound to `title_id`; the title they point at is gone.
     async fn delete_for_title(&self, title_id: &str) -> AppResult<u32>;
+
+    /// Pending duplicate folders for one title, bounded independently of unrelated imports.
+    async fn list_pending_folder_conflicts_for_title(
+        &self,
+        library_id: &str,
+        title_id: &str,
+    ) -> AppResult<Vec<LibraryScanUnmatchedItem>> {
+        let mut matches = Vec::new();
+        for offset in (0..250_000).step_by(1_000) {
+            let page = self
+                .list_library_scan_unmatched_items(
+                    Some(scryer_domain::MediaFacet::Movie),
+                    None,
+                    Some(PendingImportStatus::Pending),
+                    1_000,
+                    offset,
+                )
+                .await?;
+            let complete = page.len() < 1_000;
+            matches.extend(page.into_iter().filter(|item| item.library_id == library_id && item.title_id.as_deref() == Some(title_id) && item.reason_code == crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER));
+            if complete {
+                return Ok(matches);
+            }
+        }
+        Err(AppError::validation_refused(
+            crate::location::conflicts::refusal::SELECTION_INVALID,
+            "The pending-import catalog exceeds the safe discovery bound",
+        ))
+    }
 
     async fn list_library_scan_unmatched_items(
         &self,
@@ -7199,6 +7853,18 @@ pub trait LocationOperationRepository: Send + Sync {
     ) -> AppResult<()> {
         Ok(())
     }
+    /// Overwrite several summaries at once. Persistent stores override this
+    /// with bounded bulk writes.
+    async fn upsert_transfer_titles(
+        &self,
+        operation_id: &str,
+        titles: &[crate::location::live::TransferTitle],
+    ) -> AppResult<()> {
+        for title in titles {
+            self.upsert_transfer_title(operation_id, title).await?;
+        }
+        Ok(())
+    }
     async fn transfer_title_page(
         &self,
         _operation_id: &str,
@@ -7293,6 +7959,19 @@ pub trait LocationOperationRepository: Send + Sync {
         &self,
         record: &FileVerificationRecord,
     ) -> AppResult<()>;
+
+    /// Persists several files' verification outcomes together, all or none.
+    /// Same idempotence as [`Self::record_location_file_verification`]; a
+    /// store that cannot write them in one transaction records them in order.
+    async fn record_location_file_verifications(
+        &self,
+        records: &[FileVerificationRecord],
+    ) -> AppResult<()> {
+        for record in records {
+            self.record_location_file_verification(record).await?;
+        }
+        Ok(())
+    }
 
     async fn location_file_verifications_for_paths(
         &self,
@@ -8836,6 +9515,22 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(states)
     }
 
+    /// The status of each acquisition scope state in `ids`, without the rest
+    /// of the row. Missing ids are absent from the result. The default reads
+    /// whole rows; SQL stores override it with a primary-key read of two
+    /// columns.
+    async fn list_acquisition_scope_statuses_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, AcquisitionScopeStatus>> {
+        Ok(self
+            .list_acquisition_scope_states_by_ids(ids)
+            .await?
+            .into_iter()
+            .map(|state| (state.id, state.status))
+            .collect())
+    }
+
     async fn list_acquisition_scope_states(
         &self,
         query: AcquisitionScopeStatesQuery,
@@ -9051,6 +9746,20 @@ pub trait PendingReleaseRepository: Send + Sync {
         wanted_item_id: &str,
     ) -> AppResult<()>;
     async fn list_all_standby_pending_releases(&self) -> AppResult<Vec<PendingRelease>>;
+    /// The wanted items that hold at least one `standby` row, each once,
+    /// without reading the rows. The default reads them; SQL stores override
+    /// it with a distinct read of the wanted-item index.
+    async fn list_standby_wanted_item_ids(&self) -> AppResult<Vec<String>> {
+        let mut ids = self
+            .list_all_standby_pending_releases()
+            .await?
+            .into_iter()
+            .map(|release| release.wanted_item_id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
     async fn compare_and_set_pending_release_status(
         &self,
         id: &str,
@@ -12404,8 +13113,8 @@ pub trait MediaServerPlaybackProbe: Send + Sync {
 /// One played item exactly as a provider reported it, before any Scryer
 /// identity is attached.
 ///
-/// This is the provider-neutral shape every adapter normalizes into: Jellyfin
-/// today, Emby and Plex next. It carries the provider's own ids and the
+/// This is the provider-neutral shape every adapter normalizes into, whatever
+/// the provider. It carries the provider's own ids and the
 /// external ids needed to map the item, and nothing else — no Scryer title id,
 /// because the adapter has no business resolving one, and no credential.
 ///
@@ -12414,7 +13123,12 @@ pub trait MediaServerPlaybackProbe: Send + Sync {
 /// `series_external_ids` carries the *series'* ids: episode-level provider ids
 /// are unreliable across providers, so the series plus season/episode numbers
 /// is the join that actually holds.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// `file_paths` are where the server keeps the item's files, in the server's
+/// own spelling. They only decide whether an unmatched item could still be a
+/// Scryer title; they are never stored and never logged, which is why `Debug`
+/// shows only how many there are.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ProviderPlayedItem {
     pub provider_item_id: String,
     pub kind: scryer_domain::MediaServerSignalKind,
@@ -12428,27 +13142,204 @@ pub struct ProviderPlayedItem {
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
+    /// Marked as a favourite by this person. Plex has no favourite, so its
+    /// adapter always reports `false`.
+    pub is_favorite: bool,
+    /// The item's file paths on the server, when the server reports them.
+    pub file_paths: Vec<String>,
 }
 
-/// Reads one participant's played items from one media-server connection.
+impl std::fmt::Debug for ProviderPlayedItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderPlayedItem")
+            .field("provider_item_id", &self.provider_item_id)
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("external_ids", &self.external_ids)
+            .field("series_external_ids", &self.series_external_ids)
+            .field("series_provider_item_id", &self.series_provider_item_id)
+            .field("season_number", &self.season_number)
+            .field("episode_number", &self.episode_number)
+            .field("played", &self.played)
+            .field("play_count", &self.play_count)
+            .field("last_played_at", &self.last_played_at)
+            .field("is_favorite", &self.is_favorite)
+            .field("file_paths", &self.file_paths.len())
+            .finish()
+    }
+}
+
+/// Why a watch-history read did not produce a complete answer.
+///
+/// `reason` is one of [`crate::media_server_signals::reasons`] and is what
+/// callers decide on; `message` is the credential-free sentence stored beside
+/// it for people.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct SignalReadFailure {
+    pub reason: &'static str,
+    pub message: String,
+}
+
+impl SignalReadFailure {
+    pub fn new(reason: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+}
+
+/// The verified link a sweep read one participant's signals through.
+///
+/// Stored beside that participant's signal rows, in the same write, so the
+/// watch gate can tell a link a sweep actually read from one that was made
+/// after the sweep listed its participants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignalRosterLink {
+    /// The linked account's id ([`scryer_domain::UserExternalAccount::id`]).
+    pub link_id: String,
+    pub scryer_user_id: String,
+    /// The link's `verified_at` as the sweep saw it. Recorded for diagnosis;
+    /// membership is decided by the link and the identity it reads, because a
+    /// login refreshes this without changing whose plays are read.
+    pub link_verified_at: Option<DateTime<Utc>>,
+    /// When the sweep that read the link started.
+    pub sweep_started_at: DateTime<Utc>,
+}
+
+/// One link a sweep read, as the watch gate reads it back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignalRosterEntry {
+    pub connection_id: String,
+    pub external_user_id: String,
+    pub link: SignalRosterLink,
+}
+
+/// Opens one media-server connection for a watch-history sweep.
 ///
 /// Implemented once in infrastructure and dispatched on
-/// [`scryer_domain::MediaServerConnection::provider`], so adding Emby or Plex
-/// is a new arm rather than a new seam. The implementation owns paging,
-/// truncation, and every provider-specific quirk; callers see only normalized
-/// items.
-///
-/// An `Err` is this participant's failure alone. The sync job records it
-/// against the connection and moves to the next participant; it never aborts
-/// the sweep, because one unreadable account must not blank every other
-/// person's watch history.
+/// [`scryer_domain::MediaServerConnection::provider`]. Opening does whatever
+/// is needed once per connection per sweep (resolving which server to talk
+/// to, which account owns it); the reader it returns then reads each
+/// participant. An `Err` from `open` is the connection's failure: no
+/// participant can be read.
 #[async_trait]
 pub trait MediaServerSignalSource: Send + Sync {
-    async fn fetch_played_items(
+    async fn open(
         &self,
         connection: &scryer_domain::MediaServerConnection,
+    ) -> Result<Box<dyn MediaServerSignalReader>, SignalReadFailure>;
+}
+
+/// Reads one participant's played items from an opened connection.
+///
+/// The implementation owns paging, truncation, and every provider-specific
+/// quirk; callers see only normalized items. An `Err` is this participant's
+/// failure alone. The sync job records it against the connection and moves to
+/// the next participant; it never aborts the sweep, because one unreadable
+/// account must not blank every other person's watch history.
+#[async_trait]
+pub trait MediaServerSignalReader: Send + Sync {
+    async fn fetch_played_items(
+        &self,
         external_user_id: &str,
-    ) -> AppResult<Vec<ProviderPlayedItem>>;
+    ) -> Result<Vec<ProviderPlayedItem>, SignalReadFailure>;
+
+    /// Items' played state as the server reports it now, read just before an
+    /// action that a watch fact allowed. Nothing is stored from it.
+    ///
+    /// The answer is keyed by provider item id and must carry every item
+    /// asked for; the caller treats a missing item as a re-check that could
+    /// not be made. `participants` names the accounts whose own state is
+    /// wanted, and each item's answer must carry every one of them.
+    /// Implementations read items in batches where the provider allows it,
+    /// and bound how many requests are in flight where it does not.
+    ///
+    /// An account the server refuses for one item (404 or 403: the user was
+    /// removed, or the item sits in a library hidden from them) has no plays
+    /// of it, so it reads as unplayed. An `Err` is a re-check that could not
+    /// be made: a transport failure, a 5xx, a refusal of the connection's own
+    /// credential, or an item the server no longer knows.
+    async fn recheck_items(
+        &self,
+        _provider_item_ids: &[String],
+        _participants: &[String],
+    ) -> Result<std::collections::BTreeMap<String, ProviderItemRecheck>, SignalReadFailure> {
+        Err(SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "this media server cannot re-check an item",
+        ))
+    }
+
+    /// Every play the server records for any of its accounts, linked to a
+    /// Scryer user or not, folded to one entry per account and item.
+    ///
+    /// This is the audience read behind the anonymous "anyone watched it"
+    /// facts. It reads with the connection's own credential, so it sees
+    /// accounts nobody linked. An `Err` is the whole read's failure: a partial
+    /// audience would make "nobody watched this" a guess.
+    async fn fetch_audience_plays(&self) -> Result<Vec<ProviderAudiencePlay>, SignalReadFailure> {
+        Err(SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "this media server cannot list plays for every account",
+        ))
+    }
+}
+
+/// One account's play of one item, from the audience read.
+///
+/// `external_account_id` is the server's own account id. It is stored only to
+/// key the row; nothing reports it, because the facts it feeds name nobody.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderAudiencePlay {
+    pub external_account_id: String,
+    pub item: ProviderPlayedItem,
+}
+
+/// One stored audience play: an account's play of an item, mapped onto Scryer
+/// media where mapping succeeded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudiencePlay {
+    pub connection_id: String,
+    pub external_account_id: String,
+    pub provider_item_id: String,
+    pub kind: scryer_domain::MediaServerSignalKind,
+    pub scryer_title_id: Option<String>,
+    pub scryer_episode_id: Option<String>,
+    pub play_count: i64,
+    pub last_played_at: Option<DateTime<Utc>>,
+}
+
+/// When a connection's audience was last read in full.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudienceRead {
+    pub connection_id: String,
+    pub sweep_started_at: DateTime<Utc>,
+    pub read_at: DateTime<Utc>,
+    pub play_count: i64,
+}
+
+/// One account's state for one item, as a live re-check read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderItemPlay {
+    pub external_user_id: String,
+    pub played: bool,
+    pub last_played_at: Option<DateTime<Utc>>,
+}
+
+/// What a live re-check of one item found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderItemRecheck {
+    /// Each requested participant's own state for the item.
+    pub participants: Vec<ProviderItemPlay>,
+    /// Plays by any account, linked or not. On Plex these are the server's
+    /// own history rows for the item, one per organic play (history holds no
+    /// marks or scrobbles; the owner's marks arrive through the owner's own
+    /// state). On Jellyfin and Emby, which keep no server-wide history, they
+    /// are every listed user's own state for the item, one entry per user who
+    /// has played it.
+    pub history: Vec<ProviderItemPlay>,
 }
 
 /// Durable storage for normalized media-server watch signals.
@@ -12462,15 +13353,31 @@ pub trait MediaServerSignalRepository: Send + Sync {
     /// Returns the number of rows the participant now has. An empty `signals`
     /// is a meaningful write, not a no-op: it means this person has nothing
     /// played any more, and every prior row for them is removed.
+    ///
+    /// `read_through` is the link the sweep read these signals through. It is
+    /// recorded in the signal roster in the same transaction as the swap, so
+    /// the roster never names a link whose signals were not stored, and a
+    /// stored read is never missing from it.
     async fn replace_participant_signals(
         &self,
         connection_id: &str,
         external_user_id: &str,
         signals: &[scryer_domain::NewUserMediaSignal],
+        read_through: Option<&SignalRosterLink>,
     ) -> AppResult<u64>;
 
-    /// Remove stored observations for retired account identities. Each pair is
-    /// `(external_user_id, scryer_user_id)` from a successful verified-account read.
+    /// Every link a sweep has read and that no later sweep has retired. The
+    /// watch gate counts a verified link as observed only through an entry
+    /// here; a link with none has never had its plays read.
+    async fn signal_roster(&self) -> AppResult<Vec<SignalRosterEntry>> {
+        Err(AppError::Repository(
+            "signal roster is not configured".into(),
+        ))
+    }
+
+    /// Remove stored observations, and the roster entries that read them, for
+    /// retired account identities. Each pair is `(external_user_id,
+    /// scryer_user_id)` from a successful verified-account read.
     async fn retain_connection_participants(
         &self,
         _connection_id: &str,
@@ -12496,6 +13403,47 @@ pub trait MediaServerSignalRepository: Send + Sync {
         &self,
         title_ids: &[String],
     ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>>;
+
+    /// Atomically replace one connection's audience plays and record the read
+    /// that produced them. Rows the read did not return are removed: an
+    /// account that no longer has an item played no longer counts.
+    async fn replace_connection_audience(
+        &self,
+        _connection_id: &str,
+        _plays: &[AudiencePlay],
+        _sweep_started_at: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "audience plays are not configured".into(),
+        ))
+    }
+
+    /// Forget that a connection's audience was read, keeping its rows. Called
+    /// when an audience read fails, so the anonymous facts go unknown at once
+    /// rather than answering from the last read until it ages out.
+    async fn clear_audience_read(&self, _connection_id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "audience plays are not configured".into(),
+        ))
+    }
+
+    /// The last complete audience read per connection.
+    async fn audience_reads(&self) -> AppResult<Vec<AudienceRead>> {
+        Err(AppError::Repository(
+            "audience plays are not configured".into(),
+        ))
+    }
+
+    /// Audience plays (movies and episodes) grouped by the owning title id.
+    /// A title with no plays is absent from the map.
+    async fn audience_plays_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<AudiencePlay>>> {
+        Err(AppError::Repository(
+            "audience plays are not configured".into(),
+        ))
+    }
 
     async fn signal_sync_states(&self)
     -> AppResult<Vec<scryer_domain::MediaServerSignalSyncState>>;

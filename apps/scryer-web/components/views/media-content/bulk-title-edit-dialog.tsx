@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleRecord } from "@/lib/types";
-import type { LibraryRootRecord } from "@/lib/types/titles";
 import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
 import { METADATA_LANGUAGES } from "@/lib/i18n";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
@@ -54,7 +53,6 @@ type BulkTitleEditDialogProps = {
   view: string;
   selectedTitles: TitleRecord[];
   qualityProfiles: ParsedQualityProfile[];
-  rootFolders: LibraryRootRecord[];
   busy: boolean;
   /**
    * Applies the staged edits. Option changes go out as the per-title batch they
@@ -65,16 +63,6 @@ type BulkTitleEditDialogProps = {
     changes: TitleOptionUpdates,
     tagChanges: TitleTagsDelta,
   ) => Promise<void> | void;
-  /**
-   * Destination library shown beside the destination root (FR-010). Null when
-   * the selection spans libraries, which is the FR-017 disabled case.
-   */
-  destinationLibraryName?: string | null;
-  /**
-   * When set, the root control is a **destination** control: changing it opens
-   * the move workflow rather than staging a root rewrite (FR-011).
-   */
-  onRequestMove?: (rootFolderId: string) => void;
 };
 
 function initialDraftState(): TitleEditDraft {
@@ -87,11 +75,8 @@ export function BulkTitleEditDialog({
   view,
   selectedTitles,
   qualityProfiles,
-  rootFolders,
   busy,
   onSubmit,
-  destinationLibraryName,
-  onRequestMove,
 }: BulkTitleEditDialogProps) {
   const t = useTranslate();
   const initialDraft = React.useMemo(() => initialDraftState(), []);
@@ -109,20 +94,6 @@ export function BulkTitleEditDialog({
   const hasPendingChange =
     hasTitleEditChanges(draft, initialDraft) ||
     hasBulkTitleTagsChanges(tagDraft);
-  const folderLabel = React.useCallback(
-    (path: string) => path.split("/").filter(Boolean).pop() ?? path,
-    [],
-  );
-  const sortedRootFolders = React.useMemo(
-    () =>
-      [...rootFolders].sort((left, right) => {
-        if (left.isDefault !== right.isDefault) {
-          return left.isDefault ? -1 : 1;
-        }
-        return left.path.localeCompare(right.path);
-      }),
-    [rootFolders],
-  );
 
   React.useEffect(() => {
     if (!open) {
@@ -222,91 +193,6 @@ export function BulkTitleEditDialog({
                 ))}
               </SelectContent>
             </Select>
-          </EditableField>
-
-          {/* FR-010: the destination library sits beside the destination root.
-              This control only ever names the selection's own library — the
-              destination library is chosen in the move workflow itself, which
-              is where a cross-library transfer is previewed (FR-017). */}
-          {onRequestMove ? (
-            <EditableField label={t("move.destinationLibrary")}>
-              <Select value="__current__" disabled>
-                <SelectTrigger
-                  id="bulk-title-edit-destination-library"
-                  aria-label={t("move.destinationLibrary")}
-                  className="h-9 w-full text-sm"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__current__">
-                    {destinationLibraryName?.trim() ||
-                      t("move.destinationMixedSourceLibraries")}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {destinationLibraryName
-                  ? t("move.destinationLibraryInMoveWorkflow")
-                  : t("move.destinationMixedSourceLibraries")}
-              </p>
-            </EditableField>
-          ) : null}
-
-          <EditableField
-            label={
-              onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
-            }
-          >
-            <Select
-              value={draft.rootFolderId}
-              onValueChange={(value) => {
-                if (onRequestMove) {
-                  // Changing the destination opens the move workflow; the bulk
-                  // save never rewrites roots in place (FR-011).
-                  if (value !== UNCHANGED_VALUE) {
-                    onRequestMove(value);
-                  }
-                  return;
-                }
-                setDraft((previous) => ({ ...previous, rootFolderId: value }));
-              }}
-              disabled={
-                busy ||
-                (Boolean(onRequestMove) && sortedRootFolders.length === 0)
-              }
-            >
-              <SelectTrigger
-                id="bulk-title-edit-destination-root"
-                aria-label={
-                  onRequestMove
-                    ? t("move.destinationRoot")
-                    : t("title.rootFolder")
-                }
-                className="h-9 w-full font-[var(--font-code)] text-sm"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={UNCHANGED_VALUE}>
-                  {t("label.unchanged")}
-                </SelectItem>
-                {sortedRootFolders.map((rootFolder) => (
-                  <SelectItem key={rootFolder.id} value={rootFolder.id}>
-                    {rootFolder.isDefault
-                      ? t("title.defaultRootFolder", {
-                          path: folderLabel(rootFolder.path),
-                        })
-                      : folderLabel(rootFolder.path)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {onRequestMove ? (
-              <p className="text-xs text-muted-foreground">
-                {t("move.destinationRootHelp")}
-              </p>
-            ) : null}
           </EditableField>
 
           <EditableField label={t("search.addConfigMonitorType")}>
@@ -573,12 +459,14 @@ function EditableField({
   label,
   children,
 }: {
-  label: string;
+  label: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3">
-      <p className="text-sm font-medium text-card-foreground">{label}</p>
+      <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-card-foreground">
+        {label}
+      </p>
       {children}
     </div>
   );

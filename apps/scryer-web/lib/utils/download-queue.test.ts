@@ -138,6 +138,24 @@ test("HTTP queue refusals translate the code and preserve legacy sentences", () 
   );
 });
 
+test("media queue refusals translate the code and suppress duplicated server prose", () => {
+  const item = queueItem({
+    attentionReasonCode: "MEDIA_REFERENCES_REQUIRE_REVIEW",
+    attentionReason: "changed server wording",
+    importErrorMessage: "changed server wording",
+    trackedStatusMessages: ["changed server wording"],
+  });
+  assert.equal(
+    downloadQueue.buildQueueStatusDetail(item, (key) => key),
+    "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW",
+  );
+  assert.ok(
+    downloadQueue
+      .buildQueueStatusDetail(item)
+      .includes("changed server wording"),
+  );
+});
+
 test("unknown queue codes preserve explanations and code changes invalidate equality", () => {
   const item = queueItem({
     attentionReasonCode: "HTTP_FUTURE",

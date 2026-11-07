@@ -134,6 +134,36 @@ pub struct TitlePlacementSnapshot {
 /// path can be exercised against temp directories and a fake catalog.
 #[async_trait]
 pub trait RootMoveCatalog: Send + Sync {
+    async fn admit_conflict(
+        &self,
+        _operation: &LocationOperation,
+        _plan: &RootMoveExecutionPlan,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "Folder conflict validation is unavailable".into(),
+        ))
+    }
+    /// Apply the confirmed anonymous-folder media associations after verification.
+    async fn reconcile_conflict(
+        &self,
+        _operation: &LocationOperation,
+        _plan: &RootMoveExecutionPlan,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "Folder conflict reconciliation is unavailable".into(),
+        ))
+    }
+    /// Dispose only the confirmed conflict allowlist after catalog reconciliation.
+    async fn clean_up_conflict(
+        &self,
+        _operation: &LocationOperation,
+        _plan: &RootMoveExecutionPlan,
+        _recycler: &dyn SourceRecycler,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "Folder conflict cleanup is unavailable".into(),
+        ))
+    }
     async fn has_other_media_at_path(
         &self,
         _title_id: &str,
@@ -521,7 +551,13 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
                 "source and destination are the same path",
             ));
         }
-        return Ok(same_regular_file(&source_metadata, &destination_metadata));
+        return match shared_inode(source, destination, &source_metadata, &destination_metadata)
+            .await
+        {
+            SharedInode::SecondLink => Ok(true),
+            SharedInode::OneEntry => Err(one_entry_refusal()),
+            SharedInode::Distinct => Ok(false),
+        };
     }
     match tokio::fs::hard_link(source, destination).await {
         Ok(()) => {
@@ -543,6 +579,112 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
         }
         Err(_) => Ok(false),
     }
+}
+
+/// What a source/destination pair that may share one inode is to the mover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SharedInode {
+    /// Not provably one file: the pair is compared by content.
+    Distinct,
+    /// Two directory entries for one file; removing the source keeps the bytes.
+    SecondLink,
+    /// One directory entry reached under two spellings (a case-folding or
+    /// normalizing mount, or an alias path). Removing either name removes the
+    /// only entry, so the pair is refused.
+    OneEntry,
+}
+
+/// Decide a pair from the facts alone. Equal dev/ino is not trusted by itself:
+/// mounts that synthesize inodes (CIFS without serverino, mergerfs, rclone) can
+/// report it for two different files, so a length mismatch sends the pair to
+/// the content comparison. A shared inode counts as a second link only with a
+/// known link count of two or more; an unknown count is never assumed to be.
+pub(super) fn shared_inode_decision(
+    same_identity: bool,
+    source_len: u64,
+    destination_len: u64,
+    link_count: Option<u64>,
+) -> SharedInode {
+    if !same_identity || source_len != destination_len {
+        return SharedInode::Distinct;
+    }
+    match link_count {
+        Some(count) if count >= 2 => SharedInode::SecondLink,
+        _ => SharedInode::OneEntry,
+    }
+}
+
+/// Classify a pair by metadata, then prove a claimed second link is really a
+/// second directory entry: two names in one directory must both be listed
+/// under their exact spelling, which a case-folding mount does not do.
+pub(super) async fn shared_inode(
+    source: &Path,
+    destination: &Path,
+    source_metadata: &std::fs::Metadata,
+    destination_metadata: &std::fs::Metadata,
+) -> SharedInode {
+    let decision = shared_inode_decision(
+        same_regular_file(source_metadata, destination_metadata),
+        source_metadata.len(),
+        destination_metadata.len(),
+        super::hardlinks::link_count_from_metadata(destination_metadata).count(),
+    );
+    #[cfg(unix)]
+    if decision == SharedInode::SecondLink && !distinct_directory_entries(source, destination).await
+    {
+        return SharedInode::OneEntry;
+    }
+    #[cfg(not(unix))]
+    let _ = (source, destination);
+    decision
+}
+
+pub(super) fn one_entry_refusal() -> AppError {
+    AppError::validation_refused(
+        crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
+        "source and destination are one directory entry under two spellings",
+    )
+}
+
+/// Whether two paths are two directory entries. Names in two different
+/// directories are; names in one directory are only when they differ and the
+/// listing holds both exactly.
+#[cfg(unix)]
+async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
+    let (Some(source_parent), Some(destination_parent)) = (source.parent(), destination.parent())
+    else {
+        return false;
+    };
+    let (Ok(source_dir), Ok(destination_dir)) = (
+        tokio::fs::metadata(source_parent).await,
+        tokio::fs::metadata(destination_parent).await,
+    ) else {
+        return false;
+    };
+    use std::os::unix::fs::MetadataExt;
+    if source_dir.dev() != destination_dir.dev() || source_dir.ino() != destination_dir.ino() {
+        return true;
+    }
+    let (Some(source_name), Some(destination_name)) = (source.file_name(), destination.file_name())
+    else {
+        return false;
+    };
+    if source_name == destination_name {
+        return false;
+    }
+    let Ok(mut entries) = tokio::fs::read_dir(source_parent).await else {
+        return false;
+    };
+    let (mut saw_source, mut saw_destination) = (false, false);
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        saw_source |= name == source_name;
+        saw_destination |= name == destination_name;
+        if saw_source && saw_destination {
+            return true;
+        }
+    }
+    false
 }
 
 pub(super) fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
@@ -803,7 +945,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             .store
             .file_resolutions(&operation.id, &title.title_id)
             .await?;
-        for resolution in &resolutions {
+        for resolution in resolutions.iter().filter(|row| !row.is_disposal()) {
             if !resolution.proof_is_current().await {
                 return Err(AppError::validation_refused(
                     crate::error_reasons::location::VERIFICATION_MISMATCH,
@@ -815,6 +957,12 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 // departure from the plan.
                 outcome.notes.push(warning.clone());
             }
+        }
+        if self.plan.conflict.is_some() {
+            self.catalog
+                .reconcile_conflict(operation, self.plan)
+                .await?;
+            return Ok(outcome);
         }
         for file in planned.files.iter().chain(
             self.plan
@@ -892,7 +1040,6 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
         }
 
-        let _ = operation;
         // What the preview said would happen — a companion kept under a new
         // name, a hardlinked source, a same-named neighbour — happened. Those
         // are the plan's own statements, confirmed by the user, so they are
@@ -1024,7 +1171,21 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 } else {
                     false
                 };
-                if !same_regular_file(&source_metadata, &destination_metadata) && !same_link {
+                let same_file = same_regular_file(&source_metadata, &destination_metadata);
+                if same_file
+                    && shared_inode(
+                        &source,
+                        &file.destination(),
+                        &source_metadata,
+                        &destination_metadata,
+                    )
+                    .await
+                        != SharedInode::SecondLink
+                {
+                    // Removing the source would remove the only entry.
+                    return Err(one_entry_refusal());
+                }
+                if !same_file && !same_link {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
                         format!(
@@ -1072,35 +1233,34 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     "Source or destination changed before cleanup; preserved the source.",
                 ));
             }
-            let disposal = self
-                .recycler
-                .recycle_source(
-                    &operation.id,
-                    planned,
-                    &source,
-                    file.media_file_id.as_deref(),
-                    file.size_bytes,
-                )
-                .await?;
-            if let SourceDisposal::RemovedRecycleUnavailable(reason) = disposal {
-                outcome.warnings.push(format!(
-                    "The old copy at {} was deleted outright instead of going to the recycle bin: {reason}",
-                    file.source_path
-                ));
-            }
-            if disposal == SourceDisposal::PreservedRecycleUnavailable {
-                let warning = format!(
-                    "An extra copy remains at {} because it could not be recycled. The destination copy is complete.",
-                    file.source_path
-                );
-                if let Some(resolution) = resolution {
-                    let mut resolution = resolution.clone();
-                    resolution.warning = Some(warning.clone());
-                    resolution.reason_code = Some("recycle_unavailable".into());
-                    self.store.save_file_resolution(&resolution).await?;
+            // The destination was just proven to hold the source's bytes, so the
+            // source is the redundant half of a finished move and is removed,
+            // not recycled: a recycle entry would only be a second copy of
+            // content the library already holds.
+            match tokio::fs::remove_file(&source).await {
+                Ok(()) => tracing::info!(
+                    operation_id = %operation.id,
+                    title_id = %title.title_id,
+                    source = %file.source_path,
+                    destination = %file.destination_path,
+                    "removed a source copy verified at its destination"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AppError::Repository(format!(
+                        "failed to remove the verified source {}: {error}",
+                        file.source_path
+                    )));
                 }
-                outcome.warnings.push(warning);
             }
+        }
+
+        if self.plan.conflict.is_some() {
+            // Historical hardlink content proofs remain usable after retiring
+            // transfer sources. Inferior-file disposal rechecks the survivors.
+            self.catalog
+                .clean_up_conflict(operation, self.plan, self.recycler)
+                .await?;
         }
 
         // 2. Only *empty* source directories, deepest first (FR-031). A
@@ -1234,6 +1394,12 @@ impl<'a> RootMoveAdmission<'a> {
 impl TitleAdmissionCheck for RootMoveAdmission<'_> {
     async fn admit_title(&self, context: TitleAdmissionContext<'_>) -> AppResult<TitleAdmission> {
         let title_id = context.title.title_id.as_str();
+        if self.plan.conflict.is_some() {
+            self.catalog
+                .admit_conflict(context.operation, self.plan)
+                .await?;
+            return Ok(TitleAdmission::Proceed);
+        }
         let Some(planned) = self.plan.title(title_id) else {
             return Ok(TitleAdmission::Skip(format!(
                 "title {title_id} is not in the confirmed plan"

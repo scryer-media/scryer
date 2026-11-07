@@ -1709,6 +1709,8 @@ struct SearchDiagnosticsContext {
     /// Background convergence searches write strategy state; operator and
     /// interactive searches leave it alone.
     background: bool,
+    /// Pages of a paged strategy a background pass reads.
+    background_pages_per_pass: u32,
 }
 
 impl SearchDiagnosticsContext {
@@ -1749,6 +1751,10 @@ impl SearchDiagnosticsContext {
             scope_key,
             indexer_fingerprint,
             background,
+            background_pages_per_pass: learning_context
+                .background_pages_per_pass
+                .unwrap_or(BACKGROUND_PAGES_PER_PASS)
+                .max(1),
         })
     }
 
@@ -7120,11 +7126,23 @@ impl IndexerClient for MultiIndexerSearchClient {
                             config.name.as_str(),
                             IndexerSkipReason::ClientSetupFailed,
                         );
+                        let reason = err.reason().unwrap_or(
+                            crate::error_reasons::ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED,
+                        );
                         warn!(
                             indexer = config.name.as_str(),
                             error = %err,
+                            reason,
                             "skipping indexer: client setup failed"
                         );
+                        // An enabled indexer the search cannot run is reported,
+                        // not dropped: otherwise it reads as asked with no
+                        // results, and nothing tells the operator to act.
+                        indexer_outcomes.push(IndexerQueryOutcome {
+                            page: None,
+                            indexer_id: config.id.clone(),
+                            outcome: IndexerSearchOutcome::ClientUnavailable { reason },
+                        });
                         continue;
                     }
                 };
@@ -7883,7 +7901,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let background_page_budget = search_diagnostics
                     .as_ref()
                     .filter(|diagnostics| diagnostics.background)
-                    .map(|_| BACKGROUND_PAGES_PER_PASS)
+                    .map(|diagnostics| diagnostics.background_pages_per_pass)
                     .or(rss_poll_page_budget);
                 let mut page_chains: HashMap<String, PageChain> = HashMap::new();
                 let mut any_strategy_fired = false;
@@ -9265,7 +9283,9 @@ impl IndexerClient for MultiIndexerSearchClient {
             let caps = caps.filter(|caps| !nominal_caps_diagnostic(caps));
             let failed = matches!(
                 outcome,
-                IndexerSearchOutcome::BackedOff { .. } | IndexerSearchOutcome::Errored
+                IndexerSearchOutcome::BackedOff { .. }
+                    | IndexerSearchOutcome::ClientUnavailable { .. }
+                    | IndexerSearchOutcome::Errored
             );
             let completion = match outcome {
                 IndexerSearchOutcome::Complete { .. } | IndexerSearchOutcome::Unsupported => {
@@ -9286,12 +9306,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                         retry_after,
                     }
                 }
-                IndexerSearchOutcome::BackedOff { .. } | IndexerSearchOutcome::Errored => {
-                    IndexerSearchCompletion::Partial {
-                        reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
-                        retry_after: None,
-                    }
-                }
+                IndexerSearchOutcome::BackedOff { .. }
+                | IndexerSearchOutcome::ClientUnavailable { .. }
+                | IndexerSearchOutcome::Errored => IndexerSearchCompletion::Partial {
+                    reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
+                    retry_after: None,
+                },
             };
             if caps.is_some() {
                 if let Some(page) = page.as_mut() {
@@ -12338,6 +12358,7 @@ mod tests {
             search_session_id: "session".into(),
             background_value: Some(0.5),
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         }
     }
 
@@ -12545,6 +12566,7 @@ mod tests {
             scope_key: "scope-alpha".into(),
             indexer_fingerprint: "fingerprint-alpha".into(),
             background: false,
+            background_pages_per_pass: BACKGROUND_PAGES_PER_PASS,
         };
         let plain = search_result("Synthetic.Release.2024.1080p.WEB-DL-GRP");
         let mut hinted = search_result("Synthetic.Release.2024.2160p.WEB-DL-GRP");
@@ -12618,6 +12640,7 @@ mod tests {
             scope_key: "scope-http".into(),
             indexer_fingerprint: "fingerprint-http".into(),
             background: false,
+            background_pages_per_pass: BACKGROUND_PAGES_PER_PASS,
         };
         let response = IndexerSearchResponse {
             results: vec![http],
@@ -12965,6 +12988,7 @@ mod tests {
                 scope_key: "scope".into(),
                 indexer_fingerprint: "fingerprint".into(),
                 background: true,
+                background_pages_per_pass: BACKGROUND_PAGES_PER_PASS,
             },
             config: mock_indexer_config(),
             run_ids: vec!["run-1".into(), "run-2".into()],
@@ -13680,6 +13704,73 @@ mod tests {
             .clone();
         expected.reverse();
         assert_eq!(*starts.lock().expect("start order mutex"), expected);
+    }
+
+    /// A provider whose plugin is not loaded: it advertises capabilities but
+    /// cannot build a client.
+    struct UnloadedIndexerPluginProvider;
+
+    impl IndexerPluginProvider for UnloadedIndexerPluginProvider {
+        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+            None
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            vec![]
+        }
+
+        fn capabilities_for_provider(&self, _provider_type: &str) -> IndexerProviderCapabilities {
+            movie_caps()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_indexer_whose_client_cannot_be_built_is_reported_with_its_setup_code() {
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config()],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(UnloadedIndexerPluginProvider),
+        );
+
+        let response = multi
+            .search(
+                "Synthetic Search".to_string(),
+                HashMap::new(),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("a search with an unbuildable client still answers");
+
+        assert_eq!(
+            response
+                .indexer_outcomes
+                .iter()
+                .map(|outcome| (outcome.indexer_id.clone(), outcome.outcome))
+                .collect::<Vec<_>>(),
+            vec![(
+                mock_indexer_config().id,
+                IndexerSearchOutcome::ClientUnavailable {
+                    reason: crate::error_reasons::ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED,
+                },
+            )],
+            "the indexer is reported, not dropped"
+        );
+        assert!(response.results.is_empty());
     }
 
     #[tokio::test(start_paused = true)]
@@ -20243,6 +20334,7 @@ mod tests {
             search_session_id: format!("session-{title_id}"),
             background_value: background.then_some(0.5),
             candidate_reuse_allowed: background,
+            background_pages_per_pass: None,
         }
     }
 
@@ -20572,9 +20664,11 @@ mod tests {
             search_session_id: "session".into(),
             background_value: Some(0.5),
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
         let operator = IndexerSearchLearningContext {
             candidate_reuse_allowed: false,
+            background_pages_per_pass: None,
             background_value: None,
             ..background.clone()
         };
@@ -20616,9 +20710,11 @@ mod tests {
             search_session_id: "session".into(),
             background_value: Some(0.5),
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
         let operator = IndexerSearchLearningContext {
             candidate_reuse_allowed: false,
+            background_pages_per_pass: None,
             background_value: None,
             ..background.clone()
         };
@@ -20677,9 +20773,11 @@ mod tests {
             search_session_id: "session".into(),
             background_value: Some(0.5),
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
         let operator = IndexerSearchLearningContext {
             candidate_reuse_allowed: false,
+            background_pages_per_pass: None,
             background_value: None,
             ..background.clone()
         };
@@ -20732,6 +20830,7 @@ mod tests {
             search_session_id: "test-session".into(),
             background_value: None,
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
 
         record_strategy_learning_outcome(
@@ -20785,6 +20884,7 @@ mod tests {
             search_session_id: "test-session".into(),
             background_value: None,
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
 
         for _ in 0..LEARNED_EMPTY_SUPPRESSION_THRESHOLD {
@@ -20823,6 +20923,7 @@ mod tests {
             search_session_id: "test-session".into(),
             background_value: None,
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
 
         let cour_name = query_learning_label(ANIME_COUR_NAME_TEXT_LABEL, "Ember Tide Arc - 03");
@@ -20945,6 +21046,7 @@ mod tests {
                     search_session_id: format!("session-{session}"),
                     background_value: None,
                     candidate_reuse_allowed: false,
+                    background_pages_per_pass: None,
                 };
                 <MultiIndexerSearchClient as IndexerClient>::search(
                     client,
@@ -21063,6 +21165,7 @@ mod tests {
                         search_session_id: format!("session-{session}"),
                         background_value: None,
                         candidate_reuse_allowed: false,
+                        background_pages_per_pass: None,
                     }),
                     CancellationToken::new(),
                 )
@@ -21176,6 +21279,7 @@ mod tests {
             search_session_id: "test-session".into(),
             background_value: None,
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
 
         record_strategy_learning_outcome(
@@ -21217,6 +21321,7 @@ mod tests {
             search_session_id: "test-session".into(),
             background_value: None,
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
 
         let result = <MultiIndexerSearchClient as IndexerClient>::search(
@@ -21276,6 +21381,7 @@ mod tests {
             search_session_id: "test-session".into(),
             background_value: None,
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
 
         let result = <MultiIndexerSearchClient as IndexerClient>::search(
@@ -21309,6 +21415,63 @@ mod tests {
             .await
             .expect("learning records");
         assert!(records.is_empty());
+    }
+
+    /// A background pass reads the page depth its walk asked for: a quiet
+    /// walk's cold scope reads fewer pages than the default.
+    #[tokio::test]
+    async fn a_background_pass_reads_the_page_depth_its_walk_asked_for() {
+        let repo: StdArc<dyn IndexerSearchLearningRepository> =
+            StdArc::new(InMemorySearchLearningRepository::default());
+        let (client, calls) = scripted_search_client(movie_caps(), |call| {
+            let mut response = response_with_titles(&["Lattice.Zero.1999.Part1.1080p.WEB-DL"])?;
+            if call.page_cursor.is_none() {
+                response.next_cursor = Some("offset:500".to_string());
+                response.completion = IndexerSearchCompletion::Partial {
+                    reason: None,
+                    retry_after: None,
+                };
+            }
+            Ok(response)
+        });
+        let client = client.with_search_learning_repository(repo);
+        for pages in [1, 2] {
+            let asked = calls.lock().expect("calls").len();
+            <MultiIndexerSearchClient as IndexerClient>::search(
+                &client,
+                "Lattice Zero".into(),
+                HashMap::from([("imdb_id".to_string(), "tt0133093".to_string())]),
+                Some("movie".into()),
+                Some("movie".into()),
+                None,
+                None,
+                None,
+                SearchMode::Auto,
+                IndexerErrorOperation::AutomaticSearch,
+                None,
+                None,
+                None,
+                None,
+                vec![],
+                Some(IndexerSearchLearningContext {
+                    title_id: format!("title-depth-{pages}"),
+                    facet: "movie".into(),
+                    subject_kind: ReleaseSearchSubjectKind::Title,
+                    search_session_id: format!("background-depth-{pages}"),
+                    background_value: None,
+                    candidate_reuse_allowed: true,
+                    background_pages_per_pass: Some(pages),
+                }),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("search should succeed");
+            let budgets = calls.lock().expect("calls")[asked..]
+                .iter()
+                .map(|call| call.page_budget)
+                .collect::<HashSet<_>>();
+            assert_eq!(budgets, HashSet::from([Some(pages)]), "pages = {pages}");
+        }
     }
 
     #[tokio::test]
@@ -21360,6 +21523,7 @@ mod tests {
                         search_session_id: session.into(),
                         background_value: None,
                         candidate_reuse_allowed: background,
+                        background_pages_per_pass: None,
                     }),
                     CancellationToken::new(),
                 )
@@ -21465,6 +21629,7 @@ mod tests {
             search_session_id: "test-session".into(),
             background_value: None,
             candidate_reuse_allowed: true,
+            background_pages_per_pass: None,
         };
 
         let response = <MultiIndexerSearchClient as IndexerClient>::search(
@@ -23512,6 +23677,7 @@ mod tests {
                 search_session_id: session.into(),
                 background_value: None,
                 candidate_reuse_allowed: background,
+                background_pages_per_pass: None,
             }),
             CancellationToken::new(),
         )

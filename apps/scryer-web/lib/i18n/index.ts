@@ -136,7 +136,36 @@ export function getLanguageLabel(code: string): string {
 }
 
 const FALLBACK: LocaleDictionary = en;
-const RUSSIAN_PLURALS = new Intl.PluralRules("ru");
+const pluralRulesByLocale = new Map<LocaleCode, Intl.PluralRules>();
+
+function pluralRules(locale: LocaleCode): Intl.PluralRules {
+  let rules = pluralRulesByLocale.get(locale);
+  if (!rules) {
+    try {
+      rules = new Intl.PluralRules(locale);
+    } catch {
+      rules = new Intl.PluralRules("en");
+    }
+    pluralRulesByLocale.set(locale, rules);
+  }
+  return rules;
+}
+
+/**
+ * The `key.<plural category>` form for a numeric `count`, when the
+ * dictionary has one. Categories follow the locale's own plural rules.
+ */
+function pluralTemplate(
+  dictionary: LocaleDictionary,
+  locale: LocaleCode,
+  key: string,
+  count: unknown,
+): string | undefined {
+  if (typeof count !== "number" || !Number.isFinite(count)) {
+    return undefined;
+  }
+  return dictionary[`${key}.${pluralRules(locale).select(count)}`];
+}
 
 export function getLocaleDictionary(
   code: string | null | undefined,
@@ -217,14 +246,14 @@ export function t(
   code: string,
   values?: Record<string, string | number | boolean | null | undefined>,
 ): string {
-  const locale = getLocaleDictionary(code);
+  const localeCode = normalizeLocale(code);
+  const locale = getLocaleDictionary(localeCode);
   const count = values?.count;
-  const pluralKey =
-    normalizeLocale(code) === "rus" &&
-    typeof count === "number" &&
-    Number.isFinite(count)
-      ? `${key}.${RUSSIAN_PLURALS.select(count)}`
-      : key;
-  const template = locale[pluralKey] ?? locale[key] ?? FALLBACK[key] ?? key;
+  const template =
+    pluralTemplate(locale, localeCode, key, count) ??
+    locale[key] ??
+    pluralTemplate(FALLBACK, DEFAULT_LANGUAGE, key, count) ??
+    FALLBACK[key] ??
+    key;
   return interpolate(template, values);
 }

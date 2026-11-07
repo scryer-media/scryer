@@ -1164,7 +1164,9 @@ impl AppUseCase {
     /// disabled indexer, or one with automatic search turned off, never fires
     /// and so never earns a receipt, and routing a scope to it would keep that
     /// scope in the walk forever. A managed child still waiting for its caps
-    /// is left out the same way until they arrive.
+    /// is left out the same way until they arrive, and so is an indexer whose
+    /// client the search cannot build: every search reports it as
+    /// unavailable without asking it, and that is never coverage.
     async fn routed_indexer_ids_for_routing_scope(
         &self,
         library_id: &str,
@@ -1173,24 +1175,23 @@ impl AppUseCase {
         let routing = self
             .resolve_indexer_routing_observed(Some(library_id), scope_id)
             .await;
-        let searchable = self
-            .services
-            .integrations
-            .indexer_configs
-            .list(None)
-            .await
-            .ok()
-            .map(|configs| {
-                configs
-                    .into_iter()
-                    .filter(|config| {
-                        config.is_enabled
-                            && config.enable_auto_search
-                            && !crate::integration::indexer_caps_cache::awaits_managed_caps(config)
-                    })
-                    .map(|config| config.id)
-                    .collect::<Vec<_>>()
-            });
+        let searchable = match self.services.integrations.indexer_configs.list(None).await {
+            Ok(configs) => {
+                let mut proxies = std::collections::HashMap::new();
+                let mut searchable = Vec::new();
+                for config in configs {
+                    if config.is_enabled
+                        && config.enable_auto_search
+                        && !crate::integration::indexer_caps_cache::awaits_managed_caps(&config)
+                        && self.indexer_client_buildable(&config, &mut proxies).await
+                    {
+                        searchable.push(config.id);
+                    }
+                }
+                Some(searchable)
+            }
+            Err(_) => None,
+        };
         match (routing.plan, searchable) {
             (Some(plan), Some(searchable)) => (
                 plan.entries
@@ -1213,6 +1214,57 @@ impl AppUseCase {
             (None, Some(searchable)) => (searchable, !routing.read_failed),
             (None, None) => (Vec::new(), false),
         }
+    }
+
+    /// Whether the search could build a client for `config`, resolved the way
+    /// the search client sets one up: the provider's plugin must be loaded,
+    /// and an assigned proxy must exist and be enabled. A proxy that cannot be
+    /// read right now proves nothing, so the indexer stays routed. Without a
+    /// plugin runtime there is nothing to check against.
+    async fn indexer_client_buildable(
+        &self,
+        config: &IndexerConfig,
+        proxies: &mut std::collections::HashMap<String, Option<Option<scryer_domain::ProxyConfig>>>,
+    ) -> bool {
+        let Some(provider) = self.services.integrations.plugin_provider.available() else {
+            return true;
+        };
+        let proxy = match config.proxy_config_id.as_deref() {
+            None => None,
+            Some(proxy_id) => {
+                if !proxies.contains_key(proxy_id) {
+                    let read = self
+                        .services
+                        .integrations
+                        .proxy_configs
+                        .get_by_id(proxy_id)
+                        .await
+                        .ok();
+                    proxies.insert(proxy_id.to_string(), read);
+                }
+                match proxies.get(proxy_id).cloned().flatten() {
+                    None => return true,
+                    Some(None) => return false,
+                    Some(Some(proxy)) if !proxy.is_enabled => return false,
+                    // Prowlarr handles challenges for its parent and synced
+                    // children; the search builds those without the solver.
+                    Some(Some(proxy))
+                        if proxy.is_challenge_solver()
+                            && (config.is_prowlarr_nab_proxy()
+                                || config
+                                    .provider_type
+                                    .trim()
+                                    .eq_ignore_ascii_case("prowlarr")) =>
+                    {
+                        None
+                    }
+                    Some(Some(proxy)) => Some(proxy),
+                }
+            }
+        };
+        provider
+            .client_for_provider_with_proxy(config, proxy.as_ref())
+            .is_some()
     }
 
     /// Record convergence coverage for a search of `subject`. A search is a
@@ -1421,6 +1473,10 @@ impl AppUseCase {
                 CoverageReopen::All => self.prune_scope_key_coverage(&scope_key, None).await,
             }
         }
+        self.runtime
+            .acquisition
+            .target_cache
+            .mark_title(&item.title_id);
         self.runtime.acquisition.acquisition_wake.notify_one();
     }
 
@@ -1813,12 +1869,17 @@ mod tests {
         let mut unknown = base.clone();
         unknown.allow_unknown_quality = !base.allow_unknown_quality;
 
+        let mut upgrade_delta = base.clone();
+        assert_eq!(upgrade_delta.min_upgrade_score_delta, None);
+        upgrade_delta.min_upgrade_score_delta = Some(5);
+
         for (label, edited) in [
             ("quality_tiers", tiers),
             ("allow_upgrades", upgrades),
             ("required_audio_languages", audio),
             ("cutoff_score", cutoff),
             ("allow_unknown_quality", unknown),
+            ("min_upgrade_score_delta", upgrade_delta),
         ] {
             assert_ne!(
                 baseline,
@@ -1864,6 +1925,11 @@ mod tests {
         assert!(
             serialized.get("cutoff_score").is_none(),
             "an unset `cutoff_score` must not appear in the fingerprint input at all"
+        );
+        assert_eq!(base.min_upgrade_score_delta, None);
+        assert!(
+            serialized.get("min_upgrade_score_delta").is_none(),
+            "an unset `min_upgrade_score_delta` must not appear in the fingerprint input at all"
         );
         for ranking_key in [
             "scoring_persona",

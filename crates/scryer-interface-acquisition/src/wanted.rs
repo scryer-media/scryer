@@ -1,4 +1,4 @@
-use async_graphql::{Context, ID, Object, Result as GqlResult};
+use async_graphql::{Context, Enum, ID, InputObject, Object, Result as GqlResult, SimpleObject};
 use scryer_application::WantedSearchOutcome;
 
 use scryer_interface_core::{actor_from_ctx, app_from_ctx, to_gql_error};
@@ -6,6 +6,45 @@ use scryer_interface_media::types::*;
 
 #[derive(Default)]
 pub struct WantedMutations;
+
+/// What to do about downloads of the same title that are already running.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+pub enum StandbyQueueChoiceValue {
+    /// Queue only when nothing else is downloading; otherwise list the conflicts.
+    Check,
+    /// Queue alongside the confirmed conflicts, leaving them running.
+    Queue,
+    /// Ask the clients to cancel the confirmed conflicts, then queue without
+    /// waiting for them to act. Cancellation is best effort: a conflict that is
+    /// already post-processing may still finish.
+    CancelAndQueue,
+}
+
+/// One conflicting download the operator confirmed, as the client names it.
+#[derive(InputObject)]
+pub struct StandbyConflictIdentityInput {
+    /// The configured download client that holds the job, when known.
+    pub client_id: Option<ID>,
+    /// The download client's type, such as `sabnzbd` or `weaver`.
+    pub client_type: String,
+    /// The client's own id for the job.
+    pub item_id: String,
+}
+
+/// The result of asking to queue a saved standby candidate.
+#[derive(SimpleObject)]
+pub struct QueueStandbyReleasePayload {
+    /// Whether the release is now queued (or already was).
+    pub grabbed: bool,
+    /// Running downloads of this title that still need the operator's choice.
+    pub conflicts: Vec<QueueDownloadConflictPayload>,
+    /// Conflicts whose client accepted the cancel request. Scryer stops
+    /// tracking them; a client may still finish a job it was post-processing.
+    pub cancelled: Vec<QueueDownloadConflictPayload>,
+    /// Conflicts whose cancel request failed. They keep running and stay
+    /// tracked; the release is queued anyway.
+    pub cancel_failed: Vec<QueueDownloadConflictPayload>,
+}
 
 /// Shared builder for the media-request approval search outcome. The convergence
 /// cutover removed the per-item `trigger*WantedSearch` mutations (the convergence
@@ -20,6 +59,65 @@ pub(crate) fn wanted_search_payload(outcome: WantedSearchOutcome) -> WantedSearc
 
 #[Object]
 impl WantedMutations {
+    /// Queue a saved candidate as an operator override, confirming title-wide conflicts first.
+    async fn queue_standby_release(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "The saved standby candidate to queue.")] id: ID,
+        #[graphql(
+            default_with = "StandbyQueueChoiceValue::Check",
+            desc = "What to do about downloads of this title that are already running."
+        )]
+        choice: StandbyQueueChoiceValue,
+        #[graphql(
+            default,
+            desc = "The conflicts the operator saw and confirmed; any other running download is listed again instead."
+        )]
+        confirmed: Vec<StandbyConflictIdentityInput>,
+    ) -> GqlResult<QueueStandbyReleasePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let choice = match choice {
+            StandbyQueueChoiceValue::Check => scryer_application::StandbyQueueChoice::Check,
+            StandbyQueueChoiceValue::Queue => scryer_application::StandbyQueueChoice::Queue,
+            StandbyQueueChoiceValue::CancelAndQueue => {
+                scryer_application::StandbyQueueChoice::CancelAndQueue
+            }
+        };
+        let confirmed = confirmed
+            .into_iter()
+            .map(|item| {
+                scryer_application::ClientJobLocator::new(
+                    item.client_id.as_ref().map(|id| id.as_str()),
+                    item.client_type,
+                    item.item_id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let outcome = app
+            .queue_standby_release(&actor, id.as_str(), choice, &confirmed)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(QueueStandbyReleasePayload {
+            grabbed: outcome.grabbed,
+            conflicts: outcome
+                .conflicts
+                .into_iter()
+                .map(crate::downloads::queue_download_conflict_payload)
+                .collect(),
+            cancelled: outcome
+                .cancelled
+                .into_iter()
+                .map(crate::downloads::queue_download_conflict_payload)
+                .collect(),
+            cancel_failed: outcome
+                .cancel_failed
+                .into_iter()
+                .map(crate::downloads::queue_download_conflict_payload)
+                .collect(),
+        })
+    }
+
     /// Reopen title-mismatch scopes after a rematch so acquisition coverage can converge again.
     async fn trigger_title_mismatch_recovery_search(
         &self,

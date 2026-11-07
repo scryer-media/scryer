@@ -6,8 +6,8 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::library::library::library_scan_cancel_requested;
 use crate::library_discovery::{
-    LibraryTitleWalk, MovieTopLevelEntry, matching_movie_nfo_path_async, normalize_folder_name,
-    strip_year_suffix,
+    LibraryTitleWalk, MovieTopLevelEntry, is_sample_video_candidate, matching_movie_nfo_path_async,
+    normalize_folder_name, strip_year_suffix,
 };
 use crate::library_filename_parser::{LibraryFilenameParseInput, parse_library_filename};
 use crate::library_scan_coordinator::LibraryScanCoordinator;
@@ -137,6 +137,7 @@ pub(crate) struct SeriesLibraryScanCandidate {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedMovieLibraryScanCandidate {
+    pub(crate) boundary_evidence: Option<crate::library_discovery::DiscoveredBoundaryEvidence>,
     pub(crate) file: LibraryFile,
     pub(crate) representative_is_directory: bool,
     pub(crate) discovered_files: Vec<LibraryFile>,
@@ -1451,15 +1452,6 @@ async fn detect_primary_movie_entry_file(
     Ok((non_sample_videos.len() == 1).then(|| non_sample_videos[0].clone()))
 }
 
-fn is_sample_video_candidate(path: &Path) -> bool {
-    let stem = path
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    stem.contains("sample")
-}
-
 async fn build_prepared_movie_library_scan_candidate(
     file: LibraryFile,
     representative_is_directory: bool,
@@ -1476,6 +1468,7 @@ async fn build_prepared_movie_library_scan_candidate(
         full_path_key.as_deref(),
     ) {
         return Ok(PreparedMovieLibraryScanCandidate {
+            boundary_evidence: None,
             file,
             representative_is_directory,
             discovered_files,
@@ -1595,6 +1588,7 @@ async fn build_prepared_movie_library_scan_candidate(
     }
 
     Ok(PreparedMovieLibraryScanCandidate {
+        boundary_evidence: None,
         file,
         representative_is_directory,
         discovered_files,
@@ -2143,6 +2137,7 @@ mod tests {
         search_candidates: &[&str],
     ) -> PreparedMovieLibraryScanCandidate {
         PreparedMovieLibraryScanCandidate {
+            boundary_evidence: None,
             file: build_library_file("/library/Movie/Movie.mkv"),
             representative_is_directory: false,
             discovered_files: vec![build_library_file("/library/Movie/Movie.mkv")],

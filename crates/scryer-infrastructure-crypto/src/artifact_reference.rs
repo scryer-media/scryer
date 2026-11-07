@@ -29,6 +29,8 @@ impl std::fmt::Debug for ArtifactReferenceCipher {
 }
 
 impl ArtifactReferenceCipher {
+    // HMAC-SHA256 subkey derivation for the AES-GCM-SIV artifact cipher; a KDF, not an identity hash.
+    #[allow(clippy::disallowed_methods)]
     pub fn new(master: &EncryptionKey) -> Self {
         let root = hmac::Key::new(hmac::HMAC_SHA256, &master.key_bytes);
         let encryption = hmac::sign(&root, b"scryer-indexer-artifact-encryption-v1");

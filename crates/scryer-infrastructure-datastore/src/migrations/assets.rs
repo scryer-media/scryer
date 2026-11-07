@@ -6,6 +6,8 @@ mod key_constraints;
 use crate::migration_hook_ids;
 use blake3::Hasher as Blake3Hasher;
 use serde::{Deserialize, Serialize};
+// Migration-asset integrity is recorded as SHA-384 in shipped databases.
+#[allow(clippy::disallowed_types)]
 use sha2::{Digest as _, Sha384};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,6 +29,8 @@ impl ChecksumAlgorithm {
         }
     }
 
+    // Migration-asset integrity is recorded as SHA-384 in shipped databases.
+    #[allow(clippy::disallowed_types)]
     pub fn digest(self, bytes: &[u8]) -> Vec<u8> {
         match self {
             Self::Sha384 => Sha384::digest(bytes).to_vec(),

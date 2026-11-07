@@ -40,64 +40,80 @@ type FacetPermissionDropdownProps = {
   onLibraryChange: (changes: LibraryPermissionDrafts) => void;
 };
 
-export const APP_PERMISSION_OPTIONS: Array<{
-  value: AppPermission;
-  label: string;
-}> = [
-  { value: APP_PERMISSIONS.manageUsers, label: "Manage Users" },
-  { value: APP_PERMISSIONS.managePermissions, label: "Manage Permissions" },
-  {
-    value: APP_PERMISSIONS.manageSystemSettings,
-    label: "Manage System Settings",
-  },
-  {
-    value: APP_PERMISSIONS.manageCatalogSettings,
-    label: "Manage Catalog Settings",
-  },
-  { value: APP_PERMISSIONS.manageLists, label: "Manage Lists" },
+const APP_PERMISSION_VALUES: AppPermission[] = [
+  APP_PERMISSIONS.manageUsers,
+  APP_PERMISSIONS.managePermissions,
+  APP_PERMISSIONS.manageSystemSettings,
+  APP_PERMISSIONS.manageCatalogSettings,
+  APP_PERMISSIONS.manageLists,
 ];
 
-export const LIBRARY_PERMISSION_OPTIONS: Array<{
-  value: LibraryPermission;
-  label: string;
-}> = [
-  { value: LIBRARY_PERMISSIONS.view, label: "View" },
-  { value: LIBRARY_PERMISSIONS.manageTitles, label: "Manage Titles" },
-  { value: LIBRARY_PERMISSIONS.resolveImports, label: "Resolve Imports" },
-  { value: LIBRARY_PERMISSIONS.manageLibrary, label: "Manage Library" },
-  { value: LIBRARY_PERMISSIONS.request, label: "Request" },
-  {
-    value: LIBRARY_PERMISSIONS.autoApproveRequests,
-    label: "Auto-Approve Requests",
-  },
-  { value: LIBRARY_PERMISSIONS.manageSubtitles, label: "Manage Subtitles" },
+const LIBRARY_PERMISSION_VALUES: LibraryPermission[] = [
+  LIBRARY_PERMISSIONS.view,
+  LIBRARY_PERMISSIONS.manageTitles,
+  LIBRARY_PERMISSIONS.resolveImports,
+  LIBRARY_PERMISSIONS.manageLibrary,
+  LIBRARY_PERMISSIONS.request,
+  LIBRARY_PERMISSIONS.autoApproveRequests,
+  LIBRARY_PERMISSIONS.manageSubtitles,
 ];
 
-const FACET_OPTIONS: Array<{ value: LibraryRecord["facet"]; label: string }> = [
-  { value: "MOVIE", label: "Movie" },
-  { value: "SERIES", label: "Series" },
-  { value: "ANIME", label: "Anime" },
-];
+const FACETS: LibraryRecord["facet"][] = ["MOVIE", "SERIES", "ANIME"];
 
-function permissionLabel(permission: string, options: PermissionOption[]) {
-  return (
-    options.find((option) => option.value === permission)?.label ?? permission
-  );
+/** A permission's label; one the UI does not know shows its raw value. */
+function permissionLabel(permission: string, t: (key: string) => string) {
+  switch (permission) {
+    case APP_PERMISSIONS.manageUsers:
+      return t("permissions.MANAGE_USERS");
+    case APP_PERMISSIONS.managePermissions:
+      return t("permissions.MANAGE_PERMISSIONS");
+    case APP_PERMISSIONS.manageSystemSettings:
+      return t("permissions.MANAGE_SYSTEM_SETTINGS");
+    case APP_PERMISSIONS.manageCatalogSettings:
+      return t("permissions.MANAGE_CATALOG_SETTINGS");
+    case APP_PERMISSIONS.manageLists:
+      return t("permissions.MANAGE_LISTS");
+    case LIBRARY_PERMISSIONS.view:
+      return t("permissions.VIEW");
+    case LIBRARY_PERMISSIONS.manageTitles:
+      return t("permissions.MANAGE_TITLES");
+    case LIBRARY_PERMISSIONS.resolveImports:
+      return t("permissions.RESOLVE_IMPORTS");
+    case LIBRARY_PERMISSIONS.manageLibrary:
+      return t("permissions.MANAGE_LIBRARY");
+    case LIBRARY_PERMISSIONS.request:
+      return t("permissions.REQUEST");
+    case LIBRARY_PERMISSIONS.autoApproveRequests:
+      return t("permissions.AUTO_APPROVE_REQUESTS");
+    case LIBRARY_PERMISSIONS.manageSubtitles:
+      return t("permissions.MANAGE_SUBTITLES");
+    default:
+      return permission;
+  }
+}
+
+function facetLabel(facet: LibraryRecord["facet"], t: (key: string) => string) {
+  switch (facet) {
+    case "MOVIE":
+      return t("permissions.facet.MOVIE");
+    case "SERIES":
+      return t("permissions.facet.SERIES");
+    case "ANIME":
+      return t("permissions.facet.ANIME");
+    default:
+      return facet;
+  }
 }
 
 function permissionOptions(
   permissions: string[] | undefined,
-  options: PermissionOption[],
+  known: string[],
   t: (key: string) => string,
-) {
-  return (permissions ?? options.map((option) => option.value)).map(
-    (permission) => ({
-      value: permission,
-      label: options.some((option) => option.value === permission)
-        ? t(`permissions.${permission}`)
-        : permissionLabel(permission, options),
-    }),
-  );
+): PermissionOption[] {
+  return (permissions ?? known).map((permission) => ({
+    value: permission,
+    label: permissionLabel(permission, t),
+  }));
 }
 
 export function togglePermissionValue(
@@ -186,7 +202,7 @@ function AppPermissionDropdown({
   onChange: (next: string[]) => void;
 }) {
   const t = useTranslate();
-  const options = permissionOptions(permissions, APP_PERMISSION_OPTIONS, t);
+  const options = permissionOptions(permissions, APP_PERMISSION_VALUES, t);
   const allPermissions = options.map((option) => option.value);
   const allSelected =
     allPermissions.length > 0 &&
@@ -256,7 +272,7 @@ function FacetPermissionDropdown({
   onLibraryChange,
 }: FacetPermissionDropdownProps) {
   const t = useTranslate();
-  const options = permissionOptions(permissions, LIBRARY_PERMISSION_OPTIONS, t);
+  const options = permissionOptions(permissions, LIBRARY_PERMISSION_VALUES, t);
   const facetLibraries = libraries.filter((library) => library.facet === facet);
   const allPermissions = options.map((option) => option.value);
   const allSelected =
@@ -421,11 +437,11 @@ export function PermissionDropdowns({
         idPrefix={idPrefix}
         onChange={onAppChange}
       />
-      {FACET_OPTIONS.map((facet) => (
+      {FACETS.map((facet) => (
         <FacetPermissionDropdown
-          key={facet.value}
-          facet={facet.value}
-          label={t(`permissions.facet.${facet.value}`)}
+          key={facet}
+          facet={facet}
+          label={facetLabel(facet, t)}
           libraries={libraries}
           permissions={libraryPermissions}
           selectedByLibrary={selectedLibraryPermissions}

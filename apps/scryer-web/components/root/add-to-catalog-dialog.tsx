@@ -453,14 +453,14 @@ export function AddToCatalogDialog({
                 >
                   <SelectTrigger
                     id="add-to-catalog-root-folder"
-                    className="h-12 w-full font-[var(--font-code)]"
+                    className="h-12 w-full font-[family-name:var(--font-code)]"
                   >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {selectableRootFolders.map((rf) => (
                       <SelectItem key={rf.id} value={rf.id}>
-                        <span className="font-[var(--font-code)]">
+                        <span className="font-[family-name:var(--font-code)]">
                           {rf.path}
                         </span>
                       </SelectItem>

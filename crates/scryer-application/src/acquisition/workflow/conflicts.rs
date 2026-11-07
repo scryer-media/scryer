@@ -54,6 +54,7 @@ impl AppUseCase {
         };
 
         if outcome.queued_count > 0 {
+            self.runtime.acquisition.target_cache.mark_title(&title.id);
             self.runtime.acquisition.acquisition_wake.notify_one();
         }
 

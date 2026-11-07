@@ -99,11 +99,11 @@ export function BulkRenamePreviewSummary({
                     {title.name} ·{" "}
                     {t("rename.namingLanguage", { language: context.language })}
                   </p>
-                  <p className="font-[var(--font-code)]">
+                  <p className="font-[family-name:var(--font-code)]">
                     {context.currentRelativePath ?? "—"}
                   </p>
                   <ArrowDown aria-hidden className="my-1 h-3 w-3" />
-                  <p className="font-[var(--font-code)]">
+                  <p className="font-[family-name:var(--font-code)]">
                     {context.proposedRelativePath}
                   </p>
                 </div>
@@ -141,7 +141,7 @@ export function BulkRenamePreviewSummary({
                           <div className="flex w-fit max-w-full flex-col items-start">
                             <div
                               data-ui="bulk-rename-plan-current-path"
-                              className="break-all font-[var(--font-code)] text-muted-foreground"
+                              className="break-all font-[family-name:var(--font-code)] text-muted-foreground"
                             >
                               {item.currentPath || "—"}
                             </div>
@@ -151,7 +151,7 @@ export function BulkRenamePreviewSummary({
                             />
                             <div
                               data-ui="bulk-rename-plan-proposed-path"
-                              className="break-all font-[var(--font-code)] text-card-foreground"
+                              className="break-all font-[family-name:var(--font-code)] text-card-foreground"
                             >
                               {item.proposedPath ?? "—"}
                             </div>

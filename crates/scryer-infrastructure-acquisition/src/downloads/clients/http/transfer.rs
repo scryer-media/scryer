@@ -650,30 +650,18 @@ async fn verify_media(
 
 /// The video extension for a container the analyzer names.
 fn container_extension(container: &str) -> Option<&'static str> {
-    match container.to_ascii_lowercase().as_str() {
-        "matroska" | "mkv" => Some("mkv"),
-        "webm" => Some("webm"),
-        "mp4" => Some("mp4"),
-        "mov" => Some("mov"),
-        "mpegts" | "ts" => Some("ts"),
-        "m2ts" => Some("m2ts"),
-        "avi" => Some("avi"),
-        "flv" => Some("flv"),
-        "ogg" => Some("ogv"),
-        "asf" | "wmv" => Some("wmv"),
-        _ => None,
-    }
+    scryer_domain::preferred_video_extension_for_container(container)
 }
 
 /// The final name for a media file whose name does not say it is video
 /// (no container was stated and the URL had no usable extension), from the
-/// container the probe read. A name that already carries a video extension
-/// is kept.
+/// container the probe read. A name that already carries a video container
+/// extension is kept.
 pub(crate) fn media_path_for_probed_container(
     final_path: &Path,
     outcome: &MediaProbeOutcome,
 ) -> Option<std::path::PathBuf> {
-    if scryer_domain::canonical_video_extension(final_path).is_some() {
+    if names_video_container(final_path) {
         return None;
     }
     let MediaProbeOutcome::Probed {
@@ -684,6 +672,14 @@ pub(crate) fn media_path_for_probed_container(
         return None;
     };
     container_extension(container).map(|extension| final_path.with_extension(extension))
+}
+
+/// The name says the file is a video container. A disc image suffix does
+/// not: an HTTP payload is published only as a container its probe read, and
+/// `.bin`, the name an unnamed download is planned under, is also a disc
+/// image suffix.
+fn names_video_container(path: &Path) -> bool {
+    scryer_domain::canonical_video_extension(path).is_some() && !scryer_domain::is_disc_image(path)
 }
 
 /// The current time, injectable so tests decide when a URL has expired.
@@ -1490,7 +1486,7 @@ async fn finish_file(
         if let Some(named) = media_path_for_probed_container(&file.final_path, &outcome) {
             file.final_path = named;
         }
-        if scryer_domain::canonical_video_extension(&file.final_path).is_none() {
+        if !names_video_container(&file.final_path) {
             return Err(TransferError::Refused(http_release_refusal::UNKNOWN_CONTAINER,
                 "the payload could not be identified as a supported video container; the partial was preserved".into()));
         }
@@ -1690,6 +1686,8 @@ fn decode_hex(hex: &str) -> Option<Vec<u8>> {
 }
 
 /// Hash a file without holding it in memory.
+// Verifies the checksum a remote HTTP server advertised, so the server picks the algorithm (SHA-256, SHA-1 or MD5).
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 async fn hash_file(
     context: &TransferContext<'_>,
     path: &Path,

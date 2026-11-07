@@ -1,0 +1,27 @@
+# Hashing policy guard.
+#
+# First-party identity hashing goes through
+# `scryer_application::blake3_identity_hex` with a `HashDomain` variant; see the
+# policy on that function in crates/scryer-application/src/helpers.rs. Every
+# other digest and MAC algorithm is disallowed here so that reaching for
+# SHA-256, SHA-1, MD5 or HMAC fails `cargo clippy -D warnings` unless the site
+# is one of the documented external-contract exceptions. An exception carries
+# `#[allow(clippy::disallowed_methods)]` or `#[allow(clippy::disallowed_types)]`
+# on the smallest enclosing item, with a comment naming the contract that fixes
+# the algorithm. Do not add an allow for a hash that is ours to choose.
+
+disallowed-methods = [
+    { path = "aws_lc_rs::digest::digest", reason = "first-party hashing goes through scryer_application::blake3_identity_hex; SHA-* is allowed only where an external contract fixes the algorithm (see helpers.rs)" },
+    { path = "aws_lc_rs::digest::Context::new", reason = "first-party hashing goes through scryer_application::blake3_identity_hex; SHA-* is allowed only where an external contract fixes the algorithm (see helpers.rs)" },
+    { path = "aws_lc_rs::hmac::Key::new", reason = "HMAC is allowed only for the documented signing contracts (JWT, sessions, API keys, OAuth, SMG enrollment, TOTP); first-party fingerprints use scryer_application::blake3_identity_hex" },
+]
+
+disallowed-types = [
+    { path = "sha2::Sha224", reason = "first-party hashing goes through scryer_application::blake3_identity_hex; SHA-2 is allowed only where an external contract fixes the algorithm (see helpers.rs)" },
+    { path = "sha2::Sha256", reason = "first-party hashing goes through scryer_application::blake3_identity_hex; SHA-2 is allowed only where an external contract fixes the algorithm (see helpers.rs)" },
+    { path = "sha2::Sha384", reason = "first-party hashing goes through scryer_application::blake3_identity_hex; SHA-2 is allowed only where an external contract fixes the algorithm (see helpers.rs)" },
+    { path = "sha2::Sha512", reason = "first-party hashing goes through scryer_application::blake3_identity_hex; SHA-2 is allowed only where an external contract fixes the algorithm (see helpers.rs)" },
+    { path = "md5::Md5", reason = "MD5 is allowed only to verify a checksum a remote server supplied; first-party hashing goes through scryer_application::blake3_identity_hex" },
+    { path = "sha1::Sha1", reason = "SHA-1 is never a first-party choice; BitTorrent v1 info hashes use aws_lc_rs with an allow at that one site", allow-invalid = true },
+    { path = "sha3::Sha3_256", reason = "first-party hashing goes through scryer_application::blake3_identity_hex", allow-invalid = true },
+]

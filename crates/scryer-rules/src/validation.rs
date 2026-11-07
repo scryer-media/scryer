@@ -210,9 +210,16 @@ impl ValidationResult {
             format!("compilation error: {text}"),
         );
         if let Some((_, location)) = text.split_once(".rego:") {
+            // The column runs straight into the rest of the message.
+            let leading_number = |part: &str| {
+                let end = part
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(part.len());
+                part[..end].parse().ok()
+            };
             let mut parts = location.split(':');
-            diagnostic.line = parts.next().and_then(|s| s.parse().ok());
-            diagnostic.column = parts.next().and_then(|s| s.parse().ok());
+            diagnostic.line = parts.next().and_then(leading_number);
+            diagnostic.column = parts.next().and_then(leading_number);
         }
         Self::from_diagnostics(vec![diagnostic])
     }
@@ -2770,6 +2777,15 @@ mod tests {
         let result = validate_user_rule(source, "bad_syntax").unwrap();
         assert!(!result.valid);
         assert!(result.errors[0].contains("compilation error"));
+    }
+
+    #[test]
+    fn syntax_error_diagnostic_carries_its_position() {
+        let source = "package scryer.rules.user.bad_syntax\nimport rego.v1\n\nasdf\n";
+        let result = validate_user_rule(source, "bad_syntax").unwrap();
+        let diagnostic = &result.diagnostics[0];
+        assert_eq!(diagnostic.line, Some(4));
+        assert_eq!(diagnostic.column, Some(1));
     }
 
     #[test]

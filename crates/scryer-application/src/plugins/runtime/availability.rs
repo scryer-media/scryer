@@ -108,7 +108,8 @@ impl AppUseCase {
                 .integrations
                 .builtin_download_client_connection_tester
                 .test_connection(&client_type, config_json, proxy_config.as_ref())
-                .await;
+                .await
+                .map_err(map_native_download_client_test_error);
         }
 
         self.test_plugin_download_client_connection(
@@ -207,6 +208,49 @@ impl AppUseCase {
         Ok(())
     }
 }
+/// The test is the one answer an operator reads directly, and everything a
+/// built-in client's test reports describes the remote client, not Scryer.
+/// The client has already classified what it could into a typed failure; what
+/// it could not classify becomes a coded refusal here, never a `Repository`
+/// error the GraphQL boundary would mask as "Internal server error".
+fn map_native_download_client_test_error(error: AppError) -> AppError {
+    match error {
+        // Kinds that already carry their own code. Re-wrapping them would only
+        // bury what they say.
+        AppError::Validation(_)
+        | AppError::ValidationRefused { .. }
+        | AppError::ValidationRefusedWithCount { .. }
+        | AppError::Unauthorized(_)
+        | AppError::UnauthorizedReason { .. }
+        | AppError::NotFound(_)
+        | AppError::NotFoundReason { .. }
+        | AppError::Canceled(_)
+        | AppError::TemporaryUnavailable { .. } => error,
+        // Keeps the reason the client named; only the sentence says it was
+        // the test.
+        AppError::PluginFailed { message, failure } => AppError::PluginFailed {
+            message: format!("download client connection test failed: {message}"),
+            failure,
+        },
+        error => {
+            // `Repository`'s Display prepends "repository: ", which is noise in
+            // a toast, so unwrap it to the message the client wrote.
+            let message = match error {
+                AppError::Repository(message)
+                | AppError::RepositoryFailure { message, .. }
+                | AppError::RepositoryFailed { message, .. } => message,
+                other => other.to_string(),
+            };
+            AppError::validation_refused(
+                crate::error_reasons::integration::DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED,
+                crate::url_redaction::redact_url_credentials(&format!(
+                    "download client connection test failed: {message}"
+                )),
+            )
+        }
+    }
+}
+
 fn indexer_config_can_be_auto_created(fields: &[scryer_domain::ConfigFieldDef]) -> bool {
     !fields.iter().any(|field| {
         field.required

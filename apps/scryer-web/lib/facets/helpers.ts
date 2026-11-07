@@ -9,10 +9,6 @@ export function sectionLabelForFacet(t: Translate, facetId: Facet): string {
   return def ? t(def.searchLabelKey) : facetId;
 }
 
-export function viewAllLabelForFacet(t: Translate, facetId: Facet): string {
-  return t(`search.viewAll.${facetId}`);
-}
-
 export function viewFromFacet(facetId: Facet): ViewId {
   const def = facetById(facetId);
   return (def?.viewId ?? "movies") as ViewId;

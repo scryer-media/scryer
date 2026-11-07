@@ -490,6 +490,60 @@ async fn a_raw_query_reports_indexers_that_were_never_asked_as_skipped_with_a_re
 }
 
 #[tokio::test]
+async fn a_raw_query_reports_an_indexer_whose_client_could_not_be_built_as_failed_with_its_code() {
+    use crate::IndexerSearchOutcome;
+
+    const SYNTHETIC_REASON: &str = "SYNTHETIC_INDEXER_PROVIDER_UNSUPPORTED";
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-answers",
+            vec![nzb_release("Example.Show.S01E05.1080p.WEB-DL-GROUP", "g1")],
+        )
+        .await
+        .with_outcome(
+            "idx-unloaded",
+            IndexerSearchOutcome::ClientUnavailable {
+                reason: SYNTHETIC_REASON,
+            },
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![
+            synthetic_direct_nab_indexer_config("idx-answers", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-unloaded", "newznab"),
+        ],
+    );
+
+    let start = app
+        .start_interactive_release_search(&user, query_request("example show"))
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    let unloaded = indexer_view(&done, "idx-unloaded");
+    assert_eq!(
+        unloaded.status,
+        InteractiveReleaseSearchIndexerStatus::Failed,
+        "{unloaded:?}"
+    );
+    assert_eq!(unloaded.failure_reason_code, Some(SYNTHETIC_REASON));
+    assert!(
+        unloaded
+            .failure_reason
+            .as_deref()
+            .is_some_and(|text| !text.is_empty()),
+        "{unloaded:?}"
+    );
+    assert_eq!(unloaded.skip_reason, None);
+    assert_eq!(
+        indexer_view(&done, "idx-answers").status,
+        InteractiveReleaseSearchIndexerStatus::Completed
+    );
+}
+
+#[tokio::test]
 async fn a_raw_query_keeps_distinct_look_alike_releases_and_drops_exact_duplicates() {
     let mut idx_a = (1..=6)
         .map(|n| nzb_release("Sample.Movie.2021.1080p.WEB-DL-GROUP", &format!("a{n}")))

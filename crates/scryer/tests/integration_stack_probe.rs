@@ -13,7 +13,9 @@ use wiremock::matchers::{body_string_contains, method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
 use common::TestContext;
-use scryer_application::{LibraryRootDraft, MediaFileRepository, ShowRepository, TitleRepository};
+use scryer_application::{
+    LibraryRepository, LibraryRootDraft, MediaFileRepository, ShowRepository, TitleRepository,
+};
 use scryer_domain::{
     AppPermission, AppPermissionMask, LibraryPermission, LibraryPermissionMask, MediaFacet, User,
 };
@@ -255,8 +257,17 @@ async fn set_media_path(ctx: &TestContext, key_name: &str, value: &str) {
 
 async fn set_default_library_root(ctx: &TestContext, facet: MediaFacet, root: &Path) {
     let library_id = scryer_domain::default_library_id_for_facet(&facet);
+    // The new root replaces every stored one, so each is acknowledged as removed.
+    let removed_root_ids = LibraryRepository::get_by_id(&ctx.libraries, &library_id)
+        .await
+        .expect("default library should load")
+        .expect("default library should exist")
+        .roots
+        .into_iter()
+        .map(|root| root.id)
+        .collect();
     ctx.app
-        .update_library(
+        .update_library_with_outcome(
             &admin(),
             &library_id,
             None,
@@ -265,6 +276,7 @@ async fn set_default_library_root(ctx: &TestContext, facet: MediaFacet, root: &P
                 path: root.to_string_lossy().to_string(),
                 is_default: true,
             }]),
+            Some(removed_root_ids),
             None,
         )
         .await

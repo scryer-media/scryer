@@ -612,6 +612,19 @@ async fn seed_media_file(
     files.into_iter().find(|f| f.id == file_id).unwrap()
 }
 
+/// Media file events are title history, which only actors with privileged
+/// library access read: the same actor with Manage Titles added.
+fn history_reader(actor: &User) -> User {
+    let mut reader = actor.clone();
+    reader
+        .authorization
+        .default_library
+        .insert(LibraryPermissionMask::from_permissions([
+            scryer_domain::LibraryPermission::ManageTitles,
+        ]));
+    reader
+}
+
 fn last_upgrade_event(
     events: &[scryer_application::ActivityEvent],
 ) -> Option<&scryer_application::ActivityEvent> {
@@ -624,7 +637,7 @@ async fn upgrade_audit_events(
     title_id: &str,
 ) -> Vec<DomainEvent> {
     app.list_domain_events(
-        actor,
+        &history_reader(actor),
         &DomainEventFilter {
             event_types: Some(vec![
                 DomainEventType::MediaFileUpgraded,
@@ -827,7 +840,7 @@ async fn upgrade_replaces_old_file_with_new() {
 
     // Activity event should be recorded
     let events = app
-        .recent_activity(&actor, 10, 0)
+        .recent_activity(&history_reader(&actor), 10, 0)
         .await
         .expect("recent activity");
     let upgrade_event = last_upgrade_event(&events).expect("should have upgrade event");

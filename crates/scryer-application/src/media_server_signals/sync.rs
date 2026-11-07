@@ -1,6 +1,6 @@
 //! Scheduled media-server signal synchronization (RFC 137 sections 4.4, 7.3).
 //!
-//! One pass over every Jellyfin connection. Per connection: resolve the
+//! One pass over every Jellyfin, Emby, and Plex connection. Per connection: resolve the
 //! participant set, read each participant's played items through the adapter,
 //! map them onto Scryer subjects, and replace that participant's stored signal
 //! set atomically. Per connection the outcome is recorded in
@@ -25,9 +25,13 @@
 //!
 //! # Provider scope
 //!
-//! Jellyfin only for now. The tables, the normalized item, the store, and this
-//! orchestration are all provider-neutral; adding Emby is a new arm in the
-//! adapter plus adding its provider to [`SIGNAL_SYNC_PROVIDERS`].
+//! Jellyfin, Emby, and Plex. The tables, the normalized item, the store, and
+//! this orchestration are all provider-neutral; each provider is one arm in the
+//! adapter plus an entry in [`SIGNAL_SYNC_PROVIDERS`].
+//!
+//! A provider in that list is also part of the lifecycle-rule freshness gate:
+//! until every enabled connection of every listed provider has swept cleanly,
+//! watch facts stay unobserved rather than answering from a partial roster.
 
 use std::collections::{HashMap, HashSet};
 
@@ -40,15 +44,51 @@ use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::media_server_signals::mapping::{
-    EpisodeNumberIndex, MappedSignalSubject, SIGNAL_EXTERNAL_ID_SOURCES, TitleExternalIdIndex,
-    resolve_subject,
+    EpisodeNumberIndex, MappedSignalSubject, SIGNAL_EXTERNAL_ID_SOURCES, ScryerLibraryPaths,
+    TitleExternalIdIndex, is_foreign_item, resolve_subject,
 };
-use crate::ports::{ProviderPlayedItem, TitleExternalIdLookup};
+use crate::media_server_signals::reasons;
+use crate::ports::{
+    AudiencePlay, MediaServerSignalReader, ProviderPlayedItem, SignalReadFailure, SignalRosterLink,
+    TitleExternalIdLookup,
+};
 use crate::{AppResult, AppUseCase};
 
-/// Providers this wave synchronizes. Emby and Plex join the list when their
-/// adapters land; nothing else in this file changes.
-pub const SIGNAL_SYNC_PROVIDERS: [MediaServerProvider; 1] = [MediaServerProvider::Jellyfin];
+/// Providers the sweep synchronizes. Every provider here has a reading arm in
+/// the signal source; listing one without it would report an error per sweep
+/// and hold every watch fact unobserved.
+pub const SIGNAL_SYNC_PROVIDERS: [MediaServerProvider; 3] = [
+    MediaServerProvider::Jellyfin,
+    MediaServerProvider::Emby,
+    MediaServerProvider::Plex,
+];
+
+/// One connection's sweep state as an operator reads it: the stored row plus
+/// whether its last clean sweep still counts for the watch gate.
+#[derive(Clone, Debug)]
+pub struct MediaServerSignalSyncStatus {
+    pub state: MediaServerSignalSyncState,
+    /// A clean sweep is on record but the watch gate no longer accepts it:
+    /// it is older than the freshness window, or it was recorded while the
+    /// connection was off and nothing has swept since it was turned back on.
+    pub clean_sweep_stale: bool,
+}
+
+impl MediaServerSignalSyncStatus {
+    pub fn at(state: MediaServerSignalSyncState, now: chrono::DateTime<Utc>) -> Self {
+        let clean_sweep_stale = state.last_success_at.is_some_and(|last_success_at| {
+            !state.enabled
+                || !crate::maintenance_rules::facts::watch_signal_sweep_is_fresh(
+                    last_success_at,
+                    now,
+                )
+        });
+        Self {
+            state,
+            clean_sweep_stale,
+        }
+    }
+}
 
 /// What one sweep did, for the job summary.
 ///
@@ -76,18 +116,32 @@ struct ConnectionOutcome {
     participants_failed: usize,
     signals: u64,
     unmapped: u64,
-    /// First failure reason, kept verbatim for the state row. A later failure
-    /// does not overwrite it: the first one is usually the cause and the rest
-    /// the consequence.
-    error: Option<String>,
+    /// First failure, kept for the state row as its code and its sentence. A
+    /// later failure does not overwrite it: the first one is usually the cause
+    /// and the rest the consequence.
+    error: Option<SignalReadFailure>,
 }
 
 impl ConnectionOutcome {
-    fn record_error(&mut self, reason: String) {
+    fn record_error(&mut self, failure: SignalReadFailure) {
         if self.error.is_none() {
-            self.error = Some(reason);
+            self.error = Some(failure);
         }
     }
+}
+
+/// One participant's mapped read.
+struct ParticipantOutcome {
+    written: u64,
+    unmapped: u64,
+    /// A played movie stayed unmapped without being provably foreign, so a
+    /// played Scryer title may be among the unmapped rows.
+    incomplete: bool,
+}
+
+/// A failure of Scryer's own store, as a sweep failure.
+fn store_failure(context: &str, error: impl std::fmt::Display) -> SignalReadFailure {
+    SignalReadFailure::new(reasons::STORE_FAILED, format!("{context}: {error}"))
 }
 
 impl AppUseCase {
@@ -122,6 +176,25 @@ impl AppUseCase {
             .map(|state| (state.connection_id.clone(), state))
             .collect::<HashMap<_, _>>();
 
+        // Where Scryer keeps files, read once for the sweep. Without it no
+        // played file can be shown to lie outside Scryer's libraries, so an
+        // unmatched movie with a file path then keeps the read incomplete.
+        let library_roots = match self.services.catalog.libraries.list(None).await {
+            Ok(libraries) => Some(
+                libraries
+                    .into_iter()
+                    .flat_map(|library| library.roots.into_iter().map(|root| root.path))
+                    .collect::<Vec<_>>(),
+            ),
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "could not read library roots for a signal sync; unmatched played files count as Scryer's"
+                );
+                None
+            }
+        };
+
         for connection in connections {
             report.connections_considered += 1;
             let started_at = Utc::now();
@@ -138,6 +211,7 @@ impl AppUseCase {
                     last_started_at: prior.and_then(|state| state.last_started_at),
                     last_success_at: prior.and_then(|state| state.last_success_at),
                     last_error: None,
+                    last_error_code: None,
                     participant_count: prior.map_or(0, |state| state.participant_count),
                     signal_count: prior.map_or(0, |state| state.signal_count),
                     updated_at: started_at,
@@ -146,7 +220,10 @@ impl AppUseCase {
                 continue;
             }
 
-            let outcome = self.sync_one_connection(&connection).await;
+            let library = ScryerLibraryPaths::new(library_roots.clone(), &connection.path_mappings);
+            let outcome = self
+                .sync_one_connection(&connection, &library, started_at)
+                .await;
             report.participants_considered += outcome.participants;
             report.participants_synced += outcome.participants_synced;
             report.participants_failed += outcome.participants_failed;
@@ -173,7 +250,14 @@ impl AppUseCase {
                 } else {
                     prior.and_then(|state| state.last_success_at)
                 },
-                last_error: outcome.error.clone(),
+                last_error: outcome
+                    .error
+                    .as_ref()
+                    .map(|failure| failure.message.clone()),
+                last_error_code: outcome
+                    .error
+                    .as_ref()
+                    .map(|failure| failure.reason.to_string()),
                 participant_count: outcome.participants as i64,
                 signal_count: outcome.signals as i64,
                 updated_at: Utc::now(),
@@ -186,16 +270,27 @@ impl AppUseCase {
 
     /// Sweep one enabled connection. Never returns an error: everything that
     /// can go wrong belongs in this connection's state row.
-    async fn sync_one_connection(&self, connection: &MediaServerConnection) -> ConnectionOutcome {
+    async fn sync_one_connection(
+        &self,
+        connection: &MediaServerConnection,
+        library: &ScryerLibraryPaths,
+        started_at: chrono::DateTime<Utc>,
+    ) -> ConnectionOutcome {
         let mut outcome = ConnectionOutcome::default();
 
         if !connection.api_key_present() {
-            outcome.record_error("no credential stored".to_string());
+            outcome.record_error(SignalReadFailure::new(
+                reasons::CREDENTIAL_MISSING,
+                "no credential stored",
+            ));
             return outcome;
         }
 
         let Some(account_provider) = connection.provider.external_account_provider() else {
-            outcome.record_error("provider has no linked-account identity".to_string());
+            outcome.record_error(SignalReadFailure::new(
+                reasons::PROVIDER_UNSUPPORTED,
+                "provider has no linked-account identity",
+            ));
             return outcome;
         };
 
@@ -205,7 +300,7 @@ impl AppUseCase {
         {
             Ok(participants) => participants,
             Err(error) => {
-                outcome.record_error(format!("could not resolve participants: {error}"));
+                outcome.record_error(store_failure("could not resolve participants", error));
                 return outcome;
             }
         };
@@ -228,9 +323,35 @@ impl AppUseCase {
             .retain_connection_participants(&connection.id, &identities)
             .await
         {
-            outcome.record_error(format!("could not retire participant signals: {error}"));
+            outcome.record_error(store_failure("could not retire participant signals", error));
             return outcome;
         }
+        // No early return when nobody is linked: the audience read below is
+        // every account's on the server, and the anonymous facts it feeds
+        // stand without a linked user.
+
+        // Opened once for every participant: whatever the provider needs per
+        // connection (the server to talk to, who owns it) is read once a sweep.
+        let reader = match self
+            .services
+            .integrations
+            .media_server_signal_source
+            .open(connection)
+            .await
+        {
+            Ok(reader) => reader,
+            Err(failure) => {
+                outcome.participants_failed += identities.len();
+                warn!(
+                    connection_id = connection.id.as_str(),
+                    reason = failure.reason,
+                    error = %failure,
+                    "media-server connection could not be opened for a signal sync; stored signals are unchanged"
+                );
+                outcome.record_error(failure);
+                return outcome;
+            }
+        };
 
         for participant in participants {
             let Some(external_user_id) = participant
@@ -245,36 +366,161 @@ impl AppUseCase {
             };
 
             match self
-                .sync_one_participant(connection, external_user_id, participant.user_id.as_str())
+                .sync_one_participant(
+                    connection,
+                    reader.as_ref(),
+                    library,
+                    external_user_id,
+                    &participant,
+                    started_at,
+                )
                 .await
             {
-                Ok((written, unmapped, incomplete)) => {
+                Ok(read) => {
                     outcome.participants_synced += 1;
-                    outcome.signals += written;
-                    outcome.unmapped += unmapped;
-                    if incomplete {
-                        outcome.record_error(
-                            "played movies could not be mapped; watch history is incomplete"
-                                .to_string(),
-                        );
+                    outcome.signals += read.written;
+                    outcome.unmapped += read.unmapped;
+                    if read.incomplete {
+                        outcome.record_error(SignalReadFailure::new(
+                            reasons::UNMAPPED_PLAYED_MOVIES,
+                            "played movies could not be matched to a Scryer title; watch history is incomplete",
+                        ));
                     }
                 }
-                Err(error) => {
+                Err(failure) => {
                     outcome.participants_failed += 1;
                     // The participant's existing rows are deliberately left in
                     // place: a failed read is not evidence that they stopped
                     // watching everything.
                     warn!(
                         connection_id = connection.id.as_str(),
-                        error = %error,
+                        reason = failure.reason,
+                        error = %failure,
                         "media-server signal sync failed for one participant; their stored signals are unchanged"
                     );
-                    outcome.record_error(format!("participant sync failed: {error}"));
+                    outcome.record_error(SignalReadFailure::new(
+                        failure.reason,
+                        format!("participant sync failed: {}", failure.message),
+                    ));
                 }
             }
         }
 
+        if let Some(failure) = self
+            .sync_connection_audience(connection, reader.as_ref(), library, started_at)
+            .await
+        {
+            outcome.record_error(failure);
+        }
+
         outcome
+    }
+
+    /// Read every account's plays on the connection and replace its audience
+    /// rows with them.
+    ///
+    /// Only the anonymous "anyone watched it" facts read these rows, so a
+    /// failed read is not the connection's failure: it is logged, and the
+    /// connection's read marker is removed so those two facts go unknown
+    /// until a read succeeds. The rows already stored are kept, exactly as a
+    /// failed participant read keeps that participant's rows.
+    ///
+    /// A marker that cannot be removed would leave the failed read looking
+    /// like the last good one, so that failure is returned for the
+    /// connection's state: the sweep is then incomplete, and every watch
+    /// fact holds until a sweep succeeds.
+    async fn sync_connection_audience(
+        &self,
+        connection: &MediaServerConnection,
+        reader: &dyn MediaServerSignalReader,
+        library: &ScryerLibraryPaths,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Option<SignalReadFailure> {
+        let result = self
+            .read_connection_audience(connection, reader, library, started_at)
+            .await;
+        let Err(failure) = result else {
+            return None;
+        };
+        warn!(
+            connection_id = connection.id.as_str(),
+            reason = failure.reason,
+            error = %failure,
+            "media-server audience read failed; the anonymous watch facts are unknown until one succeeds"
+        );
+        if let Err(error) = self
+            .services
+            .integrations
+            .media_server_signals
+            .clear_audience_read(&connection.id)
+            .await
+        {
+            warn!(
+                connection_id = connection.id.as_str(),
+                error = %error,
+                "could not clear the audience read marker; the sweep is recorded as incomplete"
+            );
+            return Some(store_failure(
+                "could not clear the audience read marker after a failed audience read",
+                error,
+            ));
+        }
+        None
+    }
+
+    async fn read_connection_audience(
+        &self,
+        connection: &MediaServerConnection,
+        reader: &dyn MediaServerSignalReader,
+        library: &ScryerLibraryPaths,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Result<u64, SignalReadFailure> {
+        let (accounts, items): (Vec<String>, Vec<ProviderPlayedItem>) = reader
+            .fetch_audience_plays()
+            .await?
+            .into_iter()
+            .filter(|play| play.item.played)
+            .map(|play| (play.external_account_id, play.item))
+            .unzip();
+        let (subjects, titles) = self
+            .map_played_items(&items)
+            .await
+            .map_err(|error| store_failure("could not map audience plays", error))?;
+
+        let mut plays = Vec::new();
+        let mut incomplete = false;
+        for ((account, item), subject) in accounts.into_iter().zip(&items).zip(subjects) {
+            if !subject.is_mapped() {
+                // As for a participant: a played movie nothing proves foreign
+                // could be a Scryer title the server never identified, and
+                // "nobody watched it" would then be wrong about it.
+                incomplete |= item.kind == MediaServerSignalKind::Movie
+                    && !is_foreign_item(item, &titles, library);
+                continue;
+            }
+            plays.push(AudiencePlay {
+                connection_id: connection.id.clone(),
+                external_account_id: account,
+                provider_item_id: item.provider_item_id.clone(),
+                kind: item.kind,
+                scryer_title_id: subject.title_id,
+                scryer_episode_id: subject.episode_id,
+                play_count: item.play_count,
+                last_played_at: item.last_played_at,
+            });
+        }
+        if incomplete {
+            return Err(SignalReadFailure::new(
+                reasons::UNMAPPED_PLAYED_MOVIES,
+                "played movies could not be matched to a Scryer title; the audience is incomplete",
+            ));
+        }
+        self.services
+            .integrations
+            .media_server_signals
+            .replace_connection_audience(&connection.id, &plays, started_at)
+            .await
+            .map_err(|error| store_failure("could not store audience plays", error))
     }
 
     /// The participant set: verified linked accounts on this connection
@@ -291,23 +537,32 @@ impl AppUseCase {
             .await
     }
 
-    /// Read, map, and replace one participant's signals. Returns
-    /// `(rows written, rows written unmapped, incomplete movie history)`.
+    /// Read, map, and replace one participant's signals.
+    ///
+    /// A played movie that maps to no Scryer title makes the read incomplete
+    /// only when nothing proves it is foreign: one with no usable external id
+    /// could be a Scryer title the server never identified, and one whose file
+    /// lies in a Scryer library could be Scryer's film identified as another.
+    /// One whose ids no Scryer title claims, with no file inside a library, is
+    /// simply something Scryer does not manage (a home video, a film outside
+    /// every library). See [`is_foreign_item`].
     async fn sync_one_participant(
         &self,
         connection: &MediaServerConnection,
+        reader: &dyn MediaServerSignalReader,
+        library: &ScryerLibraryPaths,
         external_user_id: &str,
-        scryer_user_id: &str,
-    ) -> AppResult<(u64, u64, bool)> {
-        let items = self
-            .services
-            .integrations
-            .media_server_signal_source
-            .fetch_played_items(connection, external_user_id)
-            .await?;
+        participant: &UserExternalAccount,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Result<ParticipantOutcome, SignalReadFailure> {
+        let scryer_user_id = participant.user_id.as_str();
+        let items = reader.fetch_played_items(external_user_id).await?;
 
         let observed_at = Utc::now();
-        let subjects = self.map_played_items(&items).await?;
+        let (subjects, titles) = self
+            .map_played_items(&items)
+            .await
+            .map_err(|error| store_failure("could not map played items", error))?;
         let mut unmapped = 0_u64;
         let mut incomplete = false;
 
@@ -317,7 +572,9 @@ impl AppUseCase {
             .map(|(item, subject)| {
                 if !subject.is_mapped() {
                     unmapped += 1;
-                    incomplete |= item.played && item.kind == MediaServerSignalKind::Movie;
+                    incomplete |= item.played
+                        && item.kind == MediaServerSignalKind::Movie
+                        && !is_foreign_item(item, &titles, library);
                 }
                 NewUserMediaSignal {
                     provider: connection.provider.clone(),
@@ -329,6 +586,7 @@ impl AppUseCase {
                     played: item.played,
                     play_count: item.play_count,
                     last_played_at: item.last_played_at,
+                    is_favorite: item.is_favorite,
                     observed_at,
                 }
             })
@@ -338,23 +596,42 @@ impl AppUseCase {
             .services
             .integrations
             .media_server_signals
-            .replace_participant_signals(&connection.id, external_user_id, &signals)
-            .await?;
+            .replace_participant_signals(
+                &connection.id,
+                external_user_id,
+                &signals,
+                // The link this read went through joins the roster in the
+                // same write as its signals: the watch gate observes exactly
+                // the links whose plays are stored.
+                Some(&SignalRosterLink {
+                    link_id: participant.id.clone(),
+                    scryer_user_id: scryer_user_id.to_string(),
+                    link_verified_at: participant.verified_at,
+                    sweep_started_at: started_at,
+                }),
+            )
+            .await
+            .map_err(|error| store_failure("could not store signals", error))?;
 
-        Ok((written, unmapped, incomplete))
+        Ok(ParticipantOutcome {
+            written,
+            unmapped,
+            incomplete,
+        })
     }
 
     /// Map a whole participant's items in two batched reads: one external-id
     /// lookup for every item, then one episode read per distinct series that
     /// actually resolved.
     ///
-    /// The returned vector is positionally aligned with `items`.
+    /// The returned vector is positionally aligned with `items`; the title
+    /// index it was resolved against comes back beside it.
     async fn map_played_items(
         &self,
         items: &[ProviderPlayedItem],
-    ) -> AppResult<Vec<MappedSignalSubject>> {
+    ) -> AppResult<(Vec<MappedSignalSubject>, TitleExternalIdIndex)> {
         if items.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), TitleExternalIdIndex::new()));
         }
 
         let titles = self.signal_title_index(items).await?;
@@ -371,10 +648,11 @@ impl AppUseCase {
 
         let episodes = self.signal_episode_index(&series_ids).await?;
 
-        Ok(items
+        let subjects = items
             .iter()
             .map(|item| resolve_subject(item, &titles, &episodes))
-            .collect())
+            .collect();
+        Ok((subjects, titles))
     }
 
     /// One batched `title_external_ids` join covering every id every item

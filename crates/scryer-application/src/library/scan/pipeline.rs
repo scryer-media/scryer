@@ -299,25 +299,31 @@ async fn run_library_scan_pipeline_with_discovery(
         discovered,
     )?;
 
-    let worker_handle = app.restore_coordinator().spawn_task(run_scan_match_worker(
-        ScanMatchWorkerContext {
-            app: app.clone(),
-            actor: actor.clone(),
-            facet: facet.clone(),
-            library_id: library_id.to_string(),
-            library_path: library_path.to_string(),
-            session_id: session_id.to_string(),
-            library: app
-                .library_by_id_for_scan_root_heal(library_id)
-                .await
-                .unwrap_or(None),
-            metadata_language: app.metadata_language().await,
-            kind,
-        },
-        match_input_rx,
-        match_events_tx,
-        cancel_token.clone(),
-    ));
+    let worker_handle =
+        app.restore_coordinator()
+            .spawn_task(crate::folder_ownership::with_scan_ownership(
+                crate::folder_ownership::ScanOwnershipContext::current(),
+                run_scan_match_worker(
+                    ScanMatchWorkerContext {
+                        final_root: mark_discovery_complete_on_drain,
+                        app: app.clone(),
+                        actor: actor.clone(),
+                        facet: facet.clone(),
+                        library_id: library_id.to_string(),
+                        library_path: library_path.to_string(),
+                        session_id: session_id.to_string(),
+                        library: app
+                            .library_by_id_for_scan_root_heal(library_id)
+                            .await
+                            .unwrap_or(None),
+                        metadata_language: app.metadata_language().await,
+                        kind,
+                    },
+                    match_input_rx,
+                    match_events_tx,
+                    cancel_token.clone(),
+                ),
+            ));
 
     let pool_policy = LibraryScanMediaAnalysisPolicy::full_scan_pipeline(
         app,
@@ -612,6 +618,7 @@ async fn run_library_scan_pipeline_with_discovery(
         }
 
         try_mark_file_total_known(TotalKnownLatchContext {
+            final_root: mark_discovery_complete_on_drain,
             coordinator: &coordinator,
             pool: &mut pool,
             candidates: &candidates,
@@ -811,6 +818,7 @@ async fn run_library_scan_pipeline_with_discovery(
         hydration.abort_and_drain().await;
     } else {
         drain_hydration_into_media(StreamingHydrationDrainContext {
+            final_root: mark_discovery_complete_on_drain,
             coordinator: &coordinator,
             pool: &mut pool,
             candidates: &candidates,
@@ -832,6 +840,7 @@ async fn run_library_scan_pipeline_with_discovery(
             summary.matched = summary.matched.saturating_sub(media_dedup_skips);
         }
         try_mark_file_total_known(TotalKnownLatchContext {
+            final_root: mark_discovery_complete_on_drain,
             coordinator: &coordinator,
             pool: &mut pool,
             candidates: &candidates,
@@ -845,7 +854,7 @@ async fn run_library_scan_pipeline_with_discovery(
             facet,
         })
         .await?;
-        if !canceled && !file_total_marked {
+        if mark_discovery_complete_on_drain && !canceled && !file_total_marked {
             log_file_total_latch_blocked(&candidates, media_file_total_counted, started_at);
         }
 
@@ -1197,6 +1206,7 @@ async fn handle_inventory_job_event(
 }
 
 struct TotalKnownLatchContext<'a> {
+    final_root: bool,
     coordinator: &'a LibraryScanCoordinator,
     pool: &'a mut LibraryScanMediaAnalysisPool,
     candidates: &'a HashMap<ScanCandidateKey, CandidateRuntime>,
@@ -1211,7 +1221,10 @@ struct TotalKnownLatchContext<'a> {
 }
 
 async fn try_mark_file_total_known(ctx: TotalKnownLatchContext<'_>) -> AppResult<()> {
-    if *ctx.file_total_marked
+    // The session spans every configured root. Freezing this total after an
+    // earlier root would discard subsequent roots' file-count deltas.
+    if !ctx.final_root
+        || *ctx.file_total_marked
         || !ctx.match_done
         || library_scan_cancel_requested(ctx.cancel_token)
         || !matched_inventory_totals_ready(ctx.candidates)
@@ -1431,6 +1444,7 @@ async fn commit_hydration_batch(
 }
 
 struct StreamingHydrationDrainContext<'a> {
+    final_root: bool,
     coordinator: &'a LibraryScanCoordinator,
     pool: &'a mut LibraryScanMediaAnalysisPool,
     candidates: &'a HashMap<ScanCandidateKey, CandidateRuntime>,
@@ -1446,6 +1460,7 @@ struct StreamingHydrationDrainContext<'a> {
 
 async fn drain_hydration_into_media(ctx: StreamingHydrationDrainContext<'_>) -> AppResult<()> {
     try_mark_file_total_known(TotalKnownLatchContext {
+        final_root: ctx.final_root,
         coordinator: ctx.coordinator,
         pool: ctx.pool,
         candidates: ctx.candidates,
@@ -1467,6 +1482,7 @@ async fn drain_hydration_into_media(ctx: StreamingHydrationDrainContext<'_>) -> 
         let batch_len = batch.ready.len().saturating_add(batch.failed.len());
         commit_hydration_batch(ctx.pool, batch).await?;
         try_mark_file_total_known(TotalKnownLatchContext {
+            final_root: ctx.final_root,
             coordinator: ctx.coordinator,
             pool: ctx.pool,
             candidates: ctx.candidates,
@@ -2295,6 +2311,7 @@ async fn run_movie_candidate_jobs_from_discovery(
                     .await;
                 continue;
             }
+            let boundary_evidence = entry.evidence;
             let entry = MovieTopLevelEntry {
                 path: entry.path,
                 is_dir: true,
@@ -2304,7 +2321,16 @@ async fn run_movie_candidate_jobs_from_discovery(
             let library_path = ctx.library_path.clone();
             let scan_hints = ctx.scan_hints.clone();
             runner.evidence_set.spawn(async move {
-                movie_evidence_job(scanner, entry, library_path, scan_hints, key).await
+                let mut output =
+                    movie_evidence_job(scanner, entry, library_path, scan_hints, key).await;
+                if let EvidenceJobOutput::Candidate {
+                    candidate: ScanPipelineCandidate::Movie(candidate),
+                    ..
+                } = &mut output
+                {
+                    candidate.boundary_evidence = boundary_evidence;
+                }
+                output
             });
         }
 
@@ -2588,6 +2614,7 @@ async fn series_evidence_job(
 }
 
 struct ScanMatchWorkerContext {
+    final_root: bool,
     app: AppUseCase,
     actor: User,
     facet: MediaFacet,
@@ -2910,7 +2937,7 @@ async fn run_scan_match_worker(
         }
     }
 
-    if !library_scan_cancel_requested(cancel_token.as_ref()) {
+    if ctx.final_root && !library_scan_cancel_requested(cancel_token.as_ref()) {
         coordinator.mark_metadata_total_known().await;
         coordinator.publish_progress().await;
     }
@@ -3513,6 +3540,7 @@ mod tests {
                     .iter()
                     .map(
                         |(_, path, _)| crate::library_discovery::TitleFolderBoundary {
+                            evidence: None,
                             path: path.clone(),
                             rejection: None,
                         },
@@ -3638,6 +3666,7 @@ mod tests {
             let boundaries = expected
                 .iter()
                 .map(|path| crate::library_discovery::TitleFolderBoundary {
+                    evidence: None,
                     path: PathBuf::from(path),
                     rejection: None,
                 })

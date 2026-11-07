@@ -241,7 +241,7 @@ export function HistoryEventDetailContent({
           <span
             className={cn(
               "min-w-0 text-foreground",
-              key.endsWith("_path") && "font-[var(--font-code)]",
+              key.endsWith("_path") && "font-[family-name:var(--font-code)]",
             )}
           >
             {key === "reason" && DOWNLOAD_REASON_KEYS[value]

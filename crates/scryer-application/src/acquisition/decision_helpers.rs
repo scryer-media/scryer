@@ -271,7 +271,6 @@ impl AppUseCase {
         category_hint: Option<&str>,
         analyzed_quality: Option<&str>,
     ) -> AppResult<ResolvedUpgradeContext> {
-        let category = upgrade_context_category(title, category_hint);
         // Resolution failures propagate: scoring against a substitute profile
         // silently makes the wrong upgrade decision, which is exactly the
         // failure mode the strict resolver exists to prevent.
@@ -304,11 +303,8 @@ impl AppUseCase {
                 )
             });
 
-        let persona = self
-            .resolve_scoring_persona(Some(title.library_id.as_str()), Some(category))
-            .await
-            .unwrap_or_default();
-        let thresholds = self.acquisition_thresholds(&persona).await;
+        // The same-tier delta belongs to the profile that judges the title.
+        let thresholds = AcquisitionThresholds::for_profile(&profile.criteria);
 
         Ok(ResolvedUpgradeContext {
             profile,

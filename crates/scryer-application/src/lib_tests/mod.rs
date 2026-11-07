@@ -27,6 +27,7 @@ mod downloads;
 pub(crate) use downloads::RecordingDownloadRegistry;
 mod episode_file_delete;
 mod episode_metadata_refresh;
+mod file_privacy;
 mod folder_match;
 mod full_hash_backfill;
 mod golden_resolution_corpus;
@@ -57,6 +58,7 @@ mod maintenance_sequence_history;
 mod maintenance_storage_execution;
 mod maintenance_title_completion;
 mod maintenance_watch_facts;
+mod maintenance_watch_recheck;
 mod media_analysis;
 mod media_requests;
 mod media_server_signals;
@@ -116,6 +118,7 @@ pub(crate) use support_imports::MockMediaFileRepo;
 use support_imports::*;
 use support_indexers_metadata::*;
 use support_library_show::*;
+pub(crate) use support_library_show::{replace_library_roots, with_stored_root_ids};
 use support_settings_scan::*;
 
 /// An isolated writable acquisition ledger for fixtures that record grabs.

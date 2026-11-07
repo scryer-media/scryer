@@ -114,7 +114,10 @@ import { exclusionInputFromTitle } from "@/lib/utils/lists";
 import type { Facet } from "@/lib/types/titles";
 import { useTitleMoreLikeThisActions } from "@/lib/hooks/use-title-more-like-this-actions";
 import { useTitleOverviewReactiveRefresh } from "@/lib/hooks/use-title-overview-reactive-refresh";
-import { useCanManageOverviewTitle } from "@/lib/hooks/use-title-overview-access";
+import {
+  useCanManageOverviewTitle,
+  useCanViewTitleInternals,
+} from "@/lib/hooks/use-title-overview-access";
 import { useTitleDownloadFeedback } from "@/lib/hooks/use-title-download-feedback";
 import { useTitleRefreshAndScan } from "@/lib/hooks/use-title-refresh-and-scan";
 import { useTitleReleaseBlocklistClear } from "@/lib/hooks/use-title-release-blocklist-clear";
@@ -364,6 +367,7 @@ type SeriesOverviewSnapshotTitle = TitleDetail & {
 type SeriesOverviewContainerProps = {
   titleId: string;
   fullBleedHero?: boolean;
+  heroLeadingAction?: React.ReactNode;
   onTitleNotFound?: () => void;
   onBackToList?: () => void;
   onTitleResolved?: (title: OverviewTitleTarget) => void;
@@ -417,6 +421,7 @@ export const SeriesOverviewContainer = React.memo(
   function SeriesOverviewContainer({
     titleId,
     fullBleedHero,
+    heroLeadingAction,
     onTitleNotFound,
     onBackToList,
     onTitleResolved,
@@ -435,6 +440,7 @@ export const SeriesOverviewContainer = React.memo(
       useDownloadConflictConfirmation();
     const [title, setTitle] = React.useState<TitleDetail | null>(null);
     const canManageTitle = useCanManageOverviewTitle(title?.libraryId);
+    const canViewTitleInternals = useCanViewTitleInternals(title?.libraryId);
     const canAddDiscoveryItems = hasAnyLibraryPermission(
       auth.user,
       LIBRARY_PERMISSIONS.manageTitles,
@@ -541,6 +547,7 @@ export const SeriesOverviewContainer = React.memo(
       refresh: refreshDownloadFeedback,
     } = useTitleDownloadFeedback({
       titleId: titleId ?? null,
+      libraryId: title?.libraryId ?? null,
       hasDownloadClients,
     });
     const searchAction = useTitleSearchAction({
@@ -939,6 +946,7 @@ export const SeriesOverviewContainer = React.memo(
       titleId,
       blocklistLimit: 300,
       projection: "SERIES",
+      includePrivileged: canViewTitleInternals,
       applyOverviewSnapshot: applySidePanelOverviewSnapshot,
       importKinds: TITLE_OVERVIEW_IMPORT_REFRESH_KINDS,
       pause: !titleId,
@@ -986,7 +994,13 @@ export const SeriesOverviewContainer = React.memo(
           TitleHistoryEvent,
           TitleReleaseBlocklistEntry,
           ExternalSubtitleRecord
-        >(client, requestedTitleId, 300, seriesSidePanelOverviewQuery);
+        >(
+          client,
+          requestedTitleId,
+          300,
+          seriesSidePanelOverviewQuery,
+          canViewTitleInternals,
+        );
         if (currentTitleIdRef.current !== requestedTitleId) {
           return;
         }
@@ -1000,6 +1014,7 @@ export const SeriesOverviewContainer = React.memo(
       },
       [
         applySidePanelOverviewSnapshot,
+        canViewTitleInternals,
         client,
         refreshTitleMoreLikeThis,
         titleId,
@@ -2315,6 +2330,7 @@ export const SeriesOverviewContainer = React.memo(
         <SeriesOverviewView
           canManageTitle={canManageTitle}
           fullBleedHero={fullBleedHero}
+          heroLeadingAction={heroLeadingAction}
           loading={loading}
           hydrating={hydrating}
           title={title}

@@ -3,6 +3,61 @@ import type { LocaleDictionary } from "../types";
 const ja: LocaleDictionary = {
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "この Prowlarr のバージョンはサポートされていません。Prowlarr を 2.0 以降に更新してください。",
+  "error.reason.STANDBY_NOT_FOUND": "この保存済み候補はもう存在しません。",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "この保存済み候補は利用できなくなりました。一覧を更新して再試行してください。",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "保存済みリリースをキューに追加できませんでした。再試行は引き続き可能です。",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "このリリースはタイトルのブロックリストに登録されています。キューに追加するにはブロックリストから削除してください。",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "このリリースはすでにダウンロードキューにあります。",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "このタイトルで別の検索またはキュー操作が実行中です。完了後に再試行してください。",
+  "wanted.standby": "スタンバイ · {{count}}",
+  "wanted.standbyTooltip":
+    "現在の取得が失敗した場合、保存済みの候補 {{count}} 件が順に試されます。",
+  "wanted.standbyScopeNote":
+    "この範囲に紐づく行を数えます。シーズンパックはシーズンの基準エピソードで数えます。",
+  "wanted.loadingStandby": "保存済みの候補を読み込み中…",
+  "wanted.standbyCandidates": "スタンバイ候補 · {{count}}",
+  "wanted.downloadStandby": "ダウンロード",
+  "wanted.downloadStandbyLabel": "{{name}} をダウンロード",
+  "wanted.standbyConflictTitle": "進行中のダウンロードがあります",
+  "wanted.standbyConflictDescription":
+    "これらのダウンロードと並行して {{name}} をキューに追加するか、それらをキャンセルして代わりにキューに追加します。",
+  "wanted.standbyQueue": "キューに追加",
+  "wanted.standbyQueuedRefreshFailed":
+    "リリースはキューに追加されましたが、一覧を更新できませんでした。ページを再読み込みして現在の状態を確認してください。",
+  "wanted.standbyCancelAndQueue": "キャンセルしてキューに追加",
+  "wanted.standbyQueuedCancelFailed":
+    "リリースはキューに追加されましたが、競合するダウンロード {{count}} 件をキャンセルできず、まだ実行中です。",
+  "wanted.standbyRank": "順位 {{rank}}",
+  "wanted.standbyIndexer": "インデクサー",
+  "wanted.standbySize": "サイズ",
+  "wanted.standbySeeders": "シーダー",
+  "wanted.standbyScore": "スコア",
+  "wanted.standbyAge": "経過時間",
+  "wanted.seasonPack": "シーズンパック",
+  "wanted.noStandbyCandidates": "スタンバイ候補なし",
+  "settings.oauthJellyfinCallbackCopied":
+    "Jellyfin のコールバック URL をコピーしました。",
+  "settings.oauthClientIdCopied": "OAuth クライアント ID をコピーしました。",
+  "status.copyFailedSelected":
+    "コピーできませんでした。テキストは選択済みです。Ctrl+C または ⌘C を押してください。",
+  "status.copyFailed":
+    "コピーできませんでした。ブラウザーがクリップボードへのアクセスを拒否しました。",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "メディアを検証できないため、ライブラリの既存ファイルを置き換えることはできません。",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "このプレイリストまたは付随ファイルは他のファイルに依存する可能性があるため、確認が必要です。",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "メディアを読み取れませんでした。ソースへのアクセスを確認して再試行してください。",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "メディアの構造が不正です。インポートする前にソースファイルを確認してください。",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "メディアは暗号化されているため、検証できませんでした。",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "システム時計が5分以上ずれているため、Scryerはメタデータゲートウェイに接続できません。システム時計を同期してScryerを再起動してください。",
   "httpRelease.refusal.detailsUnavailable":
@@ -239,7 +294,8 @@ const ja: LocaleDictionary = {
   "nav.logs": "ログ",
   "nav.serviceLogs": "サービスログ",
   "nav.auditLogs": "監査ログ",
-  "nav.usersAccess": "ユーザーとアクセス",
+  "nav.users": "ユーザー",
+  "nav.securityAccess": "セキュリティとアクセス",
   "nav.mobileTitle": "Scryerナビゲーション",
   "nav.mobileDescription": "Scryerのメインナビゲーション",
   "nav.mobileTrigger": "ナビゲーションを開く",
@@ -321,7 +377,6 @@ const ja: LocaleDictionary = {
   "dashboard.queueCountOne": "1 件実行中",
   "settings.profile": "プロファイル",
   "settings.general": "一般",
-  "settings.security": "Security",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",
@@ -494,7 +549,6 @@ const ja: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "キープアライブは秒単位の整数で、0 を指定すると無効になります。",
   "status.proxyTunnelPublicKeyCopied": "公開鍵をコピーしました。",
-  "status.proxyTunnelPublicKeyCopyFailed": "公開鍵をコピーできませんでした。",
   "settings.qualityProfiles": "品質プロファイル",
   "settings.downloadClients": "ダウンロードクライアント",
   "settings.downloadClientRouting": "ダウンロードクライアントルーティング",
@@ -659,9 +713,8 @@ const ja: LocaleDictionary = {
   "settings.acquisitionEnabled": "自動取得を有効にする",
   "settings.acquisitionEnabledHelp":
     "バックグラウンドの取得ループ（収束検索とRSSマッチング）を実行します。",
-  "settings.acquisitionThresholds": "アップグレードしきい値",
-  "settings.acquisitionSameTierMinDelta": "同一ティア内の最小スコア差",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "同一ティア内の最小スコア差",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "同じ品質ティアのリリースは、現在のファイルのスコアを少なくともこの値だけ上回る必要があります。",
   "settings.acquisitionConvergence": "収束とペース",
   "settings.acquisitionPollIntervalSeconds": "ポーリング間隔（秒）",
@@ -880,11 +933,8 @@ const ja: LocaleDictionary = {
     "{{total}}件、{{renamable}}件変更可能、{{noop}}件変更なし、{{conflicts}}件競合、{{errors}}件エラー",
   "settings.sectionTitle": "設定 • {{section}}",
   "settings.generalText": "一般アプリケーション設定。",
-  "settings.verificationDepthTitle": "インポートコピーの検証",
   "settings.verificationDepthHelp":
     "コピーしたファイルをどこまで厳密に検証してから元のファイルに手を付けるかを決めます。",
-  "settings.verificationDepthScope":
-    "これはダウンロードクライアントからのインポートコピーにのみ適用されます。ライブラリやルートの移動は、ここでの選択に関係なく常に完全に検証されます。",
   "settings.verificationDepthLabel": "検証の深さ",
   "settings.verificationDepthFull": "完全な読み戻し",
   "settings.verificationDepthFullHelp":
@@ -912,6 +962,58 @@ const ja: LocaleDictionary = {
     "SABnzbd または NZBGet からの自動インポートに難読化された名前の動画ファイルが含まれる場合、Scryer は各ファイルの CRC-32 チェックサムとサイズをサードパーティのサービスである srrdb.com に送信し、元のファイル名を照会します。ライブラリやファイルに関するそれ以外の情報は送信されません。ディスク上のファイルの名前が変更されることはありません。",
   "discovery.personalizedDisabled":
     "このインスタンスではパーソナライズされたディスカバリーが無効になっています。",
+  "discovery.section.fromYourWatchlist": "ウォッチリストから",
+  "discovery.rail.becauseYouLike.action": "アクションが好きなあなたへ",
+  "discovery.rail.becauseYouLike.adventure": "アドベンチャーが好きなあなたへ",
+  "discovery.rail.becauseYouLike.comedy": "コメディが好きなあなたへ",
+  "discovery.rail.becauseYouLike.crime": "クライムが好きなあなたへ",
+  "discovery.rail.becauseYouLike.documentary":
+    "ドキュメンタリーが好きなあなたへ",
+  "discovery.rail.becauseYouLike.drama": "ドラマが好きなあなたへ",
+  "discovery.rail.becauseYouLike.family": "ファミリー向け作品が好きなあなたへ",
+  "discovery.rail.becauseYouLike.fantasy": "ファンタジーが好きなあなたへ",
+  "discovery.rail.becauseYouLike.history": "歴史ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.horror": "ホラーが好きなあなたへ",
+  "discovery.rail.becauseYouLike.mystery": "ミステリーが好きなあなたへ",
+  "discovery.rail.becauseYouLike.romance": "ロマンスが好きなあなたへ",
+  "discovery.rail.becauseYouLike.science-fiction": "SF が好きなあなたへ",
+  "discovery.rail.becauseYouLike.thriller": "スリラーが好きなあなたへ",
+  "discovery.rail.becauseYouLike.war": "戦争ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.western": "西部劇が好きなあなたへ",
+  "discovery.rail.becauseYouLike.sports": "スポーツものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.supernatural": "超常現象ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.coming-of-age": "青春ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.found-family": "疑似家族ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.revenge": "復讐劇が好きなあなたへ",
+  "discovery.rail.becauseYouLike.heist": "強盗ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.time-travel": "タイムトラベルが好きなあなたへ",
+  "discovery.rail.becauseYouLike.dystopia": "ディストピアが好きなあなたへ",
+  "discovery.rail.becauseYouLike.cyberpunk": "サイバーパンクが好きなあなたへ",
+  "discovery.rail.becauseYouLike.superhero": "スーパーヒーローが好きなあなたへ",
+  "discovery.rail.becauseYouLike.vampire": "ヴァンパイアが好きなあなたへ",
+  "discovery.rail.becauseYouLike.zombie": "ゾンビが好きなあなたへ",
+  "discovery.rail.becauseYouLike.survival": "サバイバルが好きなあなたへ",
+  "discovery.rail.becauseYouLike.space": "宇宙ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.detective": "探偵ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "組織犯罪ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.period-drama": "時代劇が好きなあなたへ",
+  "discovery.rail.becauseYouLike.psychological": "心理劇が好きなあなたへ",
+  "discovery.rail.becauseYouLike.mythology": "神話が好きなあなたへ",
+  "discovery.rail.becauseYouLike.isekai": "異世界ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.mecha": "メカが好きなあなたへ",
+  "discovery.rail.becauseYouLike.martial-arts": "武術ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.music": "音楽ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.workplace": "お仕事ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.medical": "医療ドラマが好きなあなたへ",
+  "discovery.rail.becauseYouLike.military": "軍事ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.spy": "スパイものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.royal-politics": "宮廷劇が好きなあなたへ",
+  "discovery.rail.becauseYouLike.first-love": "初恋ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.forbidden-love": "禁断の恋が好きなあなたへ",
+  "discovery.rail.becauseYouLike.lgbtq": "LGBTQ+ 作品が好きなあなたへ",
+  "discovery.rail.becauseYouLike.samurai": "侍ものが好きなあなたへ",
+  "discovery.rail.becauseYouLike.magical-girl": "魔法少女ものが好きなあなたへ",
   "settings.keepHistoryForever": "履歴を無期限に保持",
   "settings.historyRetentionDaysHeader": "履歴を保持する期間",
   "settings.historyRetentionDaysSuffix": "日",
@@ -1018,6 +1120,8 @@ const ja: LocaleDictionary = {
   "toast.viewInCatalog": "カタログで表示",
 
   "label.back": "戻る",
+  "label.copy": "コピー",
+  "label.copied": "コピーしました",
   "label.dismiss": "閉じる",
   "pwa.offline": "オフラインです。一部の機能が利用できない場合があります。",
   "pwa.installApp": "Scryerをインストール",
@@ -1068,6 +1172,50 @@ const ja: LocaleDictionary = {
   "title.viewModeCompact": "コンパクト",
   "title.viewModePosterTable": "リスト",
   "title.viewModePoster": "ポスター表示",
+  "title.viewModeGraph": "グラフ表示",
+  "libraryGraph.regionLabel": "ライブラリグラフ",
+  "libraryGraph.sizeByLabel": "サイズの基準",
+  "libraryGraph.sizeBy.ratingEvidence": "評価の裏付け",
+  "libraryGraph.sizeBy.rating": "評価",
+  "libraryGraph.sizeBy.popularity": "人気度",
+  "libraryGraph.resetView": "グラフ全体を表示",
+  "libraryGraph.clustersLabel": "クラスター",
+  "libraryGraph.clusterAroundTitle": "{{title}} の周辺",
+  "libraryGraph.unplaced": "未分類のタイトル",
+  "libraryGraph.collapsedCluster": "{{name}}（{{count}} タイトル）",
+  "libraryGraph.collapseCluster": "{{name}} を折りたたむ",
+  "libraryGraph.linkedBy": "つながりの理由",
+  "libraryGraph.empty":
+    "この表示のタイトルはまだライブラリグラフに含まれていません。",
+  "libraryGraph.edgeKind.semantic": "類似",
+  "libraryGraph.edgeKind.sequel": "続編",
+  "libraryGraph.edgeKind.prequel": "前日譚",
+  "libraryGraph.edgeKind.coWatch": "一緒に視聴されることが多い",
+  "libraryGraph.edgeKind.relation": "関連",
+  "libraryGraph.edgeKind.affinity": "共通の関心: {{label}}",
+  "libraryGraph.edgeKind.sharedTaste": "共通の関心",
+  "libraryGraph.edgeKind.other": "つながり",
+  "libraryGraph.edgeKind.recommendation": "おすすめ",
+  "libraryGraph.notBuilt": "ライブラリグラフはまだ作成されていません。",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "この作品はこれ以上探索できません。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "この作品はこのライブラリのメディアの種類と一致しないため、ここでは探索できません。",
+  "libraryGraph.moreLikeThisEmpty": "似た作品はまだありません。",
+  "libraryGraph.backToOverview": "概要に戻る",
+  "libraryGraph.findingMoreLikeThis": "似た作品を探しています…",
+  "libraryGraph.reason.recommendedBy": "{{sources}} でおすすめ",
+  "libraryGraph.reason.similarOn": "{{sources}} で類似",
+  "libraryGraph.reason.shares": "共通点: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "おすすめのグループ",
+  "libraryGraph.notInLibrary": "ライブラリにありません",
+  "libraryGraph.inLibrary": "ライブラリにあります",
+  "libraryGraph.openTitle": "タイトルを開く",
+  "libraryGraph.exploredGroup": "探索済み",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}、ライブラリにありません",
+  "libraryGraph.trailLabel": "探索済み",
+  "libraryGraph.canvasLabel":
+    "ライブラリグラフ。矢印キーでクラスター内の作品を移動し、Enter で開きます。",
   "title.seasonMonitored": "シーズンモニタリング中",
   "title.episodeMonitored": "エピソードモニタリング中",
   "title.deleteFilesOnDisk": "ディスク上のファイルを削除",
@@ -1442,7 +1590,6 @@ const ja: LocaleDictionary = {
   "settings.ruleAppliedFacets": "適用タイプ",
   "settings.ruleAppliedFacetsHelp":
     "空欄にするとすべてのメディアタイプに適用されます。",
-  "settings.ruleValidate": "検証",
   "settings.ruleValidating": "検証中…",
   "settings.ruleValid": "ルールは有効です。",
   "settings.ruleValidationRequired": "名前とRegoソースは必須です。",
@@ -2514,8 +2661,6 @@ const ja: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "除外する",
   "settings.maintenanceExcluded": "{{title}} をメンテナンスから除外しました。",
   "move.dialogTitle": "タイトルを移動",
-  "move.dialogDescription":
-    "移動する前に、選択した {{count}} 件のタイトルの計画を確認してください。",
   "move.destinationLibrary": "移動先ライブラリ",
   "move.destinationRoot": "移動先ルート",
   "move.destinationRootPlaceholder": "ルートを選択",
@@ -2523,13 +2668,8 @@ const ja: LocaleDictionary = {
   "move.actionDescription":
     "このタイトルのファイルを別のルートフォルダ、または別のライブラリへ移動します。",
   "move.actionButton": "移動…",
-  "move.wizardKindDescription": "このタイトルの移動先を選択してください。",
   "move.kindRootHeading": "別のルートへ移動",
-  "move.kindRootHelp":
-    "タイトルはこのライブラリに残したまま、ファイルを同じライブラリの別のルートフォルダへ移動します。",
   "move.kindLibraryHeading": "別のライブラリへ移動",
-  "move.kindLibraryHelp":
-    "タイトルを別のライブラリへ、そのライブラリのいずれかのルートへ転送します。",
   "move.noOtherRoots":
     "このライブラリには移動先となる別のルートフォルダがありません。ライブラリにルートを追加するか、別のライブラリへ移動してください。",
   "move.back": "戻る",
@@ -2573,8 +2713,6 @@ const ja: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "これらのファイルはここでは 2 つのエピソードに登録されていますが、移動先では 1 つのエピソードです。移動先では各ファイルが 1 回だけ登録されます。",
   "move.mergeRoleUnnamedFile": "ファイル {{id}}",
-  "move.operationTransferNote":
-    "これらのタイトルは別のライブラリへ移動しています。",
   "move.modeHeading": "ファイルをどのように移しますか？",
   "move.mode.MOVE_WITH_SCRYER": "Scryer で移動",
   "move.mode.FILES_ALREADY_THERE": "ファイルは既にそこにある",
@@ -2617,10 +2755,6 @@ const ja: LocaleDictionary = {
     "{{files}} ファイル（{{bytes}}）を先頭・末尾・サイズで照合します。",
   "move.verificationNotApplicable":
     "移動するファイルがないため、検証するものはありません。",
-  "move.verificationStampFull": "検証済み（完全）",
-  "move.verificationStampQuick": "検証済み（簡易）",
-  "move.verificationFallbackCount":
-    "{{count}} ファイルが簡易チェックにフォールバックしました",
   "move.typedConfirmationPrompt": "確認のためフレーズを入力してください",
   "move.confirm": "移動を開始",
   "move.startFailed": "移動を開始できませんでした。",
@@ -2704,7 +2838,6 @@ const ja: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "ルート統合",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "ライブラリ間転送",
   "move.toastPreparing": "準備中…",
-  "move.toastTransferred": "転送済み",
   "move.toastTitlesProgress": "{{current}} / {{total}} 件のタイトル",
   "move.toastDoneSubtitle": "移動完了 · {{count}} 件のタイトル",
   "move.toastWarningsSubtitle": "警告付きで完了 · {{count}} 件のタイトル",
@@ -3579,6 +3712,62 @@ const ja: LocaleDictionary = {
     "ファイルを新しい名前へ移動できませんでした。ファイルとエピソードは元のままです。",
   "pendingImports.reason.anime_numbering_ambiguous":
     "エピソード番号があいまいです",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "保留: メディアサーバーで再生中です。",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "保留: メディアサーバーに再生状況を問い合わせられませんでした。",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "保留: メディアサーバーに保存済みの視聴履歴より新しい再生があります。",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "保留: メディアサーバーの履歴に、視聴履歴の対象外のアカウントによる再生があります。",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "保留: 実行前にメディアサーバーで視聴履歴を確認できませんでした。",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "保留: 接続されたメディアサーバーに一致する項目がないため、実行前に視聴履歴を確認できませんでした。",
+  "settings.refMaintFactsWatchedByAnyone":
+    "接続済みメディアサーバーにアカウントを持つ誰かが、Scryer とのリンクの有無にかかわらず再生したかどうか。個人は特定しません",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "接続済みメディアサーバーにアカウントを持つ誰かが最後に再生した日時",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "有効なメディアサーバー上のいずれかのアカウントが再生した場合に true。アカウントが Scryer ユーザーにリンクされているかは問いません。シーズンと番組では放送済みのいずれかのエピソードが対象です。過去 48 時間以内の同期がすべての有効な接続のすべてのアカウントを読み取るまでは理由 audience_not_read で不明となり、視聴ファクトが不明な場合は通常の理由で不明になります。",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "いずれかのアカウントによる最新の再生の RFC3339 タイムスタンプ。誰も再生していない場合は理由 never_watched で値なし、再生に記録時刻がない場合は理由 play_time_missing(シーズンと番組では episode_play_time_missing)、すべてのアカウントが読み取られていない場合は audience_not_read で不明になります",
+  "settings.maintenancePreviewFacts": "ルールが読み取ったファクト",
+  "setup.sourceImportProgress": "ソースをインポート中",
+  "setup.sourceImportInvalidRequest":
+    "選択したソースを利用できません。ソースの検出を更新して、もう一度選択してください。",
+  "setup.sourceImportSelectionChanged":
+    "送信したソースの選択は変更できません。失敗したソースは概要から再試行してください。",
+  "setup.sourceImportNotOwned":
+    "このソースのインポートはお使いのアカウントでは利用できません。",
+  "setup.sourceImportQueueFull":
+    "ソースのインポート容量がいっぱいです。他のインポートが完了してから再試行してください。",
+  "setup.sourceImportActive": "このソースのインポートはまだ実行中です。",
+  "setup.sourceImportNotRetryable":
+    "再試行またはスキップできるのは、失敗または中断したソースのみです。",
+  "setup.sourceImportUnresolved":
+    "セットアップを完了する前に、未解決のソースを再試行するか明示的にスキップしてください。",
+  "setup.sourceImportCredentialRequired":
+    "続行する前にソースの認証情報を入力してください。",
+  "setup.sourceImportConfigConflict":
+    "予約された設定が変更されました。再試行する前にソースを確認してください。",
+  "setup.sourceImportSourceNotReady":
+    "続行する前にソースの検出が完了するまでお待ちください。",
+  "setup.sourceImportResume": "進行状況に再接続",
+  "setup.sourceImportLoading": "ソースのインポート進行状況を読み込み中",
+  "setup.sourceImportCredential": "{{name}} の修正済み認証情報",
+  "setup.sourceImportRetry": "失敗したソースを再試行",
+  "setup.sourceImportSkip": "このソースをスキップ",
+  "setup.sourceImportItemFailed":
+    "接続と認証情報を確認してから、再試行またはスキップしてください。",
+  "setup.sourceImportState.queued": "待機中",
+  "setup.sourceImportState.installing": "プロバイダーをインストール中",
+  "setup.sourceImportState.checking": "接続を確認中",
+  "setup.sourceImportState.saving": "設定を保存中",
+  "setup.sourceImportState.succeeded": "インポート済み",
+  "setup.sourceImportState.failed": "失敗",
+  "setup.sourceImportState.interrupted": "中断",
+  "setup.sourceImportState.skipped": "スキップ済み",
 };
 
 export default ja;

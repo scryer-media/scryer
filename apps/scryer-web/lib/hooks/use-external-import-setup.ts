@@ -7,6 +7,8 @@ import {
   isProwlarrDiscoveryReady,
   pollExternalImportFinalize,
   runFinalizeStart,
+  preferSourceImportSnapshot,
+  sourceImportPollingSettled,
   type FinalizeStatusSample,
 } from "@/lib/external-import-wizard-orchestration";
 import {
@@ -14,7 +16,10 @@ import {
   clearExternalImportSetupSecretDraftMutation,
   createLibraryMutation,
   completeSetupMutation,
-  executeExternalImportMutation,
+  startExternalImportSourcesMutation,
+  externalImportSourceStatusMutation,
+  retryExternalImportSourcesMutation,
+  skipExternalImportSourceMutation,
   finalizeExternalImportMutation,
   previewExternalImportMutation,
   saveExternalImportSetupSecretDraftMutation,
@@ -32,8 +37,14 @@ import {
   externalImportWarmupStatusQuery,
   externalImportSetupSecretDraftQuery,
   externalImportSetupSecretDraftStatusQuery,
+  externalImportLibraryRootsQuery,
   wizardQualityProfilesQuery,
 } from "@/lib/graphql/queries";
+import { mergeImportRootsIntoStoredRoots } from "@/lib/utils/library-root-validation";
+import {
+  localPathStyleFromRuntimeValue,
+  type LocalPathStyle,
+} from "@/lib/utils/local-path-style";
 import type {
   ExternalArrSourceKind,
   ExternalImportConnectionKind,
@@ -43,6 +54,7 @@ import type {
   ExternalImportMonitorWarmupProgress,
   ExternalImportMonitorWarmupStatus,
   ExternalImportResult,
+  ExternalImportSourceJob,
 } from "@/lib/types/external-import";
 
 // ── Wizard-internal model ───────────────────────────────────────────────────
@@ -212,6 +224,9 @@ interface PersistedImportWizardState {
   dcSelectionSeeded: boolean;
   idxSelectionSeeded: boolean;
   executeResult: ExternalImportResult | null;
+  sourceRequestKey: string;
+  sourceRunId: string | null;
+  sourceSubmitted: boolean;
   /** In-flight background finalize, so a refresh resumes polling instead of
    *  re-running the apply. */
   finalizeSessionId: string | null;
@@ -1201,22 +1216,145 @@ export function useExternalImportSetup({
   const [executeResult, setExecuteResult] =
     useState<ExternalImportResult | null>(() => initial?.executeResult ?? null);
 
+  const [sourceRequestKey] = useState(
+    () =>
+      initial?.sourceRequestKey ??
+      globalThis.crypto?.randomUUID?.() ??
+      `source-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const [sourceRunId, setSourceRunId] = useState<string | null>(
+    () => initial?.sourceRunId ?? null,
+  );
+  const [sourceSubmitted, setSourceSubmitted] = useState(
+    () => initial?.sourceSubmitted ?? Boolean(initial?.sourceRunId),
+  );
+  const [sourceJob, setSourceJob] = useState<ExternalImportSourceJob | null>(
+    null,
+  );
+  const sourceSnapshot = useRef<ExternalImportSourceJob | null>(null);
+  const sourcePollBusy = useRef(false);
+  const sourcePollFailures = useRef(0);
+  const [sourcePollPaused, setSourcePollPaused] = useState(false);
+  const acceptSourceJob = useCallback((job: ExternalImportSourceJob) => {
+    const snapshot = preferSourceImportSnapshot(sourceSnapshot.current, job);
+    if (snapshot !== job) return;
+    sourceSnapshot.current = snapshot;
+    sourcePollFailures.current = 0;
+    setSourcePollPaused(false);
+    setSourceJob(job);
+    setSourceRunId(job.runId);
+    setExecuteError(null);
+    setExecuteResult({
+      mediaPathsSaved: false,
+      downloadClientsCreated: job.items.filter(
+        (item) => item.kind === "download_client" && item.state === "succeeded",
+      ).length,
+      indexersCreated: job.items.filter(
+        (item) => item.kind === "indexer" && item.state === "succeeded",
+      ).length,
+      pluginsInstalled: [],
+      errors: [],
+    });
+  }, []);
+  const pollSourceImport = useCallback(async () => {
+    if (!sourceRunId || sourcePollBusy.current) return;
+    sourcePollBusy.current = true;
+    try {
+      const { data, error } = await client
+        .mutation(externalImportSourceStatusMutation, { runId: sourceRunId })
+        .toPromise();
+      if (data?.externalImportSourceStatus)
+        acceptSourceJob(
+          data.externalImportSourceStatus as ExternalImportSourceJob,
+        );
+      else {
+        setExecuteError(gqlError(error, t) || t("error.fallback.importFailed"));
+        sourcePollFailures.current += 1;
+        if (sourcePollFailures.current >= 3) setSourcePollPaused(true);
+      }
+    } finally {
+      sourcePollBusy.current = false;
+    }
+  }, [client, sourceRunId, acceptSourceJob, t]);
+  const resumeSourceImport = useCallback(() => {
+    sourcePollFailures.current = 0;
+    setSourcePollPaused(false);
+    void pollSourceImport();
+  }, [pollSourceImport]);
+  const sourcePollSettled =
+    sourceImportPollingSettled(sourceJob, sourcePollPaused) ||
+    (!sourceRunId && executeResult !== null);
+  const retrySourceImport = useCallback(
+    async (key?: string, secret?: string) => {
+      if (!sourceRunId) return;
+      setExecuting(true);
+      try {
+        const corrections =
+          key && secret?.trim() ? [{ dedupKey: key, apiKey: secret }] : [];
+        const { data, error } = await client
+          .mutation(retryExternalImportSourcesMutation, {
+            runId: sourceRunId,
+            corrections,
+          })
+          .toPromise();
+        if (data?.retryExternalImportSources)
+          acceptSourceJob(
+            data.retryExternalImportSources as ExternalImportSourceJob,
+          );
+        else
+          setExecuteError(
+            gqlError(error, t) || t("error.fallback.importFailed"),
+          );
+      } finally {
+        setExecuting(false);
+      }
+    },
+    [client, sourceRunId, acceptSourceJob, t],
+  );
+  const skipSourceImport = useCallback(
+    async (key: string) => {
+      if (!sourceRunId) return;
+      setExecuting(true);
+      try {
+        const { data, error } = await client
+          .mutation(skipExternalImportSourceMutation, {
+            runId: sourceRunId,
+            key,
+          })
+          .toPromise();
+        if (data?.skipExternalImportSource)
+          acceptSourceJob(
+            data.skipExternalImportSource as ExternalImportSourceJob,
+          );
+        else
+          setExecuteError(
+            gqlError(error, t) || t("error.fallback.importFailed"),
+          );
+      } finally {
+        setExecuting(false);
+      }
+    },
+    [client, sourceRunId, acceptSourceJob, t],
+  );
+  const sourceImportReady = sourceRunId
+    ? sourceJob?.ready === true && !executeError
+    : executeResult !== null;
+
   const executeSources = useCallback(async (): Promise<{
     ok: boolean;
     error: string | null;
   }> => {
-    // Idempotent: clients/indexers are created exactly once per wizard session.
-    // Re-entering Sources (back→forward) must not duplicate them — the backend
-    // create path does not dedup — so short-circuit once a prior run succeeded.
-    if (executeResult) return { ok: true, error: null };
-    if (!prowlarrWarmupReady) {
+    // Keep the same request identity until its durable receipt is recovered.
+    if (sourceRunId || executeResult) return { ok: true, error: null };
+    if (!sourceSubmitted && !prowlarrWarmupReady) {
       const error =
         prowlarrWarmupProgress?.errorMessage ||
-        "Prowlarr indexer discovery must finish before importing sources.";
+        t("setup.sourceImportSourceNotReady");
       setExecuteError(error);
       return { ok: false, error };
     }
     setExecuting(true);
+    setSourceSubmitted(true);
     setExecuteError(null);
     const input: ExecuteExternalImportInput = {
       sourceWarmupSessionIds: connectedArrSessionIds,
@@ -1233,17 +1371,37 @@ export function useExternalImportSetup({
         .filter(([, v]) => v.trim())
         .map(([dedupKey, apiKey]) => ({ dedupKey, apiKey })),
     };
-    const { data, error } = await client
-      .mutation(executeExternalImportMutation, { input })
-      .toPromise();
-    setExecuting(false);
-    if (error || !data?.executeExternalImport) {
+    try {
+      const { data, error } = await client
+        .mutation(startExternalImportSourcesMutation, {
+          input,
+          requestKey: sourceRequestKey,
+        })
+        .toPromise();
+      if (error || !data?.startExternalImportSources) {
+        const reason = error?.graphQLErrors
+          .map((failure) => failure.extensions?.reason)
+          .find((reason) => typeof reason === "string");
+        if (
+          reason === "SOURCE_IMPORT_INVALID_REQUEST" ||
+          reason === "SOURCE_IMPORT_SOURCE_NOT_READY"
+        )
+          setSourceSubmitted(false);
+        const message = gqlError(error, t) || t("error.fallback.importFailed");
+        setExecuteError(message);
+        return { ok: false, error: message };
+      }
+      acceptSourceJob(
+        data.startExternalImportSources as ExternalImportSourceJob,
+      );
+      return { ok: true, error: null };
+    } catch (error) {
       const message = gqlError(error, t) || t("error.fallback.importFailed");
       setExecuteError(message);
       return { ok: false, error: message };
+    } finally {
+      setExecuting(false);
     }
-    setExecuteResult(data.executeExternalImport as ExternalImportResult);
-    return { ok: true, error: null };
   }, [
     client,
     connectedArrSessionIds,
@@ -1254,6 +1412,10 @@ export function useExternalImportSetup({
     dcPasswordOverrides,
     idxApiKeyOverrides,
     executeResult,
+    sourceRunId,
+    sourceRequestKey,
+    acceptSourceJob,
+    sourceSubmitted,
     prowlarrWarmupReady,
     prowlarrWarmupProgress,
     t,
@@ -1451,7 +1613,7 @@ export function useExternalImportSetup({
   const completeFinalizedImport = useCallback(async () => {
     const scanErrors: string[] = [];
     const { data: completeData, error: completeErr } = await client
-      .mutation(completeSetupMutation, {})
+      .mutation(completeSetupMutation, { sourceImportRunId: sourceRunId })
       .toPromise();
     if (completeErr || !completeData?.completeSetup?.completed) {
       setFinalizeError(
@@ -1484,7 +1646,7 @@ export function useExternalImportSetup({
     setFinalizing(false);
     setFinalizeSessionId(null);
     setFinalizeComplete({ scanErrors });
-  }, [client, t]);
+  }, [client, t, sourceRunId]);
 
   // Poll the background apply until it settles. A refresh mid-apply rehydrates
   // `finalizeSessionId` from sessionStorage, so this resumes rather than
@@ -1607,6 +1769,44 @@ export function useExternalImportSetup({
       // libraries that already exist. Existing/default libraries are UPDATED with
       // their mapped roots; user-added libraries are CREATED.
       const createdByDraftId = createdLibrariesRef.current;
+      // The server identifies a stored root by its id only and removes every
+      // stored root an update does not name, together with the titles under
+      // it. An update therefore sends each existing library's stored roots
+      // back with their ids and adds only the paths it does not have yet, so
+      // an import never drops a root the library already had.
+      const storedRootsByLibrary = new Map<
+        string,
+        { id: string; path: string; isDefault: boolean }[]
+      >();
+      let pathStyle: LocalPathStyle | undefined;
+      if (
+        librariesToCreate.some(
+          ({ draft }) =>
+            draft.existingLibraryId && !createdByDraftId.has(draft.id),
+        )
+      ) {
+        const { data, error } = await client
+          .query(
+            externalImportLibraryRootsQuery,
+            {},
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (error) {
+          return fail(
+            gqlError(error, t) || t("error.fallback.failedToCreateLibrary"),
+          );
+        }
+        pathStyle = localPathStyleFromRuntimeValue(
+          data?.runtimeInfo?.runtimePathStyle,
+        );
+        for (const library of (data?.libraries ?? []) as {
+          id: string;
+          roots: { id: string; path: string; isDefault: boolean }[];
+        }[]) {
+          storedRootsByLibrary.set(library.id, library.roots);
+        }
+      }
       for (const { draft, rootPaths } of librariesToCreate) {
         if (createdByDraftId.has(draft.id)) continue;
         const roots = rootPaths.map((path, index) => ({
@@ -1618,17 +1818,32 @@ export function useExternalImportSetup({
           scoringPersona: draft.scoringPersona,
         };
         let resolvedId: string | null = null;
-        // Default libraries: update in place if they exist. The default may not
-        // exist yet during onboarding, so fall through to create on failure.
-        if (draft.existingLibraryId) {
-          const { data } = await client
+        // Default libraries are updated in place when they exist. The default
+        // may not exist yet during onboarding; only then is it created.
+        const storedRoots = draft.existingLibraryId
+          ? storedRootsByLibrary.get(draft.existingLibraryId)
+          : undefined;
+        if (draft.existingLibraryId && storedRoots) {
+          const { data, error } = await client
             .mutation(updateLibraryMutation, {
-              input: { libraryId: draft.existingLibraryId, roots, settings },
+              input: {
+                libraryId: draft.existingLibraryId,
+                roots: mergeImportRootsIntoStoredRoots(
+                  storedRoots,
+                  rootPaths,
+                  pathStyle,
+                ),
+                settings,
+              },
             })
             .toPromise();
-          if (data?.updateLibrary?.id) {
-            resolvedId = data.updateLibrary.id as string;
+          const updatedId = data?.updateLibrary?.id as string | undefined;
+          if (error || !updatedId) {
+            return fail(
+              `${gqlError(error, t) || t("settings.librarySaveFailed")}: ${draft.name}`,
+            );
           }
+          resolvedId = updatedId;
         }
         if (!resolvedId) {
           const { data, error } = await client
@@ -1677,6 +1892,7 @@ export function useExternalImportSetup({
       const { data: finalizeData, error: finalizeErr } = await client
         .mutation(finalizeExternalImportMutation, {
           input: {
+            sourceImportRunId: sourceRunId,
             sourceWarmupSessionIds: connectedArrSessionIds,
             mappings,
           },
@@ -1714,6 +1930,7 @@ export function useExternalImportSetup({
   }, [
     client,
     buildMappings,
+    sourceRunId,
     roots,
     detectedRoots,
     assign,
@@ -1757,8 +1974,12 @@ export function useExternalImportSetup({
       radarrCount,
       rootsMapped: mappedRoots.length,
       pathsRemapped: remappedRoots.length,
-      downloadClients: selectedDcCount,
-      indexers: selectedIdxCount,
+      downloadClients: sourceRunId
+        ? (executeResult?.downloadClientsCreated ?? 0)
+        : selectedDcCount,
+      indexers: sourceRunId
+        ? (executeResult?.indexersCreated ?? 0)
+        : selectedIdxCount,
     };
   }, [
     roots,
@@ -1768,6 +1989,8 @@ export function useExternalImportSetup({
     preview,
     selectedDcKeys,
     selectedIdxKeys,
+    sourceRunId,
+    executeResult,
   ]);
 
   // The backend rejects finalize unless EVERY warmed (detected) root is mapped,
@@ -1806,52 +2029,10 @@ export function useExternalImportSetup({
     );
   }, [preview, connectedArrSessionIds]);
 
-  // Every selected client/indexer that needs an operator-supplied secret has one.
-  const sourcesReady = useMemo(() => {
-    if (!prowlarrWarmupReady) return false;
-    if (!preview) return true;
-    const apiKeyClientTypes = new Set(["sabnzbd", "weaver"]);
-    const dcOk = preview.downloadClients.every((dc) => {
-      if (!selectedDcKeys.has(dc.dedupKey)) return true;
-      const type = dc.scryerClientType?.trim().toLowerCase() ?? null;
-      const needsApiKey =
-        dc.supported &&
-        !dc.apiKeyPresent &&
-        type !== null &&
-        apiKeyClientTypes.has(type);
-      if (needsApiKey && !(dcApiKeyOverrides[dc.dedupKey] ?? "").trim()) {
-        return false;
-      }
-      if (
-        dc.supported &&
-        dc.requiresPasswordOverride &&
-        !(dcPasswordOverrides[dc.dedupKey] ?? "").trim()
-      ) {
-        return false;
-      }
-      return true;
-    });
-    if (!dcOk) return false;
-    return preview.indexers.every((idx) => {
-      if (!selectedIdxKeys.has(idx.dedupKey)) return true;
-      if (
-        idx.supported &&
-        idx.requiresApiKeyOverride &&
-        !(idxApiKeyOverrides[idx.dedupKey] ?? "").trim()
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }, [
-    preview,
-    prowlarrWarmupReady,
-    selectedDcKeys,
-    selectedIdxKeys,
-    dcApiKeyOverrides,
-    dcPasswordOverrides,
-    idxApiKeyOverrides,
-  ]);
+  // Sources can be submitted once discovery is ready. A selected source still
+  // missing its secret is accepted and fails on its own in the summary, where
+  // it can be retried with the secret or skipped.
+  const sourcesReady = prowlarrWarmupReady;
 
   // Persist NON-SENSITIVE user input so a refresh doesn't reset the wizard.
   // Instance API keys are stripped here (secrets live in the server draft);
@@ -1868,6 +2049,9 @@ export function useExternalImportSetup({
       dcSelectionSeeded: dcSelectionSeeded.current,
       idxSelectionSeeded: idxSelectionSeeded.current,
       executeResult,
+      sourceRequestKey,
+      sourceRunId,
+      sourceSubmitted,
       finalizeSessionId,
       createdLibraries: [...createdLibrariesRef.current],
     });
@@ -1880,6 +2064,9 @@ export function useExternalImportSetup({
     selectedDcKeys,
     selectedIdxKeys,
     executeResult,
+    sourceRequestKey,
+    sourceRunId,
+    sourceSubmitted,
     finalizeSessionId,
   ]);
 
@@ -1951,6 +2138,15 @@ export function useExternalImportSetup({
     executeError,
     executeResult,
     executeSources,
+    sourceJob,
+    sourceRunId,
+    sourceSubmitted,
+    sourceImportReady,
+    pollSourceImport,
+    sourcePollSettled,
+    resumeSourceImport,
+    retrySourceImport,
+    skipSourceImport,
     // summary / finalize
     aggregateProgress,
     pollAggregateProgress,

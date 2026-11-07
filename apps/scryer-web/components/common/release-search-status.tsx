@@ -3,6 +3,7 @@ import { LoadingMark } from "@/components/common/loading-mark";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { Release } from "@/lib/types";
 import type { InteractiveSearchPresentation } from "@/lib/utils/interactive-search-presentation";
+import { unroutableResultsKey } from "@/lib/utils/unroutable-results";
 
 /**
  * The line above an interactive search's results: a small spinner and the
@@ -97,6 +98,20 @@ export function ReleaseSearchSummary({
           })}
         </p>
       ) : null}
+      {presentation.showFinalSummary
+        ? presentation.unroutableResults.map((summary) => (
+            <p
+              key={summary.reason}
+              className="mt-0.5 truncate text-[11.5px] text-[var(--scry-warning-text)]"
+              data-unroutable-reason={summary.reason}
+            >
+              {t(unroutableResultsKey(summary.reason), {
+                count: summary.count,
+                names: summary.indexerNames.join(", "),
+              })}
+            </p>
+          ))
+        : null}
     </div>
   );
 }

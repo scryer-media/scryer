@@ -3,9 +3,7 @@ import {
   ArrowUpRight,
   Check,
   CircleAlert,
-  CircleCheck,
   FolderInput,
-  LoaderCircle,
   PictureInPicture2,
   Timer,
   TriangleAlert,
@@ -14,7 +12,7 @@ import {
 } from "lucide-react";
 
 import type { Translate } from "@/components/root/types";
-import { operationStateLabelKey, toCount } from "@/lib/location-operations";
+import { toCount } from "@/lib/location-operations";
 import {
   formatMoveEta,
   moveEtaSeconds,
@@ -26,7 +24,6 @@ import {
 } from "@/lib/location-transfers";
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import { cn } from "@/lib/utils";
-import { LoadingMark } from "@/components/common/loading-mark";
 
 const DEFAULT_AUTO_DISMISS_MS = 5_000;
 
@@ -39,80 +36,42 @@ const ACCENT = {
 };
 
 function MoveProgressBar({
-  label,
   count,
   percent,
   state,
   indeterminate,
 }: {
-  label: string;
   count: string;
   percent: number;
   state: ReturnType<typeof moveToastVisualState>;
   indeterminate: boolean;
 }) {
-  let Icon: LucideIcon;
-  let iconColor: string;
-  let spin = false;
   let fillStyle: React.CSSProperties;
-  let labelColor: string;
-  let countColor: string;
+  let countColor = "var(--scry-muted2)";
 
   if (state === "success") {
-    Icon = CircleCheck;
-    iconColor = "var(--scry-success-text-soft)";
     fillStyle = { width: "100%", background: "var(--scry-success-bg-strong)" };
-    labelColor = "var(--scry-text2)";
-    countColor = "var(--scry-muted2)";
   } else if (state === "issues") {
-    Icon = TriangleAlert;
-    iconColor = "var(--scry-warning-text)";
     fillStyle = { width: "100%", background: "var(--scry-warning-solid)" };
-    labelColor = "var(--scry-text2)";
-    countColor = "var(--scry-muted2)";
   } else if (state === "failed") {
-    Icon = CircleAlert;
-    iconColor = "var(--scry-danger-text-soft)";
     fillStyle = {
       width: `${percent}%`,
       background: "var(--scry-danger-text-soft)",
     };
-    labelColor = "var(--scry-text2)";
-    countColor = "var(--scry-muted2)";
   } else if (state === "canceled") {
-    Icon = X;
-    iconColor = "var(--scry-muted2)";
     fillStyle = { width: `${percent}%`, background: "var(--scry-muted2)" };
-    labelColor = "var(--scry-text2)";
-    countColor = "var(--scry-muted2)";
   } else {
-    Icon = LoaderCircle;
-    iconColor = ACCENT.base;
-    spin = true;
     fillStyle = {
       width: `${percent}%`,
       background: ACCENT.grad,
       boxShadow: `0 0 12px rgba(${ACCENT.rgb},.5)`,
     };
-    labelColor = "var(--scry-ink2)";
     countColor = ACCENT.base;
   }
 
   return (
     <div>
-      <div className="mb-1.5 flex items-center gap-2">
-        {spin ? (
-          <LoadingMark className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <Icon
-            className="h-3.5 w-3.5 shrink-0"
-            style={{ color: iconColor }}
-            aria-hidden="true"
-          />
-        )}
-        <span className="text-xs font-semibold" style={{ color: labelColor }}>
-          {label}
-        </span>
+      <div className="mb-1.5 flex items-center">
         <span
           className="ml-auto text-[11.5px] font-semibold tabular-nums"
           style={{ color: countColor }}
@@ -218,7 +177,7 @@ export function LocationMoveToast({
   const subtitle = !operation
     ? t("move.toastPreparing")
     : visualState === "moving"
-      ? `${t(operationStateLabelKey(operation.state))} · ${titlesProgress}`
+      ? titlesProgress
       : visualState === "success"
         ? t("move.toastDoneSubtitle", { count: titlesTotal })
         : visualState === "issues"
@@ -425,14 +384,11 @@ export function LocationMoveToast({
           </div>
           <div className="flex items-center gap-2.5">
             {moving ? (
-              <>
-                {etaCountdown ? (
-                  <span className="text-xs font-semibold tabular-nums text-[var(--scry-muted2)]">
-                    {etaCountdown}
-                  </span>
-                ) : null}
-                <LoadingMark className="h-4 w-4" />
-              </>
+              etaCountdown ? (
+                <span className="text-xs font-semibold tabular-nums text-[var(--scry-muted2)]">
+                  {etaCountdown}
+                </span>
+              ) : null
             ) : badge ? (
               <span
                 className="inline-flex h-[22px] items-center gap-1.5 rounded-[7px] px-[9px] text-[11px] font-bold"
@@ -451,7 +407,6 @@ export function LocationMoveToast({
 
         <div className="mt-[14px]">
           <MoveProgressBar
-            label={t("move.toastTransferred")}
             count={barCount}
             percent={percent}
             state={visualState}

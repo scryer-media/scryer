@@ -9,6 +9,8 @@ pub use scryer_interface_media_types::*;
 pub enum FileScoreSelectionInput {
     /// Media file IDs to evaluate, limited to 1000 selections.
     FileIds(Vec<ID>),
+    /// Episode IDs whose live files should be evaluated, limited to 1000 selections.
+    EpisodeIds(Vec<ID>),
     /// Season IDs whose live files should be evaluated, limited to 1000 selections.
     SeasonIds(Vec<ID>),
     /// Title IDs whose live files should be evaluated, limited to 1000 selections.
@@ -346,6 +348,8 @@ pub struct TitleCatalogFilterInput {
     pub presences: Option<Vec<TitleCatalogPresenceValue>>,
     /// Keep titles holding a file whose scan failed or that needs review when true, and titles holding none when false; null keeps both.
     pub needs_attention: Option<bool>,
+    /// Restrict results to these title IDs; null or empty keeps every title. Lets a client refresh a few titles under its other filters without reloading the whole list.
+    pub title_ids: Option<Vec<ID>>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -689,6 +693,8 @@ pub struct LibraryPayload {
     pub is_bootstrap_default_root_set: bool,
     /// Root folders configured for the library.
     pub roots: Vec<LibraryRootPayload>,
+    /// Titles removed from the catalog because the root under them was dropped by this mutation; zero everywhere else.
+    pub removed_title_count: i32,
 }
 
 #[derive(SimpleObject, Clone)]

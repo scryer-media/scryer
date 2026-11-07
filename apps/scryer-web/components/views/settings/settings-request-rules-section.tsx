@@ -1,4 +1,7 @@
-import { regoDiagnostics } from "@/lib/utils/rego-diagnostics";
+import {
+  formatRegoValidationError,
+  regoDiagnostics,
+} from "@/lib/utils/rego-diagnostics";
 import * as React from "react";
 import {
   BookOpen,
@@ -124,7 +127,6 @@ type SettingsRequestRulesSectionProps = {
   copyRuleSet: (record: RequestRuleSetRecord) => void;
   editRuleSet: (record: RequestRuleSetRecord) => void;
   deleteRuleSet: (record: RequestRuleSetRecord) => void;
-  validateDraft: () => Promise<RequestRuleValidationResult | null>;
   validating: boolean;
   validationResult: RequestRuleValidationResult | null;
   /// Rewrite whichever way the draft names people with these usernames.
@@ -1074,7 +1076,6 @@ export function SettingsRequestRulesSection({
   copyRuleSet,
   editRuleSet,
   deleteRuleSet,
-  validateDraft,
   validating,
   validationResult,
   applyRequesters,
@@ -1311,6 +1312,12 @@ export function SettingsRequestRulesSection({
                             id="settings-request-rule-validation"
                             checking={validating}
                             result={validationResult}
+                            formatError={(error) =>
+                              formatRegoValidationError(
+                                error,
+                                ruleSetDraft.regoSource,
+                              )
+                            }
                             data-request-rule-valid={
                               validationResult
                                 ? String(validationResult.valid)
@@ -1403,17 +1410,6 @@ export function SettingsRequestRulesSection({
                           : editingRuleSetId
                             ? t("settings.requestRuleUpdate")
                             : t("settings.requestRuleCreate")}
-                      </Button>
-                      <Button
-                        id="settings-request-rule-validate"
-                        type="button"
-                        variant="secondary"
-                        onClick={() => void validateDraft()}
-                        disabled={validating || !ruleSetDraft.regoSource.trim()}
-                      >
-                        {validating
-                          ? t("settings.ruleValidating")
-                          : t("settings.ruleValidate")}
                       </Button>
                       <Button
                         id="settings-request-rule-cancel"

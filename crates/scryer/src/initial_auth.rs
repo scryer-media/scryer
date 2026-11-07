@@ -11,12 +11,23 @@ use scryer_application::initial_auth::{SetupState, refusal};
 
 pub(crate) const REQUIRE_SETUP_CODE_ENV: &str = "SCRYER_REQUIRE_SETUP_CODE";
 
-/// Unset or blank leaves the code off. A value that is not a recognized boolean
-/// keeps it on, so a typo cannot silently drop a protection the operator asked for.
-pub(crate) fn setup_code_required(raw: Option<&str>) -> bool {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|value| crate::parse_env_bool_value(value) != Some(false))
+/// The code follows exposure: unset or blank requires it when other computers
+/// can reach the listener, either directly or through a trusted proxy. An
+/// explicit false turns it off and an explicit true turns it on. A value that
+/// is not a recognized boolean keeps it on, so a typo cannot silently drop a
+/// protection the operator asked for.
+pub(crate) fn setup_code_required(
+    raw: Option<&str>,
+    listening_host: std::net::IpAddr,
+    behind_trusted_proxy: bool,
+) -> bool {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => crate::parse_env_bool_value(value) != Some(false),
+        None => {
+            !scryer_application::network_bind::is_loopback_host(listening_host)
+                || behind_trusted_proxy
+        }
+    }
 }
 
 // Standard stderr deliberately treats a missing native handle as a successful
@@ -1250,12 +1261,39 @@ mod tests {
     }
 
     #[test]
-    fn initial_auth_setup_code_is_opt_in_and_fails_closed_on_unknown_values() {
-        for raw in [None, Some(""), Some("  "), Some("0"), Some("false")] {
-            assert!(!setup_code_required(raw), "{raw:?}");
+    fn initial_auth_setup_code_follows_exposure_and_fails_closed_on_unknown_values() {
+        let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let loopback_v6: std::net::IpAddr = "::1".parse().unwrap();
+        let mapped_loopback: std::net::IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        let wide: std::net::IpAddr = "0.0.0.0".parse().unwrap();
+        let wide_v6: std::net::IpAddr = "::".parse().unwrap();
+        let lan: std::net::IpAddr = "192.0.2.10".parse().unwrap();
+
+        // Unset: loopback alone needs no code; anything others can reach does.
+        for raw in [None, Some(""), Some("  ")] {
+            for host in [loopback, loopback_v6, mapped_loopback] {
+                assert!(!setup_code_required(raw, host, false), "{raw:?} {host}");
+                assert!(
+                    setup_code_required(raw, host, true),
+                    "{raw:?} {host} proxied"
+                );
+            }
+            for host in [wide, wide_v6, lan] {
+                assert!(setup_code_required(raw, host, false), "{raw:?} {host}");
+            }
         }
+        // Forced off wins over exposure.
+        for raw in ["0", "false"] {
+            for (host, proxied) in [(loopback, false), (wide, false), (loopback, true)] {
+                assert!(
+                    !setup_code_required(Some(raw), host, proxied),
+                    "{raw} {host}"
+                );
+            }
+        }
+        // Forced on, or an unrecognized value, keeps it on even on loopback.
         for raw in ["1", "true", "on", "enabled"] {
-            assert!(setup_code_required(Some(raw)), "{raw}");
+            assert!(setup_code_required(Some(raw), loopback, false), "{raw}");
         }
     }
 
@@ -1314,6 +1352,106 @@ mod tests {
             );
             assert!(!context.auth_runtime.initial_authentication.is_available());
         }
+    }
+
+    async fn saved_bind_host(context: &TestContext) -> Option<String> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT sv.value_json FROM settings_values sv \
+             JOIN settings_definitions d ON sv.setting_definition_id = d.id AND sv.scope = d.scope \
+             WHERE d.scope = 'system' AND d.key_name = ?1 AND sv.scope_id IS NULL",
+        )
+        .bind(scryer_application::network_bind::BIND_HOST_KEY)
+        .fetch_optional(&context.db.pool)
+        .await
+        .unwrap()
+        .and_then(|raw| serde_json::from_str::<Option<String>>(&raw).unwrap())
+    }
+
+    /// The setup question saves who can reach Scryer and says a restart is
+    /// needed; an address pinned by the environment is left alone.
+    #[tokio::test]
+    async fn initial_auth_network_access_is_saved_unless_the_address_is_pinned() {
+        for pinned in [false, true] {
+            let context = fixture().await;
+            let mut addressing = scryer_application::public_url::InstanceAddressing::default();
+            if pinned {
+                addressing.bind.source =
+                    scryer_application::public_url::ConfigValueSource::Environment;
+                addressing.bind.pinned_by =
+                    Some(scryer_application::network_bind::BindPin::Environment);
+            }
+            context.app.install_public_url(
+                scryer_application::public_url::PublicUrlPolicy::default(),
+                addressing,
+            );
+            context
+                .auth_runtime
+                .initial_authentication
+                .initialize_without_code();
+            let router = http_router(&context);
+            let (_, metadata) = graphql(
+                router.clone(),
+                "/graphql",
+                serde_json::json!({"query":"{ authRuntimeState { bindEditable bindPinnedBy } }"}),
+            )
+            .await;
+            assert_eq!(
+                metadata["data"]["authRuntimeState"]["bindEditable"], !pinned,
+                "{metadata}"
+            );
+            assert_eq!(
+                metadata["data"]["authRuntimeState"]["bindPinnedBy"],
+                if pinned {
+                    serde_json::json!("ENVIRONMENT")
+                } else {
+                    serde_json::Value::Null
+                },
+                "{metadata}"
+            );
+            let query = "mutation Decide($input: CompleteInitialAuthenticationInput!) { completeInitialAuthentication(input: $input) { completed restartRequiredForBind bindIgnoredBecausePinned } }";
+            let input = serde_json::json!({"mode":"PASSWORD","password":"permanent-password","acknowledgeNoAuthentication":false,"networkAccess":"OTHER_COMPUTERS"});
+            let (_, result) = graphql(
+                router,
+                "/graphql",
+                serde_json::json!({"query":query,"variables":{"input":input}}),
+            )
+            .await;
+            let payload = &result["data"]["completeInitialAuthentication"];
+            assert_eq!(payload["completed"], true, "{result}");
+            assert_eq!(payload["restartRequiredForBind"], !pinned, "{result}");
+            assert_eq!(payload["bindIgnoredBecausePinned"], pinned, "{result}");
+            assert_eq!(
+                saved_bind_host(&context).await,
+                (!pinned).then(|| "0.0.0.0".to_string())
+            );
+        }
+    }
+
+    /// Keeping Scryer on this computer saves loopback and needs no restart
+    /// when that is already how it listens.
+    #[tokio::test]
+    async fn initial_auth_this_computer_needs_no_restart_on_loopback() {
+        let context = fixture().await;
+        context
+            .auth_runtime
+            .initial_authentication
+            .initialize_without_code();
+        let query = "mutation Decide($input: CompleteInitialAuthenticationInput!) { completeInitialAuthentication(input: $input) { completed restartRequiredForBind bindIgnoredBecausePinned } }";
+        let input = serde_json::json!({"mode":"NO_AUTHENTICATION","acknowledgeNoAuthentication":true,"networkAccess":"THIS_COMPUTER"});
+        let (_, result) = graphql(
+            http_router(&context),
+            "/graphql",
+            serde_json::json!({"query":query,"variables":{"input":input}}),
+        )
+        .await;
+        let payload = &result["data"]["completeInitialAuthentication"];
+        assert_eq!(payload["completed"], true, "{result}");
+        assert_eq!(payload["restartRequiredForBind"], false, "{result}");
+        assert_eq!(payload["bindIgnoredBecausePinned"], false, "{result}");
+        assert_eq!(
+            saved_bind_host(&context).await,
+            Some("127.0.0.1".to_string())
+        );
     }
 
     #[tokio::test]

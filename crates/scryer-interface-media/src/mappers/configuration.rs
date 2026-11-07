@@ -258,6 +258,9 @@ pub fn from_quality_profile_criteria(
         cutoff_tier: criteria.cutoff_tier,
         min_score_to_grab: criteria.min_score_to_grab,
         cutoff_score: criteria.cutoff_score,
+        min_upgrade_score_delta: criteria
+            .min_upgrade_score_delta
+            .unwrap_or(scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
     }
 }
 
@@ -291,8 +294,31 @@ pub fn from_service_settings(settings: ServiceSettings) -> ServiceSettingsPayloa
         public_url_editable: public_url.editable,
         base_path: addressing.base_path,
         base_path_source: ConfigValueSourceValue::from_application(addressing.base_path_source),
-        bind_address: addressing.bind_address,
-        bind_source: ConfigValueSourceValue::from_application(addressing.bind_source),
+        bind_address: addressing.bind.listening.to_string(),
+        bind_source: ConfigValueSourceValue::from_application(addressing.bind.source),
+        bind_saved_host: addressing.bind.saved_host.map(|host| host.to_string()),
+        bind_editable: addressing.bind.editable(),
+        bind_pinned_by: addressing
+            .bind
+            .pinned_by
+            .map(BindPinValue::from_application),
+        bind_pending: addressing.bind.pending().to_string(),
+        bind_restart_required: addressing.bind.restart_required(),
+        bind_fallback_code: addressing
+            .bind
+            .fallback
+            .as_ref()
+            .map(|fallback| fallback.code.to_string()),
+        bind_fallback_address: addressing
+            .bind
+            .fallback
+            .as_ref()
+            .and_then(|fallback| fallback.attempted.map(|address| address.to_string())),
+        bind_fallback_reason: addressing
+            .bind
+            .fallback
+            .as_ref()
+            .map(|fallback| fallback.detail.clone()),
         passkey_rp_id: addressing.passkey_rp_id,
         passkey_rp_origin: addressing.passkey_rp_origin,
         passkey_rp_source: PasskeyRelyingPartySourceValue::from_application(

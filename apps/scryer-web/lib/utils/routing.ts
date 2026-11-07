@@ -187,6 +187,37 @@ export function buildListsPath(section: ListsSection): string {
   return segment ? `/lists/${segment}` : "/lists";
 }
 
+/** Path of a discovery home section's full grid. */
+export function buildDiscoverySectionPath(sectionId: string): string {
+  return `/discovery/section/${encodeURIComponent(sectionId)}`;
+}
+
+/**
+ * The section id a `/discovery/section/:sectionId` path opens, or null for
+ * the discovery home and any other path. The path is split while still
+ * encoded and only the id segment is decoded, exactly once, so an encoded
+ * `/` or `%` stays part of the id.
+ */
+export function discoverySectionIdFromPath(pathname: string): string | null {
+  const segments = pathname.split("/").filter(Boolean);
+  const discoveryAt = segments.findIndex(
+    (segment) => segment.toLowerCase() === "discovery",
+  );
+  if (
+    discoveryAt < 0 ||
+    segments.length !== discoveryAt + 3 ||
+    segments[discoveryAt + 1]?.toLowerCase() !== "section"
+  ) {
+    return null;
+  }
+  try {
+    const sectionId = decodeURIComponent(segments[discoveryAt + 2] ?? "");
+    return sectionId.trim() ? sectionId : null;
+  } catch {
+    return null;
+  }
+}
+
 export function listsSectionFromPath(pathname: string): ListsSection {
   const segments = pathname.split("/").filter(Boolean);
   const listsAt = segments.findIndex(
@@ -781,6 +812,19 @@ export function resolveAppRoute(
     return canonicalOrRedirect(
       currentPath,
       parsedRoute(buildListsPath(section), "lists"),
+      search,
+      hash,
+    );
+  }
+
+  if (root === "discovery" && rawSegments.length > 1) {
+    const sectionId = discoverySectionIdFromPath(currentPath);
+    if (sectionId === null) {
+      return { kind: "not-found" };
+    }
+    return canonicalOrRedirect(
+      currentPath,
+      parsedRoute(buildDiscoverySectionPath(sectionId), "discovery"),
       search,
       hash,
     );

@@ -190,34 +190,12 @@ pub(crate) fn title_recommendations_subject(
     title: &Title,
     external_ids: &[ExternalId],
 ) -> Option<(DiscoverySubjectInput, Vec<String>)> {
-    let mut ids = BTreeSet::<(String, String)>::new();
-    for external_id in title.external_ids.iter().chain(external_ids.iter()) {
-        let raw_source = external_id.source.trim().to_ascii_lowercase();
-        let source = if matches!(raw_source.as_str(), "imdb" | "imdb_id") {
-            "imdb".to_string()
-        } else {
-            let Some(source) = normalize_supported_external_id_source(&external_id.source) else {
-                continue;
-            };
-            source
-        };
-        let value = external_id.value.trim();
-        if value.is_empty() {
-            continue;
-        }
-        let value = if source == "imdb" {
-            let Some(normalized) = crate::normalize::normalize_imdb_id(value) else {
-                continue;
-            };
-            normalized
-        } else {
-            let Some(id) = parse_positive_external_numeric_id(value) else {
-                continue;
-            };
-            id.to_string()
-        };
-        ids.insert((source, value));
-    }
+    let mut ids = title
+        .external_ids
+        .iter()
+        .chain(external_ids.iter())
+        .filter_map(normalized_discovery_external_id)
+        .collect::<BTreeSet<(String, String)>>();
     if let Some(imdb_id) = title
         .imdb_id
         .as_deref()
@@ -241,48 +219,63 @@ pub(crate) fn title_recommendations_subject(
             source: source.clone(),
             value: value.clone(),
         });
+        let id = parse_positive_i32(value);
         match source.as_str() {
-            "tvdb" => {
-                if let Some(id) = parse_positive_i32(value) {
-                    subject.tvdb_id = subject.tvdb_id.or(Some(id));
-                    let key = keyed_discovery_target_key("tvdb", &title.facet, value);
-                    target_keys.push(key);
-                }
-            }
-            "tmdb" => {
-                if let Some(id) = parse_positive_i32(value) {
-                    subject.tmdb_id = subject.tmdb_id.or(Some(id));
-                    let key = keyed_discovery_target_key("tmdb", &title.facet, value);
-                    target_keys.push(key);
-                }
-            }
-            "mal" => {
-                if let Some(id) = parse_positive_i32(value) {
-                    subject.mal_id = subject.mal_id.or(Some(id));
-                    let key = format!("mal:anime:{value}");
-                    target_keys.push(key);
-                }
-            }
-            "anidb" => {
-                if let Some(id) = parse_positive_i32(value) {
-                    subject.anidb_id = subject.anidb_id.or(Some(id));
-                    let key = format!("anidb:anime:{value}");
-                    target_keys.push(key);
-                }
-            }
-            "anilist" => {
-                let key = format!("anilist:anime:{value}");
-                target_keys.push(key);
-            }
-            "imdb" => {
-                let key = format!("imdb:title:{value}");
-                target_keys.push(key);
-            }
+            "tvdb" => subject.tvdb_id = subject.tvdb_id.or(id),
+            "tmdb" => subject.tmdb_id = subject.tmdb_id.or(id),
+            "mal" => subject.mal_id = subject.mal_id.or(id),
+            "anidb" => subject.anidb_id = subject.anidb_id.or(id),
             _ => {}
         }
+        target_keys.extend(discovery_target_key_for_external_id(
+            source,
+            value,
+            &title.facet,
+        ));
     }
     subject.key = title_recommendations_preferred_subject_key(&ids, &title.facet);
     Some((subject, unique_discovery_text_terms(target_keys)))
+}
+
+/// An external id in the form discovery keys on: a supported source and a
+/// normalized value. `None` for a source discovery cannot key a target on.
+pub(super) fn normalized_discovery_external_id(
+    external_id: &ExternalId,
+) -> Option<(String, String)> {
+    let raw_source = external_id.source.trim().to_ascii_lowercase();
+    let source = if matches!(raw_source.as_str(), "imdb" | "imdb_id") {
+        "imdb".to_string()
+    } else {
+        normalize_supported_external_id_source(&external_id.source)?
+    };
+    let value = external_id.value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let value = if source == "imdb" {
+        crate::normalize::normalize_imdb_id(value)?
+    } else {
+        parse_positive_external_numeric_id(value)?.to_string()
+    };
+    Some((source, value))
+}
+
+/// The discovery target key a normalized external id names for a title of
+/// `facet`, in the shape SMG keys its targets.
+pub(super) fn discovery_target_key_for_external_id(
+    source: &str,
+    value: &str,
+    facet: &MediaFacet,
+) -> Option<String> {
+    match source {
+        "tvdb" | "tmdb" => {
+            parse_positive_i32(value).map(|_| keyed_discovery_target_key(source, facet, value))
+        }
+        "mal" | "anidb" => parse_positive_i32(value).map(|_| format!("{source}:anime:{value}")),
+        "anilist" => Some(format!("anilist:anime:{value}")),
+        "imdb" => Some(format!("imdb:title:{value}")),
+        _ => None,
+    }
 }
 
 pub(super) fn title_recommendations_preferred_subject_key(

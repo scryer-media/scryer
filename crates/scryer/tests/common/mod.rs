@@ -131,6 +131,7 @@ pub struct TestContext {
     pub schema: ApiSchema,
     pub auth_runtime: AuthRuntimeStateHandle,
     pub app: AppUseCase,
+    pub plugin_install_orchestrator: scryer_application::PluginInstallOrchestrator,
     pub titles: TitleStore,
     pub shows: ShowStore,
     pub libraries: LibraryStore,
@@ -162,6 +163,16 @@ pub struct TestLibraryStateStore {
 
 #[async_trait]
 impl AcquisitionScopeStateRepository for TestLibraryStateStore {
+    async fn list_acquisition_scope_statuses_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, scryer_application::AcquisitionScopeStatus>>
+    {
+        self.wanted
+            .list_acquisition_scope_statuses_by_ids(ids)
+            .await
+    }
+
     async fn upsert_acquisition_scope_state(
         &self,
         item: &scryer_application::AcquisitionScopeState,
@@ -454,6 +465,10 @@ impl PendingReleaseRepository for TestLibraryStateStore {
         self.pending_releases
             .delete_standby_pending_releases_for_wanted_item(wanted_item_id)
             .await
+    }
+
+    async fn list_standby_wanted_item_ids(&self) -> AppResult<Vec<String>> {
+        self.pending_releases.list_standby_wanted_item_ids().await
     }
 
     async fn list_all_standby_pending_releases(
@@ -797,6 +812,42 @@ impl TestContext {
     pub async fn new_with_external_identity_verifier(
         external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
     ) -> Self {
+        Self::new_with_dependencies(external_identity_verifier, None).await
+    }
+
+    pub async fn new_with_indexer_provider(provider: Arc<dyn IndexerPluginProvider>) -> Self {
+        Self::new_with_dependencies(
+            Arc::new(HttpExternalIdentityVerifier::new()),
+            Some(provider),
+        )
+        .await
+    }
+
+    /// A context whose SQLite database lives in a file at `database_path`
+    /// instead of memory, so a measurement sees WAL, a multi-connection pool
+    /// and per-connection page caches the way an installed instance does.
+    #[allow(dead_code)]
+    pub async fn new_with_database_path(database_path: &str) -> Self {
+        Self::new_with_database(
+            Arc::new(HttpExternalIdentityVerifier::new()),
+            None,
+            database_path,
+        )
+        .await
+    }
+
+    async fn new_with_dependencies(
+        external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
+        indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
+    ) -> Self {
+        Self::new_with_database(external_identity_verifier, indexer_provider, ":memory:").await
+    }
+
+    async fn new_with_database(
+        external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
+        indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
+        database: &str,
+    ) -> Self {
         disable_platform_keystore_for_tests();
         initialize_wasm_runtime_for_tests();
 
@@ -807,9 +858,9 @@ impl TestContext {
         mount_default_smg_metadata_mocks(&smg_server).await;
 
         // In-memory SQLite with migrations applied
-        let db = SqliteServices::new(":memory:")
+        let db = SqliteServices::new(database)
             .await
-            .expect("failed to create in-memory SQLite");
+            .expect("failed to create test SQLite");
         // General integration fixtures represent an instance that has already
         // made its authentication decision. First-run tests explicitly reopen it.
         sqlx::query("UPDATE settings_values SET value_json = '{\"stage\":\"complete\"}' WHERE id = 'initial-authentication-setup'")
@@ -866,10 +917,11 @@ impl TestContext {
 
         // Build indexer client backed by built-in WASM plugins (using DynamicPluginProvider
         // so reload_plugins works in integration tests)
-        let plugin_provider: Arc<dyn IndexerPluginProvider> =
+        let default_plugin_provider: Arc<dyn IndexerPluginProvider> =
             Arc::new(scryer_plugins::DynamicPluginProvider::new(
                 scryer_plugins::build_indexer_plugin_provider(&[], &[]),
             ));
+        let plugin_provider = indexer_provider.unwrap_or(default_plugin_provider);
         let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
             Arc::new(InMemoryIndexerStatsTracker::new(None));
         let indexer_client = MultiIndexerSearchClient::new(
@@ -958,7 +1010,10 @@ impl TestContext {
         );
         let download_queue_command_store =
             Arc::new(DownloadQueueCommandStore::new(datastore.clone()));
-        let workflow_operation_store = Arc::new(WorkflowOperationStore::new(datastore.clone()));
+        let workflow_operation_store = Arc::new(
+            WorkflowOperationStore::new(datastore.clone())
+                .with_encryption_key(db.encryption_key_state()),
+        );
         let services = AppServices::builder(
             titles,
             shows,
@@ -1044,6 +1099,9 @@ impl TestContext {
         )
         .build();
 
+        let plugin_install_orchestrator =
+            services.runtime.plugins.plugin_install_orchestrator.clone();
+
         // Facet registry with all built-in facets
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
@@ -1090,6 +1148,7 @@ impl TestContext {
             schema,
             auth_runtime,
             app,
+            plugin_install_orchestrator,
             titles: title_store,
             shows: show_store,
             libraries: library_store,
@@ -1134,6 +1193,23 @@ impl TestContext {
     }
 
     pub async fn graphql_json(&self, query: &str, variables: Value, token: Option<&str>) -> Value {
+        self.graphql_json_with(query, variables, token, false).await
+    }
+
+    /// Like [`TestContext::graphql_json`], with the request-scoped dataloaders
+    /// the production handler attaches.
+    #[allow(dead_code)]
+    pub async fn graphql_json_with_request_loaders(&self, query: &str, variables: Value) -> Value {
+        self.graphql_json_with(query, variables, None, true).await
+    }
+
+    async fn graphql_json_with(
+        &self,
+        query: &str,
+        variables: Value,
+        token: Option<&str>,
+        request_loaders: bool,
+    ) -> Value {
         let body = serde_json::to_vec(&json!({ "query": query, "variables": variables }))
             .expect("serialize graphql request");
         let mut request = HttpRequest::builder()
@@ -1151,7 +1227,7 @@ impl TestContext {
             .body(Body::from(body))
             .expect("build graphql request");
         let response = tokio::spawn(async move {
-            build_test_router(app, schema, auth_runtime)
+            build_test_router_with(app, schema, auth_runtime, request_loaders)
                 .oneshot(request)
                 .await
         })
@@ -1578,15 +1654,31 @@ fn build_test_router(
     schema: ApiSchema,
     auth_runtime: AuthRuntimeStateHandle,
 ) -> Router {
+    build_test_router_with(app, schema, auth_runtime, false)
+}
+
+/// `request_loaders` attaches the request-scoped dataloaders the production
+/// GraphQL handler attaches, so resolvers take their batched path.
+fn build_test_router_with(
+    app: AppUseCase,
+    schema: ApiSchema,
+    auth_runtime: AuthRuntimeStateHandle,
+    request_loaders: bool,
+) -> Router {
     Router::new().route(
         "/graphql",
-        post(test_graphql_handler).with_state((app, schema, auth_runtime)),
+        post(test_graphql_handler).with_state((app, schema, auth_runtime, request_loaders)),
     )
 }
 
 /// Minimal GraphQL handler that replicates default-user auth injection.
 async fn test_graphql_handler(
-    State((app, schema, auth_runtime)): State<(AppUseCase, ApiSchema, AuthRuntimeStateHandle)>,
+    State((app, schema, auth_runtime, request_loaders)): State<(
+        AppUseCase,
+        ApiSchema,
+        AuthRuntimeStateHandle,
+        bool,
+    )>,
     headers: HeaderMap,
     req: GraphQLRequest,
 ) -> Response {
@@ -1671,6 +1763,12 @@ async fn test_graphql_handler(
             }
             user.authorization.app = scryer_domain::AppPermissionMask::NONE;
             user.authorization.actor_capabilities = scryer_domain::ActorCapabilityMask::NONE;
+        }
+        if request_loaders {
+            request = request.data(scryer_interface::RequestLoaders::new(
+                app.clone(),
+                user.clone(),
+            ));
         }
         request = request.data(user);
     }

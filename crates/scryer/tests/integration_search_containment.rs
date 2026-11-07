@@ -170,6 +170,7 @@ fn context(title_id: &str, session: &str, background: bool) -> IndexerSearchLear
         search_session_id: session.into(),
         background_value: background.then_some(0.5),
         candidate_reuse_allowed: background,
+        background_pages_per_pass: None,
     }
 }
 

@@ -451,17 +451,11 @@ impl AppUseCase {
         facet: Option<MediaFacet>,
         requested_library_ids: Option<Vec<String>>,
     ) -> AppResult<Vec<CutoffUnmetItem>> {
-        let authorized_libraries = self
-            .list_libraries_for_permission(
-                actor,
-                facet.clone(),
-                scryer_domain::LibraryPermission::View,
-            )
+        // Upgrade targets are acquisition state, reserved for actors with
+        // privileged library access.
+        let mut library_ids = self
+            .require_privileged_library_ids(actor, facet.clone())
             .await?;
-        let mut library_ids = authorized_libraries
-            .iter()
-            .map(|library| library.id.clone())
-            .collect::<Vec<_>>();
         let requested_library_ids = requested_library_ids
             .as_ref()
             .map(|requested| {
@@ -497,7 +491,7 @@ impl AppUseCase {
         library_ids: &[String],
         title_id: Option<&str>,
         respect_title_monitoring: bool,
-    ) -> AppResult<Vec<(scryer_domain::Title, QualityProfile)>> {
+    ) -> AppResult<Vec<(scryer_domain::Title, std::sync::Arc<QualityProfile>)>> {
         let titles = if let Some(title_id) = title_id {
             self.services
                 .catalog
@@ -511,10 +505,24 @@ impl AppUseCase {
                 .into_iter()
                 .collect()
         } else {
+            if library_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            // The library-wide load reads only what the two cutoff sweeps and
+            // profile resolution use.
             self.services
                 .catalog
                 .titles
-                .list_for_libraries(facet, library_ids, None)
+                .list_with_projection(
+                    facet,
+                    Some(library_ids),
+                    None,
+                    crate::TitleListProjection {
+                        include_external_ids: false,
+                        include_canonical_tags: true,
+                        row: CUTOFF_SWEEP_TITLE_ROW,
+                    },
+                )
                 .await?
         };
         let monitored: Vec<scryer_domain::Title> = titles
@@ -533,6 +541,9 @@ impl AppUseCase {
             .map(|profile| (profile.id.as_str(), profile))
             .collect();
         let default_profile = crate::builtin_default_quality_profile();
+        // Thousands of titles share a handful of profiles: each distinct
+        // resolution is cloned once and shared.
+        let mut resolved: HashMap<Option<String>, std::sync::Arc<QualityProfile>> = HashMap::new();
 
         Ok(monitored
             .into_iter()
@@ -553,19 +564,26 @@ impl AppUseCase {
                     category_profile_id,
                     global_profile_id,
                 );
-                let profile = resolved_profile_id
-                    .as_deref()
-                    .and_then(|profile_id| {
-                        profile_map.get(profile_id).copied().or_else(|| {
-                            profile_settings.profiles.iter().find(|profile| {
-                                crate::settings::runtime::quality_profile_ids_equal(
-                                    &profile.id,
-                                    profile_id,
-                                )
-                            })
-                        })
+                let profile = resolved
+                    .entry(resolved_profile_id.clone())
+                    .or_insert_with(|| {
+                        std::sync::Arc::new(
+                            resolved_profile_id
+                                .as_deref()
+                                .and_then(|profile_id| {
+                                    profile_map.get(profile_id).copied().or_else(|| {
+                                        profile_settings.profiles.iter().find(|profile| {
+                                            crate::settings::runtime::quality_profile_ids_equal(
+                                                &profile.id,
+                                                profile_id,
+                                            )
+                                        })
+                                    })
+                                })
+                                .unwrap_or(&default_profile)
+                                .clone(),
+                        )
                     })
-                    .unwrap_or(&default_profile)
                     .clone();
                 (title, profile)
             })
@@ -1166,30 +1184,49 @@ impl AppUseCase {
             return Err(AppError::validation_refused(crate::error_reasons::catalog::EXISTING_DOWNLOAD_NO_LONGER_SAFE_REPLACE, "the existing download is no longer safe to replace"));
         }
 
-        if let Some(client_id) = conflict.download_client_id.as_deref() {
-            self.services
-                .integrations
-                .download_client
-                .delete_queue_item_for_client_id(
-                    client_id,
-                    &conflict.download_client_item_id,
-                    false,
-                    false,
-                )
-                .await?;
-        } else {
-            self.services
-                .integrations
-                .download_client
-                .delete_queue_item_for_client(
-                    &conflict.download_client_type,
-                    &conflict.download_client_item_id,
-                    false,
-                    false,
-                )
-                .await?;
-        }
+        self.cancel_conflict_in_client(conflict).await?;
+        self.settle_cancelled_conflict(conflict, None).await
+    }
 
+    /// Ask the conflict's client to cancel its live queue item. Downloaded data
+    /// is never deleted on this path.
+    pub(crate) async fn cancel_conflict_in_client(
+        &self,
+        conflict: &SubmissionScopeConflict,
+    ) -> AppResult<()> {
+        let client = &self.services.integrations.download_client;
+        match conflict.download_client_id.as_deref() {
+            Some(client_id) => {
+                client
+                    .delete_queue_item_for_client_id(
+                        client_id,
+                        &conflict.download_client_item_id,
+                        false,
+                        false,
+                    )
+                    .await
+            }
+            None => {
+                client
+                    .delete_queue_item_for_client(
+                        &conflict.download_client_type,
+                        &conflict.download_client_item_id,
+                        false,
+                        false,
+                    )
+                    .await
+            }
+        }
+    }
+
+    /// Drop the local submission of a conflict the client no longer runs and
+    /// reopen the wanted rows it held, except those the `queued_in_place`
+    /// submission already covers.
+    pub(crate) async fn settle_cancelled_conflict(
+        &self,
+        conflict: &SubmissionScopeConflict,
+        queued_in_place: Option<&SubmissionScope>,
+    ) -> AppResult<()> {
         self.services
             .workflow
             .download_submissions
@@ -1203,10 +1240,18 @@ impl AppUseCase {
         self.runtime
             .acquisition
             .invalidate_download_registry_observations();
-        self.reset_wanted_items_for_submission_scope(&conflict.title_id, &conflict.scope)
-            .await?;
-
-        Ok(())
+        // Without this the accepted-download cache keeps reporting the
+        // cancelled job as in flight for its whole window.
+        self.runtime
+            .acquisition
+            .download_submission_guards
+            .forget_settled_download(&conflict.title_id);
+        self.reset_wanted_items_for_submission_scope(
+            &conflict.title_id,
+            &conflict.scope,
+            queued_in_place,
+        )
+        .await
     }
 }
 impl AppUseCase {
@@ -1569,6 +1614,7 @@ impl AppUseCase {
         if !title.monitored {
             return;
         }
+        self.runtime.acquisition.target_cache.mark_title(&title.id);
         self.runtime.acquisition.acquisition_wake.notify_one();
     }
 }
@@ -2555,3 +2601,39 @@ impl AppUseCase {
         Ok(title)
     }
 }
+
+/// The title columns the cutoff sweeps read: identity and display for the
+/// cutoff listing, monitoring and tags for profile resolution, and the dates
+/// movie availability is decided from.
+const CUTOFF_SWEEP_TITLE_ROW: crate::TitleRowProjection = crate::TitleRowProjection {
+    name: true,
+    monitored: true,
+    tags: true,
+    slug: true,
+    min_availability: true,
+    first_aired: true,
+    digital_release_date: true,
+    metadata_fetched_at: true,
+    movie_release_dates: true,
+    root_folder_id: false,
+    created_by: false,
+    created_at: false,
+    year: false,
+    overview: false,
+    poster: false,
+    background: false,
+    sort_title: false,
+    catalog_sort_key: false,
+    imdb_id: false,
+    runtime_minutes: false,
+    popularity: false,
+    content_status: false,
+    language: false,
+    network: false,
+    studio: false,
+    country: false,
+    aliases: false,
+    tagged_aliases: false,
+    metadata_language: false,
+    folder_path: false,
+};

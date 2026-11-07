@@ -156,12 +156,14 @@ impl crate::SubtitleDownloadRepository for StubSubtitleDownloadRepo {
 #[derive(Default)]
 struct StubSubtitleProviderConfigRepo {
     configs: Mutex<Vec<SubtitleProviderConfig>>,
+    list_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl StubSubtitleProviderConfigRepo {
     fn with_configs(configs: Vec<SubtitleProviderConfig>) -> Self {
         Self {
             configs: Mutex::new(configs),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -169,6 +171,8 @@ impl StubSubtitleProviderConfigRepo {
 #[async_trait]
 impl crate::SubtitleProviderConfigRepository for StubSubtitleProviderConfigRepo {
     async fn list(&self, provider_type: Option<String>) -> AppResult<Vec<SubtitleProviderConfig>> {
+        self.list_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(self
             .configs
             .lock()
@@ -483,10 +487,11 @@ async fn seed_fixture(subtitles_enabled: bool, providers: StubProviders) -> Subt
         (MediaFacet::Movie, &movie_root),
         (MediaFacet::Series, &series_root),
     ] {
-        app.update_media_settings(
+        update_default_library_roots(
+            &app,
             &admin,
             facet,
-            empty_update_media_settings_with_roots(vec![build_root_folder_entry(root, true)]),
+            vec![build_root_folder_entry(root, true)],
         )
         .await
         .expect("save roots");
@@ -1010,6 +1015,25 @@ async fn listing_external_subtitles_stays_on_view() {
         .await
         .expect("a viewer can still list external subtitles");
     assert_eq!(listings.len(), 1);
+    // Where the sidecar lives on disk is privileged: a viewer gets its name only.
+    assert_eq!(listings[0].download.file_path, "Lumen Drift.eng.srt");
+
+    let manager_listings = fixture
+        .app
+        .list_external_subtitles_for_title(
+            &title_manager_for(&fixture.movie_library_id),
+            &listings[0].download.title_id,
+        )
+        .await
+        .expect("a title manager can list external subtitles");
+    assert!(
+        manager_listings[0]
+            .download
+            .file_path
+            .ends_with("/Lumen Drift/Lumen Drift.eng.srt"),
+        "a title manager keeps the full sidecar path: {}",
+        manager_listings[0].download.file_path
+    );
 
     fixture
         .app
@@ -1248,4 +1272,661 @@ async fn manage_subtitles_appears_in_the_jwt_claim_vocabulary() {
         ),
         "manageSubtitles"
     );
+}
+
+// The explicit episode action uses the same subtitle policy, but only a bounded selection.
+async fn seed_subtitle_batch() -> (SubtitleFixture, String, Vec<String>) {
+    let mut fixture = seed_fixture(true, StubProviders::Ready).await;
+    fixture.app = fixture.app.with_test_overrides(|services| {
+        services.with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+    });
+    fixture
+        .app
+        .services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&fixture.admin.id, fixture.admin.authorization.app)
+        .await
+        .unwrap();
+    let file = fixture
+        .app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&fixture.series_media_file_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let title_id = file.title_id;
+    let mut episodes = Vec::new();
+    for number in 1..=3 {
+        let episode = fixture
+            .app
+            .create_episode(
+                &fixture.admin,
+                title_id.clone(),
+                None,
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".into()),
+                None,
+                None,
+                None,
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        episodes.push(episode.id);
+    }
+    for episode in &episodes[..2] {
+        fixture
+            .app
+            .services
+            .library
+            .media_files
+            .link_file_to_episode(&fixture.series_media_file_id, episode)
+            .await
+            .unwrap();
+    }
+    fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .update_monitored(&title_id, false)
+        .await
+        .unwrap();
+    // A raw score of 90 is deliberately enough here; threshold-specific tests keep the default.
+    fixture
+        .app
+        .upsert_system_setting_json("subtitles.minimum_score_series", &0, None)
+        .await
+        .unwrap();
+    (fixture, title_id, episodes)
+}
+
+async fn wait_subtitle_batch(
+    receiver: &mut tokio::sync::broadcast::Receiver<crate::JobRun>,
+    id: &str,
+) -> crate::JobRun {
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        loop {
+            let run = receiver.recv().await.expect("job event");
+            if run.id == id && run.completed_at.is_some() {
+                return run;
+            }
+        }
+    })
+    .await
+    .expect("subtitle batch should finish")
+}
+
+#[tokio::test]
+async fn subtitle_batch_accepts_without_waiting_and_deduplicates_shared_files() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    let guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .acquire(&format!("subtitle-file:{}", fixture.series_media_file_id))
+        .await;
+    let next = Utc::now() + chrono::Duration::hours(6);
+    app.set_job_next_run_at(crate::JobKey::SubtitleSearch, next)
+        .await;
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    let mut selected = episodes.clone();
+    selected.push(episodes[0].clone());
+    let accepted = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        app.start_episode_subtitle_search(&fixture.admin, &title_id, selected),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        accepted.actor_user_id.as_deref(),
+        Some(fixture.admin.id.as_str())
+    );
+    assert_eq!(accepted.status, crate::JobRunStatus::Running);
+    assert!(
+        app.start_episode_subtitle_search(&fixture.admin, &title_id, episodes.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        app.runtime
+            .jobs
+            .job_run_tracker
+            .next_run_at(crate::JobKey::SubtitleSearch)
+            .await,
+        Some(next)
+    );
+    drop(guard);
+    let done = wait_subtitle_batch(&mut events, &accepted.id).await;
+    assert_eq!(done.status, crate::JobRunStatus::Completed);
+    let summary: serde_json::Value =
+        serde_json::from_str(done.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["total"], 2); // one shared file, one episode without a file
+    assert_eq!(summary["downloaded"], 1); // Swedish missing; English already on disk
+    assert_eq!(summary["items"][0]["status"], "missing_media");
+    let rows = fixture.subtitle_downloads.rows.lock().await;
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.media_file_id == fixture.series_media_file_id)
+            .count(),
+        2
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.media_file_id == fixture.movie_media_file_id)
+            .count(),
+        1
+    );
+    drop(rows);
+    let retry = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    let retry = wait_subtitle_batch(&mut events, &retry.id).await;
+    let summary: serde_json::Value =
+        serde_json::from_str(retry.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["items"][0]["status"], "already_satisfied");
+    assert_eq!(summary["downloaded"], 0);
+}
+
+#[tokio::test]
+async fn subtitle_batch_validates_selection_and_permissions_before_acceptance() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    for ids in [
+        vec![],
+        vec!["missing-episode".into()],
+        vec![episodes[0].clone(); 1001],
+    ] {
+        let error = app
+            .start_episode_subtitle_search(&fixture.admin, &title_id, ids)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::subtitles::BATCH_SELECTION_INVALID)
+        );
+    }
+    for actor in [
+        viewer_for(&fixture.series_library_id),
+        subtitle_manager_for(&fixture.movie_library_id),
+    ] {
+        assert_unauthorized(
+            app.start_episode_subtitle_search(&actor, &title_id, episodes.clone())
+                .await,
+            "batch scope",
+        );
+    }
+    app.upsert_system_setting_json("subtitles.enabled", &false, None)
+        .await
+        .unwrap();
+    let error = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::subtitles::BATCH_DISABLED)
+    );
+    app.upsert_system_setting_json("subtitles.enabled", &true, None)
+        .await
+        .unwrap();
+    app.upsert_system_setting_json("subtitles.languages", &Vec::<String>::new(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.start_episode_subtitle_search(&fixture.admin, &title_id, episodes)
+            .await
+            .unwrap_err()
+            .validation_reason(),
+        Some(crate::error_reasons::subtitles::BATCH_LANGUAGES_REQUIRED)
+    );
+    assert!(
+        app.active_job_runs(&fixture.admin)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn subtitle_batch_rechecks_revoked_permissions_after_waiting_for_a_file() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    let actor = subtitle_manager_for(&fixture.series_library_id);
+    let grants = actor
+        .authorization
+        .libraries
+        .iter()
+        .map(|(library_id, permissions)| scryer_domain::LibraryGrant {
+            user_id: actor.id.clone(),
+            library_id: library_id.clone(),
+            permissions: *permissions,
+        })
+        .collect();
+    app.services
+        .catalog
+        .libraries
+        .set_grants_for_user(&actor.id, grants)
+        .await
+        .unwrap();
+    let guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .acquire(&format!("subtitle-file:{}", fixture.series_media_file_id))
+        .await;
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    let run = app
+        .start_episode_subtitle_search(&actor, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    // History and subscription reconciliation must work for a subtitle-only actor.
+    assert_eq!(
+        app.list_job_runs(&actor, crate::JobKey::SubtitleSearch, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    app.services
+        .catalog
+        .libraries
+        .set_grants_for_user(&actor.id, vec![])
+        .await
+        .unwrap();
+    drop(guard);
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    assert_eq!(done.status, crate::JobRunStatus::Failed);
+    assert_eq!(fixture.subtitle_downloads.rows.lock().await.len(), 2);
+}
+
+#[tokio::test]
+async fn subtitle_batch_reports_no_match_and_provider_failure_without_touching_other_files() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    app.upsert_system_setting_json("subtitles.minimum_score_series", &100, None)
+        .await
+        .unwrap();
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes.clone())
+        .await
+        .unwrap();
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    let summary: serde_json::Value =
+        serde_json::from_str(done.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["items"][1]["status"], "no_match");
+    let app = app.with_test_overrides(|services| {
+        services.with_subtitle_plugin_provider(Arc::new(StubSubtitlePluginProvider {
+            instantiates: false,
+        }))
+    });
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes)
+        .await
+        .unwrap();
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    assert_eq!(done.status, crate::JobRunStatus::Warning); // missing file plus provider failure
+    assert_eq!(fixture.subtitle_downloads.rows.lock().await.len(), 2);
+}
+
+#[tokio::test]
+async fn subtitle_batch_shutdown_interrupts_wait_and_preserves_retryability() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    let guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .acquire(&format!("subtitle-file:{}", fixture.series_media_file_id))
+        .await;
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes)
+        .await
+        .unwrap();
+    app.restore_coordinator().shutdown_workers.cancel();
+    drop(guard);
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    assert_eq!(done.status, crate::JobRunStatus::Failed);
+    assert_eq!(fixture.subtitle_downloads.rows.lock().await.len(), 2);
+}
+
+#[tokio::test]
+async fn subtitle_batch_rechecks_current_settings_and_file_state_after_waiting() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    let guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .acquire(&format!("subtitle-file:{}", fixture.series_media_file_id))
+        .await;
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    app.upsert_system_setting_json(
+        "subtitles.languages",
+        &vec![crate::subtitles::wanted::SubtitleLanguagePref {
+            code: "eng".into(),
+            forced: false,
+            hearing_impaired: false,
+        }],
+        None,
+    )
+    .await
+    .unwrap();
+    drop(guard);
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    let summary: serde_json::Value =
+        serde_json::from_str(done.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["items"][0]["status"], "already_satisfied");
+    assert_eq!(fixture.subtitle_downloads.rows.lock().await.len(), 2);
+
+    let file = app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&fixture.series_media_file_id)
+        .await
+        .unwrap()
+        .unwrap();
+    // Only this fixture's synthetic file is removed; the worker must preserve every other file.
+    std::fs::remove_file(crate::stored_paths::stored_path_to_path_buf(
+        &file.file_path,
+    ))
+    .unwrap();
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    let summary: serde_json::Value =
+        serde_json::from_str(done.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["items"][0]["status"], "missing_media");
+}
+
+#[tokio::test]
+async fn subtitle_batch_applies_forced_preferences() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    app.upsert_system_setting_json(
+        "subtitles.languages",
+        &vec![crate::subtitles::wanted::SubtitleLanguagePref {
+            code: "swe".into(),
+            forced: true,
+            hearing_impaired: false,
+        }],
+        None,
+    )
+    .await
+    .unwrap();
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    let summary: serde_json::Value =
+        serde_json::from_str(done.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["items"][0]["status"], "no_match");
+    assert_eq!(fixture.subtitle_downloads.rows.lock().await.len(), 2);
+}
+
+#[tokio::test]
+async fn subtitle_batch_honors_blocklisted_provider_files() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    fixture
+        .app
+        .services
+        .workflow
+        .subtitle_downloads
+        .blocklist(
+            &fixture.series_media_file_id,
+            STUB_PROVIDER_TYPE,
+            "stub-file-1",
+            "swe",
+            None,
+        )
+        .await
+        .unwrap();
+    let mut events = fixture.app.runtime.jobs.job_run_tracker.subscribe();
+    let run = fixture
+        .app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    let summary: serde_json::Value =
+        serde_json::from_str(done.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["items"][0]["status"], "no_match");
+    assert_eq!(fixture.subtitle_downloads.rows.lock().await.len(), 2);
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn subtitle_batch_reports_sync_warning_when_configured_engine_is_unavailable() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    fixture
+        .app
+        .upsert_system_setting_json("subtitles.sync_enabled", &true, None)
+        .await
+        .unwrap();
+    fixture
+        .app
+        .upsert_system_setting_json("subtitles.sync_threshold_series", &100, None)
+        .await
+        .unwrap();
+    let mut events = fixture.app.runtime.jobs.job_run_tracker.subscribe();
+    let run = fixture
+        .app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    assert_eq!(done.status, crate::JobRunStatus::Warning);
+    let summary: serde_json::Value =
+        serde_json::from_str(done.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["downloaded"], 1);
+    assert_eq!(summary["items"][0]["sync_warnings"], 1);
+    assert_eq!(
+        summary["items"][0]["sync_reasons"][0],
+        "subtitle_sync_plugin_required"
+    );
+}
+
+#[tokio::test]
+async fn subtitle_batch_and_periodic_cycle_share_file_deduplication() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    let movie = app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&fixture.movie_media_file_id)
+        .await
+        .unwrap()
+        .unwrap();
+    app.services
+        .catalog
+        .titles
+        .update_monitored(&movie.title_id, false)
+        .await
+        .unwrap();
+    app.services
+        .catalog
+        .titles
+        .update_monitored(&title_id, true)
+        .await
+        .unwrap();
+    let guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .acquire(&format!("subtitle-file:{}", fixture.series_media_file_id))
+        .await;
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    let periodic_app = app.clone();
+    let periodic = tokio::spawn(async move { periodic_app.run_subtitle_search_job().await });
+    drop(guard);
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    assert_eq!(done.status, crate::JobRunStatus::Completed);
+    tokio::time::timeout(std::time::Duration::from_secs(60), periodic)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let rows = fixture.subtitle_downloads.rows.lock().await;
+    assert_eq!(rows.iter().filter(|row| row.media_file_id == fixture.series_media_file_id && row.language == "swe").count(), 1);
+    assert_eq!(rows.len(), 3);
+}
+
+#[tokio::test]
+async fn subtitle_batch_interrupted_record_uses_standard_recovery() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let guard = fixture
+        .app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .acquire(&format!("subtitle-file:{}", fixture.series_media_file_id))
+        .await;
+    let mut events = fixture.app.runtime.jobs.job_run_tracker.subscribe();
+    let run = fixture
+        .app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    let snapshot = fixture
+        .app
+        .services
+        .events
+        .job_runs
+        .list_job_runs(Some(crate::JobKey::SubtitleSearch), 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.id == run.id)
+        .unwrap();
+    assert_eq!(snapshot.status, crate::JobRunStatus::Running);
+    fixture.app.restore_coordinator().shutdown_workers.cancel();
+    drop(guard);
+    wait_subtitle_batch(&mut events, &run.id).await;
+
+    let (restarted, _, _) = seed_subtitle_batch().await;
+    let jobs = Arc::new(RecordingJobRunRepo::default());
+    jobs.seed(snapshot).await;
+    let app = restarted
+        .app
+        .with_test_overrides(|services| services.with_job_runs(jobs));
+    assert_eq!(app.reconcile_interrupted_job_runs(&[]).await.unwrap(), 1);
+    let recovered = app
+        .services
+        .events
+        .job_runs
+        .list_job_runs(Some(crate::JobKey::SubtitleSearch), 10)
+        .await
+        .unwrap();
+    assert_eq!(recovered[0].id, run.id);
+    assert_eq!(recovered[0].status, crate::JobRunStatus::Failed);
+    assert!(recovered[0].completed_at.is_some());
+}
+
+#[tokio::test]
+async fn subtitle_batch_periodic_unavailable_provider_stops_before_library_walk() {
+    let fixture = seed_fixture(true, StubProviders::Ready).await;
+    let configs = Arc::new(StubSubtitleProviderConfigRepo::default());
+    let app = fixture
+        .app
+        .with_test_overrides(|services| services.with_subtitle_provider_configs(configs.clone()));
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(
+        configs
+            .list_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
+#[tokio::test]
+async fn subtitle_batch_reloads_provider_facets_between_files() {
+    let (mut fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let configs = Arc::new(StubSubtitleProviderConfigRepo::with_configs(vec![
+        stub_provider_config(),
+    ]));
+    fixture.app = fixture
+        .app
+        .with_test_overrides(|services| services.with_subtitle_provider_configs(configs.clone()));
+    let path = fixture._tempdir.path().join("second.mkv");
+    std::fs::write(&path, b"video").unwrap();
+    let app = &fixture.app;
+    let second = app
+        .services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title_id.clone(),
+            file_path: path.to_string_lossy().into_owned(),
+            size_bytes: 5,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    app.services
+        .library
+        .media_files
+        .link_file_to_episode(&second, &episodes[2])
+        .await
+        .unwrap();
+    let mut files = [fixture.series_media_file_id.clone(), second];
+    files.sort();
+    let guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .acquire(&format!("subtitle-file:{}", files[1]))
+        .await;
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes)
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        loop {
+            let progress = events.recv().await.unwrap();
+            if progress.id == run.id
+                && progress.progress_json.as_ref().is_some_and(|json| {
+                    serde_json::from_str::<serde_json::Value>(json).unwrap()["completed"] == 1
+                })
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("first file should finish");
+    configs.configs.lock().await[0].enabled_facets = vec!["movie".into()];
+    drop(guard);
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    let summary: serde_json::Value =
+        serde_json::from_str(done.summary_json.as_ref().unwrap()).unwrap();
+    assert!(summary["items"][0]["downloaded"].as_u64().unwrap() > 0);
+    assert_eq!(summary["items"][1]["downloaded"], 0);
+    assert_eq!(summary["items"][1]["status"], "no_match");
 }

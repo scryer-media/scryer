@@ -246,7 +246,7 @@ export function ExclusionsTable({
                   />
                 </TableCell>
                 <TableCell className="hidden sm:table-cell">
-                  <span className="font-[var(--font-code)] text-[12px] text-[var(--scry-muted)]">
+                  <span className="font-[family-name:var(--font-code)] text-[12px] text-[var(--scry-muted)]">
                     {exclusion.externalIds
                       .map((id) => `${id.source}:${id.value}`)
                       .join(", ")}

@@ -3027,3 +3027,741 @@ async fn unscoped_slug_lookup_prefers_the_default_library_over_a_vault_copy() {
         Some(only_in_vault.title.id.clone())
     );
 }
+
+/// Every directory and file under `root`, sorted, with file bytes, so a test
+/// can prove a catalog edit left the disk exactly as it was.
+fn root_removal_disk_snapshot(root: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {
+    fn walk(
+        base: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut Vec<(String, Option<Vec<u8>>)>,
+    ) {
+        for entry in std::fs::read_dir(dir).expect("read fixture dir") {
+            let path = entry.expect("fixture dir entry").path();
+            let relative = path
+                .strip_prefix(base)
+                .expect("fixture path under base")
+                .to_string_lossy()
+                .to_string();
+            if path.is_dir() {
+                out.push((format!("{relative}/"), None));
+                walk(base, &path, out);
+            } else {
+                out.push((
+                    relative,
+                    Some(std::fs::read(&path).expect("read fixture file")),
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+struct RootRemovalFixture {
+    app: AppUseCase,
+    user: User,
+    temp: tempfile::TempDir,
+    library_id: String,
+    root_a_id: String,
+    root_b_id: String,
+    root_b_path: String,
+    titles_on_a: Vec<Title>,
+    title_on_b: Title,
+}
+
+impl RootRemovalFixture {
+    async fn new() -> Self {
+        let (app, user) = bootstrap();
+        let temp = tempfile::tempdir().expect("root removal tempdir");
+        let root_a = temp.path().join("synthetic-disk-a");
+        let root_b = temp.path().join("synthetic-disk-b");
+        std::fs::create_dir_all(&root_a).expect("create root a");
+        std::fs::create_dir_all(&root_b).expect("create root b");
+        let library = app
+            .create_library(
+                &user,
+                MediaFacet::Movie,
+                "Synthetic Movies".to_string(),
+                vec![
+                    LibraryRootDraft {
+                        id: None,
+                        path: root_a.to_string_lossy().to_string(),
+                        is_default: true,
+                    },
+                    LibraryRootDraft {
+                        id: None,
+                        path: root_b.to_string_lossy().to_string(),
+                        is_default: false,
+                    },
+                ],
+                None,
+            )
+            .await
+            .expect("create two-root library");
+        let root_a_id = library.roots[0].id.clone();
+        let root_b_id = library.roots[1].id.clone();
+
+        let mut titles_on_a = Vec::new();
+        for (name, year, folder) in [
+            ("Synthetic Movie One", 2001, "Synthetic Movie One (2001)"),
+            ("Synthetic Movie Two", 2002, "Synthetic Movie Two (2002)"),
+        ] {
+            titles_on_a.push(
+                Self::seed_title(
+                    &app,
+                    &user,
+                    &library.id,
+                    &root_a_id,
+                    &root_a,
+                    name,
+                    year,
+                    folder,
+                )
+                .await,
+            );
+        }
+        let title_on_b = Self::seed_title(
+            &app,
+            &user,
+            &library.id,
+            &root_b_id,
+            &root_b,
+            "Synthetic Movie Three",
+            2003,
+            "Synthetic Movie Three (2003)",
+        )
+        .await;
+        std::fs::write(root_a.join("stray.synthetic"), b"stray bytes").expect("write stray file");
+
+        Self {
+            app,
+            user,
+            library_id: library.id,
+            root_a_id,
+            root_b_id,
+            root_b_path: root_b.to_string_lossy().to_string(),
+            titles_on_a,
+            title_on_b,
+            temp,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn seed_title(
+        app: &AppUseCase,
+        user: &User,
+        library_id: &str,
+        root_id: &str,
+        root_path: &std::path::Path,
+        name: &str,
+        year: i32,
+        folder_name: &str,
+    ) -> Title {
+        let title = app
+            .create_title_without_hydration_in_library(
+                user,
+                NewTitle {
+                    name: name.to_string(),
+                    facet: MediaFacet::Movie,
+                    monitored: false,
+                    year: Some(year),
+                    root_folder_id: Some(root_id.to_string()),
+                    ..Default::default()
+                },
+                library_id.to_string(),
+            )
+            .await
+            .expect("create synthetic title")
+            .title;
+        app.services
+            .catalog
+            .titles
+            .update_metadata(&title.id, None, None, None, Some(root_id.to_string()))
+            .await
+            .expect("set title root");
+        let folder = root_path.join(folder_name);
+        std::fs::create_dir_all(&folder).expect("create title folder");
+        app.services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, folder.to_string_lossy().as_ref())
+            .await
+            .expect("set title folder");
+        for (file_name, content) in [
+            ("synthetic.mkv", format!("{name} video").into_bytes()),
+            ("synthetic.srt", format!("{name} subtitle").into_bytes()),
+        ] {
+            std::fs::write(folder.join(file_name), content).expect("write fixture file");
+        }
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .expect("reload title")
+            .expect("seeded title exists")
+    }
+
+    fn only_root_b(&self) -> Vec<LibraryRootDraft> {
+        vec![LibraryRootDraft {
+            id: Some(self.root_b_id.clone()),
+            path: self.root_b_path.clone(),
+            is_default: true,
+        }]
+    }
+
+    async fn title_exists(&self, title_id: &str) -> bool {
+        self.app
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await
+            .expect("title lookup")
+            .is_some()
+    }
+}
+
+#[tokio::test]
+async fn update_library_dropping_a_root_removes_its_titles_and_leaves_files_alone() {
+    let fixture = RootRemovalFixture::new().await;
+    assert!(
+        fixture
+            .titles_on_a
+            .iter()
+            .all(|title| title.root_folder_id == fixture.root_a_id)
+    );
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+    assert!(before.len() >= 10, "fixture tree is populated: {before:?}");
+
+    let updated = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(fixture.only_root_b()),
+            Some(vec![fixture.root_a_id.clone()]),
+            None,
+        )
+        .await
+        .expect("dropping a root with titles under it succeeds");
+
+    assert_eq!(updated.removed_title_count, 2);
+    assert_eq!(
+        updated
+            .library
+            .roots
+            .iter()
+            .map(|root| root.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![fixture.root_b_id.as_str()]
+    );
+    for title in &fixture.titles_on_a {
+        assert!(
+            !fixture.title_exists(&title.id).await,
+            "{} removed",
+            title.name
+        );
+    }
+    assert!(fixture.title_exists(&fixture.title_on_b.id).await);
+    assert_eq!(root_removal_disk_snapshot(fixture.temp.path()), before);
+
+    // A second save with the same roots removes nothing more.
+    let again = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(fixture.only_root_b()),
+            None,
+            None,
+        )
+        .await
+        .expect("resaving the kept roots succeeds");
+    assert_eq!(again.removed_title_count, 0);
+    assert!(fixture.title_exists(&fixture.title_on_b.id).await);
+    assert_eq!(root_removal_disk_snapshot(fixture.temp.path()), before);
+}
+
+#[tokio::test]
+async fn update_library_refuses_a_stored_root_resubmitted_without_its_id() {
+    let fixture = RootRemovalFixture::new().await;
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+    // Root B keeps its id; root A comes back at its own path with none.
+    let library = fixture
+        .app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&fixture.library_id)
+        .await
+        .expect("library lookup")
+        .expect("library exists");
+    let drafts = library
+        .roots
+        .iter()
+        .map(|root| LibraryRootDraft {
+            id: (root.id == fixture.root_b_id).then(|| root.id.clone()),
+            path: format!("{}/", root.path),
+            is_default: root.is_default,
+        })
+        .collect::<Vec<_>>();
+
+    let error = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(drafts),
+            None,
+            None,
+        )
+        .await
+        .expect_err("a stored root sent by path alone is refused");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::ROOT_ID_REQUIRED)
+    );
+    for title in fixture.titles_on_a.iter().chain([&fixture.title_on_b]) {
+        assert!(fixture.title_exists(&title.id).await, "{} kept", title.name);
+    }
+    let after = fixture
+        .app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&fixture.library_id)
+        .await
+        .expect("library lookup")
+        .expect("library exists");
+    assert_eq!(
+        after
+            .roots
+            .iter()
+            .map(|root| (root.id.as_str(), root.path.as_str()))
+            .collect::<Vec<_>>(),
+        library
+            .roots
+            .iter()
+            .map(|root| (root.id.as_str(), root.path.as_str()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(root_removal_disk_snapshot(fixture.temp.path()), before);
+}
+
+#[tokio::test]
+async fn update_library_dropping_a_root_refuses_while_a_title_under_it_is_claimed() {
+    let fixture = RootRemovalFixture::new().await;
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+    fixture.app.runtime.library.location_ownership.claim_all(
+        "synthetic-move",
+        &[crate::location::ownership_guard::OwnedEntity::Title(
+            fixture.titles_on_a[1].id.clone(),
+        )],
+    );
+
+    let error = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(fixture.only_root_b()),
+            Some(vec![fixture.root_a_id.clone()]),
+            None,
+        )
+        .await
+        .expect_err("a claimed title blocks dropping its root");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::ROOT_TITLES_BUSY)
+    );
+    for title in fixture.titles_on_a.iter().chain([&fixture.title_on_b]) {
+        assert!(fixture.title_exists(&title.id).await, "{} kept", title.name);
+    }
+    let library = fixture
+        .app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&fixture.library_id)
+        .await
+        .expect("library lookup")
+        .expect("library exists");
+    assert_eq!(
+        library
+            .roots
+            .iter()
+            .map(|root| root.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![fixture.root_a_id.as_str(), fixture.root_b_id.as_str()]
+    );
+    assert_eq!(root_removal_disk_snapshot(fixture.temp.path()), before);
+}
+
+impl RootRemovalFixture {
+    async fn stored_root_ids(&self) -> Vec<String> {
+        self.app
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&self.library_id)
+            .await
+            .expect("library lookup")
+            .expect("library exists")
+            .roots
+            .into_iter()
+            .map(|root| root.id)
+            .collect()
+    }
+
+    async fn assert_nothing_removed(&self, before: &[(String, Option<Vec<u8>>)]) {
+        for title in self.titles_on_a.iter().chain([&self.title_on_b]) {
+            assert!(self.title_exists(&title.id).await, "{} kept", title.name);
+        }
+        assert_eq!(
+            self.stored_root_ids().await,
+            vec![self.root_a_id.clone(), self.root_b_id.clone()]
+        );
+        assert_eq!(root_removal_disk_snapshot(self.temp.path()), before);
+    }
+}
+
+#[tokio::test]
+async fn update_library_refuses_a_root_removal_it_does_not_acknowledge() {
+    let fixture = RootRemovalFixture::new().await;
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+    let root_a_path = fixture
+        .app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&fixture.library_id)
+        .await
+        .expect("library lookup")
+        .expect("library exists")
+        .roots
+        .into_iter()
+        .find(|root| root.id == fixture.root_a_id)
+        .expect("root a stored")
+        .path;
+
+    for acknowledged in [None, Some(Vec::new())] {
+        let error = fixture
+            .app
+            .update_library_with_outcome(
+                &fixture.user,
+                &fixture.library_id,
+                None,
+                Some(fixture.only_root_b()),
+                acknowledged,
+                None,
+            )
+            .await
+            .expect_err("an unacknowledged root removal is refused");
+
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::library::ROOT_REMOVAL_NOT_ACKNOWLEDGED)
+        );
+        let facts = error.refusal_facts();
+        let fact = |key: &str| {
+            facts
+                .iter()
+                .find(|fact| fact.key == key)
+                .map(|fact| fact.value.clone())
+        };
+        assert_eq!(
+            fact(crate::error_reasons::library::ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT),
+            Some(crate::RefusalFactValue::List(vec![
+                fixture.root_a_id.clone()
+            ]))
+        );
+        assert_eq!(
+            fact(crate::error_reasons::library::ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT),
+            Some(crate::RefusalFactValue::List(vec![root_a_path.clone()]))
+        );
+        fixture.assert_nothing_removed(&before).await;
+    }
+}
+
+#[tokio::test]
+async fn update_library_refuses_an_acknowledgement_for_a_root_it_does_not_drop() {
+    let fixture = RootRemovalFixture::new().await;
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+
+    for (stray, label) in [
+        (fixture.root_b_id.clone(), "a kept root"),
+        ("synthetic-unknown-root".to_string(), "an unknown root"),
+    ] {
+        let error = fixture
+            .app
+            .update_library_with_outcome(
+                &fixture.user,
+                &fixture.library_id,
+                None,
+                Some(fixture.only_root_b()),
+                Some(vec![fixture.root_a_id.clone(), stray.clone()]),
+                None,
+            )
+            .await
+            .expect_err("acknowledging a root the edit keeps is refused");
+
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::library::ROOT_REMOVAL_MISMATCH),
+            "{label}"
+        );
+        let mismatched = error
+            .refusal_facts()
+            .iter()
+            .find(|fact| {
+                fact.key == crate::error_reasons::library::ROOT_REMOVAL_MISMATCHED_IDS_FACT
+            })
+            .map(|fact| fact.value.clone());
+        assert_eq!(
+            mismatched,
+            Some(crate::RefusalFactValue::List(vec![stray])),
+            "{label}"
+        );
+        fixture.assert_nothing_removed(&before).await;
+    }
+}
+
+#[tokio::test]
+async fn update_library_ignores_removal_acknowledgements_without_a_root_list() {
+    let fixture = RootRemovalFixture::new().await;
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+
+    let updated = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            Some("Synthetic Movies Renamed".to_string()),
+            None,
+            Some(vec![fixture.root_a_id.clone()]),
+            None,
+        )
+        .await
+        .expect("a name-only edit ignores the acknowledgement");
+
+    assert_eq!(updated.removed_title_count, 0);
+    assert_eq!(updated.library.name, "Synthetic Movies Renamed");
+    fixture.assert_nothing_removed(&before).await;
+}
+
+#[tokio::test]
+async fn update_library_refuses_a_duplicated_root_id_before_removing_anything() {
+    let fixture = RootRemovalFixture::new().await;
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+    let mut drafts = fixture.only_root_b();
+    let mut duplicate = drafts[0].clone();
+    duplicate.path = fixture
+        .temp
+        .path()
+        .join("synthetic-disk-c")
+        .to_string_lossy()
+        .to_string();
+    duplicate.is_default = false;
+    drafts.push(duplicate);
+
+    let error = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(drafts),
+            Some(vec![fixture.root_a_id.clone()]),
+            None,
+        )
+        .await
+        .expect_err("one root id twice in a draft is refused");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::ROOT_ID_DUPLICATED)
+    );
+    fixture.assert_nothing_removed(&before).await;
+}
+
+#[tokio::test]
+async fn update_library_refuses_a_taken_name_before_removing_titles() {
+    let fixture = RootRemovalFixture::new().await;
+    let other_root = fixture.temp.path().join("synthetic-disk-other");
+    std::fs::create_dir_all(&other_root).expect("create other root");
+    fixture
+        .app
+        .create_library(
+            &fixture.user,
+            MediaFacet::Movie,
+            "Synthetic Taken".to_string(),
+            vec![LibraryRootDraft {
+                id: None,
+                path: other_root.to_string_lossy().to_string(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("create the library holding the name");
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+
+    let error = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            Some("Synthetic Taken".to_string()),
+            Some(fixture.only_root_b()),
+            Some(vec![fixture.root_a_id.clone()]),
+            None,
+        )
+        .await
+        .expect_err("a rename onto a taken name is refused");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::NAME_TAKEN)
+    );
+    fixture.assert_nothing_removed(&before).await;
+}
+
+#[tokio::test]
+async fn update_library_dropping_a_root_refuses_while_a_title_under_it_is_being_deleted() {
+    let fixture = RootRemovalFixture::new().await;
+    let before = root_removal_disk_snapshot(fixture.temp.path());
+    // What an activated title-deletion guard records while that deletion runs.
+    fixture
+        .app
+        .runtime
+        .acquisition
+        .titles_in_deletion
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(fixture.titles_on_a[0].id.clone());
+
+    let error = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(fixture.only_root_b()),
+            Some(vec![fixture.root_a_id.clone()]),
+            None,
+        )
+        .await
+        .expect_err("a title already being deleted blocks dropping its root");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::ROOT_TITLES_BUSY)
+    );
+    fixture.assert_nothing_removed(&before).await;
+}
+
+#[tokio::test]
+async fn update_library_cancels_the_library_scan_only_when_a_root_is_removed() {
+    let fixture = RootRemovalFixture::new().await;
+    let tracker = &fixture.app.runtime.library.library_scan_tracker;
+    let session_id = "synthetic-root-removal-scan";
+    tracker
+        .start_session_with_id_for_library(
+            session_id.to_string(),
+            MediaFacet::Movie,
+            Some(fixture.library_id.clone()),
+            LibraryScanMode::Full,
+        )
+        .await
+        .expect("start a library scan");
+    let token = fixture
+        .app
+        .ensure_library_scan_cancellation_token(session_id, LibraryScanMode::Full)
+        .await
+        .expect("full scans carry a cancellation token");
+
+    // Adding a root leaves the running scan alone.
+    let root_c = fixture.temp.path().join("synthetic-disk-c");
+    std::fs::create_dir_all(&root_c).expect("create root c");
+    let mut drafts = fixture
+        .app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&fixture.library_id)
+        .await
+        .expect("library lookup")
+        .expect("library exists")
+        .roots
+        .into_iter()
+        .map(|root| LibraryRootDraft {
+            id: Some(root.id),
+            path: root.path,
+            is_default: root.is_default,
+        })
+        .collect::<Vec<_>>();
+    drafts.push(LibraryRootDraft {
+        id: None,
+        path: root_c.to_string_lossy().to_string(),
+        is_default: false,
+    });
+    fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(drafts),
+            None,
+            None,
+        )
+        .await
+        .expect("adding a root succeeds");
+    assert!(tracker.get_session(session_id).await.is_some());
+    assert!(!token.is_cancelled());
+
+    // Removing one cancels it before any title is taken out.
+    let mut kept = fixture.only_root_b();
+    kept.push(LibraryRootDraft {
+        id: None,
+        path: root_c.to_string_lossy().to_string(),
+        is_default: false,
+    });
+    let kept = crate::lib_tests::with_stored_root_ids(
+        &fixture
+            .app
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&fixture.library_id)
+            .await
+            .expect("library lookup")
+            .expect("library exists"),
+        kept,
+    );
+    let updated = fixture
+        .app
+        .update_library_with_outcome(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(kept),
+            Some(vec![fixture.root_a_id.clone()]),
+            None,
+        )
+        .await
+        .expect("dropping a root succeeds");
+    assert_eq!(updated.removed_title_count, 2);
+    assert!(tracker.get_session(session_id).await.is_none());
+    assert!(token.is_cancelled());
+}

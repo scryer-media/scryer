@@ -1,8 +1,14 @@
 import { hasGraphQlErrorReason } from "@/lib/graphql/error-message";
 import { titleDeleteErrorMessage } from "@/lib/utils/title-delete-error-message";
 import * as React from "react";
+import {
+  DiscoveryInFlight,
+  DiscoveryResponseGate,
+  catalogDiscoveryScope,
+} from "@/lib/utils/discovery-in-flight";
 import { useCatalogFilterState } from "@/lib/hooks/use-catalog-filter-state";
 import { createCatalogPageRequestGate } from "@/lib/utils/catalog-page-request";
+import { loadCatalogBulk } from "@/lib/utils/catalog-bulk-load";
 import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import { MediaContentView } from "@/components/views/media-content-view";
 import {
@@ -37,6 +43,7 @@ import {
   jobRunsQuery,
   librariesQuery,
   libraryDownloadClientsQuery,
+  libraryRootTitleCountsQuery,
   librarySettingsQuery,
   externalSubtitlesQuery,
   catalogDiscoveryQuery,
@@ -53,6 +60,7 @@ import {
 import { createCatalogSummaryLoader } from "@/lib/utils/catalog-summary-loader";
 import {
   type ActiveCatalogListFilters,
+  applyCatalogTitlesById,
   applyRefreshedCatalogTitle,
   buildActiveCatalogListFilters,
   mergePreferLoadedImageFields,
@@ -97,6 +105,7 @@ import {
   EMPTY_TITLE_QUICK_FILTERS,
   buildTitleCatalogQueryVariables,
   titleCatalogFilterInput,
+  titleCatalogProjectionForGraph,
   titleCatalogProjectionForTable,
   loadTitleCatalogSelection,
   titleCatalogQueryKey,
@@ -136,6 +145,7 @@ import type {
   DownloadClientRoutingEntry,
   JobRun,
   LibraryRecord,
+  LibraryRootRecord,
   LibrarySettingsDraft,
   LibrarySettingsRecord,
   Release,
@@ -164,7 +174,6 @@ import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
 import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
 import { catalogDeletionRefresh } from "@/lib/utils/catalog-deletion-refresh";
@@ -180,7 +189,11 @@ import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import { titleMatchesOptionUpdates } from "@/lib/utils/title-edit-dialog";
 import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
 import { useAuth } from "@/lib/hooks/use-auth";
-import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
+import {
+  APP_PERMISSIONS,
+  hasAppPermission,
+  hasPrivilegedTitleAccess,
+} from "@/lib/utils/permissions";
 import {
   exclusionInputFromTitle,
   type AddListExclusionInput,
@@ -267,6 +280,17 @@ type CatalogReloadOptions = {
   advancedFilters?: TitleCatalogAdvancedFilters;
   mode?: "initial" | "background";
 };
+
+/** Ids per id-scoped refetch, keeping each request's IN list modest. */
+const CATALOG_REFETCH_ID_CHUNK = 500;
+
+function chunkTitleIds(ids: readonly string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < ids.length; index += size) {
+    chunks.push(ids.slice(index, index + size));
+  }
+  return chunks;
+}
 
 function markCatalogTiming(name: string) {
   if (import.meta.env.DEV && typeof performance !== "undefined") {
@@ -633,9 +657,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const { startAutomaticSearch } = useAutomaticSearch();
   const client = useClient();
   const auth = useAuth();
-  // Library and root moves are still being finished, so the bulk dialog only
-  // becomes a move entry point when the instance has opted in.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const canManageLists = hasAppPermission(
     auth.user,
     APP_PERMISSIONS.manageLists,
@@ -756,7 +777,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     },
     [advancedTitleFilters, setAdvancedTitleFilters],
   );
-  const catalogDiscoveryRequestIdRef = React.useRef(0);
+  const catalogDiscoveryGate = React.useRef(new DiscoveryResponseGate());
+  const catalogDiscoveryInFlight = React.useRef(
+    new DiscoveryInFlight<CatalogDiscoveryPayload | undefined>(),
+  );
   const [catalogDiscoveryGroups, setCatalogDiscoveryGroups] = React.useState<
     CatalogDiscoveryGroup[]
   >([]);
@@ -771,7 +795,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const authorizationSignatureRef = React.useRef(authorizationSignature);
   React.useLayoutEffect(() => {
     authorizationSignatureRef.current = authorizationSignature;
-    catalogDiscoveryRequestIdRef.current += 1;
+    catalogDiscoveryGate.current.invalidate();
+    catalogDiscoveryInFlight.current.clear();
     setCatalogDiscoveryGroups([]);
     setAddDiscoveryDialogTarget(null);
     setRequestDiscoveryDialogTarget(null);
@@ -791,56 +816,65 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     isMediaView && contentSettingsSection === "overview";
   const shouldLoadMediaSettingsForSection =
     isMediaView && isMediaSettingsSection(contentSettingsSection);
-  const refreshCatalogDiscovery = React.useCallback(async () => {
-    const requestId = catalogDiscoveryRequestIdRef.current + 1;
-    catalogDiscoveryRequestIdRef.current = requestId;
-    if (
-      !shouldLoadCatalogTitles ||
-      !catalogDependentRequestsAllowedRef.current ||
-      (!canManageCatalogDiscovery && !canRequestCatalogDiscovery)
-    ) {
-      setCatalogDiscoveryGroups([]);
-      return;
-    }
-    setCatalogDiscoveryGroups([]);
-    const libraryIds = selectedLibraryIds.filter(
-      (libraryId) => libraryId !== ALL_LIBRARIES_VALUE,
-    );
-    const input: CatalogDiscoveryInput = {
-      facet: activeFacet,
-      libraryIds,
-      includeUnresolved: true,
-      limitPerGroup: CATALOG_DISCOVERY_LIMIT_PER_GROUP,
-      maxGroups: CATALOG_DISCOVERY_MAX_GROUPS,
-    };
-    try {
-      const { data, error } = await client
-        .query<{ catalogDiscovery?: CatalogDiscoveryPayload }>(
-          catalogDiscoveryQuery,
-          { input },
-          { requestPolicy: "network-only" },
-        )
-        .toPromise();
-      if (error) {
-        throw error;
-      }
-      if (catalogDiscoveryRequestIdRef.current === requestId) {
-        setCatalogDiscoveryGroups(data?.catalogDiscovery?.groups ?? []);
-      }
-    } catch (error) {
-      console.error("[catalog-discovery] refresh failed:", error);
-      if (catalogDiscoveryRequestIdRef.current === requestId) {
+  const refreshCatalogDiscovery = React.useCallback(
+    async (refresh = false) => {
+      if (
+        !shouldLoadCatalogTitles ||
+        (!canManageCatalogDiscovery && !canRequestCatalogDiscovery)
+      ) {
+        catalogDiscoveryGate.current.invalidate();
         setCatalogDiscoveryGroups([]);
+        return;
       }
-    }
-  }, [
-    activeFacet,
-    canManageCatalogDiscovery,
-    canRequestCatalogDiscovery,
-    client,
-    selectedLibraryIds,
-    shouldLoadCatalogTitles,
-  ]);
+      setCatalogDiscoveryGroups([]);
+      const libraryIds = selectedLibraryIds.filter(
+        (libraryId) => libraryId !== ALL_LIBRARIES_VALUE,
+      );
+      const input: CatalogDiscoveryInput = {
+        facet: activeFacet,
+        libraryIds,
+        includeUnresolved: true,
+        limitPerGroup: CATALOG_DISCOVERY_LIMIT_PER_GROUP,
+        maxGroups: CATALOG_DISCOVERY_MAX_GROUPS,
+      };
+      const scope = catalogDiscoveryScope(authorizationSignature, input);
+      const ticket = catalogDiscoveryGate.current.begin(scope);
+      try {
+        const payload = await catalogDiscoveryInFlight.current.run(
+          scope,
+          async () => {
+            const { data, error } = await client
+              .query<{ catalogDiscovery?: CatalogDiscoveryPayload }>(
+                catalogDiscoveryQuery,
+                { input },
+                { requestPolicy: "network-only" },
+              )
+              .toPromise();
+            if (error) throw error;
+            return data?.catalogDiscovery;
+          },
+          refresh,
+        );
+        if (catalogDiscoveryGate.current.accepts(ticket, scope)) {
+          setCatalogDiscoveryGroups(payload?.groups ?? []);
+        }
+      } catch (error) {
+        console.error("[catalog-discovery] refresh failed:", error);
+        if (catalogDiscoveryGate.current.accepts(ticket, scope)) {
+          setCatalogDiscoveryGroups([]);
+        }
+      }
+    },
+    [
+      activeFacet,
+      authorizationSignature,
+      canManageCatalogDiscovery,
+      canRequestCatalogDiscovery,
+      client,
+      selectedLibraryIds,
+      shouldLoadCatalogTitles,
+    ],
+  );
 
   const refreshTitleCatalogFilterOptions = React.useCallback(async () => {
     const requestId = titleCatalogFilterOptionsRequestIdRef.current + 1;
@@ -938,6 +972,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
 
   const {
     viewMode: effectiveViewMode,
+    viewModePending,
     setViewMode,
     visibleColumns: visibleTitleTableColumns,
     setColumnVisible: setTitleTableColumnVisible,
@@ -976,7 +1011,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const [titleCatalogSort, setTitleCatalogSort] =
     React.useState<TitleCatalogSortState>(defaultTitleCatalogSortState);
   const effectiveTitleCatalogSort = React.useMemo<TitleCatalogSortState>(() => {
-    if (effectiveViewMode === "poster") {
+    if (effectiveViewMode === "poster" || effectiveViewMode === "graph") {
       return defaultTitleCatalogSortState;
     }
     if (titleCatalogSort.key === "name") {
@@ -991,16 +1026,21 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
     return titleCatalogSort;
   }, [effectiveViewMode, titleCatalogSort, view, visibleTitleTableColumns]);
+  const titleCatalogPageSize =
+    effectiveViewMode === "graph" ? 10_000 : TITLE_CATALOG_PAGE_SIZE;
   const titleCatalogProjection = React.useMemo(
-    () => ({
-      ...titleCatalogProjectionForTable({
-        facet: activeFacet,
-        visibleColumns:
-          effectiveViewMode === "poster" ? {} : visibleTitleTableColumns,
-        sort: effectiveTitleCatalogSort,
-      }),
-      includeSettings: effectiveViewMode !== "poster",
-    }),
+    () =>
+      effectiveViewMode === "graph"
+        ? titleCatalogProjectionForGraph()
+        : {
+            ...titleCatalogProjectionForTable({
+              facet: activeFacet,
+              visibleColumns:
+                effectiveViewMode === "poster" ? {} : visibleTitleTableColumns,
+              sort: effectiveTitleCatalogSort,
+            }),
+            includeSettings: effectiveViewMode !== "poster",
+          },
     [
       activeFacet,
       effectiveTitleCatalogSort,
@@ -1176,6 +1216,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const skipNextCatalogOverviewReloadRef = React.useRef(false);
   const [catalogPaginationState, setCatalogPaginationState] =
     React.useState<TitleCatalogState>(emptyTitleCatalogState);
+  const [catalogBulkLoadedCount, setCatalogBulkLoadedCount] = React.useState(0);
+  const catalogBulkGenerationRef = React.useRef(0);
+  React.useEffect(() => {
+    setCatalogBulkLoadedCount(0);
+    return () => {
+      catalogBulkGenerationRef.current += 1;
+    };
+  }, [effectiveViewMode, activeFacet, authorizationSignature]);
 
   React.useEffect(() => {
     catalogQueryKeyRef.current = catalogPaginationState.queryKey;
@@ -1264,19 +1312,29 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       catalogSurfaceState.phase === "empty");
   catalogDependentRequestsAllowedRef.current =
     catalogSurfaceAllowsDependentRequests;
+  // The sidebar waits for the viewer and library scope only, never for the
+  // title grid, so both requests run side by side.
+  React.useEffect(() => {
+    if (librariesLoading || librariesFacet !== activeFacet) return;
+    const gate = catalogDiscoveryGate.current;
+    void refreshCatalogDiscovery();
+    return () => {
+      gate.invalidate();
+    };
+  }, [
+    activeFacet,
+    authorizationSignature,
+    librariesFacet,
+    librariesLoading,
+    refreshCatalogDiscovery,
+  ]);
   React.useEffect(() => {
     if (!catalogSurfaceAllowsDependentRequests) {
-      setCatalogDiscoveryGroups([]);
       return;
     }
 
-    void refreshCatalogDiscovery();
     void refreshTitleCatalogFilterOptions();
-  }, [
-    catalogSurfaceAllowsDependentRequests,
-    refreshCatalogDiscovery,
-    refreshTitleCatalogFilterOptions,
-  ]);
+  }, [catalogSurfaceAllowsDependentRequests, refreshTitleCatalogFilterOptions]);
   const retryCatalogBootstrap = React.useCallback(() => {
     catalogBootstrapRequestSeqRef.current += 1;
     catalogBootstrapInFlightKeyRef.current = null;
@@ -1408,33 +1466,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       ),
     [canManageTitlesInLibrary, selectedTitleLibraryIds],
   );
-  const editDialogTitleLibraryIds = React.useMemo(
-    () => Array.from(new Set(editDialogTitles.map((title) => title.libraryId))),
-    [editDialogTitles],
-  );
-  const editDialogRootFolders = React.useMemo(() => {
-    if (editDialogTitleLibraryIds.length !== 1) {
-      return [];
-    }
-    return (
-      libraries.find((library) => library.id === editDialogTitleLibraryIds[0])
-        ?.roots ?? []
-    );
-  }, [editDialogTitleLibraryIds, libraries]);
-  // Bulk move workflow (FR-010–FR-011): picking a destination root in the bulk
-  // edit dialog opens the preview instead of staging a root rewrite.
-  const [bulkMoveRootId, setBulkMoveRootId] = React.useState<string | null>(
-    null,
-  );
-  const editDialogLibraryName = React.useMemo(() => {
-    if (editDialogTitleLibraryIds.length !== 1) {
-      return null;
-    }
-    return (
-      libraries.find((library) => library.id === editDialogTitleLibraryIds[0])
-        ?.name ?? null
-    );
-  }, [editDialogTitleLibraryIds, libraries]);
+  // Moving rewrites files on disk, so it needs the same rights as renaming.
+  const canMoveSelectedTitles = canRenameSelectedTitles;
+  const [bulkMoveDialogOpen, setBulkMoveDialogOpen] = React.useState(false);
   const bulkMoveLibraries = React.useMemo(
     () =>
       libraries.map((library) => ({
@@ -1876,14 +1910,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
   const summaryScopesRef = React.useRef({
     counts: "",
-    bytes: "",
     countsReady: false,
   });
   React.useEffect(() => {
     if (!shouldLoadCatalogTitles) return;
     summaryLoaders.counts.activate();
     summaryLoaders.bytes.activate();
-    summaryScopesRef.current = { counts: "", bytes: "", countsReady: false };
+    summaryScopesRef.current = { counts: "", countsReady: false };
     return () => {
       summaryLoaders.counts.dispose();
       summaryLoaders.bytes.dispose();
@@ -1911,17 +1944,19 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         limit: 0,
         offset: 0,
       });
-      const scope = { facet, libraryIds: [...(scopedIds ?? [])].sort() };
-      const countVariables = { ...scope, query, filter };
+      const countVariables = {
+        facet,
+        libraryIds: [...(scopedIds ?? [])].sort(),
+        query,
+        filter,
+      };
       const countKey = JSON.stringify(countVariables);
-      const bytesKey = JSON.stringify(scope);
       // A new scope keeps the previous counts on screen until its own counts
       // land; the loader drops a superseded scope's late result.
       if (summaryScopesRef.current.counts !== countKey) {
         summaryScopesRef.current.counts = countKey;
         summaryScopesRef.current.countsReady = false;
       }
-      summaryScopesRef.current.bytes = bytesKey;
       void summaryLoaders.counts.run(
         countKey,
         async () => {
@@ -1947,11 +1982,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         },
         invalidate,
       );
+      if (effectiveViewMode === "graph") return;
       void summaryLoaders.bytes.run(
-        bytesKey,
+        countKey,
         async () => {
           const { data, error } = await client
-            .query(titleCatalogManagedBytesQuery, scope, {
+            .query(titleCatalogManagedBytesQuery, countVariables, {
               requestPolicy: "network-only",
             })
             .toPromise();
@@ -1972,6 +2008,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       effectiveTitleQuickFilters,
       setTitleStatus,
       summaryLoaders,
+      effectiveViewMode,
       t,
     ],
   );
@@ -2008,6 +2045,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           null,
       );
       const requestSeq = ++catalogTitleRequestSeqRef.current;
+      setCatalogBulkLoadedCount(0);
       catalogPageRequestGate.reset();
       setCatalogPageError(null);
       catalogPageLoadInFlightRef.current = true;
@@ -2042,7 +2080,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               filters: effectiveTitleQuickFilters,
               advancedFilters,
               sort: effectiveTitleCatalogSort,
-              limit: TITLE_CATALOG_PAGE_SIZE,
+              limit: titleCatalogPageSize,
               offset: 0,
             }),
             { requestPolicy: "network-only" },
@@ -2113,6 +2151,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       t,
       titleCatalogProjection,
       refreshCatalogSummaries,
+      titleCatalogPageSize,
     ],
   );
 
@@ -2134,22 +2173,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     },
     [reloadTitles, titleFilter],
   );
-
-  React.useEffect(() => {
-    if (!shouldLoadCatalogTitles) return;
-    return registerReactiveRefresh(
-      catalogDeletionRefresh(activeFacet, () => {
-        latestCriticalMutationEpochRef.current = reactiveRefreshEpoch();
-        setTitleContextTitles([]);
-        void refreshTitles();
-      }),
-    );
-  }, [
-    activeFacet,
-    registerReactiveRefresh,
-    refreshTitles,
-    shouldLoadCatalogTitles,
-  ]);
 
   const handleCatalogDiscoveryAction = React.useCallback(
     async (item: CatalogDiscoveryItem) => {
@@ -2263,43 +2286,56 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       return;
     }
     const offset = catalogPaginationState.nextOffset;
+    const bulkGeneration = catalogBulkGenerationRef.current;
+    const isCurrent = () =>
+      requestSeq === catalogTitleRequestSeqRef.current &&
+      catalogQueryKeyRef.current === queryKey &&
+      bulkGeneration === catalogBulkGenerationRef.current;
+    if (effectiveViewMode === "graph") setCatalogBulkLoadedCount(offset);
     catalogPageLoadInFlightRef.current = true;
     setCatalogPaginationState((current) => ({ ...current, loadingMore: true }));
 
     try {
       const result = await catalogPageRequestGate.run(async () => {
-        const { data, error } = await client
-          .query(
-            buildTitlesQuery(titleCatalogProjection, {
-              includeAggregates: false,
-            }),
-            buildTitleCatalogQueryVariables({
-              facet: activeFacet,
-              libraryIds: selectedLibraryIds,
-              query,
-              filters: effectiveTitleQuickFilters,
-              advancedFilters: effectiveAdvancedTitleFilters,
-              sort: effectiveTitleCatalogSort,
-              limit: TITLE_CATALOG_PAGE_SIZE,
-              offset,
-            }),
-            { requestPolicy: "network-only" },
-          )
-          .toPromise();
-        if (error) throw error;
-        if (!data?.titles) throw new Error(t("status.failedToLoad"));
-        return data;
+        const loadPage = async (offset: number) => {
+          const { data, error } = await client
+            .query(
+              buildTitlesQuery(titleCatalogProjection, {
+                includeAggregates: false,
+              }),
+              buildTitleCatalogQueryVariables({
+                facet: activeFacet,
+                libraryIds: selectedLibraryIds,
+                query,
+                filters: effectiveTitleQuickFilters,
+                advancedFilters: effectiveAdvancedTitleFilters,
+                sort: effectiveTitleCatalogSort,
+                limit: titleCatalogPageSize,
+                offset,
+              }),
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+          if (error) throw error;
+          if (!data?.titles) throw new Error(t("status.failedToLoad"));
+          return {
+            items: (data.titles.items ?? []) as TitleRecord[],
+            hasMore: Boolean(data.titles.hasMore),
+          };
+        };
+        if (effectiveViewMode !== "graph") return loadPage(offset);
+        const items = await loadCatalogBulk({
+          offset,
+          pageSize: titleCatalogPageSize,
+          isCurrent,
+          loadPage,
+          onProgress: setCatalogBulkLoadedCount,
+        });
+        return items ? { items, hasMore: false } : null;
       });
       if (!result) return;
-      const data = result;
-      if (
-        requestSeq !== catalogTitleRequestSeqRef.current ||
-        catalogQueryKeyRef.current !== queryKey
-      ) {
-        return;
-      }
-
-      const page = data?.titles ?? {};
+      if (!isCurrent()) return;
+      const page = result;
       const nextTitles = (page.items ?? []) as TitleRecord[];
       setMonitoredTitles((current) =>
         appendCatalogTitlesPreservingImages(current, nextTitles),
@@ -2312,10 +2348,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         loadingMore: false,
       }));
     } catch (error) {
-      if (
-        requestSeq === catalogTitleRequestSeqRef.current &&
-        catalogQueryKeyRef.current === queryKey
-      ) {
+      if (isCurrent()) {
         setCatalogPageError(
           userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
         );
@@ -2340,6 +2373,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     catalogPaginationState.nextOffset,
     catalogPaginationState.queryKey,
     client,
+    effectiveViewMode,
     effectiveAdvancedTitleFilters,
     effectiveTitleQuickFilters,
     effectiveTitleCatalogSort,
@@ -2348,6 +2382,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     shouldLoadCatalogTitles,
     t,
     titleCatalogProjection,
+    titleCatalogPageSize,
   ]);
 
   const retryCatalogPage = React.useCallback(async () => {
@@ -2356,121 +2391,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setCatalogPageError(null);
     await loadMoreCatalogTitles();
   }, [catalogPageRequestGate, loadMoreCatalogTitles]);
-
-  const refreshLoadedCatalogTitlesQuietly = React.useCallback(
-    async ({ firstPageOnly = false }: { firstPageOnly?: boolean } = {}) => {
-      if (shouldLoadCatalogTitles) {
-        refreshCatalogSummaries(
-          activeCatalogQueryRef.current.trim(),
-          selectedLibraryIds,
-          effectiveAdvancedTitleFilters,
-          true,
-        );
-      }
-      if (
-        !shouldLoadCatalogTitles ||
-        titleLoading ||
-        catalogPageLoadInFlightRef.current ||
-        catalogPaginationState.queryKey === ""
-      ) {
-        return;
-      }
-
-      const requestSeq = catalogTitleRequestSeqRef.current;
-      const query = activeCatalogQueryRef.current.trim();
-      const queryKey = titleCatalogQueryKey({
-        facet: activeFacet,
-        query,
-        libraryIds: selectedLibraryIds,
-        filters: effectiveTitleQuickFilters,
-        advancedFilters: effectiveAdvancedTitleFilters,
-        sort: effectiveTitleCatalogSort,
-        projection: titleCatalogProjection,
-      });
-      if (catalogPaginationState.queryKey !== queryKey) {
-        return;
-      }
-
-      const limit = firstPageOnly
-        ? TITLE_CATALOG_PAGE_SIZE
-        : Math.max(
-            TITLE_CATALOG_PAGE_SIZE,
-            catalogPaginationState.nextOffset || TITLE_CATALOG_PAGE_SIZE,
-          );
-      const includePageMetadata = !firstPageOnly;
-
-      try {
-        const { data, error } = await client
-          .query(
-            buildTitlesQuery(titleCatalogProjection, {
-              includePageMetadata,
-              includeAggregates: false,
-            }),
-            buildTitleCatalogQueryVariables({
-              facet: activeFacet,
-              libraryIds: selectedLibraryIds,
-              query,
-              filters: effectiveTitleQuickFilters,
-              advancedFilters: effectiveAdvancedTitleFilters,
-              sort: effectiveTitleCatalogSort,
-              limit,
-              offset: 0,
-            }),
-            { requestPolicy: "network-only" },
-          )
-          .toPromise();
-        if (error) {
-          throw error;
-        }
-        if (
-          requestSeq !== catalogTitleRequestSeqRef.current ||
-          catalogQueryKeyRef.current !== queryKey
-        ) {
-          return;
-        }
-
-        const page = data?.titles ?? {};
-        const nextTitles = (page.items ?? []) as TitleRecord[];
-        setMonitoredTitles((current) =>
-          mergeCatalogTitlesPreservingImages(current, nextTitles),
-        );
-        setCatalogPaginationState((current) => {
-          if (current.queryKey !== queryKey) {
-            return current;
-          }
-          return {
-            ...current,
-            hasMore: includePageMetadata
-              ? Boolean(page.hasMore)
-              : current.hasMore,
-            nextOffset: includePageMetadata
-              ? nextTitles.length
-              : current.nextOffset,
-          };
-        });
-      } catch (error) {
-        console.error(
-          "[title-list-reactive-refresh] catalog refresh failed:",
-          error,
-        );
-      }
-    },
-    [
-      activeFacet,
-      catalogPaginationState.nextOffset,
-      catalogPaginationState.queryKey,
-      client,
-      effectiveAdvancedTitleFilters,
-      effectiveTitleQuickFilters,
-      effectiveTitleCatalogSort,
-      selectedLibraryIds,
-      setMonitoredTitles,
-      shouldLoadCatalogTitles,
-      titleCatalogProjection,
-      titleLoading,
-      refreshCatalogSummaries,
-    ],
-  );
 
   const recordCriticalCatalogMutation = React.useCallback(() => {
     latestCriticalMutationEpochRef.current = reactiveRefreshEpoch();
@@ -2511,10 +2431,23 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         );
         setPendingDeletedTitleIds(new Set());
       }
-      void refreshTitles();
+      // The deleted rows are already gone from the list; only the counts
+      // still describe them.
+      refreshCatalogSummaries(
+        activeCatalogQueryRef.current.trim(),
+        selectedLibraryIds,
+        effectiveAdvancedTitleFilters,
+        true,
+      );
       return true;
     },
-    [clearDeletionFallbackTimers, refreshTitles, setMonitoredTitles],
+    [
+      clearDeletionFallbackTimers,
+      effectiveAdvancedTitleFilters,
+      refreshCatalogSummaries,
+      selectedLibraryIds,
+      setMonitoredTitles,
+    ],
   );
 
   const refreshTrackedDeletionJobs = React.useCallback(async () => {
@@ -2580,27 +2513,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [refreshTrackedDeletionJobs]);
-
-  React.useEffect(() => {
-    const handleCatalogTitlesRefresh = (event: Event) => {
-      const { facet } = catalogTitlesRefreshDetail(event);
-      if (facet && facet !== activeFacet) {
-        return;
-      }
-      void refreshTitles();
-      void refreshCatalogDiscovery();
-    };
-
-    window.addEventListener(
-      CATALOG_TITLES_REFRESH_EVENT,
-      handleCatalogTitlesRefresh,
-    );
-    return () =>
-      window.removeEventListener(
-        CATALOG_TITLES_REFRESH_EVENT,
-        handleCatalogTitlesRefresh,
-      );
-  }, [activeFacet, refreshCatalogDiscovery, refreshTitles]);
 
   const {
     bulkDeleteDialogOpen,
@@ -2800,6 +2712,196 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     [applySelectedOverviewDetail, setMonitoredTitles, setTitleStatus, t],
   );
 
+  /**
+   * Refetch just these titles under the list's own scope, filters and sort,
+   * and fold them in. The server's answer settles membership, so this is the
+   * per-title replacement for reloading the whole list after a change to a
+   * few titles. Resolves to the titles found, or null when the request failed
+   * or the list moved on while it was in flight.
+   */
+  const refetchCatalogTitlesById = React.useCallback(
+    async (
+      titleIds: readonly string[],
+      options: { insertMissing?: boolean } = {},
+    ): Promise<TitleRecord[] | null> => {
+      const ids = [...new Set(titleIds)].filter(Boolean);
+      if (ids.length === 0) {
+        return [];
+      }
+      const requestEpoch = reactiveRefreshEpoch();
+      const queryKey = catalogQueryKeyRef.current;
+      const query = activeCatalogQueryRef.current.trim();
+      const base = buildTitleCatalogQueryVariables({
+        facet: activeFacet,
+        libraryIds: selectedLibraryIds,
+        query,
+        filters: effectiveTitleQuickFilters,
+        advancedFilters: effectiveAdvancedTitleFilters,
+        sort: effectiveTitleCatalogSort,
+        limit: 0,
+        offset: 0,
+      });
+      try {
+        const pages = await Promise.all(
+          chunkTitleIds(ids, CATALOG_REFETCH_ID_CHUNK).map(async (chunk) => {
+            const { data, error } = await client
+              .query(
+                buildTitlesQuery(titleCatalogProjection, {
+                  includeAggregates: false,
+                }),
+                {
+                  ...base,
+                  filter: { ...(base.filter ?? {}), titleIds: chunk },
+                  limit: chunk.length,
+                },
+                { requestPolicy: "network-only" },
+              )
+              .toPromise();
+            if (error) {
+              throw error;
+            }
+            return (data?.titles?.items ?? []) as TitleRecord[];
+          }),
+        );
+        const found = pages.flat();
+        if (
+          catalogQueryKeyRef.current !== queryKey ||
+          requestEpoch <= latestCriticalMutationEpochRef.current
+        ) {
+          return found;
+        }
+        const pendingDeleted = pendingDeletedTitleIdsRef.current;
+        const listed = found.filter((title) => !pendingDeleted.has(title.id));
+        for (const title of listed) {
+          applySelectedOverviewDetail(title.id, title, requestEpoch);
+        }
+        setMonitoredTitles((current) => {
+          const next = applyCatalogTitlesById(
+            current,
+            ids,
+            listed,
+            options.insertMissing === true,
+          );
+          if (next !== current) {
+            setTitleStatus(t("title.statusTemplate", { count: next.length }));
+          }
+          return next;
+        });
+        refreshCatalogSummaries(
+          query,
+          selectedLibraryIds,
+          effectiveAdvancedTitleFilters,
+          true,
+        );
+        return found;
+      } catch (error) {
+        console.error("[title-catalog] title refetch failed:", error);
+        return null;
+      }
+    },
+    [
+      activeFacet,
+      applySelectedOverviewDetail,
+      client,
+      effectiveAdvancedTitleFilters,
+      effectiveTitleCatalogSort,
+      effectiveTitleQuickFilters,
+      refreshCatalogSummaries,
+      selectedLibraryIds,
+      setMonitoredTitles,
+      setTitleStatus,
+      t,
+      titleCatalogProjection,
+    ],
+  );
+
+  /** Drop committed deletions from the list without reloading it. */
+  const removeDeletedCatalogTitles = React.useCallback(
+    (titleIds: readonly string[]) => {
+      const removed = new Set(titleIds);
+      const requestEpoch = reactiveRefreshEpoch();
+      for (const titleId of removed) {
+        applySelectedOverviewDetail(titleId, null, requestEpoch);
+      }
+      // A refresh that started before the deletion must not resurrect a row.
+      latestCriticalMutationEpochRef.current = requestEpoch;
+      setTitleContextTitles((current) => {
+        const next = current.filter((title) => !removed.has(title.id));
+        return next.length === current.length ? current : next;
+      });
+      setMonitoredTitles((current) => {
+        const next = current.filter((title) => !removed.has(title.id));
+        if (next.length === current.length) {
+          return current;
+        }
+        setTitleStatus(t("title.statusTemplate", { count: next.length }));
+        return next;
+      });
+    },
+    [applySelectedOverviewDetail, setMonitoredTitles, setTitleStatus, t],
+  );
+
+  React.useEffect(() => {
+    if (!shouldLoadCatalogTitles) return;
+    const refreshCounts = () =>
+      refreshCatalogSummaries(
+        activeCatalogQueryRef.current.trim(),
+        selectedLibraryIds,
+        effectiveAdvancedTitleFilters,
+        true,
+      );
+    return registerReactiveRefresh(
+      catalogDeletionRefresh(activeFacet, {
+        removed: (titleIds) => {
+          removeDeletedCatalogTitles(titleIds);
+          refreshCounts();
+        },
+        // Without the event, which titles went is unknown. Reloading the
+        // whole list on every degraded tick costs far more than a deleted
+        // row lingering until the feed recovers, so only the counts refresh.
+        unknown: refreshCounts,
+      }),
+    );
+  }, [
+    activeFacet,
+    effectiveAdvancedTitleFilters,
+    refreshCatalogSummaries,
+    registerReactiveRefresh,
+    removeDeletedCatalogTitles,
+    selectedLibraryIds,
+    shouldLoadCatalogTitles,
+  ]);
+
+  React.useEffect(() => {
+    const handleCatalogTitlesRefresh = (event: Event) => {
+      const { facet, titleId } = catalogTitlesRefreshDetail(event);
+      if (facet && facet !== activeFacet) {
+        return;
+      }
+      if (titleId) {
+        void refetchCatalogTitlesById([titleId], { insertMissing: true });
+      } else {
+        void refreshTitles();
+      }
+      void refreshCatalogDiscovery(true);
+    };
+
+    window.addEventListener(
+      CATALOG_TITLES_REFRESH_EVENT,
+      handleCatalogTitlesRefresh,
+    );
+    return () =>
+      window.removeEventListener(
+        CATALOG_TITLES_REFRESH_EVENT,
+        handleCatalogTitlesRefresh,
+      );
+  }, [
+    activeFacet,
+    refetchCatalogTitlesById,
+    refreshCatalogDiscovery,
+    refreshTitles,
+  ]);
+
   const applyTitleMoreLikeThis = React.useCallback(
     (
       titleId: string,
@@ -2844,13 +2946,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         insertIfMissing: added,
       });
       // Only the server knows whether a new title passes the active quick or
-      // advanced filters, so the list is reloaded rather than guessed at.
+      // advanced filters, so it is asked about this one title.
       if (
         added &&
         title &&
         activeCatalogListFiltersRef.current.serverFiltered
       ) {
-        void reloadTitles(undefined, undefined, { mode: "background" });
+        void refetchCatalogTitlesById([titleId], { insertMissing: true });
       }
     },
   });
@@ -2865,6 +2967,16 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       return;
     }
 
+    // Each title a scan touches arrives on its own title_updated event and is
+    // refetched alone, so a scan only refreshes the counts, never the list.
+    const refreshScanCounts = () =>
+      refreshCatalogSummaries(
+        activeCatalogQueryRef.current.trim(),
+        selectedLibraryIds,
+        effectiveAdvancedTitleFilters,
+        true,
+      );
+
     if (relevantActiveLibraryScanSessions.length === 0) {
       if (libraryScanTitleRefreshRef.current.sessionIds.length > 0) {
         libraryScanTitleRefreshRef.current = {
@@ -2872,7 +2984,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           refreshedAt: 0,
           sessionIds: [],
         };
-        void refreshLoadedCatalogTitlesQuietly();
+        refreshScanCounts();
         void refreshTitleCatalogFilterOptions();
       }
       return;
@@ -2896,7 +3008,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         refreshedAt: now,
         sessionIds,
       };
-      void refreshLoadedCatalogTitlesQuietly();
+      refreshScanCounts();
       void refreshTitleCatalogFilterOptions();
       return;
     }
@@ -2914,14 +3026,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       refreshedAt: now,
       sessionIds,
     };
-    void refreshLoadedCatalogTitlesQuietly({
-      firstPageOnly: effectiveViewMode !== "poster",
-    });
+    refreshScanCounts();
   }, [
-    effectiveViewMode,
+    effectiveAdvancedTitleFilters,
     relevantActiveLibraryScanSessions,
-    refreshLoadedCatalogTitlesQuietly,
+    refreshCatalogSummaries,
     refreshTitleCatalogFilterOptions,
+    selectedLibraryIds,
     shouldLoadCatalogTitles,
   ]);
 
@@ -2966,10 +3077,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     async (title: TitleRecord) => {
       await Promise.all([
         refreshMovieSidePanelOverview(title.id),
-        reloadTitles(),
+        refetchCatalogTitlesById([title.id]),
       ]);
     },
-    [refreshMovieSidePanelOverview, reloadTitles],
+    [refetchCatalogTitlesById, refreshMovieSidePanelOverview],
   );
 
   const updateMovieTitleOptions = React.useCallback(
@@ -3101,6 +3212,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     selectedOverviewTitleRecord?.metadataFetchedAt ?? "";
   const selectedPanelHydrationCreatedAt =
     selectedOverviewTitleRecord?.createdAt ?? "";
+  // The release blocklist is privileged: a viewer of this title's library is
+  // refused it, so it is not asked for.
+  const selectedPanelCanViewInternals = hasPrivilegedTitleAccess(
+    auth.user,
+    selectedOverviewTitleRecord?.libraryId,
+  );
   const selectedPanelNeedsPanelDetails =
     selectedOverviewTitleRecord !== null
       ? !hasSelectedTitlePanelDetails(selectedOverviewTitleRecord)
@@ -3274,12 +3391,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     void Promise.allSettled([
       titleDetailsRequest,
       loadSelectedOverviewExternalSubtitles(titleId),
-      client
-        .query<{ titleReleaseBlocklist?: TitleReleaseBlocklistEntry[] }>(
-          titleReleaseBlocklistQuery,
-          { titleId, limit: SELECTED_OVERVIEW_BLOCKLIST_LIMIT },
-        )
-        .toPromise(),
+      selectedPanelCanViewInternals
+        ? client
+            .query<{ titleReleaseBlocklist?: TitleReleaseBlocklistEntry[] }>(
+              titleReleaseBlocklistQuery,
+              { titleId, limit: SELECTED_OVERVIEW_BLOCKLIST_LIMIT },
+            )
+            .toPromise()
+        : Promise.resolve(null),
     ] as const).then(
       ([titleDetailsResult, externalSubtitlesResult, blocklistResult]) => {
         if (selectedPanelHydrationKeyRef.current !== requestKey) {
@@ -3320,7 +3439,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         });
 
         const blocklistEntries =
-          blocklistResult.status === "fulfilled" && !blocklistResult.value.error
+          blocklistResult.status === "fulfilled" &&
+          blocklistResult.value &&
+          !blocklistResult.value.error
             ? (blocklistResult.value.data?.titleReleaseBlocklist ?? [])
             : [];
         if (blocklistResult.status === "rejected") {
@@ -3328,7 +3449,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
             "[selected-title-blocklist-refresh] refresh failed:",
             blocklistResult.reason,
           );
-        } else if (blocklistResult.value.error) {
+        } else if (blocklistResult.value?.error) {
           console.error(
             "[selected-title-blocklist-refresh] refresh failed:",
             blocklistResult.value.error,
@@ -3345,6 +3466,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     applyTitleMoreLikeThis,
     client,
     loadSelectedOverviewExternalSubtitles,
+    selectedPanelCanViewInternals,
     selectedPanelHydrationCreatedAt,
     selectedPanelHydrationMetadataFetchedAt,
     selectedPanelHydrationTitleId,
@@ -3903,7 +4025,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           )
           .toPromise();
         const payload = result.data ?? {};
-        const refreshedTitles = await reloadTitles();
+        const refreshedTitles = await refetchCatalogTitlesById(
+          targets.map((title) => title.id),
+        );
         const inferred = refreshedTitles
           ? inferMonitoredBatchOutcome(targets, refreshedTitles, monitored)
           : {
@@ -3976,7 +4100,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         setBulkActionBusy(false);
       }
     },
-    [bulkActionBusy, client, reloadTitles, selectedTitles, setGlobalStatus, t],
+    [
+      bulkActionBusy,
+      client,
+      refetchCatalogTitlesById,
+      selectedTitles,
+      setGlobalStatus,
+      t,
+    ],
   );
 
   const applyBulkTitleOptions = React.useCallback(
@@ -4022,7 +4153,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         }
 
         if (!hasOptionChanges) {
-          await reloadTitles();
+          await refetchCatalogTitlesById(targets.map((title) => title.id));
           setSelectedTitleIds(new Set());
           setBulkEditDialogOpen(false);
           setGlobalStatus(
@@ -4048,7 +4179,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           )
           .toPromise();
         const payload = result.data ?? {};
-        const refreshedTitles = await reloadTitles();
+        const refreshedTitles = await refetchCatalogTitlesById(
+          targets.map((title) => title.id),
+        );
         const inferred = refreshedTitles
           ? inferTitleUpdateBatchOutcome(targets, refreshedTitles, changes)
           : {
@@ -4107,7 +4240,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       bulkActionBusy,
       client,
       editDialogTitles,
-      reloadTitles,
+      refetchCatalogTitlesById,
       setGlobalStatus,
       setSelectedTitleIds,
       t,
@@ -4197,6 +4330,27 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setBulkEditDialogOpen(true);
   }, [
     bulkActionBusy,
+    selectedTitleLibraryIds.length,
+    selectedTitles.length,
+    setGlobalStatus,
+  ]);
+
+  const openBulkTitleMove = React.useCallback(() => {
+    if (
+      selectedTitles.length === 0 ||
+      bulkActionBusy ||
+      !canMoveSelectedTitles
+    ) {
+      return;
+    }
+    if (selectedTitleLibraryIds.length !== 1) {
+      setGlobalStatus("Bulk actions require titles from one library.");
+      return;
+    }
+    setBulkMoveDialogOpen(true);
+  }, [
+    bulkActionBusy,
+    canMoveSelectedTitles,
     selectedTitleLibraryIds.length,
     selectedTitles.length,
     setGlobalStatus,
@@ -4470,6 +4624,48 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     t,
   ]);
 
+  // The library's roots as stored right now, with their title counts. A save
+  // computes the roots it drops from this, not from the page's copy, so roots
+  // added elsewhere since the page loaded are not dropped unseen. Null means
+  // the read failed and the failure is already reported.
+  const loadLibraryRoots = React.useCallback(
+    async (libraryId: string): Promise<LibraryRootRecord[] | null> => {
+      const permission =
+        contentSettingsSection === "library" && !canManageConfig
+          ? "MANAGE_LIBRARY"
+          : "VIEW";
+      try {
+        const { data, error } = await client
+          .query<{ libraries: Pick<LibraryRecord, "id" | "roots">[] }>(
+            libraryRootTitleCountsQuery,
+            { facet: null, permission },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (error) throw error;
+        const library = (data?.libraries ?? []).find(
+          (candidate) => candidate.id === libraryId,
+        );
+        if (!library) {
+          setGlobalStatus(t("settings.librarySaveFailed"), { level: "ERROR" });
+          return null;
+        }
+        return library.roots;
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(
+            error,
+            t("settings.librarySaveFailed"),
+            t,
+          ),
+          { level: "ERROR" },
+        );
+        return null;
+      }
+    },
+    [canManageConfig, client, contentSettingsSection, setGlobalStatus, t],
+  );
+
   const loadLibrarySettings = React.useCallback(
     async (libraryId: string): Promise<LibrarySettingsRecord | null> => {
       const { data, error } = await client
@@ -4628,6 +4824,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       input: {
         name: string;
         roots: RootFolderOption[];
+        /** Stored roots the operator confirmed removing with this save. */
+        removedRootIds?: string[];
         settings?: LibrarySettingsDraft;
       },
     ) => {
@@ -4639,6 +4837,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               libraryId,
               name: input.name,
               roots: libraryRootsInput(input.roots),
+              ...(input.removedRootIds && input.removedRootIds.length > 0
+                ? { removedRootIds: input.removedRootIds }
+                : {}),
               settings: librarySettingsInput(input.settings),
             },
           })
@@ -4648,7 +4849,17 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         await refreshLibraries();
         await refreshRootValidationLibraries();
         if (library) {
-          setGlobalStatus(t("settings.librarySaved"), { level: "SUCCESS" });
+          const removedTitleCount = library.removedTitleCount ?? 0;
+          if (removedTitleCount > 0) {
+            setGlobalStatus(
+              t("settings.libraryRootsRemovedTitles", {
+                count: removedTitleCount,
+              }),
+              { level: "SUCCESS" },
+            );
+          } else {
+            setGlobalStatus(t("settings.librarySaved"), { level: "SUCCESS" });
+          }
         }
         return library;
       } catch (error) {
@@ -5266,10 +5477,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           refreshTitles,
           titleLoading,
           catalogTotalTitleCount: catalogPaginationState.totalCount,
+          catalogBulkLoadedCount,
           catalogManagedBytes: catalogPaginationState.managedBytes,
           catalogHasMoreTitles:
             catalogPaginationState.hasMore && !catalogPageError,
           catalogPageError,
+          catalogListingKey: catalogPaginationState.queryKey,
           retryCatalogPage,
           catalogLoadingMoreTitles: catalogPaginationState.loadingMore,
           loadMoreCatalogTitles,
@@ -5348,6 +5561,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           allLibrariesValue: ALL_LIBRARIES_VALUE,
           setSelectedLibraryIds,
           loadLibrarySettings,
+          loadLibraryRoots,
           loadFacetDownloadClientRouting,
           createLibrary,
           updateLibrary,
@@ -5375,6 +5589,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           isDeletingCatalogTitleById: deleteTitleLoadingById,
           isMobile,
           viewMode: effectiveViewMode,
+          viewModePending,
           setViewMode,
           selectedTitleIds,
           toggleTitleSelection,
@@ -5386,6 +5601,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           openBulkTitleDelete,
           openBulkTitleRename,
           canRenameSelectedTitles,
+          openBulkTitleMove,
+          canMoveSelectedTitles,
         }}
       />
       {canManageTitle ? (
@@ -5424,8 +5641,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               facet,
               options,
             );
+            // A request that adds a title reaches the list through its
+            // title_added event, one title at a time.
             if (accepted) {
-              await Promise.all([refreshTitles(), refreshCatalogDiscovery()]);
+              await refreshCatalogDiscovery(true);
             }
             return accepted;
           }}
@@ -5437,29 +5656,15 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         view={view}
         selectedTitles={editDialogTitles}
         qualityProfiles={qualityProfiles}
-        rootFolders={editDialogRootFolders}
         busy={bulkActionBusy}
         onSubmit={applyBulkTitleOptions}
-        destinationLibraryName={editDialogLibraryName}
-        onRequestMove={
-          experimentalFeaturesEnabled
-            ? (rootFolderId) => {
-                setBulkEditDialogOpen(false);
-                setBulkMoveRootId(rootFolderId);
-              }
-            : undefined
-        }
       />
       <MoveTitlesDialog
-        open={bulkMoveRootId !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setBulkMoveRootId(null);
-          }
-        }}
+        open={bulkMoveDialogOpen}
+        onOpenChange={setBulkMoveDialogOpen}
         titles={bulkMoveTitles}
         libraries={bulkMoveLibraries}
-        initialRootId={bulkMoveRootId}
+        initialRootId={null}
       />
       <ConfirmDialog
         open={bulkDeleteDialogOpen}

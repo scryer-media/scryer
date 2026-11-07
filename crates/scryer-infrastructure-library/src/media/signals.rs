@@ -1,7 +1,9 @@
 //! Dual-dialect storage for media-server watch signals (RFC 137 section 7.3).
 //!
-//! Two tables: the normalized per-user observations, and one sync-state row per
-//! connection.
+//! Three tables: the normalized per-user observations, the roster of links a
+//! sweep read them through, and one sync-state row per connection. Two more
+//! hold the audience read: every account's plays, linked or not, and when
+//! each connection's audience was last read in full.
 //!
 //! # The generation swap
 //!
@@ -20,13 +22,21 @@
 //! crash between them would otherwise leave a participant with a half-deleted
 //! history that reads as "stopped watching".
 //!
+//! The same transaction records the link the read went through in
+//! `media_server_signal_roster`. The watch gate counts a link as observed only
+//! through that row, so a roster entry and the signals it vouches for are
+//! committed together or not at all.
+//!
 //! # Provider neutrality
 //!
 //! Nothing here is Jellyfin-specific. `provider` is a stored column, so the
 //! Emby and Plex adapters write through this same store unchanged.
 
 use async_trait::async_trait;
-use scryer_application::{AppError, AppResult, MediaServerSignalRepository};
+use scryer_application::{
+    AppError, AppResult, AudiencePlay, AudienceRead, MediaServerSignalRepository,
+    SignalRosterEntry, SignalRosterLink,
+};
 use scryer_domain::{
     MediaServerProvider, MediaServerSignalKind, MediaServerSignalSyncState, NewUserMediaSignal,
     UserMediaSignal,
@@ -48,12 +58,12 @@ impl MediaServerSignalStore {
 
 const SIGNAL_COLUMNS: &str = "id, connection_id, provider, external_user_id, scryer_user_id,
     provider_item_id, kind, scryer_title_id, scryer_episode_id, played, play_count,
-    last_played_at, observed_at, sync_generation, created_at, updated_at";
+    last_played_at, is_favorite, observed_at, sync_generation, created_at, updated_at";
 
 const SIGNAL_INSERT_PREFIX: &str = "INSERT INTO media_server_user_media_signals
         (id, connection_id, provider, external_user_id, scryer_user_id, provider_item_id, kind,
-         scryer_title_id, scryer_episode_id, played, play_count, last_played_at, observed_at,
-         sync_generation, created_at, updated_at)";
+         scryer_title_id, scryer_episode_id, played, play_count, last_played_at, is_favorite,
+         observed_at, sync_generation, created_at, updated_at)";
 
 /// The conflict target is the table's natural key. `id` and `created_at` are
 /// deliberately absent from the update list: a row that survives a sweep is the
@@ -68,14 +78,15 @@ const SIGNAL_UPSERT_SUFFIX: &str =
          played = excluded.played,
          play_count = excluded.play_count,
          last_played_at = excluded.last_played_at,
+         is_favorite = excluded.is_favorite,
          observed_at = excluded.observed_at,
          sync_generation = excluded.sync_generation,
          updated_at = excluded.updated_at";
 
-const SIGNAL_ROW_WIDTH: usize = 16;
+const SIGNAL_ROW_WIDTH: usize = 17;
 
 const SYNC_STATE_COLUMNS: &str = "connection_id, provider, enabled, last_started_at,
-    last_success_at, last_error, participant_count, signal_count, updated_at";
+    last_success_at, last_error, last_error_code, participant_count, signal_count, updated_at";
 
 #[async_trait]
 impl MediaServerSignalRepository for MediaServerSignalStore {
@@ -85,8 +96,7 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
         participants: &[(String, String)],
     ) -> AppResult<u64> {
         let mut args = vec![SqlArg::Text(connection_id.to_string())];
-        let mut sql =
-            "DELETE FROM media_server_user_media_signals WHERE connection_id = {}".to_string();
+        let mut retired = String::new();
         if !participants.is_empty() {
             let predicates: Vec<_> = participants
                 .iter()
@@ -96,14 +106,26 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
                     "(external_user_id = {} AND scryer_user_id = {})"
                 })
                 .collect();
-            sql.push_str(" AND (scryer_user_id IS NULL OR NOT (");
-            sql.push_str(&predicates.join(" OR "));
-            sql.push_str("))");
+            retired.push_str(" AND (scryer_user_id IS NULL OR NOT (");
+            retired.push_str(&predicates.join(" OR "));
+            retired.push_str("))");
         }
+        let signals_sql = format!(
+            "DELETE FROM media_server_user_media_signals WHERE connection_id = {{}}{retired}"
+        );
+        // A retired identity leaves the roster with its signals: the gate must
+        // never observe a link through a read Scryer no longer holds.
+        let roster_sql =
+            format!("DELETE FROM media_server_signal_roster WHERE connection_id = {{}}{retired}");
         SqlRuntime::run_in_transaction(&self.datastore, "retain_signal_participants", move |tx| {
-            let sql = sql.clone();
+            let signals_sql = signals_sql.clone();
+            let roster_sql = roster_sql.clone();
             let args = args.clone();
-            Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
+            Box::pin(async move {
+                let removed = SqlRuntime::execute(SqlExec::Tx(tx), &signals_sql, &args).await?;
+                SqlRuntime::execute(SqlExec::Tx(tx), &roster_sql, &args).await?;
+                Ok(removed)
+            })
         })
         .await
     }
@@ -113,7 +135,9 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
         connection_id: &str,
         external_user_id: &str,
         signals: &[NewUserMediaSignal],
+        read_through: Option<&SignalRosterLink>,
     ) -> AppResult<u64> {
+        let read_through = read_through.cloned();
         // A provider that lists one item twice would make the batched upsert
         // touch a row twice in one statement, which Postgres refuses outright.
         // Last write wins, matching what a per-row loop would have done.
@@ -140,6 +164,7 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
                 let connection_id = connection_id.clone();
                 let external_user_id = external_user_id.clone();
                 let owned = owned.clone();
+                let read_through = read_through.clone();
                 Box::pin(async move {
                     let participant_args = vec![
                         SqlArg::Text(connection_id.clone()),
@@ -207,6 +232,35 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
                     .transpose()?
                     .unwrap_or(0);
 
+                    // Last, so a roster entry is only ever committed with the
+                    // swap it vouches for: if this write fails, the swap rolls
+                    // back with it.
+                    if let Some(link) = read_through {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO media_server_signal_roster
+                                 (connection_id, link_id, external_user_id, scryer_user_id,
+                                  link_verified_at, sweep_started_at, read_at)
+                             VALUES ({}, {}, {}, {}, {}, {}, {})
+                             ON CONFLICT (connection_id, link_id) DO UPDATE SET
+                                 external_user_id = excluded.external_user_id,
+                                 scryer_user_id = excluded.scryer_user_id,
+                                 link_verified_at = excluded.link_verified_at,
+                                 sweep_started_at = excluded.sweep_started_at,
+                                 read_at = excluded.read_at",
+                            &[
+                                SqlArg::Text(connection_id.clone()),
+                                SqlArg::Text(link.link_id.clone()),
+                                SqlArg::Text(external_user_id.clone()),
+                                SqlArg::Text(link.scryer_user_id.clone()),
+                                SqlArg::OptTimestamp(link.link_verified_at),
+                                SqlArg::Timestamp(link.sweep_started_at),
+                                SqlArg::Timestamp(now),
+                            ],
+                        )
+                        .await?;
+                    }
+
                     Ok(remaining.max(0) as u64)
                 })
             },
@@ -230,6 +284,200 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
             .await
     }
 
+    async fn signal_roster(&self) -> AppResult<Vec<SignalRosterEntry>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT connection_id, link_id, external_user_id, scryer_user_id, link_verified_at,
+                    sweep_started_at
+               FROM media_server_signal_roster
+              ORDER BY connection_id, link_id",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(SignalRosterEntry {
+                connection_id: row.text("connection_id")?,
+                external_user_id: row.text("external_user_id")?,
+                link: SignalRosterLink {
+                    link_id: row.text("link_id")?,
+                    scryer_user_id: row.text("scryer_user_id")?,
+                    link_verified_at: row.opt_timestamp("link_verified_at")?,
+                    sweep_started_at: row.timestamp("sweep_started_at")?,
+                },
+            })
+        })
+        .collect()
+    }
+
+    async fn replace_connection_audience(
+        &self,
+        connection_id: &str,
+        plays: &[AudiencePlay],
+        sweep_started_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<u64> {
+        // One row per account and item; a provider that lists a pair twice
+        // keeps its last entry, as the participant swap does.
+        let mut seen = HashSet::new();
+        let mut deduped: Vec<AudiencePlay> = Vec::with_capacity(plays.len());
+        for play in plays.iter().rev() {
+            if seen.insert((
+                play.external_account_id.clone(),
+                play.provider_item_id.clone(),
+            )) {
+                deduped.push(play.clone());
+            }
+        }
+        deduped.reverse();
+        let connection_id = connection_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "replace_media_server_audience",
+            move |tx| {
+                let connection_id = connection_id.clone();
+                let deduped = deduped.clone();
+                Box::pin(async move {
+                    let connection_args = vec![SqlArg::Text(connection_id.clone())];
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM media_server_audience_plays WHERE connection_id = {}",
+                        &connection_args,
+                    )
+                    .await?;
+                    let rows = deduped
+                        .iter()
+                        .map(|play| {
+                            vec![
+                                SqlArg::Text(connection_id.clone()),
+                                SqlArg::Text(play.external_account_id.clone()),
+                                SqlArg::Text(play.provider_item_id.clone()),
+                                SqlArg::Text(play.kind.as_storage_str().to_string()),
+                                SqlArg::OptText(play.scryer_title_id.clone()),
+                                SqlArg::OptText(play.scryer_episode_id.clone()),
+                                SqlArg::I64(play.play_count),
+                                SqlArg::OptTimestamp(play.last_played_at),
+                            ]
+                        })
+                        .collect::<Vec<_>>();
+                    SqlRuntime::execute_batch_insert(
+                        tx,
+                        "INSERT INTO media_server_audience_plays
+                             (connection_id, external_account_id, provider_item_id, kind,
+                              scryer_title_id, scryer_episode_id, play_count, last_played_at)",
+                        8,
+                        rows,
+                        "",
+                    )
+                    .await?;
+                    let count = deduped.len() as i64;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "INSERT INTO media_server_audience_reads
+                             (connection_id, sweep_started_at, read_at, play_count)
+                         VALUES ({}, {}, {}, {})
+                         ON CONFLICT (connection_id) DO UPDATE SET
+                             sweep_started_at = excluded.sweep_started_at,
+                             read_at = excluded.read_at,
+                             play_count = excluded.play_count",
+                        &[
+                            SqlArg::Text(connection_id.clone()),
+                            SqlArg::Timestamp(sweep_started_at),
+                            SqlArg::Timestamp(chrono::Utc::now()),
+                            SqlArg::I64(count),
+                        ],
+                    )
+                    .await?;
+                    Ok(count.max(0) as u64)
+                })
+            },
+        )
+        .await
+    }
+
+    async fn clear_audience_read(&self, connection_id: &str) -> AppResult<()> {
+        let args = vec![SqlArg::Text(connection_id.to_string())];
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "clear_media_server_audience_read",
+            move |tx| {
+                let args = args.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM media_server_audience_reads WHERE connection_id = {}",
+                        &args,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn audience_reads(&self) -> AppResult<Vec<AudienceRead>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT connection_id, sweep_started_at, read_at, play_count
+               FROM media_server_audience_reads
+              ORDER BY connection_id",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(AudienceRead {
+                connection_id: row.text("connection_id")?,
+                sweep_started_at: row.timestamp("sweep_started_at")?,
+                read_at: row.timestamp("read_at")?,
+                play_count: row.i64("play_count")?,
+            })
+        })
+        .collect()
+    }
+
+    async fn audience_plays_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<AudiencePlay>>> {
+        if title_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = title_ids
+            .iter()
+            .map(|_| "{}")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT connection_id, external_account_id, provider_item_id, kind, scryer_title_id,
+                    scryer_episode_id, play_count, last_played_at
+               FROM media_server_audience_plays
+              WHERE scryer_title_id IN ({placeholders})
+              ORDER BY scryer_title_id, connection_id, external_account_id, provider_item_id"
+        );
+        let args: Vec<SqlArg> = title_ids.iter().cloned().map(SqlArg::Text).collect();
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        let mut grouped: HashMap<String, Vec<AudiencePlay>> = HashMap::new();
+        for row in rows.iter() {
+            let kind = MediaServerSignalKind::parse_storage(&row.text("kind")?)
+                .ok_or_else(|| AppError::Repository("invalid audience play kind".into()))?;
+            let play = AudiencePlay {
+                connection_id: row.text("connection_id")?,
+                external_account_id: row.text("external_account_id")?,
+                provider_item_id: row.text("provider_item_id")?,
+                kind,
+                scryer_title_id: row.opt_text("scryer_title_id")?,
+                scryer_episode_id: row.opt_text("scryer_episode_id")?,
+                play_count: row.i64("play_count")?,
+                last_played_at: row.opt_timestamp("last_played_at")?,
+            };
+            if let Some(title_id) = play.scryer_title_id.clone() {
+                grouped.entry(title_id).or_default().push(play);
+            }
+        }
+        Ok(grouped)
+    }
+
     async fn signal_sync_states(&self) -> AppResult<Vec<MediaServerSignalSyncState>> {
         let sql = format!(
             "SELECT {SYNC_STATE_COLUMNS}
@@ -251,6 +499,7 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
             SqlArg::OptTimestamp(state.last_started_at),
             SqlArg::OptTimestamp(state.last_success_at),
             SqlArg::OptText(state.last_error.clone()),
+            SqlArg::OptText(state.last_error_code.clone()),
             SqlArg::I64(state.participant_count),
             SqlArg::I64(state.signal_count),
             SqlArg::Timestamp(state.updated_at),
@@ -265,14 +514,16 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
                         SqlExec::Tx(tx),
                         "INSERT INTO media_server_signal_sync_state
                              (connection_id, provider, enabled, last_started_at, last_success_at,
-                              last_error, participant_count, signal_count, updated_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})
+                              last_error, last_error_code, participant_count, signal_count,
+                              updated_at)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
                          ON CONFLICT (connection_id) DO UPDATE SET
                              provider = excluded.provider,
                              enabled = excluded.enabled,
                              last_started_at = excluded.last_started_at,
                              last_success_at = excluded.last_success_at,
                              last_error = excluded.last_error,
+                             last_error_code = excluded.last_error_code,
                              participant_count = excluded.participant_count,
                              signal_count = excluded.signal_count,
                              updated_at = excluded.updated_at",
@@ -350,6 +601,7 @@ fn signal_args(
         SqlArg::Bool(signal.played),
         SqlArg::I64(signal.play_count),
         SqlArg::OptTimestamp(signal.last_played_at),
+        SqlArg::Bool(signal.is_favorite),
         SqlArg::Timestamp(signal.observed_at),
         SqlArg::I64(generation),
         SqlArg::Timestamp(now),
@@ -375,6 +627,7 @@ fn row_to_signal(row: &SqlRow) -> AppResult<UserMediaSignal> {
         played: row.bool("played")?,
         play_count: row.i64("play_count")?,
         last_played_at: row.opt_timestamp("last_played_at")?,
+        is_favorite: row.bool("is_favorite")?,
         observed_at: row.timestamp("observed_at")?,
         sync_generation: row.i64("sync_generation")?,
         created_at: row.timestamp("created_at")?,
@@ -392,6 +645,7 @@ fn row_to_sync_state(row: &SqlRow) -> AppResult<MediaServerSignalSyncState> {
         last_started_at: row.opt_timestamp("last_started_at")?,
         last_success_at: row.opt_timestamp("last_success_at")?,
         last_error: row.opt_text("last_error")?,
+        last_error_code: row.opt_text("last_error_code")?,
         participant_count: row.i64("participant_count")?,
         signal_count: row.i64("signal_count")?,
         updated_at: row.timestamp("updated_at")?,

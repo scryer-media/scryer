@@ -2216,6 +2216,8 @@ async fn an_encoded_whole_file_answer_is_stored_as_sent() {
 // a finished file whose completion was not recorded
 
 #[tokio::test]
+// Builds the SHA-256 checksum a remote HTTP server would advertise.
+#[allow(clippy::disallowed_methods)]
 async fn a_file_already_in_place_completes_without_a_request() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -2334,6 +2336,8 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+// Builds the SHA-256 checksum a remote HTTP server would advertise.
+#[allow(clippy::disallowed_methods)]
 fn sha256_hex(bytes: &[u8]) -> String {
     hex(aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes).as_ref())
 }
@@ -2401,6 +2405,8 @@ async fn a_matching_sha256_checksum_completes() {
     assert_eq!(std::fs::read(&done.files[0].final_path).unwrap(), BODY);
 }
 
+// Builds the MD5 checksum a remote HTTP server would advertise.
+#[allow(clippy::disallowed_types)]
 #[tokio::test]
 async fn a_matching_md5_checksum_completes() {
     use md5::Digest as _;
@@ -2812,7 +2818,13 @@ fn an_unnamed_media_file_takes_the_extension_of_the_container_it_holds() {
     opaque.container = None;
     let plan = plan_download(&source(vec![opaque]), Path::new("/srv/dl")).unwrap();
     let planned = &plan.files[0].final_path;
-    assert_eq!(scryer_domain::canonical_video_extension(planned), None);
+    // Planned under the disc image suffix `.bin`, which does not name a
+    // container the probe can verify.
+    assert_eq!(
+        planned.extension().and_then(|ext| ext.to_str()),
+        Some("bin")
+    );
+    assert!(scryer_domain::is_disc_image(planned));
 
     let read = |container: Option<&str>| MediaProbeOutcome::Probed {
         duration_seconds: None,
@@ -2836,6 +2848,18 @@ fn an_unnamed_media_file_takes_the_extension_of_the_container_it_holds() {
         media_path_for_probed_container(&named, &read(Some("mp4"))),
         None
     );
+    for (container, extension) in [("ogm", "ogm"), ("OGM", "ogm"), ("ogg", "ogv")] {
+        assert_eq!(
+            media_path_for_probed_container(planned, &read(Some(container))),
+            Some(planned.with_extension(extension)),
+        );
+    }
+    for name in ["Movie.ogm", "Movie.OGM", "Movie.OgM_"] {
+        assert_eq!(
+            media_path_for_probed_container(Path::new(name), &read(Some("ogg"))),
+            None
+        );
+    }
 }
 
 #[tokio::test]
@@ -2976,6 +3000,8 @@ async fn http_recovery_refuses_same_size_replacement_and_legacy_final_only() {
 }
 
 #[test]
+// Builds the SHA-256 checksum a remote HTTP server would advertise.
+#[allow(clippy::disallowed_methods)]
 fn http_partial_path_survives_extension_change_and_old_documents() {
     let mut file = fresh_file(Path::new("/synthetic"), "https://cdn.invalid/media");
     let old = file.part_path();

@@ -118,6 +118,9 @@ export function normalizeQualityProfileEntry(
         typeof criteria.min_score_to_grab === "number"
           ? criteria.min_score_to_grab
           : null,
+      min_upgrade_score_delta: readMinUpgradeScoreDelta(
+        criteria.min_upgrade_score_delta,
+      ),
     },
   };
 }
@@ -205,6 +208,9 @@ export function qualityProfileEntryFromGraph(
       ),
       cutoff_tier: profile.criteria.cutoffTier?.trim().toUpperCase() || null,
       min_score_to_grab: profile.criteria.minScoreToGrab,
+      min_upgrade_score_delta: readMinUpgradeScoreDelta(
+        profile.criteria.minUpgradeScoreDelta,
+      ),
     },
   };
 }
@@ -251,6 +257,15 @@ export function qualityProfileSettingsToCategoryPersonaSelections(
   }
 
   return result;
+}
+
+/** The same-tier upgrade delta a profile uses when it does not set one. */
+export const DEFAULT_MIN_UPGRADE_SCORE_DELTA = 120;
+
+function readMinUpgradeScoreDelta(raw: unknown): number {
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 0
+    ? raw
+    : DEFAULT_MIN_UPGRADE_SCORE_DELTA;
 }
 
 function readScoringOverrides(raw: unknown): ScoringOverridesPayload {
@@ -459,6 +474,7 @@ export function buildQualityProfileTemplate(
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
+    min_upgrade_score_delta: DEFAULT_MIN_UPGRADE_SCORE_DELTA,
   };
 }
 
@@ -544,6 +560,9 @@ export function toQualityProfileDraft(
       typeof entry.criteria.min_score_to_grab === "number"
         ? entry.criteria.min_score_to_grab
         : null,
+    min_upgrade_score_delta: readMinUpgradeScoreDelta(
+      entry.criteria.min_upgrade_score_delta,
+    ),
   };
 }
 
@@ -585,6 +604,7 @@ export function qualityProfileCatalogEntryFromDraft(
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
+      min_upgrade_score_delta: draft.min_upgrade_score_delta,
     },
   };
 }
@@ -616,6 +636,7 @@ export function qualityProfileEntryToMutationInput(
       ),
       cutoffTier: entry.criteria.cutoff_tier,
       minScoreToGrab: entry.criteria.min_score_to_grab,
+      minUpgradeScoreDelta: entry.criteria.min_upgrade_score_delta,
     },
   };
 }

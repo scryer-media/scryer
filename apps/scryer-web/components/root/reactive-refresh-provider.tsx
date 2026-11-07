@@ -181,9 +181,9 @@ function applyReactiveRefreshActionResult(
           unknown,
           unknown
         >["titleHistory"],
-        titleReleaseBlocklist: (payload[
-          typedActionPlan.titleReleaseBlocklistAlias
-        ] ?? []) as TitleSidePanelOverviewSnapshot<
+        titleReleaseBlocklist: (typedActionPlan.titleReleaseBlocklistAlias
+          ? (payload[typedActionPlan.titleReleaseBlocklistAlias] ?? [])
+          : []) as TitleSidePanelOverviewSnapshot<
           unknown,
           unknown,
           unknown,
@@ -253,7 +253,9 @@ function reactiveRefreshActionAliases(
       return [
         actionPlan.titleAlias,
         ...(actionPlan.titleHistoryAlias ? [actionPlan.titleHistoryAlias] : []),
-        actionPlan.titleReleaseBlocklistAlias,
+        ...(actionPlan.titleReleaseBlocklistAlias
+          ? [actionPlan.titleReleaseBlocklistAlias]
+          : []),
         actionPlan.externalSubtitlesAlias,
         actionPlan.setupStatusAlias,
       ];
@@ -632,7 +634,7 @@ export function ReactiveRefreshProvider({
       ) {
         queuePendingAction({
           ...options,
-          key: `titleSidePanelOverview:${options.titleId}:${options.blocklistLimit}:${options.projection}`,
+          key: `titleSidePanelOverview:${options.titleId}:${options.blocklistLimit}:${options.projection}:${options.includePrivileged !== false}`,
           kind: "titleSidePanelOverview",
         } as TitleSidePanelOverviewAction);
       },

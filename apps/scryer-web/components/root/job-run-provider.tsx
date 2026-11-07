@@ -1,6 +1,10 @@
 import * as React from "react";
 import { useClient } from "urql";
 
+import {
+  isEpisodeSubtitleBatch,
+  subtitleBatchProgressText,
+} from "@/lib/utils/episode-subtitle-search";
 import { toast } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -15,8 +19,10 @@ import {
   jobRunEventsSubscription,
 } from "@/lib/graphql/queries";
 import { cancelAcquisitionSearchMutation } from "@/lib/graphql/mutations";
+import { useSessionUser } from "@/lib/hooks/use-auth";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { normalizeApplicationUpgradeProgress } from "@/lib/utils/application-upgrade-progress";
+import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import {
   isTerminalJobRunStatus,
   normalizeJobRun,
@@ -131,6 +137,13 @@ export function JobRunProvider({
 }) {
   const client = useClient();
   const t = useTranslate();
+  // The server only lets system-settings managers cancel a search, so the toast
+  // offers the button to them alone.
+  const sessionUser = useSessionUser();
+  const canCancelAcquisitionSearch = hasAppPermission(
+    sessionUser,
+    APP_PERMISSIONS.manageSystemSettings,
+  );
   const cancelAcquisitionSearch = React.useCallback(
     async (runId: string) => {
       try {
@@ -322,7 +335,7 @@ export function JobRunProvider({
         .filter((run): run is JobRun => run !== null);
 
       for (const run of normalizedRuns) {
-        if (shouldRestoreAutomaticSearch(run)) {
+        if (shouldRestoreAutomaticSearch(run) || isEpisodeSubtitleBatch(run)) {
           registerInteractiveJobRun(run);
         } else {
           upsertRun(run);
@@ -447,10 +460,14 @@ export function JobRunProvider({
           ? t("jobs.runSummaryCompleted")
           : t("jobs.runSummaryRunning"));
       const upgradeToast = applicationUpgradeToastDetails(run, t);
-      const title = upgradeToast?.title ?? run.displayName;
+      const subtitleDescription = subtitleBatchProgressText(run, t);
+      const title = isEpisodeSubtitleBatch(run)
+        ? t("subtitle.batchSearch")
+        : (upgradeToast?.title ?? run.displayName);
       const outcomeKey = automaticSearchOutcomeKey(run);
       const searchProgress = acquisitionProgress(run);
       const description =
+        subtitleDescription ??
         run.errorText ??
         (outcomeKey
           ? t(outcomeKey, {
@@ -502,7 +519,7 @@ export function JobRunProvider({
         description,
         duration: Infinity,
         action:
-          run.jobKey === "ACQUISITION_SEARCH" ? (
+          run.jobKey === "ACQUISITION_SEARCH" && canCancelAcquisitionSearch ? (
             <Button
               type="button"
               size="sm"
@@ -527,7 +544,13 @@ export function JobRunProvider({
         return next;
       });
     }
-  }, [cancelAcquisitionSearch, clearReconcileTimers, runsById, t]);
+  }, [
+    canCancelAcquisitionSearch,
+    cancelAcquisitionSearch,
+    clearReconcileTimers,
+    runsById,
+    t,
+  ]);
 
   React.useEffect(
     () => () => {

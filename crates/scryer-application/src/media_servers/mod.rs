@@ -95,6 +95,8 @@ mod playback;
 mod plex;
 mod policy;
 mod refresh;
+
+pub(crate) use refresh::map_media_server_path;
 mod scanner;
 mod users;
 

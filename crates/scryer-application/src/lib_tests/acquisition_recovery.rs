@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "standby_queue_tests.rs"]
+mod standby_queue_tests;
+
 #[tokio::test]
 async fn notification_broadcast_ignores_operational_domain_events() {
     let (app, _) = bootstrap();
@@ -711,7 +714,8 @@ async fn standby_delay_parks_the_best_row_stops_the_walk_and_promotion_grabs_whe
             .await
             .expect("promotion should resolve"),
             crate::acquisition::pending::PendingGrabOutcome::Grabbed {
-                scope: SubmissionScope::Title
+                scope: SubmissionScope::Title,
+                ..
             }
         ),
         "the unchanged profile must allow promotion after delay_until"
@@ -1146,7 +1150,8 @@ async fn operator_pending_grab_ignores_the_delay_profile() {
         .await
         .expect("operator grab should resolve"),
         crate::acquisition::pending::PendingGrabOutcome::Grabbed {
-            scope: SubmissionScope::Title
+            scope: SubmissionScope::Title,
+            ..
         }
     ));
     assert_eq!(
@@ -5502,6 +5507,26 @@ async fn seed_recent_failed_season_pack_fixture_with_indexer_and_scope_states(
     Arc<StubDownloadClient>,
 ) {
     let download_client = Arc::new(StubDownloadClient::default());
+    seed_recent_failed_season_pack_fixture_with_client(
+        indexer_client,
+        wanted_items,
+        pending_releases,
+        download_client,
+    )
+    .await
+}
+
+async fn seed_recent_failed_season_pack_fixture_with_client(
+    indexer_client: Arc<TrackingIndexerClient>,
+    wanted_items: Arc<TrackingAcquisitionScopeStateRepo>,
+    pending_releases: Arc<TrackingPendingReleaseRepo>,
+    download_client: Arc<StubDownloadClient>,
+) -> (
+    AppUseCase,
+    Title,
+    Arc<TrackingIndexerClient>,
+    Arc<StubDownloadClient>,
+) {
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
         download_client.clone(),
@@ -5720,6 +5745,14 @@ async fn rss_priority_keeps_a_fifth_title_queued_while_four_queries_drain() {
         wanted.clone(),
         indexer.clone(),
     );
+    // Four titles at once is the eager walk's concurrency.
+    app.upsert_system_setting_json(
+        crate::settings::runtime::ACQUISITION_WALK_INTENSITY_KEY,
+        &crate::acquisition::walk_intensity::AcquisitionWalkIntensity::Eager.as_str(),
+        None,
+    )
+    .await
+    .expect("set the walk intensity");
     for number in 1..=5 {
         seed_movie_wanted_for_acquisition(
             &app,
@@ -6049,10 +6082,12 @@ async fn title_walk_preparation_refreshes_changed_profile_routing_and_blocklist(
                     true,
                     None,
                     now,
+                    crate::catalog::release_search::ScoringLane::Full,
                 ),
             )
             .await
             .unwrap()
+            .results
         };
     }
     let first = score!(&mut prepared, Some(&reads));
@@ -6085,6 +6120,616 @@ async fn title_walk_preparation_refreshes_changed_profile_routing_and_blocklist(
         reads.scoring_preparations.load(Ordering::SeqCst),
         3,
         "mutable exclusions refresh without rebuilding title policy"
+    );
+}
+
+#[tokio::test]
+async fn pruning_keeps_saved_results_only_for_open_scopes() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, _user) = bootstrap_with_acquisition_tracking(
+        download_client,
+        download_submissions,
+        pending_releases.clone(),
+        wanted_items.clone(),
+    );
+    let scope = |id: &str, status: AcquisitionScopeStatus| AcquisitionScopeState {
+        id: id.to_string(),
+        title_id: "synthetic-prune-title".to_string(),
+        title_name: None,
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".to_string(),
+        last_search_at: None,
+        status,
+        grabbed_release: None,
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: Utc::now().to_rfc3339(),
+        updated_at: Utc::now().to_rfc3339(),
+    };
+    for (id, status) in [
+        ("synthetic-scope-wanted", AcquisitionScopeStatus::Wanted),
+        ("synthetic-scope-grabbed", AcquisitionScopeStatus::Grabbed),
+        (
+            "synthetic-scope-completed",
+            AcquisitionScopeStatus::Completed,
+        ),
+    ] {
+        wanted_items
+            .upsert_acquisition_scope_state(&scope(id, status))
+            .await
+            .expect("seed scope");
+    }
+    for (index, wanted_item_id) in [
+        "synthetic-scope-wanted",
+        "synthetic-scope-grabbed",
+        "synthetic-scope-completed",
+        "synthetic-scope-missing",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        pending_releases
+            .insert_pending_release(&PendingRelease {
+                http_release: None,
+                id: format!("synthetic-standby-{index}"),
+                wanted_item_id: wanted_item_id.to_string(),
+                title_id: "synthetic-prune-title".to_string(),
+                release_title: format!("Synthetic.Prune.Release.{index}.1080p.WEB-DL"),
+                release_url: Some(format!("https://example.invalid/{index}.nzb")),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                release_size_bytes: Some(1_000),
+                release_score: 100,
+                scoring_log_json: None,
+                indexer_source: None,
+                indexer_id: None,
+                release_guid: Some(format!("synthetic-guid-{index}")),
+                added_at: Utc::now().to_rfc3339(),
+                last_observed_at: Utc::now().to_rfc3339(),
+                delay_until: Utc::now().to_rfc3339(),
+                status: PendingReleaseStatus::Standby,
+                grabbed_at: None,
+                source_password: None,
+                published_at: None,
+                info_hash: None,
+                seed_minimums: Default::default(),
+                seeders: None,
+                release_identity: format!("synthetic-guid-{index}"),
+                coverage_identity: format!("scope:{wanted_item_id}"),
+                role: crate::types::PendingReleaseRole::Fallback,
+                last_decision_code: None,
+                release_age_unknown: false,
+                release_listing_json: None,
+            })
+            .await
+            .expect("seed standby");
+    }
+
+    crate::acquisition_workflow::prune_standby_candidates(&app).await;
+
+    let mut kept = pending_releases
+        .list_standby_wanted_item_ids()
+        .await
+        .expect("standby ids");
+    kept.sort();
+    assert_eq!(
+        kept,
+        ["synthetic-scope-grabbed", "synthetic-scope-wanted"],
+        "a completed or vanished scope loses its saved results; open scopes keep theirs"
+    );
+}
+
+/// A spread of synthetic releases for the recent-failed-season-pack fixture:
+/// three indexers, several qualities and sources, season packs, a release for
+/// another episode, and duplicates, so a scoring pass crosses chunk
+/// boundaries and exercises every filter.
+fn chunked_scoring_releases(template: &IndexerSearchResult) -> Vec<IndexerSearchResult> {
+    let mut releases = Vec::new();
+    let release = |indexer: &str, title: String| IndexerSearchResult {
+        indexer_id: Some(indexer.to_string()),
+        download_url: Some(format!("https://example.invalid/{indexer}/{title}.nzb")),
+        title,
+        ..template.clone()
+    };
+    for (index, indexer) in ["indexer-a", "indexer-b", "indexer-c"]
+        .into_iter()
+        .enumerate()
+    {
+        for quality in ["2160p", "1080p", "720p", "480p"] {
+            for source in ["WEB-DL", "BluRay", "HDTV"] {
+                for codec in ["x264", "x265"] {
+                    releases.push(release(
+                        indexer,
+                        format!(
+                            "Recent.Failed.Season.Pack.S07E23.{quality}.{source}.{codec}-SYNTH{index}"
+                        ),
+                    ));
+                }
+            }
+        }
+        releases.push(release(
+            indexer,
+            format!("Recent.Failed.Season.Pack.S07.1080p.WEB-DL.x264-PACK{index}"),
+        ));
+        releases.push(release(
+            indexer,
+            format!("Recent.Failed.Season.Pack.S07E22.1080p.WEB-DL.x264-OTHER{index}"),
+        ));
+    }
+    let duplicates = releases.iter().take(3).cloned().collect::<Vec<_>>();
+    releases.extend(duplicates);
+    releases
+}
+
+#[tokio::test]
+async fn chunked_scoring_decides_every_release_as_scoring_it_alone_does() {
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let template = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let releases = chunked_scoring_releases(&template);
+    assert!(
+        releases.len() > 2 * 32,
+        "the batch must span several scoring chunks"
+    );
+    let now = Utc::now();
+    let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+    let mut prepared = None;
+    macro_rules! score {
+        ($results:expr, $lane:expr) => {
+            within_deadline(
+                "chunked scoring",
+                app.score_release_results_with_prepared(
+                    $results,
+                    &profile,
+                    &title.id,
+                    None,
+                    Some(24),
+                    &subject.title_evidence.parse_context,
+                    Some(7),
+                    Some(23),
+                    None,
+                    &mut prepared,
+                    Some(&reads),
+                    true,
+                    None,
+                    now,
+                    $lane,
+                ),
+            )
+            .await
+            .unwrap()
+            .results
+        };
+    }
+
+    let batch = score!(
+        releases.clone(),
+        crate::catalog::release_search::ScoringLane::Full
+    );
+    assert_eq!(
+        batch,
+        score!(
+            releases.clone(),
+            crate::catalog::release_search::ScoringLane::Full
+        ),
+        "the same result set scores to the same ranked list"
+    );
+    assert_eq!(
+        batch,
+        score!(
+            releases.clone(),
+            crate::catalog::release_search::ScoringLane::Walk { cap: None }
+        ),
+        "an uncapped walk search decides exactly what an operator search does"
+    );
+
+    // Scored one at a time, each release is the whole of its own pass: no
+    // chunk boundary, no neighbour, nothing shared but the prepared snapshot.
+    let mut alone = HashMap::new();
+    for release in &releases {
+        for scored in score!(
+            vec![release.clone()],
+            crate::catalog::release_search::ScoringLane::Full
+        ) {
+            alone.insert(scored.download_url.clone(), scored);
+        }
+    }
+    assert_eq!(
+        batch.len(),
+        alone.len(),
+        "the batch keeps exactly the releases scoring alone keeps"
+    );
+    for scored in &batch {
+        assert_eq!(
+            Some(scored),
+            alone.get(&scored.download_url),
+            "{} decided differently in a batch",
+            scored.title
+        );
+    }
+    assert!(
+        batch.iter().all(|scored| !scored.title.contains("S07E22")),
+        "a release for another episode is filtered in every chunk"
+    );
+    assert!(
+        batch.iter().any(|scored| scored
+            .quality_profile_decision
+            .as_ref()
+            .is_some_and(|decision| decision.allowed)),
+        "the fixture must produce at least one allowed release"
+    );
+}
+
+#[tokio::test]
+async fn a_capped_walk_search_scores_a_round_from_every_indexer() {
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let template = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    // Indexer A returns a long feed first; B and C each return one release
+    // after it. A cap of three must still score B's and C's.
+    let mut releases = (0..20)
+        .map(|index| IndexerSearchResult {
+            indexer_id: Some("indexer-a".into()),
+            title: format!("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL.x264-FEEDA{index:02}"),
+            download_url: Some(format!("https://example.invalid/a/{index}.nzb")),
+            ..template.clone()
+        })
+        .collect::<Vec<_>>();
+    for indexer in ["indexer-b", "indexer-c"] {
+        releases.push(IndexerSearchResult {
+            indexer_id: Some(indexer.into()),
+            title: format!("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL.x264-{indexer}"),
+            download_url: Some(format!("https://example.invalid/{indexer}.nzb")),
+            ..template.clone()
+        });
+    }
+
+    let scored = within_deadline(
+        "capped scoring",
+        app.score_release_results_with_prepared(
+            releases,
+            &profile,
+            &title.id,
+            None,
+            Some(24),
+            &subject.title_evidence.parse_context,
+            Some(7),
+            Some(23),
+            None,
+            &mut None,
+            None,
+            true,
+            None,
+            Utc::now(),
+            crate::catalog::release_search::ScoringLane::Walk { cap: Some(3) },
+        ),
+    )
+    .await
+    .unwrap()
+    .results;
+
+    let mut indexers = scored
+        .iter()
+        .map(|result| result.indexer_id.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    indexers.sort();
+    assert_eq!(indexers, ["indexer-a", "indexer-b", "indexer-c"]);
+    assert!(
+        scored
+            .iter()
+            .any(|result| result.title.ends_with("FEEDA00")),
+        "indexer A keeps the first release of its own feed"
+    );
+}
+
+#[tokio::test]
+async fn scoring_without_a_torrent_client_tallies_dropped_torrents_per_indexer() {
+    use crate::error_reasons::release_search as reasons;
+
+    // The fixture's only enabled download client is an NZBGet instance, so
+    // every torrent release is unroutable while NZB releases stay.
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let nzb = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let torrent = |indexer_id: &str, suffix: &str| IndexerSearchResult {
+        title: format!("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL-{suffix}"),
+        indexer_id: Some(indexer_id.to_string()),
+        source_kind: Some(DownloadSourceKind::TorrentFile),
+        ..nzb.clone()
+    };
+    let unclassified = IndexerSearchResult {
+        title: "Recent.Failed.Season.Pack.S07E23.720p.WEB-DL".into(),
+        source_kind: None,
+        ..nzb.clone()
+    };
+    let raw_results = vec![
+        nzb.clone(),
+        torrent("indexer-a", "ALPHA"),
+        torrent("indexer-b", "BRAVO"),
+        torrent("indexer-b", "CHARLIE"),
+        unclassified,
+    ];
+
+    let batch = within_deadline(
+        "unroutable scoring",
+        app.score_release_results_with_prepared(
+            raw_results,
+            &profile,
+            &title.id,
+            None,
+            Some(24),
+            &subject.title_evidence.parse_context,
+            Some(7),
+            Some(23),
+            None,
+            &mut None,
+            None,
+            true,
+            None,
+            Utc::now(),
+            crate::catalog::release_search::ScoringLane::Full,
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        batch.unroutable_by_indexer,
+        HashMap::from([
+            (
+                "indexer-a".to_string(),
+                std::collections::BTreeMap::from([(reasons::NO_TORRENT_CLIENT, 1)]),
+            ),
+            (
+                "indexer-b".to_string(),
+                std::collections::BTreeMap::from([(reasons::NO_TORRENT_CLIENT, 2)]),
+            ),
+        ]),
+        "only torrents are dropped, counted per indexer under the missing capability"
+    );
+    assert!(
+        batch
+            .results
+            .iter()
+            .all(|result| result.source_kind != Some(DownloadSourceKind::TorrentFile)),
+        "no torrent release reaches the scored list"
+    );
+    assert!(
+        batch
+            .results
+            .iter()
+            .any(|result| result.source_kind == Some(DownloadSourceKind::NzbUrl)),
+        "the NZB release is still scored"
+    );
+}
+
+#[tokio::test]
+async fn scoring_reports_an_unavailable_client_plugin_instead_of_a_missing_client() {
+    use crate::error_reasons::release_search as reasons;
+
+    // NZBGet is the fixture's only usable client. An enabled client whose
+    // plugin is not loaded must not read as "no torrent client configured".
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    app.services
+        .integrations
+        .download_client_configs
+        .create(DownloadClientConfig {
+            id: "synthetic-unloaded-client".to_string(),
+            name: "Synthetic Unloaded Client".to_string(),
+            client_type: "synthetic-unloaded-plugin".to_string(),
+            config_json: "{}".to_string(),
+            client_priority: 5,
+            is_enabled: true,
+            status: scryer_domain::DownloadClientStatus::Healthy,
+            last_error: None,
+            last_seen_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            proxy_config_id: None,
+        })
+        .await
+        .unwrap();
+    let profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let nzb = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let torrent = IndexerSearchResult {
+        title: "Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL-ALPHA".into(),
+        indexer_id: Some("indexer-a".to_string()),
+        source_kind: Some(DownloadSourceKind::TorrentFile),
+        ..nzb.clone()
+    };
+
+    let batch = within_deadline(
+        "unavailable client plugin scoring",
+        app.score_release_results_with_prepared(
+            vec![nzb, torrent],
+            &profile,
+            &title.id,
+            None,
+            Some(24),
+            &subject.title_evidence.parse_context,
+            Some(7),
+            Some(23),
+            None,
+            &mut None,
+            None,
+            true,
+            None,
+            Utc::now(),
+            crate::catalog::release_search::ScoringLane::Full,
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        batch.unroutable_by_indexer,
+        HashMap::from([(
+            "indexer-a".to_string(),
+            std::collections::BTreeMap::from([(reasons::TORRENT_CLIENT_PLUGIN_UNAVAILABLE, 1)]),
+        )]),
+        "the torrent is counted under the plugin-unavailable code"
+    );
+}
+
+#[tokio::test]
+async fn auto_scoring_counts_releases_set_aside_at_the_grab_limit_per_indexer() {
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let base = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let release = |indexer_id: &str, suffix: &str, current: u64, maximum: u64| {
+        let mut result = IndexerSearchResult {
+            title: format!("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL-{suffix}"),
+            indexer_id: Some(indexer_id.to_string()),
+            link: Some(format!("https://indexer.example.test/{suffix}.nzb")),
+            download_url: Some(format!("https://indexer.example.test/{suffix}.nzb")),
+            guid: Some(format!("guid-{suffix}")),
+            ..base.clone()
+        };
+        result
+            .extra
+            .insert("grab_current".into(), serde_json::json!(current));
+        result
+            .extra
+            .insert("grab_max".into(), serde_json::json!(maximum));
+        result
+    };
+    let raw_results = vec![
+        release("indexer-full", "ALPHA", 5, 5),
+        release("indexer-full", "BRAVO", 6, 5),
+        release("indexer-open", "CHARLIE", 1, 5),
+    ];
+
+    macro_rules! score {
+        ($auto:expr) => {
+            within_deadline(
+                "grab limit scoring",
+                app.score_release_results_with_prepared(
+                    raw_results.clone(),
+                    &profile,
+                    &title.id,
+                    None,
+                    Some(24),
+                    &subject.title_evidence.parse_context,
+                    Some(7),
+                    Some(23),
+                    None,
+                    &mut None,
+                    None,
+                    $auto,
+                    None,
+                    Utc::now(),
+                    crate::catalog::release_search::ScoringLane::Full,
+                ),
+            )
+            .await
+            .unwrap()
+        };
+    }
+
+    let auto = score!(true);
+    assert_eq!(
+        auto.quota_exhausted_by_indexer,
+        HashMap::from([("indexer-full".to_string(), 2)]),
+        "both releases from the indexer at its limit are counted"
+    );
+    assert!(
+        auto.results
+            .iter()
+            .all(|result| result.indexer_id.as_deref() == Some("indexer-open")),
+        "the set-aside releases still do not reach the automatic candidates"
+    );
+
+    let interactive = score!(false);
+    assert!(
+        interactive.quota_exhausted_by_indexer.is_empty(),
+        "an interactive search lists those releases and counts nothing"
     );
 }
 
@@ -10658,7 +11303,8 @@ async fn acquisition_cycle_active_anime_scan_does_not_block_due_movie_search() {
         &app,
         &[MediaFacet::Anime],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -10843,7 +11489,8 @@ async fn acquisition_cycle_active_movie_scan_does_not_block_due_series_search() 
         &app,
         &[MediaFacet::Movie],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -10983,7 +11630,8 @@ async fn acquisition_cycle_active_series_scan_defers_due_series_search() {
         &app,
         &[MediaFacet::Series],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -11125,7 +11773,8 @@ async fn acquisition_cycle_retries_standby_candidate_during_unrelated_active_sca
         &app,
         &[MediaFacet::Anime],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -11254,7 +11903,8 @@ async fn acquisition_cycle_keeps_an_old_saved_result_for_an_in_flight_grab() {
         &app,
         &[MediaFacet::Anime],
         crate::acquisition_workflow::BackgroundAcquisitionPass::Full,
-        None,
+        tokio::time::Instant::now(),
+        crate::acquisition_workflow::WalkBudget::Unbounded,
     )
     .await;
 
@@ -14293,7 +14943,8 @@ async fn a_parked_release_the_profile_now_blocks_is_not_grabbed() {
         .await
         .expect("pending grab should resolve"),
         crate::acquisition::pending::PendingGrabOutcome::Grabbed {
-            scope: SubmissionScope::Title
+            scope: SubmissionScope::Title,
+            ..
         }
     ));
 
@@ -17067,6 +17718,69 @@ async fn background_acquisition_without_download_clients_skips_the_missing_scope
     );
     assert_eq!(outcome.targets_derived, 0);
     assert_eq!(outcome.titles_walked, 0);
+}
+
+/// The walk keeps its target set between cycles. A cycle after which nothing
+/// changed reads nothing to obtain it; a change that names a title re-derives
+/// that title, not the catalog.
+#[tokio::test]
+async fn background_acquisition_reuses_its_targets_while_nothing_changes() {
+    let acquisition_scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user, _, repos) = bootstrap_with_acquisition_tracking_and_indexer_and_repos(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        acquisition_scope_states.clone(),
+        Arc::new(MockIndexerClient),
+    );
+    let (title, _) = seed_movie_wanted_for_acquisition(
+        &app,
+        &user,
+        &acquisition_scope_states,
+        "Synthetic Idle Walk",
+        2024,
+    )
+    .await;
+    let sweeps = || {
+        repos
+            .media_files
+            .missing_scope_sweeps
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+
+    let first = app.run_background_acquisition_cycle_once().await;
+    assert!(first.targets_derived > 0, "the first walk builds the set");
+    let built = sweeps();
+    assert!(built > 0, "building the set derives it");
+
+    for _ in 0..3 {
+        let idle = app.run_background_acquisition_cycle_once().await;
+        assert_eq!(idle.targets_derived, first.targets_derived);
+    }
+    assert_eq!(
+        sweeps(),
+        built,
+        "walks with nothing changed must not derive the target set again"
+    );
+    let (_, source) = app
+        .refresh_acquisition_target_cache()
+        .await
+        .expect("cached targets");
+    assert_eq!(source, "reused");
+    assert_eq!(sweeps(), built);
+
+    // Positive control: a change naming the title re-derives that title only.
+    app.mark_acquisition_title_changed(&title.id);
+    let (_, source) = app
+        .refresh_acquisition_target_cache()
+        .await
+        .expect("patched targets");
+    assert_eq!(source, "patched");
+    assert_eq!(
+        sweeps(),
+        built + 1,
+        "one title-scoped read for the one title"
+    );
 }
 
 /// A scheduler tick that decides not to run must leave no durable trace: the

@@ -5,10 +5,16 @@ import type {
   UiSettings,
 } from "../types/settings.ts";
 
-export type CatalogContentViewMode = "compact" | "poster-table" | "poster";
+export type CatalogContentViewMode =
+  "compact" | "poster-table" | "poster" | "graph";
 export type CatalogFacet = "MOVIES" | "SERIES" | "ANIME";
 export type CatalogTableViewMode = "COMPACT" | "POSTER_TABLE";
 export type CatalogColumnsInput = NonNullable<SetMyCatalogViewInput["columns"]>;
+
+/** The view modes the selector offers, in display order. */
+export function catalogViewModeOptions(): CatalogContentViewMode[] {
+  return ["compact", "poster-table", "poster", "graph"];
+}
 
 /** The column choices both table layouts share, in display order. */
 const TABLE_VIEW_MODES: readonly CatalogTableViewMode[] = [
@@ -41,6 +47,8 @@ export function catalogViewModeToProfile(
       return "COMPACT";
     case "poster-table":
       return "POSTER_TABLE";
+    case "graph":
+      return "GRAPH";
     default:
       return "POSTER";
   }
@@ -56,6 +64,8 @@ function catalogViewModeFromProfile(
       return "poster-table";
     case "POSTER":
       return "poster";
+    case "GRAPH":
+      return "graph";
     default:
       return null;
   }

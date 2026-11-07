@@ -37,6 +37,24 @@ pub fn accepted_inputs_for_client(
     native_accepted_inputs(client_type)
 }
 
+/// Whether anything running knows a download client type: a native client,
+/// or a loaded plugin. A configured client whose type is unknown has its
+/// plugin blocked or uninstalled, which differs from having no client at all.
+/// The plugin provider matches types without regard to case, and saved
+/// client types are lowercased, so the native match needs no folding.
+pub(crate) fn download_client_type_is_known(
+    client_type: &str,
+    plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
+) -> bool {
+    !native_accepted_inputs(client_type).is_empty()
+        || plugin_provider.is_some_and(|provider| {
+            provider.plugin_name_for_provider(client_type).is_some()
+                || !provider
+                    .accepted_inputs_for_provider(client_type)
+                    .is_empty()
+        })
+}
+
 /// Native client capabilities. Returns the accepted input kinds for
 /// built-in download client types.
 fn native_accepted_inputs(client_type: &str) -> Vec<DownloadSourceKind> {
@@ -178,6 +196,21 @@ pub fn normalize_release_name(raw: Option<&str>) -> Option<String> {
 pub fn normalize_release_password(raw: Option<&str>) -> Option<String> {
     raw.filter(|value| !value.trim().is_empty())
         .map(str::to_string)
+}
+
+/// Whether an indexer-supplied password value is a protection flag rather
+/// than a password. Indexers mix the two in one field: `1`, `true`, `yes`,
+/// `protected` and `passworded` mean "an archive password exists", `0`,
+/// `false` and `no` mean it does not, and some report `-1` for a protected
+/// release. None of them is usable as a password, so sending one to a
+/// download client only burns an extraction attempt. Applies to values that
+/// came from an indexer (search attributes, grab headers, grab payloads);
+/// passwords read from a release name stay literal.
+pub fn is_password_protection_marker(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "protected" | "passworded" | "0" | "false" | "no" | "-1"
+    )
 }
 
 pub(crate) fn is_obfuscated_release_name(parsed: &ParsedReleaseMetadata) -> bool {
@@ -326,6 +359,9 @@ pub enum HashDomain {
     RenamePlan,
     /// Location-operation plan fingerprint (FR-081).
     LocationPlan,
+    /// The catalog and configuration facts a previewed location plan was
+    /// built from, for reusing that plan at confirmation.
+    LocationPlanFacts,
     /// Indexer credential fingerprint inside the search identity.
     IndexerSecret,
     /// Search-diagnostics query signature.
@@ -344,6 +380,8 @@ pub enum HashDomain {
     RawSearchScope,
     /// Stable source-qualified identity exposed to external indexer clients.
     IndexerClientRelease,
+    /// Per-instance phase offset for the metadata gateway compatibility poll.
+    GatewayCompatibilityPollPhase,
 }
 
 impl HashDomain {
@@ -362,6 +400,7 @@ impl HashDomain {
             Self::DeletePreview => "scryer.library.delete-preview.v1",
             Self::RenamePlan => "scryer.library.rename-plan.v1",
             Self::LocationPlan => "scryer.location.plan.v1",
+            Self::LocationPlanFacts => "scryer.location.plan-facts.v1",
             Self::IndexerSecret => "scryer.indexer.secret.v1",
             Self::IndexerQuerySignature => "scryer.indexer.query-signature.v1",
             Self::IndexerSearchIdentity => "scryer.indexer.search-identity.v1",
@@ -371,6 +410,7 @@ impl HashDomain {
             Self::IndexerListingFamily => "scryer.indexer.listing-family.v1",
             Self::RawSearchScope => "scryer.raw-search.scope.v1",
             Self::IndexerClientRelease => "scryer.indexer-client.release.v1",
+            Self::GatewayCompatibilityPollPhase => "scryer.metadata-gateway.poll-phase.v1",
         }
     }
 }

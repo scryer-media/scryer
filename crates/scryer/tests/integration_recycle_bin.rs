@@ -185,10 +185,19 @@ async fn set_custom_recycle_bin_path(ctx: &TestContext, path: &Path) {
 }
 
 async fn seed_library(ctx: &TestContext, name: &str, root: &Path) -> Library {
+    seed_library_with_facet(ctx, name, root, MediaFacet::Movie).await
+}
+
+async fn seed_library_with_facet(
+    ctx: &TestContext,
+    name: &str,
+    root: &Path,
+    facet: MediaFacet,
+) -> Library {
     ctx.app
         .create_library(
             &catalog_actor(),
-            MediaFacet::Movie,
+            facet,
             name.to_string(),
             vec![LibraryRootDraft {
                 id: None,
@@ -238,10 +247,20 @@ async fn seed_title_with_folder_path(
     library: &Library,
     folder_path: Option<String>,
 ) {
+    seed_title_with_facet(ctx, id, library, folder_path, MediaFacet::Movie).await;
+}
+
+async fn seed_title_with_facet(
+    ctx: &TestContext,
+    id: &str,
+    library: &Library,
+    folder_path: Option<String>,
+    facet: MediaFacet,
+) {
     let title = Title {
         id: id.to_string(),
         name: format!("{} Title", library.name),
-        facet: MediaFacet::Movie,
+        facet,
         library_id: library.id.clone(),
         monitored: true,
         tags: vec![],
@@ -337,6 +356,360 @@ async fn seed_recycled_file_in_bin(
         .and_then(|path| path.file_name())
         .map(|name| name.to_string_lossy().to_string())
         .expect("entry id")
+}
+
+#[tokio::test]
+async fn recycled_item_history_correlates_upgrade_chain_and_enforces_library_access() {
+    use scryer_domain::{
+        DomainEventActorKind, DomainEventStream, DomainExternalIds, ImportCompletedEventData,
+        MediaFileDeletedEventData, MediaFileDeletedReason, MediaFileUpgradedEventData,
+        NewDomainEvent, ReleaseGrabbedEventData, TitleContextSnapshot,
+    };
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().unwrap();
+    let library =
+        seed_library_with_facet(&ctx, "History library", root.path(), MediaFacet::Anime).await;
+    let title_id = "recycle-history-title";
+    seed_title_with_facet(&ctx, title_id, &library, None, MediaFacet::Anime).await;
+    let entry_id = seed_recycled_file(root.path(), title_id, "original").await;
+    let manifest_path = root
+        .path()
+        .join(".scryer-recycle")
+        .join(&entry_id)
+        .join("manifest.json");
+    let mut manifest: RecycleManifest =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest.original_file_id = Some("old-file".into());
+    manifest.replacement_file_id = Some("new-file".into());
+    manifest.reason = "upgrade_replaced".into();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let snapshot = TitleContextSnapshot {
+        title_name: "History title".into(),
+        facet: MediaFacet::Anime,
+        external_ids: DomainExternalIds::default(),
+        poster_url: None,
+        year: None,
+    };
+    let grabbed = |download: &str| {
+        DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+            title: snapshot.clone(),
+            source_title: Some("Identical release label".into()),
+            source_hint: None,
+            source_provider: Some("Fixture indexer".into()),
+            download_id: Some(download.into()),
+            episode_ids: Vec::new(),
+            release_facts: Some(scryer_domain::GrabbedReleaseFacts {
+                scoring: Some(scryer_domain::GrabScoringSnapshot {
+                    candidate_score: 20,
+                    previous_score: Some(10),
+                    delta: Some(10),
+                    decision_code: "upgrade".into(),
+                    entries: Vec::new(),
+                    comparisons: vec![scryer_domain::GrabScoreComparison {
+                        file_id: "old-file".into(),
+                        episode_ids: Vec::new(),
+                        previous_score: 10,
+                        delta: 10,
+                    }],
+                }),
+                ..Default::default()
+            }),
+        })
+    };
+    let imported = |import: &str, download: &str| {
+        DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+            title: snapshot.clone(),
+            media_updates: Vec::new(),
+            imported_count: 1,
+            import_id: Some(import.into()),
+            source_system: Some("fixture-client".into()),
+            source_ref: Some(download.into()),
+            source_title: Some("Identical release label".into()),
+            source_path: None,
+            dest_path: Some(manifest.original_path.clone()),
+            quality: Some("1080p".into()),
+            episode_ids: Vec::new(),
+            size_bytes: Some(128),
+            upgrade: true,
+        })
+    };
+    let upgraded = |old: &str, new: &str, import: &str| {
+        DomainEventPayload::MediaFileUpgraded(MediaFileUpgradedEventData {
+            title: snapshot.clone(),
+            media_updates: Vec::new(),
+            episode_ids: vec![
+                if new == "new-file" {
+                    "episode-1"
+                } else {
+                    "unrelated-episode"
+                }
+                .into(),
+            ],
+            previous_file_id: Some(old.into()),
+            current_file_id: Some(new.into()),
+            old_score: Some(10),
+            new_score: Some(20),
+            size_bytes: Some(128),
+            import_id: Some(import.into()),
+            source_ref: None,
+        })
+    };
+    let events = [
+        ("related-grab", grabbed("download-1")),
+        ("unrelated-grab", grabbed("different-download")),
+        (
+            "unrelated-import",
+            imported("different-import", "different-download"),
+        ),
+        ("related-import", imported("import-1", "download-1")),
+        (
+            "wrong-replacement",
+            upgraded("old-file", "different-file", "different-import"),
+        ),
+        (
+            "related-upgrade",
+            upgraded("old-file", "new-file", "import-1"),
+        ),
+        (
+            "related-recycle",
+            DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                title: snapshot.clone(),
+                media_updates: Vec::new(),
+                file_id: Some("old-file".into()),
+                reason: MediaFileDeletedReason::UpgradeCleanup,
+                episode_ids: vec!["episode-1".into()],
+            }),
+        ),
+    ];
+    for (index, (id, payload)) in events.into_iter().enumerate() {
+        ctx.app
+            .append_domain_event(NewDomainEvent {
+                event_id: id.into(),
+                occurred_at: chrono::DateTime::from_timestamp(1_700_000_000 + index as i64, 0)
+                    .unwrap(),
+                actor_kind: DomainEventActorKind::System,
+                actor_user_id: None,
+                actor_display_name: "Fixture system".into(),
+                title_id: Some(title_id.into()),
+                facet: Some(MediaFacet::Anime),
+                correlation_id: None,
+                causation_id: None,
+                schema_version: 1,
+                stream: DomainEventStream::Title {
+                    title_id: title_id.into(),
+                },
+                payload,
+            })
+            .await
+            .unwrap();
+    }
+    let query = "query($id: ID!) { recycledItemHistory(id: $id) { items { id eventType sourceTitle } truncated } }";
+    let body = gql(&ctx, query, json!({"id": entry_id})).await;
+    assert_no_errors(&body);
+    let summary = &body["data"]["recycledItemHistory"];
+    assert_eq!(
+        summary["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "related-grab",
+            "related-import",
+            "related-upgrade",
+            "related-recycle"
+        ]
+    );
+    assert_eq!(summary["truncated"], false);
+
+    let movie_root = tempfile::tempdir().unwrap();
+    let movie_library = seed_library(&ctx, "Movie library", movie_root.path()).await;
+    seed_title(&ctx, "navigation-movie", &movie_library).await;
+    let movie_entry = seed_recycled_file(movie_root.path(), "navigation-movie", "movie").await;
+    let navigation_query = "{ recycledItems { items { id titleFacet episodeId } } }";
+    let body = gql(&ctx, navigation_query, json!({})).await;
+    assert_no_errors(&body);
+    let items = body["data"]["recycledItems"]["items"].as_array().unwrap();
+    let episode = items.iter().find(|item| item["id"] == entry_id).unwrap();
+    assert_eq!(episode["titleFacet"], "anime");
+    assert_eq!(episode["episodeId"], "episode-1");
+    let movie = items.iter().find(|item| item["id"] == movie_entry).unwrap();
+    assert_eq!(movie["titleFacet"], "movie");
+    assert!(movie["episodeId"].is_null());
+
+    assert!(
+        ctx.app
+            .recycled_item_history(&no_permission_actor(), &entry_id)
+            .await
+            .is_err()
+    );
+    let other_root = tempfile::tempdir().unwrap();
+    let other_library = seed_library(&ctx, "Other history library", other_root.path()).await;
+    let other_manager = manage_titles_actor("other-manager", &[other_library.id]);
+    assert!(
+        ctx.app
+            .recycled_item_history(&other_manager, &entry_id)
+            .await
+            .is_err()
+    );
+    let manager = manage_titles_actor("history-manager", &[library.id]);
+    assert_eq!(
+        ctx.app
+            .recycled_item_history(&manager, &entry_id)
+            .await
+            .unwrap()
+            .records
+            .len(),
+        4
+    );
+
+    // A file covering several episodes must not pick an arbitrary destination.
+    ctx.app
+        .append_domain_event(NewDomainEvent {
+            event_id: "multi-episode-recycle".into(),
+            occurred_at: Utc::now(),
+            actor_kind: DomainEventActorKind::System,
+            actor_user_id: None,
+            actor_display_name: "Fixture system".into(),
+            title_id: Some(title_id.into()),
+            facet: Some(MediaFacet::Anime),
+            correlation_id: None,
+            causation_id: None,
+            schema_version: 1,
+            stream: DomainEventStream::Title {
+                title_id: title_id.into(),
+            },
+            payload: DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                title: snapshot,
+                media_updates: Vec::new(),
+                file_id: Some("old-file".into()),
+                reason: MediaFileDeletedReason::UpgradeCleanup,
+                episode_ids: vec!["episode-1".into(), "episode-2".into()],
+            }),
+        })
+        .await
+        .unwrap();
+    let body = gql(&ctx, navigation_query, json!({})).await;
+    assert_no_errors(&body);
+    let items = body["data"]["recycledItems"]["items"].as_array().unwrap();
+    assert!(items.iter().find(|item| item["id"] == entry_id).unwrap()["episodeId"].is_null());
+
+    // Identical labels and paths must not substitute for missing file identities.
+    manifest.original_file_id = None;
+    manifest.replacement_file_id = None;
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    assert!(
+        ctx.app
+            .recycled_item_history(&manager, &entry_id)
+            .await
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    // A bin mounted from another catalog cannot borrow history from a local title.
+    manifest.title_id = Some("absent-title".into());
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let body = gql(&ctx, query, json!({"id": entry_id})).await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["recycledItemHistory"]["items"], json!([]));
+    let body = gql(&ctx, navigation_query, json!({})).await;
+    assert_no_errors(&body);
+    let items = body["data"]["recycledItems"]["items"].as_array().unwrap();
+    let missing = items.iter().find(|item| item["id"] == entry_id).unwrap();
+    assert!(missing["titleFacet"].is_null());
+    assert!(missing["episodeId"].is_null());
+    assert!(manifest_path.exists());
+}
+
+#[tokio::test]
+async fn recycled_items_deletion_horizon_filters_before_counting_and_pagination() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "Upcoming deletions", root.path()).await;
+    seed_title(&ctx, "upcoming-title", &library).await;
+    let now = Utc::now();
+    let mut ids = Vec::new();
+    for (name, hours) in [
+        ("overdue", -2),
+        ("soon", 24),
+        ("later", 48),
+        ("outside", 96),
+    ] {
+        let id = seed_recycled_file(root.path(), "upcoming-title", name).await;
+        let path = root
+            .path()
+            .join(".scryer-recycle")
+            .join(&id)
+            .join("manifest.json");
+        let mut manifest: RecycleManifest =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest.recycled_at =
+            (now + chrono::Duration::hours(hours) - chrono::Duration::days(7)).to_rfc3339();
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        ids.push(id);
+    }
+
+    let body = gql(
+        &ctx,
+        r#"{
+        recycledItems(limit: 1, offset: 1, deletionWithinHours: 72) {
+            totalCount items { id }
+        }
+    }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["recycledItems"]["totalCount"], 3);
+    assert_eq!(
+        body["data"]["recycledItems"]["items"],
+        json!([{ "id": ids[1] }])
+    );
+    let body = gql(&ctx, "{ recycledItems { totalCount } }", json!({})).await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["recycledItems"]["totalCount"], 4);
+
+    assert!(
+        ctx.app
+            .list_recycled_items_deleting_within(&no_permission_actor(), None, 72)
+            .await
+            .is_err()
+    );
+    let other_root = tempfile::tempdir().unwrap();
+    let other_library = seed_library(&ctx, "Other library", other_root.path()).await;
+    let other_manager = manage_titles_actor("other-manager", &[other_library.id]);
+    assert!(
+        ctx.app
+            .list_recycled_items_deleting_within(&other_manager, None, 72)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    ctx.app
+        .update_recycle_bin_settings(&config_actor(), disabled_settings())
+        .await
+        .unwrap();
+    let body = gql(
+        &ctx,
+        "{ recycledItems(deletionWithinHours: 72) { totalCount } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["recycledItems"]["totalCount"], 0);
+    for id in ids {
+        assert!(
+            root.path()
+                .join(".scryer-recycle")
+                .join(id)
+                .join("manifest.json")
+                .exists()
+        );
+    }
 }
 
 #[tokio::test]

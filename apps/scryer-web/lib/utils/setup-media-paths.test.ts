@@ -11,6 +11,7 @@ import {
   setDefaultSetupRoot,
   setupMediaLibraries,
   setupMediaRootsFromLibraries,
+  setupRootsNeedStoredRoots,
   type SetupMediaLibraries,
 } from "./setup-media-paths.ts";
 
@@ -110,10 +111,12 @@ test("a configured instance shows every root of each default library", () => {
   const roots = setupMediaRootsFromLibraries(libraries);
 
   assert.deepEqual(roots.movies, [
-    { path: "/media/films", isDefault: true },
-    { path: "/media/films-4k", isDefault: false },
+    { id: "movies-0", path: "/media/films", isDefault: true },
+    { id: "movies-1", path: "/media/films-4k", isDefault: false },
   ]);
-  assert.deepEqual(roots.series, [{ path: "/media/tv", isDefault: true }]);
+  assert.deepEqual(roots.series, [
+    { id: "series-0", path: "/media/tv", isDefault: true },
+  ]);
   // No default anime library was read, so the bootstrap folder stands in.
   assert.deepEqual(roots.anime, defaultRoots.anime);
 });
@@ -168,18 +171,90 @@ test("setup saves only the libraries whose roots changed", () => {
         field: "movies",
         libraryId: "movies",
         roots: [
-          { path: "/media/films", isDefault: false },
-          { path: "/media/films-4k", isDefault: true },
+          { id: "movies-0", path: "/media/films", isDefault: false },
+          { id: "movies-1", path: "/media/films-4k", isDefault: true },
         ],
+        removedRootIds: [],
       },
       {
         field: "series",
         libraryId: "series",
         roots: [
-          { path: "/media/tv", isDefault: true },
+          { id: "series-0", path: "/media/tv", isDefault: true },
           { path: "/media/tv-2", isDefault: false },
         ],
+        removedRootIds: [],
       },
     ],
+  );
+});
+
+test("a stored root keeps its id through a path edit and a new row has none", () => {
+  const libraries: SetupMediaLibraries = setupMediaLibraries([
+    library("movies", "MOVIE", ["/media/films", "/media/films-4k"]),
+  ]);
+  const roots = setupMediaRootsFromLibraries(libraries);
+  const edited = addSetupRoot(
+    setDefaultSetupRoot(replaceSetupRoot(roots.movies, 0, "/media/movies"), 1),
+    "/media/movies-extra",
+  );
+
+  assert.deepEqual(
+    plannedSetupRootSaves({ ...roots, movies: edited }, libraries),
+    [
+      {
+        field: "movies",
+        libraryId: "movies",
+        roots: [
+          { id: "movies-0", path: "/media/movies", isDefault: false },
+          { id: "movies-1", path: "/media/films-4k", isDefault: true },
+          { path: "/media/movies-extra", isDefault: false },
+        ],
+        removedRootIds: [],
+      },
+    ],
+  );
+});
+
+test("removing a stored root row lists its id for removal", () => {
+  const libraries: SetupMediaLibraries = setupMediaLibraries([
+    library("movies", "MOVIE", ["/media/films", "/media/films-4k"]),
+  ]);
+  const roots = setupMediaRootsFromLibraries(libraries);
+
+  assert.deepEqual(
+    plannedSetupRootSaves(
+      { ...roots, movies: removeSetupRoot(roots.movies, 0) },
+      libraries,
+    ),
+    [
+      {
+        field: "movies",
+        libraryId: "movies",
+        roots: [{ id: "movies-1", path: "/media/films-4k", isDefault: true }],
+        removedRootIds: ["movies-0"],
+      },
+    ],
+  );
+});
+
+test("rows edited before the stored roots loaded are never saved over them", () => {
+  const libraries: SetupMediaLibraries = setupMediaLibraries([
+    library("movies", "MOVIE", ["/media/films", "/media/films-4k"]),
+  ]);
+
+  // Rows still seeded from the bootstrap folders must not be saved while a
+  // default library has stored roots: they would replace those roots.
+  assert.equal(setupRootsNeedStoredRoots(false, libraries), true);
+  assert.equal(setupRootsNeedStoredRoots(true, libraries), false);
+
+  // With no stored roots there is nothing to drop, so the bootstrap rows save.
+  assert.equal(setupRootsNeedStoredRoots(false, {}), false);
+  assert.equal(
+    setupRootsNeedStoredRoots(
+      false,
+      setupMediaLibraries([library("movies", "MOVIE", [])]),
+    ),
+    false,
   );
 });

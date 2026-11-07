@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { StandbyDownloadButton } from "@/components/common/standby-download-button";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
 import type {
@@ -109,6 +110,7 @@ type WantedViewState = {
   decisionsLoading: boolean;
   standbyReleases: PendingReleaseItem[];
   standbyLoading: boolean;
+  refreshStandby: () => Promise<void>;
   loadItemDetails: (id: string, standbyCount: number) => Promise<void>;
   triggerSearch: (id: string) => Promise<void>;
   pauseItem: (id: string) => Promise<void>;
@@ -311,9 +313,11 @@ function isSeasonPackRelease(title: string) {
 function StandbyReleasesList({
   items,
   loading,
+  onQueued,
 }: {
   items: PendingReleaseItem[];
   loading: boolean;
+  onQueued: () => Promise<void>;
 }) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
@@ -352,6 +356,7 @@ function StandbyReleasesList({
               <p className="min-w-0 flex-1 break-words text-xs font-medium text-foreground">
                 {release.releaseTitle}
               </p>
+              <StandbyDownloadButton release={release} onQueued={onQueued} />
             </div>
             <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground sm:grid-cols-3">
               <span>
@@ -591,6 +596,7 @@ function WantedItemsCard({
     decisionsLoading,
     standbyReleases,
     standbyLoading,
+    refreshStandby,
     loadItemDetails,
     triggerSearch,
     pauseItem,
@@ -826,6 +832,7 @@ function WantedItemsCard({
                       <StandbyReleasesList
                         items={standbyReleases}
                         loading={standbyLoading}
+                        onQueued={refreshStandby}
                       />
                       {decisionsLoading ? (
                         <p className="text-sm text-muted-foreground">
@@ -1121,6 +1128,7 @@ function WantedItemsCard({
                           <StandbyReleasesList
                             items={standbyReleases}
                             loading={standbyLoading}
+                            onQueued={refreshStandby}
                           />
                           {decisionsLoading ? (
                             <p className="text-sm text-muted-foreground">
@@ -1464,7 +1472,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                         </div>
                         <div>
                           <span className="block">{t("pending.colSize")}</span>
-                          <span className="font-[var(--font-code)] text-foreground">
+                          <span className="font-[family-name:var(--font-code)] text-foreground">
                             {item.releaseSizeBytes == null
                               ? "—"
                               : formatBytes(item.releaseSizeBytes)}

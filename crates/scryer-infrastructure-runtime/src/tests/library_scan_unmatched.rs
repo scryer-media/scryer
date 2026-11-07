@@ -146,6 +146,8 @@ async fn library_scan_unmatched_upsert_heals_legacy_id_on_library_path_conflict(
         .expect("db should initialize");
     let library_scan_unmatched = library_scan_unmatched_store(&services);
 
+    // Reproduces the legacy SHA-256 row ids a migration has to recognise.
+    #[allow(clippy::disallowed_methods)]
     fn unmatched_id(input: &str) -> String {
         let hash = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, input.as_bytes());
         let hex = hash

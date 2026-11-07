@@ -868,6 +868,8 @@ fn pq_registration_proof_message(
     .into_bytes()
 }
 
+// SMG enrollment fixes the bootstrap MAC as HMAC-SHA256 over a SHA-256 secret hash.
+#[allow(clippy::disallowed_methods)]
 fn sign_bootstrap_mac(registration_secret: &str, message: &[u8]) -> String {
     let secret_hash = sha256_bytes(registration_secret.trim().as_bytes());
     let key = hmac::Key::new(hmac::HMAC_SHA256, &secret_hash);
@@ -1081,6 +1083,8 @@ fn parse_string_json(raw: &str) -> Option<String> {
     }
 }
 
+// SMG enrollment fixes the bootstrap MAC as HMAC-SHA256 over a SHA-256 secret hash.
+#[allow(clippy::disallowed_methods)]
 fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     let digest = digest::digest(&digest::SHA256, data);
     let mut out = [0u8; 32];

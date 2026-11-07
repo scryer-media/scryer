@@ -339,6 +339,34 @@ impl ApplicationMigrator {
         Ok(())
     }
 
+    /// The plugin component compatibility pass (0014): journal, repair and
+    /// blockers, with no provider reload. Boot loads the runtime plugins once,
+    /// right after this, so they pick up its repairs and blockers.
+    ///
+    /// Runs on every boot, outside the applied-ledger check: a restored
+    /// catalog can introduce another legacy artifact after global completion,
+    /// and two builds can share a version while carrying different host
+    /// capabilities.
+    pub(crate) async fn run_plugin_component_compatibility(
+        &mut self,
+        app: &AppUseCase,
+    ) -> Result<(), String> {
+        let datastore = self.ledger.datastore.clone();
+        let store = DatastoreCustomizationStore::new(datastore.clone());
+        let spec = *MIGRATIONS
+            .iter()
+            .find(|spec| spec.id == super::_0014_plugin_components_020::ID)
+            .unwrap();
+        let started = Instant::now();
+        if super::_0014_plugin_components_020::migrate(app, &datastore, &store).await? {
+            self.record_success(spec, started).await?;
+        }
+        Ok(())
+    }
+
+    /// Application-ready migrations. They run after the boot load of runtime
+    /// plugins, so a migration that inspects a provider sees the plugins the
+    /// operator has installed.
     pub(crate) async fn run_application_ready(
         &mut self,
         app: &AppUseCase,
@@ -347,19 +375,8 @@ impl ApplicationMigrator {
         current_version: &str,
     ) -> Result<(), String> {
         let datastore = self.ledger.datastore.clone();
-        let store = DatastoreCustomizationStore::new(datastore.clone());
         if let Err(error) = app.resume_pending_title_tag_renames().await {
             tracing::warn!(error = %error, "title tag rename recovery remains pending; retry the tag update after correcting the repository failure");
-        }
-        let spec = *MIGRATIONS
-            .iter()
-            .find(|spec| spec.id == super::_0014_plugin_components_020::ID)
-            .unwrap();
-        // Inspect per-installation progress even after global completion: a
-        // restored catalog can introduce another legacy artifact later.
-        let started = Instant::now();
-        if super::_0014_plugin_components_020::migrate(app, &datastore, &store).await? {
-            self.record_success(spec, started).await?;
         }
         for spec in MIGRATIONS
             .iter()

@@ -464,3 +464,79 @@ test("behavior helpers require the expected broad code and reason together", () 
     "This sentence was reworded",
   );
 });
+
+test("folder conflict refusals use stable reasons when server sentences change", () => {
+  for (const reason of [
+    "LOCATION_CONFLICT_PLAN_CHANGED",
+    "LOCATION_CONFLICT_PERMANENT_CONFIRMATION_REQUIRED",
+    "LOCATION_CONFLICT_FILE_CHANGED",
+  ]) {
+    const translate = (key: string) => `translated:${key}`;
+    assert.equal(
+      userFacingGraphQlErrorMessage(
+        coded(reason, "VALIDATION_ERROR", "changed sentence"),
+        "fallback",
+        translate,
+      ),
+      `translated:error.reason.${reason}`,
+    );
+    assert.equal(
+      hasGraphQlErrorReason(coded(reason), reason, "VALIDATION_ERROR"),
+      true,
+    );
+    assert.equal(
+      hasGraphQlErrorReason(
+        coded(reason, "INTERNAL_ERROR"),
+        reason,
+        "VALIDATION_ERROR",
+      ),
+      false,
+    );
+  }
+});
+
+test("media review conditions translate in every supported language without parsing prose", async () => {
+  const reasons = [
+    "MEDIA_UNVERIFIED_REPLACEMENT",
+    "MEDIA_REFERENCES_REQUIRE_REVIEW",
+    "MEDIA_PROBE_IO_FAILED",
+    "MEDIA_PROBE_MALFORMED",
+    "MEDIA_PROBE_ENCRYPTED",
+  ];
+  for (const language of [
+    "eng",
+    "fra",
+    "deu",
+    "spa",
+    "ita",
+    "por",
+    "kor",
+    "zho",
+    "zh-HK",
+    "zh-TW",
+    "jpn",
+    "rus",
+    "nld",
+    "ces",
+  ]) {
+    await loadLocaleDictionary(language);
+    for (const reason of reasons) {
+      const key = `error.reason.${reason}`;
+      const expected = t(key, language);
+      assert.notEqual(expected, key);
+      assert.equal(
+        userFacingGraphQlErrorMessage(coded(reason), "Failed", (key) =>
+          t(key, language),
+        ),
+        expected,
+      );
+      assert.equal(
+        userFacingGraphQlErrorMessage(
+          coded(reason, "REPOSITORY_ERROR"),
+          "Failed",
+        ),
+        "This sentence was reworded",
+      );
+    }
+  }
+});

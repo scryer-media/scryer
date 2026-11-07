@@ -3,9 +3,19 @@
 
 use serde::{Deserialize, Serialize};
 mod audio;
-pub use audio::{audio_codec_rank_for_release_label, normalize_audio_codec_for_release};
+pub use audio::{
+    audio_codec_rank_for_release_label, normalize_audio_codec_for_release,
+    primary_audio_stream_index,
+};
+pub mod formats;
 
-pub const ANALYSIS_REVISION: u32 = 1;
+/// Bump whenever a stored analysis summary would come out differently, so the
+/// background refresh re-extracts rows written by an older analyzer.
+pub const ANALYSIS_REVISION: u32 = AUTHORED_PRIMARY_AUDIO_REVISION;
+
+/// The first revision whose primary audio summary follows the authored default
+/// track rather than the highest channel count or codec rank.
+const AUTHORED_PRIMARY_AUDIO_REVISION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -390,6 +400,18 @@ impl AnalysisDetails {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analyses_from_before_authored_primary_audio_are_refreshed() {
+        // Rows stored at revision 1 picked primary audio by channels and codec.
+        let stored_before_policy = 1;
+        assert!(stored_before_policy < ANALYSIS_REVISION);
+        const { assert!(ANALYSIS_REVISION >= AUTHORED_PRIMARY_AUDIO_REVISION) };
+        assert_eq!(
+            primary_audio_stream_index([(false, false, None), (true, false, None)]),
+            Some(1)
+        );
+    }
 
     #[test]
     fn stereo_boolean_uses_video_metadata_and_ignores_audio() {

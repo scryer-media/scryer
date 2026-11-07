@@ -403,6 +403,8 @@ impl AuthlessWebClientProofState {
         )
     }
 
+    // HMAC-SHA256 authless web-client signing is a documented signing contract; see helpers.rs.
+    #[allow(clippy::disallowed_methods)]
     fn sign(&self, nonce: &str, expires_at: u64) -> String {
         let key = hmac::Key::new(hmac::HMAC_SHA256, &self.secret);
         let message = format!("scryer-authless-web-client:v1:{nonce}:{expires_at}");
@@ -4296,6 +4298,8 @@ mod tests {
                 public_url: Some("https://media.home/scryer/".into()),
                 reset_public_url: false,
                 acknowledge_passkey_impact: false,
+                bind_host: None,
+                reset_bind_host: false,
             }).await.expect("save public URL");
             assert_eq!(settings.public_url.effective.as_deref(), Some("https://media.home/scryer"));
             let approved = origin_policy.request_context().approved_origins().await.to_vec();

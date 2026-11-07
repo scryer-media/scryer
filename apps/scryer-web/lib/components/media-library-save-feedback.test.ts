@@ -46,15 +46,13 @@ for (const [handler, nextHandler, statusKey] of [
 }
 
 test("Save & Scan uses the shared library save handler once before starting the scan", () => {
-  const start = panel.indexOf(
-    "  const handleSaveAndScanLibrary = async () => {",
-  );
-  const end = panel.indexOf("  const handleDeleteLibrary", start);
-  assert.ok(start >= 0 && end > start);
+  const start = panel.indexOf("const handleSaveAndScanLibrary = async (");
+  const end = panel.indexOf("const handleDeleteLibrary", start);
+  assert.ok(start >= 0 && end > start, "Save & Scan handler is present");
   const body = panel.slice(start, end);
-  assert.equal(body.split("await handleSaveLibrary()").length - 1, 1);
+  assert.equal(body.split("await handleSaveLibrary(").length - 1, 1);
   assert.ok(
-    body.indexOf("await handleSaveLibrary()") <
+    body.indexOf("await handleSaveLibrary(") <
       body.indexOf("onScan(libraryId)"),
   );
   assert.doesNotMatch(body, /toast\.success\(/);

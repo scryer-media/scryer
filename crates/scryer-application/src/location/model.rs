@@ -13,6 +13,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum LocationOperationType {
+    /// Consolidate an anonymous duplicate movie folder into its catalog owner.
+    FolderConsolidation,
+    /// Keep the best movie and explicitly dispose of inferior duplicates.
+    FolderKeepOne,
     /// Correct which folder a title owns; never touches file content (US1).
     FolderReassignment,
     /// Recover invalid ownership without disposing of original files.
@@ -30,6 +34,8 @@ pub enum LocationOperationType {
 impl LocationOperationType {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::FolderConsolidation => "folder_consolidation",
+            Self::FolderKeepOne => "folder_keep_one",
             Self::FolderReassignment => "folder_reassignment",
             Self::TitleFolderRecovery => "title_folder_recovery",
             Self::RootMove => "root_move",
@@ -43,6 +49,8 @@ impl LocationOperationType {
     /// type cannot be read must not be run as some other type.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim() {
+            "folder_consolidation" => Some(Self::FolderConsolidation),
+            "folder_keep_one" => Some(Self::FolderKeepOne),
             "folder_reassignment" => Some(Self::FolderReassignment),
             "title_folder_recovery" => Some(Self::TitleFolderRecovery),
             "root_move" => Some(Self::RootMove),
@@ -654,11 +662,10 @@ mod tests {
     #[test]
     fn verification_depth_defaults_to_quick_and_round_trips() {
         assert_eq!(VerificationDepth::default(), VerificationDepth::Quick);
-        // The import-copy default never reaches location operations, which
-        // relocate the only copy and always plan full.
+        // Location plans share the quick default; full remains a setting.
         assert_eq!(
             crate::location::operations::LOCATION_OPERATION_VERIFICATION_DEPTH,
-            VerificationDepth::Full
+            VerificationDepth::Quick
         );
         for depth in [VerificationDepth::Full, VerificationDepth::Quick] {
             assert_eq!(VerificationDepth::from_setting(depth.as_str()), Ok(depth));

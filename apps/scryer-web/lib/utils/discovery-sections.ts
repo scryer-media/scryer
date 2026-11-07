@@ -8,6 +8,12 @@
 //
 // This lives outside the view component so the shelf order, the merge rules, and
 // the legacy-payload tolerance stay unit-testable.
+//
+// The order lists themselves live in lib/contracts/discovery-section-order.json:
+// the server reproduces this reading order to page a rail in full, and a test
+// there pins its copy to that file.
+
+import sectionOrder from "../contracts/discovery-section-order.json" with { type: "json" };
 
 // Only the fields the ordering actually inspects, so tests can use plain
 // fixtures and the view can pass its full DiscoveryHomeSection.
@@ -27,6 +33,60 @@ export function discoverySectionType(section: { sectionType: string }) {
   return section.sectionType.trim().toUpperCase();
 }
 
+// A "because you like" rail carries the allowlisted label it is named after
+// (`coming-of-age`). The allowlist itself is the server's; the keys this client
+// can translate are listed in lib/contracts/discovery-rail-labels.json.
+export function discoveryRailLabelTitleKey(labelKey: string) {
+  return `discovery.rail.becauseYouLike.${labelKey.trim()}`;
+}
+
+// The translated rail title for a server label key, or null when there is no
+// key or this client does not know it yet, so the caller keeps its fallback.
+export function discoveryRailLabelTitle(
+  labelKey: string | null | undefined,
+  t: (key: string) => string,
+): string | null {
+  if (!labelKey?.trim()) {
+    return null;
+  }
+  const key = discoveryRailLabelTitleKey(labelKey);
+  const title = t(key);
+  return title && title !== key ? title : null;
+}
+
+// A "browse by" card and the section it opens carry the same allowlisted label
+// key; the card names it with a bare noun ("Time Travel") rather than the
+// "because you like" sentence.
+export const DISCOVERY_BROWSE_SECTION_TYPES = [
+  "BROWSE_GENRE",
+  "BROWSE_THEME",
+] as const;
+const DISCOVERY_BROWSE_SECTION_TYPE_SET = new Set<string>(
+  DISCOVERY_BROWSE_SECTION_TYPES,
+);
+
+export function discoverySectionIsBrowse(section: { sectionType: string }) {
+  return DISCOVERY_BROWSE_SECTION_TYPE_SET.has(discoverySectionType(section));
+}
+
+export function discoveryBrowseLabelTitleKey(labelKey: string) {
+  return `discovery.browseBy.${labelKey.trim()}`;
+}
+
+// The translated browse noun for a server label key, or null when this client
+// does not know the key, so the caller keeps the server's English title.
+export function discoveryBrowseLabelTitle(
+  labelKey: string | null | undefined,
+  t: (key: string) => string,
+): string | null {
+  if (!labelKey?.trim()) {
+    return null;
+  }
+  const key = discoveryBrowseLabelTitleKey(labelKey);
+  const title = t(key);
+  return title && title !== key ? title : null;
+}
+
 // Mirrors the view's own item identity so merge dedupe and hero visibility agree.
 function discoveryItemKey(item: OrderableDiscoveryItem) {
   return `${item.targetKind}:${item.targetKey}`;
@@ -38,10 +98,8 @@ function discoveryItemKey(item: OrderableDiscoveryItem) {
 // the world shelf.
 export const NEW_ON_STREAMING_SECTION_TYPE = "NEW_ON_STREAMING";
 export const NEW_ON_PHYSICAL_SECTION_TYPE = "NEW_ON_PHYSICAL";
-export const PUBLIC_PROMOTION_SECTION_TYPES = [
-  NEW_ON_STREAMING_SECTION_TYPE,
-  NEW_ON_PHYSICAL_SECTION_TYPE,
-] as const;
+export const PUBLIC_PROMOTION_SECTION_TYPES: readonly string[] =
+  sectionOrder.publicPromotion;
 const PUBLIC_PROMOTION_SECTION_TYPE_SET = new Set<string>(
   PUBLIC_PROMOTION_SECTION_TYPES,
 );
@@ -64,10 +122,11 @@ export const HERO_RAIL_PREFERRED_SECTION_TYPE = "POPULAR_RIGHT_NOW";
 // titles outright rather than remove duplicates - and would strand the
 // server-chosen hero, which is usually a TRENDING_NOW member. So we fold the
 // source rail's items into its target rail instead of dropping either.
-const MERGED_SECTION_TARGETS = new Map<string, string>([
-  ["TRENDING_NOW", "POPULAR_RIGHT_NOW"],
-  ["POPULAR_WITH_ANIME_FANS", "ANIME_THIS_WEEK"],
-]);
+const MERGED_SECTION_TARGETS = new Map<string, string>(
+  sectionOrder.mergedSectionTargets.map(
+    ([source, target]) => [source, target] as [string, string],
+  ),
+);
 
 // The slot a section occupies in the world shelf. A merge source that found no
 // target still renders - in its target's slot - so content never vanishes and the
@@ -77,61 +136,64 @@ function worldShelfSlotType(section: { sectionType: string }) {
   return MERGED_SECTION_TARGETS.get(sectionType) ?? sectionType;
 }
 
-// Personalized shelf, most specific reason first. Theme/tag rails ("Because You
-// Like Isekai") outrank genre rails ("Because You Like Animation") - the same
+// The viewer's own watchlist, minus what the library has or someone already
+// asked for. The server claims these titles before any reason rail, so it leads
+// the personalized shelf.
+export const FROM_YOUR_WATCHLIST_SECTION_TYPE = "FROM_YOUR_WATCHLIST";
+
+// Personalized shelf, most specific reason first. Theme/tag rails ("Because you
+// like isekai") outrank genre rails ("Because you like fantasy") - the same
 // specificity ladder the Rust composer uses for dedupe priority, so the reading
 // order matches the order in which titles were claimed.
-const PERSONALIZED_SHELF_SECTION_ORDER = [
-  "BECAUSE_YOU_LIKE_TAG",
-  "BECAUSE_YOU_LIKE_GENRE",
-  // Weekly tops. Kept ahead of the top-rated rail so the shelf reads
-  // reason -> recency -> quality.
-  "TOP_MOVIES_THIS_WEEK",
-  "TOP_SERIES_THIS_WEEK",
-  "TOP_ANIME_THIS_WEEK",
-  // Scryer's own composer emits TOP_RATED; TOP_RATED_FOR_YOU is the gateway's
-  // name for the same idea. TOP_RATED reaches the personalized array only when at
-  // least one of its items is personalized - otherwise it arrives on the public
-  // surface, which is why it also holds a world-shelf slot below.
-  "TOP_RATED_FOR_YOU",
-  "TOP_RATED",
-];
+//
+// Weekly tops follow the reason rails and lead the top-rated rail, so the shelf
+// reads reason -> recency -> quality. Scryer's own composer emits TOP_RATED;
+// TOP_RATED_FOR_YOU is the gateway's name for the same idea. TOP_RATED reaches
+// the personalized array only when at least one of its items is personalized -
+// otherwise it arrives on the public surface, which is why it also holds a
+// world-shelf slot below.
+const PERSONALIZED_SHELF_SECTION_ORDER: readonly string[] =
+  sectionOrder.personalizedShelf;
 
 // FOR_YOU is a generic "we have no better reason" rail, so it renders only when
 // there is no library context at all to build reason-based rails from.
-const GENERIC_FOR_YOU_FALLBACK_SECTION_TYPES = new Set(["FOR_YOU"]);
+const GENERIC_FOR_YOU_FALLBACK_SECTION_TYPES = new Set<string>(
+  sectionOrder.genericForYouFallback,
+);
+
+// Rails that say nothing about the library, so they never stand in for the
+// library context FOR_YOU falls back on.
+const NON_LIBRARY_PERSONALIZED_SECTION_TYPES = new Set<string>(
+  sectionOrder.nonLibraryPersonalized,
+);
 
 // World shelf (gateway public feed) in a fixed reading order, regardless of the
 // order the gateway happened to emit. Anything added later that is not listed
 // here still renders, just after these, in feed order.
-const WORLD_SHELF_SECTION_ORDER = [
-  "POPULAR_RIGHT_NOW",
-  "POPULAR_MOVIES",
-  "POPULAR_SERIES",
-  "UPCOMING_MOVIES",
-  "UPCOMING_SERIES",
-  "TOP_RATED",
-  "EVERGREEN_POPULAR",
-  "ANIME_THIS_WEEK",
-  "ANIME_SEASON_STANDOUTS",
-  "MOST_ANTICIPATED_ANIME",
-  "UPCOMING_NEXT_SEASON",
-];
+const WORLD_SHELF_SECTION_ORDER: readonly string[] = sectionOrder.worldShelf;
 
 // Editor's Picks closes the page, always - after even unrecognised feed rails.
-const CURATED_SECTION_TYPE = "CURATED";
+const CURATED_SECTION_TYPES = new Set<string>(sectionOrder.curated);
 
 // Retired rail identities that older persisted payloads and snapshots can still
 // contain. They stay *recognised* (rather than forgotten) so a stale snapshot
 // never renders a ghost rail: medium is chip-owned, not a rail identity, and
 // BECAUSE_YOU_HAVE duplicated the title page's More Like This shelf. These are
 // the only sections whose items are allowed to disappear from the page.
-const SUPPRESSED_LEGACY_SECTION_TYPES = new Set([
-  "BECAUSE_YOU_HAVE",
-  "MOVIES_FOR_YOU",
-  "SERIES_FOR_YOU",
-  "ANIME_FOR_YOU",
-]);
+const SUPPRESSED_LEGACY_SECTION_TYPES = new Set<string>(
+  sectionOrder.suppressedLegacy,
+);
+
+// Animation is a medium, anime is a tradition, and the two must not comingle
+// inside one reason-based rail. The anime rails are narrowed to anime and the
+// general rails drop it; TRENDING_NOW and POPULAR_RIGHT_NOW merge into one
+// rail, so both halves anime-exclude identically.
+export const ANIME_ONLY_PUBLIC_SECTION_TYPES = new Set<string>(
+  sectionOrder.animeOnlyPublic,
+);
+export const ANIME_EXCLUDING_PUBLIC_SECTION_TYPES = new Set<string>(
+  sectionOrder.animeExcludingPublic,
+);
 
 function sectionIsRenderable(section: OrderableDiscoverySection) {
   return (
@@ -234,7 +296,12 @@ function orderDiscoveryHomeSectionsInternal<
       ),
   );
   const hasLibrarySections =
-    personalizedShelf.length > 0 ||
+    personalizedShelf.some(
+      (section) =>
+        !NON_LIBRARY_PERSONALIZED_SECTION_TYPES.has(
+          discoverySectionType(section),
+        ),
+    ) ||
     completeCollection !== null ||
     unknownPersonalizedSections.length > 0;
   const fallbackSections = hasLibrarySections
@@ -256,8 +323,8 @@ function orderDiscoveryHomeSectionsInternal<
       (section) => worldShelfSlotType(section) === slotType,
     ),
   );
-  const curatedSections = publicSections.filter(
-    (section) => discoverySectionType(section) === CURATED_SECTION_TYPE,
+  const curatedSections = publicSections.filter((section) =>
+    CURATED_SECTION_TYPES.has(discoverySectionType(section)),
   );
   const placedPublicSections = new Set<TSection>([
     ...publicPromotionSections,
@@ -317,7 +384,7 @@ export function orderDiscoveryHomeSectionsDetailed<
 // after cross-rail dedupe hides instead of rendering — a one-card rail reads as
 // breakage (owner incident 2026-08-05). Personalized rails and the collection
 // completer are exempt: a thin personal rail is still meaningful.
-export const MIN_PUBLIC_RAIL_ITEMS = 3;
+export const MIN_PUBLIC_RAIL_ITEMS: number = sectionOrder.minPublicRailItems;
 
 // applyCrossRailPresentation is the final stage of the reading order: Scryer —
 // not the gateway — owns which rail shows a title (owner directive 2026-08-05;

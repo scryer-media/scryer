@@ -1423,6 +1423,94 @@ fn rename_tokens_expose_dynamic_range_revision_and_stereoscopy() {
 }
 
 #[test]
+fn analysed_dolby_vision_names_its_base_layer() {
+    let title = test_movie_title("Movie");
+    let cases = [
+        // Profile 8 carries an HDR10-compatible base layer.
+        ("Movie.2024.2160p.WEB-DL-GROUP", Some(8), None, "DV HDR10"),
+        // Profile 5 has no compatible base layer and the name claims none.
+        ("Movie.2024.2160p.WEB-DL-GROUP", Some(5), Some(0), "DV"),
+        // The name supplies HDR10+ metadata the probe cannot see.
+        (
+            "Movie.2024.2160p.WEB-DL.DV.HDR10+-GROUP",
+            None,
+            None,
+            "DV HDR10+",
+        ),
+        // Profile 8.4 is HLG-compatible.
+        ("Movie.2024.2160p.WEB-DL-GROUP", Some(8), Some(4), "DV HLG"),
+        // Profile 8.2 has an SDR base layer.
+        ("Movie.2024.2160p.WEB-DL-GROUP", Some(8), Some(2), "DV"),
+    ];
+
+    for (release, dovi_profile, dovi_bl_compat_id, expected) in cases {
+        let parsed = parse_release_metadata(release);
+        let mut media_file = test_media_file(&format!("/library/{release}.mkv"));
+        media_file.video_hdr_format = Some("Dolby Vision".to_string());
+        media_file.dovi_profile = dovi_profile;
+        media_file.dovi_bl_compat_id = dovi_bl_compat_id;
+        let tokens = title_rename_tokens(
+            &title,
+            Some(RenameMediaEvidence::from_media_file(&media_file)),
+            &parsed,
+            "mkv",
+        )
+        .0;
+
+        assert_eq!(
+            tokens.get("dynamic_range").map(String::as_str),
+            Some(expected),
+            "{release} profile {dovi_profile:?} compat {dovi_bl_compat_id:?}"
+        );
+    }
+}
+
+#[test]
+fn primary_audio_rename_uses_mono_main_track_instead_of_stereo_commentary() {
+    let mut media = test_media_file("/library/Movie.2024.FLAC2.0.mkv");
+    let mut commentary = media.audio_streams[0].clone();
+    commentary.codec = Some("flac".into());
+    commentary.profile = None;
+    commentary.channels = Some(2);
+    commentary.name = Some("Audio Commentary".into());
+    let mut main = commentary.clone();
+    main.codec = Some("aac".into());
+    main.channels = Some(1);
+    main.name = Some("Original Mono".into());
+    media.audio_streams = vec![commentary, main];
+    media.audio_channels = Some(2); // Older cached summary must not override track evidence.
+    let parsed = parse_release_metadata("Movie.2024.FLAC2.0");
+    let resolved =
+        resolve_rename_common_metadata(Some(&media), &parsed, "Movie", Some("2024"), "mkv");
+    assert_eq!(resolved.common.audio_channels, "1.0");
+    assert_eq!(resolved.common.audio_codec, "AAC");
+
+    media.audio_streams[1].channels = None;
+    media.audio_channels_parsed = Some("2.0".into());
+    let resolved =
+        resolve_rename_common_metadata(Some(&media), &parsed, "Movie", Some("2024"), "mkv");
+    assert_eq!(resolved.common.audio_channels, "");
+    assert_eq!(resolved.common.audio_codec, "AAC");
+
+    media.audio_streams[1].channels = Some(1);
+    media.audio_streams[1].codec = None;
+    media.audio_codec_parsed = Some("FLAC".into());
+    let resolved =
+        resolve_rename_common_metadata(Some(&media), &parsed, "Movie", Some("2024"), "mkv");
+    assert_eq!(resolved.common.audio_channels, "1.0");
+    assert_eq!(resolved.common.audio_codec, "");
+
+    media.audio_streams.clear();
+    media.audio_codec = None;
+    media.audio_profile = None;
+    media.audio_channels = None;
+    let resolved =
+        resolve_rename_common_metadata(Some(&media), &parsed, "Movie", Some("2024"), "mkv");
+    assert_eq!(resolved.common.audio_channels, "2.0");
+    assert_eq!(resolved.common.audio_codec, "FLAC");
+}
+
+#[test]
 fn resolve_rename_common_metadata_prefers_analysis_over_parsed_metadata() {
     let media_file = test_media_file("/library/Movie.2024.720p.WEB-DL.AAC2.0.H.264-Parsed.mkv");
     let parsed = parse_release_metadata("Movie.2024.720p.WEB-DL.AAC2.0.H.264-Parsed");
@@ -1532,6 +1620,7 @@ fn media_file_recorded_from_analysis(
     media_file.video_height = analysis.video_height;
     media_file.video_hdr_format = analysis.video_hdr_format.clone();
     media_file.dovi_profile = analysis.dovi_profile;
+    media_file.dovi_bl_compat_id = analysis.dovi_bl_compat_id;
     media_file.audio_codec = analysis.audio_codec.clone();
     media_file.audio_profile = analysis.audio_profile.clone();
     media_file.audio_channels = analysis.audio_channels;

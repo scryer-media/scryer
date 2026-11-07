@@ -1,4 +1,5 @@
 import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
+import { useCanViewTitleInternals } from "@/lib/hooks/use-title-overview-access";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -90,9 +91,15 @@ const EMPTY_ITEMS: DownloadQueueItem[] = [];
  */
 export function useTitleDownloadFeedback({
   titleId,
-  hasDownloadClients,
+  libraryId,
+  hasDownloadClients: configuredDownloadClients,
 }: {
   titleId: string | null;
+  /**
+   * The title's library, `null` until the title is loaded. Download activity
+   * is privileged, so a caller who can only view the library gets none.
+   */
+  libraryId: string | null | undefined;
   /** `null` while that is still being checked. */
   hasDownloadClients: boolean | null;
 }): {
@@ -103,6 +110,14 @@ export function useTitleDownloadFeedback({
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
+  const canViewInternals = useCanViewTitleInternals(libraryId);
+  // Without privileged access the title behaves as if no client were set up:
+  // no queue reads, no subscription, and no error for the viewer.
+  const hasDownloadClients = !libraryId
+    ? null
+    : canViewInternals
+      ? configuredDownloadClients
+      : false;
   const { queueTitleOverviewDownloadFeedbackRefresh } = useReactiveRefresh();
   const [state, setState] = React.useState<FeedbackState | null>(null);
   const currentRef = React.useRef({ titleId, hasDownloadClients });

@@ -149,3 +149,47 @@ export function applyRefreshedCatalogTitle(
   }
   return upsertCatalogTitleRecord(titles, title, filters);
 }
+
+/**
+ * Fold an id-scoped refetch into the loaded catalog list.
+ *
+ * `found` is what the server returned for `requestedIds` under the list's own
+ * scope and filters, so it settles membership exactly: a found title is merged
+ * in place (or inserted when `insertMissing`, for a title the caller knows is
+ * new), and a requested title the server left out no longer belongs in the
+ * list. Rows that were not requested are never touched.
+ */
+export function applyCatalogTitlesById(
+  titles: TitleRecord[],
+  requestedIds: readonly string[],
+  found: readonly TitleRecord[],
+  insertMissing: boolean,
+): TitleRecord[] {
+  const requested = new Set(requestedIds);
+  const foundById = new Map(
+    found
+      .filter((title) => requested.has(title.id))
+      .map((title) => [title.id, title]),
+  );
+  let changed = false;
+  const next: TitleRecord[] = [];
+  for (const title of titles) {
+    if (!requested.has(title.id)) {
+      next.push(title);
+      continue;
+    }
+    const refreshed = foundById.get(title.id);
+    changed = true;
+    if (refreshed) {
+      next.push(mergePreferLoadedImageFields(title, refreshed));
+      foundById.delete(title.id);
+    }
+  }
+  if (insertMissing) {
+    for (const title of foundById.values()) {
+      next.push(title);
+      changed = true;
+    }
+  }
+  return changed ? next : titles;
+}

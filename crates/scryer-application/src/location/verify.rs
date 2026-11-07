@@ -207,18 +207,20 @@ pub const PARTIAL_COPY_SUFFIX: &str = ".scryer-partial";
 /// the staging name stays deterministic and two long names that share a
 /// prefix still stage apart.
 pub fn partial_destination_path(destination: &Path) -> PathBuf {
-    let name = destination
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let name = destination.file_name().unwrap_or_default();
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-    if name.len() + PARTIAL_COPY_SUFFIX.len() <= FILE_NAME_MAX_BYTES {
-        return parent.join(format!("{name}{PARTIAL_COPY_SUFFIX}"));
+    if name.as_encoded_bytes().len() + PARTIAL_COPY_SUFFIX.len() <= FILE_NAME_MAX_BYTES {
+        let mut partial = name.to_os_string();
+        partial.push(PARTIAL_COPY_SUFFIX);
+        return parent.join(partial);
     }
-    let hash = blake3::hash(name.as_bytes()).to_hex();
+    let hash = blake3::hash(name.as_encoded_bytes()).to_hex();
     let hash = &hash.as_str()[..16];
+    let Some(name) = name.to_str() else {
+        return parent.join(format!("partial-{hash}{PARTIAL_COPY_SUFFIX}"));
+    };
     let kept = crate::library::rename::truncate_utf8_bytes(
-        &name,
+        name,
         FILE_NAME_MAX_BYTES - PARTIAL_COPY_SUFFIX.len() - hash.len() - 1,
     );
     parent.join(format!("{kept}-{hash}{PARTIAL_COPY_SUFFIX}"))
@@ -624,18 +626,27 @@ impl VerifiedCopier {
             let partial = partial.clone();
             let progress = progress.clone();
             spawn_verify_blocking(move || {
-                copy_with_streamed_hashes(&source, &partial, DestinationClaim::ClaimHere, &progress)
+                Ok(copy_claiming_destination(
+                    &source,
+                    &partial,
+                    DestinationClaim::ClaimHere,
+                    &progress,
+                ))
             })
-            .await?
+            .await??
         };
         let hashes = match hashes {
             Ok(hashes) => hashes,
-            Err(error) => {
-                // The source is untouched, so the incomplete partial is worth
-                // nothing to anyone; leaving it would only confuse the next
-                // attempt's stat.
-                remove_partial_best_effort(&partial).await;
-                return Err(error);
+            Err(failure) => {
+                // The source is untouched, so an incomplete partial this
+                // attempt created is worth nothing to anyone. A partial it
+                // never claimed — one that appeared after the free check, so
+                // the exclusive create failed — belongs to someone else and
+                // stays where it is.
+                if failure.claimed {
+                    remove_partial_best_effort(&partial).await;
+                }
+                return Err(failure.error);
             }
         };
 
@@ -876,15 +887,52 @@ fn copy_with_streamed_hashes(
     claim: DestinationClaim,
     progress: &CopyProgress,
 ) -> AppResult<StreamedContentHashes> {
-    let mut input = File::open(source).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open copy source: {}: {error}",
-            source.display()
-        ))
-    })?;
+    copy_claiming_destination(source, destination, claim, progress).map_err(|failure| failure.error)
+}
 
-    let mut output = open_destination(destination, claim)?;
+/// A failed copy, and whether the destination file was opened by it — the
+/// only case in which this attempt may treat what sits there as its own.
+#[derive(Debug)]
+struct CopyFailure {
+    error: AppError,
+    claimed: bool,
+}
 
+fn copy_claiming_destination(
+    source: &Path,
+    destination: &Path,
+    claim: DestinationClaim,
+    progress: &CopyProgress,
+) -> Result<StreamedContentHashes, CopyFailure> {
+    let unclaimed = |error| CopyFailure {
+        error,
+        claimed: false,
+    };
+    let mut input = File::open(source)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open copy source: {}: {error}",
+                source.display()
+            ))
+        })
+        .map_err(unclaimed)?;
+
+    let output = open_destination(destination, claim).map_err(unclaimed)?;
+    write_claimed_destination(source, destination, &mut input, output, progress).map_err(|error| {
+        CopyFailure {
+            error,
+            claimed: true,
+        }
+    })
+}
+
+fn write_claimed_destination(
+    source: &Path,
+    destination: &Path,
+    input: &mut File,
+    mut output: File,
+    progress: &CopyProgress,
+) -> AppResult<StreamedContentHashes> {
     let mut hasher = StreamedContentHasher::new();
     let mut buffer = vec![0u8; COPY_CHUNK_BYTES];
     loop {
@@ -1300,6 +1348,47 @@ fn nearest_existing_ancestor(path: &Path) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A partial that appeared after the free check makes the exclusive create
+    /// fail; that file was never this attempt's, so the failure reports it
+    /// unclaimed and the caller leaves it in place.
+    #[test]
+    fn a_claim_lost_to_an_existing_partial_is_not_this_attempts_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.mkv");
+        let partial = temp.path().join("dest.mkv.partial");
+        std::fs::write(&source, b"incoming").unwrap();
+        std::fs::write(&partial, b"someone else's").unwrap();
+        let failure = copy_claiming_destination(
+            &source,
+            &partial,
+            DestinationClaim::ClaimHere,
+            &CopyProgress::none(),
+        )
+        .expect_err("the exclusive create fails");
+        assert!(!failure.claimed);
+        assert_eq!(std::fs::read(&partial).unwrap(), b"someone else's");
+    }
+
+    /// A failure after this attempt created the file reports it claimed, so
+    /// the incomplete partial is cleared.
+    #[cfg(unix)]
+    #[test]
+    fn a_failure_after_the_claim_is_this_attempts_file() {
+        let temp = tempfile::tempdir().unwrap();
+        // Opening a directory succeeds on unix; reading it fails after the claim.
+        let source = temp.path().join("source-dir");
+        std::fs::create_dir(&source).unwrap();
+        let partial = temp.path().join("dest.mkv.partial");
+        let failure = copy_claiming_destination(
+            &source,
+            &partial,
+            DestinationClaim::ClaimHere,
+            &CopyProgress::none(),
+        )
+        .expect_err("reading a directory fails");
+        assert!(failure.claimed);
+    }
 
     /// The streamed pair must match the one-shot values for the same bytes, and
     /// the CRC must be the algorithm the persisted tag claims.
@@ -2069,5 +2158,34 @@ mod long_name_tests {
         assert_eq!(partial.parent(), first.parent());
         assert_eq!(partial, partial_destination_path(&first));
         assert_ne!(partial, partial_destination_path(&second));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn native_partial_names_preserve_identity_for_short_and_long_opaque_names() {
+        use crate::stored_paths::stored_path_to_path_buf;
+        let (platform, markers) = if cfg!(windows) {
+            ("w", ["%uD800", "%uD801"])
+        } else {
+            ("u", ["%FF", "%FE"])
+        };
+        for prefix in ["movie".to_string(), "m".repeat(240)] {
+            let [first, second] = markers.map(|marker| {
+                stored_path_to_path_buf(&format!(
+                    "scryer-path-v1:{platform}:/library/{prefix}{marker}.mkv"
+                ))
+            });
+            assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+            let partial = partial_destination_path(&first);
+            assert_ne!(partial, partial_destination_path(&second));
+            assert_eq!(partial, partial_destination_path(&first));
+            assert_eq!(partial.parent(), first.parent());
+            assert!(partial.file_name().unwrap().as_encoded_bytes().len() <= FILE_NAME_MAX_BYTES);
+            if prefix.len() < 240 {
+                let mut expected = first.as_os_str().to_os_string();
+                expected.push(PARTIAL_COPY_SUFFIX);
+                assert_eq!(partial, PathBuf::from(expected));
+            }
+        }
     }
 }

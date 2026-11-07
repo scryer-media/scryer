@@ -571,8 +571,14 @@ fn scryer_goal_is_met(
     observation: &TorrentSeedingObservation,
     now: DateTime<Utc>,
 ) -> bool {
+    // An explicit zero ratio has no seeding obligation, even on a client
+    // without ratio telemetry. Unset still defers to the client's limits.
+    if goals.seed_goal_ratio == Some(0.0) {
+        return true;
+    }
     if let (Some(goal), Some(observed)) = (goals.seed_goal_ratio, observation.seed_ratio)
         && goal.is_finite()
+        && goal > 0.0
         && observed.is_finite()
         && observed >= goal
     {
@@ -920,6 +926,52 @@ mod tests {
         }));
         assert_eq!(decision.outcome, SeedingGateOutcome::Hold);
         assert_eq!(decision.reason, "client_reports_unmet_seed_limit");
+    }
+
+    #[test]
+    fn an_explicit_zero_ratio_releases_without_telemetry_but_preserves_safety_rails() {
+        let mut input = SeedingGateInput {
+            goals: Some(goals(Some(0.0), Some(3_600))),
+            observation: Some(TorrentSeedingObservation {
+                can_remove: Some(false),
+                can_move_files: Some(false),
+                is_private: Some(true),
+                ..TorrentSeedingObservation::default()
+            }),
+            ..SeedingGateInput::default()
+        };
+        let released = evaluate_seeding_gate(&input);
+        assert_eq!(released.reason, reason::PROFILE_GOAL_MET);
+        assert_eq!(
+            released.outcome,
+            SeedingGateOutcome::Released {
+                action: SeedGoalMetAction::RemoveEntry
+            }
+        );
+        assert_eq!(
+            released.import_mode(ImportMode::Move),
+            ImportMode::HardlinkOrCopy
+        );
+
+        input.goals.as_mut().expect("goals").never_remove = true;
+        assert_eq!(
+            evaluate_seeding_gate(&input).outcome,
+            SeedingGateOutcome::Hold
+        );
+        input.goals = Some(goals(None, None));
+        assert_eq!(
+            evaluate_seeding_gate(&input).reason,
+            reason::PRIVATE_WITHOUT_GOALS
+        );
+
+        input.goals = Some(goals(Some(0.0), None));
+        input.client_type = TORRENT_BLACKHOLE_CLIENT_TYPE.to_string();
+        assert_eq!(
+            evaluate_seeding_gate(&input).outcome,
+            SeedingGateOutcome::Released {
+                action: SeedGoalMetAction::Keep
+            }
+        );
     }
 
     #[test]

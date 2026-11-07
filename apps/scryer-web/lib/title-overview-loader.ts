@@ -89,6 +89,36 @@ function isTitleOverviewPartialOverviewError(
   });
 }
 
+/** Root fields of the side-panel overview the server keeps for privileged callers. */
+const PRIVILEGED_OVERVIEW_ALIASES = new Set([
+  "titleAcquisitionDiagnostics",
+  "titleHistory",
+  "titleReleaseBlocklist",
+]);
+
+/** Refusal code the server raises when the caller lacks privileged library access. */
+export const LIBRARY_ACCESS_DENIED_REASON =
+  "AUTHORIZATION_LIBRARY_ACCESS_DENIED";
+
+/**
+ * Whether every error is the privileged-access refusal on a privileged field.
+ * The refused fields are non-null, so the whole response comes back empty and
+ * the caller asks again without them.
+ */
+function isPrivilegedOverviewRefusal(error: CombinedError): boolean {
+  if (error.networkError || error.graphQLErrors.length === 0) {
+    return false;
+  }
+  return error.graphQLErrors.every((graphQlError) => {
+    const alias = graphQlErrorAlias(graphQlError);
+    return (
+      alias !== null &&
+      PRIVILEGED_OVERVIEW_ALIASES.has(alias) &&
+      graphQlError.extensions?.reason === LIBRARY_ACCESS_DENIED_REASON
+    );
+  });
+}
+
 export async function fetchTitleSidePanelOverviewSnapshot<
   TTitle,
   TDiagnostics = unknown,
@@ -100,6 +130,7 @@ export async function fetchTitleSidePanelOverviewSnapshot<
   titleId: string,
   blocklistLimit: number,
   queryDocument: string,
+  includePrivileged = true,
 ): Promise<
   TitleSidePanelOverviewSnapshot<
     TTitle,
@@ -109,13 +140,25 @@ export async function fetchTitleSidePanelOverviewSnapshot<
     TSubtitle
   >
 > {
-  const { data, error } = await client
+  let { data, error } = await client
     .query(
       queryDocument,
-      { id: titleId, blocklistLimit },
+      { id: titleId, blocklistLimit, includePrivileged },
       { requestPolicy: "network-only" },
     )
     .toPromise();
+
+  // The title's library is not known before its first read, so a caller with
+  // privileged access somewhere may ask about a title it can only view.
+  if (includePrivileged && error && isPrivilegedOverviewRefusal(error)) {
+    ({ data, error } = await client
+      .query(
+        queryDocument,
+        { id: titleId, blocklistLimit, includePrivileged: false },
+        { requestPolicy: "network-only" },
+      )
+      .toPromise());
+  }
 
   if (error && !isTitleOverviewPartialOverviewError(error, data)) {
     throw error;

@@ -10,6 +10,7 @@
 }
 
 @theme inline {
+  --font-mono: var(--font-code);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -448,7 +449,7 @@ body {
   z-index: 40;
 }
 
-@media (min-width: 981px) {
+@media (min-width: 1280px) {
   [data-slot="root-shell-frame"] {
     height: calc(100dvh - var(--root-shell-top-offset, 0px));
     max-height: calc(100dvh - var(--root-shell-top-offset, 0px));
@@ -1062,37 +1063,6 @@ body {
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
-* {
-  font-family:
-    var(--font-inter),
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    sans-serif;
-}
-
-[data-code-font],
-[data-code-font] * {
-  font-family:
-    var(--font-code), ui-monospace, "SFMono-Regular", "Cascadia Code",
-    "Source Code Pro", Menlo, Consolas, monospace;
-}
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  font-family:
-    var(--font-space-grotesk),
-    var(--font-inter),
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    sans-serif;
-}
-
 .placeholder-heading-font::placeholder,
 .placeholder-heading-font::-webkit-input-placeholder,
 .placeholder-heading-font::-moz-placeholder,
@@ -1113,6 +1083,36 @@ h6 {
   }
   body {
     @apply bg-background text-foreground;
+    font-family:
+      var(--font-inter),
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      sans-serif;
+  }
+
+  /* Layered and inherited, so font utilities such as font-mono can override
+     them. Unlayered font-family rules would beat every utility. */
+  [data-code-font],
+  [data-code-font] * {
+    font-family:
+      var(--font-code), ui-monospace, "SFMono-Regular", "Cascadia Code",
+      "Source Code Pro", Menlo, Consolas, monospace;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family:
+      var(--font-space-grotesk),
+      var(--font-inter),
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      sans-serif;
   }
 }
 
@@ -1135,6 +1135,21 @@ h6 {
 .cv-auto-poster {
   content-visibility: auto;
   contain-intrinsic-size: auto 260px; /* minimum 150px wide poster card at 2:3 */
+}
+
+/* The fixed mobile header owns the top of the viewport, so shell notices start
+   below it and take over the space its spacer would otherwise reserve. */
+@media (max-width: 1279px) {
+  [data-slot="root-shell-notice"]:not(
+    [data-slot="root-shell-notice"] ~ [data-slot="root-shell-notice"]
+  ) {
+    margin-top: var(--root-header-height, 0px);
+  }
+  [data-slot="root-shell-notice"]
+    ~ [data-slot="root-shell-frame"]
+    [data-slot="root-header-spacer"] {
+    display: none;
+  }
 }
 
 /* PWA safe area utilities for standalone mode on notched devices */

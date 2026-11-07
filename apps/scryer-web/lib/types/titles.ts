@@ -257,7 +257,7 @@ export type TitleRecord = {
   movieAvailability?: MovieAvailabilityRecord | null;
   qualityProfileId?: string | null;
   rootFolderId?: string;
-  rootFolderPath?: string;
+  rootFolderPath?: string | null;
   /** Whether renaming is turned on for this title's media type. */
   renameEnabled?: boolean;
   monitorType?: string | null;
@@ -297,6 +297,8 @@ export type LibraryRootRecord = {
   id: string;
   path: string;
   isDefault: boolean;
+  /** Titles currently under this root; read only where a query selects it. */
+  titleCount?: number;
 };
 
 export type LibraryRecord = {
@@ -307,6 +309,8 @@ export type LibraryRecord = {
   isDefault: boolean;
   isBootstrapDefaultRootSet?: boolean;
   roots: LibraryRootRecord[];
+  /** Titles the last `updateLibrary` took out of the catalog with a dropped root. */
+  removedTitleCount?: number;
   qualityProfileId?: string | null;
   requestQualityProfileIds?: string[];
   requestQualityProfileDefaultId?: string | null;

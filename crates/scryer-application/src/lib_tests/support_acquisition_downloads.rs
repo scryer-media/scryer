@@ -2518,6 +2518,12 @@ pub(super) struct StubDownloadClient {
     pub(super) delete_requires_absent_paths: Arc<Mutex<Vec<std::path::PathBuf>>>,
     pub(super) recent_completed_downloads: Arc<Mutex<Option<Vec<CompletedDownload>>>>,
     pub(super) deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
+    pub(super) remove_queue_item_on_delete: bool,
+    /// With `remove_queue_item_on_delete`, keep a cancelled job listed under
+    /// its id as a failed history row, the way Weaver archives it.
+    pub(super) keep_cancelled_in_history: bool,
+    /// Item ids whose delete is refused, leaving other deletes to succeed.
+    pub(super) delete_refused_ids: Arc<Mutex<HashSet<String>>>,
     pub(super) deleted_requests: DeletedDownloadRequests,
     pub(super) delete_error: Arc<Mutex<Option<String>>>,
     /// A typed refusal returned for every delete while set, after
@@ -2657,6 +2663,9 @@ impl StubDownloadClient {
         if let Some(error) = self.delete_app_error.lock().await.clone() {
             return Err(error);
         }
+        if self.delete_refused_ids.lock().await.contains(id) {
+            return Err(AppError::Repository(format!("synthetic refusal for {id}")));
+        }
         self.deleted_requests.lock().await.push((
             client_id.map(str::to_string),
             client_type.map(str::to_string),
@@ -2668,6 +2677,21 @@ impl StubDownloadClient {
             .lock()
             .await
             .push((id.to_string(), is_history));
+        if self.remove_queue_item_on_delete && !is_history {
+            let matches = |item: &DownloadQueueItem| {
+                item.download_client_item_id == id
+                    && client_id.is_none_or(|client| client == item.client_id)
+                    && client_type.is_none_or(|kind| kind == item.client_type)
+            };
+            let mut queue = self.queue_items.lock().await;
+            if self.keep_cancelled_in_history {
+                for item in queue.iter_mut().filter(|item| matches(item)) {
+                    item.state = DownloadQueueState::Failed;
+                }
+            } else {
+                queue.retain(|item| !matches(item));
+            }
+        }
         Ok(())
     }
 }

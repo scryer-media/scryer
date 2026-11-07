@@ -643,7 +643,7 @@ pub const MEDIA_FILE_PRIMARY_ENTRY: GuardedEntry = GuardedEntry {
 pub const LIBRARY_ROOTS_UPDATE_ENTRY: GuardedEntry = GuardedEntry {
     action: GuardedAction::RootConfiguration,
     module: "library/library.rs",
-    function: "update_library",
+    function: "update_library_with_outcome",
     constant: "LIBRARY_ROOTS_UPDATE_ENTRY",
 };
 

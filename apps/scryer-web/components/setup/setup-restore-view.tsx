@@ -464,7 +464,9 @@ export function SetupRestoreView({
                   <p
                     className={cn(
                       "break-all text-base font-semibold text-[var(--scry-ink2)]",
-                      selectedBundle ? "font-[var(--font-code)] text-sm" : null,
+                      selectedBundle
+                        ? "font-[family-name:var(--font-code)] text-sm"
+                        : null,
                     )}
                   >
                     {selectedBundle
@@ -535,7 +537,7 @@ export function SetupRestoreView({
                     ? t("settings.backupsEncrypted")
                     : t("settings.backupsPlaintext")}
                 </span>
-                <span className="rounded-full border border-[var(--scry-border2)] bg-[var(--scry-page2)] px-2.5 py-1 font-[var(--font-code)] text-xs font-medium text-[var(--scry-muted2)]">
+                <span className="rounded-full border border-[var(--scry-border2)] bg-[var(--scry-page2)] px-2.5 py-1 font-[family-name:var(--font-code)] text-xs font-medium text-[var(--scry-muted2)]">
                   {summary.formatVersion}
                 </span>
               </div>
@@ -553,7 +555,7 @@ export function SetupRestoreView({
                   <p className="text-xs uppercase tracking-wide text-[var(--scry-faint)]">
                     {t("setup.restoreSourceVersion")}
                   </p>
-                  <p className="mt-1 font-[var(--font-code)] text-sm text-[var(--scry-ink2)]">
+                  <p className="mt-1 font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]">
                     {summary.sourceScryerVersion}
                   </p>
                 </div>
@@ -561,7 +563,7 @@ export function SetupRestoreView({
                   <p className="text-xs uppercase tracking-wide text-[var(--scry-faint)]">
                     {t("setup.restoreSourceEngine")}
                   </p>
-                  <p className="mt-1 font-[var(--font-code)] text-sm text-[var(--scry-ink2)]">
+                  <p className="mt-1 font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]">
                     {summary.sourceEngine}
                   </p>
                 </div>
@@ -569,7 +571,7 @@ export function SetupRestoreView({
                   <p className="text-xs uppercase tracking-wide text-[var(--scry-faint)]">
                     {t("setup.restoreMigrationKey")}
                   </p>
-                  <p className="mt-1 font-[var(--font-code)] text-sm text-[var(--scry-ink2)]">
+                  <p className="mt-1 font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]">
                     {summary.sourceMigrationKey ?? "-"}
                   </p>
                 </div>
@@ -577,7 +579,7 @@ export function SetupRestoreView({
                   <p className="text-xs uppercase tracking-wide text-[var(--scry-faint)]">
                     {t("setup.restoreTotalRows")}
                   </p>
-                  <p className="mt-1 font-[var(--font-space-grotesk)] text-lg font-bold text-[var(--scry-ink2)]">
+                  <p className="mt-1 font-[family-name:var(--font-space-grotesk)] text-lg font-bold text-[var(--scry-ink2)]">
                     {Number(summary.totalRows).toLocaleString()}
                   </p>
                 </div>
@@ -585,7 +587,7 @@ export function SetupRestoreView({
                   <p className="text-xs uppercase tracking-wide text-[var(--scry-faint)]">
                     {t("uiText.tables")}
                   </p>
-                  <p className="mt-1 font-[var(--font-space-grotesk)] text-lg font-bold text-[var(--scry-ink2)]">
+                  <p className="mt-1 font-[family-name:var(--font-space-grotesk)] text-lg font-bold text-[var(--scry-ink2)]">
                     {rowCounts.length.toLocaleString()}
                   </p>
                 </div>
@@ -610,7 +612,7 @@ export function SetupRestoreView({
                     <TableBody>
                       {rowCounts.map((entry) => (
                         <TableRow key={entry.table}>
-                          <TableCell className="font-[var(--font-code)] text-xs text-[var(--scry-ink2)]">
+                          <TableCell className="font-[family-name:var(--font-code)] text-xs text-[var(--scry-ink2)]">
                             {entry.table}
                           </TableCell>
                           <TableCell className="text-right text-xs text-[var(--scry-muted)]">

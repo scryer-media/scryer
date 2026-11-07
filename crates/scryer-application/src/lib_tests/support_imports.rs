@@ -164,8 +164,10 @@ impl FileImporter for CopyingFileImporter {
 /// [`CopyingFileImporter`] that also reports transfer progress the way the
 /// real importer does (copying 0 → total, then finalizing), so tests can
 /// observe what an import path writes onto its import record.
+#[cfg(feature = "runtime-media-analysis")]
 pub(super) struct ProgressReportingFileImporter;
 
+#[cfg(feature = "runtime-media-analysis")]
 #[async_trait]
 impl FileImporter for ProgressReportingFileImporter {
     async fn snapshot_import_source(
@@ -261,6 +263,10 @@ pub(crate) struct MockMediaFileRepo {
     /// `store`), the way the real store changes only `file_episode_map`, so
     /// an election's losing file keeps this role.
     pub(super) title_roles: Arc<Mutex<std::collections::HashMap<String, crate::MediaFileRole>>>,
+    /// Return episode-scoped file rows with no `episode_id`, as the SQL
+    /// store projects them (`NULL AS episode_id`): the links are only in
+    /// `episode_ids`. Off by default for fixtures written before this switch.
+    pub(super) scoped_rows_without_episode_id: bool,
 }
 
 impl MockMediaFileRepo {
@@ -798,7 +804,10 @@ impl MediaFileRepository for MockMediaFileRepo {
                     .iter()
                     .any(|episode_id| requested.contains(episode_id.as_str()))
             })
-            .map(|(media_file, episode_ids, primary_episode_ids)| {
+            .map(|(mut media_file, episode_ids, primary_episode_ids)| {
+                if self.scoped_rows_without_episode_id {
+                    media_file.episode_id = None;
+                }
                 let title_role = title_roles
                     .get(&media_file.id)
                     .copied()

@@ -52,6 +52,7 @@ impl AppUseCase {
             .titles
             .update_monitored(title_id, monitored)
             .await?;
+        self.runtime.acquisition.target_cache.mark_title(title_id);
         // The monitored flag decides whether the matcher indexes this title at
         // all, so the cached matcher is stale the instant it flips.
         self.invalidate_monitored_title_matcher().await;
@@ -186,6 +187,7 @@ impl AppUseCase {
                 .shows
                 .upsert_series_movie_link(link)
                 .await?;
+            self.runtime.acquisition.target_cache.mark_title(&title.id);
             if !link.monitored
                 && let Err(err) = self
                     .services
@@ -249,6 +251,10 @@ impl AppUseCase {
                 },
             )
             .await?;
+        self.runtime
+            .acquisition
+            .target_cache
+            .mark_title(&collection.title_id);
 
         if propagate_to_episodes {
             self.services
@@ -296,6 +302,10 @@ impl AppUseCase {
                 },
             )
             .await?;
+        self.runtime
+            .acquisition
+            .target_cache
+            .mark_title(&episode.title_id);
 
         if !monitored
             && let Err(err) = self
@@ -476,6 +486,7 @@ impl AppUseCase {
                             emitted += 1;
                             self.emit_title_updated_activity(None, &title).await;
                         }
+                        self.runtime.acquisition.target_cache.mark_title(&title.id);
                         self.runtime.acquisition.acquisition_wake.notify_one();
                     }
                     if let Err(error) = result {
@@ -937,6 +948,10 @@ impl AppUseCase {
             .shows
             .upsert_series_movie_link(link)
             .await?;
+        self.runtime
+            .acquisition
+            .target_cache
+            .mark_title(&link.series_title_id);
         let mut final_title = Some(title);
 
         if monitored {
