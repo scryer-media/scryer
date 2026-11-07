@@ -6951,7 +6951,7 @@ const ru: LocaleDictionary = {
     "Для выбранного значения уже выполняется удаление медиафайла.",
   "error.reason.CATALOG_MEDIA_FILE_NOT_FOUND": "Медиафайл не найден.",
   "error.reason.CATALOG_METADATA_LANGUAGE_INVALID":
-    "Язык метаданных должен быть одним из следующих: eng, spa, fra, deu, ita, por, kor, zho или jpn.",
+    "Язык метаданных должен быть одним из следующих: eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces или rus.",
   "error.reason.CATALOG_MINIMUM_AVAILABILITY_INVALID":
     "Минимальная доступность должна иметь значение announced, in_cinemas или released.",
   "error.reason.CATALOG_MINIMUM_AVAILABILITY_ONLY_VALID_MOVIE_TITLES":
@@ -10062,7 +10062,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_MEDIA_SETTING_CHANGE_REQUIRED":
     "Необходимо изменить хотя бы одну настройку медиаконтента.",
   "error.reason.SETTINGS_METADATA_LANGUAGE_INVALID":
-    "Язык метаданных должен иметь одно из значений: eng, spa, fra, deu, ita, por, kor, zho или jpn.",
+    "Язык метаданных должен иметь одно из значений: eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces или rus.",
   "error.reason.SETTINGS_MONITOR_SPECIALS_ONLY_VALID_ANIME_LIBRARIES":
     "Monitor_specials допустим только для библиотек аниме.",
   "error.reason.SETTINGS_MOVIES_TABLE_SETTINGS_CANNOT_INCLUDE_EPISODES_COLUMN":

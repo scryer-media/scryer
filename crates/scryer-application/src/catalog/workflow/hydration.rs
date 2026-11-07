@@ -2081,7 +2081,7 @@ impl AppUseCase {
         let language = crate::normalize_metadata_language_code(language).ok_or_else(|| {
             AppError::validation_refused(
                 crate::error_reasons::catalog::METADATA_LANGUAGE_INVALID,
-                "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn"
+                "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus"
                     .to_string(),
             )
         })?;

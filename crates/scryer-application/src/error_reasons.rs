@@ -631,7 +631,7 @@ pub mod catalog {
     pub const SERIES_MOVIE_LINK_NOT_FOUND: &str = "CATALOG_SERIES_MOVIE_LINK_NOT_FOUND";
     /// Invalid snapshot JSON.
     pub const SNAPSHOT_JSON_COLUMN_INVALID: &str = "CATALOG_SNAPSHOT_JSON_COLUMN_INVALID";
-    /// Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn.
+    /// Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus.
     pub const METADATA_LANGUAGE_INVALID: &str = "CATALOG_METADATA_LANGUAGE_INVALID";
     /// At least one title field must be provided.
     pub const TITLE_FIELD_REQUIRED: &str = "CATALOG_TITLE_FIELD_REQUIRED";
@@ -3744,7 +3744,7 @@ pub mod settings {
     /// Plexmatch_write_on_import is only valid for series and anime libraries.
     pub const PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME_LIBRARIES: &str =
         "SETTINGS_PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME_LIBRARIES";
-    /// Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn.
+    /// Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus.
     pub const METADATA_LANGUAGE_INVALID: &str = "SETTINGS_METADATA_LANGUAGE_INVALID";
     /// Anime-specific settings require an anime library.
     pub const ANIME_SPECIFIC_SETTINGS_REQUIRE_ANIME_LIBRARY: &str =

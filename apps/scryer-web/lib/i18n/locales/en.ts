@@ -693,7 +693,7 @@ const en: LocaleDictionary = {
     "A media file deletion is already running for the selected value.",
   "error.reason.CATALOG_MEDIA_FILE_NOT_FOUND": "Media file was not found.",
   "error.reason.CATALOG_METADATA_LANGUAGE_INVALID":
-    "Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn.",
+    "Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus.",
   "error.reason.CATALOG_MINIMUM_AVAILABILITY_INVALID":
     "Minimum availability must be announced, in_cinemas, or released.",
   "error.reason.CATALOG_MINIMUM_AVAILABILITY_ONLY_VALID_MOVIE_TITLES":
@@ -3769,7 +3769,7 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_MEDIA_SETTING_CHANGE_REQUIRED":
     "At least one media setting change is required.",
   "error.reason.SETTINGS_METADATA_LANGUAGE_INVALID":
-    "Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn.",
+    "Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus.",
   "error.reason.SETTINGS_MONITOR_SPECIALS_ONLY_VALID_ANIME_LIBRARIES":
     "Monitor_specials is only valid for anime libraries.",
   "error.reason.SETTINGS_MOVIES_TABLE_SETTINGS_CANNOT_INCLUDE_EPISODES_COLUMN":
