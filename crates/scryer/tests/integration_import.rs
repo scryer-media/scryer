@@ -200,6 +200,14 @@ async fn configure_default_library_root(
         .await
         .expect("default library should load")
         .expect("default library should exist");
+    // A stored root is identified by its id alone, so a root that is already
+    // configured at this path keeps its id; a new path is allocated one.
+    let comparable = |path: &str| path.trim_end_matches(['/', '\\']).to_string();
+    let stored_id = library
+        .roots
+        .iter()
+        .find(|root| comparable(&root.path) == comparable(media_root))
+        .map(|root| root.id.clone());
     let updated = ctx
         .libraries
         .update(
@@ -207,7 +215,7 @@ async fn configure_default_library_root(
             library.name,
             library.slug,
             vec![LibraryRootDraft {
-                id: None,
+                id: stored_id,
                 path: media_root.to_string(),
                 is_default: true,
             }],
