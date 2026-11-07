@@ -294,11 +294,13 @@ const HOVER_FADE_ALPHA = 0.18;
 const OVERVIEW_FIT_PADDING = 1.25;
 
 // Zoom stops where the largest title fills this share of the view's height,
-// and a little past the framing of the whole graph (ratio 1).
+// and a little past the framing of the whole graph (ratio 1). Panning stops
+// once the graph's edge is this share of the view's shorter side inside it.
 const MAX_POSTER_VIEW_SHARE = 0.6;
 const MAX_ZOOM_OUT_RATIO = 1.5;
+const PAN_MARGIN_VIEW_SHARE = 0.5;
 
-function applyZoomLimits(
+function applyCameraLimits(
   sigma: Sigma<NodeAttributes, EdgeAttributes>,
   graph: LibraryGraphStore,
 ) {
@@ -309,7 +311,8 @@ function applyZoomLimits(
     if (attributes.collapsedClusterId !== undefined) return;
     largest = Math.max(largest, attributes.size);
   });
-  const height = sigma.getContainer().offsetHeight;
+  const container = sigma.getContainer();
+  const height = container.offsetHeight;
   // A title's size is its on-screen half-height at ratio 1.
   const minRatio =
     largest > 0 && height > 0
@@ -320,6 +323,9 @@ function applyZoomLimits(
       : null;
   sigma.setSetting("minCameraRatio", minRatio);
   sigma.setSetting("maxCameraRatio", MAX_ZOOM_OUT_RATIO);
+  sigma.setSetting("cameraPanBoundaries", {
+    tolerance: Math.min(container.offsetWidth, height) * PAN_MARGIN_VIEW_SHARE,
+  });
 }
 
 function restCamera(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
@@ -2055,7 +2061,7 @@ export default function LibraryGraphView({
     let latestPointer: { x: number; y: number } | null = null;
 
     sigma.on("afterRender", drawOverlay);
-    sigma.on("resize", () => applyZoomLimits(sigma, sigma.getGraph()));
+    sigma.on("resize", () => applyCameraLimits(sigma, sigma.getGraph()));
     // Ctrl-click (Cmd-click on a Mac) also opens the title's panel; a plain
     // click only focuses the graph on it.
     sigma.on("clickNode", ({ node, event }) => {
@@ -2536,7 +2542,7 @@ export default function LibraryGraphView({
     applySelection();
     applyDetailOpacity(sigma, detailOpacityRef, initialDetailOpacity);
     sigma.setGraph(graph);
-    applyZoomLimits(sigma, graph);
+    applyCameraLimits(sigma, graph);
     layoutRef.current = layout;
     const container = sigma.getContainer();
     const tick = () => {
