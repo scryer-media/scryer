@@ -1052,16 +1052,24 @@ mod tests {
     }
 
     /// A reqwest connect failure from a port nothing listens on.
+    ///
+    /// The socket stays bound, but never listens, until the request has
+    /// failed. That keeps the port reserved, so a server from a concurrent
+    /// test cannot take it and answer, while connections to it are refused.
     pub(super) async fn refused_connection_error() -> reqwest::Error {
         scryer_outbound_http::install_default_rustls_provider();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
-        let port = listener.local_addr().expect("local addr").port();
-        drop(listener);
-        reqwest::Client::new()
+        let reserved = tokio::net::TcpSocket::new_v4().expect("create a TCP socket");
+        reserved
+            .bind("127.0.0.1:0".parse().expect("loopback address"))
+            .expect("bind a free port");
+        let port = reserved.local_addr().expect("local addr").port();
+        let error = reqwest::Client::new()
             .get(format!("http://127.0.0.1:{port}/"))
             .send()
             .await
-            .expect_err("nothing listens on a released port")
+            .expect_err("a bound socket that never listens refuses connections");
+        drop(reserved);
+        error
     }
 
     pub(super) async fn refused_transport_error(label: &'static str) -> OutboundHttpError {
