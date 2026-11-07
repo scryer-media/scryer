@@ -1095,4 +1095,22 @@ test("a refetched listing with the same titles is recognised as unchanged", () =
     sameTitleRecords(previous, [title("1", "One"), withField]),
     false,
   );
+  // Backdrops arriving while artwork is fetched change nothing drawn.
+  const withBackdrop = {
+    ...title("2", "Two"),
+    backgroundUrl: "https://images.invalid/b.jpg",
+    backgroundSourceUrl: "https://images.invalid/b-source.jpg",
+  } as TitleRecord;
+  assert.equal(
+    sameTitleRecords(previous, [title("1", "One"), withBackdrop]),
+    true,
+  );
+  const withPoster = {
+    ...title("2", "Two"),
+    posterUrl: "https://images.invalid/p.jpg",
+  } as TitleRecord;
+  assert.equal(
+    sameTitleRecords(previous, [title("1", "One"), withPoster]),
+    false,
+  );
 });

@@ -151,6 +151,9 @@ const POSTER_UPGRADE_REST_MS = 150;
 /** A reload of an already drawn graph that finishes sooner shows nothing. */
 const REFRESH_INDICATOR_DELAY_MS = 600;
 const LAYOUT_STEPS_PER_FRAME = 6;
+const NO_NODE_OVERRIDES = Object.freeze({});
+const COLLAPSED_NODE = Object.freeze({ color: "rgba(0, 0, 0, 0)" });
+const HOVER_NEAR_NODE = Object.freeze({ zIndex: 1 });
 const MIN_POSTER_RADIUS_PX = 18;
 const HULL_PADDING_PX = 18;
 // How far a neighbourhood name may wander from its titles to find a spot
@@ -943,6 +946,10 @@ export default function LibraryGraphView({
     }
     return byId;
   }, [join]);
+  const currentTitlesById = React.useMemo(
+    () => new Map(currentTitles.map((title) => [title.id, title])),
+    [currentTitles],
+  );
   // Every key a title of the catalog listing is known by.
   const catalogIndex = React.useMemo(
     () => titleIndexByMatchKey(titles ?? []),
@@ -2127,17 +2134,16 @@ export default function LibraryGraphView({
         // breaks the camera's cursor anchor and forces graph reindexing.
         zoomToSizeRatioFunction: (ratio) => ratio,
       },
-      nodeReducer: (key, attributes, node) => {
-        if (node.collapsedClusterId !== undefined)
-          return { ...attributes, color: "rgba(0, 0, 0, 0)" };
+      // Sigma merges what this returns over the node's display data, so
+      // return only the overrides: copying the whole data here as well
+      // doubles the per-node cost of every full refresh.
+      nodeReducer: (key, _attributes, node) => {
+        if (node.collapsedClusterId !== undefined) return COLLAPSED_NODE;
         const focus = hoverFocusRef.current;
-        if (!focus) {
-          return attributes;
-        }
+        if (!focus) return NO_NODE_OVERRIDES;
         return focus.near.has(key)
-          ? { ...attributes, zIndex: 1 }
+          ? HOVER_NEAR_NODE
           : {
-              ...attributes,
               color: withAlpha(node.baseColor, HOVER_FADE_ALPHA),
               zIndex: 0,
             };
@@ -3446,7 +3452,7 @@ export default function LibraryGraphView({
     moreLikeThisActions.stripProps;
   // Owned nodes and discovered catalog matches open their overview instead
   // of offering Add or Request.
-  const selectedCatalogTitle = graphSelectionCatalogTitle(
+  const pickedCatalogTitle = graphSelectionCatalogTitle(
     selectedNode
       ? join?.titleBySubjectKey.get(selectedNode.subjectKey)
       : undefined,
@@ -3454,6 +3460,11 @@ export default function LibraryGraphView({
     catalogIndex,
     titles ?? [],
   );
+  // The graph keeps its listing through backdrop-only refetches; the card
+  // and the overview it opens show the title as it is now.
+  const selectedCatalogTitle = pickedCatalogTitle
+    ? (currentTitlesById.get(pickedCatalogTitle.id) ?? pickedCatalogTitle)
+    : null;
   const selectedResolved =
     selectedCatalogTitle !== null ||
     (selectedItem !== null && isLibraryItem(selectedItem, catalogIndex));

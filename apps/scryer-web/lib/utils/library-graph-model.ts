@@ -401,11 +401,33 @@ function sameData(a: unknown, b: unknown): boolean {
  * refetch builds new title objects even when nothing changed, and joining a
  * large library again re-lays out and redraws the whole graph.
  */
+// Backdrops fill in a few titles at a time while artwork is fetched, and the
+// graph never draws them; the selection card reads them from the live listing.
+const UNDRAWN_TITLE_FIELDS: ReadonlySet<string> = new Set([
+  "backgroundUrl",
+  "backgroundSourceUrl",
+]);
+
+/** Whether a refetched listing changes nothing the graph draws. */
 export function sameTitleRecords(
   previous: readonly TitleRecord[],
   next: readonly TitleRecord[],
 ) {
-  return sameData(previous, next);
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  for (let index = 0; index < previous.length; index += 1) {
+    const left = previous[index] as unknown as Record<string, unknown>;
+    const right = next[index] as unknown as Record<string, unknown>;
+    if (left === right) continue;
+    const drawn = (record: Record<string, unknown>) =>
+      Object.keys(record).filter((key) => !UNDRAWN_TITLE_FIELDS.has(key));
+    const keys = drawn(left);
+    if (keys.length !== drawn(right).length) return false;
+    for (const key of keys)
+      if (!Object.hasOwn(right, key) || !sameData(left[key], right[key]))
+        return false;
+  }
+  return true;
 }
 
 /**
