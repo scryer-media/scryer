@@ -44,12 +44,6 @@ fn normalize_effective_scan_root(path: &str) -> Option<String> {
     Some(Path::new(trimmed).to_string_lossy().trim().to_string())
 }
 impl AppUseCase {
-    async fn effective_scan_roots_for_facet(&self, facet: &MediaFacet) -> AppResult<Vec<String>> {
-        let root_folders = self.root_folders_for_facet(facet).await?;
-        Ok(effective_scan_roots_from_root_folders(&root_folders))
-    }
-}
-impl AppUseCase {
     pub(crate) async fn clear_pending_imports_for_removed_roots(
         &self,
         facet: &MediaFacet,

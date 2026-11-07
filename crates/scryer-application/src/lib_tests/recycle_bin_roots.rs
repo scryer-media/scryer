@@ -1164,35 +1164,22 @@ async fn updating_a_library_refuses_only_new_roots_that_conflict_with_the_custom
 }
 
 #[tokio::test]
-async fn media_settings_refuse_a_default_library_root_that_conflicts_with_the_custom_bin() {
+async fn a_default_library_root_that_conflicts_with_the_custom_bin_is_refused() {
     let fixture = Fixture::new();
     let (app, user, bin) = app_with_custom_bin(&fixture).await;
     let root = bin.join("inside");
 
-    let error = app
-        .update_media_settings(
-            &user,
-            MediaFacet::Movie,
-            empty_update_media_settings_with_roots(vec![RootFolderEntry {
-                path: root.to_string_lossy().to_string(),
-                is_default: true,
-            }]),
-        )
-        .await
-        .expect_err("a default-library root inside the bin is refused");
-    assert_bin_conflict(error, &root);
-
-    let error = app
-        .update_library_paths(
-            &user,
-            UpdateLibraryPaths {
-                movie_path: root.to_string_lossy().to_string(),
-                series_path: String::new(),
-                anime_path: None,
-            },
-        )
-        .await
-        .expect_err("the legacy library path save is refused the same way");
+    let error = update_default_library_roots(
+        &app,
+        &user,
+        MediaFacet::Movie,
+        vec![RootFolderEntry {
+            path: root.to_string_lossy().to_string(),
+            is_default: true,
+        }],
+    )
+    .await
+    .expect_err("a default-library root inside the bin is refused");
     assert_bin_conflict(error, &root);
 }
 

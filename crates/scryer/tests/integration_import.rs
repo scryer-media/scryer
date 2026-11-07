@@ -359,8 +359,6 @@ async fn set_folder_template(ctx: &TestContext, facet: MediaFacet, template: &st
             &actor,
             facet,
             scryer_application::UpdateMediaSettings {
-                library_path: None,
-                root_folders: None,
                 required_audio_languages: None,
                 folder_template: Some(template.to_string()),
                 season_folder_template: None,

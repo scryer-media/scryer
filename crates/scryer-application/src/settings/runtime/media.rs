@@ -28,8 +28,6 @@ pub struct MediaSettings {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateMediaSettings {
-    pub library_path: Option<String>,
-    pub root_folders: Option<Vec<RootFolderEntry>>,
     pub required_audio_languages: Option<Vec<String>>,
     pub use_season_folders: Option<bool>,
     pub folder_template: Option<String>,
@@ -829,42 +827,7 @@ impl AppUseCase {
             normalize_optional_string(input.season_folder_template.clone());
         let specials_folder_template =
             normalize_optional_string(input.specials_folder_template.clone());
-        let previous_roots = self.effective_scan_roots_for_facet(&facet).await?;
-        let root_folder_update = input
-            .root_folders
-            .clone()
-            .map(normalize_root_folders)
-            .transpose()?;
-
         let mut changed_keys = Vec::new();
-
-        if let Some(normalized) = root_folder_update {
-            changed_keys.extend(
-                self.update_default_library_roots_from_entries(
-                    &facet,
-                    &normalized,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                    true,
-                )
-                .await?,
-            );
-        } else if let Some(library_path) = normalize_optional_string(input.library_path) {
-            let root_folders = normalize_root_folders(vec![RootFolderEntry {
-                path: library_path,
-                is_default: true,
-            }])?;
-            changed_keys.extend(
-                self.update_default_library_roots_from_entries(
-                    &facet,
-                    &root_folders,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                    true,
-                )
-                .await?,
-            );
-        }
 
         if let Some(folder_template) = normalize_optional_string(input.folder_template) {
             crate::validate_title_folder_template(&folder_template)?;
@@ -1278,10 +1241,6 @@ impl AppUseCase {
         if changed_keys.is_empty() {
             return Err(AppError::validation_refused(crate::error_reasons::settings::MEDIA_SETTING_CHANGE_REQUIRED, "at least one media setting change is required".to_string()));
         }
-
-        let current_roots = self.effective_scan_roots_for_facet(&facet).await?;
-        self.clear_pending_imports_for_removed_roots(&facet, &previous_roots, &current_roots)
-            .await?;
 
         self.emit_settings_saved(
             actor,

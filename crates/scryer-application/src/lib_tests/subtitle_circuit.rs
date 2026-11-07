@@ -411,10 +411,11 @@ async fn circuit_fixture_with(
             .with_subtitle_plugin_provider(plugin_provider)
     });
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &admin,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&movie_root, true)]),
+        vec![build_root_folder_entry(&movie_root, true)],
     )
     .await
     .expect("save roots");

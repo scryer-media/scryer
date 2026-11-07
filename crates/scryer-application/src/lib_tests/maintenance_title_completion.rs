@@ -51,15 +51,14 @@ pub(super) async fn title_fixture(name: &str, facet: MediaFacet) -> TitleFixture
     let tempdir = tempfile::tempdir().expect("tempdir");
     let root = tempdir.path().join("series");
     std::fs::create_dir_all(&root).expect("create media root");
-    execution
-        .app
-        .update_media_settings(
-            &execution.user,
-            facet.clone(),
-            empty_update_media_settings_with_roots(vec![build_root_folder_entry(&root, true)]),
-        )
-        .await
-        .expect("save series root");
+    update_default_library_roots(
+        &execution.app,
+        &execution.user,
+        facet.clone(),
+        vec![build_root_folder_entry(&root, true)],
+    )
+    .await
+    .expect("save series root");
     let title = execution
         .app
         .add_title(

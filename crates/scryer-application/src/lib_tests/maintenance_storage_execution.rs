@@ -566,19 +566,17 @@ async fn selected_root_journal_resumes_while_retaining_owned_files_on_other_root
         .expect("fixture root parent")
         .join("root-b");
     std::fs::create_dir_all(&root_b).expect("create second configured root");
-    fixture
-        .execution
-        .app
-        .update_media_settings(
-            &fixture.execution.user,
-            MediaFacet::Movie,
-            empty_update_media_settings_with_roots(vec![
-                build_root_folder_entry(&fixture.root, true),
-                build_root_folder_entry(&root_b, false),
-            ]),
-        )
-        .await
-        .expect("configure both movie roots");
+    update_default_library_roots(
+        &fixture.execution.app,
+        &fixture.execution.user,
+        MediaFacet::Movie,
+        vec![
+            build_root_folder_entry(&fixture.root, true),
+            build_root_folder_entry(&root_b, false),
+        ],
+    )
+    .await
+    .expect("configure both movie roots");
     let (root_a_path, root_a_file_id) = add_movie_file(&fixture, "Two Roots/root-a.mkv").await;
     let root_b_path = root_b.join("Two Roots/root-b.mkv");
     let root_b_file_id = add_movie_file_at(&fixture, &root_b_path).await;

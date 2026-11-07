@@ -280,6 +280,12 @@ async fn graphql_media_settings_rejects_invalid_rename_template_tokens() {
 async fn graphql_typed_media_settings_round_trip() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
+    set_default_library_roots(
+        &ctx,
+        "ANIME",
+        &["/library/anime-main", "/library/anime-archive"],
+    )
+    .await;
     let update = gql(
         &ctx,
         r#"
@@ -309,10 +315,6 @@ async fn graphql_typed_media_settings_round_trip() {
         json!({
           "input": {
             "scope": "ANIME",
-            "rootFolders": [
-              { "path": "/library/anime-main", "isDefault": true },
-              { "path": "/library/anime-archive", "isDefault": false }
-            ],
             "requiredAudioLanguages": ["eng", "jpn"],
             "folderTemplate": "{title|truncate:64|space:_} ({year})",
             "seasonFolderTemplate": "{title|space:.}.S{season:2}",
@@ -541,31 +543,13 @@ async fn graphql_movie_settings_expose_null_and_reject_season_folder_templates()
 async fn graphql_typed_library_paths_round_trip() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/mnt/storage/movies",
-            "seriesPath": "/mnt/storage/series",
-            "animePath": "/mnt/storage/anime"
-          }
-        }),
+        "/mnt/storage/movies",
+        "/mnt/storage/series",
+        "/mnt/storage/anime",
     )
     .await;
-    assert_no_errors(&update);
-    assert_eq!(
-        update["data"]["updateLibraryPaths"]["moviePath"],
-        "/mnt/storage/movies"
-    );
 
     let read = gql(
         &ctx,

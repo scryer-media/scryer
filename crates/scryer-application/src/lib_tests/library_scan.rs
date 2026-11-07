@@ -413,13 +413,11 @@ async fn assert_fresh_nested_discovery(facet: MediaFacet) {
                 unmatched.clone(),
                 gateway.clone(),
             );
-        app.update_media_settings(
+        update_default_library_roots(
+            &app,
             &user,
             facet.clone(),
-            empty_update_media_settings_with_roots(vec![build_root_folder_entry(
-                root.path(),
-                true,
-            )]),
+            vec![build_root_folder_entry(root.path(), true)],
         )
         .await
         .unwrap();
@@ -4904,13 +4902,14 @@ async fn movie_full_scan_scans_all_configured_roots_in_one_session() {
         unmatched_items.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&root_one, true),
             build_root_folder_entry(&root_two, false),
-        ]),
+        ],
     )
     .await
     .expect("store movie roots");
@@ -4979,13 +4978,14 @@ async fn series_full_scan_scans_all_configured_roots_in_one_session() {
         unmatched_items.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Series,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&root_one, true),
             build_root_folder_entry(&root_two, false),
-        ]),
+        ],
     )
     .await
     .expect("store series roots");
@@ -5048,10 +5048,11 @@ async fn series_full_scan_batches_sonarr_identity_hints_at_gateway_cap() {
         metadata_gateway.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Series,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&series_root, true)]),
+        vec![build_root_folder_entry(&series_root, true)],
     )
     .await
     .expect("store series root");
@@ -5151,10 +5152,11 @@ async fn series_full_scan_keeps_hinted_batch_intact_across_unhinted_folder() {
         metadata_gateway.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Series,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&series_root, true)]),
+        vec![build_root_folder_entry(&series_root, true)],
     )
     .await
     .expect("store series root");
@@ -5251,10 +5253,11 @@ async fn movie_full_scan_batches_radarr_identity_hints_at_gateway_cap() {
         metadata_gateway.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&movie_root, true)]),
+        vec![build_root_folder_entry(&movie_root, true)],
     )
     .await
     .expect("store movie root");
@@ -5367,10 +5370,11 @@ async fn movie_full_scan_creates_a_tmdb_primary_title_from_a_radarr_hint() {
         metadata_gateway.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&movie_root, true)]),
+        vec![build_root_folder_entry(&movie_root, true)],
     )
     .await
     .expect("store movie root");
@@ -5477,10 +5481,11 @@ async fn series_full_scan_keeps_every_identity_from_a_rich_gateway_match() {
         metadata_gateway.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Series,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&series_root, true)]),
+        vec![build_root_folder_entry(&series_root, true)],
     )
     .await
     .expect("store series root");
@@ -5567,10 +5572,11 @@ async fn movie_full_scan_keeps_every_identity_from_a_rich_gateway_match() {
         metadata_gateway.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&movie_root, true)]),
+        vec![build_root_folder_entry(&movie_root, true)],
     )
     .await
     .expect("store movie root");
@@ -5670,10 +5676,11 @@ async fn movie_full_scan_batches_unhinted_fuzzy_candidates_at_gateway_cap() {
         metadata_gateway.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&movie_root, true)]),
+        vec![build_root_folder_entry(&movie_root, true)],
     )
     .await
     .expect("store movie root");
@@ -5832,10 +5839,11 @@ async fn movie_full_scan_completes_title_match_while_inventory_walk_is_blocked()
         }),
     );
     let app = app.with_test_overrides(|builder| builder.with_library_scanner(scanner.clone()));
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&movie_root, true)]),
+        vec![build_root_folder_entry(&movie_root, true)],
     )
     .await
     .expect("store movie root");
@@ -5892,13 +5900,14 @@ async fn multi_root_full_scan_counts_media_from_every_root() {
     let (base_app, user, _) =
         bootstrap_movie_scan_app(&roots[0], Vec::new(), Arc::new(EmptySearchMetadataGateway)).await;
     let app = base_app.with_test_overrides(|builder| builder.with_library_scanner(scanner.clone()));
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&roots[0], true),
             build_root_folder_entry(&roots[1], false),
-        ]),
+        ],
     )
     .await
     .unwrap();
@@ -6135,10 +6144,11 @@ async fn movie_full_scan_of_empty_library_completes_with_deterministic_zero_tota
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
         metadata_gateway.clone(),
     );
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&movie_root, true)]),
+        vec![build_root_folder_entry(&movie_root, true)],
     )
     .await
     .expect("store movie root");
@@ -7107,13 +7117,14 @@ async fn multi_root_full_scan_waits_for_final_root_to_mark_totals_known() {
         metadata_gateway.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Series,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&root_one, true),
             build_root_folder_entry(&root_two, false),
-        ]),
+        ],
     )
     .await
     .expect("store series roots");
@@ -7253,13 +7264,14 @@ async fn movie_full_scan_skips_invalid_roots_and_finishes_warning() {
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&valid_root, true),
             build_root_folder_entry(&invalid_root, false),
-        ]),
+        ],
     )
     .await
     .expect("store movie roots");
@@ -8150,13 +8162,14 @@ async fn update_media_settings_removing_root_clears_pending_imports_for_removed_
         unmatched_items.clone(),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&root_one, true),
             build_root_folder_entry(&root_two, false),
-        ]),
+        ],
     )
     .await
     .expect("seed movie roots");
@@ -8192,10 +8205,11 @@ async fn update_media_settings_removing_root_clears_pending_imports_for_removed_
         .await
         .expect("seed second pending import");
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&root_one, true)]),
+        vec![build_root_folder_entry(&root_one, true)],
     )
     .await
     .expect("remove second movie root");
@@ -8218,13 +8232,14 @@ async fn update_media_settings_root_folders_sync_default_library_roots() {
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&root_one, true),
             build_root_folder_entry(&root_two, false),
-        ]),
+        ],
     )
     .await
     .expect("save movie roots");
@@ -8414,51 +8429,6 @@ async fn reconcile_default_library_roots_repairs_missing_default_libraries() {
             .expect("default library should be recreated");
         assert_eq!(
             crate::settings::runtime::root_folder_entries_from_library_roots(&library.roots),
-            vec![RootFolderEntry {
-                path: expected_path.to_string(),
-                is_default: true,
-            }]
-        );
-    }
-}
-
-#[tokio::test]
-async fn update_library_paths_repairs_missing_default_libraries_before_save() {
-    let settings = Arc::new(StoredSettingsRepo::default());
-    let (app, user) = bootstrap_with_settings_repo_and_profiles_and_libraries(
-        settings,
-        Arc::new(MockQualityProfileRepo),
-        Arc::new(MockIndexerClient),
-        Arc::new(MockLibraryRepo::empty()),
-    );
-
-    let updated = app
-        .update_library_paths(
-            &user,
-            UpdateLibraryPaths {
-                movie_path: "/wizard-movies".to_string(),
-                series_path: "/wizard-series".to_string(),
-                anime_path: Some("/wizard-anime".to_string()),
-            },
-        )
-        .await
-        .expect("update repaired library paths");
-
-    assert_eq!(updated.movie_path, "/wizard-movies");
-    assert_eq!(updated.series_path, "/wizard-series");
-    assert_eq!(updated.anime_path, "/wizard-anime");
-
-    for (facet, expected_path) in [
-        (MediaFacet::Movie, "/wizard-movies"),
-        (MediaFacet::Series, "/wizard-series"),
-        (MediaFacet::Anime, "/wizard-anime"),
-    ] {
-        let root_folders = app
-            .root_folders_for_facet(&facet)
-            .await
-            .expect("repaired root folders");
-        assert_eq!(
-            root_folders,
             vec![RootFolderEntry {
                 path: expected_path.to_string(),
                 is_default: true,
@@ -8922,7 +8892,7 @@ async fn update_library_removing_root_clears_pending_imports_for_removed_root() 
 }
 
 #[tokio::test]
-async fn update_library_paths_removing_root_clears_pending_imports_for_removed_root() {
+async fn replacing_a_reconciled_default_root_clears_only_its_pending_imports() {
     let settings = Arc::new(StoredSettingsRepo::default());
     settings
         .set_value(SETTINGS_SCOPE_MEDIA, "movies.path", "/movies-old")
@@ -8969,16 +8939,17 @@ async fn update_library_paths_removing_root_clears_pending_imports_for_removed_r
         .await
         .expect("seed kept pending import");
 
-    app.update_library_paths(
+    update_default_library_roots(
+        &app,
         &user,
-        UpdateLibraryPaths {
-            movie_path: "/movies-new".to_string(),
-            series_path: "/series".to_string(),
-            anime_path: Some("/anime".to_string()),
-        },
+        MediaFacet::Movie,
+        vec![RootFolderEntry {
+            path: "/movies-new".to_string(),
+            is_default: true,
+        }],
     )
     .await
-    .expect("update library paths");
+    .expect("replace the default movie root");
 
     let items = unmatched_items.items().await;
     assert_eq!(items.len(), 1);
@@ -8987,115 +8958,7 @@ async fn update_library_paths_removing_root_clears_pending_imports_for_removed_r
 }
 
 #[tokio::test]
-async fn update_library_paths_allows_partial_wizard_paths() {
-    let settings = Arc::new(StoredSettingsRepo::default());
-    settings
-        .set_value(SETTINGS_SCOPE_MEDIA, "movies.path", "/movies-old")
-        .await;
-    settings
-        .set_value(SETTINGS_SCOPE_MEDIA, "series.path", "/series-old")
-        .await;
-    settings
-        .set_value(SETTINGS_SCOPE_MEDIA, "anime.path", "/anime-old")
-        .await;
-
-    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
-    let (app, user) = bootstrap_with_scan_unmatched_tracking(
-        settings.clone(),
-        Arc::new(MutableLibraryScanner::default()),
-        unmatched_items,
-    );
-    app.reconcile_default_library_roots()
-        .await
-        .expect("reconcile legacy roots");
-
-    let updated = app
-        .update_library_paths(
-            &user,
-            UpdateLibraryPaths {
-                movie_path: "".to_string(),
-                series_path: "/series-new".to_string(),
-                anime_path: None,
-            },
-        )
-        .await
-        .expect("update partial library paths");
-
-    assert_eq!(updated.movie_path, "/movies-old");
-    assert_eq!(updated.series_path, "/series-new");
-    assert_eq!(updated.anime_path, "/anime-old");
-}
-
-#[tokio::test]
-async fn save_external_import_library_paths_removing_root_clears_pending_imports_for_removed_root()
-{
-    let settings = Arc::new(StoredSettingsRepo::default());
-    settings
-        .set_value(SETTINGS_SCOPE_MEDIA, "movies.path", "/movies-old")
-        .await;
-    settings
-        .set_value(SETTINGS_SCOPE_MEDIA, "series.path", "/series")
-        .await;
-    settings
-        .set_value(SETTINGS_SCOPE_MEDIA, "anime.path", "/anime")
-        .await;
-
-    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
-    let (app, user) = bootstrap_with_scan_unmatched_tracking(
-        settings,
-        Arc::new(MutableLibraryScanner::default()),
-        unmatched_items.clone(),
-    );
-    app.reconcile_default_library_roots()
-        .await
-        .expect("reconcile legacy roots");
-
-    unmatched_items
-        .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
-            "movie-old-root-external",
-            MediaFacet::Movie,
-            "/movies-old",
-            "/movies-old/Unknown.Movie.2020.mkv",
-            "Unknown Movie",
-            "Unknown Movie",
-            Some(2020),
-        ))
-        .await
-        .expect("seed removed-root pending import");
-    unmatched_items
-        .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
-            "anime-root-external",
-            MediaFacet::Anime,
-            "/anime",
-            "/anime/Unknown Anime",
-            "Unknown Anime",
-            "Unknown Anime",
-            Some(2021),
-        ))
-        .await
-        .expect("seed kept pending import");
-
-    let saved = app
-        .save_external_import_library_paths(
-            &user,
-            ExternalImportLibraryPathsSelection {
-                movie_paths: vec!["/movies-new".to_string()],
-                series_paths: vec![],
-                anime_paths: vec![],
-            },
-        )
-        .await
-        .expect("save external import paths");
-
-    assert!(saved);
-    let items = unmatched_items.items().await;
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].facet, MediaFacet::Anime);
-    assert_eq!(items[0].scan_root, "/anime");
-}
-
-#[tokio::test]
-async fn save_external_import_library_paths_persists_multiple_root_folders_per_facet() {
+async fn default_library_roots_saved_per_facet_read_back_through_media_settings() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let (app, user) = bootstrap_with_scan_unmatched_tracking(
         settings,
@@ -9103,22 +8966,33 @@ async fn save_external_import_library_paths_persists_multiple_root_folders_per_f
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
     );
 
-    let saved = app
-        .save_external_import_library_paths(
+    for (facet, paths) in [
+        (
+            MediaFacet::Movie,
+            ["/movies-primary", "/movies-secondary"].as_slice(),
+        ),
+        (
+            MediaFacet::Series,
+            ["/series-main", "/series-archive"].as_slice(),
+        ),
+        (MediaFacet::Anime, ["/anime"].as_slice()),
+    ] {
+        update_default_library_roots(
+            &app,
             &user,
-            ExternalImportLibraryPathsSelection {
-                movie_paths: vec![
-                    "/movies-primary".to_string(),
-                    "/movies-secondary".to_string(),
-                ],
-                series_paths: vec!["/series-main".to_string(), "/series-archive".to_string()],
-                anime_paths: vec!["/anime".to_string()],
-            },
+            facet,
+            paths
+                .iter()
+                .enumerate()
+                .map(|(index, path)| RootFolderEntry {
+                    path: (*path).to_string(),
+                    is_default: index == 0,
+                })
+                .collect(),
         )
         .await
-        .expect("save external import paths");
-
-    assert!(saved);
+        .expect("save default library roots");
+    }
 
     let movie_settings = app
         .get_media_settings(&user, MediaFacet::Movie)
@@ -9196,78 +9070,6 @@ async fn save_external_import_library_paths_persists_multiple_root_folders_per_f
             ("/series-main".to_string(), true),
             ("/series-archive".to_string(), false),
         ]
-    );
-}
-
-#[tokio::test]
-async fn save_external_import_library_paths_accepts_custom_selected_paths() {
-    let settings = Arc::new(StoredSettingsRepo::default());
-    let (app, user) = bootstrap_with_scan_unmatched_tracking(
-        settings,
-        Arc::new(MutableLibraryScanner::default()),
-        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
-    );
-
-    let saved = app
-        .save_external_import_library_paths(
-            &user,
-            ExternalImportLibraryPathsSelection {
-                movie_paths: vec![
-                    "/custom/movies".to_string(),
-                    "/custom/movies-archive".to_string(),
-                ],
-                series_paths: vec!["/custom/series".to_string()],
-                anime_paths: vec!["/custom/anime".to_string()],
-            },
-        )
-        .await
-        .expect("save custom external import paths");
-
-    assert!(saved);
-
-    let movie_settings = app
-        .get_media_settings(&user, MediaFacet::Movie)
-        .await
-        .expect("movie settings");
-    assert_eq!(movie_settings.library_path, "/custom/movies");
-    assert_eq!(
-        movie_settings.root_folders,
-        vec![
-            RootFolderEntry {
-                path: "/custom/movies".to_string(),
-                is_default: true,
-            },
-            RootFolderEntry {
-                path: "/custom/movies-archive".to_string(),
-                is_default: false,
-            },
-        ]
-    );
-
-    let series_settings = app
-        .get_media_settings(&user, MediaFacet::Series)
-        .await
-        .expect("series settings");
-    assert_eq!(series_settings.library_path, "/custom/series");
-    assert_eq!(
-        series_settings.root_folders,
-        vec![RootFolderEntry {
-            path: "/custom/series".to_string(),
-            is_default: true,
-        }]
-    );
-
-    let anime_settings = app
-        .get_media_settings(&user, MediaFacet::Anime)
-        .await
-        .expect("anime settings");
-    assert_eq!(anime_settings.library_path, "/custom/anime");
-    assert_eq!(
-        anime_settings.root_folders,
-        vec![RootFolderEntry {
-            path: "/custom/anime".to_string(),
-            is_default: true,
-        }]
     );
 }
 
@@ -11155,13 +10957,14 @@ async fn movie_full_scan_assigns_the_root_the_candidate_was_found_under() {
         Arc::new(RecordingExactIdMetadataGateway::with_tmdb_primary_movie_matches()),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&default_root, true),
             build_root_folder_entry(&second_root, false),
-        ]),
+        ],
     )
     .await
     .expect("store movie roots");
@@ -11229,13 +11032,14 @@ async fn series_full_scan_assigns_the_root_the_candidate_was_found_under() {
         Arc::new(RecordingExactIdMetadataGateway::default().with_rich_external_ids()),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Series,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&default_root, true),
             build_root_folder_entry(&second_root, false),
-        ]),
+        ],
     )
     .await
     .expect("store series roots");
@@ -11310,13 +11114,14 @@ async fn movie_full_scan_heals_an_existing_title_onto_the_root_holding_its_files
         Arc::new(RecordingExactIdMetadataGateway::with_tmdb_primary_movie_matches()),
     );
 
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&default_root, true),
             build_root_folder_entry(&second_root, false),
-        ]),
+        ],
     )
     .await
     .expect("store movie roots");
@@ -11388,13 +11193,14 @@ async fn series_background_refresh_heals_an_indexed_title_onto_the_root_holding_
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
         Arc::new(RecordingExactIdMetadataGateway::default()),
     );
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Series,
-        empty_update_media_settings_with_roots(vec![
+        vec![
             build_root_folder_entry(&default_root, true),
             build_root_folder_entry(&second_root, false),
-        ]),
+        ],
     )
     .await
     .expect("store series roots");
@@ -11465,10 +11271,11 @@ async fn title_root_folder_id_is_untouched_when_the_folder_is_under_no_root() {
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
         Arc::new(RecordingExactIdMetadataGateway::default()),
     );
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Movie,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&default_root, true)]),
+        vec![build_root_folder_entry(&default_root, true)],
     )
     .await
     .expect("store movie root");
@@ -11627,10 +11434,11 @@ async fn full_scan_drops_pending_imports_of_a_deleted_or_moved_title() {
         unmatched.clone(),
         Arc::new(RecordingExactIdMetadataGateway::default()),
     );
-    app.update_media_settings(
+    update_default_library_roots(
+        &app,
         &user,
         MediaFacet::Series,
-        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&root, true)]),
+        vec![build_root_folder_entry(&root, true)],
     )
     .await
     .expect("store series root");

@@ -1,34 +1,5 @@
 use super::*;
 
-async fn update_library_paths_for_scan(
-    ctx: &TestContext,
-    movie_path: &str,
-    series_path: &str,
-    anime_path: &str,
-) {
-    let update = gql(
-        ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": movie_path,
-            "seriesPath": series_path,
-            "animePath": anime_path
-          }
-        }),
-    )
-    .await;
-    assert_no_errors(&update);
-}
-
 #[tokio::test]
 async fn graphql_scan_title_library() {
     let ctx = TestContext::new().await;
@@ -784,27 +755,13 @@ async fn library_series_scan_hydrates_without_creating_wanted_for_unmonitored_ti
     )
     .expect("write tvshow.nfo");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": media_root.path().display().to_string(),
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &"/tmp/movies-unused",
+        &media_root.path().display().to_string(),
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     ctx.app
@@ -938,27 +895,13 @@ async fn library_anime_scan_hydrates_and_relinks_files_from_discovered_folder_pa
     let file_path = season_dir.join("Anime.Scan.S01E01.1080p.WEB-DL.mkv");
     std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": "/tmp/series-unused",
-            "animePath": media_root.path().display().to_string()
-          }
-        }),
+        &"/tmp/movies-unused",
+        &"/tmp/series-unused",
+        &media_root.path().display().to_string(),
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -1165,27 +1108,13 @@ async fn library_anime_scan_prefers_tvshow_nfo_identity_for_nightfall_fixture() 
     .expect("write episode nfo");
     std::fs::write(season_dir.join("season.nfo"), b"<season></season>").expect("write season nfo");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": "/tmp/series-unused",
-            "animePath": media_root.path().display().to_string()
-          }
-        }),
+        &"/tmp/movies-unused",
+        &"/tmp/series-unused",
+        &media_root.path().display().to_string(),
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -1236,7 +1165,7 @@ async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_fol
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
-    update_library_paths_for_scan(
+    set_default_library_root_paths(
         &ctx,
         "/tmp/movies-unused",
         "/tmp/series-unused",
@@ -1285,27 +1214,13 @@ async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_fol
     let file_path = season_dir.join("Existing.Anime.S01E01.1080p.WEB-DL.mkv");
     std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": "/tmp/series-unused",
-            "animePath": media_root.path().display().to_string()
-          }
-        }),
+        &"/tmp/movies-unused",
+        &"/tmp/series-unused",
+        &media_root.path().display().to_string(),
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -1360,7 +1275,7 @@ async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_fo
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
-    update_library_paths_for_scan(
+    set_default_library_root_paths(
         &ctx,
         "/tmp/movies-unused",
         media_root.path().to_string_lossy().as_ref(),
@@ -1409,27 +1324,13 @@ async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_fo
     let file_path = season_dir.join("Existing.Series.S01E01.1080p.WEB-DL.mkv");
     std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": media_root.path().display().to_string(),
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &"/tmp/movies-unused",
+        &media_root.path().display().to_string(),
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -1484,7 +1385,7 @@ async fn library_series_scan_existing_unhydrated_title_without_episodes_complete
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
-    update_library_paths_for_scan(
+    set_default_library_root_paths(
         &ctx,
         "/tmp/movies-unused",
         media_root.path().to_string_lossy().as_ref(),
@@ -1547,27 +1448,13 @@ async fn library_series_scan_existing_unhydrated_title_without_episodes_complete
     let file_path = season_dir.join("Pending.Series.S01E01.1080p.WEB-DL.mkv");
     std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": media_root.path().display().to_string(),
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &"/tmp/movies-unused",
+        &media_root.path().display().to_string(),
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -1623,27 +1510,13 @@ async fn library_series_scan_creates_unmonitored_titles() {
     )
     .expect("write tvshow.nfo");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": media_root.path().display().to_string(),
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &"/tmp/movies-unused",
+        &media_root.path().display().to_string(),
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -1686,27 +1559,13 @@ async fn library_series_scan_counts_new_title_files_before_post_hydration_scan_p
     )
     .expect("write fake episode");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": media_root.path().display().to_string(),
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &"/tmp/movies-unused",
+        &media_root.path().display().to_string(),
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -1732,7 +1591,7 @@ async fn library_movie_scan_keeps_media_of_a_title_recorded_at_the_library_root(
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
-    update_library_paths_for_scan(
+    set_default_library_root_paths(
         &ctx,
         media_root.path().to_string_lossy().as_ref(),
         "/tmp/series-unused",
@@ -1808,7 +1667,7 @@ async fn library_movie_scan_leaves_an_ambiguous_root_record_and_keeps_all_its_me
     seed_typed_settings_definitions(&ctx).await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
     let media_root_path = media_root.path().to_string_lossy().into_owned();
-    update_library_paths_for_scan(
+    set_default_library_root_paths(
         &ctx,
         &media_root_path,
         "/tmp/series-unused",
@@ -1942,7 +1801,7 @@ async fn library_movie_scan_records_owned_folder_conflict_without_rehoming_title
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
-    update_library_paths_for_scan(
+    set_default_library_root_paths(
         &ctx,
         media_root.path().to_string_lossy().as_ref(),
         "/tmp/series-unused",
@@ -1981,27 +1840,13 @@ async fn library_movie_scan_records_owned_folder_conflict_without_rehoming_title
     )
     .expect("write movie.nfo");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": media_root.path().display().to_string(),
-            "seriesPath": "/tmp/series-unused",
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &media_root.path().display().to_string(),
+        &"/tmp/series-unused",
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -2081,7 +1926,7 @@ async fn library_movie_scan_matches_existing_title_from_movie_nfo_when_folder_mi
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
-    update_library_paths_for_scan(
+    set_default_library_root_paths(
         &ctx,
         media_root.path().to_string_lossy().as_ref(),
         "/tmp/series-unused",
@@ -2112,27 +1957,13 @@ async fn library_movie_scan_matches_existing_title_from_movie_nfo_when_folder_mi
     )
     .expect("write movie.nfo");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": media_root.path().display().to_string(),
-            "seriesPath": "/tmp/series-unused",
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &media_root.path().display().to_string(),
+        &"/tmp/series-unused",
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -2203,27 +2034,13 @@ async fn library_movie_scan_creates_unmonitored_title_and_collection() {
     )
     .expect("write movie.nfo");
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": media_root.path().display().to_string(),
-            "seriesPath": "/tmp/series-unused",
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &media_root.path().display().to_string(),
+        &"/tmp/series-unused",
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -2321,27 +2138,13 @@ async fn library_series_scan_handles_more_than_one_batch_of_titles() {
         .expect("write tvshow.nfo");
     }
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/tmp/movies-unused",
-            "seriesPath": media_root.path().display().to_string(),
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &"/tmp/movies-unused",
+        &media_root.path().display().to_string(),
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -2386,27 +2189,13 @@ async fn library_movie_scan_handles_more_than_one_batch_of_titles() {
         .expect("write movie nfo");
     }
 
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": media_root.path().display().to_string(),
-            "seriesPath": "/tmp/series-unused",
-            "animePath": "/tmp/anime-unused"
-          }
-        }),
+        &media_root.path().display().to_string(),
+        &"/tmp/series-unused",
+        &"/tmp/anime-unused",
     )
     .await;
-    assert_no_errors(&update);
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx

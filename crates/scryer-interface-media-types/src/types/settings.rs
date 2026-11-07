@@ -1348,23 +1348,10 @@ pub struct DelayProfileInput {
 }
 
 #[derive(InputObject, Clone)]
-/// Library root path and default marker.
-pub struct RootFolderInput {
-    /// Absolute filesystem path for the library root.
-    pub path: String,
-    /// Whether this root is the library default.
-    pub is_default: bool,
-}
-
-#[derive(InputObject, Clone)]
 /// Optional media-settings values applied to a content scope.
 pub struct UpdateMediaSettingsInput {
     /// Content scope receiving the settings.
     pub scope: ContentScopeValue,
-    /// Optional library path override.
-    pub library_path: Option<String>,
-    /// Optional replacement list of library roots; null leaves existing roots unchanged.
-    pub root_folders: Option<Vec<RootFolderInput>>,
     /// Optional required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
     /// Whether episodic titles use season folders.
@@ -1415,17 +1402,6 @@ pub struct UpdateMediaSettingsInput {
     pub movie_release_market: Option<String>,
     /// Signed offset in days from the applicable release date. Movie scope only.
     pub movie_availability_delay_days: Option<i32>,
-}
-
-#[derive(InputObject, Clone)]
-/// Root paths for movie, series, and optional anime libraries.
-pub struct UpdateLibraryPathsInput {
-    /// Movie library path.
-    pub movie_path: String,
-    /// Series library path.
-    pub series_path: String,
-    /// Anime library path, when configured.
-    pub anime_path: Option<String>,
 }
 
 #[derive(InputObject, Clone)]

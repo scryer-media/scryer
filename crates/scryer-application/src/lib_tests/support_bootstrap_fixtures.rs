@@ -1816,41 +1816,40 @@ where
     }
 }
 
-pub(super) fn empty_update_media_settings_with_roots(
+/// Replaces a facet default library's roots through `update_library`, the
+/// way an operator saves them, carrying the stored id of any root kept at
+/// the same path, and returns the facet's media settings afterwards.
+pub(super) async fn update_default_library_roots(
+    app: &AppUseCase,
+    actor: &User,
+    facet: MediaFacet,
     root_folders: Vec<RootFolderEntry>,
-) -> UpdateMediaSettings {
-    UpdateMediaSettings {
-        library_path: None,
-        root_folders: Some(root_folders),
-        required_audio_languages: None,
-        use_season_folders: None,
-        folder_template: None,
-        season_folder_template: None,
-        specials_folder_template: None,
-        rename_enabled: None,
-        rename_template: None,
-        rename_collision_policy: None,
-        rename_missing_metadata_policy: None,
-        filler_policy: None,
-        recap_policy: None,
-        monitor_specials: None,
-        inter_season_movies: None,
-        monitor_filler_movies: None,
-        nfo_write_on_import: None,
-        plexmatch_write_on_import: None,
-        import_mode: None,
-        set_permissions_linux: None,
-        file_chmod: None,
-        folder_chmod: None,
-        chown_group: None,
-        movie_availability: Default::default(),
-    }
+) -> AppResult<MediaSettings> {
+    let library = app
+        .services
+        .catalog
+        .libraries
+        .default_for_facet(facet.clone())
+        .await?
+        .expect("the facet has a default library");
+    let drafts = crate::lib_tests::with_stored_root_ids(
+        &library,
+        root_folders
+            .into_iter()
+            .map(|entry| LibraryRootDraft {
+                id: None,
+                path: entry.path,
+                is_default: entry.is_default,
+            })
+            .collect(),
+    );
+    app.update_library(actor, &library.id, None, Some(drafts), None)
+        .await?;
+    app.get_media_settings(actor, facet).await
 }
 
 pub(super) fn empty_update_media_settings() -> UpdateMediaSettings {
     UpdateMediaSettings {
-        library_path: None,
-        root_folders: None,
         required_audio_languages: None,
         use_season_folders: None,
         folder_template: None,

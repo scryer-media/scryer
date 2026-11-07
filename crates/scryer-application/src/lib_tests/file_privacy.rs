@@ -170,10 +170,11 @@ async fn seed_fixture() -> PrivacyFixture {
         (MediaFacet::Movie, &movie_root),
         (MediaFacet::Series, &series_root),
     ] {
-        app.update_media_settings(
+        update_default_library_roots(
+            &app,
             &admin,
             facet,
-            empty_update_media_settings_with_roots(vec![build_root_folder_entry(root, true)]),
+            vec![build_root_folder_entry(root, true)],
         )
         .await
         .expect("save roots");

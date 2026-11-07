@@ -4,12 +4,6 @@ pub struct LibraryPathsSettings {
     pub series_path: String,
     pub anime_path: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpdateLibraryPaths {
-    pub movie_path: String,
-    pub series_path: String,
-    pub anime_path: Option<String>,
-}
 fn library_path_key(facet: &MediaFacet) -> &'static str {
     match facet {
         MediaFacet::Movie => MOVIES_PATH_KEY,
@@ -290,17 +284,15 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    /// `refuse_recycle_bin_conflicts` is set for an operator's save, which
-    /// must not add a root that conflicts with the custom recycle bin; startup
-    /// reconciliation leaves it unset so a stored configuration never stops
-    /// the server from starting.
+    /// Startup reconciliation's bridge from the path-keyed legacy facet root
+    /// settings to the default library. It skips the recycle-bin conflict
+    /// check so a stored configuration never stops the server from starting.
     async fn update_default_library_roots_from_entries(
         &self,
         facet: &MediaFacet,
         root_folders: &[RootFolderEntry],
         source: &str,
         actor_id: Option<String>,
-        refuse_recycle_bin_conflicts: bool,
     ) -> AppResult<Vec<String>> {
         let Some(library) = self
             .services
@@ -336,10 +328,6 @@ impl AppUseCase {
         }
         self.validate_library_root_conflicts(Some(&library.id), &roots)
             .await?;
-        if refuse_recycle_bin_conflicts {
-            self.validate_library_roots_against_recycle_bin(&library.roots, &roots)
-                .await?;
-        }
 
         let library = self
             .services
@@ -436,7 +424,6 @@ impl AppUseCase {
                     &legacy_roots,
                     "startup_reconciliation",
                     None,
-                    false,
                 )
                 .await?;
                 info!(
@@ -459,7 +446,6 @@ impl AppUseCase {
                     &roots_to_mirror,
                     "startup_reconciliation",
                     None,
-                    false,
                 )
                 .await?;
                 info!(
@@ -1933,100 +1919,5 @@ impl AppUseCase {
             series_path: default_path_from_root_folders(&MediaFacet::Series, &series_roots),
             anime_path: default_path_from_root_folders(&MediaFacet::Anime, &anime_roots),
         })
-    }
-}
-impl AppUseCase {
-    pub async fn update_library_paths(
-        &self,
-        actor: &User,
-        input: UpdateLibraryPaths,
-    ) -> AppResult<LibraryPathsSettings> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
-            .await?;
-        self.ensure_default_facet_libraries().await?;
-        let previous_roots = [
-            (
-                MediaFacet::Movie,
-                self.effective_scan_roots_for_facet(&MediaFacet::Movie)
-                    .await?,
-            ),
-            (
-                MediaFacet::Series,
-                self.effective_scan_roots_for_facet(&MediaFacet::Series)
-                    .await?,
-            ),
-            (
-                MediaFacet::Anime,
-                self.effective_scan_roots_for_facet(&MediaFacet::Anime)
-                    .await?,
-            ),
-        ];
-
-        let mut changed_keys = Vec::new();
-        if let Some(movie_path) = normalize_optional_string(Some(input.movie_path)) {
-            let root_folders = normalize_root_folders(vec![RootFolderEntry {
-                path: movie_path,
-                is_default: true,
-            }])?;
-            changed_keys.extend(
-                self.update_default_library_roots_from_entries(
-                    &MediaFacet::Movie,
-                    &root_folders,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                    true,
-                )
-                .await?,
-            );
-        }
-
-        if let Some(series_path) = normalize_optional_string(Some(input.series_path)) {
-            let root_folders = normalize_root_folders(vec![RootFolderEntry {
-                path: series_path,
-                is_default: true,
-            }])?;
-            changed_keys.extend(
-                self.update_default_library_roots_from_entries(
-                    &MediaFacet::Series,
-                    &root_folders,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                    true,
-                )
-                .await?,
-            );
-        }
-
-        if let Some(anime_path) = normalize_optional_string(input.anime_path) {
-            let root_folders = normalize_root_folders(vec![RootFolderEntry {
-                path: anime_path,
-                is_default: true,
-            }])?;
-            changed_keys.extend(
-                self.update_default_library_roots_from_entries(
-                    &MediaFacet::Anime,
-                    &root_folders,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                    true,
-                )
-                .await?,
-            );
-        }
-
-        if changed_keys.is_empty() {
-            return self.get_library_paths(actor).await;
-        }
-        warn!("updateLibraryPaths is deprecated; updated default library roots instead");
-
-        for (facet, previous) in previous_roots {
-            let current = self.effective_scan_roots_for_facet(&facet).await?;
-            self.clear_pending_imports_for_removed_roots(&facet, &previous, &current)
-                .await?;
-        }
-
-        self.emit_settings_saved(actor, "library_paths", None, changed_keys)
-            .await;
-        self.get_library_paths(actor).await
     }
 }
