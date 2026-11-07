@@ -293,6 +293,32 @@ const HOVER_FADE_ALPHA = 0.18;
 /** Room around the titles when the overview is fitted to them. */
 const OVERVIEW_FIT_PADDING = 1.25;
 
+// Zoom stops where the largest title fills this share of the view's height,
+// and a little past the framing of the whole graph (ratio 1).
+const MAX_POSTER_VIEW_SHARE = 0.6;
+const MAX_ZOOM_OUT_RATIO = 1.5;
+
+function applyZoomLimits(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  graph: LibraryGraphStore,
+) {
+  let largest = 0;
+  graph.forEachNode((_key, attributes) => {
+    largest = Math.max(largest, attributes.size);
+  });
+  const height = sigma.getContainer().offsetHeight;
+  // A title's size is its on-screen half-height at ratio 1.
+  const minRatio =
+    largest > 0 && height > 0
+      ? Math.min(
+          MAX_ZOOM_OUT_RATIO,
+          (sigma.scaleSize(largest, 1) * 2) / (MAX_POSTER_VIEW_SHARE * height),
+        )
+      : null;
+  sigma.setSetting("minCameraRatio", minRatio);
+  sigma.setSetting("maxCameraRatio", MAX_ZOOM_OUT_RATIO);
+}
+
 function restCamera(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
   const origin = sigma.graphToFramedGraph({ x: 0, y: 0 });
   return { x: origin.x, y: origin.y, ratio: 1, angle: 0 };
@@ -2026,6 +2052,7 @@ export default function LibraryGraphView({
     let latestPointer: { x: number; y: number } | null = null;
 
     sigma.on("afterRender", drawOverlay);
+    sigma.on("resize", () => applyZoomLimits(sigma, sigma.getGraph()));
     // Ctrl-click (Cmd-click on a Mac) also opens the title's panel; a plain
     // click only focuses the graph on it.
     sigma.on("clickNode", ({ node, event }) => {
@@ -2506,6 +2533,7 @@ export default function LibraryGraphView({
     applySelection();
     applyDetailOpacity(sigma, detailOpacityRef, initialDetailOpacity);
     sigma.setGraph(graph);
+    applyZoomLimits(sigma, graph);
     layoutRef.current = layout;
     const container = sigma.getContainer();
     const tick = () => {
