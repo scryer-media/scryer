@@ -3363,14 +3363,6 @@ export default function LibraryGraphView({
       aria-controls={selectedVisible ? contextPanelId : undefined}
       className="flex h-full min-h-[24rem] flex-col gap-3"
     >
-      {result?.truncated ? (
-        <p
-          className="text-[12px] text-[var(--scry-muted2)]"
-          data-testid="library-graph-truncated"
-        >
-          {t("libraryGraph.truncated")}
-        </p>
-      ) : null}
       {focusCenterKey !== null ? (
         <nav
           aria-label={t("libraryGraph.trailLabel")}

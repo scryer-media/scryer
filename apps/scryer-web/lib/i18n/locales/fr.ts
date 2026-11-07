@@ -1307,8 +1307,6 @@ const fr: LocaleDictionary = {
   "libraryGraph.edgeKind.recommendation": "Recommandé",
   "libraryGraph.notBuilt":
     "Le graphe de la bibliothèque n'a pas encore été construit.",
-  "libraryGraph.truncated":
-    "Ce graphe ne couvre qu'une partie de la bibliothèque.",
   "discovery.refusal.neighborTargetKeyUnsupported":
     "Ce titre ne peut pas être exploré davantage.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":

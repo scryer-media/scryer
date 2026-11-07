@@ -1771,7 +1771,6 @@ const ru: LocaleDictionary = {
   "libraryGraph.edgeKind.other": "Связано",
   "libraryGraph.edgeKind.recommendation": "Рекомендовано",
   "libraryGraph.notBuilt": "Граф библиотеки ещё не построен.",
-  "libraryGraph.truncated": "Этот граф охватывает только часть библиотеки.",
   "discovery.refusal.neighborTargetKeyUnsupported":
     "Это произведение нельзя исследовать дальше.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":

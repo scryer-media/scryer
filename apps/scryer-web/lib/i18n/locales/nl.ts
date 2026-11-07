@@ -1577,8 +1577,6 @@ const nl: LocaleDictionary = {
   "libraryGraph.edgeKind.other": "Gekoppeld",
   "libraryGraph.edgeKind.recommendation": "Aanbevolen",
   "libraryGraph.notBuilt": "De bibliotheekgraaf is nog niet opgebouwd.",
-  "libraryGraph.truncated":
-    "Deze graaf omvat maar een deel van de bibliotheek.",
   "discovery.refusal.neighborTargetKeyUnsupported":
     "Deze titel kan niet verder worden verkend.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":

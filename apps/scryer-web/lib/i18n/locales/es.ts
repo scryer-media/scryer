@@ -1248,7 +1248,6 @@ const es: LocaleDictionary = {
   "libraryGraph.edgeKind.other": "Vinculado",
   "libraryGraph.edgeKind.recommendation": "Recomendado",
   "libraryGraph.notBuilt": "El grafo de la biblioteca aún no se ha generado.",
-  "libraryGraph.truncated": "Este grafo cubre solo una parte de la biblioteca.",
   "discovery.refusal.neighborTargetKeyUnsupported":
     "Este título no se puede explorar más.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":

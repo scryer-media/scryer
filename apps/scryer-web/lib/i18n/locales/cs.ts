@@ -1898,7 +1898,6 @@ const cs: LocaleDictionary = {
   "libraryGraph.edgeKind.other": "Propojeno",
   "libraryGraph.edgeKind.recommendation": "Doporučeno",
   "libraryGraph.notBuilt": "Graf knihovny zatím nebyl vytvořen.",
-  "libraryGraph.truncated": "Tento graf pokrývá jen část knihovny.",
   "discovery.refusal.neighborTargetKeyUnsupported":
     "Tento titul nelze dále prozkoumat.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":

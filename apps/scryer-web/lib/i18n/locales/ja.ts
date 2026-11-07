@@ -1197,8 +1197,6 @@ const ja: LocaleDictionary = {
   "libraryGraph.edgeKind.other": "つながり",
   "libraryGraph.edgeKind.recommendation": "おすすめ",
   "libraryGraph.notBuilt": "ライブラリグラフはまだ作成されていません。",
-  "libraryGraph.truncated":
-    "このグラフはライブラリの一部のみを対象としています。",
   "discovery.refusal.neighborTargetKeyUnsupported":
     "この作品はこれ以上探索できません。",
   "discovery.refusal.neighborTargetKeyFacetMismatch":

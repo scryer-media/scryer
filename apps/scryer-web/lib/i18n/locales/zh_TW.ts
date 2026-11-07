@@ -1625,7 +1625,6 @@ const zh_TW: LocaleDictionary = {
   "libraryGraph.edgeKind.other": "已關聯",
   "libraryGraph.edgeKind.recommendation": "推薦",
   "libraryGraph.notBuilt": "媒體庫圖譜尚未建立。",
-  "libraryGraph.truncated": "此圖譜僅涵蓋部分媒體庫。",
   "discovery.refusal.neighborTargetKeyUnsupported": "無法進一步探索此作品。",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
     "此作品與這個媒體庫的媒體類型不符，無法在此探索。",

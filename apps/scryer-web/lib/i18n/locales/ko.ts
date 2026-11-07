@@ -1181,7 +1181,6 @@ const ko: LocaleDictionary = {
   "libraryGraph.edgeKind.other": "연결됨",
   "libraryGraph.edgeKind.recommendation": "추천",
   "libraryGraph.notBuilt": "라이브러리 그래프가 아직 생성되지 않았습니다.",
-  "libraryGraph.truncated": "이 그래프는 라이브러리의 일부만 포함합니다.",
   "discovery.refusal.neighborTargetKeyUnsupported":
     "이 작품은 더 이상 탐색할 수 없습니다.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":

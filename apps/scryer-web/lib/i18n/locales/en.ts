@@ -6415,7 +6415,6 @@ const en: LocaleDictionary = {
   "libraryGraph.edgeKind.other": "Linked",
   "libraryGraph.edgeKind.recommendation": "Recommended",
   "libraryGraph.notBuilt": "The library graph has not been built yet.",
-  "libraryGraph.truncated": "This graph covers only part of the library.",
   "discovery.refusal.neighborTargetKeyUnsupported":
     "This title can't be explored further.",
   "discovery.refusal.neighborTargetKeyFacetMismatch":
