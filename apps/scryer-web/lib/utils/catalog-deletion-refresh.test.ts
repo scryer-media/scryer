@@ -6,14 +6,18 @@ import {
   type DomainEvent,
 } from "../reactive/domain-event-feed.ts";
 
-test("committed deletions refresh the matching catalog, including replay and fallback", () => {
+test("committed deletions name the removed titles, ignoring replay and other facets", () => {
   const engine = createReactiveRefreshEngine({
     scheduler: { setTimeout: () => 1, clearTimeout: () => {} },
   });
-  let refreshes = 0;
+  const removed: string[][] = [];
+  let unknown = 0;
   engine.register(
-    catalogDeletionRefresh("SERIES", () => {
-      refreshes += 1;
+    catalogDeletionRefresh("SERIES", {
+      removed: (titleIds) => removed.push(titleIds),
+      unknown: () => {
+        unknown += 1;
+      },
     }),
   );
   const event: DomainEvent = {
@@ -27,14 +31,36 @@ test("committed deletions refresh the matching catalog, including replay and fal
   };
   engine.handleEvent({ ...event, sequence: 1, facet: "movie" });
   engine.flush();
-  assert.equal(refreshes, 0);
+  assert.deepEqual(removed, []);
+
   engine.handleEvent({ ...event, sequence: 2 });
+  engine.handleEvent({ ...event, sequence: 3, titleId: "other" });
+  engine.handleEvent({ ...event, sequence: 4 });
   engine.flush();
-  assert.equal(refreshes, 1);
-  engine.handleEvent({ ...event, sequence: 2 });
+  assert.deepEqual(removed, [["removed", "other"]]);
+
+  engine.handleEvent({ ...event, sequence: 4 });
   engine.flush();
-  assert.equal(refreshes, 1);
+  assert.equal(removed.length, 1);
+  assert.equal(unknown, 0);
+});
+
+test("a degraded refresh reports unknown deletions instead of a title list", () => {
+  const engine = createReactiveRefreshEngine({
+    scheduler: { setTimeout: () => 1, clearTimeout: () => {} },
+  });
+  const removed: string[][] = [];
+  let unknown = 0;
+  engine.register(
+    catalogDeletionRefresh("MOVIE", {
+      removed: (titleIds) => removed.push(titleIds),
+      unknown: () => {
+        unknown += 1;
+      },
+    }),
+  );
   engine.runAll();
   engine.flush();
-  assert.equal(refreshes, 2);
+  assert.equal(unknown, 1);
+  assert.deepEqual(removed, []);
 });

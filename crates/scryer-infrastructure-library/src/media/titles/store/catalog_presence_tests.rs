@@ -373,6 +373,45 @@ async fn attention_counts_only_files_that_are_on_disk() {
     assert!(clear.contains(&"series-scan-failed-staged".to_string()));
 }
 
+/// A client refreshing a few titles asks for them by id under its other filters, so
+/// the id list narrows the page and the other filters still apply to it.
+#[tokio::test]
+async fn title_ids_narrow_the_page_under_the_other_filters() {
+    let store = seeded_catalogue().await;
+    let by_ids = |ids: &[&str], presences: Vec<TitleCatalogPresence>| TitleCatalogFilter {
+        title_ids: expected(ids),
+        presences,
+        ..TitleCatalogFilter::default()
+    };
+
+    assert_eq!(
+        names_for(
+            &store,
+            by_ids(&["movie-missing", "series-complete"], Vec::new())
+        )
+        .await,
+        expected(&["movie-missing", "series-complete"])
+    );
+    // A requested title the other filters exclude is left out, which is how the
+    // client learns it no longer belongs in the list.
+    assert_eq!(
+        names_for(
+            &store,
+            by_ids(
+                &["movie-missing", "series-complete"],
+                vec![TitleCatalogPresence::Complete],
+            ),
+        )
+        .await,
+        expected(&["series-complete"])
+    );
+    assert!(
+        names_for(&store, by_ids(&["no-such-title"], Vec::new()))
+            .await
+            .is_empty()
+    );
+}
+
 fn expected(names: &[&str]) -> Vec<String> {
     names.iter().map(|name| (*name).to_string()).collect()
 }

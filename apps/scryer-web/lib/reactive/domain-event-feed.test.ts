@@ -191,6 +191,36 @@ test("runAll queues every registered alias for the degraded fallback path", () =
   assert.deepEqual(runs.sort(), ["a", "b"]);
 });
 
+test("run receives the events that matched since the last flush", () => {
+  const { scheduler, flushAll } = createManualScheduler();
+  const engine = createReactiveRefreshEngine({ scheduler });
+  const batches: (readonly DomainEvent[] | null)[] = [];
+  engine.register({
+    aliasKey: "titles",
+    predicate: forEventTypes("title_deleted"),
+    run: (events) => batches.push(events),
+  });
+  const deleted = (sequence: number, titleId: string): DomainEvent =>
+    makeEvent({ sequence, eventType: "title_deleted", titleId });
+
+  engine.handleEvent(deleted(1, "title-a"));
+  engine.handleEvent(deleted(2, "title-b"));
+  flushAll();
+  assert.deepEqual(
+    batches.map((events) => events?.map((event) => event.titleId)),
+    [["title-a", "title-b"]],
+  );
+
+  // A degraded refresh does not know what changed, and says so even when it
+  // lands on top of events that were already queued.
+  engine.handleEvent(deleted(3, "title-c"));
+  engine.runAll();
+  engine.handleEvent(deleted(4, "title-d"));
+  flushAll();
+  assert.equal(batches.length, 2);
+  assert.equal(batches[1], null);
+});
+
 test("a throwing run is routed to onError without aborting the flush", () => {
   const { scheduler, flushAll } = createManualScheduler();
   const engine = createReactiveRefreshEngine({ scheduler });

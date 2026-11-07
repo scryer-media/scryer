@@ -348,6 +348,8 @@ pub struct TitleCatalogFilterInput {
     pub presences: Option<Vec<TitleCatalogPresenceValue>>,
     /// Keep titles holding a file whose scan failed or that needs review when true, and titles holding none when false; null keeps both.
     pub needs_attention: Option<bool>,
+    /// Restrict results to these title IDs; null or empty keeps every title. Lets a client refresh a few titles under its other filters without reloading the whole list.
+    pub title_ids: Option<Vec<ID>>,
 }
 
 #[derive(SimpleObject, Clone)]

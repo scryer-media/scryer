@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { TitleRecord } from "@/lib/types";
 import {
+  applyCatalogTitlesById,
   applyRefreshedCatalogTitle,
   buildActiveCatalogListFilters,
   mergePreferLoadedImageFields,
@@ -253,4 +254,45 @@ test("a new title is left out while filters only the server can apply are active
     ),
     ["Placeholder Renamed"],
   );
+});
+
+test("an id-scoped refetch settles only the requested rows", () => {
+  const kept = { ...loadedTitle, id: "title-kept", name: "Placeholder Kept" };
+  const leaving = { ...loadedTitle, id: "title-leaving" };
+  const current = [kept, loadedTitle, leaving];
+  const renamed = { ...loadedTitle, name: "Placeholder Renamed" };
+
+  const next = applyCatalogTitlesById(
+    current,
+    [loadedTitle.id, leaving.id],
+    [renamed],
+    false,
+  );
+  // The renamed row is merged in place; the one the filters now exclude goes.
+  assert.deepEqual(
+    next.map((title) => [title.id, title.name]),
+    [
+      ["title-kept", "Placeholder Kept"],
+      [loadedTitle.id, "Placeholder Renamed"],
+    ],
+  );
+  assert.equal(next[0], kept);
+});
+
+test("an id-scoped refetch inserts a new title only when told it is new", () => {
+  const current = [loadedTitle];
+  const added = { ...listRefreshTitle, id: "title-added" };
+
+  assert.equal(
+    applyCatalogTitlesById(current, [added.id], [added], false),
+    current,
+  );
+  assert.deepEqual(
+    applyCatalogTitlesById(current, [added.id], [added], true).map(
+      (title) => title.id,
+    ),
+    [loadedTitle.id, "title-added"],
+  );
+  // A new title the server filters exclude stays out.
+  assert.equal(applyCatalogTitlesById(current, [added.id], [], true), current);
 });

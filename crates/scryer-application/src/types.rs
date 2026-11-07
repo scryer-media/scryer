@@ -1358,6 +1358,10 @@ pub struct TitleCatalogFilter {
     /// `Some(true)` keeps titles holding a file whose scan failed or that needs
     /// review, `Some(false)` keeps the titles holding none, and `None` keeps both.
     pub needs_attention: Option<bool>,
+    /// Restrict results to these title ids; an empty list keeps every title. A
+    /// client refreshing a few titles under its active filters asks for just
+    /// those rather than reloading the whole list.
+    pub title_ids: Vec<String>,
 }
 
 /// How much of a title is on disk.

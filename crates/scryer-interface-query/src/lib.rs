@@ -399,6 +399,13 @@ fn title_catalog_filter_from_input(
             })
             .collect(),
         needs_attention: filter.needs_attention,
+        title_ids: normalize_catalog_filter_values(
+            filter
+                .title_ids
+                .unwrap_or_default()
+                .into_iter()
+                .map(String::from),
+        ),
     })
 }
 
