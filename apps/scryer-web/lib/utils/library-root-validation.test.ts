@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   findConflictingLibraryNamesByRootPath,
+  mergeImportRootsIntoStoredRoots,
   normalizeComparableLibraryRootPath,
   normalizeLibraryRootDrafts,
   trimLibraryRootPath,
@@ -114,4 +115,56 @@ test("root validation limits concurrent requests", async () => {
     4,
   );
   assert.equal(peak, 4);
+});
+
+test("an import keeps every stored root and adds only new paths", () => {
+  const stored = [
+    { id: "root-a", path: "/media/films", isDefault: false },
+    { id: "root-b", path: "/media/films-4k", isDefault: true },
+  ];
+
+  assert.deepEqual(
+    mergeImportRootsIntoStoredRoots(
+      stored,
+      ["/media/films/", "/media/films-new"],
+      "unix",
+    ),
+    [
+      { id: "root-a", path: "/media/films", isDefault: false },
+      { id: "root-b", path: "/media/films-4k", isDefault: true },
+      { path: "/media/films-new", isDefault: false },
+    ],
+  );
+});
+
+test("an import matches stored Windows roots without regard to case", () => {
+  const stored = [{ id: "root-a", path: "D:\\Media\\Films", isDefault: true }];
+
+  assert.deepEqual(
+    mergeImportRootsIntoStoredRoots(stored, ["d:/media/films"], "windows"),
+    [{ id: "root-a", path: "D:\\Media\\Films", isDefault: true }],
+  );
+  // Unix paths are case sensitive, so the same spelling is a new root there.
+  assert.equal(
+    mergeImportRootsIntoStoredRoots(
+      [{ id: "root-a", path: "/media/Films", isDefault: true }],
+      ["/media/films"],
+      "unix",
+    ).length,
+    2,
+  );
+});
+
+test("an import into a library with no stored default makes its first path the default", () => {
+  assert.deepEqual(
+    mergeImportRootsIntoStoredRoots(
+      [],
+      ["/media/films", "/media/films-4k"],
+      "unix",
+    ),
+    [
+      { path: "/media/films", isDefault: true },
+      { path: "/media/films-4k", isDefault: false },
+    ],
+  );
 });

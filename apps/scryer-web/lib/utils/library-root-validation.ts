@@ -176,3 +176,38 @@ export async function validateLibraryRootPaths(
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return { validPaths, invalidPaths, unavailable };
 }
+
+/**
+ * The root list an import sends for a library that already exists: every
+ * stored root, with its id and default flag, followed by each import path the
+ * library does not have yet. Stored roots a draft leaves out are removed with
+ * their titles, so none is left out. The stored default stays the default;
+ * the first import path becomes the default only when no stored root is.
+ */
+export function mergeImportRootsIntoStoredRoots(
+  storedRoots: readonly { id: string; path: string; isDefault: boolean }[],
+  importPaths: readonly string[],
+  pathStyle: LocalPathStyle | undefined,
+): { id?: string; path: string; isDefault: boolean }[] {
+  const comparable = (path: string) =>
+    normalizeComparableLibraryRootPath(path, pathStyle);
+  const merged: { id?: string; path: string; isDefault: boolean }[] =
+    storedRoots.map((root) => ({
+      id: root.id,
+      path: root.path,
+      isDefault: root.isDefault,
+    }));
+  const known = new Set(storedRoots.map((root) => comparable(root.path)));
+  let hasDefault = storedRoots.some((root) => root.isDefault);
+  for (const path of importPaths) {
+    const key = comparable(path);
+    if (known.has(key)) continue;
+    known.add(key);
+    merged.push({ path, isDefault: !hasDefault });
+    hasDefault = true;
+  }
+  if (!hasDefault && merged.length > 0) {
+    merged[0] = { ...merged[0], isDefault: true };
+  }
+  return merged;
+}

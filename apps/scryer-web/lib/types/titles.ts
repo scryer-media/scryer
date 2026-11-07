@@ -297,6 +297,8 @@ export type LibraryRootRecord = {
   id: string;
   path: string;
   isDefault: boolean;
+  /** Titles currently under this root; read only where a query selects it. */
+  titleCount?: number;
 };
 
 export type LibraryRecord = {

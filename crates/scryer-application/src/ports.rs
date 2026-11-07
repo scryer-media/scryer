@@ -3116,6 +3116,10 @@ pub trait LibraryRepository: Send + Sync {
     async fn permission_masks_for_user(&self, user_id: &str) -> AppResult<Vec<LibraryGrant>>;
     async fn set_grants_for_user(&self, user_id: &str, grants: Vec<LibraryGrant>) -> AppResult<()>;
     async fn title_library_id(&self, title_id: &str) -> AppResult<Option<String>>;
+    /// The number of titles under each library root, keyed by root id. A
+    /// title counts toward a root of its own library only. Roots with no
+    /// titles are absent.
+    async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>>;
 }
 
 #[derive(Clone, Debug)]

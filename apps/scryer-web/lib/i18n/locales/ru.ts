@@ -743,6 +743,11 @@ const ru: LocaleDictionary = {
   "settings.libraryRemoveRootsTitle": "Удаление корневых папок",
   "settings.libraryRemoveRootsConfirm":
     "Удаление {{paths}} также удалит из каталога все тайтлы в этой папке. Медиафайлы на диске удалены не будут.",
+  "settings.libraryRemoveRootsEntry": "{{path}} (тайтлов: {{count}})",
+  "settings.libraryRemoveRootsEntry.one": "{{path}} ({{count}} тайтл)",
+  "settings.libraryRemoveRootsEntry.few": "{{path}} ({{count}} тайтла)",
+  "settings.libraryRemoveRootsEntry.many": "{{path}} ({{count}} тайтлов)",
+  "settings.libraryRemoveRootsEntry.other": "{{path}} ({{count}} тайтла)",
   "settings.libraryRootsRemovedTitles":
     "Библиотека сохранена. Тайтлов удалено из каталога: {{count}}.",
   "settings.libraryEmpty": "Нет доступных библиотек.",
@@ -3989,6 +3994,8 @@ const ru: LocaleDictionary = {
   "setup.mediaPathNotReachable": "Путь пока недоступен",
   "setup.mediaPathsNotReachableWarning":
     "Некоторые пути к медиафайлам пока недоступны. Они были сохранены, и их можно изменить позже в настройках.",
+  "setup.mediaPathsStoredRootsLoaded":
+    "Сохранённые папки ваших библиотек загружены и заменили список. Проверьте папки и снова нажмите «Далее».",
   "setup.mediaPathsVerificationUnavailable":
     "Не удалось проверить указанные пути. Вы можете продолжить настройку и изменить их позже в настройках.",
   "setup.downloadClientTitle": "Добавьте клиент загрузки",
@@ -8236,6 +8243,12 @@ const ru: LocaleDictionary = {
     "Корневой каталог библиотеки с выбранным значением нельзя использовать.",
   "error.reason.LIBRARY_ROOT_DUPLICATED":
     "Корневые каталоги внутри библиотеки должны быть уникальными.",
+  "error.reason.LIBRARY_ROOT_ID_DUPLICATED":
+    "Одна и та же корневая папка указана дважды. Оставьте по одной записи для каждой папки.",
+  "error.reason.LIBRARY_ROOT_REMOVAL_MISMATCH":
+    "Корневые папки, подтверждённые к удалению, больше не совпадают с сохранением. Перезагрузите библиотеку и повторите попытку.",
+  "error.reason.LIBRARY_ROOT_REMOVAL_NOT_ACKNOWLEDGED":
+    "Это сохранение удалит неподтверждённые корневые папки. Перезагрузите библиотеку и проверьте папки перед сохранением.",
   "error.reason.LIBRARY_ROOT_ID_REQUIRED":
     "Эта папка уже является корневой папкой библиотеки. Оставьте существующую корневую папку вместо повторного добавления.",
   "error.reason.LIBRARY_ROOT_REQUIRED":

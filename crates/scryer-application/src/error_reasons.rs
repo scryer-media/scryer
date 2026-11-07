@@ -150,6 +150,17 @@ pub mod library {
     pub const ROOT_TITLES_BUSY: &str = "LIBRARY_ROOT_TITLES_BUSY";
     /// A stored library root was resubmitted by path without its id.
     pub const ROOT_ID_REQUIRED: &str = "LIBRARY_ROOT_ID_REQUIRED";
+    /// An edit drops stored roots it did not list as removed. Carries
+    /// [`ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT`] and
+    /// [`ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT`].
+    pub const ROOT_REMOVAL_NOT_ACKNOWLEDGED: &str = "LIBRARY_ROOT_REMOVAL_NOT_ACKNOWLEDGED";
+    /// An edit lists as removed a root it keeps or the library does not have.
+    /// Carries [`ROOT_REMOVAL_MISMATCHED_IDS_FACT`].
+    pub const ROOT_REMOVAL_MISMATCH: &str = "LIBRARY_ROOT_REMOVAL_MISMATCH";
+    /// One edit names the same stored root id more than once.
+    pub const ROOT_ID_DUPLICATED: &str = "LIBRARY_ROOT_ID_DUPLICATED";
+    /// Another library of the same facet already has this name.
+    pub const NAME_TAKEN: &str = "LIBRARY_NAME_TAKEN";
     /// Default libraries cannot be deleted.
     pub const DEFAULT_LIBRARIES_CANNOT_DELETED: &str = "LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED";
     /// Library scan session was not found.
@@ -359,6 +370,10 @@ pub mod library {
         ROOT_REQUIRED,
         ROOT_TITLES_BUSY,
         ROOT_ID_REQUIRED,
+        ROOT_REMOVAL_NOT_ACKNOWLEDGED,
+        ROOT_REMOVAL_MISMATCH,
+        ROOT_ID_DUPLICATED,
+        NAME_TAKEN,
         DEFAULT_LIBRARIES_CANNOT_DELETED,
         SCAN_SESSION_NOT_FOUND,
         SCAN_CANCEL_UNAVAILABLE,
@@ -445,6 +460,44 @@ pub mod library {
         TEMPLATE_OPTIONAL_GROUP_INVALID,
         SCAN_FOLDER_BOUNDARY_INVALID,
     ];
+
+    /// Ids of the stored roots an edit drops without listing them as removed.
+    pub const ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT: &str = "unacknowledgedRootIds";
+    /// Paths of those roots, in the same order as their ids.
+    pub const ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT: &str = "unacknowledgedRootPaths";
+    /// Ids listed as removed that the edit keeps or the library does not have.
+    pub const ROOT_REMOVAL_MISMATCHED_IDS_FACT: &str = "mismatchedRootIds";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[
+        ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT,
+        ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT,
+        ROOT_REMOVAL_MISMATCHED_IDS_FACT,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod external_import {

@@ -7202,16 +7202,15 @@ async fn additive_scan_keeps_title_match_total_unknown_until_completion() {
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
         metadata_gateway.clone(),
     );
-    app.update_library(
+    crate::lib_tests::replace_library_roots(
+        &app,
         &user,
         &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
-        None,
-        Some(vec![LibraryRootDraft {
+        vec![LibraryRootDraft {
             id: None,
             path: series_root.to_string_lossy().to_string(),
             is_default: true,
-        }]),
-        None,
+        }],
     )
     .await
     .expect("store series library roots");
@@ -7321,11 +7320,11 @@ async fn background_refresh_movies_scans_all_configured_roots() {
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
     );
 
-    app.update_library(
+    crate::lib_tests::replace_library_roots(
+        &app,
         &user,
         &scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
-        None,
-        Some(vec![
+        vec![
             LibraryRootDraft {
                 id: None,
                 path: root_one.to_string_lossy().to_string(),
@@ -7336,8 +7335,7 @@ async fn background_refresh_movies_scans_all_configured_roots() {
                 path: root_two.to_string_lossy().to_string(),
                 is_default: false,
             },
-        ]),
-        None,
+        ],
     )
     .await
     .expect("store movie roots");
@@ -7744,16 +7742,15 @@ async fn cancel_library_scan_rejects_additive_sessions() {
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
         metadata_gateway.clone(),
     );
-    app.update_library(
+    crate::lib_tests::replace_library_roots(
+        &app,
         &user,
         &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
-        None,
-        Some(vec![LibraryRootDraft {
+        vec![LibraryRootDraft {
             id: None,
             path: series_root.to_string_lossy().to_string(),
             is_default: true,
-        }]),
-        None,
+        }],
     )
     .await
     .expect("store series library roots");
@@ -8718,21 +8715,18 @@ async fn update_default_library_roots_updates_all_facet_root_read_paths() {
         },
     ];
 
-    app.update_library(
+    crate::lib_tests::replace_library_roots(
+        &app,
         &user,
         &movie_library_id,
-        None,
-        Some(
-            expected_roots
-                .iter()
-                .map(|root| LibraryRootDraft {
-                    id: None,
-                    path: root.path.clone(),
-                    is_default: root.is_default,
-                })
-                .collect(),
-        ),
-        None,
+        expected_roots
+            .iter()
+            .map(|root| LibraryRootDraft {
+                id: None,
+                path: root.path.clone(),
+                is_default: root.is_default,
+            })
+            .collect(),
     )
     .await
     .expect("update canonical roots");
@@ -8758,16 +8752,15 @@ async fn update_default_library_roots_updates_all_facet_root_read_paths() {
 async fn title_root_resolution_uses_owning_library_roots() {
     let (app, user) = bootstrap();
     let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
-    app.update_library(
+    crate::lib_tests::replace_library_roots(
+        &app,
         &user,
         &movie_library_id,
-        None,
-        Some(vec![LibraryRootDraft {
+        vec![LibraryRootDraft {
             id: None,
             path: "/library/default-movies".to_string(),
             is_default: true,
-        }]),
-        None,
+        }],
     )
     .await
     .expect("default movie library roots should update");
@@ -8802,16 +8795,15 @@ async fn title_root_resolution_uses_owning_library_roots() {
 async fn update_default_library_rejects_empty_roots_without_persisting_them() {
     let (app, user) = bootstrap();
     let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
-    app.update_library(
+    crate::lib_tests::replace_library_roots(
+        &app,
         &user,
         &movie_library_id,
-        None,
-        Some(vec![LibraryRootDraft {
+        vec![LibraryRootDraft {
             id: None,
             path: "/library/movies-main".to_string(),
             is_default: true,
-        }]),
-        None,
+        }],
     )
     .await
     .expect("initial default roots should update");
@@ -8847,16 +8839,15 @@ async fn update_library_removing_root_clears_pending_imports_for_removed_root() 
         unmatched_items.clone(),
     );
     let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
-    app.update_library(
+    crate::lib_tests::replace_library_roots(
+        &app,
         &user,
         &movie_library_id,
-        None,
-        Some(vec![LibraryRootDraft {
+        vec![LibraryRootDraft {
             id: None,
             path: "/movies-old".to_string(),
             is_default: true,
-        }]),
-        None,
+        }],
     )
     .await
     .expect("initial default roots should update");
@@ -8873,16 +8864,15 @@ async fn update_library_removing_root_clears_pending_imports_for_removed_root() 
         .await
         .expect("seed removed-root pending import");
 
-    app.update_library(
+    crate::lib_tests::replace_library_roots(
+        &app,
         &user,
         &movie_library_id,
-        None,
-        Some(vec![LibraryRootDraft {
+        vec![LibraryRootDraft {
             id: None,
             path: "/movies-new".to_string(),
             is_default: true,
-        }]),
-        None,
+        }],
     )
     .await
     .expect("canonical roots should update");

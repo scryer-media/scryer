@@ -2032,6 +2032,9 @@ export function MediaContentView({
     loadLibrarySettings: (
       libraryId: string,
     ) => Promise<LibrarySettingsRecord | null>;
+    loadLibraryRoots: (
+      libraryId: string,
+    ) => Promise<import("@/lib/types/titles").LibraryRootRecord[] | null>;
     loadFacetDownloadClientRouting: (
       scopeId: Facet,
     ) => Promise<DownloadClientRoutingEntry[]>;
@@ -2045,6 +2048,7 @@ export function MediaContentView({
       input: {
         name: string;
         roots: import("@/lib/types/titles").RootFolderOption[];
+        removedRootIds?: string[];
         settings?: LibrarySettingsDraft;
       },
     ) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
@@ -3684,6 +3688,7 @@ export function MediaContentView({
                   canManageSystemSettings || canManageCatalogSettings
                 }
                 loadLibrarySettings={state.loadLibrarySettings}
+                loadLibraryRoots={state.loadLibraryRoots}
                 loadFacetDownloadClientRouting={
                   state.loadFacetDownloadClientRouting
                 }

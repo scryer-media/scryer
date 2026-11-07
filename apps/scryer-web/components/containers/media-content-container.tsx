@@ -43,6 +43,7 @@ import {
   jobRunsQuery,
   librariesQuery,
   libraryDownloadClientsQuery,
+  libraryRootTitleCountsQuery,
   librarySettingsQuery,
   externalSubtitlesQuery,
   catalogDiscoveryQuery,
@@ -144,6 +145,7 @@ import type {
   DownloadClientRoutingEntry,
   JobRun,
   LibraryRecord,
+  LibraryRootRecord,
   LibrarySettingsDraft,
   LibrarySettingsRecord,
   Release,
@@ -4623,6 +4625,48 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     t,
   ]);
 
+  // The library's roots as stored right now, with their title counts. A save
+  // computes the roots it drops from this, not from the page's copy, so roots
+  // added elsewhere since the page loaded are not dropped unseen. Null means
+  // the read failed and the failure is already reported.
+  const loadLibraryRoots = React.useCallback(
+    async (libraryId: string): Promise<LibraryRootRecord[] | null> => {
+      const permission =
+        contentSettingsSection === "library" && !canManageConfig
+          ? "MANAGE_LIBRARY"
+          : "VIEW";
+      try {
+        const { data, error } = await client
+          .query<{ libraries: Pick<LibraryRecord, "id" | "roots">[] }>(
+            libraryRootTitleCountsQuery,
+            { facet: null, permission },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (error) throw error;
+        const library = (data?.libraries ?? []).find(
+          (candidate) => candidate.id === libraryId,
+        );
+        if (!library) {
+          setGlobalStatus(t("settings.librarySaveFailed"), { level: "ERROR" });
+          return null;
+        }
+        return library.roots;
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(
+            error,
+            t("settings.librarySaveFailed"),
+            t,
+          ),
+          { level: "ERROR" },
+        );
+        return null;
+      }
+    },
+    [canManageConfig, client, contentSettingsSection, setGlobalStatus, t],
+  );
+
   const loadLibrarySettings = React.useCallback(
     async (libraryId: string): Promise<LibrarySettingsRecord | null> => {
       const { data, error } = await client
@@ -4781,6 +4825,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       input: {
         name: string;
         roots: RootFolderOption[];
+        /** Stored roots the operator confirmed removing with this save. */
+        removedRootIds?: string[];
         settings?: LibrarySettingsDraft;
       },
     ) => {
@@ -4792,6 +4838,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               libraryId,
               name: input.name,
               roots: libraryRootsInput(input.roots),
+              ...(input.removedRootIds && input.removedRootIds.length > 0
+                ? { removedRootIds: input.removedRootIds }
+                : {}),
               settings: librarySettingsInput(input.settings),
             },
           })
@@ -5513,6 +5562,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           allLibrariesValue: ALL_LIBRARIES_VALUE,
           setSelectedLibraryIds,
           loadLibrarySettings,
+          loadLibraryRoots,
           loadFacetDownloadClientRouting,
           createLibrary,
           updateLibrary,

@@ -4367,7 +4367,8 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                         "path": "/library/root-lifecycle-custom",
                         "isDefault": false
                     }
-                ]
+                ],
+                "removedRootIds": [unreferenced_root_id]
             }
         }),
     )
@@ -4424,6 +4425,38 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         .expect("kept title id")
         .to_string();
 
+    // Each root reports how many of the library's titles sit on it, so a
+    // removal can say what it takes out before it is confirmed.
+    let counted = gql(
+        &ctx,
+        r#"query {
+            libraries(facet: ANIME, permission: MANAGE_LIBRARY) {
+                id roots { id titleCount }
+            }
+        }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&counted);
+    let counted_roots = counted["data"]["libraries"]
+        .as_array()
+        .expect("libraries list")
+        .iter()
+        .find(|library| library["id"] == library_id)
+        .map(|library| library["roots"].clone())
+        .expect("the lifecycle library is listed");
+    let title_count = |root_id: &str| {
+        counted_roots
+            .as_array()
+            .expect("library roots")
+            .iter()
+            .find(|root| root["id"] == root_id)
+            .map(|root| root["titleCount"].clone())
+            .unwrap_or_else(|| panic!("root {root_id} listed: {counted_roots}"))
+    };
+    assert_eq!(title_count(&default_root_id), 1);
+    assert_eq!(title_count(&custom_root_id), 1);
+
     // A stored root resubmitted by path without its id is refused, never
     // matched by path, and nothing leaves the catalog.
     let path_only_rename = gql(
@@ -4470,8 +4503,44 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         custom_root_id
     );
 
-    // Leaving the custom root out drops it: the titles under it leave the
-    // catalog, and the mutation says how many.
+    // Leaving the custom root out without naming it as removed is refused,
+    // and the refusal names the root it would have dropped.
+    let unacknowledged_drop = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) { removedTitleCount }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "roots": [
+                    {
+                        "id": default_root_id,
+                        "path": "/library/root-lifecycle-default",
+                        "isDefault": true
+                    }
+                ]
+            }
+        }),
+    )
+    .await;
+    let extensions = &unacknowledged_drop["errors"][0]["extensions"];
+    assert_eq!(
+        extensions["reason"], "LIBRARY_ROOT_REMOVAL_NOT_ACKNOWLEDGED",
+        "{unacknowledged_drop}"
+    );
+    assert_eq!(extensions["unacknowledgedRootIds"], json!([custom_root_id]));
+    assert_eq!(
+        extensions["unacknowledgedRootPaths"],
+        json!(["/library/root-lifecycle-custom"])
+    );
+    assert_eq!(
+        stored_title_root_folder_id(&ctx, &title_id).await,
+        custom_root_id
+    );
+
+    // Leaving the custom root out and naming it as removed drops it: the
+    // titles under it leave the catalog, and the mutation says how many.
     let dropped_custom_root = gql(
         &ctx,
         r#"mutation($input: UpdateLibraryInput!) {
@@ -4489,7 +4558,8 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                         "path": "/library/root-lifecycle-default",
                         "isDefault": true
                     }
-                ]
+                ],
+                "removedRootIds": [custom_root_id]
             }
         }),
     )

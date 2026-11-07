@@ -739,6 +739,167 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
 }
 
 #[tokio::test]
+async fn storage_sequence_holds_in_action_when_its_root_moves_over_the_subjects_files() {
+    let fixture = title_fixture("Sequence root widened", MediaFacet::Movie).await;
+    let first_path = fixture.root.join("Sequence/first.mkv");
+    let first_file_id =
+        add_movie_file(&fixture.execution.app, &fixture.title.id, &first_path).await;
+    let second_path = fixture.root.join("Sequence/second.mkv");
+    let second_file_id =
+        add_movie_file(&fixture.execution.app, &fixture.title.id, &second_path).await;
+    let mut ordered_targets = [(first_file_id, first_path), (second_file_id, second_path)];
+    ordered_targets.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let [(first_file_id, first_path), (second_file_id, second_path)] = ordered_targets;
+    let (probe, capacity_recovered) = capacity_holds_after_file_removal(first_path.clone());
+    let _probe = install_maintenance_storage_capacity_probe_for_test(probe).await;
+    let root_id = selected_root_id(&fixture).await;
+    let mut draft = sequence_draft(deletion_steps());
+    draft.storage_root_id = Some(root_id.clone());
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
+    super::maintenance_rules::arm_rule(
+        &fixture.execution.app,
+        &fixture.execution.user,
+        &rule_set_id,
+        MaintenanceEffectArming::Destructive,
+        Some(1),
+    )
+    .await;
+
+    let first = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("persist storage sequence journal before capacity hold");
+    assert_eq!(first.held, 1, "{first:?}");
+    let deletion_run = fixture
+        .execution
+        .evaluation
+        .latest_scoped_deletion_action_run(
+            &candidate.id,
+            candidate.match_generation,
+            &candidate.action_kind,
+        )
+        .await
+        .expect("read exact scoped deletion journal")
+        .expect("DeleteFiles hold persists its scoped journal");
+    let journal: serde_json::Value =
+        serde_json::from_str(&deletion_run.detail).expect("parse storage journal");
+
+    // The selected root keeps its id and moves up to the directory holding
+    // the fixture root, so the subject's remaining file still sits under it
+    // and handling gets past the pre-dispatch membership check. The root's
+    // physical identity has changed, so DeleteFiles itself must hold before
+    // touching the journaled target.
+    let widened_root = fixture
+        .root
+        .parent()
+        .expect("fixture root parent")
+        .to_path_buf();
+    let library = fixture
+        .execution
+        .app
+        .services
+        .catalog
+        .libraries
+        .default_for_facet(MediaFacet::Movie)
+        .await
+        .expect("list movie libraries")
+        .expect("default movie library");
+    fixture
+        .execution
+        .app
+        .update_library(
+            &fixture.execution.user,
+            &library.id,
+            None,
+            Some(vec![LibraryRootDraft {
+                id: Some(root_id.clone()),
+                path: widened_root.to_string_lossy().into_owned(),
+                is_default: true,
+            }]),
+            None,
+        )
+        .await
+        .expect("move the selected storage root over the subject's files");
+    capacity_recovered.store(true, Ordering::SeqCst);
+    let current_root_identity = fixture
+        .execution
+        .app
+        .maintenance_storage_root_identity(Some(root_id.as_str()))
+        .await
+        .expect("read current root identity")
+        .expect("moved root has a physical identity");
+    assert_ne!(
+        journal["storage_root_identity"].as_str(),
+        Some(current_root_identity.as_str()),
+        "the journal recorded the root's previous physical identity"
+    );
+
+    let resumed = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("hold a storage journal whose root identity changed");
+    assert_eq!(resumed.held, 1, "{resumed:?}");
+    let held_run = fixture
+        .execution
+        .evaluation
+        .list_action_runs(None, Some(&candidate.id), None)
+        .await
+        .expect("read candidate action runs")
+        .into_iter()
+        .find(|run| run.id == deletion_run.id)
+        .expect("held DeleteFiles run persists");
+    assert_eq!(held_run.status, LifecycleActionRunStatus::Held);
+    assert_eq!(
+        held_run.hold_reason.as_deref(),
+        Some(execution_reason::UNKNOWN_AT_EXECUTION)
+    );
+    assert_ne!(held_run.finished_at, deletion_run.finished_at);
+    // The in-action identity check is what held it: the run was re-entered
+    // (the pre-dispatch hold leaves it untouched) and its detail names the
+    // check.
+    let hold_detail: serde_json::Value =
+        serde_json::from_str(&held_run.detail).expect("parse hold detail");
+    assert_eq!(
+        hold_detail["reason"].as_str(),
+        Some("storage_root_identity_changed"),
+        "{hold_detail}"
+    );
+    assert!(
+        !first_path.exists(),
+        "the completed policy target stays deleted"
+    );
+    assert!(second_path.exists(), "the journaled target is preserved");
+    assert!(
+        fixture
+            .execution
+            .app
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(&second_file_id)
+            .await
+            .expect("read preserved storage row")
+            .is_some()
+    );
+    assert!(
+        fixture
+            .execution
+            .app
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(&first_file_id)
+            .await
+            .expect("read completed storage row")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn completed_storage_sequence_releases_its_exact_marker_after_root_filter_omits_it() {
     let _probe =
         install_maintenance_storage_capacity_probe_for_test(stable_capacity_probe(capacity(100)))

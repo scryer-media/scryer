@@ -10646,6 +10646,10 @@ type LibraryRootPayload {
 	Whether this is the default root folder.
 	"""
 	isDefault: Boolean!
+	"""
+	Titles in this library whose root is this root; removing the root takes them out of the catalog.
+	"""
+	titleCount: Int!
 }
 
 """
@@ -34206,6 +34210,10 @@ input UpdateLibraryInput {
 	Replacement root list; omission preserves roots and an empty list clears them when valid.
 	"""
 	roots: [UpdateLibraryRootInput!]
+	"""
+	Ids of the stored roots `roots` drops. Must name exactly the roots the edit removes; ignored when `roots` is omitted.
+	"""
+	removedRootIds: [ID!]
 	"""
 	Optional replacement library settings.
 	"""

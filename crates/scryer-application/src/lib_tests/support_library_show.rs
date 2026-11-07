@@ -280,6 +280,10 @@ impl LibraryRepository for MockLibraryRepo {
             &MediaFacet::Movie,
         )))
     }
+
+    async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>> {
+        Ok(std::collections::HashMap::new())
+    }
 }
 
 #[derive(Default)]
@@ -1013,4 +1017,43 @@ pub(crate) fn with_stored_root_ids(
             draft
         })
         .collect()
+}
+
+/// Replace `library_id`'s roots with `drafts`, sending each kept root's id back
+/// and acknowledging every stored root the new list drops, the way a client
+/// that has confirmed the removal does.
+pub(crate) async fn replace_library_roots(
+    app: &AppUseCase,
+    actor: &User,
+    library_id: &str,
+    drafts: Vec<LibraryRootDraft>,
+) -> AppResult<Library> {
+    let library = app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(library_id)
+        .await?
+        .expect("library to replace roots on exists");
+    let drafts = with_stored_root_ids(&library, drafts);
+    let removed_root_ids = library
+        .roots
+        .iter()
+        .filter(|root| {
+            !drafts
+                .iter()
+                .any(|draft| draft.id.as_deref() == Some(root.id.as_str()))
+        })
+        .map(|root| root.id.clone())
+        .collect();
+    app.update_library_with_outcome(
+        actor,
+        library_id,
+        None,
+        Some(drafts),
+        Some(removed_root_ids),
+        None,
+    )
+    .await
+    .map(|updated| updated.library)
 }
