@@ -303,7 +303,10 @@ function applyZoomLimits(
   graph: LibraryGraphStore,
 ) {
   let largest = 0;
+  // Titles only: a folded neighbourhood is drawn far larger than a title
+  // and would stop the zoom long before titles are readable.
   graph.forEachNode((_key, attributes) => {
+    if (attributes.collapsedClusterId !== undefined) return;
     largest = Math.max(largest, attributes.size);
   });
   const height = sigma.getContainer().offsetHeight;
