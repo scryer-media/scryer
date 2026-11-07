@@ -209,6 +209,7 @@ impl SubtitleMutations {
     async fn start_episode_subtitle_search(
         &self,
         ctx: &Context<'_>,
+        #[graphql(desc = "The series or anime title and the episodes in it to search.")]
         input: EpisodeSubtitleSearchInput,
     ) -> GqlResult<crate::types::JobRunPayload> {
         let app = app_from_ctx(ctx)?;

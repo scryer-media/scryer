@@ -1393,7 +1393,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     assert_eq!(kind_count("INPUT_OBJECT"), 247);
-    assert_eq!(kind_count("ENUM"), 208);
+    // The search walk intensity setting adds AcquisitionWalkIntensityValue:
+    // ENUM 208->209.
+    assert_eq!(kind_count("ENUM"), 209);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
