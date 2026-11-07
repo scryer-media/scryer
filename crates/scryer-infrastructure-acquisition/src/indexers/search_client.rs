@@ -324,22 +324,22 @@ fn effective_request_deadline(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TitleGuardMode {
-    SkipTitleMatch,
-    ExactTitleMatch,
+    Skip,
+    Exact,
     /// An id lookup's answer: a release stays when the indexer tagged it with
     /// one of the title's own ids, or when its name is the title or an alias.
     /// Indexers pad id lookups with unrelated, untagged releases, so the id in
     /// the request alone does not vouch for them.
-    IdOrTitleMatch,
+    IdOrTitle,
 }
 
 fn title_guard_mode_for_strategy(strategy: &SearchStrategy) -> TitleGuardMode {
     if !strategy.ids.is_empty() {
-        TitleGuardMode::IdOrTitleMatch
+        TitleGuardMode::IdOrTitle
     } else if strategy.request_query.trim().is_empty() {
-        TitleGuardMode::SkipTitleMatch
+        TitleGuardMode::Skip
     } else {
-        TitleGuardMode::ExactTitleMatch
+        TitleGuardMode::Exact
     }
 }
 
@@ -6200,7 +6200,7 @@ impl MultiIndexerSearchClient {
                     strategy_id: format!("protocol:{plan_id}"),
                     label: "protocol".to_string(),
                     labels: vec!["protocol".to_string()],
-                    title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                    title_guard_mode: TitleGuardMode::Skip,
                     response: Err(AppError::Repository(error.to_string())),
                     page_reservation: None,
                     request_fired: true,
@@ -8069,7 +8069,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             strategy_id: "join".into(),
                             labels: vec!["join".into()],
                             label: "join".into(),
-                            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                            title_guard_mode: TitleGuardMode::Skip,
                             response: Err(AppError::Repository(format!(
                                 "indexer search task panicked: {error}"
                             ))),
@@ -8497,7 +8497,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 strategy_id: "join".into(),
                                 labels: vec!["join".into()],
                                 label: "join".into(),
-                                title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                                title_guard_mode: TitleGuardMode::Skip,
                                 response: Err(AppError::Repository(format!(
                                     "indexer search task panicked: {error}"
                                 ))),
@@ -10317,7 +10317,7 @@ fn filter_strategy_results(
                 context.strategy_label,
                 context.is_rss_request,
             ),
-            title_validated_upstream: context.title_guard_mode != TitleGuardMode::ExactTitleMatch,
+            title_validated_upstream: context.title_guard_mode != TitleGuardMode::Exact,
         });
         if result.parsed_release_metadata.is_none() {
             result.parsed_release_metadata =
@@ -10351,9 +10351,9 @@ fn filter_strategy_results(
         };
 
         let guards_title = match context.title_guard_mode {
-            TitleGuardMode::ExactTitleMatch => true,
-            TitleGuardMode::IdOrTitleMatch => !release_carries_known_id(result, context.known_ids),
-            TitleGuardMode::SkipTitleMatch => false,
+            TitleGuardMode::Exact => true,
+            TitleGuardMode::IdOrTitle => !release_carries_known_id(result, context.known_ids),
+            TitleGuardMode::Skip => false,
         };
         if guards_title && !expected_titles.is_empty() {
             let release_titles = parsed_title_candidates(parsed);
@@ -10563,7 +10563,7 @@ mod tests {
             strategy_id: "strategy".into(),
             labels: vec!["synthetic".into()],
             label: "synthetic".into(),
-            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+            title_guard_mode: TitleGuardMode::Skip,
             response,
             page_reservation: None,
             request_fired,
@@ -10662,11 +10662,11 @@ mod tests {
 
         assert_eq!(
             title_guard_mode_for_strategy(&id_strategy),
-            TitleGuardMode::IdOrTitleMatch
+            TitleGuardMode::IdOrTitle
         );
         assert_eq!(
             title_guard_mode_for_strategy(&text_strategy),
-            TitleGuardMode::ExactTitleMatch
+            TitleGuardMode::Exact
         );
     }
 
@@ -12799,7 +12799,7 @@ mod tests {
                 tagged_aliases: Vec::new(),
                 rss_catch_up: None,
             },
-            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+            title_guard_mode: TitleGuardMode::Skip,
         }
     }
 
@@ -12888,10 +12888,7 @@ mod tests {
         // The year is a qualifier on the subject, not an id: it must not turn a
         // freetext strategy into an id-backed one.
         assert!(prepared[0].request.ids.is_empty());
-        assert_eq!(
-            prepared[0].title_guard_mode,
-            TitleGuardMode::ExactTitleMatch
-        );
+        assert_eq!(prepared[0].title_guard_mode, TitleGuardMode::Exact);
     }
 
     #[test]
@@ -23430,7 +23427,7 @@ mod tests {
             known_ids: no_known_ids(),
             // The numbering tests are what this exercises; the title guard has
             // its own coverage.
-            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+            title_guard_mode: TitleGuardMode::Skip,
             strategy_label: "freetext",
             is_rss_request: false,
         }
@@ -23478,7 +23475,7 @@ mod tests {
                 numbering_context: &numbering_context,
                 tagged_aliases: &[],
                 known_ids: no_known_ids(),
-                title_guard_mode: TitleGuardMode::ExactTitleMatch,
+                title_guard_mode: TitleGuardMode::Exact,
                 strategy_label: "freetext",
                 is_rss_request: false,
             };
@@ -23510,7 +23507,7 @@ mod tests {
                     numbering_context: &numbering_context,
                     tagged_aliases: &[],
                     known_ids: no_known_ids(),
-                    title_guard_mode: TitleGuardMode::ExactTitleMatch,
+                    title_guard_mode: TitleGuardMode::Exact,
                     strategy_label: "freetext",
                     is_rss_request: false,
                 };
@@ -23660,11 +23657,8 @@ mod tests {
     fn exact_cour_title_admits_only_the_bounded_community_mapping() {
         let numbering_context = lantern_verge_cour_context();
         for (title_guard_mode, query) in [
-            (TitleGuardMode::SkipTitleMatch, "Lantern Verge"),
-            (
-                TitleGuardMode::ExactTitleMatch,
-                "Lantern Verge Glass Meridian",
-            ),
+            (TitleGuardMode::Skip, "Lantern Verge"),
+            (TitleGuardMode::Exact, "Lantern Verge Glass Meridian"),
         ] {
             let mut results = [
                 "Lantern Verge Glass Meridian S01E08 1080p WEB-DL",
@@ -23702,7 +23696,7 @@ mod tests {
                 "Lantern Verge Glass Meridian S01E08 1080p WEB-DL".to_string(),
                 "Lantern Verge Glass Meridian - 08 1080p WEB-DL".to_string(),
             ];
-            if title_guard_mode == TitleGuardMode::SkipTitleMatch {
+            if title_guard_mode == TitleGuardMode::Skip {
                 // Bare absolute numbers remain deferred to application coverage;
                 // they are distinct from seasonless episode-number lists.
                 expected.push("Lantern Verge - 08 1080p WEB-DL".to_string());
@@ -23787,7 +23781,7 @@ mod tests {
                 numbering_context: &numbering_context,
                 tagged_aliases: &[],
                 known_ids: no_known_ids(),
-                title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                title_guard_mode: TitleGuardMode::Skip,
                 strategy_label: "freetext",
                 is_rss_request: false,
             },
