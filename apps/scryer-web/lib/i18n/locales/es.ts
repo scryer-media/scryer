@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const es: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "Esta versión de Prowlarr no es compatible. Actualiza Prowlarr a la 2.0 o posterior.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer no puede conectarse a la pasarela de metadatos porque el reloj del sistema tiene un desfase de más de 5 minutos. Sincronice el reloj del sistema y reinicie Scryer.",
   "httpRelease.refusal.detailsUnavailable":

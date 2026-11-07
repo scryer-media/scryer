@@ -4711,6 +4711,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn connection_probe_runtime_preserves_managed_endpoint_paths() {
+        let descriptor = descriptor_with_base_url_role("newznab");
+        for base_url in [
+            "http://localhost:9696/1",
+            "http://localhost:9696/prowlarr/1",
+        ] {
+            let mut config = sample_indexer_config("newznab", Some("parent"));
+            config.id = scryer_application::CONNECTION_TEST_INDEXER_ID.into();
+            config.managed_child_key = Some("1".into());
+            config.config_json = Some(
+                serde_json::json!({
+                    "base_url": base_url, "api_path": "/api",
+                })
+                .to_string(),
+            );
+
+            let inputs = build_runtime_inputs(&descriptor, "Connection Probe", &config, None);
+
+            assert_eq!(
+                inputs.config_entries.get("base_url").map(String::as_str),
+                Some(base_url)
+            );
+            assert_eq!(
+                inputs.config_entries.get("api_path").map(String::as_str),
+                Some("/api")
+            );
+            assert_eq!(inputs.destination_cooldown_key.as_deref(), Some("parent:1"));
+        }
+    }
+
     fn usage(resident_bytes: usize, denied: bool) -> GuestMemoryUsage {
         GuestMemoryUsage {
             resident_bytes,

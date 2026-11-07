@@ -1709,17 +1709,6 @@ fn detect_imported_prowlarr_proxy_indexer(
     }
 }
 
-fn version_from_validation_result(
-    result: &scryer_application::IndexerValidationResult,
-) -> Option<String> {
-    let message = result.message.as_deref()?.trim();
-    message
-        .strip_prefix("Connected to Prowlarr ")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
 fn same_base_url(left: &str, right: &str) -> bool {
     left.trim()
         .trim_end_matches('/')
@@ -2113,7 +2102,7 @@ impl ExternalImportMutations {
             {
                 Ok((validation, plan)) => {
                     payload.prowlarr_connected = true;
-                    payload.prowlarr_version = version_from_validation_result(&validation);
+                    payload.prowlarr_version = validation.server_version.clone();
                     let child_names = plan
                         .children
                         .into_iter()
@@ -3753,7 +3742,7 @@ async fn run_external_import_prowlarr_warmup_job(
                 ExternalImportProwlarrWarmupResult {
                     base_url,
                     api_key,
-                    version: version_from_validation_result(&validation),
+                    version: validation.server_version.clone(),
                     plan,
                 },
             )

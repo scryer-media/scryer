@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const ja: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "この Prowlarr のバージョンはサポートされていません。Prowlarr を 2.0 以降に更新してください。",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "システム時計が5分以上ずれているため、Scryerはメタデータゲートウェイに接続できません。システム時計を同期してScryerを再起動してください。",
   "httpRelease.refusal.detailsUnavailable":

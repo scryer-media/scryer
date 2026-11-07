@@ -86,6 +86,7 @@
   },
   "overrides": {
     "@hono/node-server": "2.1.0",
-    "immutable": "5.1.9"
+    "immutable": "5.1.9",
+    "minimatch": "11.0.1"
   }
 }

@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_HK: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "不支援此 Prowlarr 版本。請將 Prowlarr 升級至 2.0 或更新版本。",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "系統時鐘偏差超過 5 分鐘，Scryer 無法連線至中繼資料閘道。請同步系統時鐘並重新啟動 Scryer。",
   "httpRelease.refusal.detailsUnavailable":
