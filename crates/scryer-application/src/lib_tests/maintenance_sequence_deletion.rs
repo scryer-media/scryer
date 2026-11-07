@@ -836,55 +836,74 @@ async fn storage_sequence_holds_in_action_when_its_root_moves_over_the_subjects_
         "the journal recorded the root's previous physical identity"
     );
 
-    let resumed = fixture
-        .execution
-        .app
-        .run_lifecycle_action_handling_job()
-        .await
-        .expect("hold a storage journal whose root identity changed");
-    assert_eq!(resumed.held, 1, "{resumed:?}");
-    let held_run = fixture
-        .execution
-        .evaluation
-        .list_action_runs(None, Some(&candidate.id), None)
-        .await
-        .expect("read candidate action runs")
-        .into_iter()
-        .find(|run| run.id == deletion_run.id)
-        .expect("held DeleteFiles run persists");
-    assert_eq!(held_run.status, LifecycleActionRunStatus::Held);
-    assert_eq!(
-        held_run.hold_reason.as_deref(),
-        Some(execution_reason::UNKNOWN_AT_EXECUTION)
-    );
-    assert_ne!(held_run.finished_at, deletion_run.finished_at);
-    // The in-action identity check is what held it: the run was re-entered
-    // (the pre-dispatch hold leaves it untouched) and its detail names the
-    // check.
-    let hold_detail: serde_json::Value =
-        serde_json::from_str(&held_run.detail).expect("parse hold detail");
-    assert_eq!(
-        hold_detail["reason"].as_str(),
-        Some("storage_root_identity_changed"),
-        "{hold_detail}"
-    );
-    assert!(
-        !first_path.exists(),
-        "the completed policy target stays deleted"
-    );
-    assert!(second_path.exists(), "the journaled target is preserved");
-    assert!(
-        fixture
+    // The pass right after the move holds in action, and so does the next
+    // one: the hold keeps the journal, so the later pass still sees that its
+    // root moved instead of starting over without a checkpoint.
+    for pass in ["first pass after the move", "second pass after the move"] {
+        let report = fixture
             .execution
             .app
-            .services
-            .library
-            .media_files
-            .get_media_file_by_id(&second_file_id)
+            .run_lifecycle_action_handling_job()
             .await
-            .expect("read preserved storage row")
-            .is_some()
-    );
+            .expect("hold a storage journal whose root identity changed");
+        assert_eq!(report.held, 1, "{pass}: {report:?}");
+        assert_eq!(report.executed, 0, "{pass}: {report:?}");
+        let held_run = fixture
+            .execution
+            .evaluation
+            .latest_scoped_deletion_action_run(
+                &candidate.id,
+                candidate.match_generation,
+                &candidate.action_kind,
+            )
+            .await
+            .expect("read held scoped deletion run")
+            .unwrap_or_else(|| panic!("{pass}: the held run still carries its journal"));
+        assert_eq!(held_run.id, deletion_run.id, "{pass}");
+        assert_eq!(held_run.status, LifecycleActionRunStatus::Held, "{pass}");
+        assert_eq!(
+            held_run.hold_reason.as_deref(),
+            Some(execution_reason::UNKNOWN_AT_EXECUTION),
+            "{pass}"
+        );
+        assert_ne!(held_run.finished_at, deletion_run.finished_at, "{pass}");
+        let held_journal: serde_json::Value =
+            serde_json::from_str(&held_run.detail).expect("parse held journal");
+        assert_eq!(held_journal["scoped_deletion"], 1, "{pass}");
+        assert_eq!(
+            held_journal["storage_root_identity"], journal["storage_root_identity"],
+            "{pass}"
+        );
+        assert_eq!(held_journal["files"], journal["files"], "{pass}");
+        // The in-action identity check is what held it; the pre-dispatch
+        // hold neither re-enters the run nor records a hold detail.
+        assert_eq!(
+            held_journal["hold"]["reason"].as_str(),
+            Some("storage_root_identity_changed"),
+            "{pass}: {held_journal}"
+        );
+        assert!(
+            !first_path.exists(),
+            "{pass}: the completed target stays deleted"
+        );
+        assert!(
+            second_path.exists(),
+            "{pass}: the journaled target is preserved"
+        );
+        assert!(
+            fixture
+                .execution
+                .app
+                .services
+                .library
+                .media_files
+                .get_media_file_by_id(&second_file_id)
+                .await
+                .expect("read preserved storage row")
+                .is_some(),
+            "{pass}"
+        );
+    }
     assert!(
         fixture
             .execution

@@ -98,6 +98,39 @@ pub(super) struct ScopedDeletionCheckpoint {
     pub baseline: ScopeFactSnapshot,
     mutation_started: bool,
     files: Vec<FileCheckpoint>,
+    /// The most recent hold that stopped this journal's run before it
+    /// finished. The reason itself is the run's `hold_reason`; this keeps the
+    /// hold's detail without replacing the journal. Progress clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hold: Option<serde_json::Value>,
+}
+
+impl ScopedDeletionCheckpoint {
+    fn from_detail(detail: &str) -> Option<Self> {
+        serde_json::from_str::<Self>(detail)
+            .ok()
+            .filter(|checkpoint| checkpoint.scoped_deletion == 1)
+    }
+}
+
+/// Record a hold or cancellation's detail on `run` without losing a scoped
+/// deletion journal. The run's journal is the only record of which targets
+/// were already removed, and the next pass resumes from it: a hold that
+/// returns the journal itself is written as is, a hold with its own detail is
+/// kept inside the journal, and a run without a journal takes the detail.
+pub(super) fn record_hold_detail(run: &mut LifecycleActionRun, hold_detail: &serde_json::Value) {
+    let hold_is_journal = serde_json::from_value::<ScopedDeletionCheckpoint>(hold_detail.clone())
+        .is_ok_and(|checkpoint| checkpoint.scoped_deletion == 1);
+    if !hold_is_journal
+        && let Some(mut journal) = ScopedDeletionCheckpoint::from_detail(&run.detail)
+    {
+        journal.hold = Some(hold_detail.clone());
+        if let Ok(detail) = serde_json::to_string(&journal) {
+            run.detail = detail;
+            return;
+        }
+    }
+    run.detail = hold_detail.to_string();
 }
 
 impl ScopedDeletionCheckpoint {
@@ -708,8 +741,10 @@ impl AppUseCase {
     async fn save_scoped_deletion_checkpoint(
         &self,
         run: &mut LifecycleActionRun,
-        checkpoint: &ScopedDeletionCheckpoint,
+        checkpoint: &mut ScopedDeletionCheckpoint,
     ) -> AppResult<()> {
+        // Progress supersedes any hold the journal carried from a past pass.
+        checkpoint.hold = None;
         run.detail = serde_json::to_string(checkpoint)
             .map_err(|error| AppError::Repository(error.to_string()))?;
         // The run remains Running; this is durable progress, not a success report.
@@ -910,6 +945,7 @@ impl AppUseCase {
                     baseline: ScopeFactSnapshot::capture(input),
                     mutation_started: false,
                     files,
+                    hold: None,
                 }
             }
         };
@@ -940,7 +976,7 @@ impl AppUseCase {
                 .try_acquire("maintenance-storage-deletion")
                 .await
             else {
-                self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                     .await?;
                 return Ok(ActionResult::Held {
                     reason: execution_reason::STORAGE_DELETION_IN_PROGRESS,
@@ -959,7 +995,7 @@ impl AppUseCase {
                 .await
             else {
                 if storage_root_id.is_some() {
-                    self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                    self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                         .await?;
                     return Ok(ActionResult::Held {
                         reason: execution_reason::STORAGE_DELETION_IN_PROGRESS,
@@ -975,7 +1011,7 @@ impl AppUseCase {
         }
         // Persist intent before either the monitoring or filesystem mutation.
         checkpoint.mutation_started = true;
-        self.save_scoped_deletion_checkpoint(run, &checkpoint)
+        self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
             .await?;
         if unmonitor_before_delete {
             if candidate.subject_kind == Scope::Title.as_storage_str() {
@@ -1003,7 +1039,7 @@ impl AppUseCase {
             {
                 checkpoint.files[index].error =
                     Some(execution_reason::NO_MATCH_AT_EXECUTION.to_string());
-                self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                     .await?;
                 return Ok(ActionResult::Canceled {
                     reason: execution_reason::NO_MATCH_AT_EXECUTION,
@@ -1028,7 +1064,7 @@ impl AppUseCase {
                     SafetyDecision::Proceed(_, _) => {}
                     SafetyDecision::Cancel(reason) => {
                         checkpoint.files[index].error = Some(reason.to_string());
-                        self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                        self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                             .await?;
                         return Ok(ActionResult::Canceled {
                             reason,
@@ -1041,7 +1077,7 @@ impl AppUseCase {
                             crate::maintenance_rules::evaluation::candidate_reason::EXCLUDED
                                 .to_string(),
                         );
-                        self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                        self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                             .await?;
                         return Ok(ActionResult::Canceled {
                             reason:
@@ -1052,7 +1088,7 @@ impl AppUseCase {
                     }
                     SafetyDecision::Hold(reason) => {
                         checkpoint.files[index].error = Some(reason.to_string());
-                        self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                        self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                             .await?;
                         return Ok(ActionResult::Held {
                             reason,
@@ -1070,7 +1106,7 @@ impl AppUseCase {
             {
                 checkpoint.files[index].error =
                     Some(execution_reason::UNKNOWN_AT_EXECUTION.to_string());
-                self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                     .await?;
                 return Ok(ActionResult::Held {
                     reason: execution_reason::UNKNOWN_AT_EXECUTION,
@@ -1099,7 +1135,7 @@ impl AppUseCase {
                         .error
                         .unwrap_or_else(|| "file preview unavailable".to_string()),
                 );
-                self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                     .await?;
                 continue;
             };
@@ -1121,7 +1157,7 @@ impl AppUseCase {
                 {
                     checkpoint.files[index].error =
                         Some(execution_reason::UNKNOWN_AT_EXECUTION.to_string());
-                    self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                    self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                         .await?;
                     return Ok(ActionResult::Held {
                         reason: execution_reason::UNKNOWN_AT_EXECUTION,
@@ -1169,7 +1205,7 @@ impl AppUseCase {
                     checkpoint.files[index].error = Some(error.to_string());
                 }
             }
-            self.save_scoped_deletion_checkpoint(run, &checkpoint)
+            self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                 .await?;
         }
         drop(guards);
@@ -1182,5 +1218,124 @@ impl AppUseCase {
             detail: serde_json::to_value(checkpoint)
                 .map_err(|error| AppError::Repository(error.to_string()))?,
         })
+    }
+}
+
+#[cfg(test)]
+mod hold_detail_tests {
+    use super::{ScopedDeletionCheckpoint, record_hold_detail};
+    use scryer_domain::{LifecycleActionRun, LifecycleActionRunStatus};
+
+    /// A journal as version one wrote it: no provenance, no storage root and
+    /// no hold.
+    fn version_one_journal() -> serde_json::Value {
+        let absent = serde_json::json!({ "status": "absent" });
+        serde_json::json!({
+            "scoped_deletion": 1,
+            "subject_kind": "title",
+            "subject_id": "synthetic-title",
+            "subject_label": "Synthetic Title",
+            "grace_deadline": "2026-01-01T00:00:00+00:00",
+            "total_size_bytes": 10,
+            "baseline": {
+                "monitored": absent,
+                "has_file": absent,
+                "file_count": absent,
+                "total_file_size_bytes": absent,
+                "files": absent,
+                "first_imported_at": absent,
+                "episode_file_count": absent,
+                "monitored_episode_count": absent,
+            },
+            "mutation_started": true,
+            "files": [{
+                "file_id": "synthetic-file",
+                "file_path": "/synthetic/file.mkv",
+                "catalog_proof": "synthetic-proof",
+                "plan": null,
+                "completed": false,
+                "error": null,
+            }],
+        })
+    }
+
+    fn run_with_detail(detail: String) -> LifecycleActionRun {
+        let now = chrono::Utc::now();
+        LifecycleActionRun {
+            id: "synthetic-run".to_string(),
+            candidate_id: "synthetic-candidate".to_string(),
+            rule_set_id: "synthetic-rules".to_string(),
+            revision_number: 1,
+            title_id: "synthetic-title".to_string(),
+            subject_kind: "title".to_string(),
+            subject_id: "synthetic-title".to_string(),
+            action_kind: "delete_files".to_string(),
+            match_generation: 1,
+            idempotency_key: "synthetic-key".to_string(),
+            attempt: 1,
+            status: LifecycleActionRunStatus::Running,
+            hold_reason: None,
+            error: None,
+            detail,
+            started_at: now,
+            finished_at: None,
+            created_at: now,
+        }
+    }
+
+    #[test]
+    fn a_version_one_journal_without_a_hold_still_reads_and_writes_none() {
+        let journal = version_one_journal().to_string();
+        let checkpoint =
+            ScopedDeletionCheckpoint::from_detail(&journal).expect("version-one journal reads");
+        assert!(checkpoint.hold.is_none());
+        let written = serde_json::to_value(&checkpoint).expect("write journal");
+        assert!(written.get("hold").is_none(), "{written}");
+    }
+
+    #[test]
+    fn a_hold_keeps_the_journal_and_records_its_detail_inside_it() {
+        let journal = version_one_journal();
+        let mut run = run_with_detail(journal.to_string());
+        let hold = serde_json::json!({ "reason": "storage_root_identity_changed" });
+
+        record_hold_detail(&mut run, &hold);
+
+        let mut kept: serde_json::Value = serde_json::from_str(&run.detail).expect("parse detail");
+        assert_eq!(kept["hold"], hold);
+        kept.as_object_mut().expect("journal object").remove("hold");
+        let original =
+            ScopedDeletionCheckpoint::from_detail(&journal.to_string()).expect("journal reads");
+        assert_eq!(
+            kept,
+            serde_json::to_value(&original).expect("write journal"),
+            "the journal itself is unchanged"
+        );
+    }
+
+    #[test]
+    fn a_hold_that_returns_the_journal_writes_that_journal() {
+        let mut run = run_with_detail(version_one_journal().to_string());
+        let mut progressed = version_one_journal();
+        progressed["files"][0]["completed"] = serde_json::json!(true);
+
+        record_hold_detail(&mut run, &progressed);
+
+        let written: serde_json::Value = serde_json::from_str(&run.detail).expect("parse detail");
+        assert_eq!(written["files"][0]["completed"], true);
+        assert!(written.get("hold").is_none(), "{written}");
+    }
+
+    #[test]
+    fn a_run_without_a_journal_takes_the_hold_detail() {
+        let mut run = run_with_detail(r#"{"preview":"synthetic"}"#.to_string());
+        let hold = serde_json::json!({ "reason": "storage_root_identity_unavailable" });
+
+        record_hold_detail(&mut run, &hold);
+
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&run.detail).expect("parse detail"),
+            hold
+        );
     }
 }
