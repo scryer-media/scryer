@@ -518,3 +518,35 @@ test("offscreen thumbnails keep their own allowance", () => {
     ["/images/media/h2/w250", "/images/media/h3/w250"],
   );
 });
+
+test("a thumbnail still loading when its poster leaves the view finishes", () => {
+  const cache = new Map<string, HTMLImageElement>();
+  const thumbnail = new TestPosterImage();
+  thumbnail.src = "/images/media/h0/w70";
+  const sharper = new TestPosterImage();
+  sharper.src = "/images/media/h0/w250";
+  cache.set("/images/media/h0/w70", thumbnail as unknown as HTMLImageElement);
+  cache.set("/images/media/h0/w250", sharper as unknown as HTMLImageElement);
+  const created: TestPosterImage[] = [];
+  prepareGraphPosterImages(
+    cache,
+    new Set(["/images/media/h1/w70"]),
+    () => {},
+    () => {
+      const image = new TestPosterImage();
+      created.push(image);
+      return image as unknown as HTMLImageElement;
+    },
+    1,
+    240,
+    { isThumbnail: isThumbnailGraphPosterUrl },
+  );
+  // The thumbnail keeps downloading so the next crossing finds it cached;
+  // the sharper variant is cancelled.
+  assert.equal(thumbnail.src, "/images/media/h0/w70");
+  assert.equal(cache.has("/images/media/h0/w70"), true);
+  assert.equal(sharper.src, "");
+  assert.equal(cache.has("/images/media/h0/w250"), false);
+  // The thumbnail still holds the one request slot.
+  assert.equal(created.length, 0);
+});

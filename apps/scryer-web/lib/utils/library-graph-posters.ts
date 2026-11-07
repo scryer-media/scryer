@@ -212,12 +212,18 @@ export function prepareGraphPosterImages(
       continue;
     }
     const kind = pool(url);
-    if (!image.complete || offscreen[kind] > limits[kind]) {
+    // A thumbnail still loading is left to finish: one cancelled as its
+    // poster crosses the size it shows at is never cached, so every crossing
+    // would download it again. Larger variants are worth cancelling.
+    const cancel = !image.complete && kind !== "thumbnail";
+    if (cancel || offscreen[kind] > limits[kind]) {
       image.onload = null;
       image.onerror = null;
       if (!image.complete) image.src = "";
       cache.delete(url);
       offscreen[kind]--;
+    } else if (!image.complete) {
+      pending++;
     }
   }
   for (const url of visible) {
