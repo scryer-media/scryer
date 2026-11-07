@@ -111,9 +111,11 @@ import {
 } from "@/lib/utils/library-graph-layout";
 import {
   libraryGraphCacheKey,
-  libraryGraphStorage,
+  libraryGraphStore,
   libraryGraphZstdCodec,
+  readCachedGraphTitles,
   readCachedLibraryGraph,
+  writeCachedGraphTitles,
   writeCachedLibraryGraph,
 } from "@/lib/utils/library-graph-cache";
 import { libraryGraphSourceForCatalog } from "@/lib/utils/library-graph-source";
@@ -753,9 +755,56 @@ export default function LibraryGraphView({
     ),
   });
 
+  const viewerId = auth.user?.id ?? "";
+  const authLoading = auth.loading;
+  // The complete unfiltered listing from the last visit, so the graph opens
+  // up at once instead of waiting for the listing to page in again.
+  const titlesCacheKey = viewerId
+    ? libraryGraphCacheKey(
+        viewerId,
+        {
+          facet,
+          libraryIds,
+        },
+        "titles",
+      )
+    : null;
+  const [cachedListing, setCachedListing] = React.useState<{
+    key: string;
+    titles: readonly TitleRecord[];
+  } | null>(null);
+  const cachedTitles =
+    allowOverviewPreview &&
+    titlesCacheKey !== null &&
+    cachedListing?.key === titlesCacheKey
+      ? cachedListing.titles
+      : null;
+  React.useEffect(() => {
+    if (authLoading || !titlesCacheKey) return;
+    const storage = libraryGraphStore();
+    if (!storage) return;
+    let cancelled = false;
+    void readCachedGraphTitles(
+      storage,
+      titlesCacheKey,
+      libraryGraphZstdCodec,
+    ).then((stored) => {
+      if (!cancelled && stored)
+        setCachedListing({ key: titlesCacheKey, titles: stored });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, titlesCacheKey]);
+  // Titles to draw over: the live listing once complete, until then the
+  // stored one when nothing filters it.
+  const titlesReady = titlesComplete || cachedTitles !== null;
+
   const [titles, setTitles] = React.useState<readonly TitleRecord[] | null>(
     titlesComplete ? currentTitles : null,
   );
+  if (!titlesComplete && cachedTitles && titles === null)
+    setTitles(cachedTitles);
   // The last listing compared, so an unchanged refetch is compared once.
   const [seenTitles, setSeenTitles] = React.useState<
     readonly TitleRecord[] | null
@@ -878,8 +927,6 @@ export default function LibraryGraphView({
   // node where it was, and a filter that leaves no titles and is then cleared
   // does not load it again. A new facet or library set starts exploring
   // afresh.
-  const viewerId = auth.user?.id ?? "";
-  const authLoading = auth.loading;
   const sourceKey = `${facet}|${libraryIdSignature}`;
   // A graph is read again for another viewer, whose stored copy differs.
   const loadKey = `${sourceKey}|${viewerId}`;
@@ -935,7 +982,7 @@ export default function LibraryGraphView({
     };
     // The last graph read draws at once; the server's answer replaces it
     // only when it is a different graph, and is kept for the next visit.
-    const storage = viewerId ? libraryGraphStorage() : null;
+    const storage = viewerId ? libraryGraphStore() : null;
     const cacheKey = libraryGraphCacheKey(viewerId, request);
     let shown: LibraryGraphResult | null = null;
     if (storage) {
@@ -1001,8 +1048,37 @@ export default function LibraryGraphView({
     viewerId,
   ]);
 
+  // A complete listing that differs from the stored one is kept for next time.
+  React.useEffect(() => {
+    if (
+      !titlesComplete ||
+      !allowOverviewPreview ||
+      !titlesCacheKey ||
+      !titles ||
+      titles === cachedTitles
+    )
+      return;
+    const storage = libraryGraphStore();
+    if (!storage) return;
+    const timer = window.setTimeout(() => {
+      void writeCachedGraphTitles(
+        storage,
+        titlesCacheKey,
+        titles,
+        libraryGraphZstdCodec,
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    allowOverviewPreview,
+    cachedTitles,
+    titles,
+    titlesCacheKey,
+    titlesComplete,
+  ]);
+
   const previewing =
-    !titlesComplete &&
+    !titlesReady &&
     allowOverviewPreview &&
     (result?.nodes.length ?? 0) > LIBRARY_GRAPH_COLLAPSE_THRESHOLD;
   const overviewPreview = React.useMemo(
@@ -1015,10 +1091,10 @@ export default function LibraryGraphView({
         ? null
         : previewing
           ? overviewPreview
-          : titlesComplete && titles
+          : titlesReady && titles
             ? joinLibraryGraphToTitles(result, titles)
             : null,
-    [result, titles, titlesComplete, previewing, overviewPreview],
+    [result, titles, titlesReady, previewing, overviewPreview],
   );
   const [paintedJoin, setPaintedJoin] = React.useState<typeof join>(null);
   React.useEffect(() => {
