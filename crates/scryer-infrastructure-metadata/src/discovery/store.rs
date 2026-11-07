@@ -3662,6 +3662,17 @@ async fn query_discovery_items_page(
         });
     }
 
+    let (page_sql, page_args) = discovery_items_page_sql(datastore, query, sql);
+    let items = fetch_items_with_sql(datastore, &page_sql, &page_args).await?;
+    Ok(DiscoveryItemsPageRecord { items, total_count })
+}
+
+/// One page of the query's items, in browse order.
+fn discovery_items_page_sql(
+    datastore: &StoreDatastore,
+    query: &DiscoveryItemsStorageQuery,
+    sql: DiscoveryItemsSql,
+) -> (String, Vec<SqlArg>) {
     let mut page_args = sql.args;
     let (ranking_cte, table, order) = discovery_browse_order_sql(datastore, query, &mut page_args);
     page_args.push(SqlArg::I64(query.limit as i64));
@@ -3679,8 +3690,7 @@ async fn query_discovery_items_page(
         sql.cte_sql,
         discovery_item_row_columns()
     );
-    let items = fetch_items_with_sql(datastore, &page_sql, &page_args).await?;
-    Ok(DiscoveryItemsPageRecord { items, total_count })
+    (page_sql, page_args)
 }
 
 /// The same relevance precedence as the application's rail comparator, without
@@ -3703,14 +3713,18 @@ fn discovery_browse_order_sql(
     let matched_count = if let Some(run) = &query.context_run_id {
         args.push(SqlArg::Text(run.clone()));
         args.push(excluded_identity_keys_arg(&query.readable_library_ids));
-        let libraries = match datastore {
-            StoreDatastore::Sqlite { .. } => "SELECT value FROM json_each({})",
-            StoreDatastore::Postgres { .. } => {
-                "SELECT value FROM jsonb_array_elements_text(CAST({} AS JSONB)) AS libraries(value)"
-            }
+        // SQLite would otherwise read the run's every subject for each item;
+        // its CROSS JOIN keeps the item's few links first, each probing the
+        // subjects by run and key.
+        let (libraries, subjects_join) = match datastore {
+            StoreDatastore::Sqlite { .. } => ("SELECT value FROM json_each({})", "CROSS JOIN"),
+            StoreDatastore::Postgres { .. } => (
+                "SELECT value FROM jsonb_array_elements_text(CAST({} AS JSONB)) AS libraries(value)",
+                "JOIN",
+            ),
         };
         format!("(SELECT COUNT(*) FROM discovery_item_subject_links links
-                  JOIN discovery_submitted_subjects subjects ON subjects.subject_key = links.subject_key
+                  {subjects_join} discovery_submitted_subjects subjects ON subjects.subject_key = links.subject_key
                   WHERE links.item_id = deduped.id AND links.link_type = 'matched'
                     AND subjects.run_id = {{}} AND subjects.library_id IN ({libraries})
                     AND TRIM(COALESCE(subjects.display_title, '')) <> '')")
@@ -10772,6 +10786,33 @@ mod tests {
                 .collect::<Vec<_>>(),
             [6, 5, 1, 3, 2, 4, 0, 7].map(|index| format!("ordered-{index}")),
             "general item queries keep their existing order"
+        );
+
+        query.sort = Some(scryer_application::DiscoverySectionSort::Relevance);
+        let (sql, args) = discovery_items_page_sql(
+            &store.datastore,
+            &query,
+            build_discovery_items_sql(&store.datastore, &query).expect("browse sql"),
+        );
+        let plan = SqlRuntime::fetch_all(
+            store.datastore.read_exec(),
+            &format!("EXPLAIN QUERY PLAN {sql}"),
+            &args,
+        )
+        .await
+        .expect("browse query plan should load")
+        .into_iter()
+        .map(|row| row.text("detail").expect("plan detail"))
+        .collect::<Vec<_>>();
+        let links = plan
+            .iter()
+            .position(|detail| detail.starts_with("SEARCH links"));
+        let subjects = plan
+            .iter()
+            .position(|detail| detail.starts_with("SEARCH subjects"));
+        assert!(
+            matches!((links, subjects), (Some(links), Some(subjects)) if links < subjects),
+            "the matched count reads an item's links before the run's subjects: {plan:?}"
         );
         drop(store);
         drop(services);
