@@ -1692,6 +1692,34 @@ export const librariesQuery = `query Libraries($facet: MediaFacetValue, $permiss
   }
 }`;
 
+/** Every library's stored roots plus the server path style, read before an import updates a library. */
+export const externalImportLibraryRootsQuery = `query ExternalImportLibraryRoots {
+  libraries {
+    id
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
+  runtimeInfo {
+    runtimePathStyle
+  }
+}`;
+
+/** Fresh roots with their title counts, read before a save that drops roots. */
+export const libraryRootTitleCountsQuery = `query LibraryRootTitleCounts($facet: MediaFacetValue, $permission: LibraryPermissionValue) {
+  libraries(facet: $facet, permission: $permission) {
+    id
+    roots {
+      id
+      path
+      isDefault
+      titleCount
+    }
+  }
+}`;
+
 export const mediaRequestAdminLibrariesQuery = `query MediaRequestAdminLibraries($facet: MediaFacetValue) {
   libraries(facet: $facet, permission: MANAGE_TITLES) {
     id

@@ -452,6 +452,7 @@ pub(crate) fn normalize_library_root_drafts(
 ) -> AppResult<Vec<LibraryRootDraft>> {
     let mut normalized = Vec::new();
     let mut seen = HashSet::new();
+    let mut seen_ids = HashSet::new();
     let mut saw_default = false;
     for mut root in roots.drain(..) {
         root.path = scryer_domain::trim_library_root_path(&root.path);
@@ -463,6 +464,16 @@ pub(crate) fn normalize_library_root_drafts(
             return Err(AppError::validation_refused(
                 crate::error_reasons::library::ROOT_DUPLICATED,
                 "library roots must be unique within a library",
+            ));
+        }
+        // One stored root is one entry: naming its id twice would read as
+        // repointing it and adding a new root in the same edit.
+        if let Some(id) = root.id.as_deref()
+            && !seen_ids.insert(id.to_string())
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOT_ID_DUPLICATED,
+                format!("library root id '{id}' is listed more than once"),
             ));
         }
         if root.is_default {
@@ -500,6 +511,65 @@ fn removed_library_root_ids(
         .filter(|root| !kept.contains(root.id.as_str()))
         .map(|root| root.id.clone())
         .collect()
+}
+
+/// Refuse an edit whose list of removed roots does not match the roots it
+/// actually drops. A client names every root it means to remove, so a stale
+/// or partial root list cannot take titles out of the catalog by omission.
+fn refuse_unacknowledged_root_removals(
+    existing: &[scryer_domain::LibraryRoot],
+    removed_root_ids: &[String],
+    acknowledged_root_ids: &[String],
+) -> AppResult<()> {
+    let removed = removed_root_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut mismatched = Vec::new();
+    for id in acknowledged_root_ids {
+        if !removed.contains(id.as_str()) && !mismatched.contains(id) {
+            mismatched.push(id.clone());
+        }
+    }
+    if !mismatched.is_empty() {
+        return Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::library::ROOT_REMOVAL_MISMATCH,
+            "the roots listed as removed are not the roots this edit drops",
+            vec![crate::RefusalFact::list(
+                crate::error_reasons::library::ROOT_REMOVAL_MISMATCHED_IDS_FACT,
+                mismatched,
+            )],
+        ));
+    }
+    let acknowledged = acknowledged_root_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let unacknowledged = existing
+        .iter()
+        .filter(|root| removed.contains(root.id.as_str()))
+        .filter(|root| !acknowledged.contains(root.id.as_str()))
+        .collect::<Vec<_>>();
+    if !unacknowledged.is_empty() {
+        return Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::library::ROOT_REMOVAL_NOT_ACKNOWLEDGED,
+            "this edit removes library roots it does not list as removed",
+            vec![
+                crate::RefusalFact::list(
+                    crate::error_reasons::library::ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT,
+                    unacknowledged.iter().map(|root| root.id.clone()).collect(),
+                ),
+                crate::RefusalFact::list(
+                    crate::error_reasons::library::ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT,
+                    unacknowledged
+                        .iter()
+                        .map(|root| root.path.clone())
+                        .collect(),
+                ),
+            ],
+        ));
+    }
+    Ok(())
 }
 
 /// Refuse a draft that sits at a stored root's path without naming that
@@ -633,6 +703,13 @@ impl AppUseCase {
             .await
     }
 
+    /// How many titles sit under each library root, keyed by root id. Callers
+    /// pair it with libraries they already resolved for the actor, so it
+    /// exposes nothing a library listing does not.
+    pub async fn library_root_title_counts(&self) -> AppResult<HashMap<String, i64>> {
+        self.services.catalog.libraries.root_title_counts().await
+    }
+
     pub async fn external_import_library(
         &self,
         actor: &User,
@@ -680,11 +757,13 @@ impl AppUseCase {
         self.validate_library_root_conflicts(None, &roots).await?;
         self.validate_library_roots_against_recycle_bin(&[], &roots)
             .await?;
+        let slug = slug_from_library_name(&name);
+        self.refuse_taken_library_slug(&facet, None, &slug).await?;
         let now = Utc::now();
         let library = Library {
             id: Id::new().0,
             facet,
-            slug: slug_from_library_name(&name),
+            slug,
             name,
             is_default: false,
             roots: Vec::new(),
@@ -722,20 +801,23 @@ impl AppUseCase {
         roots: Option<Vec<LibraryRootDraft>>,
         settings: Option<LibrarySettingsOverrideDraft>,
     ) -> AppResult<Library> {
-        self.update_library_with_outcome(actor, library_id, name, roots, settings)
+        self.update_library_with_outcome(actor, library_id, name, roots, None, settings)
             .await
             .map(|updated| updated.library)
     }
 
     /// Update a library and report what the edit took out of the catalog.
     /// Dropping a root removes the titles under it from the catalog; their
-    /// files on disk are never touched.
+    /// files on disk are never touched. When `roots` is given, every stored
+    /// root it drops must be named in `removed_root_ids`, and every id named
+    /// there must be one it drops; `removed_root_ids` is ignored otherwise.
     pub async fn update_library_with_outcome(
         &self,
         actor: &User,
         library_id: &str,
         name: Option<String>,
         roots: Option<Vec<LibraryRootDraft>>,
+        removed_root_ids: Option<Vec<String>>,
         settings: Option<LibrarySettingsOverrideDraft>,
     ) -> AppResult<UpdatedLibrary> {
         let existing = self
@@ -797,22 +879,35 @@ impl AppUseCase {
             self.validate_library_roots_against_recycle_bin(&existing.roots, &roots)
                 .await?;
         }
-        // A root dropped from the list takes the titles under it out of the
-        // catalog; their files stay where they are. The store still refuses a
-        // removal that leaves a title behind, so this runs before it.
-        if roots_were_provided {
+        let dropped_root_ids = if roots_were_provided {
             refuse_stored_roots_without_ids(&existing.roots, &roots)?;
-        }
-        let removed_title_count = if roots_were_provided {
-            self.delete_titles_under_removed_roots(actor, &existing, &roots)
-                .await?
+            let dropped = removed_library_root_ids(&existing.roots, &roots);
+            refuse_unacknowledged_root_removals(
+                &existing.roots,
+                &dropped,
+                removed_root_ids.as_deref().unwrap_or_default(),
+            )?;
+            dropped
         } else {
-            0
+            Vec::new()
         };
         let slug = if existing.is_default {
             scryer_domain::default_library_slug_for_facet(&existing.facet).to_string()
         } else {
             slug_from_library_name(&name)
+        };
+        self.refuse_taken_library_slug(&existing.facet, Some(&existing.id), &slug)
+            .await?;
+        // Every check above runs before anything is removed. A root dropped
+        // from the list takes the titles under it out of the catalog; their
+        // files stay where they are. The store still refuses a removal that
+        // leaves a title behind, so this runs before it.
+        let removed_title_count = if dropped_root_ids.is_empty() {
+            0
+        } else {
+            self.cancel_library_scan_sessions(&existing.id).await;
+            self.delete_titles_under_removed_roots(actor, &existing, &dropped_root_ids)
+                .await?
         };
         let library = self
             .services
@@ -890,26 +985,7 @@ impl AppUseCase {
         )
         .await?;
 
-        for session in self
-            .active_library_scan_sessions()
-            .await
-            .into_iter()
-            .filter(|session| session.library_id.as_deref() == Some(library.id.as_str()))
-        {
-            if let Some(token) = self
-                .library_scan_cancellation_token(&session.session_id)
-                .await
-            {
-                token.cancel();
-            }
-            self.runtime
-                .library
-                .library_scan_tracker
-                .cancel_session(&session.session_id)
-                .await;
-            self.clear_library_scan_cancellation_token(&session.session_id)
-                .await;
-        }
+        self.cancel_library_scan_sessions(&library.id).await;
 
         self.services
             .library
@@ -952,6 +1028,60 @@ impl AppUseCase {
             ]);
         }
         Ok(deleted)
+    }
+
+    /// Cancel every running scan of `library_id`. Retiring a root, or the
+    /// whole library, takes away ground the scan would otherwise keep
+    /// importing into.
+    async fn cancel_library_scan_sessions(&self, library_id: &str) {
+        for session in self
+            .active_library_scan_sessions()
+            .await
+            .into_iter()
+            .filter(|session| session.library_id.as_deref() == Some(library_id))
+        {
+            if let Some(token) = self
+                .library_scan_cancellation_token(&session.session_id)
+                .await
+            {
+                token.cancel();
+            }
+            self.runtime
+                .library
+                .library_scan_tracker
+                .cancel_session(&session.session_id)
+                .await;
+            self.clear_library_scan_cancellation_token(&session.session_id)
+                .await;
+        }
+    }
+
+    /// Refuse a library name whose slug another library of the facet already
+    /// has. The store's unique `(facet, slug)` index would refuse it anyway,
+    /// but only after a root edit had already removed titles.
+    async fn refuse_taken_library_slug(
+        &self,
+        facet: &MediaFacet,
+        current_library_id: Option<&str>,
+        slug: &str,
+    ) -> AppResult<()> {
+        let taken = self
+            .services
+            .catalog
+            .libraries
+            .list(Some(facet.clone()))
+            .await?
+            .into_iter()
+            .any(|library| {
+                current_library_id.is_none_or(|id| library.id != id) && library.slug == slug
+            });
+        if taken {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::NAME_TAKEN,
+                "another library already uses this name",
+            ));
+        }
+        Ok(())
     }
 
     /// Remove titles from the catalog: their dependents, history, events and
@@ -1003,21 +1133,19 @@ impl AppUseCase {
         Ok(titles.len())
     }
 
-    /// Take the titles under every root `drafts` drops out of the catalog,
-    /// leaving their files where they are. Refuses, before removing anything,
-    /// when one of those titles is being deleted or held by a location
-    /// operation.
+    /// Take the titles under the removed roots out of the catalog, leaving
+    /// their files where they are. Refuses, before removing anything, when
+    /// one of those titles is being deleted or held by a location operation.
     async fn delete_titles_under_removed_roots(
         &self,
         actor: &User,
         library: &Library,
-        drafts: &[LibraryRootDraft],
+        removed_root_ids: &[String],
     ) -> AppResult<usize> {
-        let removed_root_ids = removed_library_root_ids(&library.roots, drafts);
         if removed_root_ids.is_empty() {
             return Ok(0);
         }
-        let removed_root_ids = removed_root_ids.into_iter().collect::<HashSet<_>>();
+        let removed_root_ids = removed_root_ids.iter().cloned().collect::<HashSet<_>>();
         let titles = self
             .services
             .catalog

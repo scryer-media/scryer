@@ -11,6 +11,7 @@ import {
   setDefaultSetupRoot,
   setupMediaLibraries,
   setupMediaRootsFromLibraries,
+  setupRootsNeedStoredRoots,
   type SetupMediaLibraries,
 } from "./setup-media-paths.ts";
 
@@ -173,6 +174,7 @@ test("setup saves only the libraries whose roots changed", () => {
           { id: "movies-0", path: "/media/films", isDefault: false },
           { id: "movies-1", path: "/media/films-4k", isDefault: true },
         ],
+        removedRootIds: [],
       },
       {
         field: "series",
@@ -181,6 +183,7 @@ test("setup saves only the libraries whose roots changed", () => {
           { id: "series-0", path: "/media/tv", isDefault: true },
           { path: "/media/tv-2", isDefault: false },
         ],
+        removedRootIds: [],
       },
     ],
   );
@@ -207,7 +210,51 @@ test("a stored root keeps its id through a path edit and a new row has none", ()
           { id: "movies-1", path: "/media/films-4k", isDefault: true },
           { path: "/media/movies-extra", isDefault: false },
         ],
+        removedRootIds: [],
       },
     ],
+  );
+});
+
+test("removing a stored root row lists its id for removal", () => {
+  const libraries: SetupMediaLibraries = setupMediaLibraries([
+    library("movies", "MOVIE", ["/media/films", "/media/films-4k"]),
+  ]);
+  const roots = setupMediaRootsFromLibraries(libraries);
+
+  assert.deepEqual(
+    plannedSetupRootSaves(
+      { ...roots, movies: removeSetupRoot(roots.movies, 0) },
+      libraries,
+    ),
+    [
+      {
+        field: "movies",
+        libraryId: "movies",
+        roots: [{ id: "movies-1", path: "/media/films-4k", isDefault: true }],
+        removedRootIds: ["movies-0"],
+      },
+    ],
+  );
+});
+
+test("rows edited before the stored roots loaded are never saved over them", () => {
+  const libraries: SetupMediaLibraries = setupMediaLibraries([
+    library("movies", "MOVIE", ["/media/films", "/media/films-4k"]),
+  ]);
+
+  // Rows still seeded from the bootstrap folders must not be saved while a
+  // default library has stored roots: they would replace those roots.
+  assert.equal(setupRootsNeedStoredRoots(false, libraries), true);
+  assert.equal(setupRootsNeedStoredRoots(true, libraries), false);
+
+  // With no stored roots there is nothing to drop, so the bootstrap rows save.
+  assert.equal(setupRootsNeedStoredRoots(false, {}), false);
+  assert.equal(
+    setupRootsNeedStoredRoots(
+      false,
+      setupMediaLibraries([library("movies", "MOVIE", [])]),
+    ),
+    false,
   );
 });

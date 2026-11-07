@@ -111,6 +111,9 @@ pub const MEDIA_LIBRARY_ROOT_REFERENCED: &str = "MEDIA_LIBRARY_ROOT_REFERENCED";
 /// stored library root was resubmitted by path without its id
 pub const MEDIA_LIBRARY_ROOT_ID_REQUIRED: &str = "MEDIA_LIBRARY_ROOT_ID_REQUIRED";
 
+/// one library edit named the same stored root id more than once
+pub const MEDIA_LIBRARY_ROOT_ID_DUPLICATED: &str = "MEDIA_LIBRARY_ROOT_ID_DUPLICATED";
+
 /// lifecycle claim is no longer live
 pub const MEDIA_LIFECYCLE_CLAIM_NOT_LIVE: &str = "MEDIA_LIFECYCLE_CLAIM_NOT_LIVE";
 
@@ -314,6 +317,7 @@ const ALL: &[&str] = &[
     MEDIA_LIBRARY_ROOT_PATH_EMPTY,
     MEDIA_LIBRARY_ROOT_REFERENCED,
     MEDIA_LIBRARY_ROOT_ID_REQUIRED,
+    MEDIA_LIBRARY_ROOT_ID_DUPLICATED,
     MEDIA_LIFECYCLE_CLAIM_NOT_LIVE,
     MEDIA_LIST_ACCOUNT_NOT_FOUND,
     MEDIA_LIST_EXCLUSION_NOT_FOUND,

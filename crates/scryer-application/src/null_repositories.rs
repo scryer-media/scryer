@@ -3372,6 +3372,10 @@ impl LibraryRepository for NullLibraryRepository {
     async fn title_library_id(&self, _title_id: &str) -> AppResult<Option<String>> {
         Ok(None)
     }
+
+    async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>> {
+        Ok(std::collections::HashMap::new())
+    }
 }
 
 #[derive(Default)]

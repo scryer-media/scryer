@@ -39,6 +39,7 @@ import {
   setDefaultSetupRoot,
   setupMediaLibraries,
   setupMediaRootsFromLibraries,
+  setupRootsNeedStoredRoots,
   type SetupMediaLibraries,
   type SetupMediaPathField,
   type SetupMediaRoots,
@@ -218,6 +219,9 @@ export function SetupWizardContainer({
   // already has and saves only the libraries that were changed.
   const mediaLibraries = useRef<Promise<SetupMediaLibraries> | null>(null);
   const mediaRootsEdited = useRef(false);
+  // Whether the rows show the stored roots. Until they do, they are the
+  // bootstrap folders, and saving them would replace the stored roots.
+  const mediaRootsSeeded = useRef(false);
 
   const loadMediaLibraries = useCallback(() => {
     mediaLibraries.current ??= client
@@ -241,6 +245,7 @@ export function SetupWizardContainer({
       .then((libraries) => {
         if (cancelled || mediaRootsEdited.current) return;
         setMediaRoots(setupMediaRootsFromLibraries(libraries));
+        mediaRootsSeeded.current = true;
       })
       .catch(() => {});
     return () => {
@@ -460,6 +465,10 @@ export function SetupWizardContainer({
     [],
   );
 
+  // Thrown by the save when it had to show the stored roots instead; compared
+  // by identity, never by message.
+  const storedRootsShownInstead = useRef(new Error("stored roots shown"));
+
   const saveMediaPaths = useCallback(async () => {
     setMediaPathsSaving(true);
     setMediaPathsError(null);
@@ -479,11 +488,24 @@ export function SetupWizardContainer({
         },
         save: async () => {
           const libraries = await loadMediaLibraries();
+          if (setupRootsNeedStoredRoots(mediaRootsSeeded.current, libraries)) {
+            // The rows were edited before the stored roots loaded. Show the
+            // stored roots for review rather than saving over them.
+            setMediaRoots(setupMediaRootsFromLibraries(libraries));
+            mediaRootsSeeded.current = true;
+            throw storedRootsShownInstead.current;
+          }
           for (const save of plannedSetupRootSaves(mediaRoots, libraries)) {
             savingField = save.field;
             const { data, error } = await client
               .mutation(updateLibraryMutation, {
-                input: { libraryId: save.libraryId, roots: save.roots },
+                input: {
+                  libraryId: save.libraryId,
+                  roots: save.roots,
+                  ...(save.removedRootIds.length > 0
+                    ? { removedRootIds: save.removedRootIds }
+                    : {}),
+                },
               })
               .toPromise();
             if (error) throw error;
@@ -504,6 +526,10 @@ export function SetupWizardContainer({
         },
       });
     } catch (err) {
+      if (err === storedRootsShownInstead.current) {
+        setMediaPathsError(t("setup.mediaPathsStoredRootsLoaded"));
+        return;
+      }
       const message = userFacingGraphQlErrorMessage(
         err,
         t("error.fallback.failedToSave"),

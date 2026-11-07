@@ -903,14 +903,30 @@ pub struct AutoEligibilityReason {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefusalFact {
     pub key: &'static str,
-    pub value: String,
+    pub value: RefusalFactValue,
+}
+
+/// The shape of one refusal fact: a single value, or a list of them when the
+/// refusal names several records (every root an edit would drop, say).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefusalFactValue {
+    Text(String),
+    List(Vec<String>),
 }
 
 impl RefusalFact {
     pub fn new(key: &'static str, value: impl Into<String>) -> Self {
         Self {
             key,
-            value: value.into(),
+            value: RefusalFactValue::Text(value.into()),
+        }
+    }
+
+    /// A fact naming several values, published as a GraphQL list.
+    pub fn list(key: &'static str, values: Vec<String>) -> Self {
+        Self {
+            key,
+            value: RefusalFactValue::List(values),
         }
     }
 }

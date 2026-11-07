@@ -1518,13 +1518,17 @@ impl CatalogQueries {
             .map_err(to_gql_error)?
             .into_iter()
             .collect();
+        let root_title_counts = app
+            .library_root_title_counts()
+            .await
+            .map_err(to_gql_error)?;
         Ok(libraries
             .into_iter()
             .map(|mut library| {
                 if !privileged.contains(&library.id) {
                     library.roots.clear();
                 }
-                from_library(library)
+                from_library(library, &root_title_counts)
             })
             .collect())
     }

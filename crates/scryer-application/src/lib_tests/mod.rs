@@ -117,8 +117,8 @@ use support_events_requests::*;
 pub(crate) use support_imports::MockMediaFileRepo;
 use support_imports::*;
 use support_indexers_metadata::*;
-pub(crate) use support_library_show::with_stored_root_ids;
 use support_library_show::*;
+pub(crate) use support_library_show::{replace_library_roots, with_stored_root_ids};
 use support_settings_scan::*;
 
 /// An isolated writable acquisition ledger for fixtures that record grabs.

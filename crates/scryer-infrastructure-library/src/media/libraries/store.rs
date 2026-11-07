@@ -263,6 +263,34 @@ impl LibraryRepository for LibraryStore {
             .transpose()
             .map(Option::flatten)
     }
+
+    async fn root_title_counts(&self) -> AppResult<HashMap<String, i64>> {
+        // One grouped read for every root. A title belongs to the root it
+        // names only within its own library; a row without a library falls
+        // back to its facet's default library, as in the removal guard.
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT library_roots.id AS root_id, COUNT(titles.id) AS title_count
+               FROM library_roots
+               JOIN titles
+                 ON titles.root_folder_id = library_roots.id
+                AND COALESCE(
+                        titles.library_id,
+                        CASE titles.facet
+                            WHEN 'movie' THEN 'movie_default_library'
+                            WHEN 'series' THEN 'series_default_library'
+                            WHEN 'anime' THEN 'anime_default_library'
+                            ELSE 'movie_default_library'
+                        END
+                    ) = library_roots.library_id
+              GROUP BY library_roots.id",
+            &[],
+        )
+        .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.text("root_id")?, row.i64("title_count")?)))
+            .collect()
+    }
 }
 
 async fn list_libraries(
@@ -360,6 +388,7 @@ async fn update_library_tx(
     // (FR-078).
     let existing_root_ids = existing_root_ids_by_normalized_path_tx(tx, library_id).await?;
 
+    reject_duplicate_root_ids(&roots)?;
     reject_stored_roots_without_ids(&existing_root_ids, &roots)?;
     let resolved_root_ids = resolve_root_ids(&existing_root_ids, &roots);
     reject_referenced_root_removals_tx(tx, library_id, &existing_root_ids, &resolved_root_ids)
@@ -469,6 +498,22 @@ fn reject_stored_roots_without_ids(
                     "library root '{}' is already configured; send its id to keep it",
                     root.path
                 ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse an edit that names one root id in more than one draft. Each draft
+/// is one root, so a repeated id would repoint that root and allocate a fresh
+/// one for the second entry.
+fn reject_duplicate_root_ids(roots: &[LibraryRootDraft]) -> AppResult<()> {
+    let mut seen = HashSet::new();
+    for id in roots.iter().filter_map(|root| root.id.as_deref()) {
+        if !seen.insert(id) {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_LIBRARY_ROOT_ID_DUPLICATED,
+                format!("library root id '{id}' is listed more than once"),
             ));
         }
     }
@@ -1026,6 +1071,152 @@ mod tests {
             title_root, root_id,
             "the title keeps its root through the path change"
         );
+    }
+
+    #[tokio::test]
+    async fn one_root_id_twice_in_an_update_is_refused_and_nothing_changes() {
+        let store = test_store().await;
+        create_movie_library(&store, "duplicate-id-library").await;
+        let created = store
+            .get_by_id("duplicate-id-library")
+            .await
+            .expect("library lookup")
+            .expect("library exists");
+        let root_id = created.roots[0].id.clone();
+
+        let refused = store
+            .update(
+                "duplicate-id-library",
+                "duplicate-id-library".to_string(),
+                "duplicate-id-library".to_string(),
+                vec![
+                    LibraryRootDraft {
+                        id: Some(root_id.clone()),
+                        path: "/mnt/duplicate-id-library".to_string(),
+                        is_default: true,
+                    },
+                    LibraryRootDraft {
+                        id: Some(root_id.clone()),
+                        path: "/mnt/duplicate-id-elsewhere".to_string(),
+                        is_default: false,
+                    },
+                ],
+            )
+            .await
+            .expect_err("one root id twice must be refused");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_LIBRARY_ROOT_ID_DUPLICATED)
+        );
+
+        let after = store
+            .get_by_id("duplicate-id-library")
+            .await
+            .expect("library lookup")
+            .expect("library exists");
+        assert_eq!(
+            after
+                .roots
+                .iter()
+                .map(|root| (root.id.as_str(), root.path.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(root_id.as_str(), "/mnt/duplicate-id-library")]
+        );
+    }
+
+    #[tokio::test]
+    async fn root_title_counts_count_each_roots_titles_within_its_own_library() {
+        let store = test_store().await;
+        let pool = store_pool(&store);
+        create_movie_library(&store, "counted-library").await;
+        create_movie_library(&store, "other-library").await;
+        let counted_root = store
+            .get_by_id("counted-library")
+            .await
+            .expect("library lookup")
+            .expect("library exists")
+            .roots[0]
+            .id
+            .clone();
+        let other_root = store
+            .get_by_id("other-library")
+            .await
+            .expect("library lookup")
+            .expect("library exists")
+            .roots[0]
+            .id
+            .clone();
+        let default_library = store
+            .get_by_id("movie_default_library")
+            .await
+            .expect("library lookup")
+            .expect("default movie library exists");
+        let mut default_drafts = default_library
+            .roots
+            .iter()
+            .map(|root| LibraryRootDraft {
+                id: Some(root.id.clone()),
+                path: root.path.clone(),
+                is_default: root.is_default,
+            })
+            .collect::<Vec<_>>();
+        default_drafts.push(draft(
+            "/mnt/synthetic-default-movies",
+            default_drafts.is_empty(),
+        ));
+        let default_root = store
+            .update(
+                "movie_default_library",
+                default_library.name.clone(),
+                default_library.slug.clone(),
+                default_drafts,
+            )
+            .await
+            .expect("default library root should add")
+            .roots
+            .into_iter()
+            .find(|root| root.path == "/mnt/synthetic-default-movies")
+            .expect("added default root")
+            .id;
+
+        let now = Utc::now().to_rfc3339();
+        for (id, library_id, root_id) in [
+            (
+                "counted-one",
+                Some("counted-library"),
+                counted_root.as_str(),
+            ),
+            (
+                "counted-two",
+                Some("counted-library"),
+                counted_root.as_str(),
+            ),
+            ("other-one", Some("other-library"), other_root.as_str()),
+            // Names another library's root: it is not that root's title.
+            ("crossed", Some("other-library"), counted_root.as_str()),
+            // No library: it belongs to the facet's default library.
+            ("unassigned", None, default_root.as_str()),
+        ] {
+            sqlx::query(
+                "INSERT INTO titles (id, library_id, root_folder_id, name, facet, created_at)
+                 VALUES (?1, ?2, ?3, ?1, 'movie', ?4)",
+            )
+            .bind(id)
+            .bind(library_id)
+            .bind(root_id)
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .expect("title should insert");
+        }
+
+        let counts = store
+            .root_title_counts()
+            .await
+            .expect("root title counts read");
+        assert_eq!(counts.get(&counted_root), Some(&2));
+        assert_eq!(counts.get(&other_root), Some(&1));
+        assert_eq!(counts.get(&default_root), Some(&1));
     }
 
     /// US4.2, FR-021/FR-078: a root change writes the new path onto the row the

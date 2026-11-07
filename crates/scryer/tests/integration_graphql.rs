@@ -242,12 +242,25 @@ async fn set_default_library_roots(ctx: &TestContext, facet: &str, paths: &[&str
             root
         })
         .collect::<Vec<_>>();
+    // Every stored root the new list leaves out is acknowledged as removed,
+    // the way the settings page confirms a removal.
+    let removed_root_ids = stored_roots
+        .iter()
+        .map(|stored| stored["id"].clone())
+        .filter(|id| !roots.iter().any(|root| root["id"] == *id))
+        .collect::<Vec<_>>();
     let update = gql(
         ctx,
         r#"mutation($input: UpdateLibraryInput!) {
             updateLibrary(input: $input) { id }
         }"#,
-        json!({ "input": { "libraryId": library["id"], "roots": roots } }),
+        json!({
+            "input": {
+                "libraryId": library["id"],
+                "roots": roots,
+                "removedRootIds": removed_root_ids,
+            }
+        }),
     )
     .await;
     assert_no_errors(&update);

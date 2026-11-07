@@ -1968,6 +1968,12 @@ const en: LocaleDictionary = {
     "Library root the selected item cannot be used.",
   "error.reason.LIBRARY_ROOT_DUPLICATED":
     "Library roots must be unique within a library.",
+  "error.reason.LIBRARY_ROOT_ID_DUPLICATED":
+    "The same root is listed twice. Keep one entry for each root.",
+  "error.reason.LIBRARY_ROOT_REMOVAL_MISMATCH":
+    "The roots confirmed for removal no longer match the save. Reload the library and try again.",
+  "error.reason.LIBRARY_ROOT_REMOVAL_NOT_ACKNOWLEDGED":
+    "This save would remove roots that were not confirmed. Reload the library and review the roots before saving.",
   "error.reason.LIBRARY_ROOT_ID_REQUIRED":
     "That folder is already a root of this library. Keep the existing root instead of adding it again.",
   "error.reason.LIBRARY_ROOT_REQUIRED":
@@ -5194,6 +5200,8 @@ const en: LocaleDictionary = {
   "settings.libraryRemoveRootsTitle": "Remove root folders",
   "settings.libraryRemoveRootsConfirm":
     "Removing {{paths}} also removes every title under it from the catalog. Media files on disk will not be removed.",
+  "settings.libraryRemoveRootsEntry": "{{path}} ({{count}} titles)",
+  "settings.libraryRemoveRootsEntry.one": "{{path}} ({{count}} title)",
   "settings.libraryRootsRemovedTitles":
     "Library saved. Titles removed from the catalog: {{count}}.",
   "settings.libraryEmpty": "No libraries available.",
@@ -8790,6 +8798,8 @@ const en: LocaleDictionary = {
   "setup.mediaPathNotReachable": "Not reachable yet",
   "setup.mediaPathsNotReachableWarning":
     "Some media paths are not reachable yet. They were saved and can be changed later in Settings.",
+  "setup.mediaPathsStoredRootsLoaded":
+    "Your libraries' saved folders have loaded and replaced the list. Review the folders, then press Next again.",
   "setup.mediaPathsVerificationUnavailable":
     "Could not verify these paths. You can continue and change them later in Settings.",
 

@@ -425,7 +425,12 @@ pub fn from_media_request(
     }
 }
 
-pub fn from_library(library: Library) -> LibraryPayload {
+/// Map a library, reading each root's title count from `root_title_counts`
+/// (keyed by root id, as `AppUseCase::library_root_title_counts` returns it).
+pub fn from_library(
+    library: Library,
+    root_title_counts: &std::collections::HashMap<String, i64>,
+) -> LibraryPayload {
     let is_bootstrap_default_root_set =
         scryer_application::is_bootstrap_default_library_root_set(&library);
     LibraryPayload {
@@ -439,6 +444,9 @@ pub fn from_library(library: Library) -> LibraryPayload {
             .roots
             .into_iter()
             .map(|root| LibraryRootPayload {
+                title_count: root_title_counts
+                    .get(&root.id)
+                    .map_or(0, |count| i32::try_from(*count).unwrap_or(i32::MAX)),
                 id: root.id.into(),
                 path: root.path,
                 is_default: root.is_default,

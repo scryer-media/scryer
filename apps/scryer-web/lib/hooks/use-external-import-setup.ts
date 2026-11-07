@@ -37,10 +37,14 @@ import {
   externalImportWarmupStatusQuery,
   externalImportSetupSecretDraftQuery,
   externalImportSetupSecretDraftStatusQuery,
-  librariesQuery,
+  externalImportLibraryRootsQuery,
   wizardQualityProfilesQuery,
 } from "@/lib/graphql/queries";
-import { normalizeComparableLibraryRootPath } from "@/lib/utils/library-root-validation";
+import { mergeImportRootsIntoStoredRoots } from "@/lib/utils/library-root-validation";
+import {
+  localPathStyleFromRuntimeValue,
+  type LocalPathStyle,
+} from "@/lib/utils/local-path-style";
 import type {
   ExternalArrSourceKind,
   ExternalImportConnectionKind,
@@ -1765,10 +1769,16 @@ export function useExternalImportSetup({
       // libraries that already exist. Existing/default libraries are UPDATED with
       // their mapped roots; user-added libraries are CREATED.
       const createdByDraftId = createdLibrariesRef.current;
-      // The server identifies a stored root by its id only, so an update sends
-      // each existing library's stored roots back with their ids; only a path
-      // the library does not have yet goes without one.
-      const storedRootIds = new Map<string, Map<string, string>>();
+      // The server identifies a stored root by its id only and removes every
+      // stored root an update does not name, together with the titles under
+      // it. An update therefore sends each existing library's stored roots
+      // back with their ids and adds only the paths it does not have yet, so
+      // an import never drops a root the library already had.
+      const storedRootsByLibrary = new Map<
+        string,
+        { id: string; path: string; isDefault: boolean }[]
+      >();
+      let pathStyle: LocalPathStyle | undefined;
       if (
         librariesToCreate.some(
           ({ draft }) =>
@@ -1776,26 +1786,25 @@ export function useExternalImportSetup({
         )
       ) {
         const { data, error } = await client
-          .query(librariesQuery, {}, { requestPolicy: "network-only" })
+          .query(
+            externalImportLibraryRootsQuery,
+            {},
+            { requestPolicy: "network-only" },
+          )
           .toPromise();
         if (error) {
           return fail(
             gqlError(error, t) || t("error.fallback.failedToCreateLibrary"),
           );
         }
+        pathStyle = localPathStyleFromRuntimeValue(
+          data?.runtimeInfo?.runtimePathStyle,
+        );
         for (const library of (data?.libraries ?? []) as {
           id: string;
-          roots: { id: string; path: string }[];
+          roots: { id: string; path: string; isDefault: boolean }[];
         }[]) {
-          storedRootIds.set(
-            library.id,
-            new Map(
-              library.roots.map((root) => [
-                normalizeComparableLibraryRootPath(root.path),
-                root.id,
-              ]),
-            ),
-          );
+          storedRootsByLibrary.set(library.id, library.roots);
         }
       }
       for (const { draft, rootPaths } of librariesToCreate) {
@@ -1804,35 +1813,37 @@ export function useExternalImportSetup({
           path,
           isDefault: index === 0,
         }));
-        const storedIds = draft.existingLibraryId
-          ? storedRootIds.get(draft.existingLibraryId)
-          : undefined;
-        const updateRoots = roots.map((root) => {
-          const id = storedIds?.get(
-            normalizeComparableLibraryRootPath(root.path),
-          );
-          return id ? { id, ...root } : root;
-        });
         const settings = {
           qualityProfileId: draft.qualityProfileId,
           scoringPersona: draft.scoringPersona,
         };
         let resolvedId: string | null = null;
-        // Default libraries: update in place if they exist. The default may not
-        // exist yet during onboarding, so fall through to create on failure.
-        if (draft.existingLibraryId) {
-          const { data } = await client
+        // Default libraries are updated in place when they exist. The default
+        // may not exist yet during onboarding; only then is it created.
+        const storedRoots = draft.existingLibraryId
+          ? storedRootsByLibrary.get(draft.existingLibraryId)
+          : undefined;
+        if (draft.existingLibraryId && storedRoots) {
+          const { data, error } = await client
             .mutation(updateLibraryMutation, {
               input: {
                 libraryId: draft.existingLibraryId,
-                roots: updateRoots,
+                roots: mergeImportRootsIntoStoredRoots(
+                  storedRoots,
+                  rootPaths,
+                  pathStyle,
+                ),
                 settings,
               },
             })
             .toPromise();
-          if (data?.updateLibrary?.id) {
-            resolvedId = data.updateLibrary.id as string;
+          const updatedId = data?.updateLibrary?.id as string | undefined;
+          if (error || !updatedId) {
+            return fail(
+              `${gqlError(error, t) || t("settings.librarySaveFailed")}: ${draft.name}`,
+            );
           }
+          resolvedId = updatedId;
         }
         if (!resolvedId) {
           const { data, error } = await client

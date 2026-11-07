@@ -64,6 +64,10 @@ impl LibraryRepository for UnreadableLibraryRepo {
     async fn title_library_id(&self, _title_id: &str) -> AppResult<Option<String>> {
         Err(unreadable())
     }
+
+    async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>> {
+        Err(unreadable())
+    }
 }
 
 struct Fixture {
@@ -397,6 +401,10 @@ impl LibraryRepository for LibraryReadFailsAfterFirstList {
     }
     async fn title_library_id(&self, title_id: &str) -> AppResult<Option<String>> {
         self.inner.title_library_id(title_id).await
+    }
+
+    async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>> {
+        self.inner.root_title_counts().await
     }
 }
 

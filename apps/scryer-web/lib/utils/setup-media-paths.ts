@@ -141,12 +141,37 @@ export type SetupRootSave = {
   field: SetupMediaPathField;
   libraryId: string;
   roots: SetupRoot[];
+  /**
+   * Stored roots this save drops. The server removes them, and the titles
+   * under them, only when the save lists them. The step shows every stored
+   * root, so a root is here only when the operator removed its row.
+   */
+  removedRootIds: string[];
 };
+
+/**
+ * Whether the rows were never seeded from the stored libraries while a
+ * default library has stored roots. Saving them would send the bootstrap rows
+ * as the full root list and drop the stored roots, so the step must show the
+ * stored roots first instead of saving.
+ */
+export function setupRootsNeedStoredRoots(
+  seededFromLibraries: boolean,
+  libraries: SetupMediaLibraries,
+): boolean {
+  return (
+    !seededFromLibraries &&
+    SETUP_MEDIA_PATH_FIELDS.some(
+      (field) => (libraries[field]?.roots.length ?? 0) > 0,
+    )
+  );
+}
 
 /**
  * The libraries setup should rewrite: those whose roots were changed. A facet
  * left with no roots is left alone — a library always keeps at least one — so
- * re-running setup never rewrites roots it did not touch.
+ * re-running setup never rewrites roots it did not touch. Call it only with
+ * rows seeded from `libraries` (see `setupRootsNeedStoredRoots`).
  */
 export function plannedSetupRootSaves(
   roots: SetupMediaRoots,
@@ -158,7 +183,11 @@ export function plannedSetupRootSaves(
     if (!library || next.length === 0 || sameRoots(next, library.roots)) {
       return [];
     }
-    return [{ field, libraryId: library.id, roots: next }];
+    const keptIds = new Set(next.map((root) => root.id).filter(Boolean));
+    const removedRootIds = library.roots.flatMap((root) =>
+      root.id && !keptIds.has(root.id) ? [root.id] : [],
+    );
+    return [{ field, libraryId: library.id, roots: next, removedRootIds }];
   });
 }
 

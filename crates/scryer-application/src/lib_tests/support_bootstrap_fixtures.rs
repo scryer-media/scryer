@@ -1816,9 +1816,9 @@ where
     }
 }
 
-/// Replaces a facet default library's roots through `update_library`, the
-/// way an operator saves them, carrying the stored id of any root kept at
-/// the same path, and returns the facet's media settings afterwards.
+/// Replaces a facet default library's roots the way an operator saves them,
+/// carrying the stored id of any root kept at the same path and acknowledging
+/// every root dropped, and returns the facet's media settings afterwards.
 pub(super) async fn update_default_library_roots(
     app: &AppUseCase,
     actor: &User,
@@ -1832,19 +1832,15 @@ pub(super) async fn update_default_library_roots(
         .default_for_facet(facet.clone())
         .await?
         .expect("the facet has a default library");
-    let drafts = crate::lib_tests::with_stored_root_ids(
-        &library,
-        root_folders
-            .into_iter()
-            .map(|entry| LibraryRootDraft {
-                id: None,
-                path: entry.path,
-                is_default: entry.is_default,
-            })
-            .collect(),
-    );
-    app.update_library(actor, &library.id, None, Some(drafts), None)
-        .await?;
+    let drafts = root_folders
+        .into_iter()
+        .map(|entry| LibraryRootDraft {
+            id: None,
+            path: entry.path,
+            is_default: entry.is_default,
+        })
+        .collect();
+    crate::lib_tests::replace_library_roots(app, actor, &library.id, drafts).await?;
     app.get_media_settings(actor, facet).await
 }
 

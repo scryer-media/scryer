@@ -60,6 +60,7 @@ import type {
   DownloadClientRecord,
   DownloadClientRoutingEntry,
   LibraryRecord,
+  LibraryRootRecord,
   LibraryScanSummary,
   LibrarySettingsDraft,
   LibrarySettingsRecord,
@@ -126,6 +127,8 @@ const IMPORT_MODE_OPTIONS = [
 type LibraryMutationInput = {
   name: string;
   roots: RootFolderOption[];
+  /** Stored roots the operator confirmed removing with this save. */
+  removedRootIds?: string[];
   settings?: LibrarySettingsDraft;
 };
 
@@ -154,6 +157,8 @@ type MediaLibrarySettingsPanelProps = {
   loadLibrarySettings: (
     libraryId: string,
   ) => Promise<LibrarySettingsRecord | null>;
+  /** The library's stored roots read fresh, with title counts; null when the read failed (already reported). */
+  loadLibraryRoots: (libraryId: string) => Promise<LibraryRootRecord[] | null>;
   loadFacetDownloadClientRouting: (
     scopeId: LibraryRecord["facet"],
   ) => Promise<DownloadClientRoutingEntry[]>;
@@ -317,6 +322,7 @@ export const MediaLibrarySettingsPanel = React.memo(
     canCreateLibrary,
     canManageDownloadClientRouting,
     loadLibrarySettings,
+    loadLibraryRoots,
     loadFacetDownloadClientRouting,
     onCreateLibrary,
     onUpdateLibrary,
@@ -331,7 +337,7 @@ export const MediaLibrarySettingsPanel = React.memo(
     const [saveInProgress, setSaveInProgress] = React.useState(false);
     const [deleteLibraryOpen, setDeleteLibraryOpen] = React.useState(false);
     const [pendingRootRemoval, setPendingRootRemoval] = React.useState<{
-      paths: string[];
+      roots: LibraryRootRecord[];
       scan: boolean;
     } | null>(null);
     const [pendingLibrarySelection, setPendingLibrarySelection] =
@@ -1176,7 +1182,7 @@ export const MediaLibrarySettingsPanel = React.memo(
       [],
     );
 
-    const handleSaveLibrary = async () => {
+    const handleSaveLibrary = async (removedRootIds: string[] = []) => {
       if (downloadClientRoutingBusy) {
         return null;
       }
@@ -1225,6 +1231,7 @@ export const MediaLibrarySettingsPanel = React.memo(
             (await onUpdateLibrary(activeLibrary.id, {
               name,
               roots,
+              removedRootIds,
               settings: settingsDraft,
             })) ?? activeLibrary;
           try {
@@ -1250,8 +1257,8 @@ export const MediaLibrarySettingsPanel = React.memo(
       }
     };
 
-    const handleSaveAndScanLibrary = async () => {
-      const savedLibrary = await handleSaveLibrary();
+    const handleSaveAndScanLibrary = async (removedRootIds: string[] = []) => {
+      const savedLibrary = await handleSaveLibrary(removedRootIds);
       const libraryId =
         savedLibrary?.id ?? (mode === "existing" ? activeLibrary?.id : null);
       if (!libraryId) {
@@ -1277,33 +1284,52 @@ export const MediaLibrarySettingsPanel = React.memo(
 
     // Stored roots the draft drops. The server takes the titles under them
     // out of the catalog, so the save asks first. Stored roots are identified
-    // by id only: a stored root no draft root names by id is removed.
-    const rootsRemovedByDraft = (): RootFolderOption[] => {
-      if (mode !== "existing" || !activeLibrary) {
-        return [];
-      }
+    // by id only: a stored root no draft root names by id is removed. The
+    // stored roots are read fresh, so a root added elsewhere since this page
+    // loaded shows in the confirmation instead of being dropped unseen.
+    const rootsRemovedByDraft = (
+      storedRoots: LibraryRootRecord[],
+    ): LibraryRootRecord[] => {
       const keptIds = new Set(
         normalizeRoots(draftRoots, localPathStyle)
           .map((root) => root.id)
           .filter(Boolean),
       );
-      return savedRoots.filter((root) => !(root.id && keptIds.has(root.id)));
+      return storedRoots.filter((root) => !keptIds.has(root.id));
+    };
+
+    const saveWithRemovedRoots = async (
+      scan: boolean,
+      removedRootIds: string[],
+    ) => {
+      if (scan) {
+        await handleSaveAndScanLibrary(removedRootIds);
+      } else {
+        await handleSaveLibrary(removedRootIds);
+      }
     };
 
     const requestSaveLibrary = async (scan: boolean) => {
-      const removedRoots = rootsRemovedByDraft();
-      if (removedRoots.length > 0) {
-        setPendingRootRemoval({
-          paths: removedRoots.map((root) => root.path),
-          scan,
-        });
+      if (mode !== "existing" || !activeLibrary) {
+        await saveWithRemovedRoots(scan, []);
         return;
       }
-      if (scan) {
-        await handleSaveAndScanLibrary();
-      } else {
-        await handleSaveLibrary();
+      setSaveInProgress(true);
+      let storedRoots: LibraryRootRecord[] | null;
+      try {
+        storedRoots = await loadLibraryRoots(activeLibrary.id);
+      } finally {
+        setSaveInProgress(false);
       }
+      if (!storedRoots) {
+        return;
+      }
+      const removedRoots = rootsRemovedByDraft(storedRoots);
+      if (removedRoots.length > 0) {
+        setPendingRootRemoval({ roots: removedRoots, scan });
+        return;
+      }
+      await saveWithRemovedRoots(scan, []);
     };
 
     const handleConfirmRootRemoval = async () => {
@@ -1312,11 +1338,10 @@ export const MediaLibrarySettingsPanel = React.memo(
       if (!pending) {
         return;
       }
-      if (pending.scan) {
-        await handleSaveAndScanLibrary();
-      } else {
-        await handleSaveLibrary();
-      }
+      await saveWithRemovedRoots(
+        pending.scan,
+        pending.roots.map((root) => root.id),
+      );
     };
 
     const handleConfirmDiscardLibraryChanges = React.useCallback(() => {
@@ -2618,7 +2643,15 @@ export const MediaLibrarySettingsPanel = React.memo(
           open={pendingRootRemoval !== null}
           title={t("settings.libraryRemoveRootsTitle")}
           description={t("settings.libraryRemoveRootsConfirm", {
-            paths: pendingRootRemoval?.paths.join(", ") ?? "",
+            paths:
+              pendingRootRemoval?.roots
+                .map((root) =>
+                  t("settings.libraryRemoveRootsEntry", {
+                    path: root.path,
+                    count: root.titleCount ?? 0,
+                  }),
+                )
+                .join(", ") ?? "",
           })}
           confirmLabel={t("label.remove")}
           cancelLabel={t("label.cancel")}

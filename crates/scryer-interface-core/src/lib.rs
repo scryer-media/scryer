@@ -666,7 +666,14 @@ pub fn to_gql_error(err: AppError) -> Error {
                 );
             }
             for fact in &facts {
-                extensions.set(fact.key, fact.value.as_str());
+                match &fact.value {
+                    scryer_application::RefusalFactValue::Text(value) => {
+                        extensions.set(fact.key, value.as_str());
+                    }
+                    scryer_application::RefusalFactValue::List(values) => {
+                        extensions.set(fact.key, values.clone());
+                    }
+                }
             }
         }),
         AppError::LocationOperationBusy(message) => {
