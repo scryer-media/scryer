@@ -436,6 +436,14 @@ export function runAwaitingScriptOutput(
   return newestFinished.id;
 }
 
+function isScheduledTrigger(source: JobTriggerSource) {
+  return (
+    source === "SCHEDULED_STARTUP" ||
+    source === "SCHEDULED_INTERVAL" ||
+    source === "SCHEDULED_DAILY"
+  );
+}
+
 /** A run counts as long-running once it has been active at least this long. */
 export const LONG_RUNNING_JOB_THRESHOLD_MS = 30_000;
 
@@ -450,17 +458,21 @@ function progressString(run: Pick<JobRun, "progressJson">, key: string) {
  * Jobs that have been running for at least the threshold, one per job. A
  * folder conflict task reports through its own run and runs each conflict as
  * a child location operation with a run of its own; the child is part of the
- * task, so it is not counted again.
+ * task, so it is not counted again. Scheduled runs are background maintenance
+ * nobody asked for, so only work someone started, directly or through
+ * Scryer, is counted.
  */
 export function longRunningJobs(
   runs: readonly Pick<
     JobRun,
-    "id" | "jobKey" | "status" | "startedAt" | "progressJson"
+    "id" | "jobKey" | "status" | "triggerSource" | "startedAt" | "progressJson"
   >[],
   nowMs: number,
 ): { count: number; nextChangeAtMs: number | null } {
   const active = runs.filter(
-    (run) => run.status === "RUNNING" || run.status === "DISCOVERING",
+    (run) =>
+      (run.status === "RUNNING" || run.status === "DISCOVERING") &&
+      !isScheduledTrigger(run.triggerSource),
   );
   const childOperationIds = new Set(
     active

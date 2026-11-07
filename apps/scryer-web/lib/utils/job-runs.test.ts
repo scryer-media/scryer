@@ -345,12 +345,14 @@ test("long-running jobs count each active job once it passes the threshold", () 
       id: "scan",
       jobKey: "LIBRARY_SCAN_MOVIES",
       status: "DISCOVERING",
+      triggerSource: "MANUAL",
       startedAt: "2026-01-01T00:00:00Z",
     }),
     jobRun({
       id: "move",
       jobKey: "LOCATION_OPERATION",
       status: "RUNNING",
+      triggerSource: "SYSTEM_INTERNAL",
       startedAt: "2026-01-01T00:05:00Z",
       progressJson: { operationId: "op-1" },
     }),
@@ -358,6 +360,7 @@ test("long-running jobs count each active job once it passes the threshold", () 
       id: "rss",
       jobKey: "RSS_SYNC",
       status: "RUNNING",
+      triggerSource: "MANUAL",
       startedAt: "2026-01-01T00:09:50Z",
     }),
     jobRun({
@@ -390,6 +393,7 @@ test("a folder conflict task counts once, not again for its current operation", 
       id: "task",
       jobKey: "LOCATION_OPERATION",
       status: "RUNNING",
+      triggerSource: "MANUAL",
       startedAt: "2026-01-01T00:00:00Z",
       progressJson: { current_operation_id: "conflict:task:3" },
     }),
@@ -397,9 +401,29 @@ test("a folder conflict task counts once, not again for its current operation", 
       id: "child",
       jobKey: "LOCATION_OPERATION",
       status: "RUNNING",
+      triggerSource: "MANUAL",
       startedAt: "2026-01-01T00:08:00Z",
       progressJson: { operationId: "conflict:task:3" },
     }),
   ];
   assert.equal(longRunningJobs(runs, now).count, 1);
+});
+
+test("scheduled background jobs never count as long-running", () => {
+  const now = Date.parse("2026-01-01T04:00:00Z");
+  const runs = (
+    ["SCHEDULED_STARTUP", "SCHEDULED_INTERVAL", "SCHEDULED_DAILY"] as const
+  ).map((triggerSource) =>
+    jobRun({
+      id: `artwork-${triggerSource}`,
+      jobKey: "ARTWORK_ENCODING",
+      status: "RUNNING",
+      triggerSource,
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
+  );
+  assert.deepEqual(longRunningJobs(runs, now), {
+    count: 0,
+    nextChangeAtMs: null,
+  });
 });
