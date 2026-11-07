@@ -1066,11 +1066,11 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }
     }
 
-    if analysis.video_codec.is_none()
-        && analysis.details.selected_video_id.is_none()
-        && !unavailable
-    {
-        if analysis.details.report.budget_exhausted
+    if analysis.video_codec.is_none() && !unavailable {
+        // A video stream whose codec the probe could not resolve is held, not
+        // imported as if it were verified.
+        if analysis.details.selected_video_id.is_some()
+            || analysis.details.report.budget_exhausted
             || matches!(
                 analysis.details.report.status,
                 scryer_media_types::ProbeStatus::Unsupported

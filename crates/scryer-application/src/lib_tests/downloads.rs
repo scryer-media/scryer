@@ -7101,11 +7101,13 @@ async fn automatic_disc_import_holds_unmapped_encrypted_and_unknown_images() {
         )
         .await
         .unwrap();
-        assert!(
-            result
-                .error_message
-                .as_deref()
-                .is_some_and(|message| message.contains("disc")),
+        // Held for review: encrypted media is held before the disc checks run.
+        assert_eq!(
+            (result.decision.clone(), result.skip_reason.clone()),
+            (
+                scryer_domain::ImportDecision::Skipped,
+                Some(scryer_domain::ImportSkipReason::PolicyMismatch)
+            ),
             "{kind}: {result:?}"
         );
         assert!(source.exists(), "{kind}: source must survive review hold");
@@ -11812,18 +11814,24 @@ async fn additional_movie_preparation_preserves_files_on_inconclusive_or_changed
         assert!(
             !matches!(result, Ok(ref r) if r.decision == scryer_domain::ImportDecision::Imported)
         );
-        let message = match result {
-            Ok(result) => result.error_message.unwrap_or_default(),
-            Err(error) => error.to_string(),
-        };
-        assert!(
-            message.contains(if changed_source {
-                "source changed"
-            } else {
-                "inconclusive"
-            }),
-            "{message}"
-        );
+        if changed_source {
+            let message = match result {
+                Ok(result) => result.error_message.unwrap_or_default(),
+                Err(error) => error.to_string(),
+            };
+            assert!(message.contains("source changed"), "{message}");
+        } else {
+            // Unverified media never replaces the incumbent: held for review.
+            let result = result.expect("an inconclusive source is held, not failed");
+            assert_eq!(
+                (result.decision.clone(), result.skip_reason.clone()),
+                (
+                    scryer_domain::ImportDecision::Skipped,
+                    Some(scryer_domain::ImportSkipReason::PolicyMismatch)
+                ),
+                "{result:?}"
+            );
+        }
         let files = app
             .services
             .library
