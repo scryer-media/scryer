@@ -1513,11 +1513,53 @@ fn fallback_title_from_id_text(value: &str) -> Option<String> {
 
 fn clean_library_title_candidate(value: &str) -> Option<String> {
     let normalized = normalize_library_title_text(value);
-    let trimmed = normalized
-        .trim()
-        .trim_matches(|ch: char| matches!(ch, '-' | '.' | '_' | '[' | ']' | '(' | ')' | '{' | '}'))
-        .trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    let trimmed = trim_unpaired_brackets(&normalized);
+    // Brackets alone, such as "( )", are not a title.
+    trimmed
+        .chars()
+        .any(char::is_alphanumeric)
+        .then(|| trimmed.to_string())
+}
+
+/// Trim separators and any bracket left without its partner at either end. A
+/// bracket that is part of the title keeps its partner and stays: "(500) Days
+/// of Summer" and "[REC]" are titles, while "Title (" is a cut-off year tag.
+fn trim_unpaired_brackets(value: &str) -> &str {
+    const PAIRS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('{', '}')];
+    let mut text = value;
+    loop {
+        let before = text;
+        text = text
+            .trim()
+            .trim_matches(|ch: char| matches!(ch, '-' | '.' | '_'))
+            .trim();
+        if let Some(first) = text.chars().next()
+            && let Some((_, close)) = PAIRS.iter().find(|(open, _)| *open == first)
+            && !text[first.len_utf8()..].contains(*close)
+        {
+            text = &text[first.len_utf8()..];
+        }
+        if let Some(last) = text.chars().next_back()
+            && let Some((open, _)) = PAIRS.iter().find(|(_, close)| *close == last)
+            && !text[..text.len() - last.len_utf8()].contains(*open)
+        {
+            text = &text[..text.len() - last.len_utf8()];
+        }
+        // An opener at the end, or a closer at the start, has no partner.
+        if let Some(last) = text.chars().next_back()
+            && PAIRS.iter().any(|(open, _)| *open == last)
+        {
+            text = &text[..text.len() - last.len_utf8()];
+        }
+        if let Some(first) = text.chars().next()
+            && PAIRS.iter().any(|(_, close)| *close == first)
+        {
+            text = &text[first.len_utf8()..];
+        }
+        if text == before {
+            return text;
+        }
+    }
 }
 
 fn normalize_library_title_text(value: &str) -> String {
@@ -1606,6 +1648,30 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use scryer_domain::{EpisodeType, ExternalId};
+
+    #[test]
+    fn title_candidates_keep_brackets_that_belong_to_the_title() {
+        let clean = |value: &str| clean_library_title_candidate(value);
+        assert_eq!(
+            clean("(40) Lanterns of Vael").as_deref(),
+            Some("(40) Lanterns of Vael")
+        );
+        assert_eq!(clean("(K)Raum Vael").as_deref(), Some("(K)Raum Vael"));
+        assert_eq!(clean("[VAEL]").as_deref(), Some("[VAEL]"));
+        assert_eq!(
+            clean("Lanterns of Vael (").as_deref(),
+            Some("Lanterns of Vael")
+        );
+        assert_eq!(
+            clean("- Lanterns.of.Vael -").as_deref(),
+            Some("Lanterns of Vael")
+        );
+        assert_eq!(
+            clean("Lanterns of Vael]").as_deref(),
+            Some("Lanterns of Vael")
+        );
+        assert_eq!(clean(" ( ) "), None);
+    }
 
     #[test]
     fn filename_parse_raw_name_strips_generated_restore_suffix() {
