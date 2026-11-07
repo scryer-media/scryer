@@ -26,22 +26,14 @@ pub(crate) fn for_title(
         .iter()
         .enumerate()
         .filter(|(_, stream)| stream.metadata.disposition.commentary != Some(true));
-    let best = eligible
-        .clone()
-        .max_by_key(|(index, stream)| {
-            (
-                scryer_media_types::normalize_audio_codec_for_release(
-                    stream.codec.as_deref(),
-                    stream.metadata.profile.as_deref(),
-                )
-                .as_deref()
-                .map(scryer_media_types::audio_codec_rank_for_release_label)
-                .unwrap_or(0),
-                stream.channels.unwrap_or(0),
-                std::cmp::Reverse(*index),
-            )
-        })
-        .map(|(_, stream)| *stream);
+    let best = scryer_media_types::primary_audio_stream_index(audio.iter().map(|stream| {
+        (
+            stream.metadata.disposition.default == Some(true),
+            stream.metadata.disposition.commentary == Some(true),
+            stream.name.as_deref(),
+        )
+    }))
+    .map(|index| audio[index]);
     let subtitle = streams
         .iter()
         .filter(|stream| stream.kind == StreamKind::Subtitle)

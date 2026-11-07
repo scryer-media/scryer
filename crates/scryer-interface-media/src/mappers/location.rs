@@ -144,6 +144,7 @@ pub fn from_location_transfer(
                 verification_bytes: bytes(row.verification_bytes),
                 copying: row.copying.min(i32::MAX as usize) as i32,
                 verifying: row.verifying.min(i32::MAX as usize) as i32,
+                recording: row.recording.min(i32::MAX as usize) as i32,
                 current_file: row.current_file.as_deref().map(display_path),
             })
             .collect(),
@@ -171,6 +172,103 @@ fn display_path(path: &str) -> String {
 /// cannot be represented is clamped rather than wrapped into a negative size.
 fn bytes(value: u64) -> Long {
     Long::from_u64_saturating(value)
+}
+
+pub fn pending_import_conflict_request(
+    input: crate::types::PendingImportConflictInput,
+) -> scryer_application::location::conflicts::ConflictRequest {
+    use crate::types::{PendingImportConflictLeftovers, PendingImportConflictPolicy};
+    use scryer_application::location::conflicts::{
+        ConflictLeftovers, ConflictPolicy, ConflictRequest,
+    };
+    ConflictRequest {
+        pending_import_ids: input
+            .pending_import_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect(),
+        policy: match input.policy {
+            PendingImportConflictPolicy::AdoptAll => ConflictPolicy::AdoptAll,
+            PendingImportConflictPolicy::KeepOne => ConflictPolicy::KeepOne,
+        },
+        leftovers: match input.leftovers {
+            PendingImportConflictLeftovers::PreserveAll => ConflictLeftovers::PreserveAll,
+            PendingImportConflictLeftovers::MediaOnly => ConflictLeftovers::MediaOnly,
+        },
+    }
+}
+
+pub fn from_pending_import_conflict_preview(
+    preview: scryer_application::location::conflicts::ConflictPreview,
+) -> crate::types::PendingImportConflictPreviewPayload {
+    use crate::types::{PendingImportConflictPreviewPayload, PendingImportConflictRowPayload};
+    PendingImportConflictPreviewPayload {
+        plan_fingerprint: preview.plan_fingerprint,
+        total_count: preview.total_count,
+        actionable_count: preview.actionable_count,
+        failed_count: preview.failed_count,
+        sampled: preview.sampled,
+        rows: preview
+            .rows
+            .into_iter()
+            .map(|row| PendingImportConflictRowPayload {
+                pending_import_id: ID(row.pending_import_id),
+                title_id: ID(row.title_id),
+                title_name: row.title_name,
+                survivor_path: display_path(&row.survivor_path),
+                primary_path: display_path(&row.primary_path),
+                move_bytes: bytes(row.move_bytes),
+                recycle_bytes: bytes(row.recycle_bytes),
+                recycle_count: row.recycle_count,
+                collision_renames: row.collision_renames,
+                collision_rename_samples: row
+                    .collision_rename_samples
+                    .into_iter()
+                    .map(|rename| crate::types::PendingImportConflictRenamePayload {
+                        source_path: display_path(&rename.source_path),
+                        destination_path: display_path(&rename.destination_path),
+                    })
+                    .collect(),
+                leftover_count: row.leftover_count,
+                leftover_bytes: bytes(row.leftover_bytes),
+                leftover_paths: row
+                    .leftover_paths
+                    .iter()
+                    .map(|path| display_path(path))
+                    .collect(),
+                recycle_paths: row
+                    .recycle_paths
+                    .iter()
+                    .map(|path| display_path(path))
+                    .collect(),
+                files_sampled: row.files_sampled,
+                error_reason: row.error_reason,
+                error_message: row.error_message,
+            })
+            .collect(),
+        permanent_delete_count: preview.permanent_delete_count,
+        permanent_delete_bytes: bytes(preview.permanent_delete_bytes),
+        permanent_delete_paths: preview
+            .permanent_delete_paths
+            .iter()
+            .map(|path| display_path(path))
+            .collect(),
+        permanent_delete_sampled: preview.permanent_delete_sampled,
+        requires_permanent_delete_confirmation: preview.requires_permanent_delete_confirmation,
+    }
+}
+
+pub fn from_pending_import_conflict_task(
+    task: scryer_application::location::conflicts::ConflictTask,
+) -> crate::types::PendingImportConflictTaskPayload {
+    crate::types::PendingImportConflictTaskPayload {
+        job_run_id: ID(task.job_run_id),
+        total_count: task.total_count,
+        settled_count: task.settled_count,
+        failed_count: task.failed_count,
+        operation_ids: task.operation_ids.into_iter().map(ID).collect(),
+        completed: task.completed,
+    }
 }
 
 fn from_verification_depth(value: VerificationDepth) -> VerificationDepthValue {
@@ -353,24 +451,25 @@ fn from_facet_conversion(conversion: &FacetConversion) -> LocationFacetConversio
     }
 }
 
-/// Groups the selection into all six classes, in a stable order, omitting no
-/// selected title (FR-015, SC-005).
+/// Groups the selection into all six classes, in a stable order, counting
+/// every selected title (FR-015, SC-005). Each group lists its titles the way
+/// plan sections are sampled.
 fn from_selection_classification(
     classification: &SelectionClassification,
 ) -> LocationSelectionClassificationPayload {
     let groups = TITLE_LOCATION_CLASSES
         .iter()
         .map(|class| {
-            let titles: Vec<LocationClassifiedTitlePayload> = classification
-                .titles
-                .iter()
-                .filter(|title| title.class == *class)
-                .map(from_classified_title)
-                .collect();
+            let sampled = classification.sampled_titles_in(*class, PLAN_SECTION_SAMPLE_LIMIT);
             LocationClassificationGroupPayload {
                 class: (*class).into(),
-                count: Long(titles.len() as i64),
-                titles,
+                count: Long(sampled.total),
+                complete: sampled.is_complete(),
+                titles: sampled
+                    .items
+                    .iter()
+                    .map(|title| from_classified_title(title))
+                    .collect(),
             }
         })
         .collect();
@@ -506,7 +605,19 @@ pub fn from_root_move_preview(preview: &RootMovePreview) -> LocationOperationPre
         from_selection_classification(&preview.classification),
         preview.warnings.clone(),
     );
-    payload.folders = preview
+    // The classification groups are sampled, so the user-moved-files table
+    // cannot read a no-op title's placement from them. A no-op title has no
+    // plan entry; its destination is the folder it already occupies.
+    let planned: std::collections::HashSet<&str> = preview
+        .execution
+        .titles
+        .iter()
+        .map(|title| title.title_id.as_str())
+        .collect();
+    let no_ops = preview.classification.titles.iter().filter(|title| {
+        title.class == TitleLocationClass::NoOp && !planned.contains(title.title_id.as_str())
+    });
+    let mut folders: Vec<crate::types::LocationTitleFoldersPayload> = preview
         .execution
         .titles
         .iter()
@@ -516,6 +627,15 @@ pub fn from_root_move_preview(preview: &RootMovePreview) -> LocationOperationPre
             destination: title.destination_folder_path.as_deref().map(display_path),
         })
         .collect();
+    folders.extend(no_ops.map(|title| {
+        let folder = title.source_folder_path.as_deref().map(display_path);
+        crate::types::LocationTitleFoldersPayload {
+            title_id: ID(title.title_id.clone()),
+            source: folder.clone(),
+            destination: folder,
+        }
+    }));
+    payload.folders = folders;
     payload
 }
 
@@ -546,6 +666,7 @@ fn from_classification_counts(
             .map(|class| LocationClassificationGroupPayload {
                 class: (*class).into(),
                 count: Long(count_for(*class)),
+                complete: count_for(*class) == 0,
                 titles: Vec::new(),
             })
             .collect(),

@@ -396,6 +396,13 @@ impl DiscoveryRepository for NullDiscoveryRepository {
         Ok(Vec::new())
     }
 
+    async fn list_discovery_item_targets(
+        &self,
+        _run_ids: &[String],
+    ) -> AppResult<Vec<crate::DiscoveryItemTargetRecord>> {
+        Ok(Vec::new())
+    }
+
     async fn upsert_pending_discovery_context_change(
         &self,
         _change: &DiscoveryPendingContextChangeRecord,
@@ -476,6 +483,7 @@ impl DiscoveryRepository for NullDiscoveryRepository {
     async fn list_public_discovery_section_items(
         &self,
         _run_id: &str,
+        _section_ids: &[String],
         _allowed_media_kinds: &[String],
         _include_unresolved: bool,
         _filters: &DiscoveryHomeFilters,
@@ -490,6 +498,7 @@ impl DiscoveryRepository for NullDiscoveryRepository {
         _readable_library_ids: &[String],
         _allowed_media_kinds: &[String],
         _include_unresolved: bool,
+        _include_owned: bool,
         _filters: &DiscoveryHomeFilters,
         _limit: i64,
     ) -> AppResult<Vec<DiscoveryHomeCandidate>> {
@@ -638,6 +647,58 @@ impl DiscoveryRepository for NullDiscoveryRepository {
         _diagnostic_cutoff: DateTime<Utc>,
     ) -> AppResult<DiscoveryPruneReport> {
         Ok(DiscoveryPruneReport::default())
+    }
+
+    async fn record_failed_library_graph_run(
+        &self,
+        _run: &crate::LibraryGraphRunRecord,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn commit_library_graph(
+        &self,
+        _snapshot: &crate::LibraryGraphSnapshotRecord,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn get_latest_library_graph(
+        &self,
+        _facet: &str,
+    ) -> AppResult<Option<crate::LibraryGraphSnapshotRecord>> {
+        Ok(None)
+    }
+
+    async fn get_latest_library_graph_run(
+        &self,
+        _facet: &str,
+    ) -> AppResult<Option<crate::LibraryGraphRunRecord>> {
+        Ok(None)
+    }
+
+    async fn has_complete_library_graph(&self, _facet: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn delete_library_graph_runs(&self, _facet: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn get_discovery_neighbor_cache(
+        &self,
+        _target_key: &str,
+        _language: &str,
+    ) -> AppResult<Option<crate::DiscoveryNeighborCacheRecord>> {
+        Ok(None)
+    }
+
+    async fn replace_discovery_neighbor_cache(
+        &self,
+        _record: &crate::DiscoveryNeighborCacheRecord,
+        _expire_before: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        Ok(())
     }
 }
 
@@ -3311,6 +3372,10 @@ impl LibraryRepository for NullLibraryRepository {
     async fn title_library_id(&self, _title_id: &str) -> AppResult<Option<String>> {
         Ok(None)
     }
+
+    async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>> {
+        Ok(std::collections::HashMap::new())
+    }
 }
 
 #[derive(Default)]
@@ -4100,6 +4165,8 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         current.high_contrast_mode = settings.high_contrast_mode;
         current.reduce_motion = settings.reduce_motion;
         current.hide_sponsor_button = settings.hide_sponsor_button;
+        current.discovery_grid_hide_owned = settings.discovery_grid_hide_owned;
+        current.discovery_grid_hide_requested = settings.discovery_grid_hide_requested;
         current.density = settings.density;
         current.sidebar_mode = settings.sidebar_mode;
         current.default_landing_view = settings.default_landing_view;
@@ -4311,8 +4378,13 @@ impl crate::ports::MediaServerSignalRepository for NullMediaServerSignalReposito
         _: &str,
         _: &str,
         _: &[scryer_domain::NewUserMediaSignal],
+        _: Option<&crate::ports::SignalRosterLink>,
     ) -> AppResult<u64> {
         Err(AppError::Repository("not configured".into()))
+    }
+
+    async fn signal_roster(&self) -> AppResult<Vec<crate::ports::SignalRosterEntry>> {
+        Ok(Vec::new())
     }
 
     async fn movie_signals_for_titles(
@@ -4351,13 +4423,14 @@ pub struct NullMediaServerSignalSource;
 
 #[async_trait]
 impl crate::ports::MediaServerSignalSource for NullMediaServerSignalSource {
-    async fn fetch_played_items(
+    async fn open(
         &self,
         _: &scryer_domain::MediaServerConnection,
-        _: &str,
-    ) -> AppResult<Vec<crate::ports::ProviderPlayedItem>> {
-        Err(AppError::Repository(
-            "media-server signal source is not configured".into(),
+    ) -> Result<Box<dyn crate::ports::MediaServerSignalReader>, crate::ports::SignalReadFailure>
+    {
+        Err(crate::ports::SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "media-server signal source is not configured",
         ))
     }
 }

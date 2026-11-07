@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
+};
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -26,6 +29,12 @@ pub fn stored_path_to_path_buf(stored: &str) -> PathBuf {
     decode_path(stored).unwrap_or_else(|| PathBuf::from(stored))
 }
 
+/// Foreign native encodings can be displayed, but cannot identify a local file.
+pub(crate) fn stored_path_is_native(stored: &str) -> bool {
+    !(cfg!(unix) && stored.starts_with(STORED_PATH_WINDOWS_PREFIX)
+        || cfg!(windows) && stored.starts_with(STORED_PATH_UNIX_PREFIX))
+}
+
 pub fn stored_path_to_display_string(stored: &str) -> String {
     if !stored.starts_with(STORED_PATH_PREFIX) {
         return stored.to_string();
@@ -34,6 +43,143 @@ pub fn stored_path_to_display_string(stored: &str) -> String {
     stored_path_to_path_buf(stored)
         .to_string_lossy()
         .into_owned()
+}
+
+/// Fold Unicode text while preserving native bytes or unpaired UTF-16 units.
+/// Opaque portions of a path must never acquire the replacement character's identity.
+pub(crate) fn lowercase_os_str(value: &OsStr) -> OsString {
+    map_os_str_text(value, |text| text.to_lowercase())
+}
+
+fn identity_os_str(value: &OsStr) -> OsString {
+    map_os_str_text(value, |text| text.to_lowercase().nfc().collect())
+}
+
+fn map_os_str_text(value: &OsStr, transform: impl Fn(&str) -> String) -> OsString {
+    #[cfg(unix)]
+    {
+        let mut remaining = value.as_bytes();
+        let mut folded = Vec::new();
+        while !remaining.is_empty() {
+            match std::str::from_utf8(remaining) {
+                Ok(text) => {
+                    folded.extend_from_slice(transform(text).as_bytes());
+                    break;
+                }
+                Err(error) => {
+                    let (valid, rest) = remaining.split_at(error.valid_up_to());
+                    folded.extend_from_slice(
+                        transform(std::str::from_utf8(valid).expect("validated prefix")).as_bytes(),
+                    );
+                    let invalid_len = error.error_len().unwrap_or(rest.len());
+                    folded.extend_from_slice(&rest[..invalid_len]);
+                    remaining = &rest[invalid_len..];
+                }
+            }
+        }
+        OsString::from_vec(folded)
+    }
+    #[cfg(windows)]
+    {
+        let mut folded = Vec::new();
+        let mut text = String::new();
+        for decoded in char::decode_utf16(value.encode_wide()) {
+            match decoded {
+                Ok(character) => text.push(character),
+                Err(error) => {
+                    folded.extend(transform(&text).encode_utf16());
+                    text.clear();
+                    folded.push(error.unpaired_surrogate());
+                }
+            }
+        }
+        folded.extend(transform(&text).encode_utf16());
+        OsString::from_wide(&folded)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        value
+            .to_str()
+            .map(|text| OsString::from(transform(text)))
+            .unwrap_or_else(|| value.to_owned())
+    }
+}
+
+/// Split a native name at a native prefix without decoding either lossily.
+pub(crate) fn native_name_suffix(
+    value: &OsStr,
+    prefix: &OsStr,
+    ignore_case: bool,
+) -> Option<OsString> {
+    if ignore_case {
+        let prefix = lowercase_os_str(prefix);
+        #[cfg(unix)]
+        for length in 0..=value.as_bytes().len() {
+            let (head, tail) = value.as_bytes().split_at(length);
+            if lowercase_os_str(OsStr::from_bytes(head)) == prefix {
+                return Some(OsStr::from_bytes(tail).to_owned());
+            }
+        }
+        #[cfg(windows)]
+        {
+            let units = value.encode_wide().collect::<Vec<_>>();
+            for length in 0..=units.len() {
+                if lowercase_os_str(&OsString::from_wide(&units[..length])) == prefix {
+                    return Some(OsString::from_wide(&units[length..]));
+                }
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        for (length, _) in value
+            .to_str()?
+            .char_indices()
+            .chain(std::iter::once((value.to_str()?.len(), '\0')))
+        {
+            if lowercase_os_str(OsStr::new(&value.to_str()?[..length])) == prefix {
+                return Some(OsString::from(&value.to_str()?[length..]));
+            }
+        }
+        return None;
+    }
+    #[cfg(unix)]
+    let (head, tail) = {
+        let length = prefix.as_bytes().len();
+        let value = value.as_bytes();
+        (
+            OsStr::from_bytes(value.get(..length)?).to_owned(),
+            OsStr::from_bytes(value.get(length..)?).to_owned(),
+        )
+    };
+    #[cfg(windows)]
+    let (head, tail) = {
+        let length = prefix.encode_wide().count();
+        let value = value.encode_wide().collect::<Vec<_>>();
+        (
+            OsString::from_wide(value.get(..length)?),
+            OsString::from_wide(value.get(length..)?),
+        )
+    };
+    #[cfg(not(any(unix, windows)))]
+    let (head, tail) = {
+        let value = value.to_str()?;
+        let length = prefix.to_str()?.len();
+        (
+            OsString::from(value.get(..length)?),
+            OsString::from(value.get(length..)?),
+        )
+    };
+    (head == prefix).then_some(tail)
+}
+
+/// Append a suffix before the final extension without changing the native name.
+pub(crate) fn suffix_path_stem(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.file_stem().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    if let Some(extension) = path.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    path.with_file_name(name)
 }
 
 /// Resolve `.` and `..` without touching the filesystem. One definition for
@@ -209,20 +355,28 @@ const fn folder_path_trailing_separators() -> &'static [char] {
 }
 
 pub(crate) fn stored_path_is_within_folder(folder: &str, path: &str) -> bool {
-    if cfg!(windows) {
-        let Some(folder) = folder_path_identity_key(folder) else {
-            return false;
-        };
-        let Some(path) = folder_path_identity_key(path) else {
-            return false;
-        };
-        return path == folder
-            || path
-                .strip_prefix(&folder)
-                .is_some_and(|suffix| suffix.starts_with('/'));
-    }
+    native_path_is_within_folder(
+        &stored_path_to_path_buf(folder),
+        &stored_path_to_path_buf(path),
+    )
+}
 
-    stored_path_to_path_buf(path).starts_with(stored_path_to_path_buf(folder))
+pub(crate) fn stored_path_is_lexically_within_folder(folder: &str, path: &str) -> bool {
+    native_path_is_within_folder(
+        &lexically_normalize(&stored_path_to_path_buf(folder)),
+        &lexically_normalize(&stored_path_to_path_buf(path)),
+    )
+}
+
+fn native_path_is_within_folder(folder: &Path, path: &Path) -> bool {
+    if folder.as_os_str().is_empty() {
+        return false;
+    }
+    if cfg!(windows) {
+        return PathBuf::from(identity_os_str(path.as_os_str()))
+            .starts_with(PathBuf::from(identity_os_str(folder.as_os_str())));
+    }
+    path.starts_with(folder)
 }
 
 fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<String> {
@@ -238,10 +392,11 @@ fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<St
         )));
     }
 
-    let display = decoded.to_string_lossy();
-    let mut normalized = String::with_capacity(display.len());
+    let folded = identity_os_str(decoded.as_os_str());
+    let spelling = path_to_stored_string(Path::new(&folded));
+    let mut normalized = String::with_capacity(spelling.len());
     let mut previous_was_separator = false;
-    for character in display.chars() {
+    for character in spelling.chars() {
         let is_separator = character == '/' || character == '\\';
         if is_separator {
             if !previous_was_separator {
@@ -260,7 +415,7 @@ fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<St
         normalized.pop();
     }
 
-    Some(normalize_identity_unicode(&normalized.to_lowercase()))
+    Some(normalize_identity_unicode(&normalized))
 }
 
 /// Normalizes to NFC, leaving the stored-path escape form untouched: those keys
@@ -421,6 +576,75 @@ fn hex_value(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(any(unix, windows))]
+    fn opaque_path(marker: u16) -> PathBuf {
+        #[cfg(unix)]
+        let name = OsString::from_vec([b"/library/\xC3\x84".as_slice(), &[marker as u8]].concat());
+        #[cfg(windows)]
+        let name = OsString::from_wide(
+            &[
+                "C:\\library\\\u{c4}".encode_utf16().collect::<Vec<_>>(),
+                vec![marker],
+            ]
+            .concat(),
+        );
+        PathBuf::from(name)
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn native_path_identity_preserves_opaque_units_and_root_boundaries() {
+        #[cfg(unix)]
+        let markers = [0xff, 0xfe];
+        #[cfg(windows)]
+        let markers = [0xd800, 0xd801];
+        let first = opaque_path(markers[0]);
+        let second = opaque_path(markers[1]);
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        let first_key = path_to_stored_string(&first);
+        let second_key = path_to_stored_string(&second);
+        assert!(!folder_paths_match(&first_key, &second_key));
+        assert_ne!(
+            folder_path_identity_key_for_platform(&first_key, true),
+            folder_path_identity_key_for_platform(&second_key, true)
+        );
+        assert_ne!(
+            lowercase_os_str(first.as_os_str()),
+            lowercase_os_str(second.as_os_str())
+        );
+        let child = path_to_stored_string(first.join("movie.mkv"));
+        assert!(crate::title_folder_rules::path_is_strictly_within(
+            &child, &first_key
+        ));
+        assert!(!crate::title_folder_rules::path_is_strictly_within(
+            &child,
+            &second_key
+        ));
+        assert!(!crate::title_folder_rules::path_is_strictly_within(
+            &path_to_stored_string(first.join("../outside.mkv")),
+            &first_key
+        ));
+        assert!(!crate::title_folder_rules::path_is_strictly_within(
+            &first_key, &first_key
+        ));
+    }
+
+    #[test]
+    fn native_identity_retains_unicode_normal_form_and_case_rules() {
+        assert_eq!(
+            identity_os_str(OsStr::new("M\u{c9}DIA")),
+            identity_os_str(OsStr::new("Me\u{301}dia"))
+        );
+        assert_eq!(
+            native_name_suffix(OsStr::new("k.en.srt"), OsStr::new("\u{212A}"), true),
+            Some(OsString::from(".en.srt"))
+        );
+        assert_eq!(
+            native_name_suffix(OsStr::new("i\u{307}.en.srt"), OsStr::new("\u{130}"), true),
+            Some(OsString::from(".en.srt"))
+        );
+    }
 
     /// Written precomposed, handed back decomposed by SMB. Both spellings name
     /// one file, so they have to match or the planner renames forever.

@@ -7,22 +7,32 @@ import {
   useRef,
   useState,
 } from "react";
+import { useLocation } from "react-router";
 import { useClient } from "urql";
 import {
   AddToCatalogDialog,
   EMPTY_SEARCH_RESULT,
 } from "@/components/root/add-to-catalog-dialog";
 import { RequestMediaDialog } from "@/components/root/request-media-dialog";
-import { DiscoveryView } from "@/components/views/discovery-view";
+import {
+  DiscoveryView,
+  type DiscoverySectionGridModel,
+} from "@/components/views/discovery-view";
 import {
   discoveryHomeCardsQuery,
   discoveryHomeFilterOptionsQuery,
   discoveryItemDetailQuery,
+  discoverySectionPageQuery,
 } from "@/lib/graphql/queries";
+import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { CATALOG_TITLES_REFRESH_EVENT } from "@/lib/events/catalog-titles";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useSearchContext } from "@/lib/context/search-context";
 import { useTranslate } from "@/lib/context/translate-context";
+import {
+  uiSettingsInputFromSettings,
+  useUiSettings,
+} from "@/lib/context/ui-settings-context";
 import type { LocaleCode } from "@/lib/i18n";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
@@ -30,13 +40,35 @@ import {
   discoveryItemFacet,
   externalIdsFromDiscoverySignals,
 } from "@/lib/utils/discovery-actions";
+import {
+  appendDiscoverySectionPage,
+  discoveryBrowseSectionId,
+  discoverySectionPagingFor,
+  discoverySectionQueryKey,
+  nextDiscoverySectionPage,
+  startDiscoverySectionPaging,
+  type DiscoverySectionPaging,
+} from "@/lib/utils/discovery-section-paging";
+import { discoverySectionIdFromPath } from "@/lib/utils/routing";
+import {
+  browserCacheStore,
+  browserCacheZstdCodec,
+} from "@/lib/utils/browser-cache";
+import {
+  discoveryHomeCacheKey,
+  readCachedDiscoveryHome,
+  writeCachedDiscoveryHome,
+} from "@/lib/utils/discovery-home-cache";
 import type {
   DiscoveryHomeCard,
   DiscoveryHomeFilterOptions,
   DiscoveryHomeFilters,
   DiscoveryHomeInput,
   DiscoveryHomePayload,
+  DiscoveryHomeSection,
   DiscoveryItem,
+  DiscoverySectionPagePayload,
+  DiscoverySectionSort,
   ExternalId,
   Facet,
 } from "@/lib/types";
@@ -49,11 +81,13 @@ type DiscoveryContainerProps = {
   canRequestMedia: boolean;
 };
 
+const DISCOVERY_HOME_LIMIT_PER_SECTION = 18;
+
 const DISCOVERY_HOME_INPUT: DiscoveryHomeInput = {
   includePublic: true,
   includePersonalized: true,
   includeUnresolved: true,
-  limitPerSection: 18,
+  limitPerSection: DISCOVERY_HOME_LIMIT_PER_SECTION,
 };
 
 const DISCOVERY_FACETS: Facet[] = ["MOVIE", "SERIES", "ANIME"];
@@ -139,6 +173,8 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
     [requestableLibrariesByFacet],
   );
   const [home, setHome] = useState<DiscoveryHomePayload | null>(null);
+  // The home input the shown home answers; a refresh of it skips the cache.
+  const shownHomeInputRef = useRef<DiscoveryHomeInput | null>(null);
   const [filters, setFilters] = useState<DiscoveryHomeFilters>({});
   const [filterOptions, setFilterOptions] =
     useState<DiscoveryHomeFilterOptions>({
@@ -156,6 +192,32 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
   const mountedRef = useRef(true);
   const scopeKeyRef = useRef<string | null>(null);
   const authorizationSignatureRef = useRef(authorizationSignature);
+  const location = useLocation();
+  const routeSectionId = discoverySectionIdFromPath(location.pathname);
+  const sectionId = discoveryBrowseSectionId(routeSectionId, filters);
+  const { uiSettings, uiSettingsLoaded, setUiSettings, saveUiSettings } =
+    useUiSettings();
+  const [sectionSort, setSectionSort] = useState<{
+    sectionId: string | null;
+    sort: DiscoverySectionSort;
+  }>({ sectionId: null, sort: "RELEVANCE" });
+  const [sectionIdentity, setSectionIdentity] = useState<{
+    sectionId: string;
+    section: DiscoveryHomeSection;
+  } | null>(null);
+  // Bumped to reload an open grid from its first page, e.g. after an add.
+  const [sectionReload, setSectionReload] = useState(0);
+  const [sectionPaging, setSectionPaging] = useState<
+    DiscoverySectionPaging<DiscoveryHomeCard>
+  >(() => startDiscoverySectionPaging(""));
+  const sectionPagingRef = useRef(sectionPaging);
+  const [sectionLoadingKey, setSectionLoadingKey] = useState<string | null>(
+    null,
+  );
+  const sectionInFlightRef = useRef<string | null>(null);
+  // The query whose last page request failed; automatic paging stops there
+  // until "load more" retries it.
+  const [sectionFailedKey, setSectionFailedKey] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     authorizationSignatureRef.current = authorizationSignature;
@@ -189,7 +251,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
     [filters],
   );
 
-  const refresh = useCallback(async () => {
+  const refreshHome = useCallback(async () => {
     const requestId = refreshRequestIdRef.current + 1;
     refreshRequestIdRef.current = requestId;
     const scopeKey = JSON.stringify({
@@ -204,9 +266,33 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
     }
     if (!sameScope) {
       setHome(null);
+      shownHomeInputRef.current = null;
     }
     setLoading(true);
     setError(null);
+    const current = () =>
+      mountedRef.current && refreshRequestIdRef.current === requestId;
+    // The last home read draws at once; the server's answer replaces it only
+    // when it differs, and is kept for the next visit.
+    const cacheKey = discoveryHomeCacheKey(
+      userId,
+      uiLanguage,
+      authorizationSignature,
+      filters,
+    );
+    const store = cacheKey ? browserCacheStore() : null;
+    let answered = false;
+    let shownJson: string | null = null;
+    if (store && cacheKey && shownHomeInputRef.current !== homeInput) {
+      void readCachedDiscoveryHome(store, cacheKey, browserCacheZstdCodec).then(
+        (cached) => {
+          if (!cached || answered || !current()) return;
+          shownJson = JSON.stringify(cached);
+          shownHomeInputRef.current = homeInput;
+          setHome(cached);
+        },
+      );
+    }
     try {
       const { data, error: queryError } = await clientRef.current
         .query(
@@ -215,17 +301,32 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
           { requestPolicy: "network-only" },
         )
         .toPromise();
+      answered = true;
       if (queryError) {
         throw queryError;
       }
-      if (!mountedRef.current || refreshRequestIdRef.current !== requestId) {
+      if (!current()) {
         return;
       }
-      setHome(
-        (data?.discoveryHomeCards ?? null) as DiscoveryHomePayload | null,
-      );
+      const loaded = (data?.discoveryHomeCards ??
+        null) as DiscoveryHomePayload | null;
+      const loadedJson = JSON.stringify(loaded);
+      shownHomeInputRef.current = homeInput;
+      if (loadedJson !== shownJson) {
+        setHome(loaded);
+        if (store && cacheKey)
+          window.setTimeout(() => {
+            void writeCachedDiscoveryHome(
+              store,
+              cacheKey,
+              loaded,
+              browserCacheZstdCodec,
+            );
+          }, 0);
+      }
     } catch (caught) {
-      if (!mountedRef.current || refreshRequestIdRef.current !== requestId) {
+      answered = true;
+      if (!current()) {
         return;
       }
       const message =
@@ -239,11 +340,261 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
         setLoading(false);
       }
     }
-  }, [authorizationSignature, homeInput, uiLanguage, userId]);
+  }, [authorizationSignature, filters, homeInput, uiLanguage, userId]);
+
+  const refresh = useCallback(async () => {
+    if (sectionId !== null) {
+      setSectionReload((current) => current + 1);
+      return;
+    }
+    await refreshHome();
+  }, [refreshHome, sectionId]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (sectionId === null) {
+      void refreshHome();
+    }
+  }, [refreshHome, sectionId]);
+
+  const effectiveSectionSort: DiscoverySectionSort =
+    sectionSort.sectionId === sectionId ? sectionSort.sort : "RELEVANCE";
+  const hideOwned = uiSettings.discoveryGridHideOwned;
+  const hideRequested = uiSettings.discoveryGridHideRequested;
+  // Everything that decides the grid's membership and order, plus the viewer
+  // scope and an explicit reload, so any change starts over at offset zero.
+  const sectionQueryKey =
+    sectionId === null
+      ? null
+      : `${discoverySectionQueryKey({
+          sectionId,
+          sort: effectiveSectionSort,
+          filters,
+          hideOwned,
+          hideRequested,
+        })}|${JSON.stringify([
+          userId ?? null,
+          uiLanguage,
+          authorizationSignature,
+          sectionReload,
+        ])}`;
+  const sectionQueryKeyRef = useRef(sectionQueryKey);
+  useLayoutEffect(() => {
+    sectionQueryKeyRef.current = sectionQueryKey;
+  }, [sectionQueryKey]);
+
+  const loadNextSectionPage = useCallback(async () => {
+    if (sectionId === null || sectionQueryKey === null) {
+      return;
+    }
+    const queryKey = sectionQueryKey;
+    const state = discoverySectionPagingFor(sectionPagingRef.current, queryKey);
+    const next = nextDiscoverySectionPage(state);
+    if (!next) {
+      return;
+    }
+    const flightKey = `${queryKey}@${next.offset}`;
+    if (sectionInFlightRef.current === flightKey) {
+      return;
+    }
+    sectionInFlightRef.current = flightKey;
+    setSectionLoadingKey(queryKey);
+    setSectionFailedKey(null);
+    try {
+      const { data, error: queryError } = await clientRef.current
+        .query(
+          discoverySectionPageQuery,
+          {
+            input: {
+              sectionId,
+              sectionRailLimit: DISCOVERY_HOME_LIMIT_PER_SECTION,
+              includeUnresolved: DISCOVERY_HOME_INPUT.includeUnresolved,
+              includeOwned: !hideOwned,
+              hideRequested,
+              homeFilters: filters,
+              sort: effectiveSectionSort,
+              limit: next.limit,
+              offset: next.offset,
+            },
+          },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      if (queryError) {
+        throw queryError;
+      }
+      if (!mountedRef.current || sectionQueryKeyRef.current !== queryKey) {
+        return;
+      }
+      const payload = (data?.discoveryItems ??
+        null) as DiscoverySectionPagePayload | null;
+      const pageSection = payload?.section ?? null;
+      const appended = appendDiscoverySectionPage(
+        discoverySectionPagingFor(sectionPagingRef.current, queryKey),
+        {
+          queryKey,
+          offset: next.offset,
+          items: pageSection?.items ?? [],
+          totalCount: payload?.totalCount ?? 0,
+          generationIds: pageSection?.generationIds ?? [],
+        },
+      );
+      sectionPagingRef.current = appended;
+      setSectionPaging(appended);
+      if (next.offset > 0 && appended.offset === 0) {
+        // The section was rebuilt between pages; reload it from the top.
+        setSectionReload((current) => current + 1);
+        return;
+      }
+      if (pageSection) {
+        setSectionIdentity({
+          sectionId,
+          section: { ...pageSection, items: [] },
+        });
+      }
+    } catch (caught) {
+      if (!mountedRef.current || sectionQueryKeyRef.current !== queryKey) {
+        return;
+      }
+      setGlobalStatusRef.current(
+        userFacingGraphQlErrorMessage(
+          caught,
+          tRef.current("discovery.failedToLoad"),
+          tRef.current,
+        ),
+        { level: "ERROR" },
+      );
+      setSectionFailedKey(queryKey);
+    } finally {
+      if (sectionInFlightRef.current === flightKey) {
+        sectionInFlightRef.current = null;
+        setSectionLoadingKey((current) =>
+          current === queryKey ? null : current,
+        );
+      }
+    }
+  }, [
+    effectiveSectionSort,
+    filters,
+    hideOwned,
+    hideRequested,
+    sectionId,
+    sectionQueryKey,
+  ]);
+
+  // A new query (section, sort, filters, toggles, scope or reload) clears the
+  // grid and asks for its first page. Toggles wait for the saved settings so
+  // the first page is not fetched under the defaults and then thrown away.
+  useEffect(() => {
+    if (sectionQueryKey === null || !uiSettingsLoaded) {
+      return;
+    }
+    if (sectionPagingRef.current.queryKey !== sectionQueryKey) {
+      const fresh =
+        startDiscoverySectionPaging<DiscoveryHomeCard>(sectionQueryKey);
+      sectionPagingRef.current = fresh;
+      setSectionPaging(fresh);
+    }
+    void loadNextSectionPage();
+  }, [loadNextSectionPage, sectionQueryKey, uiSettingsLoaded]);
+
+  const saveGridPreference = useCallback(
+    async (
+      change: Partial<
+        Pick<
+          typeof uiSettings,
+          "discoveryGridHideOwned" | "discoveryGridHideRequested"
+        >
+      >,
+    ) => {
+      const previous = uiSettings;
+      setUiSettings({ ...uiSettings, ...change });
+      try {
+        const result = await saveUiSettings((latest) => ({
+          ...uiSettingsInputFromSettings(latest),
+          ...change,
+        }));
+        if (result.error || !result.data?.setMyUiSettings) {
+          throw (
+            result.error ??
+            new Error(t("discovery.section.preferenceSaveFailed"))
+          );
+        }
+        setUiSettings(result.data.setMyUiSettings);
+      } catch (caught) {
+        setUiSettings(previous);
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(
+            caught,
+            t("discovery.section.preferenceSaveFailed"),
+            t,
+          ),
+          { level: "ERROR" },
+        );
+      }
+    },
+    [saveUiSettings, setGlobalStatus, setUiSettings, t, uiSettings],
+  );
+
+  const handleSectionSortChange = useCallback(
+    (sort: DiscoverySectionSort) => setSectionSort({ sectionId, sort }),
+    [sectionId],
+  );
+  const handleHideOwnedChange = useCallback(
+    (discoveryGridHideOwned: boolean) =>
+      void saveGridPreference({ discoveryGridHideOwned }),
+    [saveGridPreference],
+  );
+  const handleHideRequestedChange = useCallback(
+    (discoveryGridHideRequested: boolean) =>
+      void saveGridPreference({ discoveryGridHideRequested }),
+    [saveGridPreference],
+  );
+  const handleLoadMore = useCallback(() => {
+    void loadNextSectionPage();
+  }, [loadNextSectionPage]);
+
+  const sectionGrid = useMemo<DiscoverySectionGridModel | null>(() => {
+    if (sectionId === null || sectionQueryKey === null) {
+      return null;
+    }
+    const paging = discoverySectionPagingFor(sectionPaging, sectionQueryKey);
+    const pageFailed = sectionFailedKey === sectionQueryKey;
+    return {
+      sectionId,
+      section:
+        sectionIdentity?.sectionId === sectionId
+          ? sectionIdentity.section
+          : null,
+      items: paging.items,
+      totalCount: paging.totalCount,
+      loadingPage:
+        sectionLoadingKey === sectionQueryKey ||
+        (paging.totalCount === null && !paging.exhausted && !pageFailed),
+      exhausted: paging.exhausted,
+      pageFailed,
+      sort: effectiveSectionSort,
+      hideOwned,
+      hideRequested,
+      onSortChange: handleSectionSortChange,
+      onHideOwnedChange: handleHideOwnedChange,
+      onHideRequestedChange: handleHideRequestedChange,
+      onLoadMore: handleLoadMore,
+    };
+  }, [
+    effectiveSectionSort,
+    handleHideOwnedChange,
+    handleHideRequestedChange,
+    handleLoadMore,
+    handleSectionSortChange,
+    hideOwned,
+    hideRequested,
+    sectionId,
+    sectionFailedKey,
+    sectionIdentity,
+    sectionLoadingKey,
+    sectionPaging,
+    sectionQueryKey,
+  ]);
 
   useEffect(() => {
     // A global-search add leaves the panel open over this view, so the rails
@@ -405,7 +756,8 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
   return (
     <>
       <DiscoveryView
-        home={home}
+        home={sectionGrid ? null : home}
+        sectionGrid={sectionGrid}
         loading={loading}
         error={error}
         manageableFacets={manageableFacets}

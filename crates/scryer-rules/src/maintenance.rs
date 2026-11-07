@@ -8,8 +8,9 @@
 //!
 //! Media-server play history is in the schema now that a provider-neutral
 //! signal store stands behind it, and it is fact-shaped like everything else:
-//! `watched_by_user_ids`, `last_watched_at`, and the two requester rollups are
-//! plain values that go missing when the host could not observe them. Watchlist
+//! `watched_by_user_ids`, `last_watched_at`, the two requester rollups, and the
+//! anonymous `watched_by_anyone` pair are plain values that go missing when the
+//! host could not observe them. Watchlist
 //! and favorite signals are still absent — nothing collects them yet, and a
 //! fact rules cannot be told the truth about has no business in the contract.
 //!
@@ -181,6 +182,22 @@ pub struct MaintenanceFactsDoc {
     pub last_watched_at: Observation<String>,
     pub watched_by_any_requester: Observation<bool>,
     pub watched_by_all_requesters: Observation<bool>,
+    /// Whether any account on any enabled media server has played the
+    /// subject, linked to a Scryer user or not, and when the most recent such
+    /// play was. Anonymous: they say a play happened, never whose. Behind the
+    /// same sweep gate as the facts above, except that they do not wait for a
+    /// linked user, and also unknown until every enabled connection's full
+    /// audience has been read recently. For a season or a show they cover
+    /// every aired episode in scope: one play of one episode is enough for
+    /// `watched_by_anyone`.
+    ///
+    /// On Jellyfin and Emby the audience is every user's own played state,
+    /// marks included. On Plex it is the owner's own played state, marks
+    /// included, and the server's history for every other account, which
+    /// holds organic plays only: an item another account marked watched, or
+    /// scrobbled, without playing it is not a play here.
+    pub watched_by_anyone: Observation<bool>,
+    pub last_watched_by_anyone_at: Observation<String>,
     /// Lifecycle claims (spec 0003 FR-041..FR-044). A claim is what a request
     /// approval leaves behind on the title, and these three describe its
     /// lease. Every one of them is unknown when the claim store could
@@ -258,8 +275,9 @@ pub struct MaintenanceFactsDoc {
 /// lives here, beside the fact document, because it is a property of the facts
 /// themselves rather than of any one caller.
 ///
-/// `requested` and `last_watched_at` are deliberately absent: they are
-/// anonymous aggregates that say something happened, never who did it.
+/// `requested`, `last_watched_at`, `watched_by_anyone`, and
+/// `last_watched_by_anyone_at` are deliberately absent: they are anonymous
+/// aggregates that say something happened, never who did it.
 pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
     "added_by_user_id",
     "added_by_username",
@@ -268,6 +286,20 @@ pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
     "watched_by_user_ids",
     "watched_by_any_requester",
     "watched_by_all_requesters",
+];
+
+/// Facts computed from media-server watch history.
+///
+/// A rule that reads one decided on plays stored by the last sweep, so the
+/// executor reads the server again before acting on it: a play since that
+/// sweep is evidence the stored facts do not have yet.
+pub const WATCH_MAINTENANCE_FACTS: [&str; 6] = [
+    "watched_by_user_ids",
+    "last_watched_at",
+    "watched_by_any_requester",
+    "watched_by_all_requesters",
+    "watched_by_anyone",
+    "last_watched_by_anyone_at",
 ];
 
 /// One series movie as a rule sees it.
@@ -632,6 +664,8 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             last_watched_at: Observation::known("2024-03-01T00:00:00Z".to_string()),
             watched_by_any_requester: Observation::known(true),
             watched_by_all_requesters: Observation::known(true),
+            watched_by_anyone: Observation::known(true),
+            last_watched_by_anyone_at: Observation::known("2024-03-02T00:00:00Z".to_string()),
             request_lease_state: Observation::known("none".to_string()),
             // The one deliberately absent fact in the synthetic document: a
             // title with no live lease has no expiry, and inventing one would

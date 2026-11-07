@@ -555,7 +555,7 @@ export function ManualImportDialog({
                         <div className="flex items-start gap-2">
                           <FileVideo className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/60" />
                           <div className="min-w-0">
-                            <span className="block break-all font-[var(--font-code)] text-xs text-card-foreground">
+                            <span className="block break-all font-[family-name:var(--font-code)] text-xs text-card-foreground">
                               {file.fileName}
                             </span>
                             {file.videoFacts ? (
@@ -571,7 +571,7 @@ export function ManualImportDialog({
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right font-[var(--font-code)] text-xs text-muted-foreground">
+                      <TableCell className="text-right font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                         {formatFileSize(file.sizeBytes)}
                       </TableCell>
                       <TableCell className="text-center">

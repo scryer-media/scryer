@@ -62,7 +62,8 @@ type SettingsSecuritySectionProps = {
   onMfaPasswordLoginChange: (enabled: boolean) => void;
   onTotpJellyfinLoginChange: (enabled: boolean) => void;
   onTotpEmbyLoginChange: (enabled: boolean) => void;
-  externalAccountInvitesPanel: React.ReactNode;
+  /** Who can reach Scryer, its public URL and trusted proxies. */
+  networkPanel: React.ReactNode;
   oauthApplicationsPanel: React.ReactNode;
 };
 
@@ -102,7 +103,7 @@ export function SettingsSecuritySection({
   onMfaPasswordLoginChange,
   onTotpJellyfinLoginChange,
   onTotpEmbyLoginChange,
-  externalAccountInvitesPanel,
+  networkPanel,
   oauthApplicationsPanel,
 }: SettingsSecuritySectionProps) {
   const t = useTranslate();
@@ -374,7 +375,7 @@ export function SettingsSecuritySection({
           </div>
         ) : null}
 
-        {externalAccountInvitesPanel}
+        {networkPanel}
         {oauthApplicationsPanel}
       </div>
 

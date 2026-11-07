@@ -34,6 +34,17 @@ fn title_scope_from_facet(facet: MediaFacetValue) -> ContentScopeValue {
     }
 }
 
+/// Whether the caller holds privileged access to `library_id`. Nested fields
+/// that expose acquisition state answer empty or null without it, so pages a
+/// viewer can open keep loading.
+async fn caller_has_privileged_access(ctx: &Context<'_>, library_id: &str) -> GqlResult<bool> {
+    let app = app_from_ctx(ctx)?;
+    let actor = actor_from_ctx(ctx)?;
+    app.has_privileged_library_access(&actor, library_id)
+        .await
+        .map_err(to_gql_error)
+}
+
 fn relation_page_limit(limit: i32) -> i32 {
     limit.clamp(1, RELATION_PAGE_MAX_LIMIT)
 }
@@ -544,19 +555,13 @@ impl TitlePayload {
         .await
     }
 
-    /// Absolute root-folder path for this title; requires view permission on its library.
-    async fn root_folder_path(&self, ctx: &Context<'_>) -> GqlResult<String> {
+    /// Absolute root-folder path for this title, or null when the caller lacks management access to its library.
+    async fn root_folder_path(&self, ctx: &Context<'_>) -> GqlResult<Option<String>> {
         Box::pin(async move {
             let app = app_from_ctx(ctx)?;
             let actor = actor_from_ctx(ctx)?;
-            app.require_library_permission(
+            app.title_root_folder_path_for_viewer(
                 &actor,
-                self.library_id.as_ref(),
-                scryer_domain::LibraryPermission::View,
-            )
-            .await
-            .map_err(to_gql_error)?;
-            app.title_root_folder_path_for_parts(
                 self.root_folder_id.as_ref(),
                 self.library_id.as_ref(),
                 &self.facet.into_domain(),
@@ -892,6 +897,9 @@ impl TitlePayload {
         offset: i32,
     ) -> GqlResult<WantedItemsPagePayload> {
         Box::pin(async move {
+            if !caller_has_privileged_access(ctx, self.library_id.as_ref()).await? {
+                return Ok(WantedItemsPagePayload { items: Vec::new() });
+            }
             let app = app_from_ctx(ctx)?;
             let actor = actor_from_ctx(ctx)?;
             let limit = relation_page_limit(limit);
@@ -946,6 +954,13 @@ impl TitlePayload {
             let actor = actor_from_ctx(ctx)?;
             let limit = relation_page_limit(limit.min(i64::from(i32::MAX)) as i32);
             let offset = relation_page_offset(offset);
+            if !caller_has_privileged_access(ctx, self.library_id.as_ref()).await? {
+                return Ok(ReleaseDecisionsPagePayload {
+                    items: Vec::new(),
+                    total_count: 0,
+                    has_more: false,
+                });
+            }
             let (decisions, total_count) = app
                 .list_release_decisions_page(
                     &actor,
@@ -989,6 +1004,9 @@ impl TitlePayload {
         activity_filter: Option<DownloadActivityFilterValue>,
     ) -> GqlResult<Vec<DownloadQueueItemPayload>> {
         Box::pin(async move {
+            if !caller_has_privileged_access(ctx, self.library_id.as_ref()).await? {
+                return Ok(Vec::new());
+            }
             let app = app_from_ctx(ctx)?;
             let actor = actor_from_ctx(ctx)?;
             let items = app
@@ -1319,10 +1337,14 @@ impl EpisodePayload {
         Box::pin(async move {
             let app = app_from_ctx(ctx)?;
             let actor = actor_from_ctx(ctx)?;
+            // The batch read silently drops titles outside the caller's
+            // privileged libraries, matching the loader path above.
             let wanted_item = app
-                .get_title_wanted_item(&actor, self.title_id.as_ref(), Some(self.id.as_ref()))
+                .get_title_wanted_items_for_titles(&actor, std::slice::from_ref(&*self.title_id))
                 .await
                 .map_err(to_gql_error)?
+                .into_iter()
+                .find(|state| state.episode_id.as_deref() == Some(self.id.as_str()))
                 .map(from_wanted_item)
                 .transpose()
                 .map_err(to_gql_error)?;

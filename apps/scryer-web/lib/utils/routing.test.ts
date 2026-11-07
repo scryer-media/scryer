@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildDiscoverySectionPath,
   buildIndexerSettingsPath,
   buildListsPath,
+  discoverySectionIdFromPath,
   buildOverviewDetailPath,
   buildRulesPath,
   indexerSettingsTabFromPath,
@@ -435,4 +437,43 @@ test("the Lists page resolves its panes and redirects the default pane's alias",
     );
   }
   assert.equal(listsSectionFromPath("/lists/unknown"), "public");
+});
+
+test("discovery section grids round-trip their section id", () => {
+  for (const sectionId of [
+    "for_you",
+    "because_you_like_tag_coming-of-age",
+    "browse_genre_science-fiction",
+    "public:trending now/€",
+  ]) {
+    const path = buildDiscoverySectionPath(sectionId);
+    assert.equal(discoverySectionIdFromPath(path), sectionId, path);
+    const route = canonical(path);
+    assert.equal(route.view, "discovery");
+    assert.equal(route.canonicalPath, path);
+  }
+  assert.equal(discoverySectionIdFromPath("/discovery"), null);
+  assert.equal(discoverySectionIdFromPath("/discovery/section"), null);
+  assert.equal(discoverySectionIdFromPath("/discovery/section/a/b"), null);
+  assert.equal(discoverySectionIdFromPath("/discovery/section/%E0%A4%A"), null);
+  assert.equal(
+    discoverySectionIdFromPath("/discovery/section/top%5Frated"),
+    "top_rated",
+  );
+  assert.equal(
+    discoverySectionIdFromPath("/discovery/section/label%2520key"),
+    "label%20key",
+  );
+  assert.equal(
+    discoverySectionIdFromPath("/discovery/section/public%3Atrending%2Fnow"),
+    "public:trending/now",
+  );
+  redirects("/Discovery/Section/for_you", "/discovery/section/for_you");
+  for (const path of [
+    "/discovery/section",
+    "/discovery/other/for_you",
+    "/discovery/section/for_you/extra",
+  ]) {
+    assert.deepEqual(resolveAppRoute(path), { kind: "not-found" }, path);
+  }
 });

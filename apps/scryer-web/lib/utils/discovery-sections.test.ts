@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  FROM_YOUR_WATCHLIST_SECTION_TYPE,
   orderDiscoveryHomeSections,
   type OrderableDiscoveryItem,
   type OrderableDiscoverySection,
@@ -223,6 +224,58 @@ test("FOR_YOU renders only when there is no library context", () => {
       completeCollection: section("COMPLETE_THE_COLLECTION"),
     }),
     ["COMPLETE_THE_COLLECTION"],
+  );
+});
+
+test("the watchlist rail leads the personalized shelf, ahead of every reason rail", () => {
+  assert.deepEqual(
+    orderedTypes({
+      personalizedSections: [
+        section("BECAUSE_YOU_LIKE_GENRE"),
+        section("TOP_RATED"),
+        section("BECAUSE_YOU_LIKE_TAG"),
+        section(FROM_YOUR_WATCHLIST_SECTION_TYPE),
+      ],
+      publicSections: [section("POPULAR_RIGHT_NOW")],
+      completeCollection: section("COMPLETE_THE_COLLECTION"),
+    }),
+    [
+      FROM_YOUR_WATCHLIST_SECTION_TYPE,
+      "BECAUSE_YOU_LIKE_TAG",
+      "BECAUSE_YOU_LIKE_GENRE",
+      "TOP_RATED",
+      "COMPLETE_THE_COLLECTION",
+      "POPULAR_RIGHT_NOW",
+    ],
+  );
+});
+
+test("the watchlist rail is not library context, so FOR_YOU still falls back", () => {
+  assert.deepEqual(
+    orderedTypes({
+      personalizedSections: [
+        section("FOR_YOU"),
+        section(FROM_YOUR_WATCHLIST_SECTION_TYPE),
+      ],
+    }),
+    [FROM_YOUR_WATCHLIST_SECTION_TYPE, "FOR_YOU"],
+  );
+});
+
+test("a thin watchlist rail still renders and keeps its titles first", () => {
+  const shared = item("shared-title");
+  const ordered = order({
+    personalizedSections: [
+      section("BECAUSE_YOU_LIKE_TAG", [shared, item("tag-only")]),
+      section(FROM_YOUR_WATCHLIST_SECTION_TYPE, [shared]),
+    ],
+  });
+  assert.deepEqual(
+    ordered.map((entry) => [entry.sectionType, itemKeys([entry])]),
+    [
+      [FROM_YOUR_WATCHLIST_SECTION_TYPE, ["MOVIE:shared-title"]],
+      ["BECAUSE_YOU_LIKE_TAG", ["MOVIE:tag-only"]],
+    ],
   );
 });
 

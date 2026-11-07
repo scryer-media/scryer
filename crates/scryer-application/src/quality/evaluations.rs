@@ -10,6 +10,7 @@ mod refresh_job;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ScoreRefreshSelection {
     Files(Vec<String>),
+    Episodes(Vec<String>),
     Seasons(Vec<String>),
     Titles(Vec<String>),
 }
@@ -17,7 +18,7 @@ pub enum ScoreRefreshSelection {
 impl ScoreRefreshSelection {
     pub fn ids(&self) -> &[String] {
         match self {
-            Self::Files(ids) | Self::Seasons(ids) | Self::Titles(ids) => ids,
+            Self::Files(ids) | Self::Episodes(ids) | Self::Seasons(ids) | Self::Titles(ids) => ids,
         }
     }
 }
@@ -182,7 +183,8 @@ impl AppUseCase {
                     "media file",
                 )
             })?;
-        self.get_title(actor, &file.title_id)
+        let title = self
+            .get_title(actor, &file.title_id)
             .await?
             .ok_or_else(|| {
                 AppError::not_found_reason(
@@ -190,6 +192,14 @@ impl AppUseCase {
                     "media title",
                 )
             })?;
+        // The evaluation is scoring provenance: absent, not refused, for an
+        // actor who can view the title but holds no privileged access.
+        if !self
+            .has_privileged_library_access(actor, &title.library_id)
+            .await?
+        {
+            return Ok(None);
+        }
         let Some(evaluation) = self
             .services
             .library

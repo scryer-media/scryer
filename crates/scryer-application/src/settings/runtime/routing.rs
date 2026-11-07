@@ -506,6 +506,7 @@ impl AppUseCase {
         scope_id: &str,
         entries: Vec<DownloadClientRoutingSettingsEntry>,
     ) -> AppResult<Vec<DownloadClientRoutingSettingsEntry>> {
+        let _routing = self.runtime.integrations.routing_settings_write_lock.lock().await;
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
 
@@ -544,6 +545,7 @@ impl AppUseCase {
         actor: &User,
         client_id: &str,
     ) -> AppResult<()> {
+        let _routing = self.runtime.integrations.routing_settings_write_lock.lock().await;
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
 
@@ -612,6 +614,7 @@ impl AppUseCase {
         source: &str,
         updated_by_user_id: Option<String>,
     ) -> AppResult<()> {
+        let _routing = self.runtime.integrations.routing_settings_write_lock.lock().await;
         let indexer_id = indexer_id.trim();
         if indexer_id.is_empty() {
             return Err(AppError::validation_refused(crate::error_reasons::settings::INDEXER_ROUTING_ENTRY_REQUIRES_INDEXER_ID, "indexer routing entry requires indexer_id".to_string()));
@@ -679,6 +682,7 @@ impl AppUseCase {
         source: &str,
         updated_by_user_id: Option<String>,
     ) -> AppResult<()> {
+        let _routing = self.runtime.integrations.routing_settings_write_lock.lock().await;
         if indexer_ids.is_empty() {
             return Ok(());
         }
@@ -772,6 +776,7 @@ impl AppUseCase {
         scope_id: &str,
         entries: Vec<IndexerRoutingSettingsEntry>,
     ) -> AppResult<Vec<IndexerRoutingSettingsEntry>> {
+        let _routing = self.runtime.integrations.routing_settings_write_lock.lock().await;
         let previous = self.get_indexer_routing(actor, scope_id).await?;
 
         let mut payload = serde_json::Map::new();
@@ -857,6 +862,7 @@ impl AppUseCase {
     /// Reads stay read-only — this is the single explicit write boundary for
     /// the migration.
     pub async fn normalize_routing_settings(&self) -> AppResult<()> {
+        let _routing = self.runtime.integrations.routing_settings_write_lock.lock().await;
         const NORMALIZE_SOURCE: &str = "startup_normalize_routing";
 
         for scope_id in ["movie", "series", "anime"] {

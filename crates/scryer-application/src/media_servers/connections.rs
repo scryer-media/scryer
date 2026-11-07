@@ -15,6 +15,42 @@ impl AppUseCase {
             .await
     }
 
+    /// Every connection's watch-signal sweep state: when it last swept
+    /// cleanly and why the latest sweep did not, if it did not. A connection
+    /// that has never been swept has no entry.
+    ///
+    /// The state is a diagnostic shown beside the connections, not part of
+    /// them, so a store that cannot read it answers with no entries and a
+    /// warning rather than failing the connection listing it sits in.
+    pub async fn list_media_server_signal_sync_states(
+        &self,
+        actor: &User,
+    ) -> AppResult<Vec<crate::media_server_signals::MediaServerSignalSyncStatus>> {
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
+            .await?;
+        let states = match self
+            .services
+            .integrations
+            .media_server_signals
+            .signal_sync_states()
+            .await
+        {
+            Ok(states) => states,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "could not read media-server watch sweep state; connections are listed without it"
+                );
+                return Ok(Vec::new());
+            }
+        };
+        let now = chrono::Utc::now();
+        Ok(states
+            .into_iter()
+            .map(|state| crate::media_server_signals::MediaServerSignalSyncStatus::at(state, now))
+            .collect())
+    }
+
     pub async fn get_media_server_connection(
         &self,
         actor: &User,

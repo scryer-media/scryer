@@ -1073,7 +1073,6 @@ export function SettingsMaintenanceRulesContainer({
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         deleteRuleSet={deleteRuleSet}
-        validateDraft={validateDraft}
         validating={validating}
         validationResult={validationResult}
         previewSource={previewSource}

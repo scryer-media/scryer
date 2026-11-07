@@ -1,5 +1,5 @@
 impl AppUseCase {
-    /// Effective import-copy verification depth (FR-042). An absent setting
+    /// Effective copy and location verification depth (FR-042). An absent setting
     /// reads as [`VerificationDepth::default`]; an unparseable or unreadable one
     /// falls back to that same default and says so in the log.
     pub(crate) async fn resolve_verification_depth(&self) -> VerificationDepth {

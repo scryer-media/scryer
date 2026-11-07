@@ -1,4 +1,7 @@
-import { regoDiagnostics, regoSourceLine } from "@/lib/utils/rego-diagnostics";
+import {
+  formatRegoValidationError,
+  regoDiagnostics,
+} from "@/lib/utils/rego-diagnostics";
 import * as React from "react";
 import {
   BookOpen,
@@ -81,7 +84,6 @@ type SettingsRulesSectionProps = {
   editRuleSet: (record: RuleSetRecord) => void;
   toggleRuleSetEnabled: (record: RuleSetRecord) => Promise<void> | void;
   deleteRuleSet: (record: RuleSetRecord) => Promise<void> | void;
-  validateDraft: () => Promise<RuleValidationResult | null>;
   validating: boolean;
   validationResult: RuleValidationResult | null;
   applyTemplate: (template: {
@@ -114,75 +116,6 @@ type RefField = { field: string; type: string; descKey: string };
 
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 const REF_SECTIONS = ruleInputContract.sections as RefSectionDef[];
-function adjustRuleValidationLocations(text: string, source: string): string {
-  return text.replace(
-    /(\S+\.rego:)(\d+)(:\d+)/g,
-    (_, prefix: string, lineText: string, suffix: string) => {
-      const line = Number.parseInt(lineText, 10);
-      return Number.isFinite(line)
-        ? `${prefix}${regoSourceLine(source, line)}${suffix}`
-        : `${prefix}${lineText}${suffix}`;
-    },
-  );
-}
-
-function formatRuleValidationError(error: string, source: string): string {
-  const normalized = error.replace(/\r\n/g, "\n").trim();
-  if (normalized.includes("\n")) {
-    return adjustRuleValidationLocations(normalized, source).replace(
-      /^(\s*)(\d+)(\s+\|)/gm,
-      (match, prefix: string, lineText: string, suffix: string) => {
-        const line = Number.parseInt(lineText, 10);
-        return Number.isFinite(line)
-          ? `${prefix}${regoSourceLine(source, line)}${suffix}`
-          : match;
-      },
-    );
-  }
-
-  const parts = normalized.split(/\s+\|\s+/);
-  if (parts.length < 4) {
-    return normalized;
-  }
-
-  const [location, lineNumber, sourceText, ...hintParts] = parts;
-  const rawLine = Number.parseInt(lineNumber, 10);
-  const visibleLineNumber = Number.isFinite(rawLine)
-    ? String(regoSourceLine(source, rawLine))
-    : lineNumber;
-  const gutterWidth = Math.max(visibleLineNumber.length, 1);
-  const columnMatch = location.match(/:(\d+):(\d+)(?:\D*$|$)/);
-  const column = columnMatch ? Number.parseInt(columnMatch[2] ?? "", 10) : null;
-  const hint = hintParts.join(" | ").trim();
-  const visibleLocation = adjustRuleValidationLocations(
-    location.trim(),
-    source,
-  );
-  const locationMatch = visibleLocation.match(/^(.*?:)\s*(-->\s+.+)$/);
-  const locationLines = locationMatch
-    ? [locationMatch[1], locationMatch[2]]
-    : [visibleLocation];
-  const pointerErrorMatch = hint.match(
-    /^(\^+)\s+((?:error|warning|note):\s*.+)$/,
-  );
-  const pointerMarker = pointerErrorMatch?.[1] ?? hint;
-  const trailingDiagnostic = pointerErrorMatch?.[2];
-  const pointer =
-    column && Number.isFinite(column) && pointerMarker.startsWith("^")
-      ? `${" ".repeat(Math.max(0, column - 1))}${pointerMarker}`
-      : pointerMarker;
-
-  return [
-    ...locationLines,
-    `${" ".repeat(gutterWidth)} |`,
-    `${visibleLineNumber.padStart(gutterWidth)} | ${sourceText.trim()}`,
-    `${" ".repeat(gutterWidth)} | ${pointer}`,
-    trailingDiagnostic,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-}
-
 function RefFieldTable({ section }: { section: RefSectionDef }) {
   const t = useTranslate();
   return (
@@ -994,7 +927,6 @@ export function SettingsRulesSection({
   editRuleSet,
   toggleRuleSetEnabled,
   deleteRuleSet,
-  validateDraft,
   validating,
   validationResult,
   applyTemplate,
@@ -1295,7 +1227,7 @@ export function SettingsRulesSection({
                               checking={validating}
                               result={validationResult}
                               formatError={(error) =>
-                                formatRuleValidationError(
+                                formatRegoValidationError(
                                   error,
                                   ruleSetDraft.regoSource,
                                 )
@@ -1341,19 +1273,6 @@ export function SettingsRulesSection({
                                 ? t("settings.ruleUpdate")
                                 : t("settings.ruleCreate")}
                         </Button>
-                        <Button
-                          id="settings-rule-validate"
-                          type="button"
-                          variant="secondary"
-                          onClick={() => void validateDraft()}
-                          disabled={
-                            validating || !ruleSetDraft.regoSource.trim()
-                          }
-                        >
-                          {validating
-                            ? t("settings.ruleValidating")
-                            : t("settings.ruleValidate")}
-                        </Button>
                         {testScoring ? (
                           <Button
                             id="settings-rule-test"
@@ -1376,14 +1295,10 @@ export function SettingsRulesSection({
                         </Button>
                       </div>
                     </form>
-                    {testScoring ? (
-                      <div className="mt-3">
-                        {testScoring({
-                          open: isTestScoringOpen,
-                          onOpenChange: setIsTestScoringOpen,
-                        })}
-                      </div>
-                    ) : null}
+                    {testScoring?.({
+                      open: isTestScoringOpen,
+                      onOpenChange: setIsTestScoringOpen,
+                    })}
                   </CardContent>
                 </Card>
                 {editorMode === "edit" ? (

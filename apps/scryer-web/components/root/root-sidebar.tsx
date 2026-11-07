@@ -94,6 +94,7 @@ import {
   LIBRARY_PERMISSIONS,
   hasAnyAppPermission,
   hasAnyLibraryPermission,
+  hasAnyPrivilegedLibraryAccess,
 } from "@/lib/utils/permissions";
 import type { AppPermission, LibraryPermission } from "@/lib/utils/permissions";
 import {
@@ -103,6 +104,7 @@ import {
   canAccessSystemSection,
 } from "@/lib/utils/routes";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { useLongRunningJobCount } from "@/lib/hooks/use-long-running-job-count";
 
 type NavItem = {
   id: ViewId;
@@ -112,14 +114,15 @@ type NavItem = {
 
 type TopNavGroupDefinition = {
   id: string;
-  labelKey: string;
+  /** Without one the items sit directly in the nav, under no section. */
+  labelKey?: string;
   label?: string;
   items: TopNavGroupItemDefinition[];
 };
 
 type TopNavGroup = {
   id: string;
-  label: string;
+  label: string | null;
   items: TopNavGroupItem[];
 };
 
@@ -192,8 +195,7 @@ type HeaderWithMobileNavigationProps = {
 
 const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
   {
-    id: "overview",
-    labelKey: "nav.group.overview",
+    id: "dashboard",
     items: [{ kind: "view", id: "dashboard" }],
   },
   {
@@ -251,10 +253,15 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       {
         kind: "settings",
         id: "users",
-        labelKey: "nav.usersAccess",
+        labelKey: "nav.users",
         icon: Users,
       },
-      { kind: "settings", id: "security", icon: ShieldCheck },
+      {
+        kind: "settings",
+        id: "security",
+        labelKey: "nav.securityAccess",
+        icon: ShieldCheck,
+      },
       { kind: "view", id: "system" },
       { kind: "apiExplorer", icon: Code2 },
       { kind: "system", id: "jobs", labelKey: "system.jobsTitle", icon: Timer },
@@ -373,7 +380,7 @@ const settingsEntries: Array<{
   },
   {
     id: "security",
-    label: (t) => t("settings.security"),
+    label: (t) => t("nav.securityAccess"),
     icon: ShieldCheck,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageUsers],
   },
@@ -630,6 +637,44 @@ function TopNavBadge({
   );
 }
 
+/** Activity's badges: running jobs, then imports needing attention. */
+function ActivityNavBadges({
+  jobCount,
+  jobLabel,
+  importBadge,
+}: {
+  jobCount: number;
+  jobLabel: string;
+  importBadge: { text: string; label?: string } | null;
+}) {
+  if (jobCount <= 0 && !importBadge) {
+    return null;
+  }
+  return (
+    <span className={TOP_NAV_BADGE_GROUP_CLASS}>
+      {jobCount > 0 ? (
+        <span
+          id="root-sidebar-activity-running-jobs"
+          className={cn(TOP_NAV_BADGE_BASE_CLASS, navBadgeToneClass("cta"))}
+          title={jobLabel}
+          aria-label={jobLabel}
+        >
+          {jobCount}
+        </span>
+      ) : null}
+      {importBadge ? (
+        <span
+          className={cn(TOP_NAV_BADGE_BASE_CLASS, navBadgeToneClass("cta"))}
+          title={importBadge.label}
+          aria-label={importBadge.label}
+        >
+          {importBadge.text}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function FacetNavBadges({ importCount }: { importCount: number }) {
   if (importCount <= 0) {
     return null;
@@ -762,6 +807,9 @@ function RootSidebarContent({
     LIBRARY_PERMISSIONS.resolveImports,
   );
   const canAccessFacetImport = canResolveImports;
+  // Download activity, history and wanted state are privileged; a caller who
+  // can only view libraries or resolve imports does not get those pages.
+  const canViewLibraryInternals = hasAnyPrivilegedLibraryAccess(user);
   const visibleMediaSettingsSubPages = React.useMemo(
     () =>
       canManageConfig
@@ -824,7 +872,7 @@ function RootSidebarContent({
                 canManageTitle,
               canManageLists || canManageSystemSettings,
             )) &&
-          (item.id !== "wanted" || canViewCatalog) &&
+          (item.id !== "wanted" || canViewLibraryInternals) &&
           (item.id !== "dashboard" ||
             canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&
@@ -832,6 +880,7 @@ function RootSidebarContent({
       ),
     [
       canAccessMediaTopNav,
+      canViewLibraryInternals,
       canManageLists,
       canManageSystemSettings,
       canManageTitle,
@@ -932,7 +981,8 @@ function RootSidebarContent({
         groupedIds.add(definition.id);
         return [{ kind: "view", ...item }];
       });
-      return { id: group.id, label: group.label ?? t(group.labelKey), items };
+      const label = group.label ?? (group.labelKey ? t(group.labelKey) : null);
+      return { id: group.id, label, items };
     }).filter((group) => group.items.length > 0);
     const ungroupedItems = visibleTopNav
       .filter((item) => !groupedIds.has(item.id))
@@ -991,7 +1041,25 @@ function RootSidebarContent({
   const activityImportBadgeText = !manualImportCountKnown
     ? "…"
     : `${activityImportBadgeCount}${manualImportCountStale ? "*" : ""}`;
-  const visibleActivitySubPages = ACTIVITY_SUB_PAGES;
+  const longRunningJobCount = useLongRunningJobCount();
+  const activityNavBadges = (
+    <ActivityNavBadges
+      jobCount={longRunningJobCount}
+      jobLabel={t("activity.runningJobs", { count: longRunningJobCount })}
+      importBadge={
+        hasActivityImportBadge
+          ? { text: activityImportBadgeText, label: activityImportBadgeLabel }
+          : null
+      }
+    />
+  );
+  const visibleActivitySubPages = React.useMemo(
+    () =>
+      canViewLibraryInternals
+        ? ACTIVITY_SUB_PAGES
+        : ACTIVITY_SUB_PAGES.filter((entry) => entry.id === "import"),
+    [canViewLibraryInternals],
+  );
   const hasVisibleActivitySubnav = React.useMemo(
     () => visibleActivitySubPages.some((entry) => entry.id !== "activity"),
     [visibleActivitySubPages],
@@ -1136,7 +1204,7 @@ function RootSidebarContent({
     <SidebarTrigger
       id="root-sidebar-mobile-trigger"
       aria-label={t("nav.mobileTrigger")}
-      className="size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] text-[var(--scry-muted2)] shadow-none transition hover:border-[var(--scry-bhover2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:ring-primary/25 min-[981px]:hidden"
+      className="size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] text-[var(--scry-muted2)] shadow-none transition hover:border-[var(--scry-bhover2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:ring-primary/25 min-[1280px]:hidden"
     />
   );
   const canInjectMobileNavigation =
@@ -1153,7 +1221,7 @@ function RootSidebarContent({
         collapsible={isMobile ? "offcanvas" : "none"}
         mobileTitle={t("nav.mobileTitle")}
         mobileDescription={t("nav.mobileDescription")}
-        className="overflow-hidden border-r border-[var(--scry-border3)] bg-[var(--scry-bg)] shadow-[4px_0_16px_rgba(2,6,23,0.04)] dark:shadow-[12px_0_40px_rgba(2,6,23,0.22)] min-[981px]:sticky min-[981px]:top-[var(--root-shell-top-offset,0px)] min-[981px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:self-start"
+        className="overflow-hidden border-r border-[var(--scry-border3)] bg-[var(--scry-bg)] shadow-[4px_0_16px_rgba(2,6,23,0.04)] dark:shadow-[12px_0_40px_rgba(2,6,23,0.22)] min-[1280px]:sticky min-[1280px]:top-[var(--root-shell-top-offset,0px)] min-[1280px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:self-start"
       >
         <SidebarHeader className="px-4 py-0">
           <div className="flex w-full items-center justify-center">
@@ -1171,23 +1239,25 @@ function RootSidebarContent({
 
             return (
               <SidebarGroup key={group.id} className="px-0 py-1 first:pt-0">
-                <SidebarGroupLabel asChild className="h-auto p-0">
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between rounded-md px-1 py-1.5 text-left text-[10.5px] font-bold uppercase tracking-[0.13em] text-[var(--scry-faint3)] hover:text-[var(--scry-ink2)] focus-visible:ring-2 focus-visible:ring-ring"
-                    aria-controls={groupContentId}
-                    aria-expanded={!isCollapsed}
-                    onClick={() => toggleTopNavGroup(group.id)}
-                  >
-                    {group.label}
-                    <ChevronDown
-                      className={cn(
-                        "h-4 w-4 transition-transform",
-                        isCollapsed && "-rotate-90",
-                      )}
-                    />
-                  </button>
-                </SidebarGroupLabel>
+                {group.label ? (
+                  <SidebarGroupLabel asChild className="h-auto p-0">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between rounded-md px-1 py-1.5 text-left text-[10.5px] font-bold uppercase tracking-[0.13em] text-[var(--scry-faint3)] hover:text-[var(--scry-ink2)] focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-controls={groupContentId}
+                      aria-expanded={!isCollapsed}
+                      onClick={() => toggleTopNavGroup(group.id)}
+                    >
+                      {group.label}
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 transition-transform",
+                          isCollapsed && "-rotate-90",
+                        )}
+                      />
+                    </button>
+                  </SidebarGroupLabel>
+                ) : null}
                 {isCollapsed ? null : (
                   <SidebarMenu id={groupContentId} className="space-y-0.5">
                     {group.items.map((item) => {
@@ -1430,12 +1500,9 @@ function RootSidebarContent({
                                 <span className="min-w-0 flex-1 truncate">
                                   {item.label}
                                 </span>
-                                {item.id === "activity" &&
-                                hasActivityImportBadge ? (
-                                  <TopNavBadge label={activityImportBadgeLabel}>
-                                    {activityImportBadgeText}
-                                  </TopNavBadge>
-                                ) : null}
+                                {item.id === "activity"
+                                  ? activityNavBadges
+                                  : null}
                               </SidebarMenuButton>
                             </SidebarMenuItem>
                           </React.Fragment>
@@ -1512,12 +1579,9 @@ function RootSidebarContent({
                               <span className="min-w-0 flex-1 truncate">
                                 {item.label}
                               </span>
-                              {item.id === "activity" &&
-                              hasActivityImportBadge ? (
-                                <TopNavBadge label={activityImportBadgeLabel}>
-                                  {activityImportBadgeText}
-                                </TopNavBadge>
-                              ) : null}
+                              {item.id === "activity"
+                                ? activityNavBadges
+                                : null}
                               {isSettingsTop && pluginBlockedCount > 0 ? (
                                 // Only one badge fits the collapsed row; a plugin
                                 // that is not running outranks one with an update.
@@ -1940,11 +2004,11 @@ function RootSidebarContent({
       </Sidebar>
       <SidebarInset
         data-slot="root-content-panel"
-        className="relative min-w-0 min-[981px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:overflow-hidden"
+        className="relative min-w-0 min-[1280px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:overflow-hidden"
       >
         {headerWithMobileNavigation}
         {canInjectMobileNavigation ? null : (
-          <div className="mx-3 mb-3 mt-3 flex items-center gap-3 rounded-xl border border-[var(--scry-border2)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-bg))] px-3 py-2 shadow-[0_12px_28px_rgba(2,6,23,0.16)] min-[981px]:hidden">
+          <div className="mx-3 mb-3 mt-3 flex items-center gap-3 rounded-xl border border-[var(--scry-border2)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-bg))] px-3 py-2 shadow-[0_12px_28px_rgba(2,6,23,0.16)] min-[1280px]:hidden">
             {mobileNavigationTrigger}
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-foreground">
@@ -1970,7 +2034,7 @@ export const RootSidebar = React.memo(function RootSidebar(
 ) {
   return (
     <SidebarProvider
-      className="h-full"
+      className="min-[1280px]:h-full"
       style={
         {
           "--sidebar-width": "224px",

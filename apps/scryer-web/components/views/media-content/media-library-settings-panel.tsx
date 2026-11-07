@@ -21,6 +21,7 @@ import {
 import { AddNewButton } from "@/components/common/add-new-button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { ChangeRootDialog } from "@/components/dialogs/change-root-dialog";
+import { InfoHelp } from "@/components/common/info-help";
 import { SearchLanguagePicker } from "@/components/common/search-language-picker";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
@@ -37,9 +38,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
-import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
+import {
+  formatAudioLanguageLabels,
+  formatSearchLanguageLabels,
+} from "@/lib/constants/audio-languages";
 import { METADATA_LANGUAGES } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
@@ -57,6 +60,7 @@ import type {
   DownloadClientRecord,
   DownloadClientRoutingEntry,
   LibraryRecord,
+  LibraryRootRecord,
   LibraryScanSummary,
   LibrarySettingsDraft,
   LibrarySettingsRecord,
@@ -123,6 +127,8 @@ const IMPORT_MODE_OPTIONS = [
 type LibraryMutationInput = {
   name: string;
   roots: RootFolderOption[];
+  /** Stored roots the operator confirmed removing with this save. */
+  removedRootIds?: string[];
   settings?: LibrarySettingsDraft;
 };
 
@@ -151,6 +157,8 @@ type MediaLibrarySettingsPanelProps = {
   loadLibrarySettings: (
     libraryId: string,
   ) => Promise<LibrarySettingsRecord | null>;
+  /** The library's stored roots read fresh, with title counts; null when the read failed (already reported). */
+  loadLibraryRoots: (libraryId: string) => Promise<LibraryRootRecord[] | null>;
   loadFacetDownloadClientRouting: (
     scopeId: LibraryRecord["facet"],
   ) => Promise<DownloadClientRoutingEntry[]>;
@@ -314,6 +322,7 @@ export const MediaLibrarySettingsPanel = React.memo(
     canCreateLibrary,
     canManageDownloadClientRouting,
     loadLibrarySettings,
+    loadLibraryRoots,
     loadFacetDownloadClientRouting,
     onCreateLibrary,
     onUpdateLibrary,
@@ -322,14 +331,15 @@ export const MediaLibrarySettingsPanel = React.memo(
     onActiveLibraryNameChange,
   }: MediaLibrarySettingsPanelProps) {
     const t = useTranslate();
-    // Root changes are still being finished, so the row action and its dialog
-    // only exist when the instance has opted in.
-    const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
     const [mode, setMode] = React.useState<"existing" | "new">("existing");
     // `saving` covers the container's mutation and refreshes only; this also
     // covers the panel adopting the saved library afterwards.
     const [saveInProgress, setSaveInProgress] = React.useState(false);
     const [deleteLibraryOpen, setDeleteLibraryOpen] = React.useState(false);
+    const [pendingRootRemoval, setPendingRootRemoval] = React.useState<{
+      roots: LibraryRootRecord[];
+      scan: boolean;
+    } | null>(null);
     const [pendingLibrarySelection, setPendingLibrarySelection] =
       React.useState<string | null>(null);
     const [activeLibraryId, setActiveLibraryId] = React.useState<string | null>(
@@ -918,11 +928,7 @@ export const MediaLibrarySettingsPanel = React.memo(
     // A root change is planned against the *stored* configuration, so it is
     // offered only while the panel has nothing unsaved to contradict it.
     const canChangeRoot =
-      experimentalFeaturesEnabled &&
-      mode !== "new" &&
-      !!activeLibrary &&
-      !hasDraftChanges &&
-      !actionBusy;
+      mode !== "new" && !!activeLibrary && !hasDraftChanges && !actionBusy;
     const changeRootTarget = React.useMemo(
       () =>
         savedRoots.find((candidate) => candidate.id === changeRootId) ?? null,
@@ -1012,8 +1018,28 @@ export const MediaLibrarySettingsPanel = React.memo(
         if (current.some((rf) => rf.path === trimmed)) {
           return current;
         }
+        // Re-adding a stored root the draft dropped brings back its id, so
+        // the save keeps that root instead of sending its path without one.
+        const comparable = normalizeComparableLibraryRootPath(
+          trimmed,
+          localPathStyle,
+        );
+        const stored = savedRoots.find(
+          (root) =>
+            root.id &&
+            !current.some((candidate) => candidate.id === root.id) &&
+            normalizeComparableLibraryRootPath(root.path, localPathStyle) ===
+              comparable,
+        );
         return normalizeRoots(
-          [...current, { path: trimmed, isDefault: current.length === 0 }],
+          [
+            ...current,
+            {
+              ...(stored?.id ? { id: stored.id } : {}),
+              path: trimmed,
+              isDefault: current.length === 0,
+            },
+          ],
           localPathStyle,
         );
       });
@@ -1156,7 +1182,7 @@ export const MediaLibrarySettingsPanel = React.memo(
       [],
     );
 
-    const handleSaveLibrary = async () => {
+    const handleSaveLibrary = async (removedRootIds: string[] = []) => {
       if (downloadClientRoutingBusy) {
         return null;
       }
@@ -1205,6 +1231,7 @@ export const MediaLibrarySettingsPanel = React.memo(
             (await onUpdateLibrary(activeLibrary.id, {
               name,
               roots,
+              removedRootIds,
               settings: settingsDraft,
             })) ?? activeLibrary;
           try {
@@ -1230,8 +1257,8 @@ export const MediaLibrarySettingsPanel = React.memo(
       }
     };
 
-    const handleSaveAndScanLibrary = async () => {
-      const savedLibrary = await handleSaveLibrary();
+    const handleSaveAndScanLibrary = async (removedRootIds: string[] = []) => {
+      const savedLibrary = await handleSaveLibrary(removedRootIds);
       const libraryId =
         savedLibrary?.id ?? (mode === "existing" ? activeLibrary?.id : null);
       if (!libraryId) {
@@ -1253,6 +1280,68 @@ export const MediaLibrarySettingsPanel = React.memo(
         return;
       }
       await onDeleteLibrary(activeLibrary.id);
+    };
+
+    // Stored roots the draft drops. The server takes the titles under them
+    // out of the catalog, so the save asks first. Stored roots are identified
+    // by id only: a stored root no draft root names by id is removed. The
+    // stored roots are read fresh, so a root added elsewhere since this page
+    // loaded shows in the confirmation instead of being dropped unseen.
+    const rootsRemovedByDraft = (
+      storedRoots: LibraryRootRecord[],
+    ): LibraryRootRecord[] => {
+      const keptIds = new Set(
+        normalizeRoots(draftRoots, localPathStyle)
+          .map((root) => root.id)
+          .filter(Boolean),
+      );
+      return storedRoots.filter((root) => !keptIds.has(root.id));
+    };
+
+    const saveWithRemovedRoots = async (
+      scan: boolean,
+      removedRootIds: string[],
+    ) => {
+      if (scan) {
+        await handleSaveAndScanLibrary(removedRootIds);
+      } else {
+        await handleSaveLibrary(removedRootIds);
+      }
+    };
+
+    const requestSaveLibrary = async (scan: boolean) => {
+      if (mode !== "existing" || !activeLibrary) {
+        await saveWithRemovedRoots(scan, []);
+        return;
+      }
+      setSaveInProgress(true);
+      let storedRoots: LibraryRootRecord[] | null;
+      try {
+        storedRoots = await loadLibraryRoots(activeLibrary.id);
+      } finally {
+        setSaveInProgress(false);
+      }
+      if (!storedRoots) {
+        return;
+      }
+      const removedRoots = rootsRemovedByDraft(storedRoots);
+      if (removedRoots.length > 0) {
+        setPendingRootRemoval({ roots: removedRoots, scan });
+        return;
+      }
+      await saveWithRemovedRoots(scan, []);
+    };
+
+    const handleConfirmRootRemoval = async () => {
+      const pending = pendingRootRemoval;
+      setPendingRootRemoval(null);
+      if (!pending) {
+        return;
+      }
+      await saveWithRemovedRoots(
+        pending.scan,
+        pending.roots.map((root) => root.id),
+      );
     };
 
     const handleConfirmDiscardLibraryChanges = React.useCallback(() => {
@@ -1322,11 +1411,11 @@ export const MediaLibrarySettingsPanel = React.memo(
       <>
         {secondaryNavTarget
           ? createPortal(
-              <div>
-                <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.05em] text-[var(--scry-faint2)]">
+              <div className="flex flex-wrap items-center gap-2 @6xl/facet-shell:block">
+                <div className="w-full px-1 text-[11px] font-bold uppercase tracking-[0.05em] text-[var(--scry-faint2)] @6xl/facet-shell:mb-2">
                   {t("settings.librariesLabel")}
                 </div>
-                <ul className="space-y-1">
+                <ul className="flex flex-wrap gap-2 @6xl/facet-shell:block @6xl/facet-shell:space-y-1">
                   {libraries.map((library) => {
                     const active =
                       mode !== "new" && selectedValue === library.id;
@@ -1372,7 +1461,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                     disabled={actionBusy}
                     aria-current={mode === "new" ? "true" : undefined}
                     className={cn(
-                      "mt-2 w-full justify-start",
+                      "justify-start @6xl/facet-shell:mt-2 @6xl/facet-shell:w-full",
                       mode === "new" &&
                         "bg-[rgba(var(--scry-accent-rgb),0.16)]",
                     )}
@@ -1487,17 +1576,17 @@ export const MediaLibrarySettingsPanel = React.memo(
                           id={selectorId("media-library-root-row", rf.path)}
                           className="space-y-1"
                         >
-                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] py-2 pl-3.5 pr-2 sm:flex-nowrap sm:py-1.5">
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] py-2 pl-3.5 pr-2 @xl/facet-page:flex-nowrap @xl/facet-page:py-1.5">
                             <div className="flex min-w-0 flex-1 items-center gap-2.5">
                               <FolderOpen className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
                               <span
-                                className="min-w-0 flex-1 break-all font-[var(--font-code)] text-[13.5px] text-[var(--scry-text2)] sm:truncate"
+                                className="min-w-0 flex-1 break-all font-[family-name:var(--font-code)] text-[13.5px] text-[var(--scry-text2)] @xl/facet-page:truncate"
                                 title={rf.path}
                               >
                                 {rf.path}
                               </span>
                             </div>
-                            <div className="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto sm:shrink-0 sm:flex-nowrap">
+                            <div className="order-last flex w-full flex-wrap items-center gap-2 @xl/facet-page:order-none @xl/facet-page:w-auto @xl/facet-page:shrink-0 @xl/facet-page:flex-nowrap">
                               {pathIsInvalid ? (
                                 <span
                                   className="shrink-0 rounded-[7px] border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-destructive"
@@ -1517,16 +1606,16 @@ export const MediaLibrarySettingsPanel = React.memo(
                                     rf.path,
                                   )}
                                   type="button"
-                                  variant="ghost"
+                                  variant="outline"
                                   size="sm"
-                                  className="h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                  className="h-8 shrink-0 px-2.5 text-xs"
                                   onClick={() => handleSetDefault(index)}
                                   disabled={actionBusy}
                                 >
                                   {t("settings.rootFolderSetDefault")}
                                 </Button>
                               )}
-                              {rf.id && experimentalFeaturesEnabled ? (
+                              {rf.id ? (
                                 <Button
                                   id={selectorId(
                                     "media-library-root-change",
@@ -1607,7 +1696,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                 title={t("settings.mediaProfilesTitle")}
                 description={t("settings.mediaProfilesHelp")}
               >
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
                   <div className="space-y-2">
                     <Label>{t("settings.libraryRequiredAudioLabel")}</Label>
                     <AudioLanguagePicker
@@ -1628,15 +1717,28 @@ export const MediaLibrarySettingsPanel = React.memo(
                     ) : null}
                   </div>
                   <div className="space-y-2">
-                    <Label>{t("settings.searchLanguages")}</Label>
+                    <div className="flex items-center gap-1">
+                      <Label>{t("settings.searchLanguages")}</Label>
+                      <InfoHelp
+                        text={t("settings.searchLanguagesHelp")}
+                        ariaLabel={t("settings.searchLanguages")}
+                      />
+                    </div>
                     <SearchLanguagePicker
                       value={draftSearchLanguages}
                       onChange={setDraftSearchLanguages}
                       disabled={settingsBusy}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.searchLanguagesHelp")}
-                    </p>
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveValue", {
+                          value:
+                            formatSearchLanguageLabels(
+                              savedSettings.searchLanguages ?? [],
+                            ) || t("label.none"),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
                   </div>
                   <div className="space-y-2">
                     <Label>{t("settings.libraryMetadataLanguageLabel")}</Label>
@@ -1645,7 +1747,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       onValueChange={setDraftMetadataLanguage}
                       disabled={settingsBusy}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1675,7 +1777,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftUseSeasonFolders}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1708,7 +1810,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       onValueChange={setDraftQualityProfileId}
                       disabled={settingsBusy}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1741,7 +1843,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       onValueChange={setDraftScoringPersona}
                       disabled={settingsBusy}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1824,7 +1926,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                     "settings.libraryMovieAvailabilityDescription",
                   )}
                 >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
                     <div className="space-y-2">
                       <Label htmlFor="library-movie-default-availability">
                         {t("settings.movieDefaultAvailability")}
@@ -1834,7 +1936,10 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftMovieAvailability}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger id="library-movie-default-availability">
+                        <SelectTrigger
+                          id="library-movie-default-availability"
+                          className="w-full"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1916,8 +2021,9 @@ export const MediaLibrarySettingsPanel = React.memo(
               >
                 <div
                   className={cn(
-                    "grid gap-5",
-                    canManageDownloadClientRouting && "md:grid-cols-2",
+                    "grid grid-cols-1 gap-5",
+                    canManageDownloadClientRouting &&
+                      "@xl/facet-page:grid-cols-2",
                   )}
                 >
                   <div className="space-y-2">
@@ -1927,7 +2033,10 @@ export const MediaLibrarySettingsPanel = React.memo(
                       onValueChange={setDraftImportMode}
                       disabled={settingsBusy}
                     >
-                      <SelectTrigger id="media-library-import-mode-trigger">
+                      <SelectTrigger
+                        id="media-library-import-mode-trigger"
+                        className="w-full"
+                      >
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1955,7 +2064,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       </EffectiveChip>
                     ) : null}
                     {showUnixPermissions ? (
-                      <div className="grid gap-3 pt-2 sm:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-3 pt-2 @md/facet-page:grid-cols-2">
                         <div className="space-y-2">
                           <Label>
                             {t("settings.setPermissionsLinuxLabel")}
@@ -1965,7 +2074,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                             onValueChange={setDraftSetPermissionsLinux}
                             disabled={settingsBusy}
                           >
-                            <SelectTrigger>
+                            <SelectTrigger className="w-full">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -2016,7 +2125,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                     <span>
                                       {option.value} - {t(option.labelKey)}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(option.value, "file")}
                                     </span>
                                   </span>
@@ -2029,7 +2138,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                       {customFileChmod} -{" "}
                                       {t("settings.chmodPresetCustom")}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(customFileChmod, "file")}
                                     </span>
                                   </span>
@@ -2073,7 +2182,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                     <span>
                                       {option.value} - {t(option.labelKey)}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(option.value, "folder")}
                                     </span>
                                   </span>
@@ -2086,7 +2195,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                       {customFolderChmod} -{" "}
                                       {t("settings.chmodPresetCustom")}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(
                                         customFolderChmod,
                                         "folder",
@@ -2143,7 +2252,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         }}
                         disabled={settingsBusy || downloadClientRoutingBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2181,7 +2290,7 @@ export const MediaLibrarySettingsPanel = React.memo(
               >
                 <div>
                   <div
-                    className={`grid gap-3 ${showPlexmatch ? "md:grid-cols-2" : "md:grid-cols-1"}`}
+                    className={`grid grid-cols-1 gap-3 ${showPlexmatch ? "@xl/facet-page:grid-cols-2" : ""}`}
                   >
                     <div className="space-y-2">
                       <Label>{t("settings.nfoWriteOnImportLabel")}</Label>
@@ -2190,7 +2299,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftNfoWriteOnImport}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2226,7 +2335,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                           onValueChange={setDraftPlexmatchWriteOnImport}
                           disabled={settingsBusy}
                         >
-                          <SelectTrigger>
+                          <SelectTrigger className="w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -2265,7 +2374,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                   icon={SlidersVertical}
                   title={t("settings.animeSettings")}
                 >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
                     <div className="space-y-2">
                       <Label>{t("settings.fillerPolicyLabel")}</Label>
                       <Select
@@ -2273,7 +2382,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftFillerPolicy}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2304,7 +2413,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftRecapPolicy}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2335,7 +2444,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftMonitorSpecials}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2365,7 +2474,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftInterSeasonMovies}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2395,7 +2504,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftMonitorFillerMovies}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2452,7 +2561,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       id="media-library-save"
                       type="button"
                       variant="outline"
-                      onClick={handleSaveLibrary}
+                      onClick={() => void requestSaveLibrary(false)}
                       disabled={
                         settingsBusy ||
                         downloadClientRoutingBusy ||
@@ -2469,7 +2578,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       id="media-library-save-scan"
                       type="button"
                       variant="primary"
-                      onClick={handleSaveAndScanLibrary}
+                      onClick={() => void requestSaveLibrary(true)}
                       disabled={
                         settingsBusy ||
                         downloadClientRoutingBusy ||
@@ -2496,9 +2605,7 @@ export const MediaLibrarySettingsPanel = React.memo(
           initialPath={browserInitialPath}
           title={browserTitle}
         />
-        {experimentalFeaturesEnabled &&
-        activeLibrary &&
-        changeRootTarget?.id ? (
+        {activeLibrary && changeRootTarget?.id ? (
           <ChangeRootDialog
             open
             onOpenChange={(next) => {
@@ -2531,6 +2638,28 @@ export const MediaLibrarySettingsPanel = React.memo(
           cancelLabel={t("label.cancel")}
           onConfirm={handleConfirmDeleteLibrary}
           onCancel={() => setDeleteLibraryOpen(false)}
+        />
+        <ConfirmDialog
+          open={pendingRootRemoval !== null}
+          title={t("settings.libraryRemoveRootsTitle")}
+          description={t("settings.libraryRemoveRootsConfirm", {
+            paths:
+              pendingRootRemoval?.roots
+                .map((root) =>
+                  t("settings.libraryRemoveRootsEntry", {
+                    path: root.path,
+                    count: root.titleCount ?? 0,
+                  }),
+                )
+                .join(", ") ?? "",
+          })}
+          confirmLabel={t("label.remove")}
+          cancelLabel={t("label.cancel")}
+          contentId="media-library-remove-roots-dialog"
+          confirmButtonId="media-library-remove-roots-confirm"
+          cancelButtonId="media-library-remove-roots-cancel"
+          onConfirm={handleConfirmRootRemoval}
+          onCancel={() => setPendingRootRemoval(null)}
         />
         <ConfirmDialog
           open={libraryDiscardPrompt === "open"}

@@ -1121,13 +1121,18 @@ pub(crate) async fn run_claimed_download_cleanup(
         // Hash-addressed torrent clients report the torrent's internal name,
         // which need not equal the indexer's release title. Compare content
         // identity with the original submission, while still requiring its
-        // active binding when no canonical token is available.
+        // active binding when no canonical token is available. A submission
+        // recorded without a content hash (the indexer gave none and the hash
+        // the client accepted was not kept) still names the client's own item
+        // id, which a hash-addressed client sets to the torrent hash. Item ids
+        // that are not a hash (a numeric id) leave identity to the name check.
         let torrent_hash_matches = if crate::seeding_gate::client_type_is_torrent(app, &record.client_type)
             && let Some(observed) = crate::normalize_torrent_info_hash(Some(&item.download_client_item_id))
         {
             app.services.workflow.download_submissions
                 .find_by_canonical_download_id(&record.download_id).await?
-                .and_then(|submission| crate::normalize_torrent_info_hash(submission.info_hash.as_deref()))
+                .and_then(|submission| crate::normalize_torrent_info_hash(submission.info_hash.as_deref())
+                    .or_else(|| crate::normalize_torrent_info_hash(Some(&submission.download_client_item_id))))
                 .map(|expected| expected == observed)
         } else { None };
         if crate::ClientJobLocator::new(Some(&item.client_id), &item.client_type,

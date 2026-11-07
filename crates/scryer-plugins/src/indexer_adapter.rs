@@ -7,8 +7,8 @@ use scryer_application::{
     IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
     IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
     IndexerStatsTracker, NullIndexerStatsTracker, PluginDynamicConfigFields, PluginFailureReason,
-    ResolvedDownloadArtifact, SearchMode, extract_magnet_info_hash, is_valid_magnet_uri,
-    normalize_release_password,
+    ResolvedDownloadArtifact, SearchMode, extract_magnet_info_hash, is_password_protection_marker,
+    is_valid_magnet_uri, normalize_release_password,
 };
 use scryer_domain::{IndexerConfig, ProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
@@ -1100,9 +1100,17 @@ fn decode_grab_result(
         for (name, value) in &payload.response_headers {
             if name.eq_ignore_ascii_case("x-dnzb-password") {
                 match value {
-                    serde_json::Value::String(value) => password_candidates.push(value),
+                    serde_json::Value::String(value) => {
+                        if !is_password_protection_marker(value) {
+                            password_candidates.push(value);
+                        }
+                    }
                     serde_json::Value::Array(values) => {
-                        for value in values.iter().filter_map(serde_json::Value::as_str) {
+                        for value in values
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .filter(|value| !is_password_protection_marker(value))
+                        {
                             password_candidates.push(value);
                         }
                     }
@@ -1110,7 +1118,13 @@ fn decode_grab_result(
                 }
             }
         }
-        password_candidates.extend(payload.password_candidates.iter().map(String::as_str));
+        password_candidates.extend(
+            payload
+                .password_candidates
+                .iter()
+                .map(String::as_str)
+                .filter(|value| !is_password_protection_marker(value)),
+        );
         return Ok(Some(ResolvedDownloadArtifact::Nzb {
             bytes: payload.body,
             file_name: payload.file_name,
@@ -1966,22 +1980,19 @@ fn plugin_password_hint(
     result: &scryer_plugin_sdk::PluginSearchResult,
     extra: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<String> {
+    // Both fields come from the indexer, and plugins forward whatever the
+    // indexer's password attribute held, so a protection marker can arrive in
+    // the typed hint as well as in the legacy provider-extra field.
     result
         .password_hint
         .as_deref()
+        .filter(|value| !is_password_protection_marker(value))
         .and_then(|value| normalize_release_password(Some(value)))
         .or_else(|| {
             extra
                 .get("password")
                 .and_then(|value| value.as_str())
-                // This legacy provider-extra field mixes protection markers
-                // with actual passwords. The typed password_hint is literal.
-                .filter(|value| {
-                    !matches!(
-                        value.trim().to_ascii_lowercase().as_str(),
-                        "1" | "true" | "yes" | "protected" | "passworded" | "0" | "false" | "no"
-                    )
-                })
+                .filter(|value| !is_password_protection_marker(value))
                 .and_then(|value| normalize_release_password(Some(value)))
         })
 }
@@ -3743,8 +3754,8 @@ mod tests {
                 "url": "https://indexer.example/download/1",
                 "body": bytes.to_vec(),
                 "source_kind": "nzb",
-                "response_headers": {"X-DNZB-Password": ["1", " synthetic ", "1"]},
-                "password_candidates": ["true", " synthetic "]
+                "response_headers": {"X-DNZB-Password": [" synthetic ", " synthetic "]},
+                "password_candidates": ["second-synthetic", " synthetic "]
             }),
         }))
         .unwrap()
@@ -3763,9 +3774,38 @@ mod tests {
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            ["1", " synthetic ", "true"]
+            [" synthetic ", "second-synthetic"]
         );
         assert!(!format!("{password_candidates:?}").contains("synthetic"));
+    }
+
+    #[test]
+    fn grab_nzb_payload_drops_protection_markers_from_password_candidates() {
+        let artifact = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "url": "https://indexer.example/download/1",
+                "body": b"<nzb></nzb>".to_vec(),
+                "source_kind": "nzb",
+                "response_headers": {"X-DNZB-Password": ["-1", "1", " synthetic "]},
+                "password_candidates": ["true", "0", " -1 ", "second-synthetic"]
+            }),
+        }))
+        .unwrap()
+        .unwrap();
+        let ResolvedDownloadArtifact::Nzb {
+            password_candidates,
+            ..
+        } = artifact
+        else {
+            panic!("expected NZB artifact");
+        };
+        assert_eq!(
+            password_candidates
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [" synthetic ", "second-synthetic"]
+        );
     }
 
     #[test]
@@ -4390,6 +4430,8 @@ mod tests {
             "0",
             "false",
             "no",
+            "-1",
+            " -1 ",
             "  ",
         ] {
             let result = scryer_plugin_sdk::PluginSearchResult {
@@ -4405,6 +4447,17 @@ mod tests {
                 plugin_password_hint(&result, &extra),
                 None,
                 "marker {marker:?} must not become a password hint"
+            );
+
+            let typed = scryer_plugin_sdk::PluginSearchResult {
+                password_hint: Some(marker.to_string()),
+                ..scryer_plugin_sdk::PluginSearchResult::default()
+            };
+            let extra = merge_result_extra(&typed);
+            assert_eq!(
+                plugin_password_hint(&typed, &extra),
+                None,
+                "typed marker {marker:?} must not become a password hint"
             );
         }
     }

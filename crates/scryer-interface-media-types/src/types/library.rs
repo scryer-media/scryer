@@ -27,6 +27,8 @@ pub struct LibraryRootPayload {
     pub path: String,
     /// Whether this is the default root folder.
     pub is_default: bool,
+    /// Titles in this library whose root is this root; removing the root takes them out of the catalog.
+    pub title_count: i32,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1334,9 +1336,11 @@ pub struct CreateLibraryRootInput {
 #[derive(InputObject, Clone)]
 /// Replacement library root path and default marker.
 pub struct UpdateLibraryRootInput {
-    /// Id of the stored root this entry edits. A root keeps its identity, and the
-    /// titles under it keep their root, when its path changes under the same id.
-    /// Omit it for a new root; an entry without one is matched by path.
+    /// Id of the stored root this entry edits. Stored roots are identified by
+    /// this id and must carry it; a root keeps its identity, and the titles under
+    /// it keep their root, when its path changes under the same id. A root
+    /// without an id is a new root, and a root without an id at a stored root's
+    /// path is refused.
     pub id: Option<ID>,
     /// Absolute filesystem path for the root.
     pub path: String,
@@ -1366,6 +1370,8 @@ pub struct UpdateLibraryInput {
     pub name: Option<String>,
     /// Replacement root list; omission preserves roots and an empty list clears them when valid.
     pub roots: Option<Vec<UpdateLibraryRootInput>>,
+    /// Ids of the stored roots `roots` drops. Must name exactly the roots the edit removes; ignored when `roots` is omitted.
+    pub removed_root_ids: Option<Vec<ID>>,
     /// Optional replacement library settings.
     pub settings: Option<LibrarySettingsInput>,
 }

@@ -135,6 +135,7 @@ impl crate::AppUseCase {
                         "WAITING_FOR_STORAGE"
                     }
                     _ if active.is_some_and(|file| file.comparing) => "COMPARING",
+                    _ if active.is_some_and(|file| file.recording) => "RECORDING",
                     _ if file.destination_path.is_empty() => "DUPLICATE",
                     Some(scryer_domain::ImportTransferPhase::Verifying) => "VERIFYING",
                     Some(scryer_domain::ImportTransferPhase::Copying) => "MOVING",

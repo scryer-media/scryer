@@ -26,6 +26,15 @@ pub struct LibraryRootDraft {
     pub is_default: bool,
 }
 
+/// A library after an update, with what the update took out of the catalog.
+#[derive(Clone, Debug)]
+pub struct UpdatedLibrary {
+    pub library: scryer_domain::Library,
+    /// Titles removed from the catalog because the root under them was
+    /// dropped by this update. Their files on disk are untouched.
+    pub removed_title_count: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum MetadataFieldUpdate<T> {
     #[default]
@@ -240,12 +249,11 @@ pub struct UpdateRecycleBinSettings {
     pub retention_days: Option<i64>,
 }
 
-/// How thoroughly a download-client completed-download copy is proven before
-/// its source may be touched (FR-042).
-///
-/// Location operations do not read it: `LOCATION_OPERATION_VERIFICATION_DEPTH`
-/// forces full depth for every library move, root change, and consolidation,
-/// because those relocate the user's only copy.
+/// How thoroughly a copied file is proven before its source may be touched:
+/// download-client completed-download copies and every location operation
+/// (library move, root change, consolidation) use this depth.
+/// `LOCATION_OPERATION_VERIFICATION_DEPTH` is only the default a location plan
+/// carries before the workflow resolves this setting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerificationSettings {
     pub depth: crate::location::model::VerificationDepth,
@@ -264,6 +272,10 @@ pub struct RecycledItem {
     pub size_bytes: u64,
     pub title_id: Option<String>,
     pub title_name: Option<String>,
+    pub title_facet: Option<scryer_domain::MediaFacet>,
+    pub episode_id: Option<String>,
+    pub(crate) original_file_id: Option<String>,
+    pub(crate) replacement_file_id: Option<String>,
     pub reason: String,
     pub recycled_at: String,
     pub scheduled_deletion_at: String,
@@ -276,6 +288,13 @@ pub struct RecycledItem {
 pub enum RecycleRestoreConflictPolicy {
     KeepBoth,
     ReplaceExisting,
+}
+
+/// A bounded, item-correlated projection of durable title history.
+pub struct RecycledItemHistory {
+    pub records: Vec<scryer_domain::TitleHistoryRecord>,
+    /// More candidate history or matching rows exist beyond the summary bounds.
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1006,6 +1025,107 @@ pub struct TitleMediaFile {
     pub release_listing_json: Option<String>,
 }
 
+impl TitleMediaFile {
+    /// The view of this file an actor without privileged library access may
+    /// see: the file name without its directory, and none of the acquisition
+    /// provenance (release names, indexer, scoring, grab time, original path).
+    /// Quality, analysis, size, role, scan status and episode links stay.
+    #[must_use]
+    pub fn redacted_for_viewer(mut self) -> Self {
+        self.file_path = file_name_only(&self.file_path).to_string();
+        self.original_file_path = None;
+        self.release_group = None;
+        self.scene_name = None;
+        self.grabbed_release_title = None;
+        self.indexer_source = None;
+        self.scoring_log = None;
+        self.acquisition_score = None;
+        self.release_hash = None;
+        self.release_listing_json = None;
+        self.grabbed_at = None;
+        self
+    }
+}
+
+/// The last component of a Unix or Windows path. A path that ends in a
+/// separator, or an empty one, yields an empty name.
+pub(crate) fn file_name_only(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or("")
+}
+
+#[cfg(test)]
+mod viewer_redaction_tests {
+    use super::{TitleMediaFile, file_name_only};
+
+    #[test]
+    fn file_name_only_handles_unix_windows_and_bare_paths() {
+        assert_eq!(
+            file_name_only("/media/movies/Sample Film (2001)/sample.mkv"),
+            "sample.mkv"
+        );
+        assert_eq!(
+            file_name_only(r"D:\media\shows\Sample Show\s01e01.mkv"),
+            "s01e01.mkv"
+        );
+        assert_eq!(file_name_only(r"/mnt/share\mixed/sample.mkv"), "sample.mkv");
+        assert_eq!(file_name_only("sample.mkv"), "sample.mkv");
+        assert_eq!(file_name_only("/media/movies/"), "");
+        assert_eq!(file_name_only(""), "");
+    }
+
+    #[test]
+    fn redacted_for_viewer_keeps_file_name_and_clears_provenance() {
+        let file = TitleMediaFile {
+            id: "file-1".to_string(),
+            title_id: "title-1".to_string(),
+            file_path: "/media/movies/Sample Film (2001)/Sample.Film.2001.mkv".to_string(),
+            original_file_path: Some("/downloads/complete/sample/sample.mkv".to_string()),
+            size_bytes: 1_234,
+            quality_label: Some("1080p".to_string()),
+            resolution: Some("1080p".to_string()),
+            release_group: Some("SAMPLEGRP".to_string()),
+            scene_name: Some("Sample.Film.2001.1080p-SAMPLEGRP".to_string()),
+            grabbed_release_title: Some("Sample.Film.2001.1080p-SAMPLEGRP".to_string()),
+            indexer_source: Some("sample-indexer".to_string()),
+            scoring_log: Some("[]".to_string()),
+            acquisition_score: Some(42),
+            release_hash: Some("abc123".to_string()),
+            release_listing_json: Some("{}".to_string()),
+            grabbed_at: Some("2026-01-01T00:00:00Z".to_string()),
+            ..TitleMediaFile::default()
+        };
+
+        let redacted = file.clone().redacted_for_viewer();
+
+        assert_eq!(redacted.file_path, "Sample.Film.2001.mkv");
+        assert_eq!(redacted.original_file_path, None);
+        assert_eq!(redacted.release_group, None);
+        assert_eq!(redacted.scene_name, None);
+        assert_eq!(redacted.grabbed_release_title, None);
+        assert_eq!(redacted.indexer_source, None);
+        assert_eq!(redacted.scoring_log, None);
+        assert_eq!(redacted.acquisition_score, None);
+        assert_eq!(redacted.release_hash, None);
+        assert_eq!(redacted.release_listing_json, None);
+        assert_eq!(redacted.grabbed_at, None);
+        // Catalog facts a viewer may see are untouched.
+        assert_eq!(redacted.id, file.id);
+        assert_eq!(redacted.title_id, file.title_id);
+        assert_eq!(redacted.size_bytes, file.size_bytes);
+        assert_eq!(redacted.quality_label, file.quality_label);
+        assert_eq!(redacted.resolution, file.resolution);
+    }
+
+    #[test]
+    fn redacted_for_viewer_reduces_windows_paths_to_the_file_name() {
+        let file = TitleMediaFile {
+            file_path: r"E:\library\Sample Show\Season 01\s01e02.mkv".to_string(),
+            ..TitleMediaFile::default()
+        };
+        assert_eq!(file.redacted_for_viewer().file_path, "s01e02.mkv");
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EpisodeScopedMediaFile {
     pub media_file: TitleMediaFile,
@@ -1238,6 +1358,10 @@ pub struct TitleCatalogFilter {
     /// `Some(true)` keeps titles holding a file whose scan failed or that needs
     /// review, `Some(false)` keeps the titles holding none, and `None` keeps both.
     pub needs_attention: Option<bool>,
+    /// Restrict results to these title ids; an empty list keeps every title. A
+    /// client refreshing a few titles under its active filters asks for just
+    /// those rather than reloading the whole list.
+    pub title_ids: Vec<String>,
 }
 
 /// How much of a title is on disk.
@@ -2805,6 +2929,13 @@ pub enum IndexerSearchOutcome {
     /// so the operator can see why an indexer stayed silent.
     BackedOff {
         until: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    /// The indexer's client could not be built, so nothing was sent: its
+    /// plugin is not loaded, or its proxy is missing or disabled. `reason` is
+    /// the stable code of the setup failure. The indexer stays enabled, so
+    /// every search reports it until the operator acts.
+    ClientUnavailable {
+        reason: &'static str,
     },
     Errored,
 }
@@ -4619,6 +4750,7 @@ pub enum UiCatalogViewMode {
     Compact,
     PosterTable,
     Poster,
+    Graph,
 }
 
 impl UiCatalogViewMode {
@@ -4627,6 +4759,7 @@ impl UiCatalogViewMode {
             Self::Compact => "compact",
             Self::PosterTable => "poster-table",
             Self::Poster => "poster",
+            Self::Graph => "graph",
         }
     }
 
@@ -4635,8 +4768,31 @@ impl UiCatalogViewMode {
             "compact" => Some(Self::Compact),
             "poster-table" => Some(Self::PosterTable),
             "poster" => Some(Self::Poster),
+            "graph" => Some(Self::Graph),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod ui_settings_catalog_view_mode_tests {
+    use super::UiCatalogViewMode;
+
+    #[test]
+    fn every_catalog_view_mode_round_trips_through_its_stored_text() {
+        for mode in [
+            UiCatalogViewMode::Compact,
+            UiCatalogViewMode::PosterTable,
+            UiCatalogViewMode::Poster,
+            UiCatalogViewMode::Graph,
+        ] {
+            assert_eq!(UiCatalogViewMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(
+            UiCatalogViewMode::parse("graph"),
+            Some(UiCatalogViewMode::Graph)
+        );
+        assert_eq!(UiCatalogViewMode::parse("map"), None);
     }
 }
 
@@ -4775,6 +4931,10 @@ pub struct UiSettings {
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
+    /// Discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4798,6 +4958,10 @@ pub struct UiSettingsUpdate {
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
+    /// Discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4819,6 +4983,8 @@ impl UiSettings {
             high_contrast_mode: false,
             reduce_motion: false,
             hide_sponsor_button: false,
+            discovery_grid_hide_owned: true,
+            discovery_grid_hide_requested: false,
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),

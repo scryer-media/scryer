@@ -310,7 +310,9 @@ export function DownloadClientRemotePathMappingsField({
               <span className="font-medium text-card-foreground">
                 {t("settings.downloadClientRemotePathMappingsExampleLabel")}:
               </span>{" "}
-              <span className="font-[var(--font-code)]">{EXAMPLE_MAPPING}</span>
+              <span className="font-[family-name:var(--font-code)]">
+                {EXAMPLE_MAPPING}
+              </span>
             </p>
             <Button
               id={`${fieldKey}-add-mapping`}
@@ -385,7 +387,7 @@ export function DownloadClientRemotePathMappingsField({
                       }
                       required={required && rows.length === 1}
                       aria-invalid={hasRemoteError}
-                      className="font-[var(--font-code)] text-sm"
+                      className="font-[family-name:var(--font-code)] text-sm"
                     />
                     {hasRemoteError ? (
                       <p className="text-xs text-destructive">
@@ -414,7 +416,7 @@ export function DownloadClientRemotePathMappingsField({
                         onFocus={() => setBrowseRowIndex(index)}
                         required={required && rows.length === 1}
                         aria-invalid={hasLocalError}
-                        className="pr-10 font-[var(--font-code)] text-sm"
+                        className="pr-10 font-[family-name:var(--font-code)] text-sm"
                       />
                       <IconButton
                         id={browseButtonId}
@@ -465,7 +467,9 @@ export function DownloadClientRemotePathMappingsField({
               <span className="font-medium text-card-foreground">
                 {t("settings.downloadClientRemotePathMappingsExampleLabel")}:
               </span>{" "}
-              <span className="font-[var(--font-code)]">{EXAMPLE_MAPPING}</span>
+              <span className="font-[family-name:var(--font-code)]">
+                {EXAMPLE_MAPPING}
+              </span>
             </p>
           </div>
         </div>

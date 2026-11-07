@@ -3,6 +3,61 @@ import type { LocaleDictionary } from "../types";
 const ko: LocaleDictionary = {
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "이 Prowlarr 버전은 지원되지 않습니다. Prowlarr를 2.0 이상으로 업그레이드하세요.",
+  "error.reason.STANDBY_NOT_FOUND":
+    "이 저장된 후보는 더 이상 존재하지 않습니다.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "이 저장된 후보는 더 이상 사용할 수 없습니다. 목록을 새로 고친 뒤 다시 시도하세요.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "저장된 릴리스를 대기열에 추가하지 못했습니다. 다시 시도할 수 있습니다.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "이 릴리스는 타이틀의 차단 목록에 있습니다. 대기열에 추가하려면 차단 목록에서 제거하세요.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "이 릴리스는 이미 다운로드 대기열에 있습니다.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "이 타이틀에 대해 다른 검색 또는 대기열 작업이 실행 중입니다. 완료된 뒤 다시 시도하세요.",
+  "wanted.standby": "대기 · {{count}}",
+  "wanted.standbyTooltip":
+    "현재 가져오기가 실패하면 저장된 후보 {{count}}개를 순서대로 시도합니다.",
+  "wanted.standbyScopeNote":
+    "이 범위에 속한 행을 셉니다. 시즌 팩은 시즌의 기준 에피소드에서 셉니다.",
+  "wanted.loadingStandby": "저장된 후보 불러오는 중…",
+  "wanted.standbyCandidates": "대기 후보 · {{count}}",
+  "wanted.downloadStandby": "다운로드",
+  "wanted.downloadStandbyLabel": "{{name}} 다운로드",
+  "wanted.standbyConflictTitle": "이미 진행 중인 다운로드가 있습니다",
+  "wanted.standbyConflictDescription":
+    "이 다운로드들과 함께 {{name}}을(를) 대기열에 추가하거나, 취소하고 대신 대기열에 추가합니다.",
+  "wanted.standbyQueue": "대기열에 추가",
+  "wanted.standbyQueuedRefreshFailed":
+    "릴리스가 대기열에 추가되었지만 목록을 새로 고치지 못했습니다. 현재 상태를 보려면 페이지를 새로 고치세요.",
+  "wanted.standbyCancelAndQueue": "취소하고 대기열에 추가",
+  "wanted.standbyQueuedCancelFailed":
+    "릴리스가 대기열에 추가되었지만 충돌하는 다운로드 {{count}}개를 취소하지 못해 아직 실행 중입니다.",
+  "wanted.standbyRank": "순위 {{rank}}",
+  "wanted.standbyIndexer": "인덱서",
+  "wanted.standbySize": "크기",
+  "wanted.standbySeeders": "시더",
+  "wanted.standbyScore": "점수",
+  "wanted.standbyAge": "경과 시간",
+  "wanted.seasonPack": "시즌 팩",
+  "wanted.noStandbyCandidates": "대기 후보 없음",
+  "settings.oauthJellyfinCallbackCopied": "Jellyfin 콜백 URL을 복사했습니다.",
+  "settings.oauthClientIdCopied": "OAuth 클라이언트 ID를 복사했습니다.",
+  "status.copyFailedSelected":
+    "복사하지 못했습니다. 텍스트가 선택되어 있으니 Ctrl+C 또는 ⌘C를 누르세요.",
+  "status.copyFailed":
+    "복사하지 못했습니다. 브라우저가 클립보드 접근을 거부했습니다.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "미디어를 검증할 수 없어 기존 라이브러리 파일을 대체할 수 없습니다.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "이 재생 목록 또는 동반 파일은 다른 파일에 의존할 수 있으므로 검토가 필요합니다.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "미디어를 읽을 수 없습니다. 원본에 대한 접근 권한을 확인하고 다시 시도하세요.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "미디어 구조가 잘못되었습니다. 가져오기 전에 원본 파일을 확인하세요.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "미디어가 암호화되어 검증할 수 없습니다.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "시스템 시계가 5분 이상 차이 나서 Scryer가 메타데이터 게이트웨이에 연결할 수 없습니다. 시스템 시계를 동기화한 후 Scryer를 다시 시작하세요.",
   "httpRelease.refusal.detailsUnavailable":
@@ -238,7 +293,8 @@ const ko: LocaleDictionary = {
   "nav.logs": "로그",
   "nav.serviceLogs": "서비스 로그",
   "nav.auditLogs": "감사 로그",
-  "nav.usersAccess": "사용자 및 접근",
+  "nav.users": "사용자",
+  "nav.securityAccess": "보안 및 접근",
   "nav.mobileTitle": "Scryer 내비게이션",
   "nav.mobileDescription": "기본 Scryer 내비게이션",
   "nav.mobileTrigger": "내비게이션 열기",
@@ -320,7 +376,6 @@ const ko: LocaleDictionary = {
   "dashboard.queueCountOne": "1개 활성",
   "settings.profile": "프로필",
   "settings.general": "일반",
-  "settings.security": "Security",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",
@@ -490,7 +545,6 @@ const ko: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "킵얼라이브는 초 단위 정수이며 0을 지정하면 꺼집니다.",
   "status.proxyTunnelPublicKeyCopied": "공개 키를 복사했습니다.",
-  "status.proxyTunnelPublicKeyCopyFailed": "공개 키를 복사할 수 없습니다.",
   "settings.qualityProfiles": "품질 프로필",
   "settings.downloadClients": "다운로드 클라이언트",
   "settings.downloadClientRouting": "다운로드 클라이언트 라우팅",
@@ -647,9 +701,8 @@ const ko: LocaleDictionary = {
   "settings.acquisitionEnabled": "자동 수집 사용",
   "settings.acquisitionEnabledHelp":
     "백그라운드 수집 루프(수렴 검색 및 RSS 매칭)를 실행합니다.",
-  "settings.acquisitionThresholds": "업그레이드 임계값",
-  "settings.acquisitionSameTierMinDelta": "동일 등급 최소 점수 차",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "동일 등급 최소 점수 차",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "같은 품질 등급의 릴리스는 현재 파일의 점수를 최소 이 값만큼 넘어야 합니다.",
   "settings.acquisitionConvergence": "수렴 및 속도",
   "settings.acquisitionPollIntervalSeconds": "폴링 간격(초)",
@@ -865,11 +918,8 @@ const ko: LocaleDictionary = {
     "{{total}}개 항목, {{renamable}}개 변경 가능, {{noop}}개 변경 없음, {{conflicts}}개 충돌, {{errors}}개 오류",
   "settings.sectionTitle": "설정 • {{section}}",
   "settings.generalText": "일반 애플리케이션 설정.",
-  "settings.verificationDepthTitle": "가져오기 복사본 검증",
   "settings.verificationDepthHelp":
     "원본에 손대기 전에 복사된 파일을 얼마나 엄격하게 검증할지 정합니다.",
-  "settings.verificationDepthScope":
-    "다운로드 클라이언트의 가져오기 복사본에만 적용됩니다. 라이브러리와 루트 이동은 여기서 무엇을 고르든 항상 전체 검증합니다.",
   "settings.verificationDepthLabel": "검증 깊이",
   "settings.verificationDepthFull": "전체 다시 읽기",
   "settings.verificationDepthFullHelp":
@@ -897,6 +947,58 @@ const ko: LocaleDictionary = {
     "SABnzbd 또는 NZBGet의 자동 가져오기에 난독화된 이름의 동영상 파일이 포함된 경우, Scryer는 각 파일의 CRC-32 체크섬과 크기를 제3자 서비스인 srrdb.com으로 보내 원래 파일 이름을 조회합니다. 라이브러리나 파일에 대한 다른 정보는 전송되지 않습니다. 디스크의 파일 이름은 절대 변경되지 않습니다.",
   "discovery.personalizedDisabled":
     "이 인스턴스에서는 개인화된 발견이 꺼져 있습니다.",
+  "discovery.section.fromYourWatchlist": "보고 싶은 목록에서",
+  "discovery.rail.becauseYouLike.action": "액션을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.adventure": "모험을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.comedy": "코미디를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.crime": "범죄물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.documentary": "다큐멘터리를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.drama": "드라마를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.family": "가족 콘텐츠를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.fantasy": "판타지를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.history": "역사물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.horror": "공포를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.mystery": "미스터리를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.romance": "로맨스를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.science-fiction": "공상과학을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.thriller": "스릴러를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.war": "전쟁 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.western": "서부극을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.sports": "스포츠 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.supernatural": "초자연물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.coming-of-age": "성장 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.found-family":
+    "유사 가족 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.revenge": "복수극을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.heist": "하이스트물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.time-travel": "시간 여행을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.dystopia": "디스토피아를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.cyberpunk": "사이버펑크를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.superhero": "슈퍼히어로를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.vampire": "뱀파이어를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.zombie": "좀비를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.survival": "생존물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.space": "우주 모험을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.detective": "탐정물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "조직 범죄물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.period-drama": "시대극을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.psychological": "심리극을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.mythology": "신화를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.isekai": "이세계물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.mecha": "메카를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.martial-arts": "무술을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.music": "음악 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.workplace": "직장물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.medical": "의학 드라마를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.military": "군대물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.spy": "스파이물을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.royal-politics": "왕실 암투를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.first-love": "첫사랑 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.forbidden-love": "금지된 사랑을 좋아하는 분께",
+  "discovery.rail.becauseYouLike.lgbtq": "LGBTQ+ 이야기를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.samurai": "사무라이를 좋아하는 분께",
+  "discovery.rail.becauseYouLike.magical-girl": "마법소녀를 좋아하는 분께",
   "settings.keepHistoryForever": "기록을 영구히 보존",
   "settings.historyRetentionDaysHeader": "기록 보존 기간",
   "settings.historyRetentionDaysSuffix": "일",
@@ -1003,6 +1105,8 @@ const ko: LocaleDictionary = {
   "toast.viewInCatalog": "카탈로그에서 보기",
 
   "label.back": "뒤로",
+  "label.copy": "복사",
+  "label.copied": "복사됨",
   "label.dismiss": "닫기",
   "pwa.offline": "오프라인 상태입니다. 일부 기능을 사용할 수 없습니다.",
   "pwa.installApp": "Scryer 설치",
@@ -1053,6 +1157,49 @@ const ko: LocaleDictionary = {
   "title.viewModeCompact": "컴팩트",
   "title.viewModePosterTable": "목록",
   "title.viewModePoster": "포스터 보기",
+  "title.viewModeGraph": "그래프 보기",
+  "libraryGraph.regionLabel": "라이브러리 그래프",
+  "libraryGraph.sizeByLabel": "크기 기준",
+  "libraryGraph.sizeBy.ratingEvidence": "평점 근거",
+  "libraryGraph.sizeBy.rating": "평점",
+  "libraryGraph.sizeBy.popularity": "인기도",
+  "libraryGraph.resetView": "그래프 맞추기",
+  "libraryGraph.clustersLabel": "클러스터",
+  "libraryGraph.clusterAroundTitle": "{{title}} 주변",
+  "libraryGraph.unplaced": "분류되지 않은 작품",
+  "libraryGraph.collapsedCluster": "{{name}} ({{count}}개 작품)",
+  "libraryGraph.collapseCluster": "{{name}} 접기",
+  "libraryGraph.linkedBy": "연결 이유",
+  "libraryGraph.empty": "이 보기의 작품은 아직 라이브러리 그래프에 없습니다.",
+  "libraryGraph.edgeKind.semantic": "비슷함",
+  "libraryGraph.edgeKind.sequel": "속편",
+  "libraryGraph.edgeKind.prequel": "프리퀄",
+  "libraryGraph.edgeKind.coWatch": "함께 자주 시청됨",
+  "libraryGraph.edgeKind.relation": "관련",
+  "libraryGraph.edgeKind.affinity": "공통 관심사: {{label}}",
+  "libraryGraph.edgeKind.sharedTaste": "공통 관심사",
+  "libraryGraph.edgeKind.other": "연결됨",
+  "libraryGraph.edgeKind.recommendation": "추천",
+  "libraryGraph.notBuilt": "라이브러리 그래프가 아직 생성되지 않았습니다.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "이 작품은 더 이상 탐색할 수 없습니다.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "이 작품은 이 라이브러리의 미디어 유형과 일치하지 않아 여기에서 탐색할 수 없습니다.",
+  "libraryGraph.moreLikeThisEmpty": "아직 비슷한 작품이 없습니다.",
+  "libraryGraph.backToOverview": "개요로 돌아가기",
+  "libraryGraph.findingMoreLikeThis": "비슷한 작품을 찾는 중…",
+  "libraryGraph.reason.recommendedBy": "{{sources}}에서 추천",
+  "libraryGraph.reason.similarOn": "{{sources}}에서 비슷함",
+  "libraryGraph.reason.shares": "공통점: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "추천 그룹",
+  "libraryGraph.notInLibrary": "라이브러리에 없음",
+  "libraryGraph.inLibrary": "라이브러리에 있음",
+  "libraryGraph.openTitle": "타이틀 열기",
+  "libraryGraph.exploredGroup": "탐색함",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, 라이브러리에 없음",
+  "libraryGraph.trailLabel": "탐색함",
+  "libraryGraph.canvasLabel":
+    "라이브러리 그래프. 화살표 키로 클러스터 안의 작품 사이를 이동하고 Enter 키로 엽니다.",
   "title.seasonMonitored": "시즌 모니터링 중",
   "title.episodeMonitored": "에피소드 모니터링 중",
   "title.deleteFilesOnDisk": "디스크에서 파일 삭제",
@@ -1417,7 +1564,6 @@ const ko: LocaleDictionary = {
   "settings.rulePriority": "우선순위",
   "settings.ruleAppliedFacets": "적용 유형",
   "settings.ruleAppliedFacetsHelp": "비워두면 모든 미디어 유형에 적용됩니다.",
-  "settings.ruleValidate": "검증",
   "settings.ruleValidating": "검증 중…",
   "settings.ruleValid": "규칙이 유효합니다.",
   "settings.ruleValidationRequired": "이름과 Rego 소스는 필수입니다.",
@@ -2459,8 +2605,6 @@ const ko: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "제외",
   "settings.maintenanceExcluded": "{{title}}을(를) 유지 관리에서 제외했습니다.",
   "move.dialogTitle": "타이틀 이동",
-  "move.dialogDescription":
-    "선택한 {{count}}개 타이틀의 계획을 확인한 뒤 이동하세요.",
   "move.destinationLibrary": "대상 라이브러리",
   "move.destinationRoot": "대상 루트",
   "move.destinationRootPlaceholder": "루트 선택",
@@ -2468,13 +2612,8 @@ const ko: LocaleDictionary = {
   "move.actionDescription":
     "이 타이틀의 파일을 다른 루트 폴더 또는 다른 라이브러리로 이동합니다.",
   "move.actionButton": "이동…",
-  "move.wizardKindDescription": "이 타이틀을 어디로 옮길지 선택하세요.",
   "move.kindRootHeading": "다른 루트로 이동",
-  "move.kindRootHelp":
-    "타이틀은 이 라이브러리에 그대로 두고 파일만 같은 라이브러리의 다른 루트 폴더로 옮깁니다.",
   "move.kindLibraryHeading": "다른 라이브러리로 이동",
-  "move.kindLibraryHelp":
-    "타이틀을 다른 라이브러리의 루트 중 하나로 전송합니다.",
   "move.noOtherRoots":
     "이 라이브러리에는 옮길 다른 루트 폴더가 없습니다. 라이브러리에 루트를 추가하거나 타이틀을 다른 라이브러리로 옮기세요.",
   "move.back": "뒤로",
@@ -2517,8 +2656,6 @@ const ko: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "이 파일들은 여기서는 두 에피소드에 등록되어 있지만 대상에서는 하나의 에피소드입니다. 대상에서는 각 파일이 한 번만 등록됩니다.",
   "move.mergeRoleUnnamedFile": "파일 {{id}}",
-  "move.operationTransferNote":
-    "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
   "move.modeHeading": "파일을 어떻게 옮길까요?",
   "move.mode.MOVE_WITH_SCRYER": "Scryer로 이동",
   "move.mode.FILES_ALREADY_THERE": "파일이 이미 그곳에 있음",
@@ -2560,10 +2697,6 @@ const ko: LocaleDictionary = {
     "{{files}}개 파일({{bytes}})을 앞부분, 뒷부분, 크기로 확인합니다.",
   "move.verificationNotApplicable":
     "이동하는 파일이 없어 검증할 것이 없습니다.",
-  "move.verificationStampFull": "검증됨(전체)",
-  "move.verificationStampQuick": "검증됨(빠름)",
-  "move.verificationFallbackCount":
-    "{{count}}개 파일이 빠른 검사로 대체되었습니다",
   "move.typedConfirmationPrompt": "확인하려면 문구를 입력하세요",
   "move.confirm": "이동 시작",
   "move.startFailed": "이동을 시작하지 못했습니다.",
@@ -2647,7 +2780,6 @@ const ko: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "루트 통합",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "라이브러리 간 전송",
   "move.toastPreparing": "준비 중…",
-  "move.toastTransferred": "전송됨",
   "move.toastTitlesProgress": "{{current}} / {{total}}개 타이틀",
   "move.toastDoneSubtitle": "이동 완료 · {{count}}개 타이틀",
   "move.toastWarningsSubtitle": "경고와 함께 완료됨 · {{count}}개 타이틀",
@@ -3507,6 +3639,62 @@ const ko: LocaleDictionary = {
     "파일을 새 이름으로 옮기지 못했습니다. 파일과 에피소드는 그대로 유지되었습니다.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "에피소드 번호가 모호합니다",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "보류: 미디어 서버에서 재생 중입니다.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "보류: 미디어 서버에 재생 여부를 확인할 수 없었습니다.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "보류: 미디어 서버에 저장된 시청 기록보다 최신 재생이 있습니다.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "보류: 미디어 서버 기록에 시청 기록이 반영하지 않는 계정의 재생이 있습니다.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "보류: 실행 전에 미디어 서버에서 시청 기록을 확인할 수 없었습니다.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "보류: 연결된 미디어 서버에 일치하는 항목이 없어 실행 전에 시청 기록을 확인할 수 없었습니다.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "연결된 미디어 서버에 계정이 있는 누군가가 Scryer 연결 여부와 관계없이 재생했는지 여부. 누구인지는 밝히지 않습니다",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "연결된 미디어 서버에 계정이 있는 누군가가 마지막으로 재생한 시각",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "활성화된 미디어 서버의 어떤 계정이든 재생했으면 true이며, 계정이 Scryer 사용자에 연결되어 있는지는 상관없습니다. 시즌과 시리즈는 방영된 에피소드 중 하나라도 해당됩니다. 최근 48시간 안의 동기화가 모든 활성 연결의 모든 계정을 읽기 전까지는 audience_not_read 사유로 알 수 없으며, 시청 사실을 알 수 없을 때는 일반적인 사유로 알 수 없습니다.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "어떤 계정이든 가장 최근에 재생한 RFC3339 타임스탬프. 아무도 재생하지 않았으면 never_watched 사유로 값이 없고, 재생에 기록된 시각이 없으면 play_time_missing(시즌과 시리즈는 episode_play_time_missing), 모든 계정을 읽지 못했으면 audience_not_read 사유로 알 수 없습니다",
+  "settings.maintenancePreviewFacts": "규칙이 읽은 사실",
+  "setup.sourceImportProgress": "소스 가져오는 중",
+  "setup.sourceImportInvalidRequest":
+    "선택한 소스를 사용할 수 없습니다. 소스 검색을 새로 고친 후 다시 선택하세요.",
+  "setup.sourceImportSelectionChanged":
+    "제출된 소스 선택은 변경할 수 없습니다. 실패한 소스는 요약에서 다시 시도하세요.",
+  "setup.sourceImportNotOwned":
+    "이 소스 가져오기는 현재 계정에서 사용할 수 없습니다.",
+  "setup.sourceImportQueueFull":
+    "소스 가져오기 용량이 가득 찼습니다. 다른 가져오기가 끝난 후 다시 시도하세요.",
+  "setup.sourceImportActive": "이 소스 가져오기는 아직 실행 중입니다.",
+  "setup.sourceImportNotRetryable":
+    "실패하거나 중단된 소스만 다시 시도하거나 건너뛸 수 있습니다.",
+  "setup.sourceImportUnresolved":
+    "설정을 완료하기 전에 해결되지 않은 소스를 다시 시도하거나 명시적으로 건너뛰세요.",
+  "setup.sourceImportCredentialRequired":
+    "계속하기 전에 소스 자격 증명을 입력하세요.",
+  "setup.sourceImportConfigConflict":
+    "예약된 구성이 변경되었습니다. 다시 시도하기 전에 소스를 검토하세요.",
+  "setup.sourceImportSourceNotReady":
+    "계속하기 전에 소스 검색이 끝날 때까지 기다리세요.",
+  "setup.sourceImportResume": "진행 상황에 다시 연결",
+  "setup.sourceImportLoading": "소스 가져오기 진행 상황을 불러오는 중",
+  "setup.sourceImportCredential": "{{name}}의 수정된 자격 증명",
+  "setup.sourceImportRetry": "실패한 소스 다시 시도",
+  "setup.sourceImportSkip": "이 소스 건너뛰기",
+  "setup.sourceImportItemFailed":
+    "연결과 자격 증명을 확인한 후 다시 시도하거나 건너뛰세요.",
+  "setup.sourceImportState.queued": "대기 중",
+  "setup.sourceImportState.installing": "공급자 설치 중",
+  "setup.sourceImportState.checking": "연결 확인 중",
+  "setup.sourceImportState.saving": "구성 저장 중",
+  "setup.sourceImportState.succeeded": "가져옴",
+  "setup.sourceImportState.failed": "실패",
+  "setup.sourceImportState.interrupted": "중단됨",
+  "setup.sourceImportState.skipped": "건너뜀",
 };
 
 export default ko;

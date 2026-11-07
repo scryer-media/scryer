@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import {
   ChevronRight,
   FileType,
@@ -10,6 +10,13 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { ViewId } from "@/components/root/types";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
@@ -92,6 +99,7 @@ export function FacetSettingsSection({
   trailingCrumb,
 }: FacetSettingsSectionProps) {
   const t = useTranslate();
+  const navigate = useNavigate();
   const meta = SECTION_META[section];
   const sectionLabel = t(meta.labelKey);
   const Icon = meta.icon;
@@ -104,7 +112,7 @@ export function FacetSettingsSection({
       : [];
   const showSubnav = availableSections.length > 1;
   const pageContent = (
-    <>
+    <div className="@container/facet-page min-w-0">
       <div className="mb-4 flex items-center gap-1.5 text-[12.5px] text-[var(--scry-faint)]">
         <span>{facetLabel}</span>
         <ChevronRight className="h-3.5 w-3.5" />
@@ -129,7 +137,7 @@ export function FacetSettingsSection({
           </>
         ) : null}
       </div>
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-4">
           <div className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),0.35),rgba(123,91,255,0.22))] text-[var(--scry-accent-text)]">
             <Icon className="h-[23px] w-[23px]" />
@@ -141,7 +149,7 @@ export function FacetSettingsSection({
           </div>
         </div>
         {headerStatus || showSecondaryNav ? (
-          <div className="flex shrink-0 items-center gap-2.5">
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
             {headerStatus}
             {showSecondaryNav ? (
               <div
@@ -153,91 +161,134 @@ export function FacetSettingsSection({
         ) : null}
       </div>
       {children}
-    </>
+    </div>
   );
 
+  // Both rails take room from the form, so they follow the width this page
+  // actually has rather than the viewport: the root sidebar also takes a share.
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent md:flex-row">
-      {showSubnav ? (
-        <aside
-          data-slot="facet-settings-subnav"
-          className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[218px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]"
-        >
-          <div className="mb-3 flex items-center gap-2 px-2 text-[var(--scry-ink2)] md:mb-4">
-            <Settings2 className="h-[18px] w-[18px] text-[var(--scry-accent-text)]" />
-            <span className="text-[16px] font-bold">{facetLabel}</span>
-          </div>
-          <nav className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0">
-            {availableSections.map((id) => {
-              const ItemIcon = SECTION_META[id].icon;
-              const active = section === id;
-              return (
-                <Link
-                  key={id}
-                  id={selectorId("root-sidebar-media", view, id)}
-                  to={buildViewPath(view, undefined, id)}
-                  className={cn(
-                    "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
-                    active &&
-                      "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
-                  )}
-                >
-                  <ItemIcon
-                    className={cn(
-                      "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                      active && "text-[var(--scry-accent-text)]",
-                    )}
-                  />
-                  <span className="whitespace-nowrap">
-                    {t(SECTION_META[id].labelKey)}
-                  </span>
-                </Link>
-              );
-            })}
-          </nav>
-        </aside>
-      ) : null}
-      {showSecondaryNav ? (
-        <aside
-          id={LIBRARY_SECONDARY_NAV_SLOT_ID}
-          data-slot="facet-secondary-nav"
-          className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[220px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]"
-        />
-      ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-transparent">
-        <div
-          data-slot="facet-settings-scroll"
-          className="min-h-0 flex-1 overflow-y-auto"
-        >
-          <div
-            className={cn(
-              "mx-auto w-full px-4 py-5 sm:px-6 md:px-[30px] md:py-[26px] md:pb-[60px]",
-              contentWidth === "reference"
-                ? "max-w-[1780px]"
-                : contentWidth === "full"
-                  ? "max-w-[1780px]"
-                  : contentWidth === "wide"
-                    ? "max-w-[1280px]"
-                    : "max-w-[920px]",
-            )}
+    <div className="@container/facet-shell flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent">
+      <div className="flex min-h-0 w-full flex-1 flex-col @3xl/facet-shell:flex-row">
+        {showSubnav ? (
+          <aside
+            data-slot="facet-settings-subnav"
+            className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 @3xl/facet-shell:h-full @3xl/facet-shell:w-[218px] @3xl/facet-shell:overflow-y-auto @3xl/facet-shell:border-b-0 @3xl/facet-shell:border-r @3xl/facet-shell:p-[22px_14px]"
           >
-            {contentWidth === "reference" ? (
-              <div className="grid gap-5 xl:grid-cols-[minmax(0,920px)_minmax(28rem,1fr)] 2xl:grid-cols-[minmax(0,920px)_minmax(42rem,1fr)] xl:items-start">
-                <div className="min-w-0">{pageContent}</div>
-                <aside
-                  id={FACET_REFERENCE_SLOT_ID}
-                  data-slot="facet-reference"
-                  className="min-w-0 xl:sticky xl:top-[26px]"
-                />
+            <div className="flex items-center justify-between gap-3 px-2 text-[var(--scry-ink2)] @3xl/facet-shell:mb-4">
+              <div className="flex min-w-0 items-center gap-2">
+                <Settings2 className="h-[18px] w-[18px] shrink-0 text-[var(--scry-accent-text)]" />
+                <span className="truncate text-[16px] font-bold">
+                  {facetLabel}
+                </span>
               </div>
-            ) : (
-              pageContent
-            )}
+              <Select
+                value={section}
+                onValueChange={(id) =>
+                  void navigate(
+                    buildViewPath(
+                      view,
+                      undefined,
+                      id as FacetSettingsSectionId,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger
+                  id={selectorId("facet-settings-section-select", view)}
+                  size="compact"
+                  chrome="toolbar"
+                  aria-label={t("nav.settings")}
+                  className="shrink-0 @3xl/facet-shell:hidden"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" align="end">
+                  {availableSections.map((id) => {
+                    const ItemIcon = SECTION_META[id].icon;
+                    return (
+                      <SelectItem key={id} value={id}>
+                        <ItemIcon />
+                        {t(SECTION_META[id].labelKey)}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+            <nav className="hidden flex-col gap-2 @3xl/facet-shell:flex">
+              {availableSections.map((id) => {
+                const ItemIcon = SECTION_META[id].icon;
+                const active = section === id;
+                return (
+                  <Link
+                    key={id}
+                    id={selectorId("root-sidebar-media", view, id)}
+                    to={buildViewPath(view, undefined, id)}
+                    className={cn(
+                      "flex h-9 w-full shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]",
+                      active &&
+                        "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
+                    )}
+                  >
+                    <ItemIcon
+                      className={cn(
+                        "h-[17px] w-[17px] text-[var(--scry-muted2)]",
+                        active && "text-[var(--scry-accent-text)]",
+                      )}
+                    />
+                    <span className="whitespace-nowrap">
+                      {t(SECTION_META[id].labelKey)}
+                    </span>
+                  </Link>
+                );
+              })}
+            </nav>
+          </aside>
+        ) : null}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col @6xl/facet-shell:flex-row">
+          {showSecondaryNav ? (
+            <aside
+              id={LIBRARY_SECONDARY_NAV_SLOT_ID}
+              data-slot="facet-secondary-nav"
+              className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 @6xl/facet-shell:h-full @6xl/facet-shell:w-[220px] @6xl/facet-shell:overflow-y-auto @6xl/facet-shell:border-b-0 @6xl/facet-shell:border-r @6xl/facet-shell:p-[22px_14px]"
+            />
+          ) : null}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-transparent">
+            <div
+              data-slot="facet-settings-scroll"
+              className="min-h-0 flex-1 overflow-y-auto"
+            >
+              <div
+                className={cn(
+                  "mx-auto w-full px-4 py-5 sm:px-6 md:px-[30px] md:py-[26px] md:pb-[60px]",
+                  contentWidth === "reference"
+                    ? "max-w-[1780px]"
+                    : contentWidth === "full"
+                      ? "max-w-[1780px]"
+                      : contentWidth === "wide"
+                        ? "max-w-[1280px]"
+                        : "max-w-[920px]",
+                )}
+              >
+                {contentWidth === "reference" ? (
+                  <div className="grid gap-5 xl:grid-cols-[minmax(0,920px)_minmax(28rem,1fr)] 2xl:grid-cols-[minmax(0,920px)_minmax(42rem,1fr)] xl:items-start">
+                    <div className="min-w-0">{pageContent}</div>
+                    <aside
+                      id={FACET_REFERENCE_SLOT_ID}
+                      data-slot="facet-reference"
+                      className="min-w-0 xl:sticky xl:top-[26px]"
+                    />
+                  </div>
+                ) : (
+                  pageContent
+                )}
+              </div>
+            </div>
+            {showSecondaryNav ? (
+              <div id={LIBRARY_FOOTER_SLOT_ID} data-slot="facet-footer" />
+            ) : null}
           </div>
         </div>
-        {showSecondaryNav ? (
-          <div id={LIBRARY_FOOTER_SLOT_ID} data-slot="facet-footer" />
-        ) : null}
       </div>
     </div>
   );

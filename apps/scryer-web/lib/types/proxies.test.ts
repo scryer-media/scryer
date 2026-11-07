@@ -154,7 +154,7 @@ const PROXY_LOCALE_KEYS = [
   "status.editingProxy",
   "status.proxyHostKeyReset",
   "status.proxyTunnelPublicKeyCopied",
-  "status.proxyTunnelPublicKeyCopyFailed",
+  "status.copyFailedSelected",
 ];
 
 test("every provider belongs to exactly one family", () => {

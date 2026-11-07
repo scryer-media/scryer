@@ -26,7 +26,6 @@ use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationState, LocationOperationType,
     VerificationDepth,
 };
-use crate::location::operations::LOCATION_OPERATION_VERIFICATION_DEPTH;
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::preview::{
     LOCATION_TYPED_CONFIRMATION_PHRASE, PlanConfirmationRequest, PlanItemKind,
@@ -78,18 +77,27 @@ impl RootChangeFixture {
                 &library_id,
                 "Movies".to_string(),
                 "movies".to_string(),
-                vec![
-                    LibraryRootDraft {
-                        id: None,
-                        path: source.to_string_lossy().to_string(),
-                        is_default: true,
-                    },
-                    LibraryRootDraft {
-                        id: None,
-                        path: other.to_string_lossy().to_string(),
-                        is_default: false,
-                    },
-                ],
+                crate::lib_tests::with_stored_root_ids(
+                    &app.services
+                        .catalog
+                        .libraries
+                        .get_by_id(&library_id)
+                        .await
+                        .expect("library lookup")
+                        .expect("library exists"),
+                    vec![
+                        LibraryRootDraft {
+                            id: None,
+                            path: source.to_string_lossy().to_string(),
+                            is_default: true,
+                        },
+                        LibraryRootDraft {
+                            id: None,
+                            path: other.to_string_lossy().to_string(),
+                            is_default: false,
+                        },
+                    ],
+                ),
             )
             .await
             .expect("configure two roots");
@@ -1029,31 +1037,34 @@ async fn a_root_change_owns_the_root_and_every_assigned_title_including_the_file
 
 // ── Verification depth ───────────────────────────────────────────────────────
 
-/// The verification-depth preference is an import preference. A root change
-/// moves the user's only copy and recycles the source once the destination
-/// verifies, so it plans full depth whatever the setting says.
+/// A root change plans the configured verification depth: quick by default,
+/// and full end to end once the operator opts into it.
 #[tokio::test]
-async fn a_root_change_verifies_at_full_depth_whatever_the_import_preference_says() {
+async fn a_root_change_verifies_at_the_configured_depth() {
     let fixture = RootChangeFixture::new().await;
     fixture
-        .app
-        .update_verification_settings(
-            &fixture.user,
-            UpdateVerificationSettings {
-                depth: VerificationDepth::Quick,
-            },
-        )
-        .await
-        .expect("choose quick verification");
-    let title = fixture
         .seed_title("Depth", 2008, "Depth (2008)", &[("Depth.mkv", 64)])
         .await;
 
     let preview = fixture.preview().await;
     assert_eq!(
         preview.plan.verification.depth,
-        LOCATION_OPERATION_VERIFICATION_DEPTH
+        VerificationDepth::Quick,
+        "with no preference set a root change plans quick verification"
     );
+
+    fixture
+        .app
+        .update_verification_settings(
+            &fixture.user,
+            UpdateVerificationSettings {
+                depth: VerificationDepth::Full,
+            },
+        )
+        .await
+        .expect("choose full verification");
+
+    let preview = fixture.preview().await;
     assert_eq!(preview.plan.verification.depth, VerificationDepth::Full);
 
     let operation = fixture.start_and_settle().await;
@@ -1062,5 +1073,4 @@ async fn a_root_change_verifies_at_full_depth_whatever_the_import_preference_say
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].depth.applied, VerificationDepth::Full);
     assert!(!records[0].depth.fell_back);
-    let _ = title;
 }

@@ -9,6 +9,16 @@ export function continueExternalImportFromConnect(
   navigate();
 }
 
+/** Sources navigation waits for durable acceptance, independent of worker completion. */
+export async function continueExternalImportFromSources(
+  accept: () => Promise<{ ok: boolean; error: string | null }>,
+  navigate: () => void,
+): Promise<{ ok: boolean; error: string | null }> {
+  const outcome = await accept();
+  if (outcome.ok) navigate();
+  return outcome;
+}
+
 export function isProwlarrDiscoveryReady(
   hasConnectedProwlarr: boolean,
   sessionId: string | null,
@@ -155,4 +165,25 @@ export function isFinalizeBlocked(state: {
     !state.mappingReady ||
     state.finalizing
   );
+}
+import type { ExternalImportSourceJob } from "./types/external-import.ts";
+
+/** Status responses from before a retry must never replace newer receipts. */
+export function preferSourceImportSnapshot(
+  current: ExternalImportSourceJob | null,
+  incoming: ExternalImportSourceJob,
+): ExternalImportSourceJob {
+  if (
+    current &&
+    (current.runId !== incoming.runId || current.updatedAt > incoming.updatedAt)
+  )
+    return current;
+  return incoming;
+}
+
+export function sourceImportPollingSettled(
+  job: ExternalImportSourceJob | null,
+  paused: boolean,
+): boolean {
+  return paused || (job !== null && !job.active);
 }

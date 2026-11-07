@@ -17,6 +17,7 @@ import {
   type RegoFamily,
 } from "./rego-assistance.ts";
 import {
+  formatRegoValidationError,
   graphQlRuleValidationResult,
   regoDiagnostics,
   regoSourceLine,
@@ -185,6 +186,15 @@ test("every field and catalog item has a localized description", () => {
     assert.ok(english.includes(`"${item.descKey}"`), item.descKey);
 });
 
+test("validation errors show the line as written in the editor", () => {
+  const error =
+    "compilation error: \n--> request/r1.rego:3:1\n  |\n3 | asdf\n  | ^\nerror: rule must have a body or assignment";
+  assert.equal(
+    formatRegoValidationError(error, "asdf"),
+    "compilation error: \n--> request/r1.rego:1:1\n  |\n1 | asdf\n  | ^\nerror: rule must have a body or assignment",
+  );
+});
+
 test("diagnostics account for inserted package and import lines", () => {
   assert.equal(regoSourceLine("match if { true }", 3), 1);
   assert.equal(regoSourceLine("import rego.v1\nmatch if { true }", 3), 2);
@@ -340,4 +350,23 @@ test("a diagnostics-shaped extension on another error family cannot paint rule m
     assert.deepEqual(result.diagnostics, []);
     assert.deepEqual(regoDiagnostics("match :=", result), []);
   }
+});
+
+test("compiler diagnostics show the line the editor shows", () => {
+  const source = "import rego.v1\n\nasdf";
+  const [diagnostic] = regoDiagnostics(source, {
+    valid: false,
+    errors: [],
+    diagnostics: [
+      {
+        code: "RULE_COMPILATION_ERROR",
+        message:
+          "compilation error: \n--> user/r.rego:4:1\n  |\n4 | asdf\n  | ^\nerror: bad",
+        line: 4,
+        column: 1,
+      },
+    ],
+  });
+  assert.equal(diagnostic?.line, 3);
+  assert.match(diagnostic?.message ?? "", /r\.rego:3:1\n {2}\|\n3 \| asdf/);
 });

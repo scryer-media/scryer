@@ -3,14 +3,41 @@ import test from "node:test";
 
 import {
   jobInstanceKey,
+  longRunningJobs,
   mergeLatestJobRun,
   normalizeJobRun,
+  preferJobRunSnapshot,
   parseFullHashBackfillFailures,
   runAwaitingScriptOutput,
   scriptRunForJobRun,
   scriptRunIdOf,
 } from "./job-runs.ts";
 import type { JobRun } from "../types/jobs.ts";
+
+test("source import retries replace terminal snapshots by durable revision", () => {
+  const failed = jobRun({
+    id: "source-run",
+    jobKey: "SOURCE_IMPORT",
+    status: "WARNING",
+    progressJson: { revision: 5 },
+    startedAt: "2026-01-01T00:00:00Z",
+  });
+  const retry = {
+    ...failed,
+    status: "RUNNING" as const,
+    completedAt: null,
+    progressJson: { revision: 6 },
+  };
+  assert.equal(preferJobRunSnapshot(failed, retry), retry);
+  assert.equal(preferJobRunSnapshot(retry, failed), retry);
+  const completed = {
+    ...retry,
+    status: "COMPLETED" as const,
+    progressJson: { revision: 7 },
+  };
+  assert.equal(preferJobRunSnapshot(retry, completed), completed);
+  assert.equal(preferJobRunSnapshot(completed, retry), completed);
+});
 
 test("full-hash backfill failures are read with their path and reason", () => {
   const parsed = parseFullHashBackfillFailures({
@@ -309,4 +336,90 @@ test("the newest finished run waits until its script run has settled", () => {
     null,
   );
   assert.equal(runAwaitingScriptOutput([active], []), null);
+});
+
+test("long-running jobs count each active location operation once it passes the threshold", () => {
+  const now = Date.parse("2026-01-01T00:10:00Z");
+  const runs = [
+    jobRun({
+      id: "move",
+      jobKey: "LOCATION_OPERATION",
+      status: "RUNNING",
+      startedAt: "2026-01-01T00:05:00Z",
+      progressJson: { operationId: "op-1" },
+    }),
+    jobRun({
+      id: "fresh-move",
+      jobKey: "LOCATION_OPERATION",
+      status: "DISCOVERING",
+      startedAt: "2026-01-01T00:09:50Z",
+      progressJson: { operationId: "op-2" },
+    }),
+    jobRun({
+      id: "done",
+      jobKey: "LOCATION_OPERATION",
+      status: "COMPLETED",
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
+    jobRun({
+      id: "queued",
+      jobKey: "LOCATION_OPERATION",
+      status: "QUEUED",
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
+  ];
+  assert.deepEqual(longRunningJobs(runs, now), {
+    count: 1,
+    nextChangeAtMs: Date.parse("2026-01-01T00:10:20Z"),
+  });
+  assert.deepEqual(longRunningJobs(runs, now + 20_000), {
+    count: 2,
+    nextChangeAtMs: null,
+  });
+});
+
+test("a folder conflict task counts once, not again for its current operation", () => {
+  const now = Date.parse("2026-01-01T00:10:00Z");
+  const runs = [
+    jobRun({
+      id: "task",
+      jobKey: "LOCATION_OPERATION",
+      status: "RUNNING",
+      triggerSource: "MANUAL",
+      startedAt: "2026-01-01T00:00:00Z",
+      progressJson: { current_operation_id: "conflict:task:3" },
+    }),
+    jobRun({
+      id: "child",
+      jobKey: "LOCATION_OPERATION",
+      status: "RUNNING",
+      triggerSource: "MANUAL",
+      startedAt: "2026-01-01T00:08:00Z",
+      progressJson: { operationId: "conflict:task:3" },
+    }),
+  ];
+  assert.equal(longRunningJobs(runs, now).count, 1);
+});
+
+test("jobs without a panel on Activity never count as long-running", () => {
+  const now = Date.parse("2026-01-01T04:00:00Z");
+  const runs = (
+    [
+      ["ARTWORK_ENCODING", "SCHEDULED_DAILY"],
+      ["LIBRARY_SCAN_MOVIES", "MANUAL"],
+      ["ACQUISITION_SEARCH", "SYSTEM_INTERNAL"],
+    ] as const
+  ).map(([jobKey, triggerSource]) =>
+    jobRun({
+      id: jobKey,
+      jobKey,
+      status: "RUNNING",
+      triggerSource,
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
+  );
+  assert.deepEqual(longRunningJobs(runs, now), {
+    count: 0,
+    nextChangeAtMs: null,
+  });
 });

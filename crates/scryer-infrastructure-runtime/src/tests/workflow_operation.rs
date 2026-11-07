@@ -608,6 +608,95 @@ async fn latest_run_per_operation_type_reads_each_custom_job_once() {
 }
 
 #[tokio::test]
+async fn operation_type_keyset_paging_reaches_older_runs_without_skipping_timestamp_ties() {
+    let (services, _db) = temp_services("workflow_operation_type_keyset_paging").await;
+    let store = workflow_operation_store(&services);
+    let now = Utc::now();
+    // Four runs share a timestamp and cross a page boundary. An older active
+    // task must remain reachable even when completed history fills page one.
+    for (id, started_at, status) in [
+        ("match-b", now, "completed"),
+        ("old-active", now - chrono::Duration::seconds(60), "running"),
+        ("match-d", now, "completed"),
+        ("match-a", now, "completed"),
+        ("match-c", now, "completed"),
+    ] {
+        seed_workflow_operation_of_type(
+            &services,
+            id,
+            Some(JobKey::LocationOperation.as_str()),
+            "pending_import_conflicts",
+            status,
+            started_at,
+        )
+        .await;
+    }
+    for (id, job_key, operation_type) in [
+        (
+            "different-type",
+            JobKey::LocationOperation,
+            "other_location_operation",
+        ),
+        (
+            "different-key",
+            JobKey::Housekeeping,
+            "pending_import_conflicts",
+        ),
+    ] {
+        seed_workflow_operation_of_type(
+            &services,
+            id,
+            Some(job_key.as_str()),
+            operation_type,
+            "completed",
+            now + chrono::Duration::seconds(60),
+        )
+        .await;
+    }
+
+    let mut before = None;
+    let mut pages = Vec::new();
+    for _ in 0..4 {
+        let page = store
+            .list_job_runs_by_operation_type_before(
+                JobKey::LocationOperation,
+                "pending_import_conflicts",
+                before,
+                2,
+            )
+            .await
+            .expect("read next page of conflict tasks");
+        let ids = page.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
+        before = page.last().map(|run| (run.started_at, run.id.clone()));
+        pages.push(ids);
+    }
+    assert_eq!(
+        pages,
+        vec![
+            vec!["match-d", "match-c"],
+            vec!["match-b", "match-a"],
+            vec!["old-active"],
+            Vec::<&str>::new(),
+        ]
+    );
+    let ids = pages.into_iter().flatten().collect::<Vec<_>>();
+    assert_eq!(
+        ids.len(),
+        ids.iter().collect::<HashSet<_>>().len(),
+        "no task is repeated across timestamp ties"
+    );
+    assert_eq!(
+        store
+            .get_job_run("old-active")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        JobRunStatus::Running
+    );
+}
+
+#[tokio::test]
 async fn migration_registers_job_run_listing_indexes() {
     let services = SqliteServices::new("sqlite::memory:")
         .await

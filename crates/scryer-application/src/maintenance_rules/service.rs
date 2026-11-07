@@ -197,6 +197,10 @@ pub struct MaintenancePreviewTitleResult {
     pub outcome: Option<MaintenanceOutcome>,
     pub reason_codes: Vec<String>,
     pub error: Option<String>,
+    /// The input document the rule evaluated for this subject, facts and
+    /// observations both. `None` unless the caller may read facts about
+    /// specific people, because the document carries them.
+    pub facts: Option<serde_json::Value>,
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
@@ -725,6 +729,12 @@ impl AppUseCase {
         // for a draft.
         self.require_person_fact_authority(actor, &policy.rego_source, &policy.id)
             .await?;
+        // The per-subject fact document names who watched what and who asked
+        // for it, whatever the rule reads, so only a caller who may author
+        // person-targeted rules is shown it.
+        let facts_visible = self
+            .has_app_permission(actor, AppPermission::ManagePermissions)
+            .await?;
 
         let mut titles = self.select_preview_titles(&request.selection).await?;
         titles.retain(|title| library_ids.is_empty() || library_ids.contains(&title.library_id));
@@ -793,6 +803,9 @@ impl AppUseCase {
         let signals_by_title = self
             .maintenance_watch_signals_for_titles(&watch_context, &titles)
             .await?;
+        let (watch_context, audience_by_title) = self
+            .maintenance_audience_plays_for_titles(&watch_context, &titles)
+            .await;
         // Claims are read exactly as the pass reads them, including what
         // happens when the store is down: preview degrades to unknown claim
         // facts rather than erroring, so an operator previewing a lease rule
@@ -842,6 +855,7 @@ impl AppUseCase {
             let watch = MaintenanceTitleWatch {
                 context: &watch_context,
                 signals: signals_by_title.get(&title.id).map(Vec::as_slice),
+                audience: audience_by_title.get(&title.id).map(Vec::as_slice),
             };
             let claims = MaintenanceTitleClaims {
                 claims: claims_by_title
@@ -954,6 +968,20 @@ impl AppUseCase {
                     }
                 };
 
+                let facts = if facts_visible {
+                    serde_json::to_value(&input)
+                        .inspect_err(|error| {
+                            tracing::warn!(
+                                rule_set_id = policy.id.as_str(),
+                                subject_id = subject.id.as_str(),
+                                error = %error,
+                                "could not render the preview fact document"
+                            );
+                        })
+                        .ok()
+                } else {
+                    None
+                };
                 let excluded = subject.excluded_by(&title.id, &exclusions);
                 let active = self
                     .services
@@ -992,6 +1020,7 @@ impl AppUseCase {
                     outcome,
                     reason_codes,
                     error,
+                    facts,
                 });
             }
         }

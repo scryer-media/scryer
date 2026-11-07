@@ -272,7 +272,7 @@ export default function SetupImportSourcesView({
                               e.target.value,
                             )
                           }
-                          className="h-8 font-[var(--font-code)] text-xs"
+                          className="h-8 font-[family-name:var(--font-code)] text-xs"
                         />
                       </div>
                     ) : null}
@@ -295,7 +295,7 @@ export default function SetupImportSourcesView({
                               e.target.value,
                             )
                           }
-                          className="h-8 font-[var(--font-code)] text-xs"
+                          className="h-8 font-[family-name:var(--font-code)] text-xs"
                         />
                       </div>
                     ) : null}
@@ -382,7 +382,7 @@ export default function SetupImportSourcesView({
                               e.target.value,
                             )
                           }
-                          className="h-8 font-[var(--font-code)] text-xs"
+                          className="h-8 font-[family-name:var(--font-code)] text-xs"
                         />
                         {idx.apiKeyHelpUrl ? (
                           <a

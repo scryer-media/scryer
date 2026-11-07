@@ -9,7 +9,6 @@ use scryer_application::{
     AppError, AppResult, LibraryDirectoryScanResult, LibraryFile, LibraryFileBatchReceiver,
     LibraryScanner, stored_paths::path_to_stored_string,
 };
-use scryer_domain::VIDEO_EXTENSIONS;
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::sync::mpsc;
@@ -33,16 +32,18 @@ impl Default for FileSystemLibraryScanner {
 
 impl FileSystemLibraryScanner {
     pub fn new() -> Self {
-        let allowed_extensions = VIDEO_EXTENSIONS.iter().map(|ext| ext.to_string()).collect();
+        // The same standalone list the filesystem walker applies, so every scan
+        // path catalogs the same files.
+        let allowed_extensions = scryer_media_types::formats::standalone_video_extensions()
+            .map(str::to_owned)
+            .collect();
 
         Self { allowed_extensions }
     }
 
     fn path_has_allowed_extension(allowed_extensions: &HashSet<String>, path: &Path) -> bool {
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
-            .is_some_and(|ext| allowed_extensions.contains(&ext))
+        scryer_domain::canonical_video_extension(path)
+            .is_some_and(|extension| allowed_extensions.contains(extension))
     }
 
     async fn validate_root(root: &str) -> AppResult<PathBuf> {
@@ -487,6 +488,39 @@ impl LibraryScanner for FileSystemLibraryScanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn scanners_share_normalized_registry_acceptance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut expected = Vec::new();
+        for entry in scryer_media_types::formats::MEDIA_FORMATS {
+            let path = dir
+                .path()
+                .join(format!("Release.{}_", entry.extension.to_uppercase()));
+            std::fs::write(&path, b"video").expect("write video");
+            if entry.is_standalone_video() {
+                expected.push(path_to_stored_string(&path));
+            }
+        }
+        for name in ["Release.ogm.exe", "Release.ogmx", "notes.txt"] {
+            std::fs::write(dir.path().join(name), b"unrelated").expect("write unrelated");
+        }
+        expected.sort();
+        let scanner = FileSystemLibraryScanner::new();
+        let root = dir.path().to_string_lossy();
+        for files in [
+            scanner.scan_library(&root).await.expect("library"),
+            scanner.scan_directory(&root).await.expect("directory"),
+            scanner
+                .scan_directory_children(&root)
+                .await
+                .expect("children"),
+        ] {
+            let mut paths = files.into_iter().map(|file| file.path).collect::<Vec<_>>();
+            paths.sort();
+            assert_eq!(paths, expected);
+        }
+    }
 
     #[tokio::test]
     async fn scan_library_prefers_same_stem_nfo() {

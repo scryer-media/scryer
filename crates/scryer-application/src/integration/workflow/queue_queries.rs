@@ -1359,13 +1359,7 @@ impl AppUseCase {
         include_import_activity: bool,
         activity_filter: DownloadActivityFilter,
     ) -> AppResult<Vec<DownloadQueueItem>> {
-        self.require_any_library_permission(actor, scryer_domain::LibraryPermission::View)
-            .await?;
-        let allowed_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
+        let allowed_library_ids = self.require_privileged_queue_library_ids(actor).await?;
         let can_view_operational_history = self
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -1416,17 +1410,7 @@ impl AppUseCase {
         sort: DownloadHistorySort,
     ) -> AppResult<DownloadQueuePage> {
         let started_at = Instant::now();
-        let allowed_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
-        if allowed_library_ids.is_empty() {
-            return Err(AppError::unauthorized_reason(
-                crate::error_reasons::integration::LIBRARY_ACCESS_DENIED,
-                "You do not have access to this library".to_string(),
-            ));
-        }
+        let allowed_library_ids = self.require_privileged_queue_library_ids(actor).await?;
         let can_view_operational_history = self
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -1576,12 +1560,20 @@ impl AppUseCase {
         include_import_activity: bool,
         activity_filter: DownloadActivityFilter,
     ) -> AppResult<Vec<DownloadQueueItem>> {
-        self.require_title_library_permission(
-            actor,
-            title_id,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await?;
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
+        self.require_privileged_library_access(actor, &title.library_id)
+            .await?;
         let (_, model) = self.current_download_queue_read_model().await?;
         let ordering = Self::legacy_download_queue_ordering(&model).await;
         Ok(ordering
@@ -1736,7 +1728,15 @@ impl AppUseCase {
         let items = self
             .collect_download_history_items_for_actor(
                 actor,
-                scryer_domain::LibraryPermission::ResolveImports,
+                &self
+                    .authorized_library_ids(
+                        actor,
+                        None,
+                        scryer_domain::LibraryPermission::ResolveImports,
+                    )
+                    .await?
+                    .into_iter()
+                    .collect(),
                 DurableHistoryRows::Skip,
             )
             .await?
@@ -1802,7 +1802,15 @@ impl AppUseCase {
         let count = self
             .collect_download_history_items_for_actor(
                 actor,
-                scryer_domain::LibraryPermission::ResolveImports,
+                &self
+                    .authorized_library_ids(
+                        actor,
+                        None,
+                        scryer_domain::LibraryPermission::ResolveImports,
+                    )
+                    .await?
+                    .into_iter()
+                    .collect(),
                 DurableHistoryRows::Skip,
             )
             .await?
@@ -1831,8 +1839,7 @@ impl AppUseCase {
         scryer_submitted_only: bool,
         sort: Option<DownloadHistorySort>,
     ) -> AppResult<DownloadHistoryPage> {
-        self.require_any_library_permission(actor, scryer_domain::LibraryPermission::View)
-            .await?;
+        let allowed_library_ids = self.require_privileged_queue_library_ids(actor).await?;
 
         let limit = limit.clamp(1, 50);
         let normalized_client_ids = client_ids.map(|ids| {
@@ -1844,7 +1851,7 @@ impl AppUseCase {
         let mut items = self
             .collect_download_history_items_for_actor(
                 actor,
-                scryer_domain::LibraryPermission::View,
+                &allowed_library_ids,
                 DurableHistoryRows::Include,
             )
             .await?
@@ -1896,17 +1903,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<Vec<DownloadQueueItem>> {
-        let allowed_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
-        if allowed_library_ids.is_empty() {
-            return Err(AppError::unauthorized_reason(
-                crate::error_reasons::integration::LIBRARY_ACCESS_DENIED,
-                "You do not have access to this library".to_string(),
-            ));
-        }
+        let allowed_library_ids = self.require_privileged_queue_library_ids(actor).await?;
         let can_view_operational_history = self
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -1939,8 +1936,7 @@ impl AppUseCase {
         client_type: Option<&str>,
         download_client_item_id: &str,
     ) -> AppResult<Option<DownloadQueueItem>> {
-        self.require_any_library_permission(actor, scryer_domain::LibraryPermission::View)
-            .await?;
+        let allowed_library_ids = self.require_privileged_queue_library_ids(actor).await?;
         let item = self
             .find_download_queue_item_raw(client_id, client_type, download_client_item_id)
             .await?;
@@ -1948,11 +1944,7 @@ impl AppUseCase {
             return Ok(None);
         };
         let visible = self
-            .filter_download_queue_items_for_permission(
-                actor,
-                vec![item],
-                scryer_domain::LibraryPermission::View,
-            )
+            .filter_download_queue_items_for_libraries(actor, vec![item], &allowed_library_ids)
             .await?;
         Ok(visible.into_iter().next())
     }
@@ -1983,8 +1975,7 @@ impl AppUseCase {
         client_type: &str,
         download_client_item_id: &str,
     ) -> AppResult<Option<SubmissionScope>> {
-        self.require_any_library_permission(actor, scryer_domain::LibraryPermission::View)
-            .await?;
+        self.require_privileged_queue_library_ids(actor).await?;
 
         let submission = self
             .services
@@ -2015,12 +2006,8 @@ impl AppUseCase {
                 );
                 return Ok(None);
             };
-            self.require_library_permission(
-                actor,
-                &title.library_id,
-                scryer_domain::LibraryPermission::View,
-            )
-            .await?;
+            self.require_privileged_library_access(actor, &title.library_id)
+                .await?;
         }
         Ok(submission.map(|submission| submission.scope))
     }

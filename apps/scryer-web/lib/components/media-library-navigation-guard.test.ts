@@ -33,8 +33,8 @@ function sliceBetween(
 test("a library save keeps the unsaved-changes guard down until the panel adopts what it saved", () => {
   const body = sliceBetween(
     panel,
-    "  const handleSaveLibrary = async () => {",
-    "  const handleSaveAndScanLibrary",
+    "const handleSaveLibrary = async (",
+    "const handleSaveAndScanLibrary",
   );
 
   const raised = body.indexOf("setSaveInProgress(true)");

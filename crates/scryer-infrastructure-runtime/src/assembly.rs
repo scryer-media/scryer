@@ -954,7 +954,10 @@ impl DatastoreAssembly {
         );
         let download_queue_command_store =
             Arc::new(DownloadQueueCommandStore::new(datastore.clone()));
-        let workflow_operation_store = Arc::new(WorkflowOperationStore::new(datastore.clone()));
+        let workflow_operation_store = Arc::new(
+            WorkflowOperationStore::new(datastore.clone())
+                .with_encryption_key(db.encryption_key_state()),
+        );
         let discovery_store = Arc::new(DiscoveryStore::new(datastore.clone()));
         let backup_exporter = Arc::new(SqliteLogicalBackupExporter::new(
             config.database_url.clone(),
@@ -1114,7 +1117,10 @@ impl DatastoreAssembly {
         );
         let download_queue_command_store =
             Arc::new(DownloadQueueCommandStore::new(datastore.clone()));
-        let workflow_operation_store = Arc::new(WorkflowOperationStore::new(datastore.clone()));
+        let workflow_operation_store = Arc::new(
+            WorkflowOperationStore::new(datastore.clone())
+                .with_encryption_key(db.encryption_key_state()),
+        );
         let discovery_store = Arc::new(DiscoveryStore::new(datastore.clone()));
         let backup_exporter = Arc::new(PostgresLogicalBackupExporter::new(&db));
 

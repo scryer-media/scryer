@@ -1654,7 +1654,11 @@ async fn import_single_episode_file(
         .await?;
         return Ok(EpisodeImportOutcome::Rejected {
             rejection: crate::post_download_gate::ImportedFileRejection {
-                message: "file resolves to no episode of this title".to_string(),
+                // A release can number an episode the catalog files elsewhere
+                // (an OVA named S01E13 that the catalog lists as a special);
+                // only Manual Import can place it, so the hold says so.
+                message: "file resolves to no episode of this title. Open Manual Import and assign the correct season and episode, including specials."
+                    .to_string(),
                 recycle_reason: "episode_not_found_for_title",
                 skip_reason: Some(ImportSkipReason::PolicyMismatch),
                 blocking_rule_codes: vec!["episode_not_found_for_title".to_string()],

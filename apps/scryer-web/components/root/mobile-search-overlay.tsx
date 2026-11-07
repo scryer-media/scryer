@@ -52,11 +52,7 @@ import type {
   MetadataCatalogRequestOptions,
 } from "@/lib/hooks/use-global-search";
 import { FACET_REGISTRY } from "@/lib/facets/registry";
-import {
-  sectionLabelForFacet,
-  viewAllLabelForFacet,
-  viewFromFacet,
-} from "@/lib/facets/helpers";
+import { sectionLabelForFacet, viewFromFacet } from "@/lib/facets/helpers";
 import { useSearchContext } from "@/lib/context/search-context";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { globalSearchMetadataResultId, selectorId } from "@/lib/utils/dom-ids";
@@ -158,6 +154,30 @@ export function MobileSearchOverlay({
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = original;
+    };
+  }, []);
+
+  // The on-screen keyboard shrinks the visual viewport but not the layout
+  // viewport, so without this the end of the results list sits behind it.
+  React.useEffect(() => {
+    const viewport = window.visualViewport;
+    const overlay = overlayRef.current;
+    if (!viewport || !overlay) {
+      return;
+    }
+
+    const fitOverlayToViewport = () => {
+      overlay.style.top = `${viewport.offsetTop}px`;
+      overlay.style.bottom = "auto";
+      overlay.style.height = `${viewport.height}px`;
+    };
+
+    fitOverlayToViewport();
+    viewport.addEventListener("resize", fitOverlayToViewport);
+    viewport.addEventListener("scroll", fitOverlayToViewport);
+    return () => {
+      viewport.removeEventListener("resize", fitOverlayToViewport);
+      viewport.removeEventListener("scroll", fitOverlayToViewport);
     };
   }, []);
 
@@ -913,7 +933,6 @@ export function MobileSearchOverlay({
     const facetLabel = facetConfig
       ? t(facetConfig.navLabelKey)
       : sectionLabelForFacet(t, facet);
-    const viewAllFacetLabel = viewAllLabelForFacet(t, facet);
     const resultCountLabel =
       items.length === 1
         ? t("search.resultCountOne")
@@ -938,9 +957,9 @@ export function MobileSearchOverlay({
                 setActiveFilters([facet]);
                 focusMobileSearchFilter(facet);
               }}
-              aria-label={viewAllFacetLabel}
+              aria-label={`${t("search.viewAll")} ${facetLabel}`}
             >
-              {viewAllFacetLabel}
+              {t("search.viewAll")}
             </button>
           ) : null}
         </div>
@@ -1100,6 +1119,7 @@ export function MobileSearchOverlay({
           data-slot="mobile-global-search-results"
           role="region"
           aria-label={t("search.title")}
+          onTouchMove={() => inputRef.current?.blur()}
           className="min-h-0 flex-1 overflow-y-auto px-[14px] py-[18px] [scrollbar-color:var(--scry-border2)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:border-[3px] [&::-webkit-scrollbar-thumb]:border-transparent [&::-webkit-scrollbar-thumb]:bg-[var(--scry-border2)] [&::-webkit-scrollbar-thumb]:bg-clip-content"
         >
           {showSectionResults ? (

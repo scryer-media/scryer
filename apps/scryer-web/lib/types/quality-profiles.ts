@@ -47,6 +47,7 @@ export type QualityProfileCriteriaPayload = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
+  min_upgrade_score_delta: number;
 };
 
 export type ParsedQualityProfileEntry = ParsedQualityProfile & {
@@ -79,6 +80,7 @@ export type QualityProfileGraphCriteriaPayload = {
   scoringOverrides: ScoringOverridesPayload;
   cutoffTier: string | null;
   minScoreToGrab: number | null;
+  minUpgradeScoreDelta: number;
 };
 
 export type QualityProfileGraphPayload = {
@@ -121,6 +123,7 @@ export type QualityProfileDraft = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
+  min_upgrade_score_delta: number;
 };
 
 export type JsonPrimitive = string | number | boolean | null;

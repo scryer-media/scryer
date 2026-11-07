@@ -16,6 +16,12 @@ registerHooks({
 });
 const { commitQualityProfileDraftToEntries, hasDuplicateQualityProfileName } =
   await import("./quality-profile-draft-commit.ts");
+const {
+  DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+  normalizeQualityProfileEntry,
+  qualityProfileEntryToMutationInput,
+  toQualityProfileDraft,
+} = await import("./quality-profiles.ts");
 import { QUALITY_TIER_CHOICES } from "../constants/quality-profiles.ts";
 import type {
   ParsedQualityProfileEntry,
@@ -45,6 +51,7 @@ function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
       scoring_overrides: {},
       cutoff_tier: null,
       min_score_to_grab: null,
+      min_upgrade_score_delta: 120,
     },
   };
 }
@@ -71,6 +78,7 @@ function makeDraft(id: string, name: string): QualityProfileDraft {
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
+    min_upgrade_score_delta: 120,
   };
 }
 
@@ -140,4 +148,47 @@ test("profile draft save and clone preserve Ignore PROPER/REPACK", () => {
     name: "Clone",
   });
   assert.equal(cloned.draftEntry.criteria.ignore_proper_repack, true);
+});
+
+test("the same-tier upgrade delta survives draft, save and mutation input", () => {
+  const draft = {
+    ...makeDraft("default", "Cinema"),
+    min_upgrade_score_delta: 5,
+  };
+  const saved = commitQualityProfileDraftToEntries(
+    [makeEntry("default", "Cinema")],
+    draft,
+  );
+  const entry = saved.catalogEntries[0];
+  assert.ok(entry);
+  assert.equal(entry.criteria.min_upgrade_score_delta, 5);
+  assert.equal(
+    toQualityProfileDraft(entry, "x", "x").min_upgrade_score_delta,
+    5,
+  );
+  assert.equal(
+    qualityProfileEntryToMutationInput(entry).criteria.minUpgradeScoreDelta,
+    5,
+  );
+});
+
+test("a profile without a same-tier upgrade delta reads as the default", () => {
+  const parsed = normalizeQualityProfileEntry({
+    id: "imported",
+    name: "Imported",
+    criteria: { quality_tiers: ["1080P"] },
+  });
+  assert.equal(
+    parsed?.criteria.min_upgrade_score_delta,
+    DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+  );
+  const negative = normalizeQualityProfileEntry({
+    id: "imported",
+    name: "Imported",
+    criteria: { quality_tiers: ["1080P"], min_upgrade_score_delta: -3 },
+  });
+  assert.equal(
+    negative?.criteria.min_upgrade_score_delta,
+    DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+  );
 });

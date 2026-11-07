@@ -347,22 +347,6 @@ fn collect_media_files(root: &Path, depth: usize, files: &mut Vec<PathBuf>) -> i
 }
 
 fn is_media_file(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(OsStr::to_str)
-            .map(|ext| ext.to_ascii_lowercase()),
-        Some(ext)
-            if matches!(
-                ext.as_str(),
-                "mkv"
-                    | "mp4"
-                    | "m2ts"
-                    | "mov"
-                    | "ts"
-                    | "avi"
-                    | "wmv"
-                    | "ogv"
-                    | "flv"
-            )
-    )
+    scryer_media_types::formats::media_format_for_path(path)
+        .is_some_and(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
 }

@@ -2,8 +2,9 @@ import { isArchivePasswordFailure } from "@/lib/utils/archive-password-reason";
 import * as React from "react";
 import { Link } from "react-router";
 import { useQuery } from "urql";
-import { ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
 import {
   CalendarEventHoverCard,
   type CalendarEpisodeItem,
@@ -34,6 +35,12 @@ import {
   type HistoryEpisodeDisplay,
 } from "@/lib/utils/history-episodes";
 import { redactHistoryApiKeys } from "@/lib/utils/history-redaction";
+import {
+  historyHoverData,
+  historyHoverDetails,
+  historyHoverString,
+  type HistoryHoverDetails,
+} from "@/lib/utils/history-hover";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
 import type { ViewId } from "@/components/root/types";
@@ -141,50 +148,9 @@ function historyEpisodeHref(
 
 type HistoryEpisode = HistoryEpisodeDisplay;
 
-function historyHoverData(value: unknown): Record<string, unknown> | null {
-  if (typeof value === "string") {
-    try {
-      return historyHoverData(JSON.parse(value));
-    } catch {
-      return null;
-    }
-  }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return null;
-}
-
-function historyHoverString(
-  value: Record<string, unknown> | null,
-  key: string,
-): string | null {
-  const candidate = value?.[key];
-  return typeof candidate === "string" && candidate.trim() ? candidate : null;
-}
-
-function historyHoverDetails(event: TitleHistoryEvent): {
-  facet: string | null;
-  posterUrl: string | null;
-} {
-  const payload = historyHoverData(event.dataJson);
-  const title = historyHoverData(payload?.title) ?? payload;
-  const rawFacet = historyHoverString(title, "facet") ?? event.facet;
-  const facet = rawFacet?.trim().toUpperCase() ?? null;
-  return {
-    facet:
-      facet === "MOVIE" || facet === "SERIES" || facet === "ANIME"
-        ? facet
-        : null,
-    posterUrl:
-      historyHoverString(title, "poster_url") ??
-      historyHoverString(title, "posterUrl"),
-  };
-}
-
 function calendarEpisodeForHistoryEvent(
   event: TitleHistoryEvent,
-  details: ReturnType<typeof historyHoverDetails>,
+  details: HistoryHoverDetails,
   episodeLabel?: string | null,
 ): CalendarEpisodeItem {
   const libraryName = event.sourceSystem ?? event.clientName ?? null;
@@ -199,7 +165,7 @@ function calendarEpisodeForHistoryEvent(
     episodeNumber: null,
     episodeTitle: episodeLabel ?? null,
     overview: event.quality,
-    imageUrl: details.posterUrl,
+    imageUrl: null,
     airDate: event.occurredAt,
     monitored: true,
     playbackLinks: [],
@@ -298,6 +264,7 @@ function HistoryTitleHoverLink({
       {!isMobile && previewAnchor ? (
         <CalendarEventHoverCard
           key={event.id}
+          posterFallbackUrl={details.posterUrl}
           preview={{
             episode: calendarEpisodeForHistoryEvent(
               event,
@@ -595,12 +562,10 @@ export function HistoryEventTable({
                 >
                   <TableCell className="align-middle text-center @max-[64rem]/history:absolute @max-[64rem]/history:right-3 @max-[64rem]/history:top-3">
                     {hasExpandableContent ? (
-                      <button
-                        type="button"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-card/80 text-muted-foreground transition hover:text-foreground"
+                      <TableDisclosureButton
                         id={selectorId("history-event-expand", event.id)}
                         onClick={() => toggleExpanded(event.id)}
-                        aria-expanded={isExpanded}
+                        expanded={isExpanded}
                         aria-controls={
                           isExpanded
                             ? `history-event-details-${event.id}`
@@ -611,13 +576,7 @@ export function HistoryEventTable({
                             ? t("history.collapseDetails")
                             : t("history.expandDetails")
                         }
-                      >
-                        {isExpanded ? (
-                          <ChevronUp className="h-4 w-4" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4" />
-                        )}
-                      </button>
+                      />
                     ) : null}
                   </TableCell>
                   <TableCell className="align-middle @max-[64rem]/history:col-span-2 @max-[64rem]/history:pr-10!">

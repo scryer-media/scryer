@@ -27,6 +27,11 @@ export type InteractiveSearchIndexerProgress = {
   elapsedMs: number | null;
   failureReason: string | null;
   /**
+   * Stable code beside `failureReason` for a failure the operator must act
+   * on, such as an indexer whose plugin is not loaded; an open set.
+   */
+  failureReasonCode?: string | null;
+  /**
    * The indexer asked Scryer to slow down rather than failing. It resumes on
    * its own, so the row reads as a cooldown rather than an error.
    */
@@ -41,6 +46,19 @@ export type InteractiveSearchIndexerProgress = {
   capsReason?: string | null;
   /** Seconds the provider asked Scryer to wait before discovering capabilities again. */
   capsRetryAfterSeconds?: number | null;
+  /**
+   * Releases a title search removed because no enabled download client
+   * accepts them, one entry per missing client family. Not part of
+   * `resultCount`.
+   */
+  unroutableResults?: InteractiveSearchUnroutableResults[] | null;
+};
+
+/** Releases one indexer returned that no enabled download client can take. */
+export type InteractiveSearchUnroutableResults = {
+  /** Stable reason code; an open set, so unknown codes are expected. */
+  reason: string;
+  count: number;
 };
 
 /** How Scryer obtained the capabilities it used to search an indexer. */

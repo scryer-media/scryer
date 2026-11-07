@@ -429,6 +429,7 @@ function MainContent({
   handleImportRouteEmpty,
   canViewCatalog,
   canAccessActivity,
+  canViewLibraryInternals,
   canResolveImports,
   canManageTitle,
   canRequestMedia,
@@ -470,6 +471,7 @@ function MainContent({
   handleImportRouteEmpty: () => void;
   canViewCatalog: boolean;
   canAccessActivity: boolean;
+  canViewLibraryInternals: boolean;
   canResolveImports: boolean;
   canManageTitle: boolean;
   canRequestMedia: boolean;
@@ -507,6 +509,13 @@ function MainContent({
   if (view === "activity") {
     if (!canAccessActivity) {
       return <ViewLoadingFallback />;
+    }
+    // Download activity and history are privileged; a caller who can only
+    // resolve imports lands on the import queue instead.
+    if (!canViewLibraryInternals) {
+      return (
+        <ActivityContainer key="activity-import" activitySection="import" />
+      );
     }
     if (activitySection === "history") {
       return (
@@ -553,6 +562,9 @@ function MainContent({
     return <RequestsContainer key="requests" facet={null} />;
   }
   if (view === "wanted") {
+    if (!canViewLibraryInternals) {
+      return <ViewLoadingFallback />;
+    }
     return (
       <WantedContainer
         key={`wanted-${wantedSection}-${discoveryAuthorizationSignature}`}
@@ -1377,6 +1389,7 @@ function AuthenticatedHomePage({
     canRequestMedia,
     canResolveImports,
     canAccessActivity,
+    canViewLibraryInternals,
     canManageSystemSettings,
     canManageCatalogSettings,
     canManageUserAccounts,
@@ -1641,13 +1654,19 @@ function AuthenticatedHomePage({
     if (
       !routeIsCanonical ||
       (view !== "calendar" && view !== "wanted") ||
-      canViewCatalog
+      (view === "wanted" ? canViewLibraryInternals : canViewCatalog)
     ) {
       return;
     }
 
     navigateToAccessibleDefault();
-  }, [canViewCatalog, navigateToAccessibleDefault, routeIsCanonical, view]);
+  }, [
+    canViewCatalog,
+    canViewLibraryInternals,
+    navigateToAccessibleDefault,
+    routeIsCanonical,
+    view,
+  ]);
 
   useEffect(() => {
     if (!routeIsCanonical || (view !== "system" && view !== "logs")) {
@@ -1932,7 +1951,7 @@ function AuthenticatedHomePage({
                         <div
                           ref={shellFrameRef}
                           data-slot="root-shell-frame"
-                          className="flex min-h-0 w-full flex-1 min-[981px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:overflow-hidden"
+                          className="flex min-h-0 w-full flex-1 min-[1280px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:overflow-hidden"
                           style={
                             {
                               "--root-shell-top-offset": `${shellTopOffset}px`,
@@ -1970,7 +1989,7 @@ function AuthenticatedHomePage({
                           >
                             <main
                               data-slot="root-main-scroll"
-                              className="flex min-h-[70vh] flex-1 flex-col min-[981px]:min-h-0 min-[981px]:overflow-y-auto"
+                              className="flex min-h-[70vh] flex-1 flex-col min-[1280px]:min-h-0 min-[1280px]:overflow-y-auto"
                             >
                               <Suspense fallback={<ViewLoadingFallback />}>
                                 {routeIsLanding ? (
@@ -2042,6 +2061,9 @@ function AuthenticatedHomePage({
                                     handleImportRouteEmpty={handleBackToList}
                                     canViewCatalog={canViewCatalog}
                                     canAccessActivity={canAccessActivity}
+                                    canViewLibraryInternals={
+                                      canViewLibraryInternals
+                                    }
                                     canResolveImports={canResolveImports}
                                     canManageTitle={canManageTitle}
                                     canRequestMedia={canRequestMedia}

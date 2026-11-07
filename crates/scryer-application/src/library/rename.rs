@@ -908,6 +908,8 @@ impl AppUseCase {
                 .await?
             }
         }
+        self.preflight_additional_movie_folder_moves(&preview)
+            .await?;
         // Applying is the point at which a title whose root id disagreed with
         // its folder is corrected: the plan was built against the root the
         // files are really under, so the record catches up with it (#224).
@@ -2172,6 +2174,26 @@ impl AppUseCase {
                     &mut planning,
                 )
                 .await?;
+            // A movie whose folder move would strand an Additional is blocked
+            // here, per title, so the preview names it and applying leaves it
+            // alone while the rest of the plan goes ahead.
+            if facet == MediaFacet::Movie
+                && let Some(planned) = title_folder.as_ref()
+                && self
+                    .additional_movie_folder_move_blocked(planned, &title_items)
+                    .await?
+            {
+                for item in title_items.iter_mut().filter(|item| {
+                    matches!(
+                        item.write_action,
+                        RenameWriteAction::Move | RenameWriteAction::Replace
+                    )
+                }) {
+                    item.write_action = RenameWriteAction::Error;
+                    item.reason_code =
+                        crate::error_reasons::library::RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED.into();
+                }
+            }
             if let Some(planned) = title_folder.as_ref()
                 && !title_items.is_empty()
                 && title_items
@@ -2340,14 +2362,16 @@ impl AppUseCase {
             .shows
             .list_collections_for_title(&title.id)
             .await?;
-        let media_files = self
+        let all_media_files = self
             .services
             .library
             .media_files
             .list_media_files_for_title(&title.id)
-            .await?
-            .into_iter()
+            .await?;
+        let media_files = all_media_files
+            .iter()
             .filter(|file| title.facet != MediaFacet::Movie || file.role.is_primary())
+            .cloned()
             .collect::<Vec<_>>();
         if let Some(error) = rendering_error {
             tracing::warn!(title_id = %title.id, %error, "title skipped by rename template validation");
@@ -2412,7 +2436,7 @@ impl AppUseCase {
                         build_movie_rename_plan_items(
                             &title,
                             collections,
-                            media_files,
+                            all_media_files,
                             &mut options,
                         )
                     }
@@ -2705,6 +2729,69 @@ impl AppUseCase {
         }
     }
 
+    /// Folder relocation cannot strand an Additional while the ordinary
+    /// renamer applies media items independently. Filename-only renames remain
+    /// safe because all movie variants keep their established folder.
+    ///
+    /// Preview already marks such a title's moving items blocked, so this only
+    /// refuses a plan that predates an Additional appearing outside the folder.
+    async fn preflight_additional_movie_folder_moves(&self, plan: &RenamePlan) -> AppResult<()> {
+        if plan.facet != MediaFacet::Movie {
+            return Ok(());
+        }
+        for planned in &plan.title_folders {
+            if self
+                .additional_movie_folder_move_blocked(planned, &plan.items)
+                .await?
+            {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED,
+                    "This folder rename would leave an additional movie file outside the title folder. Keep the folder name or move the title with its additional files before renaming.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether applying `items` would move a movie's Primary to another folder
+    /// while one of its Additionals stays outside the planned title folder.
+    async fn additional_movie_folder_move_blocked(
+        &self,
+        planned: &RenamePlanTitleFolder,
+        items: &[RenamePlanItem],
+    ) -> AppResult<bool> {
+        let files = self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&planned.title_id)
+            .await?;
+        let moves_primary = files
+            .iter()
+            .filter(|file| file.role.is_primary())
+            .any(|file| {
+                items.iter().any(|item| {
+                    item.current_path == file.file_path
+                        && matches!(
+                            item.write_action,
+                            RenameWriteAction::Move | RenameWriteAction::Replace
+                        )
+                        && item.proposed_path.as_deref().is_some_and(|target| {
+                            stored_path_to_path_buf(target).parent()
+                                != stored_path_to_path_buf(&item.current_path).parent()
+                        })
+                })
+            });
+        Ok(moves_primary
+            && files.iter().any(|file| {
+                !file.role.is_primary()
+                    && !crate::title_folder_rules::path_is_strictly_within(
+                        &file.file_path,
+                        &planned.folder_path,
+                    )
+            }))
+    }
+
     async fn normalize_existing_rename_collisions(
         &self,
         items: Vec<RenamePlanItem>,
@@ -2902,17 +2989,22 @@ fn build_movie_rename_plan_items(
 
     collections
         .into_iter()
-        .map(|collection| {
+        .filter_map(|collection| {
             let matched_media_file = collection
                 .ordered_path
                 .as_deref()
                 .and_then(|path| media_files_by_path.get(path));
+            // A scan may give each movie variant its own collection. Keep the
+            // role lookup even though only Primary contributes rename actions.
+            if matched_media_file.is_some_and(|file| !file.role.is_primary()) {
+                return None;
+            }
             let mut item =
                 build_movie_rename_plan_item(title, &collection, matched_media_file, options);
             if item.media_file_id.is_none() {
                 item.media_file_id = matched_media_file.map(|media_file| media_file.id.clone());
             }
-            item
+            Some(item)
         })
         .collect()
 }
@@ -4486,10 +4578,12 @@ fn title_external_id_value(title: &Title, source: &str) -> Option<String> {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RenameMediaEvidence {
     analyzed: crate::media::release_labels::ResolvedAnalysisReleaseLabels,
+    has_audio_stream_evidence: bool,
     quality_label: Option<String>,
     source_type: Option<String>,
     video_hdr_format: Option<String>,
     dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
     video_codec_parsed: Option<crate::release_parser::VideoCodec>,
     audio_codec_parsed: Option<String>,
     audio_channels_parsed: Option<String>,
@@ -4500,6 +4594,7 @@ pub(crate) struct RenameMediaEvidence {
 impl RenameMediaEvidence {
     pub(crate) fn from_media_file(media_file: &TitleMediaFile) -> Self {
         Self {
+            has_audio_stream_evidence: !media_file.audio_streams.is_empty(),
             analyzed: resolve_release_labels_from_analysis(
                 media_file.video_width,
                 media_file.video_height,
@@ -4514,6 +4609,7 @@ impl RenameMediaEvidence {
             source_type: non_empty_owned(media_file.source_type.clone()),
             video_hdr_format: non_empty_owned(media_file.video_hdr_format.clone()),
             dovi_profile: media_file.dovi_profile,
+            dovi_bl_compat_id: media_file.dovi_bl_compat_id,
             video_codec_parsed: media_file.video_codec_parsed,
             audio_codec_parsed: non_empty_owned(media_file.audio_codec_parsed.clone()),
             audio_channels_parsed: non_empty_owned(media_file.audio_channels_parsed.clone()),
@@ -4523,9 +4619,11 @@ impl RenameMediaEvidence {
     }
 
     /// A file still being imported has its probe but no recorded row yet; the
-    /// parsed release name supplies everything the probe cannot.
+    /// parsed release name supplies missing facts, except unknown fields of
+    /// an explicitly analyzed primary audio track.
     pub(crate) fn from_analysis(analysis: &crate::MediaFileAnalysis) -> Self {
         Self {
+            has_audio_stream_evidence: !analysis.audio_streams.is_empty(),
             analyzed: resolve_release_labels_from_analysis(
                 analysis.video_width,
                 analysis.video_height,
@@ -4538,6 +4636,7 @@ impl RenameMediaEvidence {
             ),
             video_hdr_format: non_empty_owned(analysis.video_hdr_format.clone()),
             dovi_profile: analysis.dovi_profile,
+            dovi_bl_compat_id: analysis.dovi_bl_compat_id,
             ..Self::default()
         }
     }
@@ -4572,10 +4671,12 @@ fn resolve_rename_common_metadata_from_evidence(
 ) -> ResolvedRenameCommonMetadata {
     let RenameMediaEvidence {
         analyzed,
+        has_audio_stream_evidence,
         quality_label,
         source_type,
         video_hdr_format,
         dovi_profile,
+        dovi_bl_compat_id,
         video_codec_parsed,
         audio_codec_parsed,
         audio_channels_parsed,
@@ -4591,8 +4692,12 @@ fn resolve_rename_common_metadata_from_evidence(
     let source = source_type
         .or_else(|| parsed_current.source.as_ref().map(ToString::to_string))
         .unwrap_or_default();
-    let dynamic_range =
-        dynamic_range_label(video_hdr_format.as_deref(), dovi_profile, parsed_current);
+    let dynamic_range = dynamic_range_label(
+        video_hdr_format.as_deref(),
+        dovi_profile,
+        dovi_bl_compat_id,
+        parsed_current,
+    );
     let revision = if parsed_current.revision <= 0 {
         String::new()
     } else if parsed_current.is_repack {
@@ -4610,13 +4715,22 @@ fn resolve_rename_common_metadata_from_evidence(
         .unwrap_or_default();
     let audio_codec = analyzed
         .audio_codec
-        .or(audio_codec_parsed)
-        .or_else(|| parsed_current.audio.as_ref().map(ToString::to_string))
+        .or_else(|| {
+            (!has_audio_stream_evidence)
+                .then(|| {
+                    audio_codec_parsed
+                        .or_else(|| parsed_current.audio.as_ref().map(ToString::to_string))
+                })
+                .flatten()
+        })
         .unwrap_or_default();
     let audio_channels = analyzed
         .audio_channels
-        .or(audio_channels_parsed)
-        .or_else(|| parsed_current.audio_channels.clone())
+        .or_else(|| {
+            (!has_audio_stream_evidence)
+                .then(|| audio_channels_parsed.or_else(|| parsed_current.audio_channels.clone()))
+                .flatten()
+        })
         .unwrap_or_default();
     let group = release_group
         .or_else(|| parsed_current.release_group.clone())
@@ -4653,6 +4767,7 @@ fn resolve_rename_common_metadata_from_evidence(
 fn dynamic_range_label(
     video_hdr_format: Option<&str>,
     dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
     parsed: &ParsedReleaseMetadata,
 ) -> String {
     if let Some(format) = video_hdr_format {
@@ -4665,7 +4780,7 @@ fn dynamic_range_label(
             return String::new();
         }
         if compact == "DV" || compact.contains("DOLBYVISION") || compact.contains("DOVI") {
-            return "DV".to_string();
+            return dolby_vision_label(dovi_profile, dovi_bl_compat_id, parsed);
         }
         if compact.contains("HDR10+") || compact.contains("HDR10PLUS") || compact.contains("HDR10P")
         {
@@ -4683,7 +4798,7 @@ fn dynamic_range_label(
         return format.trim().to_string();
     }
     if dovi_profile.is_some() {
-        return "DV".to_string();
+        return dolby_vision_label(dovi_profile, dovi_bl_compat_id, parsed);
     }
 
     let mut labels = Vec::new();
@@ -4702,6 +4817,51 @@ fn dynamic_range_label(
         labels.push("HDR");
     }
     labels.join(" ")
+}
+
+/// "DV" plus the base layer a non-Dolby-Vision player falls back to, the way
+/// the release-name path spells it ("DV HDR10", "DV HDR10+", "DV HLG").
+///
+/// The probe's BL-compatibility id decides when it is present: 1 and 6 are an
+/// HDR10 base layer, 4 is HLG, and 0 or 2 (none, SDR) leave plain "DV". Without
+/// it, profiles 7 and 8 carry an HDR10-compatible base layer. The release name
+/// fills in what the probe cannot tell, including HDR10+ dynamic metadata on
+/// an HDR10 base layer.
+fn dolby_vision_label(
+    dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
+    parsed: &ParsedReleaseMetadata,
+) -> String {
+    let parsed_base = if parsed.is_hdr10plus {
+        Some("HDR10+")
+    } else if parsed.has_hdr_fallback {
+        Some("HDR10")
+    } else if parsed.is_hlg {
+        Some("HLG")
+    } else {
+        None
+    };
+    let base = match dovi_bl_compat_id {
+        Some(1 | 6) => Some(if parsed.is_hdr10plus {
+            "HDR10+"
+        } else {
+            "HDR10"
+        }),
+        Some(4) => Some("HLG"),
+        Some(0 | 2) => None,
+        _ => match dovi_profile {
+            Some(7 | 8) => Some(if parsed.is_hdr10plus {
+                "HDR10+"
+            } else {
+                "HDR10"
+            }),
+            _ => parsed_base,
+        },
+    };
+    match base {
+        Some(base) => format!("DV {base}"),
+        None => "DV".to_string(),
+    }
 }
 
 /// The tokens every rename template can use for `title`'s file: title, year,

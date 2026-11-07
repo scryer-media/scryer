@@ -1040,6 +1040,8 @@ impl AppUseCase {
         env_flag_enabled(OAUTH_E2E_CLIENT_ENV) && env_flag_enabled(OAUTH_E2E_RELEASE_GATE_ENV)
     }
 
+    // HMAC-SHA256 OAuth token hashing is a documented signing contract; see helpers.rs.
+    #[allow(clippy::disallowed_methods)]
     pub(crate) fn oauth_token_hash(&self, context: &str, token: &str) -> String {
         let key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes());
         crate::to_hex(hmac::sign(&key, format!("oauth:{context}:{token}").as_bytes()).as_ref())
@@ -1314,6 +1316,8 @@ fn reject_redirect_uri_fragment(url: &Url) -> AppResult<()> {
     Ok(())
 }
 
+// OAuth PKCE S256 challenge, fixed by RFC 7636.
+#[allow(clippy::disallowed_methods)]
 fn pkce_s256_challenge(code_verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, code_verifier.as_bytes()).as_ref())
 }

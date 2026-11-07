@@ -235,7 +235,9 @@ export function SettingsSeedingProfilesSection({
     });
   }, []);
   const errorFor = (field: SeedingProfileField) =>
-    touchedFields.has(field) ? fieldErrors[field] : undefined;
+    touchedFields.has(field) && fieldErrors[field]
+      ? t(fieldErrors[field])
+      : undefined;
   const errorId = (field: SeedingProfileField) =>
     `settings-seeding-profile-${field}-error`;
 

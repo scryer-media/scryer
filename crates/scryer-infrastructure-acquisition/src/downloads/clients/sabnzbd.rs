@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 use reqwest::{StatusCode, Url, multipart};
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadClientStatus,
-    DownloadGrabResult, NullStagedNzbStore, RateLimitCooldownAction, StagedNzbRef, StagedNzbStore,
+    DownloadGrabResult, NullStagedNzbStore, PluginFailureReason, RateLimitCooldownAction,
+    StagedNzbRef, StagedNzbStore,
 };
 use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
 use scryer_outbound_http::{
@@ -385,7 +386,7 @@ impl SabnzbdDownloadClient {
 
             let status = response.status();
             let body = response.text().await.map_err(|err| {
-                AppError::Repository(format!("sabnzbd response read failed: {err}"))
+                sab_transport_failure(&format!("sabnzbd response read failed: {err}"))
             })?;
 
             match evaluate_sab_api_response("sabnzbd api", request_mode, status, &body) {
@@ -1908,11 +1909,18 @@ fn map_sabnzbd_outbound_error(operation: &str, error: OutboundHttpError) -> AppE
             )
         }
         OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch is closed"),
-        OutboundHttpError::Transport { source, .. } => AppError::Repository(format!(
-            "{operation} failed: {}",
-            redact_sab_secret_values(&source.to_string())
-        )),
+        OutboundHttpError::Transport { source, .. } => {
+            sab_transport_failure(&format!("{operation} failed: {source}"))
+        }
     }
+}
+
+/// SABnzbd could not be reached, or its answer could not be read.
+fn sab_transport_failure(message: &str) -> AppError {
+    AppError::native_client_failed(
+        PluginFailureReason::UpstreamUnavailable,
+        redact_sab_secret_values(message),
+    )
 }
 
 /// Classify a transport-level failure of the addfile POST.
@@ -2063,31 +2071,41 @@ fn map_sabnzbd_auth_validation_error(error: AppError) -> AppError {
         AppError::Validation(message) => AppError::Repository(format!(
             "sabnzbd authentication validation failed: {message}"
         )),
+        // The client already named the failure; only the sentence says it was
+        // the authentication check.
+        AppError::PluginFailed { message, failure } => AppError::PluginFailed {
+            message: format!("sabnzbd authentication validation failed: {message}"),
+            failure,
+        },
         other => AppError::Repository(format!("sabnzbd authentication validation failed: {other}")),
     }
 }
 
 fn map_sabnzbd_response_error(operation: &str, status: StatusCode, body: &str) -> AppError {
     let detail = extract_sab_error_detail(body);
-    if status == StatusCode::UNAUTHORIZED
-        || status == StatusCode::FORBIDDEN
-        || classify_sab_error_message(&detail) == SabFailureKind::Authentication
-    {
-        return AppError::Repository(format!("sabnzbd authentication failed: {detail}"));
-    }
-
-    AppError::Repository(format!("{operation} returned status {status}: {detail}"))
+    let reason = classify_sab_failure(Some(status), &detail);
+    let message = if reason == PluginFailureReason::AuthFailed {
+        format!("sabnzbd authentication failed: {detail}")
+    } else {
+        format!("{operation} returned status {status}: {detail}")
+    };
+    AppError::native_client_failed(reason, redact_sab_secret_values(&message))
 }
 
 fn map_sabnzbd_api_error(operation: &str, status: Option<StatusCode>, detail: &str) -> AppError {
-    if status
-        .is_some_and(|value| value == StatusCode::UNAUTHORIZED || value == StatusCode::FORBIDDEN)
-        || classify_sab_error_message(detail) == SabFailureKind::Authentication
-    {
-        return AppError::Repository(format!("sabnzbd authentication failed: {detail}"));
-    }
+    let reason = classify_sab_failure(status, detail);
+    let message = if reason == PluginFailureReason::AuthFailed {
+        format!("sabnzbd authentication failed: {detail}")
+    } else {
+        format!("{operation} error: {detail}")
+    };
+    AppError::native_client_failed(reason, redact_sab_secret_values(&message))
+}
 
-    AppError::Repository(format!("{operation} error: {detail}"))
+fn is_sab_auth_failure(error: &AppError) -> bool {
+    error
+        .plugin_failure()
+        .is_some_and(|failure| failure.reason == PluginFailureReason::AuthFailed)
 }
 
 enum SabApiResponseEvaluation {
@@ -2103,12 +2121,10 @@ fn evaluate_sab_api_response(
     body: &str,
 ) -> SabApiResponseEvaluation {
     if !status.is_success() {
-        let detail = extract_sab_error_detail(body);
         let error = map_sabnzbd_response_error(operation, status, body);
-        return if status == StatusCode::UNAUTHORIZED
-            || status == StatusCode::FORBIDDEN
-            || classify_sab_error_message(&detail) == SabFailureKind::Authentication
-        {
+        // A rejected credential fails the same way on the alternate path, so
+        // only other refusals try it.
+        return if is_sab_auth_failure(&error) {
             SabApiResponseEvaluation::Failure(error)
         } else {
             SabApiResponseEvaluation::Retry(error)
@@ -2181,10 +2197,7 @@ fn evaluate_sab_addfile_response(status: StatusCode, body: &str) -> SabAddfileOu
 
     if !status.is_success() {
         let detail = extract_sab_error_detail(body);
-        if status == StatusCode::UNAUTHORIZED
-            || status == StatusCode::FORBIDDEN
-            || classify_sab_error_message(&detail) == SabFailureKind::Authentication
-        {
+        if classify_sab_failure(Some(status), &detail) == PluginFailureReason::AuthFailed {
             return SabAddfileOutcome::Auth(format!("sabnzbd authentication failed: {detail}"));
         }
         // The request was sent to the resolved API path but returned a
@@ -2212,7 +2225,7 @@ fn evaluate_sab_addfile_response(status: StatusCode, body: &str) -> SabAddfileOu
 
     if sab_api_status_is_false(&json) {
         let detail = sab_api_error_message(&json).unwrap_or("unknown error");
-        if classify_sab_error_message(detail) == SabFailureKind::Authentication {
+        if classify_sab_failure(None, detail) == PluginFailureReason::AuthFailed {
             return SabAddfileOutcome::Auth(format!("sabnzbd authentication failed: {detail}"));
         }
         return SabAddfileOutcome::Rejected(format!("sabnzbd rejected the nzb: {detail}"));
@@ -2409,15 +2422,28 @@ fn extract_sab_error_detail(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(600).collect())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SabFailureKind {
-    Authentication,
-    Other,
+/// The one place a SABnzbd failure is classified.
+///
+/// The HTTP status decides first. SABnzbd reports a rejected API key or login
+/// as error text, often under a 200, and that text is the only signal it
+/// gives, so it is read here and nowhere else, and only to recognise
+/// authentication. A refusal SABnzbd answered without a failing status is
+/// permanent: asking again unchanged gets the same answer.
+fn classify_sab_failure(status: Option<StatusCode>, detail: &str) -> PluginFailureReason {
+    let status_reason = status
+        .filter(|status| !status.is_success())
+        .map(PluginFailureReason::for_http_status);
+    if status_reason == Some(PluginFailureReason::AuthFailed)
+        || sab_detail_names_authentication(detail)
+    {
+        return PluginFailureReason::AuthFailed;
+    }
+    status_reason.unwrap_or(PluginFailureReason::Permanent)
 }
 
-fn classify_sab_error_message(message: &str) -> SabFailureKind {
+fn sab_detail_names_authentication(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
-    let authentication = normalized.contains("authentication")
+    normalized.contains("authentication")
         || normalized.contains("unauthorized")
         || normalized.contains("forbidden")
         || normalized.contains("api key required")
@@ -2426,12 +2452,7 @@ fn classify_sab_error_message(message: &str) -> SabFailureKind {
         || normalized.contains("apikey incorrect")
         || normalized.contains("login failed")
         || normalized.contains("invalid api key")
-        || normalized.contains("invalid credentials");
-    if authentication {
-        SabFailureKind::Authentication
-    } else {
-        SabFailureKind::Other
-    }
+        || normalized.contains("invalid credentials")
 }
 
 fn sabnzbd_queue_priority(raw_priority: Option<&str>) -> i32 {
@@ -2806,13 +2827,32 @@ fn is_localhost_base_url(base_url: &str) -> Option<bool> {
 mod tests {
     #[test]
     fn sab_authentication_diagnostics_have_one_typed_boundary() {
+        use reqwest::StatusCode;
+        use scryer_application::PluginFailureReason;
+
         assert_eq!(
-            super::classify_sab_error_message("Invalid API key"),
-            super::SabFailureKind::Authentication
+            super::classify_sab_failure(None, "Invalid API key"),
+            PluginFailureReason::AuthFailed
         );
         assert_eq!(
-            super::classify_sab_error_message("queue unavailable"),
-            super::SabFailureKind::Other
+            super::classify_sab_failure(Some(StatusCode::OK), "API Key Incorrect"),
+            PluginFailureReason::AuthFailed
+        );
+        assert_eq!(
+            super::classify_sab_failure(Some(StatusCode::FORBIDDEN), ""),
+            PluginFailureReason::AuthFailed
+        );
+        assert_eq!(
+            super::classify_sab_failure(Some(StatusCode::TOO_MANY_REQUESTS), "slow down"),
+            PluginFailureReason::RateLimited
+        );
+        assert_eq!(
+            super::classify_sab_failure(Some(StatusCode::BAD_GATEWAY), "queue unavailable"),
+            PluginFailureReason::UpstreamUnavailable
+        );
+        assert_eq!(
+            super::classify_sab_failure(None, "queue unavailable"),
+            PluginFailureReason::Permanent
         );
     }
 
@@ -4657,5 +4697,68 @@ mod tests {
                 None => assert!(result.is_err()),
             }
         }
+    }
+
+    fn failure_reason(error: &AppError) -> scryer_application::PluginFailureReason {
+        error
+            .plugin_failure()
+            .unwrap_or_else(|| panic!("expected a typed failure, got {error:?}"))
+            .reason
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn an_incorrect_api_key_is_an_auth_failure() {
+        for response in [
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"status": false, "error": "API Key Incorrect"})),
+            ResponseTemplate::new(403),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            let client = SabnzbdDownloadClient::new(server.uri(), "synthetic-wrong-key".into());
+
+            let error = client.test_connection().await.expect_err("refused");
+
+            assert_eq!(
+                failure_reason(&error),
+                scryer_application::PluginFailureReason::AuthFailed
+            );
+        }
+    }
+
+    #[test]
+    fn a_status_false_refusal_is_permanent_and_keeps_its_sentence() {
+        let outcome = evaluate_sab_api_response(
+            "sabnzbd api",
+            Some("queue"),
+            StatusCode::OK,
+            r#"{"status": false, "error": "queue is paused"}"#,
+        );
+        match outcome {
+            SabApiResponseEvaluation::Failure(error) => {
+                assert_eq!(
+                    failure_reason(&error),
+                    scryer_application::PluginFailureReason::Permanent
+                );
+                assert!(error.to_string().contains("queue is paused"), "{error}");
+            }
+            _ => panic!("expected a failure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_sabnzbd_is_an_unavailable_upstream() {
+        let error = map_sabnzbd_outbound_error(
+            "sabnzbd api call",
+            crate::downloads::clients::tests::refused_transport_error("sabnzbd").await,
+        );
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::UpstreamUnavailable
+        );
     }
 }

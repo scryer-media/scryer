@@ -62,7 +62,7 @@ export function FileScoreSummary({
       {evaluation?.rejectionCodes.length ? (
         <div className="text-xs text-[var(--scry-danger-text-soft)]">
           {t("scoring.rejected")}:{" "}
-          <span className="font-[var(--font-code)]">
+          <span className="font-[family-name:var(--font-code)]">
             {evaluation.rejectionCodes.join(", ")}
           </span>
         </div>

@@ -59,6 +59,7 @@ export type TitleCatalogSortStateLike = {
 };
 
 export type TitleCatalogProjection = {
+  graph?: boolean;
   includeSettings?: boolean;
   library: boolean;
   quality: boolean;
@@ -70,6 +71,8 @@ export type TitleCatalogProjection = {
   ratings: boolean;
   movieMedia: boolean;
   popularity: boolean;
+  /** The title's provider ids, which the library graph joins on. */
+  externalIds?: boolean;
 };
 
 export type TitleCatalogQueryOptions = {
@@ -261,6 +264,7 @@ export function titleCatalogProjectionSignature(
   const normalized = projection ?? EMPTY_TITLE_CATALOG_PROJECTION;
   return [
     normalized.includeSettings === false && "poster",
+    normalized.graph && "graph",
     normalized.library && "library",
     normalized.quality && "quality",
     normalized.profile && "profile",
@@ -271,9 +275,26 @@ export function titleCatalogProjectionSignature(
     normalized.ratings && "ratings",
     normalized.movieMedia && "movieMedia",
     normalized.popularity && "popularity",
+    normalized.externalIds && "externalIds",
   ]
     .filter(Boolean)
     .join(":");
+}
+
+/**
+ * What the catalog fetches while the library graph is shown: the provider ids
+ * the graph joins on and every value a node can be sized by. The graph shows
+ * no settings or table columns, so it asks for none.
+ */
+export function titleCatalogProjectionForGraph(): TitleCatalogProjection {
+  return {
+    ...EMPTY_TITLE_CATALOG_PROJECTION,
+    graph: true,
+    includeSettings: false,
+    ratings: true,
+    popularity: true,
+    externalIds: true,
+  };
 }
 
 export function titleCatalogProjectionForTable({

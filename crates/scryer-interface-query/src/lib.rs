@@ -32,14 +32,15 @@ use scryer_interface_media::mappers;
 use scryer_interface_media::mappers::{
     catalog_discovery_query_from_input, discovery_home_filter_options_query_from_input,
     discovery_home_query_from_input, discovery_item_detail_query_from_input,
-    discovery_items_query_from_input, from_active_import_stream, from_activity_event,
-    from_application_upgrade_status, from_backup_info, from_catalog_discovery,
-    from_change_title_folder_preview, from_collection, from_dashboard_activity_stats,
-    from_delete_episode_files_preview, from_delete_preview, from_delete_titles_preview,
-    from_discovery_home, from_discovery_home_cards, from_discovery_home_filter_options,
-    from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
-    from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
-    from_library, from_library_scan_session, from_library_settings, from_linked_account,
+    discovery_items_query_from_input, discovery_neighbors_query_from_input,
+    from_active_import_stream, from_activity_event, from_application_upgrade_status,
+    from_backup_info, from_catalog_discovery, from_change_title_folder_preview, from_collection,
+    from_dashboard_activity_stats, from_delete_episode_files_preview, from_delete_preview,
+    from_delete_titles_preview, from_discovery_home, from_discovery_home_cards,
+    from_discovery_home_filter_options, from_discovery_item, from_discovery_items_result,
+    from_discovery_neighbors, from_domain_event, from_download_queue_item, from_episode,
+    from_external_import_monitor_warmup_progress, from_job_definition, from_job_run, from_library,
+    from_library_graph, from_library_scan_session, from_library_settings, from_linked_account,
     from_location_operation, from_location_operation_asset_listing, from_location_retry_selection,
     from_media_rename_plan, from_media_request, from_media_request_counts,
     from_pending_import_connection, from_pending_import_counts, from_pending_release,
@@ -47,7 +48,7 @@ use scryer_interface_media::mappers::{
     from_smg_scryer_update_notice, from_smg_version_compatibility_notice, from_storage_root_usage,
     from_system_health, from_title, from_title_acquisition_diagnostics, from_title_history_page,
     from_title_release_blocklist_entry, from_user_with_auth_factor_status, from_wanted_item,
-    from_wanted_scope_view, location_destination_into_application,
+    from_wanted_scope_view, library_graph_query_from_input, location_destination_into_application,
     location_execution_mode_into_application, root_scope_destination,
 };
 use scryer_interface_media::types::*;
@@ -250,7 +251,16 @@ const TITLE_CATALOG_PAGE_SIZE: usize = 300;
 fn title_catalog_page_limit(limit: Option<i32>) -> usize {
     limit
         .unwrap_or(TITLE_CATALOG_PAGE_SIZE as i32)
-        .clamp(1, TITLE_CATALOG_PAGE_SIZE as i32) as usize
+        .clamp(1, 10_000) as usize
+}
+
+#[test]
+fn catalog_bulk_page_limit_preserves_default_and_bounds_explicit_requests() {
+    assert_eq!(title_catalog_page_limit(None), 300);
+    assert_eq!(title_catalog_page_limit(Some(10_000)), 10_000);
+    assert_eq!(title_catalog_page_limit(Some(i32::MAX)), 10_000);
+    assert_eq!(title_catalog_page_limit(Some(0)), 1);
+    assert_eq!(title_catalog_page_limit(Some(-1)), 1);
 }
 
 fn title_catalog_page_offset(offset: Option<i32>) -> usize {
@@ -389,6 +399,13 @@ fn title_catalog_filter_from_input(
             })
             .collect(),
         needs_attention: filter.needs_attention,
+        title_ids: normalize_catalog_filter_values(
+            filter
+                .title_ids
+                .unwrap_or_default()
+                .into_iter()
+                .map(String::from),
+        ),
     })
 }
 
@@ -604,6 +621,7 @@ pub fn from_interactive_release_search_snapshot(
                 .elapsed_ms
                 .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
+            failure_reason_code: indexer.failure_reason_code.map(str::to_owned),
             caps_source: indexer.caps.map(|caps| {
                 use scryer_application::IndexerCapsSource as Source;
                 match caps.source {
@@ -635,6 +653,16 @@ pub fn from_interactive_release_search_snapshot(
                 }
             }),
             skipped_until: indexer.skipped_until,
+            unroutable_results: indexer
+                .unroutable_results
+                .into_iter()
+                .map(
+                    |(reason, count)| InteractiveReleaseSearchUnroutableResultsPayload {
+                        reason: reason.to_string(),
+                        count: i32::try_from(count).unwrap_or(i32::MAX),
+                    },
+                )
+                .collect(),
         })
         .collect();
     InteractiveReleaseSearchPayload {
@@ -690,6 +718,7 @@ fn convergence_state_to_value(
 #[derive(Clone, Copy)]
 struct TitlePayloadSelection {
     include_external_ids: bool,
+    row: scryer_application::TitleRowProjection,
 }
 
 impl TitlePayloadSelection {
@@ -700,6 +729,57 @@ impl TitlePayloadSelection {
         };
         Self {
             include_external_ids: title_field_exists("externalIds"),
+            row: scryer_application::TitleRowProjection {
+                name: title_field_exists("name"),
+                monitored: title_field_exists("monitored"),
+                tags: [
+                    "tags",
+                    "qualityProfileId",
+                    "monitorType",
+                    "useSeasonFolders",
+                    "monitorSpecials",
+                    "interSeasonMovies",
+                    "fillerPolicy",
+                    "recapPolicy",
+                    "releaseNumbering",
+                    "useSeasonFoldersOverride",
+                    "effectiveUseSeasonFolders",
+                    "inheritsUseSeasonFolders",
+                    "effectiveFillerPolicy",
+                    "effectiveRecapPolicy",
+                ]
+                .into_iter()
+                .any(title_field_exists),
+                root_folder_id: title_field_exists("rootFolderId")
+                    || title_field_exists("rootFolderPath"),
+                created_by: false,
+                created_at: title_field_exists("createdAt"),
+                year: title_field_exists("year"),
+                overview: title_field_exists("overview"),
+                poster: title_field_exists("posterUrl") || title_field_exists("posterSourceUrl"),
+                background: title_field_exists("backgroundUrl")
+                    || title_field_exists("backgroundSourceUrl"),
+                sort_title: title_field_exists("sortTitle"),
+                catalog_sort_key: false,
+                slug: title_field_exists("slug"),
+                imdb_id: title_field_exists("imdbId"),
+                runtime_minutes: title_field_exists("runtimeMinutes"),
+                popularity: title_field_exists("popularity"),
+                content_status: title_field_exists("contentStatus"),
+                language: title_field_exists("language"),
+                first_aired: title_field_exists("firstAired"),
+                network: title_field_exists("network"),
+                studio: title_field_exists("studio"),
+                country: title_field_exists("country"),
+                aliases: title_field_exists("aliases"),
+                tagged_aliases: title_field_exists("taggedAliases"),
+                metadata_language: title_field_exists("metadataLanguage"),
+                metadata_fetched_at: title_field_exists("metadataFetchedAt"),
+                min_availability: title_field_exists("minAvailability"),
+                digital_release_date: false,
+                movie_release_dates: false,
+                folder_path: false,
+            },
         }
     }
 }
@@ -1287,7 +1367,9 @@ impl CatalogQueries {
         filter: Option<TitleCatalogFilterInput>,
         #[graphql(desc = "Optional sort key and direction; omitted uses the application default.")]
         sort: Option<TitleCatalogSortInput>,
-        #[graphql(desc = "Requested page size; defaults to 300 and is clamped to 1 through 300.")]
+        #[graphql(
+            desc = "Requested page size; defaults to 300 and is clamped to 1 through 10000."
+        )]
         limit: Option<i32>,
         #[graphql(
             desc = "Zero-based page offset; defaults to 0 and negative values are treated as 0."
@@ -1322,6 +1404,7 @@ impl CatalogQueries {
                 title_catalog_page_offset(offset),
                 scryer_application::TitleListProjection {
                     include_external_ids: selection.include_external_ids,
+                    row: selection.row,
                     include_canonical_tags: lookahead
                         .field("items")
                         .field("canonicalTags")
@@ -1338,7 +1421,9 @@ impl CatalogQueries {
         let items = page
             .items
             .into_iter()
-            .map(|title| from_title(&app, title))
+            .map(|title| {
+                scryer_interface_media::mappers::from_title_projected(&app, title, selection.row)
+            })
             .collect();
 
         Ok(TitleCatalogPayload {
@@ -1411,7 +1496,7 @@ impl CatalogQueries {
         })
     }
 
-    /// List libraries visible to the caller that grant at least the requested permission.
+    /// List libraries visible to the caller that grant at least the requested permission; root folders are empty unless the caller has management access to the library.
     async fn libraries(
         &self,
         ctx: &Context<'_>,
@@ -1432,10 +1517,30 @@ impl CatalogQueries {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(libraries.into_iter().map(from_library).collect())
+        // Root paths say where media lives on disk; only callers with
+        // privileged access to a library see its roots.
+        let privileged: std::collections::HashSet<String> = app
+            .privileged_library_ids(&actor, None)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .collect();
+        let root_title_counts = app
+            .library_root_title_counts()
+            .await
+            .map_err(to_gql_error)?;
+        Ok(libraries
+            .into_iter()
+            .map(|mut library| {
+                if !privileged.contains(&library.id) {
+                    library.roots.clear();
+                }
+                from_library(library, &root_title_counts)
+            })
+            .collect())
     }
 
-    /// List root folders of libraries the caller can view, with the disk usage of each backing filesystem.
+    /// List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem; refuses callers with no such library.
     async fn storage_roots(&self, ctx: &Context<'_>) -> GqlResult<Vec<StorageRootUsagePayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -1899,6 +2004,20 @@ impl CatalogQueries {
                     .as_deref()
                     .map(scryer_interface_media::mappers::transfer_message)
             })
+    }
+
+    /// Read progress while a background task settles a selected set of folder conflicts.
+    async fn pending_import_conflict_task(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Background job identity returned when conflicts were accepted.")]
+        job_run_id: ID,
+    ) -> GqlResult<Option<PendingImportConflictTaskPayload>> {
+        app_from_ctx(ctx)?
+            .pending_import_conflict_task(&actor_from_ctx(ctx)?, job_run_id.as_str())
+            .await
+            .map_err(to_gql_error)
+            .map(|task| task.map(mappers::from_pending_import_conflict_task))
     }
 
     /// Read one location operation with its per-title checkpoints.
@@ -2809,7 +2928,23 @@ impl JobAndDownloadQueries {
         let actor = actor_from_ctx(ctx)?;
         let query = discovery_home_query_from_input(input).map_err(to_gql_error)?;
         let result = app
-            .discovery_home(&actor, query)
+            .discovery_home_projected(
+                &actor,
+                query,
+                scryer_application::DiscoveryHomeProjection {
+                    full_cards: [
+                        "publicSections",
+                        "personalizedSections",
+                        "completeCollection",
+                        "heroItem",
+                    ]
+                    .iter()
+                    .any(|field| ctx.look_ahead().field(field).exists()),
+                    hero: ctx.look_ahead().field("heroItem").exists(),
+                    browse_labels: ctx.look_ahead().field("browseLabels").exists(),
+                    facets: ctx.look_ahead().field("facets").exists(),
+                },
+            )
             .await
             .map_err(to_gql_error)?;
         Ok(from_discovery_home(&app, result))
@@ -2826,7 +2961,16 @@ impl JobAndDownloadQueries {
         let actor = actor_from_ctx(ctx)?;
         let query = discovery_home_query_from_input(input).map_err(to_gql_error)?;
         let result = app
-            .discovery_home_cards(&actor, query)
+            .discovery_home_projected(
+                &actor,
+                query,
+                scryer_application::DiscoveryHomeProjection {
+                    full_cards: false,
+                    hero: ctx.look_ahead().field("heroItem").exists(),
+                    browse_labels: ctx.look_ahead().field("browseLabels").exists(),
+                    facets: false,
+                },
+            )
             .await
             .map_err(to_gql_error)?;
         from_discovery_home_cards(&app, result).map_err(to_gql_error)
@@ -2864,11 +3008,12 @@ impl JobAndDownloadQueries {
     ) -> GqlResult<DiscoveryItemsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let query = discovery_items_query_from_input(input).map_err(to_gql_error)?;
         let result = app
-            .discovery_items(&actor, discovery_items_query_from_input(input))
+            .discovery_items(&actor, query)
             .await
             .map_err(to_gql_error)?;
-        Ok(from_discovery_items_result(&app, result))
+        from_discovery_items_result(&app, result).map_err(to_gql_error)
     }
 
     /// Fetch one discovery item by identity and scope, returning null when unavailable.
@@ -2901,6 +3046,41 @@ impl JobAndDownloadQueries {
             .await
             .map_err(to_gql_error)?;
         Ok(from_catalog_discovery(&app, result))
+    }
+
+    /// Titles related to one anchor, owned or not, and the neighbourhoods they fall into. Owned results carry resolvedTitleId; nothing is filtered out for being in the library.
+    async fn discovery_neighbors(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Anchor whose related titles are returned.")]
+        input: DiscoveryNeighborsInput,
+    ) -> GqlResult<DiscoveryNeighborsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let neighbors = app
+            .discovery_neighbors(&actor, discovery_neighbors_query_from_input(input))
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_discovery_neighbors(&app, neighbors))
+    }
+
+    /// Return a facet's library graph: how the viewer's owned titles relate,
+    /// limited to titles the viewer can see. Null when personalized discovery
+    /// is off, the viewer can see none of the requested libraries, or no graph
+    /// has been built yet.
+    async fn library_graph(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Facet and optional library scope of the graph.")]
+        input: LibraryGraphInput,
+    ) -> GqlResult<Option<LibraryGraph>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let graph = app
+            .library_graph(&actor, library_graph_query_from_input(input))
+            .await
+            .map_err(to_gql_error)?;
+        Ok(graph.map(from_library_graph))
     }
 
     /// Return a bounded download queue page with readiness, revision, staleness, filters, and stable sorting metadata.
@@ -3377,21 +3557,33 @@ impl SystemQueries {
             desc = "Library IDs to include; omitted or empty includes all permitted libraries."
         )]
         library_ids: Option<Vec<ID>>,
+        #[graphql(
+            desc = "Only files scheduled for automatic deletion within this many hours, including overdue files; clamped to 1 through 72 and sorted soonest first before pagination. Omit for all entries, newest first."
+        )]
+        deletion_within_hours: Option<i32>,
     ) -> GqlResult<RecycledItemsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let library_ids = library_ids.map(|ids| ids.into_iter().map(|id| id.to_string()).collect());
-        let all = app
-            .list_recycled_items(&actor, library_ids)
-            .await
-            .map_err(to_gql_error)?;
+        let all = match deletion_within_hours {
+            Some(hours) => {
+                app.list_recycled_items_deleting_within(&actor, library_ids, hours)
+                    .await
+            }
+            None => app.list_recycled_items(&actor, library_ids).await,
+        }
+        .map_err(to_gql_error)?;
         let total_count = all.len() as i32;
         let limit = limit.clamp(1, 500) as usize;
         let offset = offset.max(0) as usize;
-        let items = all
+        let mut page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+        if ctx.look_ahead().field("items").field("episodeId").exists() {
+            app.populate_recycled_item_episode_ids(&actor, &mut page)
+                .await
+                .map_err(to_gql_error)?;
+        }
+        let items = page
             .into_iter()
-            .skip(offset)
-            .take(limit)
             .map(|item| {
                 Ok(RecycledItemPayload {
                     id: ID::from(item.id),
@@ -3400,6 +3592,8 @@ impl SystemQueries {
                     size_bytes: Long::from_u64_saturating(item.size_bytes),
                     title_id: item.title_id.map(ID::from),
                     title_name: item.title_name,
+                    title_facet: item.title_facet.map(|facet| facet.as_str().to_string()),
+                    episode_id: item.episode_id.map(ID::from),
                     reason: item.reason,
                     recycled_at: parse_required_datetime(
                         &item.recycled_at,
@@ -3418,6 +3612,36 @@ impl SystemQueries {
             })
             .collect::<GqlResult<Vec<_>>>()?;
         Ok(RecycledItemsPayload { items, total_count })
+    }
+
+    /// Read the file-correlated grab, import, upgrade and deletion history for a recycle entry.
+    async fn recycled_item_history(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Recycle-bin entry whose history is requested; requires title-management access to its library."
+        )]
+        id: ID,
+    ) -> GqlResult<RecycledItemHistoryPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let summary = app
+            .recycled_item_history(&actor, id.as_str())
+            .await
+            .map_err(to_gql_error)?;
+        let total_count = summary.records.len() as i64;
+        let page = from_title_history_page(
+            scryer_application::TitleHistoryPage {
+                records: summary.records,
+                total_count,
+            },
+            0,
+        )
+        .map_err(to_gql_error)?;
+        Ok(RecycledItemHistoryPayload {
+            items: page.items,
+            truncated: summary.truncated,
+        })
     }
 
     /// Preview restoring recycled items by ID without changing their files.

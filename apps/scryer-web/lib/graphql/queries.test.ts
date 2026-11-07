@@ -243,6 +243,57 @@ test("reactive movie side panel refresh omits acquisition diagnostics", () => {
   );
 });
 
+test("reactive side panel refresh for a viewer omits privileged fields", () => {
+  const result = buildReactiveRefreshQuery([
+    {
+      key: "titleSidePanelOverview:title-1:300:movie:false",
+      kind: "titleSidePanelOverview",
+      titleId: "title-1",
+      blocklistLimit: 300,
+      projection: "MOVIE",
+      includePrivileged: false,
+    },
+  ]);
+
+  // History and the blocklist are refused for View-only callers, and a
+  // refused non-null root field would null the whole batched response.
+  assert.equal(result.query.includes("titleHistory("), false);
+  assert.equal(result.query.includes("titleReleaseBlocklist("), false);
+  assert.equal(result.query.includes("title(id:"), true);
+  assert.equal(result.query.includes("externalSubtitles("), true);
+  const plan = result.actionPlans[0];
+  assert.equal(plan?.kind, "titleSidePanelOverview");
+  assert.equal(
+    plan?.kind === "titleSidePanelOverview"
+      ? (plan.titleReleaseBlocklistAlias ?? null)
+      : null,
+    null,
+  );
+});
+
+test("side panel overviews gate privileged fields on includePrivileged", () => {
+  assert.equal(
+    movieSidePanelOverviewQuery.includes("$includePrivileged: Boolean! = true"),
+    true,
+  );
+  for (const field of [
+    "titleAcquisitionDiagnostics",
+    "titleHistory",
+    "titleReleaseBlocklist",
+  ]) {
+    assert.match(
+      movieSidePanelOverviewQuery,
+      new RegExp(
+        `${field}\\([^)]*\\)\\s*@include\\(if: \\$includePrivileged\\)`,
+      ),
+    );
+  }
+  assert.match(
+    seriesSidePanelOverviewQuery,
+    /titleReleaseBlocklist\([^)]*\)\s*@include\(if: \$includePrivileged\)/,
+  );
+});
+
 test("movie side panel overview includes acquisition diagnostics", () => {
   assert.equal(
     movieSidePanelOverviewQuery.includes("titleAcquisitionDiagnostics"),

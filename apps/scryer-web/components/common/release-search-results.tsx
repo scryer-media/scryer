@@ -410,7 +410,7 @@ function SearchResultRow({
             </div>
           </div>
           <div className="w-16 shrink-0 text-right max-md:w-auto max-md:text-left">
-            <div className="font-[var(--font-code)] text-[15px] font-bold text-[var(--scry-ink2)]">
+            <div className="font-[family-name:var(--font-code)] text-[15px] font-bold text-[var(--scry-ink2)]">
               {bytesToWholeReadable(result.sizeBytes)}
             </div>
           </div>
@@ -500,7 +500,7 @@ function SearchResultRow({
               </>
             ) : null}
             <span aria-hidden="true">•</span>
-            <span className="font-[var(--font-code)] font-medium text-foreground/80">
+            <span className="font-[family-name:var(--font-code)] font-medium text-foreground/80">
               {bytesToWholeReadable(result.sizeBytes)}
             </span>
             {decision ? (
@@ -521,7 +521,7 @@ function SearchResultRow({
                   >
                     {t("nzb.score")}
                     <span
-                      className={`font-[var(--font-code)] font-semibold underline decoration-dotted underline-offset-2 ${scoreToneClassName(decision.releaseScore)}`}
+                      className={`font-[family-name:var(--font-code)] font-semibold underline decoration-dotted underline-offset-2 ${scoreToneClassName(decision.releaseScore)}`}
                     >
                       {formatScore(decision.releaseScore)}
                     </span>
@@ -530,7 +530,7 @@ function SearchResultRow({
                   <span className="inline-flex items-center gap-1">
                     {t("nzb.score")}
                     <span
-                      className={`font-[var(--font-code)] font-semibold ${scoreToneClassName(decision.releaseScore)}`}
+                      className={`font-[family-name:var(--font-code)] font-semibold ${scoreToneClassName(decision.releaseScore)}`}
                     >
                       {formatScore(decision.releaseScore)}
                     </span>
@@ -711,7 +711,7 @@ function SearchResultRow({
             hasLog ? (
               <button
                 type="button"
-                className={`text-sm font-[var(--font-code)] underline-offset-2 hover:underline ${scoreToneClassName(decision.releaseScore)}`}
+                className={`text-sm font-[family-name:var(--font-code)] underline-offset-2 hover:underline ${scoreToneClassName(decision.releaseScore)}`}
                 data-ui="score-log-toggle"
                 onClick={() => setExpanded((prev) => !prev)}
                 aria-label={
@@ -722,18 +722,18 @@ function SearchResultRow({
               </button>
             ) : (
               <span
-                className={`text-sm font-[var(--font-code)] ${scoreToneClassName(decision.releaseScore)}`}
+                className={`text-sm font-[family-name:var(--font-code)] ${scoreToneClassName(decision.releaseScore)}`}
               >
                 {formatScore(decision.releaseScore)}
               </span>
             )
           ) : (
-            <span className="text-sm font-[var(--font-code)] text-muted-foreground">
+            <span className="text-sm font-[family-name:var(--font-code)] text-muted-foreground">
               {formatScore(undefined)}
             </span>
           )}
         </td>
-        <td className="whitespace-nowrap border border-border border-x-0 px-2 py-2 text-center align-middle font-[var(--font-code)] text-base font-semibold text-foreground">
+        <td className="whitespace-nowrap border border-border border-x-0 px-2 py-2 text-center align-middle font-[family-name:var(--font-code)] text-base font-semibold text-foreground">
           {bytesToWholeReadable(result.sizeBytes)}
         </td>
         <td className="rounded-r-lg border border-border border-l-0 px-3 py-2 text-center align-middle">

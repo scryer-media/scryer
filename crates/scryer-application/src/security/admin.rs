@@ -128,9 +128,18 @@ impl AppUseCase {
     }
 
     pub async fn disk_space(&self, actor: &User) -> AppResult<Vec<DiskSpaceInfo>> {
+        // Root paths say where media lives on disk: privileged libraries only.
+        let privileged = self
+            .require_privileged_library_ids(actor, None)
+            .await?
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
         let libraries = self
             .list_libraries_for_permission(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+            .await?
+            .into_iter()
+            .filter(|library| privileged.contains(&library.id))
+            .collect::<Vec<_>>();
 
         let mut seen_paths = std::collections::HashSet::new();
         let mut results = Vec::new();

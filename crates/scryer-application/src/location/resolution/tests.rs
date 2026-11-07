@@ -13,6 +13,7 @@ fn title(source: &Path, destination: &Path, name: &str, size: u64) -> PlannedTit
         classification: None,
         placement: TitleCheckpointPlacement::default(),
         outcomes: TitleOutcomeCounts::default(),
+        planned_rename_sources: Default::default(),
         files: vec![PlannedFile {
             media_file_id: Some("media".into()),
             source_path: source.join(name),
@@ -762,4 +763,39 @@ async fn a_media_file_canceled_while_waiting_releases_its_companions_as_canceled
         .expect_err("a companion of a media file that never moved does not move");
     assert!(matches!(error, AppError::Canceled(_)), "got {error}");
     assert!(title.files[1].source_path.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_existing_second_link_is_a_no_copy_placement() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("a");
+    let destination = temp.path().join("b");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::hard_link(&source, &destination).unwrap();
+    let (progress, reads, _) = counting_progress();
+    let proof = compare_existing(&source, &destination, &progress, None)
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_alias_of_the_only_entry_is_refused_and_preserved() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("sub")).unwrap();
+    let source = temp.path().join("a");
+    let alias = temp.path().join("sub").join("..").join("a");
+    std::fs::write(&source, b"incoming").unwrap();
+    let (progress, _, _) = counting_progress();
+    let error = compare_existing(&source, &alias, &progress, None)
+        .await
+        .expect_err("one entry under two spellings is refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH)
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), b"incoming");
 }

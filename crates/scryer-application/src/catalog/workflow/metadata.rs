@@ -848,6 +848,7 @@ impl AppUseCase {
             )
             .await?;
         self.emit_title_updated_activity(actor, &updated).await;
+        self.runtime.acquisition.target_cache.mark_title(title_id);
         self.runtime.acquisition.acquisition_wake.notify_one();
         Ok(updated)
     }

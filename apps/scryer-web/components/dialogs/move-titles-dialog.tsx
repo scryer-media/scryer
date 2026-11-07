@@ -3,6 +3,7 @@ import { useClient } from "urql";
 import {
   ArrowRight,
   HardDrive,
+  Library,
   Merge,
   TriangleAlert,
   User,
@@ -22,13 +23,11 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -94,6 +93,7 @@ import {
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import type { LibraryRootRecord } from "@/lib/types/titles";
 import { cn } from "@/lib/utils";
+import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 /** A title the move workflow was opened for. */
@@ -375,6 +375,15 @@ export function MoveTitlesDialog({
     () => populatedClassificationGroups(preview?.classification),
     [preview],
   );
+  const classifiedById = React.useMemo(
+    () =>
+      new Map(
+        groups.flatMap((group) =>
+          group.titles.map((entry) => [entry.titleId, entry] as const),
+        ),
+      ),
+    [groups],
+  );
   // The titles the classification refuses, which the user must deselect before
   // the plan can start (FR-086).
   const blocked = React.useMemo(() => blockingTitleRows(preview), [preview]);
@@ -507,6 +516,11 @@ export function MoveTitlesDialog({
     setStep((current) => nextMoveStep(current));
   }, []);
 
+  const chooseKindAndAdvance = (value: MoveDestinationKind) => {
+    chooseKind(value);
+    goNext();
+  };
+
   const [manualPage, setManualPage] = React.useState(0);
   const [manualMappingChanged, setManualMappingChanged] = React.useState(false);
   React.useEffect(() => {
@@ -603,14 +617,18 @@ export function MoveTitlesDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent id="move-titles-dialog" className="sm:max-w-4xl">
+      <DialogContent
+        id="move-titles-dialog"
+        className="sm:max-w-4xl"
+        aria-describedby={undefined}
+      >
         <DialogHeader>
-          <DialogTitle>{t("move.dialogTitle")}</DialogTitle>
-          <DialogDescription>
-            {step === "kind"
-              ? t("move.wizardKindDescription")
-              : t("move.dialogDescription", { count: titles.length })}
-          </DialogDescription>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            {t("move.dialogTitle")}
+            <Badge id="move-titles-beta" tone="warning" className="text-[11px]">
+              {t("settings.pluginBeta")}
+            </Badge>
+          </DialogTitle>
         </DialogHeader>
 
         {startedOperationId ? (
@@ -619,73 +637,47 @@ export function MoveTitlesDialog({
             heading={t("move.startedHeading")}
           />
         ) : step === "kind" ? (
-          /* Step 1: which of the two moves this is. The destination controls
-             differ per kind, so the kind is asked first rather than inferred
-             from a picker that can only express one of them. */
-          <div className="space-y-2">
-            <RadioGroup
-              value={kind ?? ""}
-              onValueChange={(value) =>
-                chooseKind(value as MoveDestinationKind)
-              }
-              className="space-y-2"
+          <div className="grid min-h-48 content-center gap-3 sm:grid-cols-2">
+            <Button
+              variant="outline"
+              className="h-auto flex-col gap-3 whitespace-normal p-6 text-base has-[>svg]:px-6"
+              id="move-titles-kind-root"
+              disabled={rootKindUnavailable}
+              onClick={() => chooseKindAndAdvance("root")}
             >
-              <label
-                className={cn(
-                  "flex items-start gap-3 rounded-lg border border-border px-3 py-3 text-sm",
-                  rootKindUnavailable
-                    ? "opacity-60"
-                    : "cursor-pointer hover:bg-muted/20",
-                )}
-              >
-                <RadioGroupItem
-                  id="move-titles-kind-root"
-                  value="root"
-                  disabled={rootKindUnavailable}
-                  className="mt-0.5"
-                />
-                <span className="min-w-0">
-                  <span className="block font-medium text-foreground">
-                    {t("move.kindRootHeading")}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {t("move.kindRootHelp")}
-                  </span>
-                  {mixedSourceLibraries ? (
-                    <span
-                      id="move-titles-mixed-libraries"
-                      className="mt-1 block text-xs text-[var(--scry-warning-text)]"
-                    >
-                      {t("move.destinationMixedSourceLibraries")}
-                    </span>
-                  ) : null}
-                  {noOtherRoots ? (
-                    <span
-                      id="move-titles-no-other-roots"
-                      className="mt-1 block text-xs text-[var(--scry-warning-text)]"
-                    >
-                      {t("move.noOtherRoots")}
-                    </span>
-                  ) : null}
+              <HardDrive
+                aria-hidden="true"
+                className="size-10 text-[var(--scry-muted2)]"
+              />
+              {t("move.kindRootHeading")}
+              {mixedSourceLibraries ? (
+                <span
+                  id="move-titles-mixed-libraries"
+                  className="text-xs text-[var(--scry-warning-text)]"
+                >
+                  {t("move.destinationMixedSourceLibraries")}
                 </span>
-              </label>
-
-              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border px-3 py-3 text-sm hover:bg-muted/20">
-                <RadioGroupItem
-                  id="move-titles-kind-library"
-                  value="library"
-                  className="mt-0.5"
-                />
-                <span className="min-w-0">
-                  <span className="block font-medium text-foreground">
-                    {t("move.kindLibraryHeading")}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {t("move.kindLibraryHelp")}
-                  </span>
+              ) : noOtherRoots ? (
+                <span
+                  id="move-titles-no-other-roots"
+                  className="text-xs text-[var(--scry-warning-text)]"
+                >
+                  {t("move.noOtherRoots")}
                 </span>
-              </label>
-            </RadioGroup>
+              ) : null}
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto flex-col gap-3 whitespace-normal p-6 text-base has-[>svg]:px-6"
+              id="move-titles-kind-library"
+              onClick={() => chooseKindAndAdvance("library")}
+            >
+              <Library
+                aria-hidden="true"
+                className="size-10 text-[var(--scry-muted2)]"
+              />
+              {t("move.kindLibraryHeading")}
+            </Button>
           </div>
         ) : step === "destination" ? (
           /* Step 2: where. Same-library moves pick a root the selection is not
@@ -717,6 +709,10 @@ export function MoveTitlesDialog({
                     {otherLibraries.map((library) => (
                       <SelectItem
                         key={library.id}
+                        id={selectorId(
+                          "move-titles-destination-library-option",
+                          library.name,
+                        )}
                         value={library.id}
                         disabled={destinationDisabledReasonKey !== null}
                       >
@@ -762,7 +758,7 @@ export function MoveTitlesDialog({
               >
                 <SelectTrigger
                   id="move-titles-destination-root"
-                  className="h-9 w-full font-[var(--font-code)] text-sm"
+                  className="h-9 w-full font-[family-name:var(--font-code)] text-sm"
                 >
                   <SelectValue
                     placeholder={t("move.destinationRootPlaceholder")}
@@ -770,7 +766,14 @@ export function MoveTitlesDialog({
                 </SelectTrigger>
                 <SelectContent>
                   {wizardRoots.map((root) => (
-                    <SelectItem key={root.id} value={root.id}>
+                    <SelectItem
+                      key={root.id}
+                      id={selectorId(
+                        "move-titles-destination-root-option",
+                        root.path,
+                      )}
+                      value={root.id}
+                    >
                       {root.path}
                     </SelectItem>
                   ))}
@@ -836,7 +839,10 @@ export function MoveTitlesDialog({
             </p>
           </div>
         ) : step === "manual" ? (
-          <div className="max-h-[65vh] min-h-64 space-y-4 overflow-y-auto">
+          <div
+            id="move-titles-manual"
+            className="max-h-[65vh] min-h-64 space-y-4 overflow-y-auto"
+          >
             <p className="font-medium">{t("move.manualInstructions")}</p>
             <p className="text-sm text-muted-foreground">
               {t("move.manualStructure")}
@@ -872,9 +878,7 @@ export function MoveTitlesDialog({
                   .map((id) => {
                     const folders = foldersByTitle.get(id);
                     const summary = mergesByTitle.get(id);
-                    const entry = groups
-                      .flatMap((group) => group.titles)
-                      .find((row) => row.titleId === id);
+                    const entry = classifiedById.get(id);
                     return (
                       <React.Fragment key={id}>
                         <TableRow>
@@ -882,7 +886,13 @@ export function MoveTitlesDialog({
                           <TableCell className="break-all">
                             {folders?.source ?? entry?.sourceFolderPath ?? "—"}
                           </TableCell>
-                          <TableCell className="break-all">
+                          <TableCell
+                            id={selectorId(
+                              "move-titles-manual-destination",
+                              id,
+                            )}
+                            className="break-all"
+                          >
                             {folders?.destination ??
                               (entry?.class === "NO_OP"
                                 ? entry.sourceFolderPath
@@ -1316,7 +1326,7 @@ export function MoveTitlesDialog({
                   disabled={!canStart}
                   onClick={() => void handleStart()}
                 />
-              ) : step !== "method" ? (
+              ) : step === "destination" ? (
                 <Button
                   id="move-titles-next"
                   type="button"
@@ -1347,13 +1357,13 @@ function SummaryCell({ label, value }: { label: string; value: string }) {
 function PlanItemRow({ item }: { item: LocationPlanItem }) {
   return (
     <li className="min-w-0 text-xs text-muted-foreground">
-      <span className="font-[var(--font-code)] break-all">
+      <span className="font-[family-name:var(--font-code)] break-all">
         {item.sourcePath ?? "—"}
       </span>
       {item.destinationPath ? (
         <>
           {" → "}
-          <span className="font-[var(--font-code)] break-all text-foreground">
+          <span className="font-[family-name:var(--font-code)] break-all text-foreground">
             {item.destinationPath}
           </span>
         </>
@@ -1380,6 +1390,9 @@ type ClassificationGroupProps = {
   t: (key: string, values?: Record<string, string | number>) => string;
 };
 
+/** Titles a classification group renders before asking to show more. */
+const CLASSIFICATION_GROUP_WINDOW = 100;
+
 function ClassificationGroup({
   groupClass,
   count,
@@ -1395,6 +1408,15 @@ function ClassificationGroup({
   t,
 }: ClassificationGroupProps) {
   const blocking = classBlocksStart(groupClass);
+  // A bulk selection can hold thousands of titles in one class. The server
+  // sends a sample of a large group (every title needing attention plus some
+  // of the rest), and the group renders a bounded window of what it received,
+  // growing it on request. The badge and the "showing" line keep the complete
+  // count, so a sampled group still says how many titles it holds.
+  const [visible, setVisible] = React.useState(CLASSIFICATION_GROUP_WINDOW);
+  const shown = entries.slice(0, visible);
+  const remaining = count - shown.length;
+  const remainingReceived = entries.length - shown.length;
   return (
     <div
       id={`move-titles-group-${groupClass}`}
@@ -1411,7 +1433,7 @@ function ClassificationGroup({
         <Badge tone={blocking ? "negative" : "info"}>{count}</Badge>
       </p>
       <ul className="mt-1 space-y-1">
-        {entries.map((entry) => {
+        {shown.map((entry) => {
           const stats = files.get(entry.titleId);
           const where = placement(entry);
           return (
@@ -1435,14 +1457,14 @@ function ClassificationGroup({
               <span className="block text-muted-foreground">
                 {currentLibraryName(entry) ?? "—"}
                 {" · "}
-                <span className="font-[var(--font-code)] break-all">
+                <span className="font-[family-name:var(--font-code)] break-all">
                   {where.source ?? "—"}
                 </span>
                 <ArrowRight
                   aria-hidden="true"
                   className="mx-1 inline h-3 w-3 align-[-1px]"
                 />
-                <span className="font-[var(--font-code)] break-all text-foreground">
+                <span className="font-[family-name:var(--font-code)] break-all text-foreground">
                   {where.destination ?? "—"}
                 </span>
               </span>
@@ -1474,6 +1496,31 @@ function ClassificationGroup({
           );
         })}
       </ul>
+      {remaining > 0 ? (
+        <p className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>
+            {t("move.groupShowing", {
+              shown: shown.length,
+              total: count,
+            })}
+          </span>
+          {remainingReceived > 0 ? (
+            <Button
+              id={selectorId("move-titles-group-show-more", groupClass)}
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setVisible((current) => current + CLASSIFICATION_GROUP_WINDOW)
+              }
+            >
+              {t("move.groupShowMore", {
+                count: Math.min(remainingReceived, CLASSIFICATION_GROUP_WINDOW),
+              })}
+            </Button>
+          ) : null}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1721,19 +1768,19 @@ function BlockedIdentityDetail({
               {candidate.name ? (
                 <>
                   <span>{candidate.name}</span>{" "}
-                  <span className="font-[var(--font-code)] break-all opacity-80">
+                  <span className="font-[family-name:var(--font-code)] break-all opacity-80">
                     {candidate.titleId}
                   </span>
                 </>
               ) : (
-                <span className="font-[var(--font-code)] break-all">
+                <span className="font-[family-name:var(--font-code)] break-all">
                   {candidate.titleId}
                 </span>
               )}
               {candidate.sharedIdentities.length > 0 ? (
                 <span
                   id={`move-titles-ambiguous-shared-${entry.titleId}-${candidate.titleId}`}
-                  className="block font-[var(--font-code)] break-all opacity-80"
+                  className="block font-[family-name:var(--font-code)] break-all opacity-80"
                 >
                   {t("move.ambiguousCandidateShared", {
                     identities: candidate.sharedIdentities.join(", "),

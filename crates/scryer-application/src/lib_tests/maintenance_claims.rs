@@ -197,18 +197,14 @@ async fn assert_lease_does_not_hold(state: LifecycleClaimState) {
         .await;
     fixture.open_gates(true, true).await;
     let root = tempfile::tempdir().expect("claim fixture root");
-    fixture
-        .app
-        .update_media_settings(
-            &fixture.user,
-            MediaFacet::Movie,
-            empty_update_media_settings_with_roots(vec![build_root_folder_entry(
-                root.path(),
-                true,
-            )]),
-        )
-        .await
-        .expect("configure claim fixture root");
+    update_default_library_roots(
+        &fixture.app,
+        &fixture.user,
+        MediaFacet::Movie,
+        vec![build_root_folder_entry(root.path(), true)],
+    )
+    .await
+    .expect("configure claim fixture root");
     let title = seed_title(&fixture.app, &fixture.user, "Leased").await;
     let folder = root.path().join("Leased");
     std::fs::create_dir(&folder).expect("create claimed title folder");

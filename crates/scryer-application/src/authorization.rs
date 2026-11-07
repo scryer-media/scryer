@@ -37,6 +37,27 @@ pub(crate) fn effective_library_permission(
             && permission_allows_app_library_override(permission))
 }
 
+/// The one rule for privileged library access: where a library's media lives
+/// on disk, how it was acquired, and its history.
+///
+/// Holding `View` on a library lets an actor browse its catalog. Paths,
+/// release provenance, scoring, queue, wanted and history data are reserved
+/// for actors who can manage the library's titles or the library itself, and
+/// for system or catalog administrators. Full administrators hold
+/// `ManageTitles` through their default-library mask, so the library check
+/// covers them.
+pub(crate) fn privileged_library_access(
+    authorization: &UserAuthorization,
+    library_id: &str,
+) -> bool {
+    effective_library_permission(authorization, library_id, LibraryPermission::ManageTitles)
+        || effective_library_permission(authorization, library_id, LibraryPermission::ManageLibrary)
+        || authorization.has_any_app_permission(AppPermissionMask::from_permissions([
+            AppPermission::ManageSystemSettings,
+            AppPermission::ManageCatalogSettings,
+        ]))
+}
+
 fn default_library_ids(facet: Option<MediaFacet>) -> Vec<String> {
     match facet {
         Some(facet) => vec![scryer_domain::default_library_id_for_facet(&facet)],
@@ -262,6 +283,95 @@ impl AppUseCase {
         })
     }
 
+    /// Whether the actor holds privileged access to `library_id`; see
+    /// [`privileged_library_access`].
+    pub async fn has_privileged_library_access(
+        &self,
+        actor: &User,
+        library_id: &str,
+    ) -> AppResult<bool> {
+        let authorization = self.authorization_for_actor(actor).await?;
+        Ok(privileged_library_access(&authorization, library_id))
+    }
+
+    /// Ids of the libraries the actor holds privileged access to; see
+    /// [`privileged_library_access`]. Batch callers read this once and filter
+    /// or redact per library.
+    pub async fn privileged_library_ids(
+        &self,
+        actor: &User,
+        facet: Option<MediaFacet>,
+    ) -> AppResult<Vec<String>> {
+        let candidates = self.permission_candidate_library_ids(facet).await?;
+        let authorization = self.authorization_for_actor(actor).await?;
+        Ok(candidates
+            .into_iter()
+            .filter(|library_id| privileged_library_access(&authorization, library_id))
+            .collect())
+    }
+
+    /// Refuses with `LIBRARY_ACCESS_DENIED` unless the actor holds privileged
+    /// access to `library_id`.
+    pub async fn require_privileged_library_access(
+        &self,
+        actor: &User,
+        library_id: &str,
+    ) -> AppResult<()> {
+        if self
+            .has_privileged_library_access(actor, library_id)
+            .await?
+        {
+            Ok(())
+        } else {
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
+                "You do not have access to this library".to_string(),
+            ))
+        }
+    }
+
+    /// [`Self::privileged_library_ids`] for a root listing: refuses with
+    /// `LIBRARY_ACCESS_DENIED` when the actor holds privileged access to no
+    /// library at all, so a viewer is told the surface is closed rather than
+    /// handed an empty page.
+    pub async fn require_privileged_library_ids(
+        &self,
+        actor: &User,
+        facet: Option<MediaFacet>,
+    ) -> AppResult<Vec<String>> {
+        let library_ids = self.privileged_library_ids(actor, facet).await?;
+        if library_ids.is_empty() {
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
+                "You do not have access to this library".to_string(),
+            ))
+        } else {
+            Ok(library_ids)
+        }
+    }
+
+    /// Media files of one library as the actor may see them: unchanged with
+    /// privileged access, otherwise each one
+    /// [redacted](crate::TitleMediaFile::redacted_for_viewer).
+    pub(crate) async fn redact_media_files_for_library(
+        &self,
+        actor: &User,
+        library_id: &str,
+        files: Vec<crate::TitleMediaFile>,
+    ) -> AppResult<Vec<crate::TitleMediaFile>> {
+        if self
+            .has_privileged_library_access(actor, library_id)
+            .await?
+        {
+            Ok(files)
+        } else {
+            Ok(files
+                .into_iter()
+                .map(crate::TitleMediaFile::redacted_for_viewer)
+                .collect())
+        }
+    }
+
     /// Ids of the libraries the actor holds `permission` on.
     pub async fn authorized_library_ids(
         &self,
@@ -269,13 +379,50 @@ impl AppUseCase {
         facet: Option<MediaFacet>,
         permission: LibraryPermission,
     ) -> AppResult<Vec<String>> {
-        let candidates = self.permission_candidate_library_ids(facet).await?;
-        let authorization = self.authorization_for_actor(actor).await?;
-        Ok(candidates
-            .into_iter()
+        Ok(self
+            .library_permission_context(actor, facet)
+            .await?
+            .library_ids(permission))
+    }
+
+    /// The libraries and the actor's authorization, read once so a caller
+    /// that needs several permissions filters them without reading either
+    /// again.
+    pub(crate) async fn library_permission_context(
+        &self,
+        actor: &User,
+        facet: Option<MediaFacet>,
+    ) -> AppResult<LibraryPermissionContext> {
+        let libraries = self.services.catalog.libraries.list(facet.clone()).await?;
+        let candidate_library_ids = if libraries.is_empty() {
+            default_library_ids(facet)
+        } else {
+            libraries.iter().map(|library| library.id.clone()).collect()
+        };
+        Ok(LibraryPermissionContext {
+            libraries,
+            candidate_library_ids,
+            authorization: self.authorization_for_actor(actor).await?,
+        })
+    }
+}
+
+/// What [`AppUseCase::library_permission_context`] read.
+pub(crate) struct LibraryPermissionContext {
+    pub(crate) libraries: Vec<scryer_domain::Library>,
+    candidate_library_ids: Vec<String>,
+    authorization: UserAuthorization,
+}
+
+impl LibraryPermissionContext {
+    /// [`AppUseCase::authorized_library_ids`] for `permission`.
+    pub(crate) fn library_ids(&self, permission: LibraryPermission) -> Vec<String> {
+        self.candidate_library_ids
+            .iter()
             .filter(|library_id| {
-                effective_library_permission(&authorization, library_id, permission)
+                effective_library_permission(&self.authorization, library_id, permission)
             })
-            .collect())
+            .cloned()
+            .collect()
     }
 }

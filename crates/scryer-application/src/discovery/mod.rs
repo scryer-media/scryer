@@ -7,14 +7,15 @@ use crate::library_scan::{
 use crate::ports::{
     CatalogDiscoveryGroup, CatalogDiscoveryGroupKind, CatalogDiscoveryQuery,
     CatalogDiscoveryResult, CatalogDiscoverySectionCandidatesRecord, CatalogDiscoverySurface,
-    CatalogOwnedTitleRecord, DISCOVERY_DEFAULT_SCOPE_KEY, DiscoveryExternalIdRecord,
-    DiscoveryFacetRecord, DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeQuery,
-    DiscoveryHomeResult, DiscoveryHomeSectionCandidatesRecord, DiscoveryItemDetailQuery,
-    DiscoveryItemLibraryProvenanceRecord, DiscoveryItemRecord, DiscoveryItemsQuery,
-    DiscoveryItemsResult, DiscoveryItemsStorageQuery, DiscoveryPendingContextChangeRecord,
-    DiscoveryRankComponentRecord, DiscoverySectionItemsRecord, DiscoverySectionRecord,
-    DiscoverySectionResult, DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord,
-    DiscoverySyncStatus, TitleExternalIdLookup,
+    CatalogOwnedProbe, CatalogOwnedSeriesMovieRecord, CatalogOwnedTitleRecord,
+    DISCOVERY_DEFAULT_SCOPE_KEY, DiscoveryExternalIdRecord, DiscoveryFacetRecord,
+    DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeQuery, DiscoveryHomeResult,
+    DiscoveryHomeSectionCandidatesRecord, DiscoveryItemDetailQuery,
+    DiscoveryItemLibraryProvenanceRecord, DiscoveryItemRecord, DiscoveryItemTargetRecord,
+    DiscoveryItemsQuery, DiscoveryItemsResult, DiscoveryItemsStorageQuery,
+    DiscoveryPendingContextChangeRecord, DiscoveryRankComponentRecord, DiscoverySectionItemsRecord,
+    DiscoverySectionRecord, DiscoverySectionResult, DiscoverySourceTagRecord,
+    DiscoverySubmittedSubjectRecord, DiscoverySyncStatus, TitleExternalIdLookup,
 };
 use crate::settings::keys::{
     DISCOVERY_GENRE_RAIL_CORROBORATION_KEY, DISCOVERY_GENRE_RAIL_CREDIBILITY_GATE_KEY,
@@ -25,8 +26,7 @@ use crate::{AppError, AppResult, AppUseCase};
 use chrono::{DateTime, Utc};
 use scryer_domain::{
     CanonicalMediaTag, DomainEvent, DomainEventPayload, DomainExternalIds, ExternalId,
-    LibraryPermission, MediaFacet, SeriesMovieLink, Title, TitleContextSnapshot, User,
-    title_catalog_sort_input,
+    LibraryPermission, MediaFacet, Title, TitleContextSnapshot, User, title_catalog_sort_input,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -38,6 +38,14 @@ use tracing::{debug, warn};
 pub(crate) const DISCOVERY_CONTEXT_CHANGES_MAX_CHANGED_SUBJECTS: usize = 250;
 const DISCOVERY_HOME_MIN_CANDIDATES: usize = 500;
 const DISCOVERY_HOME_MAX_CANDIDATES: usize = 2_000;
+/// The personalized pool a section page reads, and so how deep a personalized
+/// section can go. The home reads a prefix of the same ordered pool
+/// (`personalized_home_candidate_limit`), which is what a section rebuilds
+/// the home's rails and evidence median from.
+const DISCOVERY_PERSONALIZED_SECTION_MAX_CANDIDATES: usize = 2_500;
+/// How deep a public section page can go.
+const DISCOVERY_PUBLIC_SECTION_MAX_ITEMS: usize = 2_500;
+const DISCOVERY_FOR_YOU_SECTION_ID: &str = "for_you";
 const DISCOVERY_COMPLETE_COLLECTION_MIN_CANDIDATES: usize = 100;
 const DISCOVERY_COMPLETE_COLLECTION_MAX_CANDIDATES: usize = 500;
 const CATALOG_ANIME_WEEKLY_SECTION_ID: &str = "anime_this_week";
@@ -47,14 +55,14 @@ const CATALOG_ANIME_PRIORITY_SECTION_IDS: &[&str] = &["new_on_streaming", "most_
 /// treated as corroborated. A lone source (for example a single trakt vote)
 /// can spike to 10.0 without corroboration, so such fossils must lose to
 /// corroborated evidence whenever ratings decide ordering.
-const DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT: usize = 2;
+pub const DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT: usize = 2;
 /// A single-provider rating still counts as credible when it is backed by at
 /// least this many votes: an aggregator score built from thousands of votes
 /// (a MAL-only anime, for instance) is stronger evidence than two thinly
 /// sourced provider entries, and must not be demoted below them. Kept in
 /// lockstep with SMG's display-evidence bar (CanonicalRatingDisplayMinVotes)
 /// so a rating SMG displays is never ranked non-credible here for votes alone.
-const DISCOVERY_CREDIBLE_RATING_MIN_VOTES: i32 = 25;
+pub const DISCOVERY_CREDIBLE_RATING_MIN_VOTES: i32 = 25;
 /// A rail's share of one medium may not exceed this multiple of the library's
 /// share of that medium. Shared across the three mediums by design: anime and
 /// Western animation are separate mediums under one rule.
@@ -164,6 +172,11 @@ pub(crate) struct DiscoveryLibrarySubject {
 
 #[derive(Default)]
 struct DiscoveryVisibility {
+    /// Libraries the viewer holds `View` on.
+    owned_library_ids: HashSet<String>,
+    /// Libraries the viewer holds `Request` on.
+    requestable_library_ids: HashSet<String>,
+    facets_by_library_id: HashMap<String, MediaFacet>,
     readable_library_ids: HashSet<String>,
     allowed_media_kinds: HashSet<&'static str>,
 }
@@ -224,19 +237,34 @@ struct DiscoverySubjectParts {
     canonical: CanonicalSubject,
 }
 
+mod affinity_cache;
 mod catalog;
 mod context;
 mod home;
+mod library_graph;
 mod medium;
+mod neighbors;
+mod rail_labels;
 mod records;
+mod section;
+mod watchlist;
 
 use catalog::*;
 use context::*;
 use home::*;
 use medium::*;
+use rail_labels::*;
 use records::*;
+pub(crate) use section::DiscoverySectionCache;
+#[cfg(test)]
+use section::*;
+use watchlist::*;
 
+pub(crate) use affinity_cache::DiscoveryAffinityCache;
 pub(crate) use catalog::discovery_library_growth_warrants_snapshot;
+pub use catalog::{
+    CatalogOwnershipDecisions, catalog_owned_probe_for_targets, catalog_ownership_decisions,
+};
 #[cfg(test)]
 pub(crate) use context::build_discovery_library_context;
 pub(crate) use context::{
@@ -244,11 +272,37 @@ pub(crate) use context::{
     incremental_item_records, pending_context_change_from_domain_event, public_feed_item_records,
     public_feed_section_records, snapshot_item_records,
 };
+#[cfg(test)]
+pub(crate) use library_graph::{
+    LIBRARY_GRAPH_AXIS, LIBRARY_GRAPH_MIN_COSINE, LIBRARY_GRAPH_NEIGHBORS_PER_NODE,
+    LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS,
+};
+pub use library_graph::{
+    LibraryGraphCluster, LibraryGraphEdge, LibraryGraphNode, LibraryGraphQuery, LibraryGraphView,
+};
+pub(crate) use library_graph::{LibraryGraphRebuildSummary, library_graph_facets_for_changes};
+pub use neighbors::{
+    DISCOVERY_NEIGHBORS_DEFAULT_LIMIT, DiscoveryNeighborsQuery, DiscoveryNeighborsView,
+};
 pub(crate) use records::{
     pending_context_changes_need_snapshot_reconciliation,
     pending_context_changes_resolved_key_count, snapshot_facet_records,
     title_more_like_this_item_records, title_recommendations_subject,
 };
+
+/// How the viewer's library holds one discovery item.
+pub(super) struct DiscoveryItemOwnership {
+    /// A title in a library the viewer can read that stands for the item.
+    pub(super) readable_title_id: Option<String>,
+    /// A readable series holds the item as one of its linked movies.
+    pub(super) owned_by_series_movie: bool,
+}
+
+impl DiscoveryItemOwnership {
+    pub(super) fn is_owned(&self) -> bool {
+        self.readable_title_id.is_some() || self.owned_by_series_movie
+    }
+}
 
 impl AppUseCase {
     pub async fn title_more_like_this(
@@ -285,7 +339,6 @@ impl AppUseCase {
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
-        let readable_library_id_list = sorted_discovery_library_ids(&readable_library_ids);
         let candidate_limit = requested_limit.saturating_mul(4).clamp(24, 100) as i64;
         let mut items = self
             .services
@@ -293,13 +346,42 @@ impl AppUseCase {
             .discovery
             .list_title_more_like_this_items(title_id, candidate_limit)
             .await?;
-        let mut item_lookup_indexes = vec![Vec::<usize>::new(); items.len()];
-        let mut lookups = Vec::new();
-        let mut series_movie_lookups = Vec::new();
         for item in &mut items {
             item.resolved_title_id = None;
             item.owned_in_input = false;
         }
+        let ownership = self
+            .discovery_items_readable_ownership(&items, &readable_library_ids)
+            .await?;
+        let mut filtered_items = Vec::with_capacity(requested_limit.min(items.len()));
+        for (mut item, owned) in items.into_iter().zip(ownership) {
+            if owned.is_owned() {
+                continue;
+            }
+
+            item.resolved = false;
+            item.resolved_title_id = None;
+            item.owned_in_input = false;
+            filtered_items.push(item);
+            if filtered_items.len() >= requested_limit {
+                break;
+            }
+        }
+        Ok(filtered_items)
+    }
+
+    /// Which title in a library the viewer can read stands for each item, if
+    /// any, matched on the item's target key the way the library stores
+    /// external ids. One entry per item, in order.
+    pub(super) async fn discovery_items_readable_ownership(
+        &self,
+        items: &[DiscoveryItemRecord],
+        readable_library_ids: &HashSet<String>,
+    ) -> AppResult<Vec<DiscoveryItemOwnership>> {
+        let readable_library_id_list = sorted_discovery_library_ids(readable_library_ids);
+        let mut item_lookup_indexes = vec![Vec::<usize>::new(); items.len()];
+        let mut lookups = Vec::new();
+        let mut series_movie_lookups = Vec::new();
         for (item_index, item) in items.iter().enumerate() {
             let Some((source, kind, value)) = discovery_target_key_parts(&item.target_key) else {
                 continue;
@@ -347,34 +429,26 @@ impl AppUseCase {
             .into_iter()
             .map(|matched| matched.lookup_index)
             .collect::<HashSet<_>>();
-        let mut filtered_items = Vec::with_capacity(requested_limit.min(items.len()));
-        for (mut item, lookup_indexes) in items.into_iter().zip(item_lookup_indexes) {
-            let readable_local_title = lookup_indexes.iter().find_map(|lookup_index| {
-                matches_by_lookup_index
-                    .get(lookup_index)
-                    .and_then(|titles| {
-                        titles.iter().find(|candidate| {
-                            readable_library_ids.contains(candidate.library_id.as_str())
+        Ok(item_lookup_indexes
+            .into_iter()
+            .map(|lookup_indexes| DiscoveryItemOwnership {
+                readable_title_id: lookup_indexes.iter().find_map(|lookup_index| {
+                    matches_by_lookup_index
+                        .get(lookup_index)
+                        .and_then(|titles| {
+                            titles
+                                .iter()
+                                .find(|candidate| {
+                                    readable_library_ids.contains(candidate.library_id.as_str())
+                                })
+                                .map(|title| title.id.clone())
                         })
-                    })
-            });
-            if readable_local_title.is_some()
-                || lookup_indexes
+                }),
+                owned_by_series_movie: lookup_indexes
                     .iter()
-                    .any(|lookup_index| series_movie_owned_lookup_indexes.contains(lookup_index))
-            {
-                continue;
-            }
-
-            item.resolved = false;
-            item.resolved_title_id = None;
-            item.owned_in_input = false;
-            filtered_items.push(item);
-            if filtered_items.len() >= requested_limit {
-                break;
-            }
-        }
-        Ok(filtered_items)
+                    .any(|lookup_index| series_movie_owned_lookup_indexes.contains(lookup_index)),
+            })
+            .collect())
     }
 
     pub async fn discovery_home(
@@ -382,8 +456,17 @@ impl AppUseCase {
         actor: &User,
         query: DiscoveryHomeQuery,
     ) -> AppResult<DiscoveryHomeResult> {
-        self.discovery_home_with_selected_card_hydration(actor, query, true)
-            .await
+        self.discovery_home_projected(
+            actor,
+            query,
+            crate::DiscoveryHomeProjection {
+                full_cards: true,
+                hero: true,
+                browse_labels: true,
+                facets: true,
+            },
+        )
+        .await
     }
 
     pub async fn discovery_home_cards(
@@ -391,8 +474,17 @@ impl AppUseCase {
         actor: &User,
         query: DiscoveryHomeQuery,
     ) -> AppResult<DiscoveryHomeResult> {
-        self.discovery_home_with_selected_card_hydration(actor, query, false)
-            .await
+        self.discovery_home_projected(
+            actor,
+            query,
+            crate::DiscoveryHomeProjection {
+                full_cards: false,
+                hero: true,
+                browse_labels: true,
+                facets: false,
+            },
+        )
+        .await
     }
 
     pub async fn discovery_home_filter_options(
@@ -437,11 +529,11 @@ impl AppUseCase {
         Ok(options)
     }
 
-    async fn discovery_home_with_selected_card_hydration(
+    pub async fn discovery_home_projected(
         &self,
         actor: &User,
         query: DiscoveryHomeQuery,
-        hydrate_selected_cards: bool,
+        projection: crate::DiscoveryHomeProjection,
     ) -> AppResult<DiscoveryHomeResult> {
         let discovery_home_started_at = Instant::now();
         let visibility = self.discovery_visibility(actor).await?;
@@ -449,8 +541,9 @@ impl AppUseCase {
         // The instance-wide switch is a second input to the same per-caller
         // gate, so every read path below serves public rows only when it is
         // off without needing a branch of its own.
+        let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
         let can_view_personalized =
-            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
+            !readable_library_ids.is_empty() && personalized_discovery_enabled;
         let status = self
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
@@ -463,18 +556,14 @@ impl AppUseCase {
             .map(|media_kind| (*media_kind).to_string())
             .collect::<Vec<_>>();
         allowed_media_kinds.sort();
-        let owned_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let owned_library_id_list = sorted_discovery_library_ids(&owned_library_ids);
+        let owned_library_id_list = sorted_discovery_library_ids(&visibility.owned_library_ids);
         let owned_visibility = self
-            .discovery_home_owned_visibility(&owned_library_id_list)
+            .discovery_home_owned_visibility(&owned_library_id_list, &status.state)
             .await?;
         let candidate_load_started_at = Instant::now();
         let mut candidates_by_id = HashMap::<String, DiscoveryHomeCandidate>::new();
         let mut home_submitted_subjects = Vec::new();
+        let mut home_subject_run_id = None;
         let mut public_candidate_count = 0usize;
         let mut personalized_candidate_count = 0usize;
         let mut complete_collection_candidate_count = 0usize;
@@ -489,6 +578,7 @@ impl AppUseCase {
                     .discovery
                     .list_public_discovery_section_items(
                         public_run_id,
+                        &[],
                         &allowed_media_kinds,
                         include_unresolved,
                         &query.filters,
@@ -514,6 +604,25 @@ impl AppUseCase {
             }
         }
 
+        // The viewer's own watchlist composes ahead of every library rail and
+        // claims its titles first, so a title the viewer already asked for is
+        // never offered again as "because you like".
+        let watchlist = if query.include_personalized && personalized_discovery_enabled {
+            self.discovery_watchlist_composition(
+                actor,
+                &visibility,
+                &owned_library_id_list,
+                &status.state,
+                can_view_personalized,
+                &query.filters,
+                include_unresolved,
+                limit,
+            )
+            .await?
+        } else {
+            DiscoveryWatchlistComposition::default()
+        };
+
         let mut personalized_sections = Vec::new();
         let mut complete_collection = None;
         let mut facets = Vec::new();
@@ -530,6 +639,7 @@ impl AppUseCase {
                     &readable_library_id_list,
                     &allowed_media_kinds,
                     include_unresolved,
+                    false,
                     &query.filters,
                     personalized_home_candidate_limit(limit) as i64,
                 )
@@ -540,24 +650,6 @@ impl AppUseCase {
                 &mut candidates_by_id,
             );
             personalized_items.retain(|item| visibility.allows_item(item));
-            let submitted_subjects = self
-                .services
-                .library
-                .discovery
-                .list_discovery_submitted_subjects(context_run_id)
-                .await?;
-            let submitted_subjects =
-                filter_submitted_subjects_for_libraries(&submitted_subjects, readable_library_ids);
-            home_submitted_subjects = submitted_subjects.clone();
-            resolve_discovery_matched_subjects(&mut personalized_items, &submitted_subjects)?;
-            let rail_settings = self.discovery_rail_composition_settings().await;
-            let library_profile = self
-                .discovery_library_affinity_profile(
-                    readable_library_ids,
-                    &submitted_subjects,
-                    rail_settings.genre_rail_corroboration,
-                )
-                .await?;
             let complete_collection_candidates = self
                 .services
                 .library
@@ -577,21 +669,47 @@ impl AppUseCase {
                 &mut candidates_by_id,
             );
             complete_collection_items.retain(|item| visibility.allows_item(item));
+            home_subject_run_id = Some(context_run_id.to_string());
+            home_submitted_subjects = self
+                .discovery_submitted_subjects_for_items(
+                    context_run_id,
+                    &readable_library_id_list,
+                    personalized_items
+                        .iter()
+                        .chain(complete_collection_items.iter()),
+                )
+                .await?;
+            resolve_discovery_matched_subjects(&mut personalized_items, &home_submitted_subjects)?;
+            let rail_settings = self.discovery_rail_composition_settings().await;
+            let library_profile = self
+                .discovery_library_affinity_profile(
+                    readable_library_ids,
+                    Some(context_run_id),
+                    rail_settings.genre_rail_corroboration,
+                )
+                .await?;
             resolve_discovery_matched_subjects(
                 &mut complete_collection_items,
-                &submitted_subjects,
+                &home_submitted_subjects,
             )?;
             complete_collection =
                 complete_collection_section(&complete_collection_items, include_unresolved, limit);
-            personalized_sections = personalized_section_results(
-                &personalized_items,
-                &library_profile,
+            let visible_items =
+                discovery_home_visible_items(&personalized_items, include_unresolved);
+            let rail_context = DiscoveryRailContext::new(
                 &candidates_by_id,
                 rail_settings,
-                include_unresolved,
+                &library_profile,
+                &visible_items,
                 limit,
             );
-            if hydrate_selected_cards {
+            personalized_sections = personalized_section_results_in_context(
+                visible_items,
+                &library_profile,
+                &rail_context,
+                &watchlist.claimed_item_keys,
+            );
+            if projection.facets {
                 facets = self
                     .services
                     .library
@@ -605,6 +723,31 @@ impl AppUseCase {
                     .await?;
             }
         }
+
+        let mut browse_query = self
+            .discovery_browse_query_with_owned(
+                &visibility,
+                &status.state,
+                can_view_personalized && query.include_personalized,
+                &DiscoveryItemsQuery {
+                    include_unresolved,
+                    ..DiscoveryItemsQuery::default()
+                },
+                &crate::ports::DiscoverySectionItemsQuery {
+                    filters: query.filters.clone(),
+                    ..Default::default()
+                },
+                &owned_visibility,
+            )
+            .await?;
+        if !query.include_public {
+            browse_query.public_run_id = None;
+        }
+        let browse_labels = if projection.browse_labels {
+            self.discovery_pool_browse_labels(&browse_query).await?
+        } else {
+            Vec::new()
+        };
 
         let public_top_rated_run_id = query
             .include_public
@@ -669,11 +812,20 @@ impl AppUseCase {
             }
         }
 
-        let hero_item = select_discovery_home_hero_with_candidates(
-            &public_sections,
-            &personalized_sections,
-            &candidates_by_id,
-        );
+        let hero_item = if projection.hero {
+            select_discovery_home_hero_with_candidates(
+                &public_sections,
+                &personalized_sections,
+                &candidates_by_id,
+            )
+        } else {
+            None
+        };
+        // Added after the hero is chosen: watchlist cards are resolved outside
+        // the candidate pool, so they carry no candidate for hero hydration.
+        if let Some(watchlist_section) = watchlist.section {
+            personalized_sections.insert(0, watchlist_section);
+        }
         let mut result = DiscoveryHomeResult {
             status,
             hero_item,
@@ -682,6 +834,7 @@ impl AppUseCase {
             complete_collection,
             facets,
             can_view_personalized,
+            browse_labels,
         };
         debug!(
             operation = "discovery_home",
@@ -692,12 +845,37 @@ impl AppUseCase {
             elapsed_ms = discovery_home_elapsed_ms(section_selection_started_at),
             "discovery home sections selected"
         );
-        if hydrate_selected_cards {
+        if projection.full_cards {
             self.hydrate_discovery_home_result(&mut result, &candidates_by_id)
                 .await?;
-        } else {
+        } else if projection.hero {
             self.hydrate_discovery_home_hero(&mut result, &candidates_by_id)
                 .await?;
+        }
+        if let Some(run_id) = home_subject_run_id.as_deref() {
+            // Selection only ever draws from the items resolved above; read
+            // whatever a composed section carries beyond them.
+            let covered = home_submitted_subjects
+                .iter()
+                .map(|subject| subject.subject_key.clone())
+                .collect::<HashSet<_>>();
+            let missing = discovery_home_subject_keys(&result)
+                .into_iter()
+                .filter(|key| !covered.contains(key))
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                home_submitted_subjects.extend(
+                    self.services
+                        .library
+                        .discovery
+                        .list_discovery_submitted_subjects_for_keys(
+                            run_id,
+                            &readable_library_id_list,
+                            &missing,
+                        )
+                        .await?,
+                );
+            }
         }
         resolve_discovery_home_selected_subjects(&mut result, &home_submitted_subjects)?;
         debug!(
@@ -790,6 +968,11 @@ impl AppUseCase {
         actor: &User,
         query: DiscoveryItemsQuery,
     ) -> AppResult<DiscoveryItemsResult> {
+        if let Some(section_query) = &query.section {
+            return self
+                .discovery_section_items(actor, &query, section_query)
+                .await;
+        }
         let visibility = self.discovery_visibility(actor).await?;
         let readable_library_ids = &visibility.readable_library_ids;
         // The instance-wide switch is a second input to the same per-caller
@@ -817,8 +1000,10 @@ impl AppUseCase {
             readable_library_ids: readable_library_id_list,
             allowed_media_kinds: visibility.sorted_allowed_media_kinds(),
             filters: query,
+            home_filters: crate::ports::DiscoveryHomeFilters::default(),
             limit,
             offset,
+            ..DiscoveryItemsStorageQuery::default()
         };
         let mut page = self
             .services
@@ -828,13 +1013,12 @@ impl AppUseCase {
             .await?;
         if let Some(context_run_id) = state.last_success_generation_id.as_deref() {
             let submitted_subjects = self
-                .services
-                .library
-                .discovery
-                .list_discovery_submitted_subjects(context_run_id)
+                .discovery_submitted_subjects_for_items(
+                    context_run_id,
+                    &sorted_discovery_library_ids(readable_library_ids),
+                    page.items.iter(),
+                )
                 .await?;
-            let submitted_subjects =
-                filter_submitted_subjects_for_libraries(&submitted_subjects, readable_library_ids);
             resolve_discovery_matched_subjects(&mut page.items, &submitted_subjects)?;
         }
 
@@ -842,6 +1026,8 @@ impl AppUseCase {
             items: page.items,
             total_count: page.total_count,
             can_view_personalized,
+            section: None,
+            generation_ids: Vec::new(),
         })
     }
 
@@ -887,8 +1073,10 @@ impl AppUseCase {
                 offset: 0,
                 ..DiscoveryItemsQuery::default()
             },
+            home_filters: crate::ports::DiscoveryHomeFilters::default(),
             limit: 1,
             offset: 0,
+            ..DiscoveryItemsStorageQuery::default()
         };
         let mut page = self
             .services
@@ -897,17 +1085,25 @@ impl AppUseCase {
             .query_discovery_items(&storage_query)
             .await?;
         if page.items.is_empty() {
-            return Ok(None);
+            // A watchlist card built from the viewer's own list rows has no
+            // stored item; it reads back under the rail's own gates.
+            return self
+                .discovery_watchlist_row_card_detail(
+                    actor,
+                    &visibility,
+                    target_key,
+                    query.include_unresolved,
+                )
+                .await;
         }
         if let Some(context_run_id) = context_run_id.as_deref() {
             let submitted_subjects = self
-                .services
-                .library
-                .discovery
-                .list_discovery_submitted_subjects(context_run_id)
+                .discovery_submitted_subjects_for_items(
+                    context_run_id,
+                    &sorted_discovery_library_ids(readable_library_ids),
+                    page.items.iter(),
+                )
                 .await?;
-            let submitted_subjects =
-                filter_submitted_subjects_for_libraries(&submitted_subjects, readable_library_ids);
             resolve_discovery_matched_subjects(&mut page.items, &submitted_subjects)?;
         }
 
@@ -927,26 +1123,22 @@ impl AppUseCase {
             });
         }
 
-        let readable_library_ids = self
-            .authorized_library_ids(actor, Some(query.facet.clone()), LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
         let requested_library_ids = query
             .library_ids
             .iter()
-            .map(|library_id| library_id.trim())
-            .filter(|library_id| !library_id.is_empty())
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
             .collect::<HashSet<_>>();
-        let effective_library_ids = if requested_library_ids.is_empty() {
-            readable_library_ids.clone()
-        } else {
-            readable_library_ids
-                .iter()
-                .filter(|library_id| requested_library_ids.contains(library_id.as_str()))
-                .cloned()
-                .collect()
-        };
+        let effective_library_ids = visibility
+            .owned_library_ids
+            .iter()
+            .filter(|id| {
+                visibility.facets_by_library_id.get(*id) == Some(&query.facet)
+                    && (requested_library_ids.is_empty()
+                        || requested_library_ids.contains(id.as_str()))
+            })
+            .cloned()
+            .collect::<HashSet<_>>();
         let can_view_personalized =
             !effective_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let effective_library_id_list = sorted_discovery_library_ids(&effective_library_ids);
@@ -961,14 +1153,9 @@ impl AppUseCase {
         let limit = catalog_discovery_group_limit(query.limit_per_group);
         let max_groups = catalog_discovery_max_groups(query.max_groups);
         let candidate_limit = catalog_discovery_candidate_limit(limit, max_groups);
-        let owned_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let owned_library_id_list = sorted_discovery_library_ids(&owned_library_ids);
+        let owned_library_id_list = sorted_discovery_library_ids(&visibility.owned_library_ids);
         let owned_visibility = self
-            .owned_discovery_visibility(&owned_library_id_list)
+            .owned_discovery_visibility(&owned_library_id_list, &state)
             .await?;
         let excluded_public_identity_keys = owned_visibility.excluded_discovery_identity_keys();
 
@@ -996,6 +1183,7 @@ impl AppUseCase {
         }
 
         let mut personalized_candidates = Vec::new();
+        let mut affinity_run_id = None;
         let mut submitted_subjects = Vec::new();
         if can_view_personalized
             && let Some(context_run_id) = state.last_success_generation_id.as_deref()
@@ -1014,16 +1202,14 @@ impl AppUseCase {
                 .await?
                 .items;
             candidates.retain(|item| !owned_visibility.item_is_owned(item));
+            affinity_run_id = Some(context_run_id);
             submitted_subjects = self
-                .services
-                .library
-                .discovery
-                .list_discovery_submitted_subjects(context_run_id)
+                .discovery_submitted_subjects_for_items(
+                    context_run_id,
+                    &effective_library_id_list,
+                    candidates.iter(),
+                )
                 .await?;
-            submitted_subjects = filter_submitted_subjects_for_libraries(
-                &submitted_subjects,
-                &effective_library_ids,
-            );
             resolve_discovery_matched_subjects(&mut candidates, &submitted_subjects)?;
             personalized_candidates = candidates;
         }
@@ -1066,7 +1252,7 @@ impl AppUseCase {
             let library_profile = self
                 .discovery_library_affinity_profile(
                     &effective_library_ids,
-                    &submitted_subjects,
+                    affinity_run_id,
                     rail_settings.genre_rail_corroboration,
                 )
                 .await?;
@@ -1092,29 +1278,70 @@ impl AppUseCase {
             }
         }
 
+        let mut selected_items = groups
+            .iter()
+            .flat_map(|group| group.items.iter().cloned())
+            .collect::<Vec<_>>();
+        self.services
+            .library
+            .discovery
+            .hydrate_catalog_discovery_items(&mut selected_items)
+            .await?;
+        let mut selected_items = selected_items.into_iter();
+        for group in &mut groups {
+            for item in &mut group.items {
+                if let Some(hydrated) = selected_items.next() {
+                    *item = hydrated;
+                }
+            }
+            if matches!(group.surface, CatalogDiscoverySurface::Personalized) {
+                resolve_discovery_matched_subjects(&mut group.items, &submitted_subjects)?;
+            }
+        }
         Ok(CatalogDiscoveryResult {
             groups,
             can_view_personalized,
         })
     }
 
-    async fn discovery_visibility(&self, actor: &User) -> AppResult<DiscoveryVisibility> {
-        let requestable_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::Request)
-            .await?;
-        let manageable_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::ManageTitles)
-            .await?;
+    /// The libraries of `facet` a personalized discovery read covers: every
+    /// library the actor can view, narrowed to `requested_library_ids` when
+    /// any non-blank id is given. An id the actor cannot view is ignored.
+    async fn discovery_effective_library_ids(
+        &self,
+        actor: &User,
+        facet: &MediaFacet,
+        requested_library_ids: &[String],
+    ) -> AppResult<HashSet<String>> {
         let readable_library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::View)
-            .await?;
-
-        let mut facets_by_library_id = self
-            .services
-            .catalog
-            .libraries
-            .list(None)
+            .authorized_library_ids(actor, Some(facet.clone()), LibraryPermission::View)
             .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let requested_library_ids = requested_library_ids
+            .iter()
+            .map(|library_id| library_id.trim())
+            .filter(|library_id| !library_id.is_empty())
+            .collect::<HashSet<_>>();
+        if requested_library_ids.is_empty() {
+            return Ok(readable_library_ids);
+        }
+        Ok(readable_library_ids
+            .into_iter()
+            .filter(|library_id| requested_library_ids.contains(library_id.as_str()))
+            .collect())
+    }
+
+    async fn discovery_visibility(&self, actor: &User) -> AppResult<DiscoveryVisibility> {
+        // One read of the libraries and the actor's grants serves every
+        // permission below and the facet map.
+        let permissions = self.library_permission_context(actor, None).await?;
+        let requestable_library_ids = permissions.library_ids(LibraryPermission::Request);
+        let manageable_library_ids = permissions.library_ids(LibraryPermission::ManageTitles);
+        let readable_library_ids = permissions.library_ids(LibraryPermission::View);
+
+        let mut facets_by_library_id = permissions
+            .libraries
             .into_iter()
             .map(|library| (library.id, library.facet))
             .collect::<HashMap<_, _>>();
@@ -1124,11 +1351,15 @@ impl AppUseCase {
                 .or_insert(facet);
         }
 
+        let mut visibility = DiscoveryVisibility {
+            owned_library_ids: readable_library_ids.iter().cloned().collect(),
+            requestable_library_ids: requestable_library_ids.iter().cloned().collect(),
+            ..Default::default()
+        };
         let discoverable_library_ids = requestable_library_ids
             .into_iter()
             .chain(manageable_library_ids)
             .collect::<HashSet<_>>();
-        let mut visibility = DiscoveryVisibility::default();
         for library_id in &discoverable_library_ids {
             if let Some(facet) = facets_by_library_id.get(library_id) {
                 visibility
@@ -1145,6 +1376,7 @@ impl AppUseCase {
                         .contains(discovery_media_kind_for_facet(facet.clone()))
                 })
             }));
+        visibility.facets_by_library_id = facets_by_library_id;
         Ok(visibility)
     }
 
@@ -1197,71 +1429,206 @@ impl AppUseCase {
         })
     }
 
+    /// Which of the items in the current generations (`state`'s context and
+    /// public runs) the catalog in `readable_library_ids` already owns. It
+    /// reads only the catalog titles and series-linked movies those items
+    /// can name, so its cost follows the discovery pool, not the catalog;
+    /// the decisions it makes for those items are the ones a visibility
+    /// built from the whole catalog would make.
     async fn owned_discovery_visibility(
         &self,
         readable_library_ids: &[String],
+        state: &crate::ports::DiscoverySyncStateRecord,
+    ) -> AppResult<CatalogOwnedVisibility> {
+        let run_ids = state
+            .last_success_generation_id
+            .iter()
+            .chain(state.last_public_feed_generation_id.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        if readable_library_ids.is_empty() || run_ids.is_empty() {
+            return Ok(CatalogOwnedVisibility::default());
+        }
+        let targets = self
+            .services
+            .library
+            .discovery
+            .list_discovery_item_targets(&run_ids)
+            .await?;
+        self.owned_visibility_for_targets(
+            readable_library_ids,
+            targets.iter().map(|target| {
+                (
+                    target.target_key.as_str(),
+                    target.resolved_title_id.as_deref(),
+                )
+            }),
+        )
+        .await
+    }
+
+    async fn discovery_home_owned_visibility(
+        &self,
+        readable_library_ids: &[String],
+        state: &crate::ports::DiscoverySyncStateRecord,
+    ) -> AppResult<CatalogOwnedVisibility> {
+        self.owned_discovery_visibility(readable_library_ids, state)
+            .await
+    }
+
+    /// Ownership decided for `targets` (target key, resolved title id) only:
+    /// [`CatalogOwnedVisibility::item_is_owned`] and
+    /// [`CatalogOwnedVisibility::target_key_is_owned`] answer exactly for
+    /// those, and the excluded keys and title ids cover every owned one.
+    async fn owned_visibility_for_targets<'a>(
+        &self,
+        readable_library_ids: &[String],
+        targets: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
     ) -> AppResult<CatalogOwnedVisibility> {
         if readable_library_ids.is_empty() {
+            return Ok(CatalogOwnedVisibility::default());
+        }
+        let probe = catalog_owned_probe(targets);
+        if probe.is_empty() {
             return Ok(CatalogOwnedVisibility::default());
         }
         let titles = self
             .services
             .catalog
             .titles
-            .list_catalog_owned_title_records(readable_library_ids)
+            .list_catalog_owned_title_records_matching(readable_library_ids, &probe)
             .await?;
-        let title_ids = titles
-            .iter()
-            .map(|title| title.id.clone())
-            .collect::<Vec<_>>();
-        let series_movies = self
+        let series_movies = match self
             .services
             .catalog
             .shows
-            .list_series_movie_links_for_titles(&title_ids)
-            .await?;
+            .list_catalog_owned_series_movies_matching(readable_library_ids, &probe)
+            .await?
+        {
+            Some(series_movies) => series_movies,
+            None => {
+                // A repository without a probe-scoped read: every link of
+                // every title in those libraries.
+                let title_ids = self
+                    .services
+                    .catalog
+                    .titles
+                    .list_catalog_owned_title_records(readable_library_ids)
+                    .await?
+                    .into_iter()
+                    .map(|title| title.id)
+                    .collect::<Vec<_>>();
+                self.services
+                    .catalog
+                    .shows
+                    .list_series_movie_links_for_titles(&title_ids)
+                    .await?
+                    .iter()
+                    .map(CatalogOwnedSeriesMovieRecord::from)
+                    .collect()
+            }
+        };
         Ok(CatalogOwnedVisibility::from_title_records_and_series_movies(&titles, &series_movies))
-    }
-
-    async fn discovery_home_owned_visibility(
-        &self,
-        readable_library_ids: &[String],
-    ) -> AppResult<CatalogOwnedVisibility> {
-        self.owned_discovery_visibility(readable_library_ids).await
     }
 }
 
 impl AppUseCase {
+    /// The submitted subjects of `run_id` in `library_ids` that any of
+    /// `items` matched: the only ones card reasons can name.
+    pub(super) async fn discovery_submitted_subjects_for_items<'a>(
+        &self,
+        run_id: &str,
+        library_ids: &[String],
+        items: impl IntoIterator<Item = &'a DiscoveryItemRecord>,
+    ) -> AppResult<Vec<DiscoverySubmittedSubjectRecord>> {
+        let subject_keys = items
+            .into_iter()
+            .flat_map(|item| item.matched_subject_keys.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if subject_keys.is_empty() || library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.services
+            .library
+            .discovery
+            .list_discovery_submitted_subjects_for_keys(run_id, library_ids, &subject_keys)
+            .await
+    }
+
     async fn discovery_library_affinity_profile(
         &self,
         allowed_library_ids: &HashSet<String>,
-        submitted_subjects: &[DiscoverySubmittedSubjectRecord],
+        run_id: Option<&str>,
         genre_rail_corroboration: bool,
     ) -> AppResult<DiscoveryLibraryAffinityProfile> {
-        let mut library_ids = allowed_library_ids.iter().cloned().collect::<Vec<_>>();
-        library_ids.sort();
-        let mut titles = Vec::new();
-        let mut seen_title_ids = HashSet::new();
-        for title_id in submitted_subjects
-            .iter()
-            .filter_map(|subject| subject.title_id.as_deref())
-            .filter(|title_id| seen_title_ids.insert((*title_id).to_string()))
-        {
-            if let Some(title) = self.services.catalog.titles.get_by_id(title_id).await?
-                && allowed_library_ids.contains(&title.library_id)
-            {
-                titles.push(title);
-            }
-        }
-        if titles.is_empty() {
-            titles = self
+        let library_ids = sorted_discovery_library_ids(allowed_library_ids);
+        let Some(revision) = self
+            .services
+            .catalog
+            .titles
+            .discovery_affinity_revision()
+            .await?
+        else {
+            return self
+                .discovery_library_affinity_profile_uncached(
+                    &library_ids,
+                    run_id,
+                    genre_rail_corroboration,
+                )
+                .await;
+        };
+        let scope = affinity_cache::DiscoveryAffinityCacheScope {
+            run_id: run_id.map(str::to_owned),
+            library_ids: library_ids.clone(),
+            genre_rail_corroboration,
+        };
+        let profile = self
+            .runtime
+            .catalog
+            .discovery_affinity_cache
+            .get_or_fill(scope, revision, Instant::now(), || {
+                self.discovery_library_affinity_profile_uncached(
+                    &library_ids,
+                    run_id,
+                    genre_rail_corroboration,
+                )
+            })
+            .await?;
+        Ok((*profile).clone())
+    }
+
+    async fn discovery_library_affinity_profile_uncached(
+        &self,
+        library_ids: &[String],
+        run_id: Option<&str>,
+        genre_rail_corroboration: bool,
+    ) -> AppResult<DiscoveryLibraryAffinityProfile> {
+        let title_ids = match run_id {
+            Some(run_id) => self
                 .services
-                .catalog
-                .titles
-                .list_for_libraries(None, &library_ids, None)
-                .await?;
-        }
-        Ok(discovery_library_affinity_profile_from_titles(
+                .library
+                .discovery
+                .list_discovery_submitted_title_ids(run_id, library_ids)
+                .await?
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let started = Instant::now();
+        let titles = self
+            .services
+            .catalog
+            .titles
+            .list_discovery_affinity_titles(library_ids, run_id, &title_ids)
+            .await?;
+        debug!(
+            operation = "discovery_affinity",
+            title_count = titles.len(),
+            elapsed_ms = discovery_home_elapsed_ms(started),
+            "discovery affinity evidence loaded"
+        );
+        Ok(discovery_library_affinity_profile_from_projection(
             &titles,
             genre_rail_corroboration,
         ))
@@ -1323,14 +1690,31 @@ impl AppUseCase {
 
 /// The library profile, computed from owned titles alone so the same numbers
 /// drive the medium mix sent to SMG and the gate applied to what comes back.
+#[cfg(test)]
 pub(super) fn discovery_library_affinity_profile_from_titles(
     titles: &[Title],
+    genre_rail_corroboration: bool,
+) -> DiscoveryLibraryAffinityProfile {
+    let titles = titles
+        .iter()
+        .map(|title| crate::DiscoveryAffinityTitle {
+            id: title.id.clone(),
+            facet: title.facet.clone(),
+            canonical_tags: title.canonical_tags.clone(),
+        })
+        .collect::<Vec<_>>();
+    discovery_library_affinity_profile_from_projection(&titles, genre_rail_corroboration)
+}
+
+fn discovery_library_affinity_profile_from_projection(
+    titles: &[crate::DiscoveryAffinityTitle],
     genre_rail_corroboration: bool,
 ) -> DiscoveryLibraryAffinityProfile {
     let support_floor = discovery_rail_label_support_floor(titles.len());
     DiscoveryLibraryAffinityProfile {
         genre_labels: top_owned_title_labels(
             titles,
+            DiscoveryRailLabelFamily::Genre,
             |title| {
                 corroborated_canonical_genre_labels(&title.canonical_tags, genre_rail_corroboration)
             },
@@ -1344,11 +1728,25 @@ pub(super) fn discovery_library_affinity_profile_from_titles(
         // sourced from canonical genre tags.
         theme_labels: top_owned_title_labels(
             titles,
+            DiscoveryRailLabelFamily::Theme,
             |title| qualified_owned_theme_labels(&title.canonical_tags),
             DISCOVERY_RAIL_LADDER_LABELS,
             support_floor,
         ),
-        medium_mix: DiscoveryLibraryMediumMix::from_titles(titles),
+        medium_mix: {
+            let mut mix = DiscoveryLibraryMediumMix::default();
+            for title in titles {
+                mix.add(discovery_medium_from_genres(
+                    &title.facet,
+                    title
+                        .canonical_tags
+                        .iter()
+                        .filter(|tag| tag.category.eq_ignore_ascii_case("genre"))
+                        .map(|tag| tag.name.as_str()),
+                ));
+            }
+            mix
+        },
         owned_title_count: titles.len(),
     }
 }

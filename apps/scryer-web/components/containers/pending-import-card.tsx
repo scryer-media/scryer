@@ -18,6 +18,7 @@ import type {
   PendingImportBindingPreview,
   PendingImportItem,
 } from "@/lib/types";
+import { isResolvableConflict } from "@/lib/pending-import-conflicts";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 type MetadataSearchResult = {
@@ -68,6 +69,13 @@ export type PendingImportCardProps = {
   onOpenSearch: (item: PendingImportItem) => void;
   onRequestIgnore: (item: PendingImportItem) => void;
   onBind: () => void;
+  selected?: boolean;
+  conflictBusy?: boolean;
+  onSelectedChange?: (item: PendingImportItem, checked: boolean) => void;
+  onResolveConflict?: (
+    item: PendingImportItem,
+    policy: "ADOPT_ALL" | "KEEP_ONE",
+  ) => void;
   /** Opens the episode picker for an import whose numbering was ambiguous. */
   onAssignEpisode?: (item: PendingImportItem) => void;
   onResolve: (
@@ -109,6 +117,10 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   onRequestIgnore,
   onBind,
   onAssignEpisode,
+  selected,
+  conflictBusy,
+  onSelectedChange,
+  onResolveConflict,
   onResolve,
   onToggleEpisodeSelection,
   onSetSelectedEpisodeIds,
@@ -144,19 +156,57 @@ export const PendingImportCard = React.memo(function PendingImportCard({
     >
       <CardHeader className="space-y-2">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-1">
-            <CardTitle className="text-base">{item.displayName}</CardTitle>
-            <p
-              id={`pending-import-status-${item.id}`}
-              className="text-sm text-muted-foreground"
-            >
-              {summary}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {t("pendingImports.library")} {libraryLabel}
-            </p>
+          <div className="flex min-w-0 items-start gap-3">
+            {item.status === "PENDING" && onSelectedChange ? (
+              <Checkbox
+                id={`pending-import-conflict-select-${item.id}`}
+                size="large"
+                aria-label={t("pendingImports.selectItem", {
+                  name: item.displayName,
+                })}
+                checked={selected ?? false}
+                disabled={isBusy || conflictBusy}
+                onCheckedChange={(checked) =>
+                  onSelectedChange(item, checked === true)
+                }
+              />
+            ) : null}
+            <div className="min-w-0 space-y-1">
+              <CardTitle className="text-base">{item.displayName}</CardTitle>
+              <p
+                id={`pending-import-status-${item.id}`}
+                className="text-sm text-muted-foreground"
+              >
+                {summary}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t("pendingImports.library")} {libraryLabel}
+              </p>
+            </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
+            {isResolvableConflict(item) && onResolveConflict ? (
+              <>
+                <Button
+                  id={`pending-import-conflict-adopt-${item.id}`}
+                  size="sm"
+                  variant="outline"
+                  disabled={isBusy || conflictBusy}
+                  onClick={() => onResolveConflict(item, "ADOPT_ALL")}
+                >
+                  {t("pendingImports.conflict.adoptAll")}
+                </Button>
+                <Button
+                  id={`pending-import-conflict-keep-one-${item.id}`}
+                  size="sm"
+                  variant="outline"
+                  disabled={isBusy || conflictBusy}
+                  onClick={() => onResolveConflict(item, "KEEP_ONE")}
+                >
+                  {t("pendingImports.conflict.keepOne")}
+                </Button>
+              </>
+            ) : null}
             {canAssignEpisode ? (
               <Button
                 type="button"
@@ -207,7 +257,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
           <span className="font-medium text-foreground">
             {t("pendingImports.path")}:
           </span>{" "}
-          <span className="break-all font-[var(--font-code)] text-muted-foreground">
+          <span className="break-all font-[family-name:var(--font-code)] text-muted-foreground">
             {item.path}
           </span>
         </div>
@@ -239,9 +289,14 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               ? t("pendingImports.invalidOwnershipHelp")
               : isFolderOwnershipChange
                 ? t("pendingImports.folderOwnershipChangedHelp")
-                : t("pendingImports.ownershipConflictHelp", {
-                    folder: item.titleFolderPath,
-                  })}
+                : t(
+                    isResolvableConflict(item)
+                      ? "pendingImports.conflict.ownershipHelp"
+                      : "pendingImports.ownershipConflictHelp",
+                    {
+                      folder: item.titleFolderPath,
+                    },
+                  )}
           </p>
         ) : null}
         {isActive && canSearchOrBind ? (

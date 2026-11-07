@@ -1485,29 +1485,81 @@ async fn plex_server_base_url(
     machine_id: &str,
     token: &str,
 ) -> AppResult<Url> {
-    let response = verifier
-        .client
-        .get(verifier.plex_url("api/resources?includeHttps=1")?)
+    discover_plex_server_base_url(
+        &verifier.client,
+        &verifier.plex_base_url,
+        machine_id,
+        token,
+        None,
+    )
+    .await
+    .map_err(|failure| match failure {
+        PlexServerDiscoveryFailure::Transport(error) => {
+            AppError::Repository(format!("failed to reach Plex resources: {error}"))
+        }
+        PlexServerDiscoveryFailure::Status(status) => AppError::Repository(format!(
+            "Plex resources discovery failed with status {status}"
+        )),
+        PlexServerDiscoveryFailure::Unreadable(error) => error,
+        PlexServerDiscoveryFailure::NoServerUri => {
+            AppError::Repository("configured Plex server has no reachable URI".into())
+        }
+    })
+}
+
+/// Why plex.tv could not name a reachable URL for one server, kept typed so
+/// each caller classifies it in its own terms.
+#[derive(Debug)]
+pub(crate) enum PlexServerDiscoveryFailure {
+    /// The resource list request got no answer.
+    Transport(reqwest::Error),
+    /// plex.tv answered with a non-success status.
+    Status(reqwest::StatusCode),
+    /// The answer, or the server URI in it, could not be read.
+    Unreadable(AppError),
+    /// The account's resource list has no connection for this server.
+    NoServerUri,
+}
+
+/// The reachable base URL of the Plex server `machine_id`, from the resource
+/// list on `plex_service` read with the owner's token. Prefers an https URI.
+pub(crate) async fn discover_plex_server_base_url(
+    client: &reqwest::Client,
+    plex_service: &Url,
+    machine_id: &str,
+    token: &str,
+    timeout: Option<std::time::Duration>,
+) -> Result<Url, PlexServerDiscoveryFailure> {
+    let url = plex_service
+        .join("api/resources?includeHttps=1")
+        .map_err(|error| {
+            PlexServerDiscoveryFailure::Unreadable(AppError::Repository(format!(
+                "invalid Plex endpoint URL: {error}"
+            )))
+        })?;
+    let mut request = client
+        .get(url)
         .header("Accept", "application/xml")
-        .header("X-Plex-Token", token)
+        .header("X-Plex-Token", token);
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
+    }
+    let response = request
         .send()
         .await
-        .map_err(|error| {
-            AppError::Repository(format!("failed to reach Plex resources: {error}"))
-        })?;
+        .map_err(PlexServerDiscoveryFailure::Transport)?;
     if !response.status().is_success() {
-        return Err(AppError::Repository(format!(
-            "Plex resources discovery failed with status {}",
-            response.status()
-        )));
+        return Err(PlexServerDiscoveryFailure::Status(response.status()));
     }
     let resources = response.text().await.map_err(|error| {
-        AppError::Repository(format!("invalid Plex resources response: {error}"))
+        PlexServerDiscoveryFailure::Unreadable(AppError::Repository(format!(
+            "invalid Plex resources response: {error}"
+        )))
     })?;
-    let server_url = plex_server_url(&resources, machine_id)?.ok_or_else(|| {
-        AppError::Repository("configured Plex server has no reachable URI".into())
-    })?;
-    media_server_url(&server_url)
+    let server_url = plex_server_url(&resources, machine_id)
+        .map_err(PlexServerDiscoveryFailure::Unreadable)?
+        .ok_or(PlexServerDiscoveryFailure::NoServerUri)?;
+    media_server_url(&server_url).map_err(PlexServerDiscoveryFailure::Unreadable)
 }
 
 async fn scan_media_server_catalog(
@@ -1792,7 +1844,7 @@ fn plex_provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
         .collect()
 }
 
-fn plex_external_id(value: &str) -> Option<ExternalId> {
+pub(crate) fn plex_external_id(value: &str) -> Option<ExternalId> {
     let (raw_source, raw_value) = value.trim().split_once("://")?;
     let source = match raw_source.trim().to_ascii_lowercase().as_str() {
         "tmdb" | "themoviedb" | "com.plexapp.agents.tmdb" | "com.plexapp.agents.themoviedb" => {

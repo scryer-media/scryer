@@ -4,13 +4,14 @@ import { useCanManageOverviewTitle } from "@/lib/hooks/use-title-overview-access
 import {
   ChevronDown,
   ChevronRight,
+  EllipsisVertical,
   Eye,
   EyeOff,
   History,
-  Info,
   Search,
   Zap,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableActionsHead,
@@ -20,13 +21,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { IconButton } from "@/components/ui/icon-button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import {
   ReleaseSearchLoader,
@@ -40,6 +40,10 @@ import type { Release } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { InteractiveSearchDialog } from "@/components/common/interactive-search-dialog";
 import { useIsNarrowElement } from "@/lib/hooks/use-mobile";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+} from "@/lib/utils/action-button-styles";
 import {
   selectorId,
   seriesOverviewSeasonInteractiveSearchId,
@@ -62,6 +66,7 @@ import type {
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import { sameDownloadQueueItem } from "@/lib/utils/download-queue";
+import { seasonHasSelectableEpisodes } from "@/lib/utils/season-selection";
 import {
   formatFileSize,
   isEpisodeCountableForProgress,
@@ -83,6 +88,26 @@ const EMPTY_INDEXER_PROGRESS: InteractiveSearchIndexerProgress[] = [];
 const EPISODE_TABLE_MIN_WIDTH = 720;
 
 export { SeriesMovieTimelineSection } from "./series-movie-row";
+
+// The inline actions, size and progress take about 340px and the heading
+// truncates into the rest, so they still fit a desktop side panel (about
+// 620px at a 1440px window). Below this the heading would be squeezed to a
+// few characters, so phones get the actions menu instead.
+const SEASON_ACTIONS_MENU_MAX_WIDTH = 600;
+
+function SeasonActionsMenuItem(
+  props: Omit<React.ComponentProps<typeof Button>, "size" | "variant">,
+) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className="w-full flex-row-reverse justify-start"
+      {...props}
+    />
+  );
+}
 
 type SeasonSectionProps = {
   collection: TitleCollection;
@@ -156,6 +181,13 @@ type SeasonSectionProps = {
   pendingEpisodeIds?: ReadonlySet<string>;
   onToggleEpisodeSelected?: (episodeId: string) => void;
   onSetSeasonSelected?: (episodeIds: string[], selected: boolean) => void;
+  /**
+   * Ticks or unticks the header checkbox of a season whose episodes have not
+   * loaded yet. The owner loads them and selects the season once they arrive.
+   */
+  onToggleUnloadedSeasonSelected?: (collectionId: string) => void;
+  /** The season was ticked before its episodes loaded and is waiting on them. */
+  seasonSelectionQueued?: boolean;
 };
 
 const EPISODE_SCOPED_PROPS = new Set<keyof SeasonSectionProps>([
@@ -276,6 +308,8 @@ function SeasonSectionImpl({
   pendingEpisodeIds,
   onToggleEpisodeSelected,
   onSetSeasonSelected,
+  onToggleUnloadedSeasonSelected,
+  seasonSelectionQueued = false,
 }: SeasonSectionProps) {
   const t = useTranslate();
   const seasonSearchPresentation = React.useMemo(
@@ -299,8 +333,12 @@ function SeasonSectionImpl({
   const isMobile = useIsNarrowElement(sectionRef, EPISODE_TABLE_MIN_WIDTH);
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const [seasonToggling, setSeasonToggling] = React.useState(false);
-  const [detailsOpen, setDetailsOpen] = React.useState(false);
   const [seasonSearchOpen, setSeasonSearchOpen] = React.useState(false);
+  const actionsInMenu = useIsNarrowElement(
+    sectionRef,
+    SEASON_ACTIONS_MENU_MAX_WIDTH,
+  );
+  const [actionsMenuOpen, setActionsMenuOpen] = React.useState(false);
   const stableSubtitleDownloads = subtitleDownloads ?? EMPTY_SUBTITLE_DOWNLOADS;
   const selectionEnabled = Boolean(onToggleEpisodeSelected);
 
@@ -329,12 +367,33 @@ function SeasonSectionImpl({
       : "indeterminate";
   }, [selectableEpisodeIds, selectedEpisodeIds]);
 
+  const seasonSelectable = seasonHasSelectableEpisodes({
+    episodesReady,
+    selectableEpisodeCount: selectableEpisodeIds.length,
+    episodeRecordsTotal: collection.episodeRecordsTotal,
+  });
+  const seasonCheckboxState =
+    !episodesReady && seasonSelectionQueued ? true : seasonSelectionState;
+
   const handleToggleSeasonSelection = React.useCallback(() => {
+    if (!episodesReady) {
+      // A collapsed season has not loaded its episodes; the owner loads them
+      // and applies the selection once they arrive.
+      onToggleUnloadedSeasonSelected?.(collection.id);
+      return;
+    }
     if (!onSetSeasonSelected) {
       return;
     }
     onSetSeasonSelected(selectableEpisodeIds, seasonSelectionState !== true);
-  }, [onSetSeasonSelected, seasonSelectionState, selectableEpisodeIds]);
+  }, [
+    collection.id,
+    episodesReady,
+    onSetSeasonSelected,
+    onToggleUnloadedSeasonSelected,
+    seasonSelectionState,
+    selectableEpisodeIds,
+  ]);
 
   const seasonCheckedState: boolean | "indeterminate" = React.useMemo(() => {
     if (episodes.length === 0) {
@@ -471,41 +530,6 @@ function SeasonSectionImpl({
       data-collection-id={collection.id}
       className="overflow-hidden rounded-lg border border-border bg-background/40"
     >
-      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent id={`season-details-dialog-${collection.id}`}>
-          <DialogHeader>
-            <DialogTitle>
-              {seasonHeading(collection, t)} — {t("episode.details")}
-            </DialogTitle>
-          </DialogHeader>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 text-sm">
-            <dt className="text-muted-foreground">
-              {t("title.table.monitored")}
-            </dt>
-            <dd>{t(collection.monitored ? "label.yes" : "label.no")}</dd>
-            <dt className="text-muted-foreground">
-              {t("title.table.episodes")}
-            </dt>
-            <dd>
-              {episodesReady ||
-              (collection.episodesTotal != null &&
-                collection.episodesOwned != null &&
-                collection.episodesMonitored != null)
-                ? t("title.table.episodeProgressTooltipWithTotal", {
-                    owned: collectionMetrics.ownedEpisodes,
-                    total: collectionMetrics.totalEpisodes,
-                    monitored: collectionMetrics.monitoredEpisodes,
-                  })
-                : t("label.unknown")}
-              {episodeRangeLabel ? (
-                <p className="text-muted-foreground">{episodeRangeLabel}</p>
-              ) : null}
-            </dd>
-            <dt className="text-muted-foreground">{t("title.table.size")}</dt>
-            <dd>{collectionSizeLabel ?? t("label.unknown")}</dd>
-          </dl>
-        </DialogContent>
-      </Dialog>
       {showCollectionHeader ? (
         <div
           id={seriesOverviewSeasonToggleId(collection.collectionIndex)}
@@ -519,9 +543,15 @@ function SeasonSectionImpl({
               onToggle();
             }
           }}
-          className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80"
+          // The section clips to its rounded border, so the focus ring is drawn
+          // inset and the header takes the section's corner radius, keeping the
+          // ring whole at the corners.
+          className={cn(
+            "flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--scry-focus)]",
+            expanded ? "rounded-t-[inherit]" : "rounded-[inherit]",
+          )}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             {selectionEnabled ? (
               // On desktop this mirrors the table's 40px selection column
               // (pulled back through the header's px-4) so the season and
@@ -536,8 +566,11 @@ function SeasonSectionImpl({
                   id={seriesOverviewSeasonSelectId(collection.id)}
                   size="table"
                   className="shrink-0"
-                  checked={seasonSelectionState}
-                  disabled={!episodesReady || selectableEpisodeIds.length === 0}
+                  checked={seasonCheckboxState}
+                  disabled={
+                    !seasonSelectable ||
+                    (!episodesReady && !onToggleUnloadedSeasonSelected)
+                  }
                   aria-label={t("seriesOverview.selectSeasonForDelete", {
                     name: seasonHeading(collection, t),
                   })}
@@ -581,7 +614,7 @@ function SeasonSectionImpl({
             </button>
             <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground">
+              <p className="truncate text-sm font-semibold text-foreground">
                 {seasonHeading(collection, t)}
               </p>
               {episodeRangeLabel ? (
@@ -591,7 +624,12 @@ function SeasonSectionImpl({
               ) : null}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div
+            className={cn(
+              "ml-auto flex shrink-0 items-center gap-2 empty:hidden",
+              actionsInMenu && "gap-1.5",
+            )}
+          >
             {collectionSizeLabel ? (
               <span className="text-xs tabular-nums text-muted-foreground">
                 {collectionSizeLabel}
@@ -601,28 +639,102 @@ function SeasonSectionImpl({
               <EpisodeProgressBar
                 progress={collectionEpisodeProgress}
                 compact
-                className="w-[6.75rem]"
+                className={actionsInMenu ? "w-20" : "w-[6.75rem]"}
               />
             ) : null}
-            {canRefreshScores ? (
+            {actionsInMenu ? (
+              <Popover open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    id={`season-actions-${collection.id}`}
+                    type="button"
+                    size="icon-sm"
+                    variant="secondary"
+                    aria-label={`${seasonHeading(collection, t)} — ${t("label.actions")}`}
+                    className={cn(
+                      boxedActionButtonBaseClass,
+                      boxedActionButtonToneClass.neutral,
+                      "ml-auto shrink-0",
+                    )}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <EllipsisVertical className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  className="flex w-max flex-col gap-0.5 p-1"
+                  onKeyDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  {canRefreshScores ? (
+                    <RefreshScoresButton
+                      appearance="menu"
+                      id={`season-refresh-scores-${collection.id}`}
+                      selection={{ seasonIds: [collection.id] }}
+                    />
+                  ) : null}
+                  {onOpenSeasonHistory ? (
+                    <SeasonActionsMenuItem
+                      id={`season-history-${collection.id}`}
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        onOpenSeasonHistory(collection);
+                      }}
+                    >
+                      <History className="h-4 w-4" />
+                      {t("history.title")}
+                    </SeasonActionsMenuItem>
+                  ) : null}
+                  {onRunSeasonSearch ? (
+                    <SeasonActionsMenuItem
+                      id={seriesOverviewSeasonSearchId(collection.id)}
+                      disabled={seasonSearchLoading === true}
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        onRunSeasonSearch();
+                      }}
+                    >
+                      {seasonSearchLoading === true ? (
+                        <LoadingMark className="h-4 w-4" />
+                      ) : (
+                        <Zap className="h-4 w-4" />
+                      )}
+                      {t("label.search")}
+                    </SeasonActionsMenuItem>
+                  ) : null}
+                  {onRunSeasonInteractiveSearch && onQueueFromSeasonSearch ? (
+                    <SeasonActionsMenuItem
+                      id={seriesOverviewSeasonInteractiveSearchId(
+                        collection.id,
+                      )}
+                      disabled={seasonInteractiveSearchLoading}
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        setSeasonSearchOpen(true);
+                        onRunSeasonInteractiveSearch();
+                      }}
+                    >
+                      {seasonInteractiveSearchLoading ? (
+                        <LoadingMark className="h-4 w-4" />
+                      ) : (
+                        <Search className="h-4 w-4" />
+                      )}
+                      {t("label.interactiveSearch")}
+                    </SeasonActionsMenuItem>
+                  ) : null}
+                </PopoverContent>
+              </Popover>
+            ) : null}
+            {canRefreshScores && !actionsInMenu ? (
               <RefreshScoresButton
                 appearance="icon"
                 id={`season-refresh-scores-${collection.id}`}
                 selection={{ seasonIds: [collection.id] }}
               />
             ) : null}
-            <IconButton
-              id={`season-details-${collection.id}`}
-              label={`${seasonHeading(collection, t)} — ${t("episode.details")}`}
-              onKeyDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                setDetailsOpen(true);
-              }}
-            >
-              <Info className="h-4 w-4" />
-            </IconButton>
-            {onOpenSeasonHistory ? (
+            {onOpenSeasonHistory && !actionsInMenu ? (
               <IconButton
                 id={`season-history-${collection.id}`}
                 label={`${seasonHeading(collection, t)} — ${t("history.title")}`}
@@ -635,7 +747,7 @@ function SeasonSectionImpl({
                 <History className="h-4 w-4" />
               </IconButton>
             ) : null}
-            {onRunSeasonSearch ? (
+            {onRunSeasonSearch && !actionsInMenu ? (
               <EpisodeTableActionButton
                 id={seriesOverviewSeasonSearchId(collection.id)}
                 tone="auto"
@@ -658,7 +770,9 @@ function SeasonSectionImpl({
                 )}
               </EpisodeTableActionButton>
             ) : null}
-            {onRunSeasonInteractiveSearch && onQueueFromSeasonSearch ? (
+            {onRunSeasonInteractiveSearch &&
+            onQueueFromSeasonSearch &&
+            !actionsInMenu ? (
               <EpisodeTableActionButton
                 id={seriesOverviewSeasonInteractiveSearchId(collection.id)}
                 tone="search"
@@ -704,29 +818,35 @@ function SeasonSectionImpl({
           })}
           description={t("series.interactiveSearchSeason")}
         >
-          <div className="mb-2 flex items-start gap-4">
-            <ReleaseSearchSummary
-              presentation={seasonSearchPresentation}
-              results={seasonSearchResults ?? EMPTY_RELEASES}
-              dataUi="season-release-search-summary"
-            />
-          </div>
-          {seasonSearchPresentation.showInitialLoader ? (
-            <ReleaseSearchLoader />
-          ) : seasonSearchResults && seasonSearchResults.length > 0 ? (
-            <SearchResultBuckets
-              titleId={collection.titleId}
-              ownedScope={{ collectionId: collection.id }}
-              results={seasonSearchResults}
-              onQueue={(release) =>
-                onQueueFromSeasonSearch(collection, release)
-              }
-              requireCandidateToken
-            />
+          {searchBlocked ? (
+            <TitleSearchDownloadClientNotice />
           ) : (
-            <p className="text-sm text-muted-foreground">
-              {t("nzb.noResultsYet")}
-            </p>
+            <>
+              <div className="mb-2 flex items-start gap-4">
+                <ReleaseSearchSummary
+                  presentation={seasonSearchPresentation}
+                  results={seasonSearchResults ?? EMPTY_RELEASES}
+                  dataUi="season-release-search-summary"
+                />
+              </div>
+              {seasonSearchPresentation.showInitialLoader ? (
+                <ReleaseSearchLoader />
+              ) : seasonSearchResults && seasonSearchResults.length > 0 ? (
+                <SearchResultBuckets
+                  titleId={collection.titleId}
+                  ownedScope={{ collectionId: collection.id }}
+                  results={seasonSearchResults}
+                  onQueue={(release) =>
+                    onQueueFromSeasonSearch(collection, release)
+                  }
+                  requireCandidateToken
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {t("nzb.noResultsYet")}
+                </p>
+              )}
+            </>
           )}
         </InteractiveSearchDialog>
       ) : null}

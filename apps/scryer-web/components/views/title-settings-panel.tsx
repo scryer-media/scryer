@@ -39,7 +39,6 @@ export function TitleSettingsPanel({
   onOpenFixMatch,
   footerActions,
   footerContent,
-  experimentalFeaturesEnabled = false,
 }: {
   id?: string;
   /** Prefix for every control's id, so each overview keeps its own. */
@@ -58,12 +57,6 @@ export function TitleSettingsPanel({
   footerActions?: React.ReactNode;
   /** Content shown under the footer actions. */
   footerContent?: React.ReactNode;
-  /**
-   * Whether the move entry point is offered on this instance. The flag is read
-   * once by the view that owns this panel and passed down, so the panel keeps
-   * a module graph that server-renders.
-   */
-  experimentalFeaturesEnabled?: boolean;
 }) {
   const client = useClient();
   const [movieAvailability, setMovieAvailability] =
@@ -167,9 +160,7 @@ export function TitleSettingsPanel({
         idPrefix={idPrefix}
         currentLibraryName={currentLibraryName}
         rootFolderReadOnly
-        onOpenMove={
-          experimentalFeaturesEnabled ? () => setMoveOpen(true) : undefined
-        }
+        onOpenMove={() => setMoveOpen(true)}
         footer={
           <>
             <div className="flex flex-wrap items-center justify-end gap-2 px-3 py-3">
@@ -196,15 +187,13 @@ export function TitleSettingsPanel({
           </>
         }
       />
-      {experimentalFeaturesEnabled ? (
-        <MoveTitlesDialog
-          open={moveOpen}
-          onOpenChange={setMoveOpen}
-          titles={[movedTitle]}
-          libraries={moveLibraries}
-          initialRootId={null}
-        />
-      ) : null}
+      <MoveTitlesDialog
+        open={moveOpen}
+        onOpenChange={setMoveOpen}
+        titles={[movedTitle]}
+        libraries={moveLibraries}
+        initialRootId={null}
+      />
     </div>
   );
 }

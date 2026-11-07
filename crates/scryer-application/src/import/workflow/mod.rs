@@ -28,8 +28,11 @@ use scryer_domain::{
     Collection, CollectionType, CompletedDownload, DomainEventPayload, DownloadQueueItem, Id,
     ImportCompletedEventData, ImportDecision, ImportErrorCode, ImportRecord, ImportResult,
     ImportSkipReason, ImportStatus, ImportType, MediaFacet, PostedFileName, Title,
-    TrackedDownloadState, User, is_video_file,
+    TrackedDownloadState, User,
 };
+// Only a standalone library suffix makes an import candidate, the same list
+// library scans catalog; probe-only suffixes and disc companions never do.
+use scryer_domain::is_standalone_video_file as is_video_file;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -306,9 +309,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<Vec<crate::ActiveImportStream>> {
-        let allowed_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+        let allowed_library_ids = self.require_privileged_library_ids(actor, None).await?;
         Ok(self
             .runtime
             .imports
@@ -324,11 +325,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<tokio::sync::watch::Receiver<crate::ActiveImportStreamSync>> {
-        if self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?
-            .is_empty()
-        {
+        if self.privileged_library_ids(actor, None).await?.is_empty() {
             return Err(AppError::unauthorized_reason(
                 crate::error_reasons::import::DO_NOT_ACCESS_ANY_LIBRARIES,
                 "You do not have access to any libraries".to_string(),

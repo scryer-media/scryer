@@ -84,8 +84,10 @@ function Stream({ stream }: { stream: MediaStreamDetail }) {
             </dd>
             <dt>{t("mediaFile.streamPixelFormat")}</dt>
             <dd>
-              {metadata.pixelFormat ?? unknown} / {metadata.bitDepth ?? "?"}
-              {t("uiText.bit")}
+              {metadata.pixelFormat ?? unknown} /{" "}
+              {t("mediaFile.bitDepthValue", {
+                depth: metadata.bitDepth ?? "?",
+              })}
             </dd>
             <dt>{t("mediaFile.streamFieldOrder")}</dt>
             <dd>{metadata.fieldOrder ?? unknown}</dd>

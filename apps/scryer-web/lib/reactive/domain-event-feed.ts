@@ -138,8 +138,13 @@ export type ReactiveRefreshRegistration = {
   aliasKey: string;
   /** Decides whether a given domain event should refresh this alias. */
   predicate: DomainEventPredicate;
-  /** Performs the refresh. Invoked (coalesced) after a matching event. */
-  run: () => void;
+  /**
+   * Performs the refresh. Invoked (coalesced) after matching events, with the
+   * events that matched since the last run, so a view can refresh only what
+   * they name. `null` means the changes are unknown (the degraded interval or
+   * a reconnect without a cursor): anything this alias covers may be stale.
+   */
+  run: (events: readonly DomainEvent[] | null) => void;
   /** Optional error sink for throws from `run`. */
   onError?: (error: unknown) => void;
 };
@@ -186,7 +191,9 @@ export function createReactiveRefreshEngine(options?: {
   const scheduler = options?.scheduler ?? defaultScheduler;
 
   const registrations = new Map<string, ReactiveRefreshRegistration>();
-  const pendingAliasKeys = new Set<string>();
+  // Matched events per pending alias; `null` once `runAll` has queued it,
+  // since the changes it stands for are unknown.
+  const pendingAliasKeys = new Map<string, DomainEvent[] | null>();
   let flushHandle: unknown = null;
   let lastSequenceRaw: number | string | null = null;
   let lastSequenceNum: number | null = null;
@@ -199,15 +206,15 @@ export function createReactiveRefreshEngine(options?: {
     if (pendingAliasKeys.size === 0) {
       return;
     }
-    const aliasKeys = Array.from(pendingAliasKeys);
+    const pending = Array.from(pendingAliasKeys);
     pendingAliasKeys.clear();
-    for (const aliasKey of aliasKeys) {
+    for (const [aliasKey, events] of pending) {
       const registration = registrations.get(aliasKey);
       if (!registration) {
         continue;
       }
       try {
-        registration.run();
+        registration.run(events);
       } catch (error) {
         if (registration.onError) {
           registration.onError(error);
@@ -280,7 +287,12 @@ export function createReactiveRefreshEngine(options?: {
         return [];
       }
       for (const aliasKey of matched) {
-        pendingAliasKeys.add(aliasKey);
+        const events = pendingAliasKeys.get(aliasKey);
+        if (events === undefined) {
+          pendingAliasKeys.set(aliasKey, [event]);
+        } else if (events !== null) {
+          events.push(event);
+        }
       }
       scheduleFlush();
       return matched;
@@ -296,7 +308,7 @@ export function createReactiveRefreshEngine(options?: {
         return;
       }
       for (const aliasKey of registrations.keys()) {
-        pendingAliasKeys.add(aliasKey);
+        pendingAliasKeys.set(aliasKey, null);
       }
       scheduleFlush();
     },

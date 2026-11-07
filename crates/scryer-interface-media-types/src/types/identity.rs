@@ -285,6 +285,31 @@ pub struct CompleteInitialAuthenticationInput {
     pub acknowledge_no_authentication: bool,
     /// One-time setup code authorizing the initial authentication decision.
     pub setup_code: Option<String>,
+    /// Who may reach this instance. Omission leaves the listening address
+    /// alone; ignored when SCRYER_BIND sets it.
+    pub network_access: Option<InitialNetworkAccess>,
+}
+
+/// Who may reach a newly set up instance.
+#[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq)]
+pub enum InitialNetworkAccess {
+    /// Listen on loopback only.
+    ThisComputer,
+    /// Listen on every IPv4 interface.
+    OtherComputers,
+}
+
+impl InitialNetworkAccess {
+    pub fn to_application(self) -> scryer_application::network_bind::InitialNetworkAccess {
+        match self {
+            Self::ThisComputer => {
+                scryer_application::network_bind::InitialNetworkAccess::ThisComputer
+            }
+            Self::OtherComputers => {
+                scryer_application::network_bind::InitialNetworkAccess::OtherComputers
+            }
+        }
+    }
 }
 
 /// Result of the operator's first-run authentication decision.
@@ -294,6 +319,10 @@ pub struct InitialAuthenticationPayload {
     pub completed: bool,
     /// Login tokens for password authentication; null when authentication is disabled.
     pub login: Option<LoginPayload>,
+    /// Whether the saved network choice takes effect only after a restart.
+    pub restart_required_for_bind: bool,
+    /// Whether the network choice was not saved because SCRYER_BIND sets the address.
+    pub bind_ignored_because_pinned: bool,
 }
 
 /// New password selected after signing in with an administrator-provided temporary password.

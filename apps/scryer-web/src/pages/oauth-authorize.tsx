@@ -394,7 +394,9 @@ export default function OAuthAuthorizePage() {
               id={selectorId("oauth-authorize-heading")}
               className={OAUTH_HEADING_CLASS}
             >
-              {t("uiText.authorize")} {clientName ?? "integration"}
+              {clientName
+                ? t("oauth.authorizeClient", { name: clientName })
+                : t("oauth.authorizeIntegration")}
             </h1>
             <p className={OAUTH_URI_CLASS}>{request.redirectUri}</p>
           </div>

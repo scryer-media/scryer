@@ -51,13 +51,13 @@ impl AppUseCase {
                 .map(|title| title.library_id)
                 .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?,
         };
-        self.require_library_permission(actor, &library_id, scryer_domain::LibraryPermission::View)
+        self.require_privileged_library_access(actor, &library_id)
             .await?;
         Ok(Some(item))
     }
 
     /// Batch variant of [`Self::get_wanted_item`]: loads wanted items by id and
-    /// silently drops those the actor cannot `View`.
+    /// silently drops those outside the actor's privileged libraries.
     pub async fn get_wanted_items_by_ids(
         &self,
         actor: &User,
@@ -69,12 +69,8 @@ impl AppUseCase {
             .acquisition_scope_states
             .list_acquisition_scope_states_by_ids(ids)
             .await?;
-        self.filter_wanted_items_for_permission(
-            actor,
-            items,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await
+        self.filter_wanted_items_for_privileged_access(actor, items)
+            .await
     }
 }
 impl AppUseCase {
@@ -84,9 +80,7 @@ impl AppUseCase {
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<(Vec<AcquisitionScopeState>, i64)> {
         let requested_library_ids = query.library_ids.clone();
-        let mut library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+        let mut library_ids = self.require_privileged_library_ids(actor, None).await?;
         if !requested_library_ids.is_empty() {
             let authorized = library_ids.into_iter().collect::<HashSet<_>>();
             library_ids = requested_library_ids
@@ -646,6 +640,10 @@ impl AppUseCase {
                 item.grabbed_release.as_deref(),
             )
             .await?;
+        self.runtime
+            .acquisition
+            .target_cache
+            .mark_title(&item.title_id);
         self.runtime.acquisition.acquisition_wake.notify_one();
         Ok(())
     }
@@ -745,14 +743,24 @@ impl AppUseCase {
     /// Operator queue replacement: the blocking download is gone, so every
     /// scope it covered re-opens from scratch — score baseline cleared (the
     /// replacement decides on its own merits), all coverage pruned, loop woken.
+    ///
+    /// Rows `kept` covers stay as they are: a release already queued in the
+    /// blocking download's place holds them.
     pub(crate) async fn reset_wanted_items_for_submission_scope(
         &self,
         title_id: &str,
         scope: &SubmissionScope,
+        kept: Option<&SubmissionScope>,
     ) -> AppResult<()> {
-        let wanted_item_ids = self
+        let mut wanted_item_ids = self
             .covered_wanted_item_ids_for_submission_scope(title_id, scope, "")
             .await?;
+        if let Some(kept) = kept {
+            let held = self
+                .covered_wanted_item_ids_for_submission_scope(title_id, kept, "")
+                .await?;
+            wanted_item_ids.retain(|id| !held.contains(id));
+        }
         for wanted_item_id in wanted_item_ids {
             if let Some(item) = self
                 .services

@@ -15,6 +15,7 @@ import { toast } from "sonner";
 
 import {
   continueExternalImportFromConnect,
+  continueExternalImportFromSources,
   isFinalizeBlocked,
 } from "@/lib/external-import-wizard-orchestration";
 import { useExternalImportSetup } from "@/lib/hooks/use-external-import-setup";
@@ -97,6 +98,9 @@ export function SetupImportWizard({
   const {
     loadPreview,
     pollAggregateProgress,
+    pollSourceImport,
+    sourcePollSettled,
+    warmupSettled,
     warmupSessionLost,
     recoverLostWarmup,
     pendingReverify,
@@ -184,12 +188,20 @@ export function SetupImportWizard({
   useEffect(() => {
     if (currentStep !== 5) return;
     void pollAggregateProgress();
-    if (wizard.warmupSettled) return;
+    if (!sourcePollSettled) void pollSourceImport();
+    if (warmupSettled && sourcePollSettled) return;
     const id = setInterval(() => {
-      void pollAggregateProgress();
+      if (!warmupSettled) void pollAggregateProgress();
+      if (!sourcePollSettled) void pollSourceImport();
     }, 3000);
     return () => clearInterval(id);
-  }, [currentStep, wizard.warmupSettled, pollAggregateProgress]);
+  }, [
+    currentStep,
+    warmupSettled,
+    sourcePollSettled,
+    pollSourceImport,
+    pollAggregateProgress,
+  ]);
 
   // A lost warmup session (pruned after a restart / TTL) can't be recovered in
   // place — no retry or preview reload will work against a dead session. Force
@@ -230,12 +242,14 @@ export function SetupImportWizard({
   }, [loadPreview, goToStep]);
 
   const goSourcesContinue = useCallback(async () => {
-    const { ok, error } = await wizard.executeSources();
+    const { ok, error } = await continueExternalImportFromSources(
+      wizard.executeSources,
+      () => goToStep(5, "import"),
+    );
     if (!ok) {
       toast.warning(error ?? t("setup.connectionFailed"));
       return;
     }
-    goToStep(5, "import");
   }, [wizard, t, goToStep]);
 
   // Starting finalize only ACCEPTS the background apply; the hook polls it and
@@ -298,10 +312,15 @@ export function SetupImportWizard({
       onPrimary = () => goToStep(4, "import");
       break;
     case 4:
-      body = <SetupImportSourcesView wizard={wizard} t={t} />;
-      // Block until every selected client/indexer that needs a user-supplied
-      // secret has one (otherwise execute creates non-functional configs).
-      primaryDisabled = wizard.executing || !wizard.sourcesReady;
+      body = (
+        <fieldset disabled={wizard.sourceSubmitted}>
+          <SetupImportSourcesView wizard={wizard} t={t} />
+        </fieldset>
+      );
+      // Block only until discovery is ready. Sources missing a secret are
+      // submitted and fail individually; the summary offers retry and skip.
+      primaryDisabled =
+        wizard.executing || (!wizard.sourceSubmitted && !wizard.sourcesReady);
       onPrimary = () => void goSourcesContinue();
       break;
     case 5:
@@ -315,12 +334,14 @@ export function SetupImportWizard({
       // source-root mappings (e.g. after a refresh that dropped the preview).
       // It also stays disabled for the duration of the background apply, and
       // re-enables for a retry the moment that apply fails.
-      primaryDisabled = isFinalizeBlocked({
-        warmupComplete: wizard.warmupComplete,
-        previewSettled: wizard.previewSettled,
-        mappingReady: wizard.mappingReady,
-        finalizing: wizard.finalizing,
-      });
+      primaryDisabled =
+        !wizard.sourceImportReady ||
+        isFinalizeBlocked({
+          warmupComplete: wizard.warmupComplete,
+          previewSettled: wizard.previewSettled,
+          mappingReady: wizard.mappingReady,
+          finalizing: wizard.finalizing,
+        });
       onPrimary = () => void finish();
       break;
   }

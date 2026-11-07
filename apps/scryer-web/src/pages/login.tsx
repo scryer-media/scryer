@@ -977,8 +977,8 @@ export default function LoginPage() {
               description={t(
                 "uiAttr.Enter_a_code_from_your_authenticator_app_or_a_recovery_code",
               )}
-              submitLabel="Verify"
-              busyLabel="Verifying"
+              submitLabel={t("auth.mfaVerify")}
+              busyLabel={t("auth.mfaVerifying")}
               cancelLabel={t("uiAttr.Back")}
               busy={submitting}
               disabled={submitting}

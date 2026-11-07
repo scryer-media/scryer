@@ -114,7 +114,10 @@ function ValidationBadge({
           aria-expanded={expanded}
           aria-controls={expanded ? errorId : undefined}
           aria-describedby={expanded ? errorId : undefined}
-          className="ml-auto flex h-8 w-[34px] shrink-0 items-center justify-center rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className={cn(
+            "flex h-8 w-[34px] shrink-0 items-center justify-center rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+            expanded ? "absolute right-0 top-0 z-10" : "ml-auto",
+          )}
           onClick={() => setPinned((value) => !value)}
         >
           <X className="h-4 w-4" aria-hidden="true" />
@@ -137,13 +140,14 @@ function ValidationBadge({
           role="region"
           aria-label={label}
           tabIndex={0}
-          className="min-h-0 space-y-2 overflow-y-auto px-3 pb-3 text-xs"
+          className="min-h-0 space-y-2 overflow-y-auto py-2 pl-3 pr-9 text-xs"
         >
           {(errorMessages?.length ? errorMessages : [label]).map(
             (error, index) => (
               <pre
                 key={index}
-                className="whitespace-pre-wrap break-words font-[var(--font-code)] leading-5 [overflow-wrap:anywhere]"
+                data-code-font
+                className="whitespace-pre-wrap break-words leading-5 [overflow-wrap:anywhere]"
               >
                 {formatError ? formatError(error) : error}
               </pre>

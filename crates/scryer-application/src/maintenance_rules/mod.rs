@@ -43,6 +43,7 @@ pub(crate) mod sequence_history;
 pub mod service;
 pub(crate) mod storage;
 pub(crate) mod subjects;
+pub(crate) mod watch_recheck;
 
 pub use action_catalog::{
     MAINTENANCE_ACTION_SCHEMA_VERSION, MaintenanceActionDescriptor, MaintenanceActionKind,

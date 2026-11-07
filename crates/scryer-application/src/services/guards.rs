@@ -195,6 +195,52 @@ impl AcquisitionTitleWalkLocks {
         }
     }
 
+    /// Take the title's walk lock unless a non-background holder has it.
+    ///
+    /// A free lock is taken at once. A background holder is told to yield and
+    /// the lock is awaited, exactly as [`Self::acquire`] does. Any other holder
+    /// (an operator's walk, or another short operator request) answers `None`
+    /// immediately, so a one-shot operator action is refused instead of
+    /// queueing behind a whole operator walk of the title.
+    pub(crate) async fn acquire_unless_interactive(
+        &self,
+        title_id: &str,
+    ) -> Option<TitleWalkGuard> {
+        let (slot, pending) = {
+            let mut locks = self.locks.lock().await;
+            let slot = Self::slot(&mut locks, title_id);
+            if let Ok(guard) = Arc::clone(&slot.lock).try_lock_owned() {
+                slot.set_background_yield(None);
+                return Some(TitleWalkGuard {
+                    _guard: guard,
+                    _slot: slot,
+                });
+            }
+            // The token is set together with the background try-lock under
+            // this table mutex, so its presence names a background holder.
+            let token = slot
+                .background_yield
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()?;
+            token.cancel();
+            let mut pending = Box::pin(Arc::clone(&slot.lock).lock_owned());
+            match futures_util::poll!(pending.as_mut()) {
+                std::task::Poll::Ready(guard) => {
+                    return Some(TitleWalkGuard {
+                        _guard: guard,
+                        _slot: slot,
+                    });
+                }
+                std::task::Poll::Pending => (slot, pending),
+            }
+        };
+        Some(TitleWalkGuard {
+            _guard: pending.await,
+            _slot: slot,
+        })
+    }
+
     /// Take the title's walk lock if it is free, else `None`. The interactive
     /// job's first attempt: it does not disturb a holder, so the job can say it
     /// is waiting before it calls [`Self::acquire`].
@@ -703,6 +749,10 @@ impl BackupExecutionGuardTable {
             locks.insert(key, Arc::downgrade(&created));
             created
         }
+    }
+
+    pub async fn acquire(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.lock_for_key(key.to_string()).await.lock_owned().await
     }
 
     pub async fn try_acquire(&self, key: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {

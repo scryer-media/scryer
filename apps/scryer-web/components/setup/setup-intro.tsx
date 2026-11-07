@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -10,7 +11,12 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { useLocation } from "react-router";
 import { cn } from "@/lib/utils";
+import {
+  initialSetupIntroPhase,
+  setupIntroPhaseForTarget,
+} from "@/lib/utils/setup-intro-phase";
 
 const LOGO_SRC = `${import.meta.env.BASE_URL}scryer-logo.svg`;
 
@@ -26,20 +32,28 @@ const SetupIntroContext = createContext<
 
 /** One load-in owner above the authentication decision and the wizard routes. */
 export function SetupIntroBoundary({ children }: { children: ReactNode }) {
-  const [intro, setIntro] = useState(setupIntroFlies);
+  const { pathname } = useLocation();
+  const [phase, setPhase] = useState(() =>
+    initialSetupIntroPhase(pathname, setupIntroFlies()),
+  );
   const [ready, setReady] = useState(false);
   const targetRef = useRef<HTMLElement | null>(null);
   const register = useCallback((target: HTMLElement | null) => {
     targetRef.current = target;
     setReady(true);
+    setPhase((current) => setupIntroPhaseForTarget(current, target !== null));
   }, []);
-  const finish = useCallback(() => setIntro(false), []);
+  const finish = useCallback(() => setPhase("done"), []);
+  const playing = phase === "playing";
   return (
     <SetupIntroContext.Provider value={register}>
-      <div inert={intro} style={intro ? { visibility: "hidden" } : undefined}>
+      <div
+        inert={playing}
+        style={playing ? { visibility: "hidden" } : undefined}
+      >
         {children}
       </div>
-      {intro && (
+      {playing && (
         <SetupIntroMark targetRef={targetRef} ready={ready} onDone={finish} />
       )}
     </SetupIntroContext.Provider>
@@ -50,7 +64,8 @@ export function SetupIntroBoundary({ children }: { children: ReactNode }) {
 export function useSetupIntroTarget<T extends HTMLElement>(ready = true) {
   const register = useContext(SetupIntroContext);
   const target = useRef<T>(null);
-  useEffect(() => {
+  // Before paint, so a first-run screen never flashes ahead of the logo.
+  useLayoutEffect(() => {
     if (ready) register?.(target.current);
   }, [ready, register]);
   return target;
@@ -140,7 +155,7 @@ function aimAt(flying: HTMLImageElement, target: HTMLElement) {
  * and the artwork has decoded, then flies onto the header logo at `targetRef`.
  *
  * The boundary hides the chosen screen until the logo lands. A null target
- * dismisses the load-in for routes outside setup.
+ * dismisses the load-in if the route it opened on leaves setup.
  */
 function SetupIntroMark({
   targetRef,

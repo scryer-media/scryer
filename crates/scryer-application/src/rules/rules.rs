@@ -809,6 +809,9 @@ impl AppUseCase {
             .acquisition
             .landed_bar_memo
             .reset_for_engine(reads_clock);
+        // Format scores come from the rules, so the format-cutoff half of the
+        // walk's target set follows the engine.
+        self.runtime.acquisition.target_cache.mark_cutoff();
     }
 }
 

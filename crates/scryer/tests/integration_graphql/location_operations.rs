@@ -609,7 +609,7 @@ async fn graphql_location_operation_preview_classifies_a_mixed_selection() {
     // FR-043: the depth is stated before anything moves, and the statement says
     // how much it covers. A same-volume rename copies nothing, so the depth
     // applies to no files (FR-032); the statement stays consistent either way.
-    assert_eq!(preview["verification"]["depth"], "FULL");
+    assert_eq!(preview["verification"]["depth"], "QUICK");
     let verified_files = preview["verification"]["files"]
         .as_i64()
         .expect("verification file count");
@@ -785,7 +785,8 @@ async fn graphql_start_location_operation_accepts_the_previewed_plan() {
     assert_eq!(operation["sourceLibraryId"], library_id);
     assert_eq!(operation["destinationRootId"], destination_root_id);
     assert_eq!(operation["planFingerprint"], fingerprint);
-    assert_eq!(operation["verificationDepth"], "FULL");
+    // No saved preference: the operation records the configured default depth.
+    assert_eq!(operation["verificationDepth"], "QUICK");
     assert_eq!(operation["verificationFallbackCount"], 0);
     assert_eq!(operation["counters"]["titlesTotal"], 1);
     assert_eq!(operation["counters"]["filesTotal"], 1);
@@ -928,6 +929,7 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
                     current_file: None,
                     copying: 0,
                     verifying: 0,
+                    recording: 0,
                     detail: (sequence == 50).then(|| "destination conflict".into()),
                 },
             )
@@ -950,9 +952,29 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
     assert_eq!(summary["totalCount"], 51);
     assert!(summary["titles"].as_array().unwrap().is_empty());
     assert_eq!(page["titles"].as_array().unwrap().len(), 50);
-    assert_eq!(page["titles"][0]["titleId"], "title-50");
-    assert_eq!(page["titles"][0]["hasException"], true);
+    // Queued titles sort ahead of finished ones, so the blocked title waits
+    // on the next page behind the fifty pending ones.
+    assert_eq!(page["titles"][0]["titleId"], "title-0");
+    assert_eq!(page["titles"][0]["hasException"], false);
+    assert!(
+        page["titles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|title| title["titleId"] != "title-50")
+    );
     assert_eq!(page["hasMore"], true);
+    let next = gql(
+        &ctx,
+        r#"query($id: ID!) { locationTransferPage(id: $id, offset: 50) { titles { titleId hasException } } }"#,
+        json!({"id": operation_id}),
+    )
+    .await;
+    assert_no_errors(&next);
+    let next_titles = &next["data"]["locationTransferPage"]["titles"];
+    assert_eq!(next_titles.as_array().unwrap().len(), 1);
+    assert_eq!(next_titles[0]["titleId"], "title-50");
+    assert_eq!(next_titles[0]["hasException"], true);
     assert_eq!(page["generation"], summary["generation"]);
     assert!(summary["etaSeconds"].is_null());
     assert_eq!(
@@ -1730,8 +1752,8 @@ async fn graphql_a_root_change_preview_states_what_the_root_keeps_and_accounts_f
     assert_eq!(plan["sourceRootId"], source_root_id);
     assert_eq!(plan["destinationRootId"], source_root_id);
     assert_eq!(plan["blocksStart"], false, "{preview}");
-    // FR-031: a location operation always verifies at full depth.
-    assert_eq!(plan["verification"]["depth"], "FULL");
+    // With no saved preference the plan carries the configured default depth.
+    assert_eq!(plan["verification"]["depth"], "QUICK");
 
     // FR-029: the stronger confirmation, and the phrase is the shared MOVE.
     assert_eq!(plan["confirmation"]["requirement"], "TYPED");
@@ -2216,4 +2238,244 @@ async fn graphql_a_start_naming_two_destination_forms_is_refused() {
         "typedConfirmation": "MOVE",
     }))
     .await;
+}
+
+#[tokio::test]
+async fn graphql_conflict_resolution_rejects_invalid_selection_with_a_reason() {
+    let ctx = TestContext::new().await;
+    for ids in [json!([]), json!(["same-conflict", "same-conflict"])] {
+        let body = gql(
+            &ctx,
+            r#"mutation PreviewConflicts($input: PendingImportConflictInput!) {
+              previewPendingImportConflicts(input: $input) { planFingerprint }
+            }"#,
+            json!({"input": {"pendingImportIds": ids, "policy": "ADOPT_ALL", "leftovers": "PRESERVE_ALL"}}),
+        ).await;
+        assert_graphql_field_denied(&body, "previewPendingImportConflicts");
+        assert_eq!(
+            body["errors"][0]["extensions"]["reason"],
+            scryer_application::location::conflicts::refusal::SELECTION_INVALID,
+            "selection refusal must remain machine-readable: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn graphql_conflict_resolution_requires_both_import_and_title_permissions() {
+    let ctx = TestContext::new().await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let title = create_catalog_title(
+        &ctx,
+        "Guarded Conflict",
+        MediaFacet::Movie,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    let now = Utc::now().to_rfc3339();
+    let pending = scryer_application::LibraryScanUnmatchedItem {
+        id: "guarded-folder-conflict".to_string(),
+        library_id: library_id.clone(),
+        facet: MediaFacet::Movie,
+        status: scryer_application::PendingImportStatus::Pending,
+        title_id: Some(title.id),
+        scan_session_id: "guarded-conflict-session".to_string(),
+        scan_root: "/synthetic-library".to_string(),
+        item_path: "/synthetic-library/duplicate".to_string(),
+        display_name: "Guarded Conflict".to_string(),
+        query: "Guarded Conflict".to_string(),
+        year_hint: None,
+        reason_code: scryer_application::location::conflicts::PENDING_REASON.to_string(),
+        error_message: None,
+        search_attempts: Vec::new(),
+        size_bytes: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    scryer_application::LibraryScanUnmatchedItemRepository::upsert_library_scan_unmatched_item(
+        &ctx.library_scan_unmatched,
+        &pending,
+    )
+    .await
+    .expect("seed guarded folder conflict");
+
+    // Each actor has exactly one required permission. Neither may inspect a
+    // conflict's title/folders or start its operation with the other missing.
+    for permission in [
+        LibraryPermission::ManageTitles,
+        LibraryPermission::ResolveImports,
+    ] {
+        let mut actor = location_outsider();
+        actor.authorization.libraries.insert(
+            library_id.clone(),
+            LibraryPermissionMask::from_permissions([permission]),
+        );
+        for (field, extra, selection) in [
+            ("previewPendingImportConflicts", "", "planFingerprint"),
+            (
+                "resolvePendingImportConflicts",
+                ", planFingerprint: \"unconfirmed\"",
+                "jobRunId",
+            ),
+        ] {
+            let query = format!(
+                r#"mutation {{ {field}(input: {{
+                pendingImportIds: ["guarded-folder-conflict"],
+                policy: KEEP_ONE, leftovers: MEDIA_ONLY{extra}
+            }}) {{ {selection} }} }}"#
+            );
+            let denied = schema_exec(&ctx, &query, Some(actor.clone())).await;
+            assert_graphql_field_denied(&denied, field);
+            assert_eq!(
+                denied["errors"][0]["extensions"]["reason"],
+                scryer_application::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
+                "authorization must precede folder inspection and confirmation: {denied}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn graphql_conflict_schema_exposes_operation_types_and_explicit_disposal_consent() {
+    let ctx = TestContext::new().await;
+    let body = gql(&ctx, r#"{
+      operation: __type(name: "LocationOperationTypeValue") { enumValues { name } }
+      mode: __type(name: "LocationExecutionModeValue") { enumValues { name } }
+      policy: __type(name: "PendingImportConflictPolicy") { enumValues { name } }
+      leftovers: __type(name: "PendingImportConflictLeftovers") { enumValues { name } }
+      confirm: __type(name: "ResolvePendingImportConflictsInput") { inputFields { name defaultValue } }
+    }"#, json!({})).await;
+    assert_no_errors(&body);
+    let names = |key: &str| {
+        body["data"][key]["enumValues"]
+            .as_array()
+            .expect("enum values")
+            .iter()
+            .map(|value| value["name"].as_str().expect("enum name"))
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert!(names("operation").contains(&"FOLDER_CONSOLIDATION"));
+    assert!(names("operation").contains(&"FOLDER_KEEP_ONE"));
+    assert!(names("mode").contains(&"USER_MOVED_FILES"));
+    assert_eq!(
+        names("policy"),
+        std::collections::BTreeSet::from(["ADOPT_ALL", "KEEP_ONE"])
+    );
+    assert_eq!(
+        names("leftovers"),
+        std::collections::BTreeSet::from(["PRESERVE_ALL", "MEDIA_ONLY"])
+    );
+    let consent = body["data"]["confirm"]["inputFields"]
+        .as_array()
+        .expect("input fields")
+        .iter()
+        .find(|field| field["name"] == "confirmPermanentDelete")
+        .expect("permanent consent field");
+    assert_eq!(
+        consent["defaultValue"], "false",
+        "permanent deletion is never implicit"
+    );
+}
+
+/// Counts the SQL statements sqlx runs, across every thread, so a measurement
+/// can state how many round trips a request costs.
+#[derive(Clone, Default)]
+struct StatementCounter(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl StatementCounter {
+    fn get(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for StatementCounter {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if event.metadata().target() == "sqlx::query" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// A measurement, not a regression check: previews and confirms a root move of
+/// a large synthetic selection on SQLite and prints wall time and statement
+/// counts. Run it on demand with
+/// `cargo nextest run -p scryer --run-ignored only measure_a_bulk_root_move`;
+/// `SCRYER_MEASURE_TITLES` sets the selection size (default 5000).
+#[tokio::test]
+#[ignore = "measurement; run on demand"]
+async fn measure_a_bulk_root_move_preview_and_confirmation() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let counter = StatementCounter::default();
+    tracing::subscriber::set_global_default(tracing_subscriber::registry().with(counter.clone()))
+        .expect("install the statement counter");
+
+    let total: usize = std::env::var("SCRYER_MEASURE_TITLES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5000);
+    let ctx = TestContext::new().await;
+    let first_root = tempfile::tempdir().expect("first root tempdir");
+    let second_root = tempfile::tempdir().expect("second root tempdir");
+    let (_, destination_root_id) =
+        configure_two_movie_roots(&ctx, first_root.path(), second_root.path()).await;
+
+    let mut title_ids = Vec::with_capacity(total);
+    for index in 1..=total {
+        let name = format!("Synthetic Fixture {index:04}");
+        let folder = make_folder(first_root.path(), &format!("{name} (2001)"));
+        let title = movable_title(
+            &ctx,
+            &name,
+            &folder,
+            &format!("Synthetic.Fixture.{index:04}.2001.mkv"),
+        )
+        .await;
+        title_ids.push(title.id);
+    }
+
+    let input = json!({ "input": {
+        "titleIds": title_ids,
+        "destination": { "rootId": destination_root_id }
+    }});
+    let before = counter.get();
+    let started = std::time::Instant::now();
+    let preview = gql(&ctx, PREVIEW_QUERY, input.clone()).await;
+    let preview_wall = started.elapsed();
+    let preview_statements = counter.get() - before;
+    assert_no_errors(&preview);
+    let fingerprint = preview["data"]["locationOperationPreview"]["planFingerprint"]
+        .as_str()
+        .expect("preview fingerprint")
+        .to_string();
+
+    let mut start_input = input;
+    start_input["input"]["planFingerprint"] = json!(fingerprint);
+    let before = counter.get();
+    let started = std::time::Instant::now();
+    let start = gql(&ctx, START_MUTATION, start_input).await;
+    let start_wall = started.elapsed();
+    let start_statements = counter.get() - before;
+    assert_no_errors(&start);
+
+    let line = format!(
+        "bulk root move of {total} titles: preview {preview_wall:?} / {preview_statements} statements; confirmation {start_wall:?} / {start_statements} statements"
+    );
+    println!("{line}");
+    // `SCRYER_MEASURE_OUT` also appends the line to a file, for runners that
+    // swallow test output.
+    if let Ok(path) = std::env::var("SCRYER_MEASURE_OUT") {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open the measurement output");
+        writeln!(file, "{line}").expect("write the measurement");
+    }
 }

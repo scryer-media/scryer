@@ -18,6 +18,7 @@ import {
   oauthClientRegistrationsQuery,
 } from "@/lib/graphql/queries";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { copyText } from "@/lib/utils/clipboard";
 import {
   automaticLinkingStatus,
   canCreateJellyfinPluginClient,
@@ -255,15 +256,10 @@ export function OAuthClientRegistrationsPanel() {
 
   const copyClientId = React.useCallback(
     async (clientId: string) => {
-      if (!navigator.clipboard) {
-        toast.error(t("oauth.ui.Unable_to_copy_the_OAuth_client_ID"));
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(clientId);
-        toast.success(t("oauth.ui.OAuth_client_ID_copied"));
-      } catch {
-        toast.error(t("oauth.ui.Unable_to_copy_the_OAuth_client_ID"));
+      if (await copyText(clientId)) {
+        toast.success(t("settings.oauthClientIdCopied"));
+      } else {
+        toast.error(t("status.copyFailed"));
       }
     },
     [t],
@@ -271,15 +267,10 @@ export function OAuthClientRegistrationsPanel() {
 
   const copyJellyfinCallback = React.useCallback(
     async (callbackUrl: string) => {
-      if (!navigator.clipboard) {
-        toast.error(t("oauth.ui.Unable_to_copy_the_Jellyfin_callback_URL"));
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(callbackUrl);
-        toast.success(t("oauth.ui.Jellyfin_callback_URL_copied"));
-      } catch {
-        toast.error(t("oauth.ui.Unable_to_copy_the_Jellyfin_callback_URL"));
+      if (await copyText(callbackUrl)) {
+        toast.success(t("settings.oauthJellyfinCallbackCopied"));
+      } else {
+        toast.error(t("status.copyFailed"));
       }
     },
     [t],
@@ -497,7 +488,7 @@ export function OAuthClientRegistrationsPanel() {
               <p>
                 {t("uiText.oAuthClient")}{" "}
                 {jellyfinClientStatus === "ready"
-                  ? "ready"
+                  ? t("oauth.ui.ready")
                   : jellyfinClientStatus === "reconciling"
                     ? t("oauth.ui.reconciling_the_created_client")
                     : jellyfinClientStatus === "ambiguous"
@@ -509,7 +500,7 @@ export function OAuthClientRegistrationsPanel() {
               <p>
                 {t("uiText.automaticAccountLinking")}{" "}
                 {linkingStatus === "ready"
-                  ? "ready"
+                  ? t("oauth.ui.ready")
                   : linkingStatus === "ambiguous"
                     ? t(
                         "oauth.ui.ambiguous_more_than_one_eligible_Jellyfin_connection_matches_this_public_URL",
@@ -660,7 +651,7 @@ export function OAuthClientRegistrationsPanel() {
                 />
                 <p className="text-xs text-[var(--scry-muted3)]">
                   {previewCallbackUrl
-                    ? `Exact callback: ${previewCallbackUrl}`
+                    ? t("oauth.ui.exactCallback", { url: previewCallbackUrl })
                     : t(
                         "oauth.ui.Enter_a_public_HTTPS_URL_to_derive_the_exact_callback",
                       )}
@@ -829,7 +820,7 @@ export function OAuthClientRegistrationsPanel() {
                   </Button>
                 </div>
               </div>
-              <ul className="space-y-1 break-all font-[var(--font-code)] text-xs text-[var(--scry-muted3)]">
+              <ul className="space-y-1 break-all font-[family-name:var(--font-code)] text-xs text-[var(--scry-muted3)]">
                 {registeredClient.redirectUris.map((uri) => (
                   <li key={uri}>{uri}</li>
                 ))}
@@ -849,7 +840,9 @@ export function OAuthClientRegistrationsPanel() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
               {editingClient
-                ? `Edit ${editingClient.displayName}`
+                ? t("oauth.ui.editApplication", {
+                    name: editingClient.displayName,
+                  })
                 : t("oauth.ui.Register_an_application")}
             </h4>
             {editingClient ? (
@@ -889,7 +882,7 @@ export function OAuthClientRegistrationsPanel() {
             </Label>
             <textarea
               id="oauth-client-redirect-uris"
-              className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 font-[var(--font-code)] text-xs shadow-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 font-[family-name:var(--font-code)] text-xs shadow-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
               value={draft.redirectUris}
               disabled={busy}
               onChange={(event) =>

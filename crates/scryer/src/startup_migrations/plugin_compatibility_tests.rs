@@ -284,3 +284,59 @@ async fn plugin_compatibility_reports_counts_for_the_completion_log() {
     assert_eq!(repeat.blocked, 1);
     assert_eq!(repeat.unchanged, 1);
 }
+
+#[tokio::test]
+async fn plugin_compatibility_pass_leaves_the_provider_reload_to_the_boot_load() {
+    let ctx = common::TestContext::new().await;
+    let datastore = ctx.db.datastore();
+    let store = DatastoreCustomizationStore::new(datastore.clone());
+    let builtin = builtin_load().descriptor;
+    let replaceable = old_installation(&builtin.id, false);
+    let manual = old_installation("legacy-manual", true);
+    for installation in [&replaceable, &manual] {
+        store
+            .create_plugin_installation(installation, Some(LEGACY_MODULE))
+            .await
+            .unwrap();
+    }
+    let reloads =
+        Arc::new(scryer_application::testing::ReloadCountingListPluginProvider::default());
+    let app = ctx.app.with_test_overrides(|builder| {
+        builder
+            .with_plugin_installation_store(Arc::new(store.clone()))
+            .with_plugin_descriptor_loader(Arc::new(scryer_plugins::WasmPluginDescriptorLoader))
+            .with_list_plugin_provider(reloads.clone())
+    });
+
+    migrate(&app, &datastore, &store).await.unwrap();
+    assert_eq!(
+        reloads.reloads(),
+        0,
+        "the compatibility pass does not reload providers"
+    );
+
+    let report = app.load_runtime_plugins_at_boot().await.unwrap();
+    assert_eq!(
+        reloads.reloads(),
+        1,
+        "the boot load reloads the providers once"
+    );
+    assert_eq!(
+        report.compatibility_blocked,
+        std::slice::from_ref(&manual.plugin_id),
+        "the boot load honours the blocker the pass recorded"
+    );
+    assert!(
+        report
+            .loaded
+            .iter()
+            .any(|plugin| plugin.descriptor.id == builtin.id),
+        "the boot load runs the artifact the pass repaired"
+    );
+    assert!(
+        !report
+            .loaded
+            .iter()
+            .any(|plugin| plugin.descriptor.id == manual.plugin_id)
+    );
+}

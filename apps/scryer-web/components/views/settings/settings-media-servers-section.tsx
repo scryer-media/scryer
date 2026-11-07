@@ -45,6 +45,7 @@ import {
   type VisibleMediaServerProvider,
 } from "@/lib/constants/integration-providers";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type {
   LibraryRecord,
   MediaServerConnection,
@@ -58,6 +59,8 @@ import { selectorId } from "@/lib/utils/dom-ids";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
 import { buildViewPath } from "@/lib/utils/routing";
+import { formatUiDateTime } from "@/lib/utils/date-format";
+import { watchSyncReasonText } from "@/lib/utils/watch-sync-reason";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 type SettingsMediaServersSectionProps = {
@@ -171,6 +174,73 @@ function capabilityBadges(
   return badges.length > 0
     ? badges
     : [{ label: "Connection only", tone: "neutral" }];
+}
+
+/** Whether watch history from this connection was last read in full. */
+function WatchHistoryCell({
+  connection,
+}: {
+  connection: MediaServerConnection;
+}) {
+  const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
+  const sync = connection.watchSignalSync;
+  if (!connection.enabled) {
+    return (
+      <span className="text-muted-foreground">
+        {t("settings.watchHistoryDisabled")}
+      </span>
+    );
+  }
+  if (!sync || (!sync.lastCleanSweepAt && !sync.lastError)) {
+    return (
+      <span className="text-muted-foreground">
+        {t("settings.watchHistoryNotRead")}
+      </span>
+    );
+  }
+  const lastFullRead = sync.lastCleanSweepAt ? (
+    <span
+      className="block text-muted-foreground"
+      title={t("settings.watchHistorySignalCount", {
+        count: sync.signalCount,
+        accounts: sync.participantCount,
+      })}
+    >
+      {t("settings.watchHistoryLastFullRead", {
+        time: formatUiDateTime(sync.lastCleanSweepAt, dateTimeFormat),
+      })}
+    </span>
+  ) : null;
+  if (sync.lastError) {
+    return (
+      <div className="space-y-1">
+        <span
+          className="block text-[var(--scry-danger-text-soft)]"
+          title={t("settings.watchHistoryIncompleteHelp", {
+            reason: watchSyncReasonText(t, sync.lastErrorCode, sync.lastError),
+          })}
+        >
+          {t("settings.watchHistoryIncomplete")}
+        </span>
+        {lastFullRead}
+      </div>
+    );
+  }
+  if (sync.cleanSweepStale) {
+    return (
+      <div className="space-y-1">
+        <span
+          className="block text-[var(--scry-warning-text)]"
+          title={t("settings.watchHistoryStaleHelp")}
+        >
+          {t("settings.watchHistoryStale")}
+        </span>
+        {lastFullRead}
+      </div>
+    );
+  }
+  return lastFullRead;
 }
 
 function MediaServerActionButton({
@@ -309,6 +379,7 @@ export function SettingsMediaServersSection({
                 <TableHead>{t("label.enabled")}</TableHead>
                 <TableHead>{t("settings.capabilities")}</TableHead>
                 <TableHead>{t("settings.credentials")}</TableHead>
+                <TableHead>{t("settings.watchHistory")}</TableHead>
                 <TableHead className="text-right">
                   {t("label.actions")}
                 </TableHead>
@@ -408,6 +479,14 @@ export function SettingsMediaServersSection({
                       </span>
                     )}
                   </TableCell>
+                  <TableCell
+                    id={selectorId(
+                      "settings-media-server-watch-history",
+                      connection.id,
+                    )}
+                  >
+                    <WatchHistoryCell connection={connection} />
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="inline-flex items-center gap-2">
                       <MediaServerActionButton
@@ -479,7 +558,7 @@ export function SettingsMediaServersSection({
               ))}
               {visibleConnections.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-muted-foreground">
+                  <TableCell colSpan={8} className="text-muted-foreground">
                     {t("settings.noMediaServersFound")}
                   </TableCell>
                 </TableRow>

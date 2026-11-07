@@ -11,15 +11,6 @@ const BACKGROUND_HOT_TARGET_VALUE: f64 = 1.0;
 /// admits when quota is healthy — it only defers once quota tightens.
 const BACKGROUND_COLD_TARGET_VALUE: f64 = 0.25;
 
-/// Maximum number of titles whose missing-media acquisition pipelines may be
-/// evaluated concurrently. Indexer strategy admission is bounded separately.
-const BACKGROUND_ACQUISITION_TITLE_LIMIT: usize = 4;
-
-/// How many scopes one cycle may walk, as a multiple of its batch. Scopes whose
-/// walk spent nothing are replaced from further along the rotation; this bounds
-/// how far one cycle follows them.
-const BACKGROUND_ACQUISITION_TOP_UP_FACTOR: usize = 4;
-
 /// How many indexer searches one title may issue in one background walk.
 ///
 /// The walk's time budget alone cannot keep a walk light: several titles run
@@ -61,6 +52,7 @@ const LIST_SYNC_JITTER_WINDOW: std::time::Duration = std::time::Duration::from_s
 #[derive(Debug, Clone, Copy)]
 struct BackgroundAcquisitionSettings {
     max_scopes_per_cycle: usize,
+    walk_intensity: crate::acquisition::walk_intensity::AcquisitionWalkIntensity,
 }
 
 impl AppUseCase {
@@ -77,6 +69,7 @@ impl AppUseCase {
             ) as usize;
         Ok(BackgroundAcquisitionSettings {
             max_scopes_per_cycle,
+            walk_intensity: self.acquisition_walk_intensity().await?,
         })
     }
 }
@@ -258,25 +251,128 @@ impl BackgroundAcquisitionCycleOutcome {
     }
 }
 
-/// `budget` bounds the walk: once it has run that long the cycle starts no
+/// How long one walk may run. Once it has run that long the cycle starts no
 /// further title, the titles in flight stop at their next stage, and the
-/// rotation cursor is left on the first scope the walk did not reach. `None`
-/// walks without a bound.
+/// rotation cursor is left on the first scope the walk did not reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WalkBudget {
+    /// No bound.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Unbounded,
+    /// A fixed length, whatever the intensity.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Fixed(std::time::Duration),
+    /// The poller's walk: the intensity's share of wall time, given the rest
+    /// the cadence takes after every walk.
+    Share { rest: std::time::Duration },
+}
+
+impl WalkBudget {
+    fn slice(
+        self,
+        intensity: crate::acquisition::walk_intensity::AcquisitionWalkIntensity,
+    ) -> Option<std::time::Duration> {
+        match self {
+            Self::Unbounded => None,
+            Self::Fixed(budget) => Some(budget),
+            Self::Share { rest } => Some(intensity.walk_slice(rest)),
+        }
+    }
+}
+
+/// When each lane of one walk has to stop.
+///
+/// Hot scopes are walked first and may use the slice up to the cold tail's
+/// reserve; the cold long tail then gets at most
+/// [`COLD_SUB_SLICE_PERCENT`](crate::acquisition::walk_intensity::COLD_SUB_SLICE_PERCENT)
+/// of the slice, counted from its first title, and never past the slice's end.
+/// A walk with no cold targets gives the hot lane the whole slice.
+#[derive(Debug)]
+struct WalkDeadlines {
+    end: Option<tokio::time::Instant>,
+    hot: Option<tokio::time::Instant>,
+    cold_sub_slice: Option<std::time::Duration>,
+    cold: std::sync::OnceLock<Option<tokio::time::Instant>>,
+}
+
+impl WalkDeadlines {
+    fn new(
+        started: tokio::time::Instant,
+        slice: Option<std::time::Duration>,
+        has_cold_targets: bool,
+    ) -> Self {
+        let cold_sub_slice = slice
+            .map(|slice| slice * crate::acquisition::walk_intensity::COLD_SUB_SLICE_PERCENT / 100);
+        let end = slice.map(|slice| started + slice);
+        let hot = match (end, cold_sub_slice) {
+            (Some(end), Some(reserve)) if has_cold_targets => Some(end - reserve),
+            _ => end,
+        };
+        Self {
+            end,
+            hot,
+            cold_sub_slice,
+            cold: std::sync::OnceLock::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn unbounded() -> Self {
+        Self::new(tokio::time::Instant::now(), None, false)
+    }
+
+    /// The deadline a title in `hot`'s lane walks under. The cold lane's
+    /// clock starts with the first cold title that asks.
+    fn for_lane(&self, hot: bool) -> Option<tokio::time::Instant> {
+        if hot {
+            return self.hot;
+        }
+        *self
+            .cold
+            .get_or_init(|| match (self.end, self.cold_sub_slice) {
+                (Some(end), Some(sub_slice)) => {
+                    Some(end.min(tokio::time::Instant::now() + sub_slice))
+                }
+                _ => None,
+            })
+    }
+
+    /// Whether `hot`'s lane has run out of time, without starting the cold
+    /// lane's clock.
+    fn lane_passed(&self, hot: bool) -> bool {
+        if hot {
+            return deadline_passed(self.hot);
+        }
+        match self.cold.get() {
+            Some(cold) => deadline_passed(*cold),
+            None => deadline_passed(self.end),
+        }
+    }
+}
+
 async fn run_background_acquisition_cycle(
     app: &AppUseCase,
     pass: BackgroundAcquisitionPass,
-    budget: Option<std::time::Duration>,
+    budget: WalkBudget,
 ) -> BackgroundAcquisitionCycleOutcome {
-    let deadline = budget.map(|budget| tokio::time::Instant::now() + budget);
+    let started = tokio::time::Instant::now();
     let blocked_facets = blocked_acquisition_facets_after_quiet_wait(app).await;
-    run_background_acquisition_cycle_with_blocked_facets(app, &blocked_facets, pass, deadline).await
+    run_background_acquisition_cycle_with_blocked_facets(
+        app,
+        &blocked_facets,
+        pass,
+        started,
+        budget,
+    )
+    .await
 }
 
 pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     app: &AppUseCase,
     blocked_facets: &[MediaFacet],
     pass: BackgroundAcquisitionPass,
-    deadline: Option<tokio::time::Instant>,
+    started: tokio::time::Instant,
+    budget: WalkBudget,
 ) -> BackgroundAcquisitionCycleOutcome {
     let cycle_started = std::time::Instant::now();
     prune_standby_candidates(app).await;
@@ -338,24 +434,43 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         return BackgroundAcquisitionCycleOutcome::default();
     }
 
-    let mut targets = match app.derive_acquisition_targets(&now).await {
+    let walk_cpu_started = crate::acquisition::walk_metrics::process_cpu_seconds();
+    let targets_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+        crate::acquisition::walk_metrics::WalkSection::Targets,
+    );
+    // The set is held between walks and patched on change; a walk with
+    // nothing changed since the last one reads nothing to obtain it.
+    let walk_targets = match app.walk_targets(&now, blocked_facets).await {
         Ok(targets) => targets,
         Err(err) => {
             warn!(error = %err, "failed to derive acquisition targets");
             return BackgroundAcquisitionCycleOutcome::default();
         }
     };
-    if !blocked_facets.is_empty() {
-        targets.retain(|target| !blocked_facets.contains(&target.facet));
-    }
+    let targets = walk_targets.as_slice();
+    drop(targets_timer);
     if targets.is_empty() {
         return BackgroundAcquisitionCycleOutcome::default();
     }
 
+    // A large backlog turns `normal` quiet; the walk reads its slice, its
+    // concurrency and its cold page depth from what it actually runs at.
+    let intensity = settings.walk_intensity.effective(targets.len());
+    app.runtime
+        .acquisition
+        .walk_intensity
+        .store(intensity.to_index(), std::sync::atomic::Ordering::Relaxed);
+    let deadlines = WalkDeadlines::new(
+        started,
+        budget.slice(intensity),
+        targets.iter().any(|target| !target.is_hot),
+    );
+    let deadline = deadlines.end;
+
     let hot_resume = app.background_acquisition_hot_resume_position().await;
     let resume = app.background_acquisition_resume_position().await;
     let max_scopes = settings.max_scopes_per_cycle.max(1);
-    let scan_limit = max_scopes.saturating_mul(BACKGROUND_ACQUISITION_TOP_UP_FACTOR);
+    let scan_limit = max_scopes.saturating_mul(intensity.scan_top_up_factor());
 
     // Scheduler availability, resolved once per cycle for the pre-skip.
     let availability = app.scheduler_availability().await;
@@ -407,8 +522,11 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             stop = WalkStopReason::combine(stop, WalkStopReason::Deadline);
             break;
         }
+        let selection_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+            crate::acquisition::walk_metrics::WalkSection::BatchSelection,
+        );
         let selection = crate::acquisition::targets::select_background_acquisition_batch(
-            &targets,
+            targets,
             hot_cursor.as_deref(),
             cursor.as_deref(),
             budget.min(scan_limit.saturating_sub(walked.len())),
@@ -424,6 +542,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             selection.resume_after.as_deref(),
         )
         .await;
+        drop(selection_timer);
         let (hot_cursor_before, cursor_before) = (hot_cursor.take(), cursor.take());
         hot_cursor = selection.hot_resume_after;
         cursor = selection.resume_after;
@@ -440,14 +559,15 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         );
         let Some(round) = walk_selected_scopes(
             app,
-            &targets,
+            targets,
             &selection.indices,
             &now,
             &availability,
             &indexer_hosts,
             &cycle,
             &dl_snapshot,
-            deadline,
+            &deadlines,
+            intensity.title_concurrency(),
             titles_walked,
             &rss_yield,
         )
@@ -466,7 +586,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             // A title stopped mid-way leaves its remaining scopes here too, so
             // the next cycle resumes it at its first unwalked scope.
             let rewound_hot = rewound_lane_cursor(
-                &targets,
+                targets,
                 &selection.indices,
                 &round.undispatched,
                 true,
@@ -474,7 +594,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
                 hot_cursor.as_deref(),
             );
             let rewound_cold = rewound_lane_cursor(
-                &targets,
+                targets,
                 &selection.indices,
                 &round.undispatched,
                 false,
@@ -529,6 +649,15 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         indexer_queries,
         stop,
     };
+    metrics::histogram!(crate::acquisition::walk_metrics::WALK_SECONDS)
+        .record(cycle_started.elapsed().as_secs_f64());
+    if let (Some(started), Some(ended)) = (
+        walk_cpu_started,
+        crate::acquisition::walk_metrics::process_cpu_seconds(),
+    ) {
+        metrics::histogram!(crate::acquisition::walk_metrics::WALK_PROCESS_CPU_SECONDS)
+            .record((ended - started).max(0.0));
+    }
     // One INFO line per walk, worded for why it ended.
     let stop_reason = stop.map_or("none", WalkStopReason::as_str);
     let elapsed_secs = cycle_started.elapsed().as_secs();
@@ -543,6 +672,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             indexer_queries,
             elapsed_secs,
             stop_reason,
+            intensity = intensity.as_str(),
             "background acquisition walk reached its time budget; the next cycle continues from its cursor"
         ),
         Some(WalkStopReason::QueryBudget) => info!(
@@ -559,6 +689,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             indexer_queries,
             elapsed_secs,
             stop_reason,
+            intensity = intensity.as_str(),
             "background acquisition walk finished its selection"
         ),
     }
@@ -566,6 +697,8 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     tracing::debug!(
         titles_walked = outcome.titles_walked,
         targets_derived = outcome.targets_derived,
+        target_source = walk_targets.read.as_str(),
+        intensity = intensity.as_str(),
         selected_scopes = walked.len(),
         deferred_scopes = outcome.deferred_scopes,
         skipped_locked_titles = outcome.skipped_locked_titles,
@@ -623,8 +756,9 @@ fn rewound_lane_cursor(
     }
 }
 
-/// Walk the selected scopes, at most [`BACKGROUND_ACQUISITION_TITLE_LIMIT`]
-/// titles at a time. `None` when the selected titles could not be loaded.
+/// Walk the selected scopes, at most `title_limit` titles at a time, each
+/// under its lane's deadline. `None` when the selected titles could not be
+/// loaded.
 #[expect(
     clippy::too_many_arguments,
     reason = "the dispatch carries the cycle-wide acquisition inputs"
@@ -638,10 +772,12 @@ async fn walk_selected_scopes(
     indexer_hosts: &HashMap<String, String>,
     cycle: &Arc<BackgroundAcquisitionCycleCoordinator>,
     dl_snapshot: &DownloadClientSnapshot,
-    deadline: Option<tokio::time::Instant>,
+    deadlines: &WalkDeadlines,
+    title_limit: usize,
     titles_walked_before: usize,
     rss_yield: &tokio_util::sync::CancellationToken,
 ) -> Option<SelectedScopesWalk> {
+    let title_limit = title_limit.max(1);
     // Count selected episode scopes per (title_id, season_num). Season pack
     // search is only worthwhile when >= 2 episodes from the same season are in
     // this cycle — mirroring Sonarr's "count > 1 missing" rule before issuing a
@@ -683,18 +819,29 @@ async fn walk_selected_scopes(
     debug!(
         selected_count = indices.len(),
         title_count = ready_titles.len(),
-        title_limit = BACKGROUND_ACQUISITION_TITLE_LIMIT,
+        title_limit,
         "background acquisition cycle: dispatching title work"
     );
 
+    let title_is_hot = |work: &BackgroundAcquisitionTitleWork| {
+        work.ready.iter().any(|work| {
+            targets
+                .get(work.target_index)
+                .is_some_and(|target| target.is_hot)
+        })
+    };
     let mut dispatched = 0usize;
     let mut out_of_time = false;
+    // Titles whose lane ran out of time while the other lane still had some;
+    // they go back on the cursor with the titles never reached.
+    let mut lane_expired = VecDeque::new();
     loop {
-        while in_flight.len() < BACKGROUND_ACQUISITION_TITLE_LIMIT {
+        while in_flight.len() < title_limit {
             // The budget is checked here between titles, and again inside each
             // title between its stages. A cycle always walks at least one
             // title so it cannot stall.
-            if titles_walked_before + dispatched > 0 && deadline_passed(deadline) {
+            let walked_any = titles_walked_before + dispatched > 0;
+            if walked_any && deadline_passed(deadlines.end) {
                 out_of_time = true;
             }
             if out_of_time || rss_yield.is_cancelled() {
@@ -703,6 +850,12 @@ async fn walk_selected_scopes(
             let Some(title_work) = ready_titles.pop_front() else {
                 break;
             };
+            let hot = title_is_hot(&title_work);
+            if walked_any && deadlines.lane_passed(hot) {
+                lane_expired.push_back(title_work);
+                continue;
+            }
+            let deadline = deadlines.for_lane(hot);
             let Some(title) = titles_by_id.get(&title_work.title_id).cloned() else {
                 warn!(
                     title_id = title_work.title_id.as_str(),
@@ -830,6 +983,7 @@ async fn walk_selected_scopes(
         }
     }
 
+    ready_titles.extend(lane_expired);
     if !ready_titles.is_empty() {
         let unreached = ready_titles
             .iter()
@@ -962,22 +1116,64 @@ fn submission_blocks_search_for_wanted_item(
 }
 
 impl AppUseCase {
+    /// Indexer pages one background search reads per pass, from its lane's
+    /// value hint: a hot scope reads the full depth, a cold one the depth of
+    /// the intensity the walk runs at.
+    pub(crate) fn background_pages_per_pass(&self, background_value: f64) -> u32 {
+        if background_value >= BACKGROUND_HOT_TARGET_VALUE {
+            crate::acquisition::walk_intensity::HOT_PAGES_PER_PASS
+        } else {
+            self.current_walk_intensity().cold_pages_per_pass().max(1)
+        }
+    }
+
+    /// Search results one background search scores, from its lane's value
+    /// hint: a hot scope scores everything it found, a cold one at most the
+    /// cap of the intensity the walk runs at.
+    pub(crate) fn background_evaluation_cap(&self, background_value: f64) -> Option<usize> {
+        (background_value < BACKGROUND_HOT_TARGET_VALUE)
+            .then(|| self.current_walk_intensity().evaluated_results_per_search())
+    }
+
+    fn current_walk_intensity(
+        &self,
+    ) -> crate::acquisition::walk_intensity::AcquisitionWalkIntensity {
+        crate::acquisition::walk_intensity::AcquisitionWalkIntensity::from_index(
+            self.runtime
+                .acquisition
+                .walk_intensity
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+}
+
+impl AppUseCase {
     /// One convergence cycle, returning what it walked so a test can assert on
     /// the deferral counters the poller re-arms from.
     #[cfg(test)]
     pub(crate) async fn run_background_acquisition_cycle_once(
         &self,
     ) -> BackgroundAcquisitionCycleOutcome {
-        run_background_acquisition_cycle(self, BackgroundAcquisitionPass::Full, None).await
+        run_background_acquisition_cycle(
+            self,
+            BackgroundAcquisitionPass::Full,
+            WalkBudget::Unbounded,
+        )
+        .await
     }
 
-    /// One full cycle under a walk budget, as the poller runs it.
+    /// One full cycle under a fixed walk budget.
     #[cfg(test)]
     pub(crate) async fn run_background_acquisition_cycle_with_budget_once(
         &self,
         budget: std::time::Duration,
     ) -> BackgroundAcquisitionCycleOutcome {
-        run_background_acquisition_cycle(self, BackgroundAcquisitionPass::Full, Some(budget)).await
+        run_background_acquisition_cycle(
+            self,
+            BackgroundAcquisitionPass::Full,
+            WalkBudget::Fixed(budget),
+        )
+        .await
     }
 
     /// One pass of the given kind, so a test can show what the tick between
@@ -987,7 +1183,7 @@ impl AppUseCase {
         &self,
         pass: BackgroundAcquisitionPass,
     ) -> BackgroundAcquisitionCycleOutcome {
-        run_background_acquisition_cycle(self, pass, None).await
+        run_background_acquisition_cycle(self, pass, WalkBudget::Unbounded).await
     }
 }
 
@@ -1558,6 +1754,8 @@ impl AcquisitionWalkIntent {
     }
 
     /// The candidate-value hint a search issued under this intent carries.
+    /// The two background values double as the lane marker
+    /// [`AppUseCase::background_pages_per_pass`] reads.
     ///
     /// `None` is the operator lane: the search client admits it through the
     /// interactive semaphore, skips the background corpus reuse, and the
@@ -4512,6 +4710,9 @@ async fn process_single_target(
         .collect::<Vec<_>>();
 
     session.stats.queries += 1;
+    let search_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+        crate::acquisition::walk_metrics::WalkSection::ScopeSearch,
+    );
     let search_outcome = match app
         .search_and_score_subject_with_context(
             &search_title,
@@ -4536,6 +4737,7 @@ async fn process_single_target(
             return Ok(());
         }
     };
+    drop(search_timer);
     if let Some(scope_key) = convergence_scope_key.as_deref() {
         app.link_search_session_coverage_scope(&search_outcome.search_session_id, scope_key)
             .await;
@@ -4551,6 +4753,9 @@ async fn process_single_target(
     }
     // One evaluation over the union, so the merged rows are ranked by the same
     // comparator as the rest rather than appended past it.
+    let evaluation_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+        crate::acquisition::walk_metrics::WalkSection::Evaluation,
+    );
     let results = app
         .evaluate_search_results_for_subject_with_missing_history(
             &search_title,
@@ -4561,6 +4766,10 @@ async fn process_single_target(
             !session.options.intent.is_interactive(),
         )
         .await?;
+    drop(evaluation_timer);
+    let learning_timer = crate::acquisition::walk_metrics::SectionTimer::start(
+        crate::acquisition::walk_metrics::WalkSection::LearningWrites,
+    );
     // A finalize failure withholds coverage (the scope re-searches next cycle)
     // but never the grab walk below: these are live results in hand, and
     // retention bookkeeping does not outrank acquiring with them.
@@ -4589,6 +4798,7 @@ async fn process_single_target(
         .acquisition_scope_states
         .record_acquisition_scope_search_attempt(&item.id, &now.to_rfc3339())
         .await;
+    drop(learning_timer);
 
     if results.is_empty() {
         debug!(
@@ -5783,13 +5993,22 @@ async fn commit_scope_grab(
 /// one timer instead of stacking.
 ///
 /// `poll_interval` is the bound: a re-arm that would not land before the next
-/// tick is not worth running an extra cycle for.
+/// tick is not worth running an extra cycle for. `not_before` is what is left
+/// of the walk cadence's idle gap: a re-arm inside it could only run a held
+/// pass, so the delay is raised to it, and one raised past the tick is left
+/// to the tick. That keeps a deferral from buying the walk more than its
+/// time share.
 fn arm_deferred_acquisition_retry(
     outcome: BackgroundAcquisitionCycleOutcome,
     armed: Option<tokio::time::Instant>,
     poll_interval: std::time::Duration,
+    not_before: std::time::Duration,
 ) -> Option<tokio::time::Instant> {
-    let Some(delay) = outcome.deferred_retry_delay(poll_interval) else {
+    let Some(delay) = outcome
+        .deferred_retry_delay(poll_interval)
+        .map(|delay| delay.max(not_before))
+        .filter(|delay| not_before.is_zero() || *delay < poll_interval)
+    else {
         return armed;
     };
     let deadline = tokio::time::Instant::now() + delay;
@@ -5894,6 +6113,15 @@ impl AcquisitionWalkCadence {
     /// The shortest rest between the end of one walk and the start of the next.
     fn min_walk_gap(&self) -> std::time::Duration {
         self.walk_period.max(self.poll_period)
+    }
+
+    /// What is left of the idle gap at `now`; zero outside it.
+    fn walk_gap_remaining(&self, now: tokio::time::Instant) -> std::time::Duration {
+        self.last_walk_ended_at
+            .map_or(std::time::Duration::ZERO, |ended| {
+                self.min_walk_gap()
+                    .saturating_sub(now.saturating_duration_since(ended))
+            })
     }
 
     fn in_walk_gap(&self, now: tokio::time::Instant) -> bool {
@@ -6193,11 +6421,12 @@ pub async fn start_background_acquisition_poller(
             warn!(error = %err, "failed to load acquisition settings, using defaults");
             crate::AcquisitionSettings {
                 enabled: true,
-                same_tier_min_delta: 120,
                 poll_interval_seconds:
                     crate::settings::runtime::DEFAULT_ACQUISITION_POLL_INTERVAL_SECONDS,
                 walk_interval_seconds:
                     crate::settings::runtime::DEFAULT_ACQUISITION_WALK_INTERVAL_SECONDS,
+                walk_intensity:
+                    crate::acquisition::walk_intensity::AcquisitionWalkIntensity::default(),
                 long_tail_backfill_max_scopes_per_cycle:
                     crate::acquisition::convergence::DEFAULT_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE
                         as i32,
@@ -6582,9 +6811,12 @@ pub async fn start_background_acquisition_poller(
         trigger: BackgroundAcquisitionTrigger,
     ) -> Option<(BackgroundAcquisitionTrigger, BackgroundAcquisitionPass)> {
         let app = app.clone();
-        admit_background_acquisition_pass(supervisor, walk_cadence, trigger, |pass, budget| {
+        // The walk's slice is its intensity's share of walking plus the idle
+        // gap the cadence rests after it.
+        let rest = walk_cadence.min_walk_gap();
+        admit_background_acquisition_pass(supervisor, walk_cadence, trigger, |pass, _| {
             run_task(BACKGROUND_ACQUISITION_CYCLE_TASK, async move {
-                run_background_acquisition_cycle(&app, pass, Some(budget)).await
+                run_background_acquisition_cycle(&app, pass, WalkBudget::Share { rest }).await
             })
         })
     }
@@ -6631,8 +6863,13 @@ pub async fn start_background_acquisition_poller(
                         BackgroundAcquisitionTrigger::Wake
                         | BackgroundAcquisitionTrigger::PollTick => deferred_retry_at,
                     };
-                    deferred_retry_at =
-                        arm_deferred_acquisition_retry(outcome, armed, acquisition_poll_period);
+                    let now = tokio::time::Instant::now();
+                    deferred_retry_at = arm_deferred_acquisition_retry(
+                        outcome,
+                        armed,
+                        acquisition_poll_period,
+                        walk_cadence.walk_gap_remaining(now),
+                    );
                 } else if let Err(error) = completion.result {
                     warn!(
                         task = completion.name,
@@ -6674,6 +6911,11 @@ pub async fn start_background_acquisition_poller(
                 );
             }
             changed = settings_changed.recv() => {
+                // Every settings writer reaches this broadcast, including the
+                // ones that do not go through `publish_settings_changed`.
+                if crate::acquisition::target_cache::settings_change_may_move_targets(&changed) {
+                    app.runtime.acquisition.target_cache.mark_everything();
+                }
                 if acquisition_walk_interval_may_have_changed(changed) {
                     match app.acquisition_settings().await {
                         Ok(settings) => walk_cadence.set_walk_period(std::time::Duration::from_secs(
@@ -8205,7 +8447,8 @@ mod task_runner_tests {
             arm_deferred_acquisition_retry(
                 BackgroundAcquisitionCycleOutcome::default(),
                 None,
-                POLL
+                POLL,
+                std::time::Duration::ZERO,
             )
             .is_none(),
             "a cycle with nothing deferred must not arm a timer"
@@ -8222,6 +8465,7 @@ mod task_runner_tests {
                 },
                 None,
                 POLL,
+                std::time::Duration::ZERO,
             )
             .is_none(),
             "an untimed deferral waits for the tick"
@@ -8239,6 +8483,7 @@ mod task_runner_tests {
                 },
                 None,
                 POLL,
+                std::time::Duration::ZERO,
             )
             .is_none(),
             "a title-lock skip must not arm a timer"
@@ -8255,6 +8500,7 @@ mod task_runner_tests {
                 },
                 None,
                 POLL,
+                std::time::Duration::ZERO,
             )
             .is_none(),
             "a cooldown longer than the poll interval is the tick's job"
@@ -8269,6 +8515,7 @@ mod task_runner_tests {
             },
             None,
             POLL,
+            std::time::Duration::ZERO,
         )
         .expect("a cooldown inside the poll interval arms a retry");
         assert_eq!(armed - now, std::time::Duration::from_secs(20));
@@ -8283,6 +8530,7 @@ mod task_runner_tests {
             },
             None,
             POLL,
+            std::time::Duration::ZERO,
         )
         .expect("armed");
         assert_eq!(floored - now, DEFERRED_RETRY_MIN_DELAY);
@@ -8297,6 +8545,7 @@ mod task_runner_tests {
             },
             Some(floored),
             POLL,
+            std::time::Duration::ZERO,
         )
         .expect("armed");
         assert_eq!(coalesced, floored);
@@ -8306,9 +8555,37 @@ mod task_runner_tests {
             arm_deferred_acquisition_retry(
                 BackgroundAcquisitionCycleOutcome::default(),
                 Some(floored),
-                POLL
+                POLL,
+                std::time::Duration::ZERO,
             ),
             Some(floored)
+        );
+
+        // Inside the walk's idle gap the re-arm waits the gap out, and one
+        // the gap pushes past the tick is left to the tick: a deferral never
+        // buys the walk more than its time share.
+        let deferred = BackgroundAcquisitionCycleOutcome {
+            deferred_scopes: 1,
+            retry_after: Some(std::time::Duration::from_secs(20)),
+            ..BackgroundAcquisitionCycleOutcome::default()
+        };
+        let raised = arm_deferred_acquisition_retry(
+            deferred,
+            None,
+            POLL,
+            std::time::Duration::from_secs(45),
+        )
+        .expect("a gap shorter than the tick still arms");
+        assert_eq!(raised - now, std::time::Duration::from_secs(45));
+        assert_eq!(
+            arm_deferred_acquisition_retry(
+                deferred,
+                None,
+                POLL,
+                std::time::Duration::from_secs(240),
+            ),
+            None,
+            "a gap longer than the tick leaves the deferral to the cadence"
         );
     }
 
@@ -8365,9 +8642,38 @@ mod task_runner_tests {
         );
     }
 
-    #[test]
-    fn background_acquisition_title_limit_is_four() {
-        assert_eq!(BACKGROUND_ACQUISITION_TITLE_LIMIT, 4);
+    /// Hot scopes take the slice up to the cold tail's reserve; the cold
+    /// tail's clock starts with its first title and never runs past the
+    /// slice.
+    #[tokio::test(start_paused = true)]
+    async fn the_cold_tail_gets_its_sub_slice_after_the_hot_lane() {
+        let secs = std::time::Duration::from_secs;
+        let started = tokio::time::Instant::now();
+        let slice = secs(100);
+        let deadlines = WalkDeadlines::new(started, Some(slice), true);
+        assert_eq!(deadlines.end, Some(started + slice));
+        assert_eq!(deadlines.for_lane(true), Some(started + secs(75)));
+
+        tokio::time::advance(secs(10)).await;
+        assert!(!deadlines.lane_passed(false));
+        assert_eq!(deadlines.for_lane(false), Some(started + secs(35)));
+        tokio::time::advance(secs(30)).await;
+        assert!(deadlines.lane_passed(false), "the cold sub-slice is spent");
+        assert!(!deadlines.lane_passed(true), "the hot lane still has time");
+
+        let late = WalkDeadlines::new(started, Some(slice), true);
+        tokio::time::advance(secs(50)).await;
+        assert_eq!(late.for_lane(false), Some(started + slice));
+
+        assert_eq!(
+            WalkDeadlines::new(started, Some(slice), false).for_lane(true),
+            Some(started + slice),
+            "with no cold targets the hot lane has the whole slice"
+        );
+        let unbounded = WalkDeadlines::unbounded();
+        assert_eq!(unbounded.for_lane(true), None);
+        assert_eq!(unbounded.for_lane(false), None);
+        assert!(!unbounded.lane_passed(false));
     }
 
     fn arbitration_candidate(

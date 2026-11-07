@@ -775,7 +775,7 @@ async fn hash_file_cancellable(
                         "Full-hash backfill cancelled",
                     ));
                 }
-                let mut file = std::fs::File::open(&path).map_err(|error| {
+                let mut file = open_full_hash_backfill_file(&path).map_err(|error| {
                     AppError::Repository(format!(
                         "failed to open {} for full-hash backfill: {error}",
                         path.display()
@@ -846,6 +846,29 @@ async fn hash_file_cancellable(
     })?
 }
 
+/// Opens a buffered, read-only handle with a sequential access hint where supported.
+fn open_full_hash_backfill_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_SEQUENTIAL_SCAN;
+
+        options.custom_flags(FILE_FLAG_SEQUENTIAL_SCAN);
+    }
+    let file = options.open(path)?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+
+        // Advisory only: unsupported filesystems must still be hashable.
+        // SAFETY: the file owns this live descriptor; zero length covers the whole file.
+        let _ = unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_SEQUENTIAL) };
+    }
+    Ok(file)
+}
+
 /// Applied only to this short-lived reader thread, never to a runtime pool.
 fn hash_reader_priority() -> std::io::Result<()> {
     crate::background_worker_priority()?;
@@ -900,6 +923,33 @@ pub(super) fn same_file_version(before: &std::fs::Metadata, after: &std::fs::Met
 mod tests {
     use super::*;
     use chrono::{FixedOffset, TimeZone};
+
+    #[test]
+    fn full_hash_backfill_opens_existing_files_read_only_without_changing_contents() {
+        use std::io::{Read, Write};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("media.bin");
+        let contents = b"synthetic media bytes";
+        std::fs::write(&path, contents).unwrap();
+
+        let mut file = open_full_hash_backfill_file(&path).unwrap();
+        assert!(file.write_all(b"changed bytes").is_err());
+        let mut actual = Vec::new();
+        file.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, contents);
+        assert_eq!(std::fs::read(&path).unwrap(), contents);
+    }
+
+    #[test]
+    fn full_hash_backfill_open_does_not_create_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.bin");
+
+        let error = open_full_hash_backfill_file(&path).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(!path.exists());
+    }
 
     #[test]
     fn full_hash_backfill_window_follows_local_two_to_six() {

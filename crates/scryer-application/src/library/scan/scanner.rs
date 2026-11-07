@@ -217,6 +217,72 @@ pub struct DiscoveryExternalIdInput {
     pub value: String,
 }
 
+/// The embedding space the gateway builds a library graph in.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LibraryGraphAxis {
+    Semantic,
+    Narrative,
+    Experience,
+}
+
+impl LibraryGraphAxis {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Semantic => "SEMANTIC",
+            Self::Narrative => "NARRATIVE",
+            Self::Experience => "EXPERIENCE",
+        }
+    }
+}
+
+/// The gateway's `LibraryGraphInput`: one facet's owned subjects.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryGraphGatewayInput {
+    pub subjects: Vec<DiscoverySubjectInput>,
+    pub axis: LibraryGraphAxis,
+    pub neighbors_per_node: i32,
+    pub min_cosine: f64,
+}
+
+/// The gateway's `LibraryGraphResult`, field for field.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct LibraryGraphGatewayResult {
+    pub generated_at: String,
+    #[serde(default)]
+    pub nodes: Vec<LibraryGraphGatewayNode>,
+    #[serde(default)]
+    pub edges: Vec<LibraryGraphGatewayEdge>,
+    #[serde(default)]
+    pub clusters: Vec<LibraryGraphGatewayCluster>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryGraphGatewayNode {
+    pub subject_key: String,
+    pub target_key: String,
+    pub cluster_id: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct LibraryGraphGatewayEdge {
+    pub from: String,
+    pub to: String,
+    pub weight: f64,
+    #[serde(default)]
+    pub kinds: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryGraphGatewayCluster {
+    pub id: i64,
+    pub label_key: Option<String>,
+    pub label: String,
+    pub medoid: String,
+    pub size: i64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoverySubjectInput {
@@ -360,6 +426,29 @@ pub struct DiscoveryRelatedResult {
     pub generated_at: String,
     #[serde(default)]
     pub results: Vec<DiscoveryTitle>,
+    /// Neighbourhoods the gateway found among `results`; each result names
+    /// its group in [`DiscoveryTitle::group_id`]. Empty when the gateway
+    /// skipped grouping.
+    #[serde(default)]
+    pub groups: Vec<DiscoveryRelatedGroup>,
+}
+
+/// One neighbourhood among a title's related results, as the gateway grouped
+/// them from the semantic and relation links between the results.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveryRelatedGroup {
+    /// Group id, matching [`DiscoveryTitle::group_id`].
+    pub id: i64,
+    /// Canonical genre or theme tag key that names the group, or `None` when
+    /// the group is named after its medoid.
+    #[serde(default)]
+    pub label_key: Option<String>,
+    /// Display label of the group.
+    pub label: String,
+    /// Target key of the result that best represents the group.
+    pub medoid: String,
+    /// Number of results in the group.
+    pub size: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -586,6 +675,11 @@ pub struct DiscoveryTitle {
     pub change_subject_keys: Vec<String>,
     #[serde(default)]
     pub removed_subject_keys: Vec<String>,
+    /// The [`DiscoveryRelatedGroup`] this related result belongs to. Only the
+    /// title recommendations document requests it; every other document
+    /// leaves it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<i64>,
 }
 
 impl DiscoveryTitle {
@@ -1065,6 +1159,16 @@ pub trait MetadataGateway: Send + Sync {
         let _ = input;
         Err(AppError::Repository(
             "metadata gateway collectionCompletions is not implemented".into(),
+        ))
+    }
+
+    async fn library_graph(
+        &self,
+        input: &LibraryGraphGatewayInput,
+    ) -> AppResult<LibraryGraphGatewayResult> {
+        let _ = input;
+        Err(AppError::Repository(
+            "metadata gateway libraryGraph is not implemented".into(),
         ))
     }
 

@@ -397,6 +397,26 @@ impl AppUseCase {
                 ))
             })
     }
+
+    /// Root-folder path for a title as the caller may see it. The caller must
+    /// hold View on the library; the path itself is only returned to callers
+    /// with privileged access, and is `None` for everyone else.
+    pub async fn title_root_folder_path_for_viewer(
+        &self,
+        actor: &User,
+        root_folder_id: &str,
+        library_id: &str,
+        facet: &MediaFacet,
+    ) -> AppResult<Option<String>> {
+        self.require_library_permission(actor, library_id, scryer_domain::LibraryPermission::View)
+            .await?;
+        if !self.has_privileged_library_access(actor, library_id).await? {
+            return Ok(None);
+        }
+        self.title_root_folder_path_for_parts(root_folder_id, library_id, facet)
+            .await
+            .map(Some)
+    }
 }
 impl AppUseCase {
     /// Return every configured library root for a facet across all libraries.
@@ -416,19 +436,28 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    /// Return one usage row per (library, root) pair the caller may view.
+    /// Return one usage row per (library, root) pair the caller holds
+    /// privileged access to.
     ///
-    /// Visibility is resolved with the same
-    /// [`AppUseCase::list_libraries_for_permission`] call the `libraries` query
-    /// uses, so roots of libraries the caller cannot view are never returned.
+    /// Root paths say where media lives on disk, so only libraries in
+    /// [`AppUseCase::privileged_library_ids`] contribute rows; an actor with no
+    /// privileged library is refused.
     /// Rows are deduplicated by normalized path within each library, and each
     /// unique filesystem path is stat'ed at most once per call even when several
     /// libraries share it. `used_bytes` and `total_bytes` are `None` when the
     /// filesystem cannot be inspected (a failed stat, or a non-unix build).
     pub async fn storage_root_usage(&self, actor: &User) -> AppResult<Vec<StorageRootUsage>> {
+        let privileged = self
+            .require_privileged_library_ids(actor, None)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
         let libraries = self
             .list_libraries_for_permission(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+            .await?
+            .into_iter()
+            .filter(|library| privileged.contains(&library.id))
+            .collect::<Vec<_>>();
         let roots = library_root_folders_from_libraries(&libraries, None);
 
         let mut seen = HashSet::new();

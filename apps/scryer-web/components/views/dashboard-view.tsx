@@ -294,7 +294,7 @@ function DashboardHeader({
   return (
     <header className="flex min-w-0 items-start gap-3">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <h1 className="font-[var(--font-display)] text-[19px] font-bold text-[var(--scry-ink2)]">
+        <h1 className="font-[family-name:var(--font-space-grotesk)] text-[19px] font-bold text-[var(--scry-ink2)]">
           {t(greetingKey(), { name: username ?? "" })}
         </h1>
         <p className="text-[12px] text-[var(--scry-muted)]">
@@ -381,14 +381,14 @@ function PluginUpdateStrip({
             <span className="truncate text-[var(--scry-ink2)]">
               {update.name}
             </span>
-            <span className="whitespace-nowrap font-[var(--font-code)] text-[var(--scry-muted2)]">
+            <span className="whitespace-nowrap font-[family-name:var(--font-code)] text-[var(--scry-muted2)]">
               {update.fromVersion ?? "—"}
             </span>
             <ArrowUp
               className="h-3 w-3 shrink-0 text-[var(--scry-muted2)]"
               aria-hidden="true"
             />
-            <span className="whitespace-nowrap font-[var(--font-code)] text-[var(--scry-success-text)]">
+            <span className="whitespace-nowrap font-[family-name:var(--font-code)] text-[var(--scry-success-text)]">
               {update.toVersion ?? "—"}
             </span>
             {update.breaking ? (
@@ -581,7 +581,7 @@ function StatTile({
             ) : null}
             <span
               className={cn(
-                "font-[var(--font-display)] text-[18px] font-bold tabular-nums",
+                "font-[family-name:var(--font-space-grotesk)] text-[18px] font-bold tabular-nums",
                 metric.tone === "danger" && metric.value > 0
                   ? "text-[var(--scry-danger-text)]"
                   : "text-[var(--scry-ink2)]",
@@ -1718,7 +1718,7 @@ function StorageRootTile({
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-1.5">
           <span
-            className="min-w-0 flex-1 truncate font-[var(--font-code)] text-[11px] text-[var(--scry-ink2)]"
+            className="min-w-0 flex-1 truncate font-[family-name:var(--font-code)] text-[11px] text-[var(--scry-ink2)]"
             title={root.path}
           >
             {root.path}
@@ -1729,7 +1729,7 @@ function StorageRootTile({
             </Badge>
           ) : null}
           <span
-            className="shrink-0 font-[var(--font-display)] text-[15px] font-bold tabular-nums"
+            className="shrink-0 font-[family-name:var(--font-space-grotesk)] text-[15px] font-bold tabular-nums"
             style={{
               color: percent === null ? "var(--scry-muted2)" : toneStyle.text,
             }}

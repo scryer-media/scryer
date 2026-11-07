@@ -1201,6 +1201,30 @@ impl AcquisitionScopeStateRepository for WantedStore {
             .collect()
     }
 
+    async fn list_acquisition_scope_statuses_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, AcquisitionScopeStatus>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let sql = format!(
+            "SELECT id, status FROM wanted_items WHERE id IN ({})",
+            placeholders(ids.len())
+        );
+        let args = ids.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.text("id")?,
+                    AcquisitionScopeStatus::parse(&row.text("status")?).unwrap_or_default(),
+                ))
+            })
+            .collect()
+    }
+
     async fn list_acquisition_scope_states(
         &self,
         query: AcquisitionScopeStatesQuery,
@@ -1425,11 +1449,12 @@ impl HousekeepingRepository for HousekeepingStore {
         // The newest terminal run of each job is kept whatever its age. Every
         // user-defined job shares the `custom_job` key, so those runs keep
         // one per operation type (one per script) instead of one in total.
-        execute_housekeeping_delete(
+        let deleted = execute_housekeeping_delete(
             &self.datastore,
             "delete_stale_workflow_operations",
             "DELETE FROM workflow_operations
-              WHERE job_key IS NOT NULL
+             WHERE NOT EXISTS (SELECT 1 FROM workflow_private_inputs WHERE workflow_private_inputs.run_id = workflow_operations.id AND workflow_private_inputs.input_encrypted IS NOT NULL)
+               AND job_key IS NOT NULL
                 AND (
                     (status = 'completed' AND started_at <= {})
                     OR (status IN ('warning', 'failed') AND started_at <= {})
@@ -1457,7 +1482,20 @@ impl HousekeepingRepository for HousekeepingStore {
                 SqlArg::Timestamp(now - Duration::days(warning_failed_days)),
             ],
         )
-        .await
+        .await?;
+        // A request receipt whose run is gone can no longer resolve a replay.
+        execute_housekeeping_delete(
+            &self.datastore,
+            "delete_orphaned_workflow_private_inputs",
+            "DELETE FROM workflow_private_inputs
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM workflow_operations
+                  WHERE workflow_operations.id = workflow_private_inputs.run_id
+             )",
+            Vec::new(),
+        )
+        .await?;
+        Ok(deleted)
     }
 
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
@@ -2558,6 +2596,21 @@ impl PendingReleaseRepository for PendingReleaseStore {
         )
         .await?;
         Ok(())
+    }
+
+    async fn list_standby_wanted_item_ids(&self) -> AppResult<Vec<String>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT DISTINCT wanted_item_id
+               FROM pending_releases
+              WHERE status = 'standby'
+              ORDER BY wanted_item_id ASC",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("wanted_item_id"))
+        .collect()
     }
 
     async fn list_all_standby_pending_releases(&self) -> AppResult<Vec<PendingRelease>> {

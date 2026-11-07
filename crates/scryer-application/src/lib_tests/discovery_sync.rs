@@ -40,7 +40,7 @@ use scryer_domain::{
     LibraryScanCanceledEventData, LibraryScanCompletedEventData, LibraryScanFailedEventData,
     LibraryScanStartedEventData, MediaFacet, Title, TitleContextSnapshot, TitleUpdatedEventData,
 };
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 
@@ -82,7 +82,7 @@ fn rail_floor_padding_titles(library_id: &str, count: usize) -> Vec<Title> {
                 Vec::new(),
             );
             title.library_id = library_id.to_string();
-            title.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+            title.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
             title
                 .canonical_tags
                 .extend(canonical_theme_tags(&["Isekai"]));
@@ -205,7 +205,7 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
         vec![("tmdb_movie", "603")],
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
     owned_drama_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Horror", "Isekai"]));
@@ -232,7 +232,7 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
         vec![("tmdb_movie", "605")],
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Science Fiction"]);
     owned_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Isekai"]));
@@ -368,7 +368,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         vec![("tmdb_movie", "603")],
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
     owned_drama_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Horror", "Isekai"]));
@@ -395,7 +395,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         vec![("tmdb_movie", "605")],
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Science Fiction"]);
     owned_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Isekai"]));
@@ -521,7 +521,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Sci-Fi One",
         "movie",
         89.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -536,7 +536,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Sci-Fi Two",
         "movie",
         88.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -581,7 +581,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "High-Rated Sci-Fi",
         "movie",
         85.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -656,7 +656,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Weekly Series Two",
         "series",
         80.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -805,7 +805,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     rail_padding.extend(rail_floor_padding_items(
         "context-run",
         "scifi",
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         10,
     ));
@@ -892,7 +892,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         viewer_home
             .facets
             .iter()
-            .any(|facet| facet.facet_name == "genre" && facet.facet_value == "Sci Fi")
+            .any(|facet| facet.facet_name == "genre" && facet.facet_value == "Science Fiction")
     );
     assert!(
         viewer_home
@@ -917,17 +917,20 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     assert!(personalized_section_types.contains(&"BECAUSE_YOU_LIKE_TAG"));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
         section.section_type == "BECAUSE_YOU_LIKE_GENRE"
-            && section.title == "Because You Like Sci Fi"
+            && section.title == "Because you like science fiction"
+            && section.label_key.as_deref() == Some("science-fiction")
     }));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
         section.section_type == "BECAUSE_YOU_LIKE_GENRE"
-            && section.title == "Because You Like Drama"
+            && section.title == "Because you like drama"
     }));
     assert!(!viewer_home.personalized_sections.iter().any(|section| {
-        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because You Like Horror"
+        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because you like horror"
     }));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
-        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because You Like Isekai"
+        section.section_type == "BECAUSE_YOU_LIKE_TAG"
+            && section.title == "Because you like isekai"
+            && section.label_key.as_deref() == Some("isekai")
     }));
 
     let filtered = app
@@ -1489,6 +1492,46 @@ async fn discovery_home_hydrates_only_selected_cards_from_large_candidate_set() 
         *discovery.personalized_facet_calls.lock().await,
         0,
         "card-only discovery home must not load unused personalized facets"
+    );
+    discovery.hydrated_home_hero_ids.lock().await.clear();
+    let projected = app
+        .discovery_home_projected(
+            &viewer_actor,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 1,
+                filters: DiscoveryHomeFilters::default(),
+            },
+            crate::DiscoveryHomeProjection::default(),
+        )
+        .await
+        .unwrap();
+    assert!(projected.hero_item.is_none());
+    assert!(projected.browse_labels.is_empty());
+    assert!(projected.facets.is_empty());
+    assert!(discovery.hydrated_home_hero_ids.lock().await.is_empty());
+    assert!(
+        discovery
+            .hydrated_home_candidate_ids
+            .lock()
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        projected
+            .personalized_sections
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .map(|item| &item.id)
+            .collect::<Vec<_>>(),
+        card_home
+            .personalized_sections
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .map(|item| &item.id)
+            .collect::<Vec<_>>(),
     );
 }
 
@@ -2414,6 +2457,378 @@ async fn title_more_like_this_filters_readable_library_titles_and_refills_limit(
     );
     assert!(items.iter().all(|item| !item.owned_in_input));
     assert!(items.iter().all(|item| item.resolved_title_id.is_none()));
+}
+
+fn neighbor_discovery_title(target_key: &str, display_title: &str) -> DiscoveryTitle {
+    DiscoveryTitle {
+        target_key: target_key.to_string(),
+        display_title: display_title.to_string(),
+        poster_url: format!("https://images.example.test/{target_key}.jpg"),
+        matched_subject_keys: Vec::new(),
+        matched_subject_titles: Vec::new(),
+        ..test_discovery_title()
+    }
+}
+
+#[tokio::test]
+async fn discovery_neighbors_returns_owned_neighbors_with_their_title_while_more_like_this_filters_them()
+ {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let viewer = library_permission_user_with_grants(
+        "discovery-neighbors-viewer",
+        &[(
+            &movie_library_id,
+            &[
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::Request,
+            ],
+        )],
+    );
+    let mut source_title = test_title(
+        "source-title",
+        "Synthetic Source Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "100")],
+    );
+    source_title.library_id = movie_library_id.clone();
+    let mut owned_title = test_title(
+        "owned-title",
+        "Synthetic Owned Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    );
+    owned_title.library_id = movie_library_id.clone();
+    titles
+        .store
+        .lock()
+        .await
+        .extend([source_title, owned_title]);
+    let grouped = |target_key: &str, display_title: &str, group_id: i64| DiscoveryTitle {
+        group_id: Some(group_id),
+        ..neighbor_discovery_title(target_key, display_title)
+    };
+    *gateway.title_recommendation_results.lock().await = vec![
+        grouped("tmdb:movie:100", "Synthetic Source Movie", 1),
+        grouped("tmdb:movie:603", "Synthetic Owned Movie", 0),
+        grouped("tmdb:movie:605", "Synthetic Fresh Movie", 0),
+    ];
+    // Group 1 holds only the anchor, which is never served, and the gateway's
+    // sizes count results the neighbours screen out.
+    *gateway.title_recommendation_groups.lock().await = vec![
+        crate::DiscoveryRelatedGroup {
+            id: 0,
+            label_key: Some("canonical:theme:heist".to_string()),
+            label: "Heist".to_string(),
+            medoid: "tmdb:movie:603".to_string(),
+            size: 3,
+        },
+        crate::DiscoveryRelatedGroup {
+            id: 1,
+            label_key: None,
+            label: "Synthetic Source Movie".to_string(),
+            medoid: "tmdb:movie:100".to_string(),
+            size: 1,
+        },
+    ];
+
+    let query = crate::DiscoveryNeighborsQuery {
+        target_key: "TMDB:movie:100".to_string(),
+        facet: MediaFacet::Movie,
+        limit: crate::DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
+    };
+    let neighbors = app
+        .discovery_neighbors(&viewer, query.clone())
+        .await
+        .expect("discovery neighbors should load");
+
+    // The anchor itself is not its own neighbour; the owned one stays, with
+    // its title id.
+    assert_eq!(
+        neighbors
+            .items
+            .iter()
+            .map(|neighbor| (
+                neighbor.item.target_key.as_str(),
+                neighbor.item.resolved_title_id.as_deref(),
+                neighbor.group_id,
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("tmdb:movie:603", Some("owned-title"), Some(0)),
+            ("tmdb:movie:605", None, Some(0)),
+        ]
+    );
+    // Only groups with a served member remain, sized by what is served.
+    assert_eq!(
+        neighbors.groups,
+        vec![crate::DiscoveryRelatedGroup {
+            id: 0,
+            label_key: Some("canonical:theme:heist".to_string()),
+            label: "Heist".to_string(),
+            medoid: "tmdb:movie:603".to_string(),
+            size: 2,
+        }]
+    );
+    let inputs = gateway.title_recommendation_inputs.lock().await.clone();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].subject.key.as_deref(), Some("tmdb:movie:100"));
+    assert_eq!(inputs[0].subject.tmdb_id, Some(100));
+    assert_eq!(inputs[0].subject.facet.as_deref(), Some("movie"));
+
+    // A second expansion of the same anchor is served from the cache.
+    let again = app
+        .discovery_neighbors(&viewer, query)
+        .await
+        .expect("cached discovery neighbors should load");
+    assert_eq!(again, neighbors);
+    assert_eq!(gateway.title_recommendation_inputs.lock().await.len(), 1);
+
+    // More-like-this over the same related titles still drops the owned one.
+    let mut cached_items = ["tmdb:movie:603", "tmdb:movie:605"]
+        .into_iter()
+        .map(|target_key| {
+            discovery_item_record(
+                "title-more-like-this-run",
+                "title-more-like-this-run",
+                None,
+                target_key,
+                target_key,
+                "movie",
+                90.0,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+    for item in &mut cached_items {
+        item.updated_at = Utc::now();
+    }
+    discovery
+        .title_more_like_this_items
+        .lock()
+        .await
+        .insert("source-title".to_string(), cached_items);
+    let more_like_this = app
+        .title_more_like_this(&viewer, "source-title", 12)
+        .await
+        .expect("title more-like-this should load");
+    assert_eq!(
+        more_like_this
+            .iter()
+            .map(|item| item.target_key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tmdb:movie:605"]
+    );
+}
+
+#[tokio::test]
+async fn discovery_neighbors_asks_again_after_an_ungrouped_answer() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let viewer = library_permission_user_with_grants(
+        "discovery-neighbors-ungrouped-viewer",
+        &[(
+            &movie_library_id,
+            &[
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::Request,
+            ],
+        )],
+    );
+    let mut source_title = test_title(
+        "source-title",
+        "Synthetic Source Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "100")],
+    );
+    source_title.library_id = movie_library_id.clone();
+    titles.store.lock().await.push(source_title);
+    // The gateway skipped grouping: results, but no groups.
+    *gateway.title_recommendation_results.lock().await = vec![
+        neighbor_discovery_title("tmdb:movie:605", "Synthetic Fresh Movie"),
+        neighbor_discovery_title("tmdb:movie:606", "Synthetic Other Movie"),
+    ];
+    let query = crate::DiscoveryNeighborsQuery {
+        target_key: "tmdb:movie:100".to_string(),
+        facet: MediaFacet::Movie,
+        limit: crate::DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
+    };
+    let calls = || async { gateway.title_recommendation_inputs.lock().await.len() };
+
+    let ungrouped = app
+        .discovery_neighbors(&viewer, query.clone())
+        .await
+        .expect("an ungrouped answer is served");
+    assert_eq!(ungrouped.items.len(), 2);
+    assert!(ungrouped.groups.is_empty());
+    assert_eq!(calls().await, 1);
+
+    // The next read asks again; a failed ask serves the cached entry.
+    *gateway.fail_title_recommendations.lock().await = true;
+    let fallback = app
+        .discovery_neighbors(&viewer, query.clone())
+        .await
+        .expect("a failed refresh serves the cached entry");
+    assert_eq!(fallback, ungrouped);
+    assert_eq!(calls().await, 2);
+
+    // Once the gateway groups, the grouped answer is cached as usual.
+    *gateway.fail_title_recommendations.lock().await = false;
+    *gateway.title_recommendation_results.lock().await = vec![
+        DiscoveryTitle {
+            group_id: Some(0),
+            ..neighbor_discovery_title("tmdb:movie:605", "Synthetic Fresh Movie")
+        },
+        DiscoveryTitle {
+            group_id: Some(0),
+            ..neighbor_discovery_title("tmdb:movie:606", "Synthetic Other Movie")
+        },
+    ];
+    *gateway.title_recommendation_groups.lock().await = vec![crate::DiscoveryRelatedGroup {
+        id: 0,
+        label_key: None,
+        label: "Synthetic Fresh Movie".to_string(),
+        medoid: "tmdb:movie:605".to_string(),
+        size: 2,
+    }];
+    let grouped = app
+        .discovery_neighbors(&viewer, query.clone())
+        .await
+        .expect("a grouped answer is served");
+    assert_eq!(grouped.groups.len(), 1);
+    assert_eq!(calls().await, 3);
+    let cached = app
+        .discovery_neighbors(&viewer, query)
+        .await
+        .expect("a grouped answer is cached");
+    assert_eq!(cached, grouped);
+    assert_eq!(calls().await, 3);
+}
+
+#[tokio::test]
+async fn discovery_neighbors_refuses_an_unknown_target_key_with_a_reason_code() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+
+    for (target_key, facet, reason) in [
+        (
+            "plex:movie:100",
+            MediaFacet::Movie,
+            crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_UNSUPPORTED,
+        ),
+        (
+            "tmdb:movie",
+            MediaFacet::Movie,
+            crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_UNSUPPORTED,
+        ),
+        (
+            "tmdb:movie:not-a-number",
+            MediaFacet::Movie,
+            crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_UNSUPPORTED,
+        ),
+        (
+            "tmdb:series:100",
+            MediaFacet::Movie,
+            crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_FACET_MISMATCH,
+        ),
+    ] {
+        let error = app
+            .discovery_neighbors(
+                &admin,
+                crate::DiscoveryNeighborsQuery {
+                    target_key: target_key.to_string(),
+                    facet,
+                    limit: 24,
+                },
+            )
+            .await
+            .expect_err("an unusable anchor is refused");
+        assert_eq!(error.validation_reason(), Some(reason), "{target_key}");
+    }
+    assert!(gateway.title_recommendation_inputs.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn discovery_neighbors_gives_an_ungated_viewer_an_empty_list_before_reading_the_key() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let unusable = |facet: MediaFacet| crate::DiscoveryNeighborsQuery {
+        target_key: "plex:movie:100".to_string(),
+        facet,
+        limit: 24,
+    };
+
+    // Request on the series library only: the movie facet is not theirs, so
+    // even an unusable key reads as nothing to show.
+    let series_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let series_viewer = library_permission_user_with_grants(
+        "discovery-neighbors-series-viewer",
+        &[(
+            &series_library_id,
+            &[
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::Request,
+            ],
+        )],
+    );
+    assert!(
+        app.discovery_neighbors(&series_viewer, unusable(MediaFacet::Movie))
+            .await
+            .expect("an ungated viewer is not refused")
+            .items
+            .is_empty()
+    );
+
+    // Request without View on the movie library: the facet is visible but no
+    // library of it may be read, as for the library graph.
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_only = library_permission_user_with_grants(
+        "discovery-neighbors-request-only",
+        &[(
+            &movie_library_id,
+            &[scryer_domain::LibraryPermission::Request],
+        )],
+    );
+    assert!(
+        app.discovery_neighbors(&request_only, unusable(MediaFacet::Movie))
+            .await
+            .expect("an ungated viewer is not refused")
+            .items
+            .is_empty()
+    );
+
+    // Personalized discovery off: empty for everyone, the admin included.
+    let settings = settings_with_personalized_discovery(false).await;
+    let (disabled_app, disabled_admin, _titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway.clone(), settings);
+    assert!(
+        disabled_app
+            .discovery_neighbors(&disabled_admin, unusable(MediaFacet::Movie))
+            .await
+            .expect("personalized discovery off is not a refusal")
+            .items
+            .is_empty()
+    );
+
+    // The same key from a gated viewer is still refused with its code.
+    let error = app
+        .discovery_neighbors(&admin, unusable(MediaFacet::Movie))
+        .await
+        .expect_err("a gated viewer's unusable key is refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::discovery::NEIGHBOR_TARGET_KEY_UNSUPPORTED)
+    );
+    assert!(gateway.title_recommendation_inputs.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -3793,6 +4208,355 @@ async fn discovery_sync_incremental_reload_calls_smg_and_commits_patch() {
     drop(commits);
 
     assert!(discovery.pending_changes.lock().await.is_empty());
+}
+
+async fn run_incremental_movie_change_with_library_graph(
+    queue_full: bool,
+) -> (
+    Arc<SnapshotMetadataGateway>,
+    Arc<RecordingDiscoveryRepository>,
+) {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    *gateway.library_graph_queue_full.lock().await = queue_full;
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-1".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-1".to_string()),
+        last_context_snapshot_completed_at: Some(due_at),
+        next_incremental_reload_eligible_at: Some(due_at),
+        dirty_since: Some(due_at),
+        dirty_reason_mask: 1,
+        updated_at: due_at,
+        ..DiscoverySyncStateRecord::default()
+    });
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "The Example Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+    discovery
+        .upsert_pending_discovery_context_change(&DiscoveryPendingContextChangeRecord {
+            id: "change-1".to_string(),
+            scope_key: crate::DISCOVERY_DEFAULT_SCOPE_KEY.to_string(),
+            subject_key: Some("tmdb:movie:603".to_string()),
+            previous_subject_key: None,
+            change_type: "updated".to_string(),
+            title_id: Some("title-1".to_string()),
+            previous_title_id: None,
+            library_facet: Some("movie".to_string()),
+            raw_subject_json: Some(
+                serde_json::json!({
+                    "tmdbId": 603,
+                    "kind": "movie",
+                    "facet": "movie",
+                    "externalIds": [{"source": "tmdb", "value": "603"}]
+                })
+                .to_string(),
+            ),
+            raw_previous_subject_json: None,
+            first_seen_sequence: Some(10),
+            last_seen_sequence: Some(12),
+            first_seen_at: due_at,
+            last_seen_at: due_at,
+        })
+        .await
+        .expect("pending change should seed");
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should succeed whatever the library graph does");
+    (gateway, discovery)
+}
+
+#[tokio::test]
+async fn discovery_sync_incremental_change_rebuilds_the_touched_facet_library_graph() {
+    let (gateway, discovery) = run_incremental_movie_change_with_library_graph(false).await;
+
+    let inputs = gateway.library_graph_inputs.lock().await;
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].axis, crate::LIBRARY_GRAPH_AXIS);
+    assert_eq!(
+        inputs[0].neighbors_per_node,
+        crate::LIBRARY_GRAPH_NEIGHBORS_PER_NODE
+    );
+    assert_eq!(inputs[0].min_cosine, crate::LIBRARY_GRAPH_MIN_COSINE);
+    assert_eq!(
+        inputs[0]
+            .subjects
+            .iter()
+            .map(|subject| subject.key.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("tmdb:movie:603")]
+    );
+    drop(inputs);
+
+    let commits = discovery.library_graph_commits.lock().await;
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].run.facet, "movie");
+    assert_eq!(commits[0].run.status, "complete");
+    assert_eq!(commits[0].run.subject_count, 1);
+    assert_eq!(commits[0].run.submitted_count, 1);
+    assert_eq!(commits[0].nodes.len(), 1);
+    assert_eq!(commits[0].nodes[0].title_ids, vec!["title-1".to_string()]);
+}
+
+#[tokio::test]
+async fn discovery_sync_library_graph_queue_full_is_recorded_as_transient_without_failing_the_run()
+{
+    let (gateway, discovery) = run_incremental_movie_change_with_library_graph(true).await;
+
+    // One call for the touched facet, and no retry within the run.
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+    assert!(discovery.library_graph_commits.lock().await.is_empty());
+    let runs = discovery.library_graph_runs.lock().await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].facet, "movie");
+    assert_eq!(runs[0].status, "failed");
+    assert_eq!(
+        runs[0].error_code.as_deref(),
+        Some(crate::error_reasons::library_graph::GATEWAY_QUEUE_FULL)
+    );
+    drop(runs);
+
+    // The sync run itself still committed its incremental patch.
+    assert_eq!(discovery.incremental_commits.lock().await.len(), 1);
+    assert!(discovery.pending_changes.lock().await.is_empty());
+}
+
+/// A library whose context snapshot already landed and that has nothing
+/// pending, so a sync run touches no facet on its own account: whatever
+/// library graph it builds, it builds as a retry.
+async fn quiet_synced_library_with_library_graph(
+    gateway: Arc<SnapshotMetadataGateway>,
+) -> (crate::AppUseCase, Arc<RecordingDiscoveryRepository>) {
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let synced_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-1".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-1".to_string()),
+        last_context_snapshot_completed_at: Some(synced_at),
+        updated_at: synced_at,
+        ..DiscoverySyncStateRecord::default()
+    });
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "Synthetic Movie One",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+    (app, discovery)
+}
+
+async fn run_discovery_sync_at(app: &crate::AppUseCase, now: DateTime<Utc>) {
+    app.runtime.environment.set_fixed_now_for_tests(Some(now));
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should succeed whatever the library graph does");
+}
+
+#[tokio::test]
+async fn discovery_sync_builds_a_library_graph_that_never_landed_without_a_reload() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, discovery) = quiet_synced_library_with_library_graph(gateway.clone()).await;
+    let now = Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
+
+    run_discovery_sync_at(&app, now).await;
+    assert!(discovery.incremental_commits.lock().await.is_empty());
+    assert!(discovery.commits.lock().await.is_empty());
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+    assert_eq!(discovery.library_graph_commits.lock().await.len(), 1);
+
+    // Built: the next quiet run leaves it alone.
+    run_discovery_sync_at(&app, now + chrono::Duration::hours(1)).await;
+    assert!(discovery.commits.lock().await.is_empty());
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn discovery_sync_retries_a_queue_full_library_graph_after_the_gateways_wait() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    *gateway.library_graph_queue_full.lock().await = true;
+    let asked_wait_seconds = 2 * crate::discovery::LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS;
+    *gateway.library_graph_retry_after_seconds.lock().await = Some(asked_wait_seconds as u64);
+    let (app, discovery) = quiet_synced_library_with_library_graph(gateway.clone()).await;
+    let failed_at = Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
+
+    run_discovery_sync_at(&app, failed_at).await;
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+    {
+        let runs = discovery.library_graph_runs.lock().await;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].error_code.as_deref(),
+            Some(crate::error_reasons::library_graph::GATEWAY_QUEUE_FULL)
+        );
+        assert_eq!(runs[0].retry_after_seconds, Some(asked_wait_seconds));
+        assert_eq!(runs[0].completed_at, Some(failed_at));
+    }
+
+    // Inside the floor, then past the floor but inside the gateway's longer
+    // wait: no call either time.
+    *gateway.library_graph_queue_full.lock().await = false;
+    run_discovery_sync_at(&app, failed_at + chrono::Duration::hours(1)).await;
+    run_discovery_sync_at(
+        &app,
+        failed_at
+            + chrono::Duration::seconds(crate::discovery::LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS),
+    )
+    .await;
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 1);
+    assert!(discovery.library_graph_commits.lock().await.is_empty());
+
+    // The wait is over: the retry lands.
+    run_discovery_sync_at(
+        &app,
+        failed_at + chrono::Duration::seconds(asked_wait_seconds),
+    )
+    .await;
+    assert_eq!(gateway.library_graph_inputs.lock().await.len(), 2);
+    assert_eq!(discovery.library_graph_commits.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn discovery_sync_committed_snapshot_rebuilds_every_facet_and_drops_an_empty_ones_graph() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+    {
+        let mut store = titles.store.lock().await;
+        store.push(test_title(
+            "title-movie",
+            "Synthetic Movie One",
+            MediaFacet::Movie,
+            vec![("tmdb_movie", "603")],
+        ));
+        store.push(test_title(
+            "title-series",
+            "Synthetic Series One",
+            MediaFacet::Series,
+            vec![("tvdb", "81189")],
+        ));
+    }
+    // Anime once had a graph and has no owned titles any more.
+    let stale_anime = crate::LibraryGraphSnapshotRecord {
+        run: crate::LibraryGraphRunRecord {
+            id: "library-graph-stale-anime".to_string(),
+            facet: "anime".to_string(),
+            axis: "SEMANTIC".to_string(),
+            status: "complete".to_string(),
+            subject_count: 1,
+            submitted_count: 1,
+            generated_at: None,
+            error_code: None,
+            error_text: None,
+            retry_after_seconds: None,
+            omitted_subject_keys: Vec::new(),
+            started_at: due_at,
+            completed_at: Some(due_at),
+            created_at: due_at,
+            updated_at: due_at,
+        },
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        clusters: Vec::new(),
+    };
+    discovery
+        .commit_library_graph(&stale_anime)
+        .await
+        .expect("seed graph");
+
+    run_discovery_sync_at(&app, Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap()).await;
+
+    assert_eq!(discovery.commits.lock().await.len(), 1);
+    let built = gateway
+        .library_graph_inputs
+        .lock()
+        .await
+        .iter()
+        .map(|input| input.subjects[0].facet.clone().unwrap_or_default())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        built,
+        BTreeSet::from(["movie".to_string(), "series".to_string()])
+    );
+    assert_eq!(
+        discovery.library_graph_deletes.lock().await.as_slice(),
+        ["anime".to_string()]
+    );
+    assert!(
+        discovery
+            .get_latest_library_graph("anime")
+            .await
+            .expect("read")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_failed_snapshot_reload_rebuilds_no_library_graph() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    *gateway.snapshot_status_override.lock().await = Some(failed_snapshot_status("request-1"));
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-previous".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-previous".to_string()),
+        last_context_snapshot_completed_at: Some(due_at),
+        next_context_snapshot_eligible_at: Some(due_at),
+        updated_at: due_at,
+        ..DiscoverySyncStateRecord::default()
+    });
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "Synthetic Movie One",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+    // The facet's graph is in place, so nothing is due for a retry either.
+    let built_at = Utc.with_ymd_and_hms(2026, 3, 1, 11, 0, 0).unwrap();
+    discovery
+        .commit_library_graph(&crate::LibraryGraphSnapshotRecord {
+            run: crate::LibraryGraphRunRecord {
+                id: "library-graph-movie".to_string(),
+                facet: "movie".to_string(),
+                axis: "SEMANTIC".to_string(),
+                status: "complete".to_string(),
+                subject_count: 1,
+                submitted_count: 1,
+                generated_at: None,
+                error_code: None,
+                error_text: None,
+                retry_after_seconds: None,
+                omitted_subject_keys: Vec::new(),
+                started_at: built_at,
+                completed_at: Some(built_at),
+                created_at: built_at,
+                updated_at: built_at,
+            },
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            clusters: Vec::new(),
+        })
+        .await
+        .expect("seed graph");
+
+    run_discovery_sync_at(&app, Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap()).await;
+
+    assert!(discovery.commits.lock().await.is_empty());
+    assert!(gateway.library_graph_inputs.lock().await.is_empty());
+    assert_eq!(discovery.library_graph_commits.lock().await.len(), 1);
+    assert!(discovery.library_graph_deletes.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -5395,6 +6159,8 @@ struct SnapshotMetadataGateway {
     public_feed_inputs: Mutex<Vec<DiscoveryPublicFeedInput>>,
     title_recommendation_inputs: Mutex<Vec<TitleRecommendationsInput>>,
     title_recommendation_results: Mutex<Vec<DiscoveryTitle>>,
+    title_recommendation_groups: Mutex<Vec<crate::DiscoveryRelatedGroup>>,
+    fail_title_recommendations: Mutex<bool>,
     title_recommendation_gate: Mutex<Option<Arc<Notify>>>,
     title_recommendation_started: Notify,
     status_requests: Mutex<Vec<String>>,
@@ -5406,6 +6172,10 @@ struct SnapshotMetadataGateway {
     fail_snapshot_page: Mutex<bool>,
     context_changes_override: Mutex<Option<DiscoveryContextChangesResult>>,
     fail_context_changes: Mutex<bool>,
+    library_graph_inputs: Mutex<Vec<crate::LibraryGraphGatewayInput>>,
+    library_graph_queue_full: Mutex<bool>,
+    // The wait a queue-full answer asks for; five seconds when unset.
+    library_graph_retry_after_seconds: Mutex<Option<u64>>,
 }
 
 #[async_trait]
@@ -5472,11 +6242,17 @@ impl MetadataGateway for SnapshotMetadataGateway {
             self.title_recommendation_started.notify_one();
             gate.notified().await;
         }
+        if *self.fail_title_recommendations.lock().await {
+            return Err(AppError::Repository(
+                "synthetic title recommendations failure".to_string(),
+            ));
+        }
         Ok(DiscoveryRelatedResult {
             subject_key: input.subject.key.clone().unwrap_or_default(),
             query: input.query.clone(),
             generated_at: "2026-06-25T00:00:04Z".to_string(),
             results: self.title_recommendation_results.lock().await.clone(),
+            groups: self.title_recommendation_groups.lock().await.clone(),
         })
     }
 
@@ -5618,6 +6394,52 @@ impl MetadataGateway for SnapshotMetadataGateway {
         })
     }
 
+    async fn library_graph(
+        &self,
+        input: &crate::LibraryGraphGatewayInput,
+    ) -> AppResult<crate::LibraryGraphGatewayResult> {
+        self.library_graph_inputs.lock().await.push(input.clone());
+        if *self.library_graph_queue_full.lock().await {
+            let retry_after = self
+                .library_graph_retry_after_seconds
+                .lock()
+                .await
+                .unwrap_or(5);
+            return Err(AppError::temporary_unavailable_reason(
+                crate::error_reasons::metadata_gateway::QUEUE_FULL,
+                "library graph queue is full",
+                Some(std::time::Duration::from_secs(retry_after)),
+            ));
+        }
+        let nodes = input
+            .subjects
+            .iter()
+            .filter_map(|subject| subject.key.clone())
+            .map(|key| crate::LibraryGraphGatewayNode {
+                subject_key: key.clone(),
+                target_key: key,
+                cluster_id: 0,
+            })
+            .collect::<Vec<_>>();
+        let clusters = nodes
+            .first()
+            .map(|node| crate::LibraryGraphGatewayCluster {
+                id: 0,
+                label_key: None,
+                label: "Synthetic Cluster".to_string(),
+                medoid: node.target_key.clone(),
+                size: nodes.len() as i64,
+            })
+            .into_iter()
+            .collect();
+        Ok(crate::LibraryGraphGatewayResult {
+            generated_at: "2026-06-25T00:00:04Z".to_string(),
+            nodes,
+            edges: Vec::new(),
+            clusters,
+        })
+    }
+
     async fn acknowledge_discovery_context_snapshot(
         &self,
         request_id: &str,
@@ -5666,6 +6488,10 @@ struct RecordingDiscoveryRepository {
     // Simulates a metadata language change landing between the SMG fetch and
     // the public-feed commit: the store rolls the commit back as superseded.
     supersede_public_feed_commits: Mutex<bool>,
+    library_graph_runs: Mutex<Vec<crate::LibraryGraphRunRecord>>,
+    library_graph_commits: Mutex<Vec<crate::LibraryGraphSnapshotRecord>>,
+    neighbor_cache: Mutex<Vec<crate::DiscoveryNeighborCacheRecord>>,
+    library_graph_deletes: Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -5930,6 +6756,27 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
             .collect())
     }
 
+    async fn list_discovery_item_targets(
+        &self,
+        _run_ids: &[String],
+    ) -> AppResult<Vec<crate::DiscoveryItemTargetRecord>> {
+        // The double's list reads ignore generations, so every stored item
+        // is a candidate.
+        let mut targets = self
+            .items
+            .lock()
+            .await
+            .iter()
+            .map(|item| crate::DiscoveryItemTargetRecord {
+                target_key: item.target_key.clone(),
+                resolved_title_id: item.resolved_title_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets.dedup();
+        Ok(targets)
+    }
+
     async fn upsert_pending_discovery_context_change(
         &self,
         change: &DiscoveryPendingContextChangeRecord,
@@ -6077,6 +6924,7 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
     async fn list_public_discovery_section_items(
         &self,
         run_id: &str,
+        section_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
         _filters: &DiscoveryHomeFilters,
@@ -6091,6 +6939,9 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
                 .trim()
                 .eq_ignore_ascii_case("COMPLETE_THE_COLLECTION")
             {
+                continue;
+            }
+            if !section_ids.is_empty() && !section_ids.contains(&section.section_id) {
                 continue;
             }
             let mut items = all_items
@@ -6123,6 +6974,7 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
         readable_library_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
+        include_owned: bool,
         _filters: &DiscoveryHomeFilters,
         limit: i64,
     ) -> AppResult<Vec<DiscoveryHomeCandidate>> {
@@ -6133,7 +6985,7 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
             include_unresolved,
         )
         .into_iter()
-        .filter(|item| !item.owned_in_input)
+        .filter(|item| include_owned || !item.owned_in_input)
         .filter(|item| recording_item_is_allowed(item, allowed_media_kinds))
         .collect::<Vec<_>>();
         recording_dedupe_and_sort(&mut items);
@@ -6454,8 +7306,57 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
                     .iter()
                     .any(|allowed| allowed.eq_ignore_ascii_case(&media_kind))
             }) && recording_item_matches_query(item, &query.filters)
+                && query.browse_label.as_ref().is_none_or(|(kind, label)| {
+                    recording_canonical_facet_values_match(item, kind, std::slice::from_ref(label))
+                })
+                && recording_canonical_facet_values_match(
+                    item,
+                    "genre",
+                    &query.home_filters.genre_tag_keys,
+                )
+                && recording_canonical_facet_values_match(
+                    item,
+                    "theme",
+                    &query.home_filters.theme_tag_keys,
+                )
+                && !query.excluded_identity_keys.contains(&item.target_key)
+                && item
+                    .resolved_title_id
+                    .as_ref()
+                    .is_none_or(|id| !query.excluded_title_ids.contains(id))
+                && !item
+                    .target_key
+                    .splitn(3, ':')
+                    .collect::<Vec<_>>()
+                    .as_slice()
+                    .get(2)
+                    .is_some_and(|value| {
+                        let source = item.target_key.split(':').next().unwrap_or_default();
+                        let kind = recording_discovery_item_media_kind(item).unwrap_or_default();
+                        query
+                            .requested_keys
+                            .contains(&format!("{kind}:{source}:{value}"))
+                    })
         });
         recording_dedupe_and_sort(&mut items);
+        match query.sort.unwrap_or_default() {
+            crate::DiscoverySectionSort::Title => items.sort_by_cached_key(|item| {
+                item.sort_title
+                    .as_deref()
+                    .unwrap_or(&item.display_title)
+                    .to_lowercase()
+            }),
+            crate::DiscoverySectionSort::ReleaseDate => {
+                items.sort_by_key(|item| std::cmp::Reverse(item.year))
+            }
+            crate::DiscoverySectionSort::Popularity => {
+                items.sort_by(|a, b| b.base_rank.partial_cmp(&a.base_rank).unwrap())
+            }
+            crate::DiscoverySectionSort::Rating => {
+                items.sort_by(|a, b| b.rating.partial_cmp(&a.rating).unwrap())
+            }
+            crate::DiscoverySectionSort::Relevance => {}
+        }
         let total_count = items.len() as i64;
         let offset = query.offset.min(items.len());
         let limit = query.limit.min(items.len().saturating_sub(offset));
@@ -6538,6 +7439,111 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
         Ok(crate::DiscoveryPruneReport {
             runs_deleted: (before - runs.len()) as u64,
         })
+    }
+
+    async fn record_failed_library_graph_run(
+        &self,
+        run: &crate::LibraryGraphRunRecord,
+    ) -> AppResult<()> {
+        self.library_graph_runs.lock().await.push(run.clone());
+        Ok(())
+    }
+
+    async fn commit_library_graph(
+        &self,
+        snapshot: &crate::LibraryGraphSnapshotRecord,
+    ) -> AppResult<()> {
+        self.library_graph_runs
+            .lock()
+            .await
+            .push(snapshot.run.clone());
+        self.library_graph_commits
+            .lock()
+            .await
+            .push(snapshot.clone());
+        Ok(())
+    }
+
+    async fn get_latest_library_graph(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<crate::LibraryGraphSnapshotRecord>> {
+        Ok(self
+            .library_graph_commits
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find(|snapshot| snapshot.run.facet == facet)
+            .cloned())
+    }
+
+    async fn get_latest_library_graph_run(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<crate::LibraryGraphRunRecord>> {
+        Ok(self
+            .library_graph_runs
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find(|run| run.facet == facet)
+            .cloned())
+    }
+
+    async fn has_complete_library_graph(&self, facet: &str) -> AppResult<bool> {
+        Ok(self
+            .library_graph_commits
+            .lock()
+            .await
+            .iter()
+            .any(|snapshot| snapshot.run.facet == facet))
+    }
+
+    async fn delete_library_graph_runs(&self, facet: &str) -> AppResult<()> {
+        self.library_graph_runs
+            .lock()
+            .await
+            .retain(|run| run.facet != facet);
+        self.library_graph_commits
+            .lock()
+            .await
+            .retain(|snapshot| snapshot.run.facet != facet);
+        self.library_graph_deletes
+            .lock()
+            .await
+            .push(facet.to_string());
+        Ok(())
+    }
+
+    async fn get_discovery_neighbor_cache(
+        &self,
+        target_key: &str,
+        language: &str,
+    ) -> AppResult<Option<crate::DiscoveryNeighborCacheRecord>> {
+        Ok(self
+            .neighbor_cache
+            .lock()
+            .await
+            .iter()
+            .find(|record| record.target_key == target_key && record.language == language)
+            .cloned())
+    }
+
+    async fn replace_discovery_neighbor_cache(
+        &self,
+        record: &crate::DiscoveryNeighborCacheRecord,
+        expire_before: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut cache = self.neighbor_cache.lock().await;
+        cache.retain(|existing| {
+            existing.fetched_at >= expire_before
+                && !(existing.target_key == record.target_key
+                    && existing.language == record.language)
+        });
+        cache.push(record.clone());
+        Ok(())
     }
 }
 
@@ -7421,6 +8427,7 @@ fn test_discovery_title() -> DiscoveryTitle {
         context_terms: Vec::new(),
         change_subject_keys: Vec::new(),
         removed_subject_keys: Vec::new(),
+        group_id: None,
     }
 }
 
@@ -7940,4 +8947,1433 @@ async fn discovery_sync_fails_an_abandoned_library_scan_session() {
             || !discovery.incremental_commits.lock().await.is_empty(),
         "discovery work must resume once the abandoned scan is finished"
     );
+}
+
+fn watchlist_subscription(id: &str, owner_user_id: &str) -> scryer_domain::ListSubscription {
+    let mut subscription = crate::lists::test_support::subscription(id);
+    subscription.scope = scryer_domain::ListScope::Personal;
+    subscription.owner_user_id = owner_user_id.to_string();
+    subscription.credential_id = Some(format!("{id}-account"));
+    subscription.source.provider = "plex".to_string();
+    subscription.source.source_type = "watchlist".to_string();
+    subscription.source.params.clear();
+    subscription
+}
+
+fn watchlist_row(
+    subscription_id: &str,
+    tmdb_id: &str,
+    added_minute: i64,
+    state: scryer_domain::ListMembershipState,
+) -> scryer_domain::ListMembership {
+    let mut row = crate::lists::test_support::membership(subscription_id, tmdb_id, state);
+    row.external_ids = vec![crate::lists::test_support::tmdb(tmdb_id)];
+    row.display_title = Some(format!("Fixture Row {tmdb_id}"));
+    row.first_seen_at = crate::lists::test_support::at(added_minute);
+    row
+}
+
+fn pending_movie_request(id: &str, tmdb_id: &str) -> scryer_domain::MediaRequest {
+    let now = Utc.timestamp_opt(2_000, 0).unwrap();
+    scryer_domain::MediaRequest {
+        id: id.to_string(),
+        library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+        facet: MediaFacet::Movie,
+        status: scryer_domain::MediaRequestStatus::Pending,
+        identity_fingerprint: format!("fingerprint-{id}"),
+        title: "Fixture Requested Movie".to_string(),
+        sort_title: None,
+        slug: None,
+        poster_url: None,
+        background_url: None,
+        year: None,
+        overview: None,
+        runtime_minutes: None,
+        language: None,
+        content_status: None,
+        rating_summary: scryer_domain::TitleRatingSummary::default(),
+        requested_quality_profile_id: None,
+        requested_quality_profile_name: None,
+        requested_monitor_type: None,
+        requested_monitor_selection: None,
+        resolved_by_user_id: None,
+        resolved_at: None,
+        created_title_id: None,
+        approved_quality_profile_id: None,
+        approved_quality_profile_name: None,
+        requested_lease_days: None,
+        approved_lease_days: None,
+        decision_id: None,
+        decided_by_rule_set_ids: Vec::new(),
+        policy_tags: Vec::new(),
+        metadata_snapshot_json: "{}".to_string(),
+        external_ids: vec![ExternalId::new("tmdb", tmdb_id)],
+        requesters: Vec::new(),
+        origin: scryer_domain::MediaRequestOrigin::default(),
+        created_by_user_id: "requester-fixture".to_string(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn watchlist_home_query() -> DiscoveryHomeQuery {
+    DiscoveryHomeQuery {
+        include_public: true,
+        include_personalized: true,
+        include_unresolved: true,
+        limit_per_section: 10,
+        filters: DiscoveryHomeFilters::default(),
+    }
+}
+
+fn watchlist_section_titles(home: &crate::ports::DiscoveryHomeResult) -> Option<Vec<String>> {
+    home.personalized_sections
+        .iter()
+        .find(|section| section.section_type == "FROM_YOUR_WATCHLIST")
+        .map(|section| {
+            section
+                .items
+                .iter()
+                .map(|item| item.display_title.clone())
+                .collect()
+        })
+}
+
+#[tokio::test]
+async fn discovery_home_shows_each_viewer_only_their_own_watchlist() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let media_requests = Arc::new(super::MockMediaRequestRepo::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+            .with_media_requests(media_requests.clone())
+    });
+    let permissions = || {
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ]
+    };
+    let (_, first_viewer) =
+        create_authenticated_user(&app, &admin, "watchlist-first", "password", permissions()).await;
+    let (_, second_viewer) =
+        create_authenticated_user(&app, &admin, "watchlist-second", "password", permissions())
+            .await;
+    let (_, unlinked_viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-unlinked",
+        "password",
+        permissions(),
+    )
+    .await;
+
+    let mut owned = test_title(
+        "watchlist-owned-title",
+        "Fixture Owned Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "7003")],
+    );
+    owned.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    titles.store.lock().await.push(owned);
+    media_requests
+        .requests
+        .lock()
+        .await
+        .push(pending_movie_request("watchlist-request", "7004"));
+
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.extend(
+        [
+            ("7001", "Fixture Watchlist Alpha"),
+            ("7002", "Fixture Watchlist Beta"),
+            ("7003", "Fixture Owned Movie"),
+            ("7004", "Fixture Requested Movie"),
+            ("7005", "Fixture Declined Movie"),
+            ("7006", "Fixture Library Movie"),
+            ("7101", "Fixture Second Viewer Movie"),
+        ]
+        .into_iter()
+        .map(|(tmdb_id, title)| {
+            discovery_item_record(
+                "public-watchlist-run",
+                "public-watchlist-run",
+                None,
+                &format!("tmdb:movie:{tmdb_id}"),
+                title,
+                "movie",
+                10.0,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            )
+        }),
+    );
+
+    let first = watchlist_subscription("watchlist-first", &first_viewer.id);
+    let second = watchlist_subscription("watchlist-second", &second_viewer.id);
+    // A personal list of the first viewer's that is not a watchlist feeds
+    // nothing here.
+    let mut other_list = watchlist_subscription("watchlist-first-other", &first_viewer.id);
+    other_list.source.source_type = "user_list".to_string();
+    *lists.subscriptions.lock().unwrap() = vec![first, second, other_list];
+    use scryer_domain::ListMembershipState as State;
+    lists.insert_rows(vec![
+        watchlist_row("watchlist-first", "7001", 10, State::Pending),
+        watchlist_row("watchlist-first", "7002", 20, State::Pending),
+        watchlist_row("watchlist-first", "7003", 30, State::Pending),
+        watchlist_row("watchlist-first", "7004", 40, State::Pending),
+        watchlist_row("watchlist-first", "7005", 50, State::Excluded),
+        // In no discovery pool this viewer can see: a card from its row.
+        watchlist_row("watchlist-first", "7999", 60, State::Pending),
+        // In a library somewhere: never the watchlist's to offer.
+        watchlist_row("watchlist-first", "7006", 70, State::InLibrary),
+        watchlist_row("watchlist-first-other", "7002", 5, State::Pending),
+        watchlist_row("watchlist-second", "7101", 10, State::Pending),
+    ]);
+    // Known by an AniList id alone: a request could not add it, so no card.
+    let mut anilist_only = watchlist_row("watchlist-first", "7998", 80, State::Pending);
+    anilist_only.external_ids = vec![ExternalId::new("anilist", "7998")];
+    lists.insert_rows(vec![anilist_only]);
+
+    let first_home = app
+        .discovery_home(&first_viewer, watchlist_home_query())
+        .await
+        .expect("first viewer home");
+    assert_eq!(
+        first_home
+            .personalized_sections
+            .first()
+            .map(|section| section.section_type.as_str()),
+        Some("FROM_YOUR_WATCHLIST")
+    );
+    assert_eq!(
+        watchlist_section_titles(&first_home),
+        Some(vec![
+            "Fixture Watchlist Beta".to_string(),
+            "Fixture Watchlist Alpha".to_string(),
+            "Fixture Row 7999".to_string(),
+        ])
+    );
+
+    let second_home = app
+        .discovery_home(&second_viewer, watchlist_home_query())
+        .await
+        .expect("second viewer home");
+    assert_eq!(
+        watchlist_section_titles(&second_home),
+        Some(vec!["Fixture Second Viewer Movie".to_string()])
+    );
+
+    // The row card reads back for the add or request action, for its owner
+    // only.
+    let detail_query = |target_key: &str| DiscoveryItemDetailQuery {
+        target_key: target_key.to_string(),
+        include_unresolved: true,
+    };
+    let row_card = app
+        .discovery_item_detail(&first_viewer, detail_query("tmdb:movie:7999"))
+        .await
+        .expect("row card detail")
+        .expect("the owner reads their row card");
+    assert_eq!(row_card.display_title, "Fixture Row 7999");
+    assert_eq!(row_card.target_key, "tmdb:movie:7999");
+    assert!(!row_card.resolved);
+    assert_eq!(
+        app.discovery_item_detail(&second_viewer, detail_query("tmdb:movie:7999"))
+            .await
+            .expect("other viewer detail"),
+        None
+    );
+    assert_eq!(
+        app.discovery_item_detail(&first_viewer, detail_query("anilist:anime:7998"))
+            .await
+            .expect("anilist-only detail"),
+        None
+    );
+
+    let unlinked_home = app
+        .discovery_home(&unlinked_viewer, watchlist_home_query())
+        .await
+        .expect("unlinked viewer home");
+    assert_eq!(watchlist_section_titles(&unlinked_home), None);
+}
+
+#[tokio::test]
+async fn discovery_home_has_no_watchlist_section_when_personalized_discovery_is_off() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(true).await;
+    let (app, admin, _titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway, settings.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    let (_, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-switched-off",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.push(discovery_item_record(
+        "public-watchlist-run",
+        "public-watchlist-run",
+        None,
+        "tmdb:movie:7001",
+        "Fixture Watchlist Alpha",
+        "movie",
+        10.0,
+        &["Drama"],
+        &[],
+        false,
+        true,
+    ));
+    *lists.subscriptions.lock().unwrap() =
+        vec![watchlist_subscription("watchlist-switched-off", &viewer.id)];
+    lists.insert_rows(vec![watchlist_row(
+        "watchlist-switched-off",
+        "7001",
+        10,
+        scryer_domain::ListMembershipState::Pending,
+    )]);
+
+    let shown = app
+        .discovery_home(&viewer, watchlist_home_query())
+        .await
+        .expect("home with personalized discovery on");
+    assert!(watchlist_section_titles(&shown).is_some());
+
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            "false",
+        )
+        .await;
+    let hidden = app
+        .discovery_home(&viewer, watchlist_home_query())
+        .await
+        .expect("home with personalized discovery off");
+    assert_eq!(watchlist_section_titles(&hidden), None);
+}
+
+/// Titles on the library's reason rails and the FOR_YOU sweep: the rails the
+/// watchlist claims its titles from.
+fn reason_rail_titles(home: &crate::ports::DiscoveryHomeResult) -> Vec<String> {
+    home.personalized_sections
+        .iter()
+        .filter(|section| {
+            section.section_type.starts_with("BECAUSE_YOU_LIKE")
+                || section.section_type == "FOR_YOU"
+        })
+        .flat_map(|section| section.items.iter())
+        .map(|item| item.display_title.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn discovery_home_watchlist_claims_its_titles_from_the_library_rails() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    let (_, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-claims",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut library_title = test_title(
+        "watchlist-claims-library-title",
+        "Fixture Library Title",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "8000")],
+    );
+    library_title.library_id = movie_library_id.clone();
+    titles.store.lock().await.push(library_title);
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("watchlist-claims-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery
+        .submitted_subjects
+        .lock()
+        .await
+        .push(DiscoverySubmittedSubjectRecord {
+            run_id: "watchlist-claims-run".to_string(),
+            subject_key: "tmdb:movie:8000".to_string(),
+            title_id: Some("watchlist-claims-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+            library_facet: Some("movie".to_string()),
+            title_kind: Some("movie".to_string()),
+            display_title: Some("Fixture Library Title".to_string()),
+            external_ids_json: "[]".to_string(),
+            raw_subject_json: "{}".to_string(),
+        });
+    discovery.items.lock().await.extend((0..24).map(|index| {
+        let mut item = discovery_item_record(
+            "watchlist-claims-run",
+            "watchlist-claims-run",
+            None,
+            &format!("tmdb:movie:{}", 8_100 + index),
+            &format!("Fixture Candidate {index}"),
+            "movie",
+            1_000.0 - index as f64,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        );
+        item.matched_subject_keys = vec!["tmdb:movie:8000".to_string()];
+        item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+            subject_key: "tmdb:movie:8000".to_string(),
+            title_id: Some("watchlist-claims-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+        }];
+        item
+    }));
+    let query = || DiscoveryHomeQuery {
+        include_public: false,
+        include_personalized: true,
+        include_unresolved: true,
+        limit_per_section: 10,
+        filters: DiscoveryHomeFilters::default(),
+    };
+
+    let before = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home before the watchlist");
+    assert!(
+        reason_rail_titles(&before).contains(&"Fixture Candidate 0".to_string()),
+        "fixture must offer the candidate on a library rail first"
+    );
+
+    *lists.subscriptions.lock().unwrap() =
+        vec![watchlist_subscription("watchlist-claims", &viewer.id)];
+    lists.insert_rows(vec![watchlist_row(
+        "watchlist-claims",
+        "8100",
+        10,
+        scryer_domain::ListMembershipState::Pending,
+    )]);
+    let with_watchlist = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home with the watchlist");
+    assert_eq!(
+        watchlist_section_titles(&with_watchlist),
+        Some(vec!["Fixture Candidate 0".to_string()])
+    );
+    assert!(!reason_rail_titles(&with_watchlist).contains(&"Fixture Candidate 0".to_string()));
+
+    // A member whose list policy is none has no watchlist, and nothing is
+    // claimed on its behalf.
+    lists
+        .policies
+        .lock()
+        .unwrap()
+        .push(scryer_domain::UserListPolicy {
+            user_id: viewer.id.clone(),
+            policy: scryer_domain::ListPolicy::None,
+            updated_by_user_id: None,
+            updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        });
+    let refused = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home with personal lists refused");
+    assert_eq!(watchlist_section_titles(&refused), None);
+    assert!(reason_rail_titles(&refused).contains(&"Fixture Candidate 0".to_string()));
+}
+
+#[tokio::test]
+async fn discovery_home_watchlist_needs_an_enabled_personal_linked_list() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.push(discovery_item_record(
+        "public-watchlist-run",
+        "public-watchlist-run",
+        None,
+        "tmdb:movie:7001",
+        "Fixture Watchlist Alpha",
+        "movie",
+        10.0,
+        &["Drama"],
+        &[],
+        false,
+        true,
+    ));
+
+    type SubscriptionVariant = (&'static str, fn(&mut scryer_domain::ListSubscription));
+    let variants: [SubscriptionVariant; 3] = [
+        ("public", |subscription| {
+            subscription.scope = scryer_domain::ListScope::Public;
+        }),
+        ("disabled", |subscription| subscription.enabled = false),
+        ("unlinked", |subscription| subscription.credential_id = None),
+    ];
+    for (name, adjust) in variants {
+        let (_, viewer) = create_authenticated_user(
+            &app,
+            &admin,
+            &format!("watchlist-{name}"),
+            "password",
+            vec![
+                TestPermissionPreset::CatalogView,
+                TestPermissionPreset::MediaRequest,
+            ],
+        )
+        .await;
+        let subscription_id = format!("watchlist-{name}");
+        let mut subscription = watchlist_subscription(&subscription_id, &viewer.id);
+        adjust(&mut subscription);
+        lists.subscriptions.lock().unwrap().push(subscription);
+        lists.insert_rows(vec![watchlist_row(
+            &subscription_id,
+            "7001",
+            10,
+            scryer_domain::ListMembershipState::Pending,
+        )]);
+
+        let home = app
+            .discovery_home(&viewer, watchlist_home_query())
+            .await
+            .expect("home");
+        assert_eq!(watchlist_section_titles(&home), None, "{name} list");
+    }
+}
+
+struct DiscoverySectionFixture {
+    app: crate::AppUseCase,
+    discovery: Arc<RecordingDiscoveryRepository>,
+    viewer: scryer_domain::User,
+    media_requests: Arc<super::support_events_requests::MockMediaRequestRepo>,
+    movie_library_id: String,
+}
+
+/// A personalized pool of `count` synthetic drama movies, all found through
+/// one library title, ranked by index.
+async fn discovery_section_fixture(username: &str, count: usize) -> DiscoverySectionFixture {
+    discovery_section_fixture_with_lists(username, count, None).await
+}
+
+/// [`discovery_section_fixture`], with the viewer's personal lists read from
+/// `lists` when given.
+async fn discovery_section_fixture_with_lists(
+    username: &str,
+    count: usize,
+    lists: Option<Arc<crate::lists::test_support::MemoryListStore>>,
+) -> DiscoverySectionFixture {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let media_requests = Arc::new(super::support_events_requests::MockMediaRequestRepo::default());
+    let app = app.with_test_overrides(|builder| {
+        let builder = builder
+            .with_discovery_store(discovery.clone())
+            .with_media_requests(media_requests.clone());
+        match lists.clone() {
+            Some(lists) => builder.with_list_store(lists),
+            None => builder,
+        }
+    });
+    let (_viewer, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        username,
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut library_title = test_title(
+        "section-library-title",
+        "Section Library Title",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "9000")],
+    );
+    library_title.library_id = movie_library_id.clone();
+    titles.store.lock().await.push(library_title);
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("section-run".to_string()),
+        last_public_feed_generation_id: Some("section-public".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery
+        .submitted_subjects
+        .lock()
+        .await
+        .push(DiscoverySubmittedSubjectRecord {
+            run_id: "section-run".to_string(),
+            subject_key: "tmdb:movie:9000".to_string(),
+            title_id: Some("section-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+            library_facet: Some("movie".to_string()),
+            title_kind: Some("movie".to_string()),
+            display_title: Some("Section Library Title".to_string()),
+            external_ids_json: "[]".to_string(),
+            raw_subject_json: "{}".to_string(),
+        });
+    let mut items = Vec::new();
+    for index in 0..count {
+        let mut item = discovery_item_record(
+            "section-run",
+            "section-run",
+            None,
+            &format!("tmdb:movie:{}", 20_000 + index),
+            &format!("Section Candidate {index}"),
+            "movie",
+            1_000.0 - index as f64,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        );
+        item.matched_subject_keys = vec!["tmdb:movie:9000".to_string()];
+        item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+            subject_key: "tmdb:movie:9000".to_string(),
+            title_id: Some("section-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+        }];
+        items.push(item);
+    }
+    discovery.items.lock().await.extend(items);
+    DiscoverySectionFixture {
+        app,
+        discovery,
+        viewer,
+        media_requests,
+        movie_library_id,
+    }
+}
+
+fn discovery_section_items_query(
+    section_id: &str,
+    rail_limit: usize,
+    offset: usize,
+    limit: usize,
+) -> DiscoveryItemsQuery {
+    DiscoveryItemsQuery {
+        offset,
+        limit,
+        section: Some(crate::DiscoverySectionItemsQuery {
+            section_id: section_id.to_string(),
+            rail_limit,
+            ..crate::DiscoverySectionItemsQuery::default()
+        }),
+        ..DiscoveryItemsQuery::default()
+    }
+}
+
+/// Every page of one section, in order, until the reported total is read.
+async fn discovery_section_pages(
+    fixture: &DiscoverySectionFixture,
+    query: impl Fn(usize) -> DiscoveryItemsQuery,
+) -> (Vec<Vec<String>>, i64) {
+    let mut pages = Vec::new();
+    let mut offset = 0;
+    let total_count = loop {
+        let page = fixture
+            .app
+            .discovery_items(&fixture.viewer, query(offset))
+            .await
+            .expect("section page should load");
+        assert!(page.section.is_some(), "a section page names its section");
+        if page.items.is_empty() {
+            break page.total_count;
+        }
+        offset += page.items.len();
+        pages.push(
+            page.items
+                .into_iter()
+                .map(|item| item.target_key)
+                .collect::<Vec<_>>(),
+        );
+        if offset as i64 >= page.total_count {
+            break page.total_count;
+        }
+    };
+    (pages, total_count)
+}
+
+#[tokio::test]
+async fn discovery_section_pages_start_with_the_home_rail_and_never_repeat() {
+    let fixture = discovery_section_fixture("discovery-section-paging", 140).await;
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("home should load");
+    assert!(
+        home.personalized_sections.len() >= 2,
+        "the pool should fill more than one rail: {:?}",
+        home.personalized_sections
+            .iter()
+            .map(|section| (&section.section_id, section.items.len()))
+            .collect::<Vec<_>>()
+    );
+
+    // Only the composed shelf (the label rails and For You) claims titles
+    // in rail order; standalone rails such as Top Rated list on their own.
+    let composed =
+        |section_id: &str| section_id == "for_you" || section_id.starts_with("because_you_like_");
+    for (position, rail) in home.personalized_sections.iter().enumerate() {
+        let earlier = home.personalized_sections[..position]
+            .iter()
+            .filter(|section| composed(&rail.section_id) && composed(&section.section_id))
+            .flat_map(|section| section.items.iter().map(|item| item.target_key.clone()))
+            .collect::<HashSet<_>>();
+        let (pages, total_count) = discovery_section_pages(&fixture, |offset| {
+            discovery_section_items_query(&rail.section_id, 25, offset, 25)
+        })
+        .await;
+        let home_keys = rail
+            .items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pages.first(),
+            Some(&home_keys),
+            "the first page of {} is the home rail",
+            rail.section_id
+        );
+        let all_keys = pages.iter().flatten().cloned().collect::<Vec<_>>();
+        assert_eq!(all_keys.len() as i64, total_count);
+        assert_eq!(
+            all_keys.iter().collect::<HashSet<_>>().len(),
+            all_keys.len(),
+            "no title repeats across the pages of {}",
+            rail.section_id
+        );
+        assert!(
+            all_keys.iter().all(|key| !earlier.contains(key)),
+            "{} never lists a title an earlier rail claimed",
+            rail.section_id
+        );
+    }
+    let last = home
+        .personalized_sections
+        .iter()
+        .rev()
+        .find(|section| composed(&section.section_id))
+        .expect("home composes a personalized shelf");
+    let (pages, _) = discovery_section_pages(&fixture, |offset| {
+        discovery_section_items_query(&last.section_id, 25, offset, 25)
+    })
+    .await;
+    assert!(
+        pages.len() > 1,
+        "the last composed rail ({}) continues past its home window into the pool",
+        last.section_id
+    );
+}
+
+#[tokio::test]
+async fn discovery_browse_includes_public_and_weak_candidates_without_rail_limits() {
+    let fixture = discovery_section_fixture("browse-combined", 1105).await;
+    {
+        let mut items = fixture.discovery.items.lock().await;
+        for item in items.iter_mut() {
+            item.matched_subject_count = 0;
+            item.matched_subject_keys.clear();
+            item.rank_score = None;
+            item.base_rank = None;
+            item.rating = None;
+            item.external_ratings.clear();
+            item.affinity_signals.clear();
+            for tag in &mut item.canonical_tags {
+                tag.confidence = None;
+                tag.sources.clear();
+            }
+        }
+        let mut public = items[0].clone();
+        public.id = "public-only".into();
+        public.target_key = "tmdb:movie:80000".into();
+        public.run_id = "section-public".into();
+        public.base_generation_id = Some("section-public".into());
+        public.source_run_kind = "public_feed".into();
+        public.library_provenance.clear();
+        let mut duplicate = public.clone();
+        duplicate.id = "public-duplicate".into();
+        duplicate.target_key = items[0].target_key.clone();
+        items.extend([public, duplicate]);
+    }
+    let (pages, count) = discovery_section_pages(&fixture, |offset| {
+        discovery_section_items_query("browse_genre_drama", 25, offset, 200)
+    })
+    .await;
+    assert_eq!(count, 1106);
+    let keys = pages.into_iter().flatten().collect::<HashSet<_>>();
+    assert_eq!(keys.len(), 1106);
+    assert!(keys.contains("tmdb:movie:80000"));
+    let mut query = discovery_section_items_query("browse_all", 25, 0, 200);
+    query.section.as_mut().unwrap().filters.genre_tag_keys = vec!["canonical:genre:drama".into()];
+    let page = fixture
+        .app
+        .discovery_items(&fixture.viewer, query)
+        .await
+        .unwrap();
+    assert_eq!(page.total_count, count);
+    assert_eq!(page.items.len(), 200);
+    assert_eq!(page.generation_ids, vec!["section-run", "section-public"]);
+    assert_eq!(page.section.as_ref().unwrap().surface, "mixed");
+    let public_generation = fixture
+        .discovery
+        .state
+        .lock()
+        .await
+        .as_mut()
+        .unwrap()
+        .last_public_feed_generation_id
+        .take();
+    let personalized = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            discovery_section_items_query("browse_all", 25, 0, 50),
+        )
+        .await
+        .unwrap();
+    assert_eq!(personalized.total_count, 1105);
+    assert_eq!(
+        personalized.section.as_ref().unwrap().surface,
+        "personalized"
+    );
+    fixture
+        .discovery
+        .state
+        .lock()
+        .await
+        .as_mut()
+        .unwrap()
+        .last_public_feed_generation_id = public_generation;
+
+    fixture
+        .app
+        .services
+        .config
+        .settings
+        .upsert_setting_json(
+            crate::SETTINGS_SCOPE_SYSTEM,
+            crate::DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            None,
+            "false".into(),
+            "test",
+            None,
+        )
+        .await
+        .unwrap();
+    let disabled = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            discovery_section_items_query("browse_all", 25, 0, 50),
+        )
+        .await
+        .unwrap();
+    assert_eq!(disabled.total_count, 2);
+    assert_eq!(disabled.section.as_ref().unwrap().surface, "public");
+    assert!(!disabled.can_view_personalized);
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: true,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        home.browse_labels
+            .iter()
+            .find(|label| label.label_key == "drama")
+            .unwrap()
+            .item_count,
+        2,
+        "thin public browse labels survive without personalized rails"
+    );
+    fixture
+        .discovery
+        .state
+        .lock()
+        .await
+        .as_mut()
+        .unwrap()
+        .last_success_generation_id = None;
+    let public = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            discovery_section_items_query("browse_genre_drama", 25, 0, 50),
+        )
+        .await
+        .unwrap();
+    assert_eq!(public.total_count, 2);
+    assert_eq!(public.generation_ids, vec!["section-public"]);
+    assert_eq!(public.section.as_ref().unwrap().surface, "public");
+}
+
+#[tokio::test]
+async fn discovery_browse_labels_open_a_section_of_every_matching_pool_title() {
+    let fixture = discovery_section_fixture("discovery-section-browse", 60).await;
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("home should load");
+    let drama = home
+        .browse_labels
+        .iter()
+        .find(|label| label.label_key == "drama")
+        .expect("the pool's genre is browsable");
+    assert_eq!(drama.family, crate::DiscoveryBrowseLabelFamily::Genre);
+    assert_eq!(drama.item_count, 60);
+    assert!(
+        home.browse_labels
+            .iter()
+            .all(|label| label.label_key == "drama"),
+        "only labels the pool holds are offered"
+    );
+
+    let (pages, total_count) = discovery_section_pages(&fixture, |offset| {
+        discovery_section_items_query(&drama.section_id, 25, offset, 25)
+    })
+    .await;
+    assert_eq!(total_count, 60);
+    let all_keys = pages.into_iter().flatten().collect::<Vec<_>>();
+    assert_eq!(all_keys.iter().collect::<HashSet<_>>().len(), 60);
+
+    let sorted = fixture
+        .app
+        .discovery_items(&fixture.viewer, {
+            let mut query = discovery_section_items_query(&drama.section_id, 25, 0, 60);
+            if let Some(section) = query.section.as_mut() {
+                section.sort = crate::DiscoverySectionSort::Title;
+            }
+            query
+        })
+        .await
+        .expect("sorted section should load");
+    let titles = sorted
+        .items
+        .iter()
+        .map(|item| item.display_title.to_lowercase())
+        .collect::<Vec<_>>();
+    let mut expected = titles.clone();
+    expected.sort();
+    assert_eq!(titles, expected);
+}
+
+#[tokio::test]
+async fn discovery_section_hides_pending_requests_only_when_asked() {
+    let fixture = discovery_section_fixture("discovery-section-requested", 30).await;
+    let now = Utc.timestamp_opt(3_000, 0).unwrap();
+    fixture
+        .media_requests
+        .requests
+        .lock()
+        .await
+        .push(scryer_domain::MediaRequest {
+            background_url: None,
+            requested_monitor_selection: None,
+            requested_lease_days: None,
+            approved_lease_days: None,
+            decision_id: None,
+            decided_by_rule_set_ids: Vec::new(),
+            policy_tags: Vec::new(),
+            metadata_snapshot_json: "{}".to_string(),
+            rating_summary: scryer_domain::TitleRatingSummary::default(),
+            id: "section-pending-request".to_string(),
+            library_id: fixture.movie_library_id.clone(),
+            facet: MediaFacet::Movie,
+            status: scryer_domain::MediaRequestStatus::Pending,
+            identity_fingerprint: "section-pending-request".to_string(),
+            title: "Section Candidate 3".to_string(),
+            sort_title: None,
+            slug: None,
+            poster_url: None,
+            year: None,
+            overview: None,
+            runtime_minutes: None,
+            language: None,
+            content_status: None,
+            requested_quality_profile_id: None,
+            requested_quality_profile_name: None,
+            requested_monitor_type: None,
+            resolved_by_user_id: None,
+            resolved_at: None,
+            created_title_id: None,
+            approved_quality_profile_id: None,
+            approved_quality_profile_name: None,
+            external_ids: vec![ExternalId {
+                source: "tmdb".to_string(),
+                kind: None,
+                value: "20003".to_string(),
+            }],
+            requesters: Vec::new(),
+            created_by_user_id: "section-requester".to_string(),
+            origin: Default::default(),
+            created_at: now,
+            updated_at: now,
+        });
+    let section_id = "browse_genre_drama";
+    let shown = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            discovery_section_items_query(section_id, 25, 0, 50),
+        )
+        .await
+        .expect("section should load");
+    assert!(
+        shown
+            .items
+            .iter()
+            .any(|item| item.target_key == "tmdb:movie:20003")
+    );
+    let mut hidden_query = discovery_section_items_query(section_id, 25, 0, 50);
+    if let Some(section) = hidden_query.section.as_mut() {
+        section.hide_requested = true;
+    }
+    let hidden = fixture
+        .app
+        .discovery_items(&fixture.viewer, hidden_query)
+        .await
+        .expect("section should load");
+    assert_eq!(hidden.total_count, shown.total_count - 1);
+    assert!(
+        hidden
+            .items
+            .iter()
+            .all(|item| item.target_key != "tmdb:movie:20003")
+    );
+}
+
+#[tokio::test]
+async fn discovery_public_section_page_folds_its_merged_source() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let (_viewer, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "discovery-section-public",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-fold".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.sections.lock().await.extend([
+        discovery_section_record("public-fold", "popular_now", "POPULAR_RIGHT_NOW", "public"),
+        discovery_section_record("public-fold", "trending", "TRENDING_NOW", "public"),
+        discovery_section_record("public-fold", "upcoming", "UPCOMING", "public"),
+    ]);
+    let mut items = Vec::new();
+    for (section_id, prefix, count) in [
+        ("popular_now", 30_000, 30),
+        ("trending", 31_000, 30),
+        ("upcoming", 32_000, 10),
+    ] {
+        for index in 0..count {
+            items.push(discovery_item_record(
+                "public-fold",
+                "public-fold",
+                Some(section_id),
+                &format!("tmdb:movie:{}", prefix + index),
+                &format!("Public Candidate {}", prefix + index),
+                "movie",
+                100.0 - index as f64,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            ));
+        }
+    }
+    // The same title in both folded sources is listed once.
+    items.push(discovery_item_record(
+        "public-fold",
+        "public-fold",
+        Some("trending"),
+        "tmdb:movie:30000",
+        "Public Candidate 30000",
+        "movie",
+        1.0,
+        &["Drama"],
+        &[],
+        false,
+        true,
+    ));
+    discovery.items.lock().await.extend(items);
+
+    let first = app
+        .discovery_items(
+            &viewer,
+            discovery_section_items_query("popular_now", 25, 0, 40),
+        )
+        .await
+        .expect("public section should load");
+    assert_eq!(first.total_count, 60);
+    assert_eq!(first.items.len(), 40);
+    // Page one is the folded rail the dashboard shows: each rail's window
+    // of 25, target first, then what is left of each.
+    let expected = (30_000..30_025)
+        .chain(31_000..31_025)
+        .chain(30_025..30_030)
+        .chain(31_025..31_030)
+        .map(|id| format!("tmdb:movie:{id}"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>(),
+        expected[..40]
+    );
+    let second = app
+        .discovery_items(
+            &viewer,
+            discovery_section_items_query("popular_now", 25, 40, 40),
+        )
+        .await
+        .expect("public section should page");
+    assert_eq!(second.items.len(), 20);
+    assert_eq!(
+        second
+            .items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>(),
+        expected[40..]
+    );
+    assert_eq!(
+        second.generation_ids,
+        ["public-fold".to_string()],
+        "a page names the generations it was composed from"
+    );
+    let keys = first
+        .items
+        .iter()
+        .chain(second.items.iter())
+        .map(|item| item.target_key.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(keys.len(), 60);
+    assert!(keys.iter().all(|key| !key.starts_with("tmdb:movie:32")));
+}
+
+#[tokio::test]
+async fn discovery_top_rated_section_skips_titles_earlier_rails_showed() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let (_viewer, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "discovery-section-top-rated",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-top".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.sections.lock().await.extend([
+        discovery_section_record("public-top", "popular_now", "POPULAR_RIGHT_NOW", "public"),
+        discovery_section_record(
+            "public-top",
+            "next_season",
+            "UPCOMING_NEXT_SEASON",
+            "public",
+        ),
+    ]);
+    let mut items = Vec::new();
+    for (section_id, prefix, count, top_score) in [
+        ("popular_now", 40_000, 10, 100.0),
+        ("next_season", 41_000, 30, 90.0),
+    ] {
+        for index in 0..count {
+            items.push(discovery_item_record(
+                "public-top",
+                "public-top",
+                Some(section_id),
+                &format!("tmdb:movie:{}", prefix + index),
+                &format!("Top Candidate {}", prefix + index),
+                "movie",
+                top_score - index as f64,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            ));
+        }
+    }
+    discovery.items.lock().await.extend(items);
+
+    // Top Rated takes the ten popular titles and fifteen more; the dashboard
+    // reads the popular rail first, so Top Rated shows only the fifteen, and
+    // its section continues with the rest of the ranking.
+    let expected = (41_000..41_030)
+        .map(|id| format!("tmdb:movie:{id}"))
+        .collect::<Vec<_>>();
+    let first = app
+        .discovery_items(
+            &viewer,
+            discovery_section_items_query("top_rated", 25, 0, 15),
+        )
+        .await
+        .expect("top rated section should load");
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>(),
+        expected[..15]
+    );
+    assert_eq!(first.total_count, 30);
+    let rest = app
+        .discovery_items(
+            &viewer,
+            discovery_section_items_query("top_rated", 25, 15, 40),
+        )
+        .await
+        .expect("top rated section should page");
+    assert_eq!(
+        rest.items
+            .iter()
+            .map(|item| item.target_key.clone())
+            .collect::<Vec<_>>(),
+        expected[15..]
+    );
+}
+
+#[tokio::test]
+async fn discovery_watchlist_section_pages_the_rail_and_no_reason_rail_repeats_it() {
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let fixture = discovery_section_fixture_with_lists(
+        "discovery-section-watchlist",
+        140,
+        Some(lists.clone()),
+    )
+    .await;
+    *lists.subscriptions.lock().unwrap() = vec![watchlist_subscription(
+        "section-watchlist",
+        &fixture.viewer.id,
+    )];
+    use scryer_domain::ListMembershipState as State;
+    // Every third pool title from the top of the pool, then two titles no
+    // stored item names.
+    let mut rows = (0..90)
+        .step_by(3)
+        .map(|index| {
+            watchlist_row(
+                "section-watchlist",
+                &(20_000 + index).to_string(),
+                index as i64,
+                State::Pending,
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.push(watchlist_row(
+        "section-watchlist",
+        "29001",
+        200,
+        State::Pending,
+    ));
+    rows.push(watchlist_row(
+        "section-watchlist",
+        "29002",
+        201,
+        State::Pending,
+    ));
+    lists.insert_rows(rows);
+    let watchlisted = (0..90)
+        .step_by(3)
+        .map(|index| format!("tmdb:movie:{}", 20_000 + index))
+        .chain([
+            "tmdb:movie:29001".to_string(),
+            "tmdb:movie:29002".to_string(),
+        ])
+        .collect::<HashSet<_>>();
+
+    // The home shows unresolved titles, so the section pages do too.
+    let watchlist_section_query = |section_id: &str, offset: usize| DiscoveryItemsQuery {
+        include_unresolved: true,
+        ..discovery_section_items_query(section_id, 25, offset, 25)
+    };
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("home should load");
+    let rail = home
+        .personalized_sections
+        .iter()
+        .find(|section| section.section_id == "from_your_watchlist")
+        .expect("the watchlist rail");
+    assert_eq!(rail.items.len(), 25);
+    assert_eq!(rail.total_count, 32);
+
+    let first = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            watchlist_section_query("from_your_watchlist", 0),
+        )
+        .await
+        .expect("watchlist section page");
+    assert!(!first.generation_ids.is_empty());
+    let (pages, total_count) = discovery_section_pages(&fixture, |offset| {
+        watchlist_section_query("from_your_watchlist", offset)
+    })
+    .await;
+    assert_eq!(
+        pages.first(),
+        Some(
+            &rail
+                .items
+                .iter()
+                .map(|item| item.target_key.clone())
+                .collect::<Vec<_>>()
+        ),
+        "the first page of the watchlist is the home rail"
+    );
+    let all_keys = pages.iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(total_count, 32);
+    assert_eq!(all_keys.len(), 32);
+    assert_eq!(
+        all_keys.iter().cloned().collect::<HashSet<_>>(),
+        watchlisted
+    );
+
+    let reason_rails = home
+        .personalized_sections
+        .iter()
+        .filter(|section| {
+            section.section_id == "for_you" || section.section_id.starts_with("because_you_like_")
+        })
+        .collect::<Vec<_>>();
+    assert!(!reason_rails.is_empty(), "the pool composes a reason rail");
+    for reason_rail in reason_rails {
+        let (pages, _) = discovery_section_pages(&fixture, |offset| {
+            watchlist_section_query(&reason_rail.section_id, offset)
+        })
+        .await;
+        assert_eq!(
+            pages.first(),
+            Some(
+                &reason_rail
+                    .items
+                    .iter()
+                    .map(|item| item.target_key.clone())
+                    .collect::<Vec<_>>()
+            ),
+            "the first page of {} is still the home rail",
+            reason_rail.section_id
+        );
+        assert!(
+            pages.iter().flatten().all(|key| !watchlisted.contains(key)),
+            "{} never lists a title the watchlist claimed",
+            reason_rail.section_id
+        );
+    }
 }

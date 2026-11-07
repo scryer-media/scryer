@@ -2137,7 +2137,7 @@ impl AppUseCase {
             Ok(ActionResult::Held { reason, detail }) => {
                 deletion_run.status = LifecycleActionRunStatus::Held;
                 deletion_run.hold_reason = Some(reason.to_string());
-                deletion_run.detail = detail.to_string();
+                super::scoped_deletion::record_hold_detail(&mut deletion_run, &detail);
                 deletion_run.finished_at = Some(Utc::now());
                 self.services
                     .customization
@@ -2149,7 +2149,7 @@ impl AppUseCase {
             Ok(ActionResult::Canceled { reason, detail }) => {
                 deletion_run.status = LifecycleActionRunStatus::Held;
                 deletion_run.hold_reason = Some(reason.to_string());
-                deletion_run.detail = detail.to_string();
+                super::scoped_deletion::record_hold_detail(&mut deletion_run, &detail);
                 deletion_run.finished_at = Some(Utc::now());
                 self.services
                     .customization

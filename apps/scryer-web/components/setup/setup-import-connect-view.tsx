@@ -71,7 +71,7 @@ const FIELD_LABEL_STYLE: CSSProperties = {
 };
 
 const MONO_INPUT_CLASS =
-  "h-[38px] rounded-md font-[var(--font-code)] text-[12.5px] text-[#dbe6fb]";
+  "h-[38px] rounded-md font-[family-name:var(--font-code)] text-[12.5px] text-[#dbe6fb]";
 
 export function SetupImportConnectView({
   wizard,

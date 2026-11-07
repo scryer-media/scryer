@@ -1,6 +1,10 @@
 import * as React from "react";
 import { RefreshScoresButton } from "@/components/common/refresh-scores-button";
-import { FolderOpen, Trash2, X } from "lucide-react";
+import { useAuth } from "@/lib/hooks/use-auth";
+import { canManageLibrarySubtitles } from "@/lib/utils/permissions";
+import { useEpisodeSubtitleSearch } from "@/lib/hooks/use-episode-subtitle-search";
+import { episodeSelectionActions } from "@/lib/utils/episode-subtitle-search";
+import { FolderOpen, Trash2, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +13,6 @@ import { useClient } from "urql";
 import type { Release } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
@@ -25,7 +28,6 @@ import {
 } from "@/lib/utils/release-queue-scope";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import {
-  SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID,
   SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID,
   seriesOverviewSeriesMovieRowId,
 } from "@/lib/utils/dom-ids";
@@ -80,6 +82,7 @@ import {
   type TitleMoreLikeThisStripActions,
 } from "../title-more-like-this-strip";
 import { TitleCastStrip } from "../title-cast-strip";
+import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "../title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { TitleRatingsStrip } from "../title-ratings-strip";
@@ -99,6 +102,7 @@ import {
   TvdbSeriesExternalLink,
 } from "@/components/common/external-media-links";
 import { titleGenreLabels } from "@/lib/utils/title-genres";
+import { resolveQueuedSeasonSelections } from "@/lib/utils/season-selection";
 import {
   collectActiveDownloadEpisodeIds,
   coveredEpisodeIdsForQueueItem,
@@ -144,6 +148,8 @@ function compareEpisodeQueueItems(
 type Props = {
   canManageTitle: boolean;
   fullBleedHero?: boolean;
+  /** Sits in the top left corner of the hero. */
+  heroLeadingAction?: React.ReactNode;
   loading: boolean;
   hydrating: boolean;
   title: TitleDetail | null;
@@ -242,6 +248,7 @@ type Props = {
 function SeriesOverviewViewImpl({
   canManageTitle,
   fullBleedHero = false,
+  heroLeadingAction,
   loading,
   hydrating,
   title,
@@ -306,9 +313,6 @@ function SeriesOverviewViewImpl({
   const emptyEpisodes = React.useMemo<CollectionEpisode[]>(() => [], []);
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
-  // Library and root moves are still being finished, so the panel's move entry
-  // point only exists when the instance has opted in.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const dateTimeFormat = useUiDateTimeFormat();
   const client = useClient();
   const { confirmReplaceConflict, replaceConflictDialog } =
@@ -412,9 +416,15 @@ function SeriesOverviewViewImpl({
       seriesMovieSearchAbortByLinkRef.current = {};
     };
   }, []);
+  // Seasons ticked while collapsed, before their episodes loaded. Each is
+  // selected once its episodes arrive.
+  const [queuedSeasonSelections, setQueuedSeasonSelections] = React.useState<
+    Set<string>
+  >(() => new Set());
   const titleId = title?.id ?? null;
   React.useEffect(() => {
     setSelectedEpisodeIds(new Set());
+    setQueuedSeasonSelections(new Set());
   }, [titleId]);
 
   React.useEffect(() => {
@@ -422,7 +432,48 @@ function SeriesOverviewViewImpl({
       return;
     }
     setSelectedEpisodeIds(new Set());
+    setQueuedSeasonSelections(new Set());
   }, [episodeSelectionResetToken]);
+
+  React.useEffect(() => {
+    if (queuedSeasonSelections.size === 0) {
+      return;
+    }
+    const resolved = resolveQueuedSeasonSelections(
+      queuedSeasonSelections,
+      episodesByCollection,
+      pendingEpisodeIds,
+    );
+    if (!resolved) {
+      return;
+    }
+    setQueuedSeasonSelections(resolved.remaining);
+    if (resolved.episodeIds.length > 0) {
+      setSelectedEpisodeIds((current) => {
+        const next = new Set(current);
+        for (const episodeId of resolved.episodeIds) {
+          next.add(episodeId);
+        }
+        return next;
+      });
+    }
+  }, [episodesByCollection, pendingEpisodeIds, queuedSeasonSelections]);
+
+  const handleToggleUnloadedSeasonSelected = React.useCallback(
+    (collectionId: string) => {
+      setQueuedSeasonSelections((current) => {
+        const next = new Set(current);
+        if (next.has(collectionId)) {
+          next.delete(collectionId);
+        } else {
+          next.add(collectionId);
+        }
+        return next;
+      });
+      void onLoadCollectionEpisodes?.(collectionId);
+    },
+    [onLoadCollectionEpisodes],
+  );
 
   const handleToggleEpisodeSelected = React.useCallback((episodeId: string) => {
     setSelectedEpisodeIds((current) => {
@@ -455,6 +506,8 @@ function SeriesOverviewViewImpl({
 
   const handleClearEpisodeSelection = React.useCallback(() => {
     setSelectedEpisodeIds(new Set());
+    // A season still loading would otherwise select its episodes on arrival.
+    setQueuedSeasonSelections(new Set());
   }, []);
 
   const handleDeleteSelectedEpisodeFiles = React.useCallback(() => {
@@ -464,8 +517,13 @@ function SeriesOverviewViewImpl({
     onRequestDeleteEpisodeFiles([...selectedEpisodeIds]);
   }, [onRequestDeleteEpisodeFiles, selectedEpisodeIds]);
 
-  const episodeSelectionEnabled =
-    canManageTitle && Boolean(onRequestDeleteEpisodeFiles);
+  const { user } = useAuth();
+  const episodeActions = episodeSelectionActions(
+    canManageTitle && Boolean(onRequestDeleteEpisodeFiles),
+    canManageLibrarySubtitles(user, title?.libraryId),
+  );
+  const episodeSelectionEnabled = episodeActions.enabled || canManageTitle;
+  const subtitleBatch = useEpisodeSubtitleSearch(onRefreshSubtitles);
 
   const searchPrerequisiteNotice =
     canManageTitle && !hasDownloadClients && showSearchPrerequisiteNotice ? (
@@ -1235,11 +1293,12 @@ function SeriesOverviewViewImpl({
               ? "relative -mx-4 -mt-4 overflow-hidden rounded-none border-0 p-0 sm:-mx-5 sm:-mt-5"
               : "relative overflow-hidden p-0"
           }
-          style={
-            overviewBackdropUrl
+          style={{
+            ...(overviewBackdropUrl
               ? { backdropFilter: "none", WebkitBackdropFilter: "none" }
-              : undefined
-          }
+              : null),
+            ...(fullBleedHero ? { boxShadow: "none" } : null),
+          }}
         >
           {overviewBackdropUrl ? (
             <div
@@ -1257,17 +1316,44 @@ function SeriesOverviewViewImpl({
               <div
                 className="absolute inset-0"
                 style={{
-                  background: `linear-gradient(to top, ${overviewBackdropGround} 0%, ${overviewBackdropGround} 5%, color-mix(in srgb, ${overviewBackdropGround} 82%, transparent), color-mix(in srgb, ${overviewBackdropGround} 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)`,
+                  background: `linear-gradient(to top, ${
+                    fullBleedHero
+                      ? `color-mix(in srgb, ${overviewBackdropGround} 70%, transparent)`
+                      : `${overviewBackdropGround} 0%, ${overviewBackdropGround} 5%, color-mix(in srgb, ${overviewBackdropGround} 82%, transparent)`
+                  }, color-mix(in srgb, ${overviewBackdropGround} 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)`,
                 }}
               />
               {fullBleedHero ? (
-                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
+                <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
               ) : null}
             </div>
           ) : null}
           <CardContent className="relative p-4">
+            {heroLeadingAction ? (
+              <div className="absolute left-2.5 top-2.5 z-20">
+                {heroLeadingAction}
+              </div>
+            ) : null}
+            {onBackToList ? (
+              <div className="absolute right-2.5 top-2.5 z-20 sm:right-4 sm:top-4">
+                <IconButton
+                  label={t("label.close")}
+                  tone="neutral"
+                  className="size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[var(--scry-ink2)] shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
+                  onClick={() => onBackToList()}
+                >
+                  <X className="h-5 w-5" />
+                </IconButton>
+              </div>
+            ) : null}
             <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
-              <div className="mx-auto shrink-0 sm:mx-0">
+              <div
+                className={
+                  heroLeadingAction
+                    ? "mx-auto shrink-0 sm:mx-0 sm:mt-8"
+                    : "mx-auto shrink-0 sm:mx-0"
+                }
+              >
                 <TitlePosterSlot
                   src={title.posterUrl}
                   metadataFetchedAt={title.metadataFetchedAt}
@@ -1279,18 +1365,8 @@ function SeriesOverviewViewImpl({
                 />
               </div>
 
-              <div className="relative min-w-0 flex-1 flex flex-col pr-12">
-                {onBackToList ? (
-                  <IconButton
-                    label={t("label.close")}
-                    tone="neutral"
-                    className="absolute right-0 top-0 z-20 size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[var(--scry-ink2)] shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
-                    onClick={() => onBackToList()}
-                  >
-                    <X className="h-5 w-5" />
-                  </IconButton>
-                ) : null}
-                <h1 className="text-xl font-bold text-foreground sm:text-2xl">
+              <div className="relative min-w-0 flex-1 flex flex-col">
+                <h1 className="text-xl font-bold text-foreground sm:min-h-10 sm:pr-12 sm:text-2xl">
                   {title.name}
                   {title.year ? (
                     <span className="block text-base font-normal text-muted-foreground sm:ml-2 sm:inline sm:text-lg">
@@ -1450,7 +1526,6 @@ function SeriesOverviewViewImpl({
                     onUpdateTitleOptions={onUpdateTitleOptions}
                     onTitleChanged={onTitleChanged}
                     onOpenFixMatch={onOpenFixMatch}
-                    experimentalFeaturesEnabled={experimentalFeaturesEnabled}
                     footerActions={
                       rename ? (
                         <TitleRenamePreviewButton
@@ -1480,44 +1555,58 @@ function SeriesOverviewViewImpl({
         <div>
           <Card className="relative overflow-hidden max-sm:p-2">
             <CardHeader className="max-sm:px-1 max-sm:pt-1">
-              {/* min-h matches the small buttons so the header keeps one
+              {/* min-h matches the action buttons so the header keeps one
                 height whether or not the selection controls are showing. */}
-              <div className="flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-h-9 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <FolderOpen className="h-4 w-4" />
                   {t("title.seasonsAndEpisodes")}
                 </CardTitle>
-                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end [&_button]:h-9">
                   {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
                     <>
-                      {wholeSeasonsSelected ? (
+                      {canManageTitle ? (
                         <RefreshScoresButton
-                          selection={{
-                            seasonIds: selectedSeasons.map(([id]) => id),
-                          }}
+                          selection={
+                            wholeSeasonsSelected
+                              ? { seasonIds: selectedSeasons.map(([id]) => id) }
+                              : { episodeIds: [...selectedEpisodeIds] }
+                          }
                         />
                       ) : null}
-                      <Button
-                        id={SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID}
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleClearEpisodeSelection}
-                      >
-                        {t("seriesOverview.clearEpisodeSelection")}
-                      </Button>
-                      <Button
-                        id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        onClick={handleDeleteSelectedEpisodeFiles}
-                      >
-                        <Trash2 className="mr-1.5 h-4 w-4" />
-                        {t("seriesOverview.deleteSelectedEpisodeFiles", {
-                          count: selectedEpisodeIds.size,
-                        })}
-                      </Button>
+                      {episodeActions.canSearchSubtitles && title ? (
+                        <Button
+                          id="series-overview-search-selected-subtitles"
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={subtitleBatch.pending}
+                          onClick={() =>
+                            void subtitleBatch.start(
+                              title.id,
+                              [...selectedEpisodeIds],
+                              handleClearEpisodeSelection,
+                            )
+                          }
+                        >
+                          <Search className="mr-1.5 h-4 w-4" />
+                          {t("subtitle.batchSearch")}
+                        </Button>
+                      ) : null}
+                      {episodeActions.canDelete ? (
+                        <Button
+                          id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={handleDeleteSelectedEpisodeFiles}
+                        >
+                          <Trash2 className="mr-1.5 h-4 w-4" />
+                          {t("seriesOverview.deleteSelectedEpisodeFiles", {
+                            count: selectedEpisodeIds.size,
+                          })}
+                        </Button>
+                      ) : null}
                     </>
                   ) : null}
                   {manualImport ? (
@@ -1746,6 +1835,14 @@ function SeriesOverviewViewImpl({
                             ? handleSetSeasonSelected
                             : undefined
                         }
+                        onToggleUnloadedSeasonSelected={
+                          episodeSelectionEnabled && onLoadCollectionEpisodes
+                            ? handleToggleUnloadedSeasonSelected
+                            : undefined
+                        }
+                        seasonSelectionQueued={queuedSeasonSelections.has(
+                          collection.id,
+                        )}
                       />
                     );
                   })}
@@ -1775,9 +1872,11 @@ function SeriesOverviewViewImpl({
           {...moreLikeThisActions}
         />
 
-        <TitleCastStrip credits={titleCastOriginalCredits(title.credits)} />
+        <HorizontalRailScrollGroup>
+          <TitleCastStrip credits={titleCastOriginalCredits(title.credits)} />
 
-        <TitleDubCastStrip credits={title.credits} />
+          <TitleDubCastStrip credits={title.credits} />
+        </HorizontalRailScrollGroup>
 
         <TitleBlockedReleasesSection
           key={title.id}

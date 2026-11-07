@@ -1,5 +1,8 @@
 use std::path::Path;
 
+mod scan_cache;
+pub(crate) use scan_cache::{ScanOwnershipContext, with_scan_ownership};
+
 use scryer_domain::Title;
 
 use crate::library::workflow::{LibraryRootState, library_root_state};
@@ -19,7 +22,13 @@ pub(crate) struct ScanFolderRoots {
 impl ScanFolderRoots {
     pub(crate) async fn load(app: &AppUseCase) -> AppResult<std::sync::Arc<Self>> {
         let libraries = app.services.catalog.libraries.list(None).await?;
-        let by_library: std::collections::HashMap<_, Vec<_>> = libraries
+        // `all` is exactly what `AppUseCase::all_library_root_folders` reads,
+        // so a check served from the snapshot matches a fresh read.
+        let all = crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None)
+            .into_iter()
+            .map(|root| root.path)
+            .collect();
+        let by_library = libraries
             .into_iter()
             .map(|library| {
                 (
@@ -28,8 +37,14 @@ impl ScanFolderRoots {
                 )
             })
             .collect();
-        let all = by_library.values().flatten().cloned().collect();
         Ok(std::sync::Arc::new(Self { all, by_library }))
+    }
+
+    /// The scan's root snapshot, when the caller runs inside one.
+    pub(crate) fn current_all() -> Option<Vec<String>> {
+        SCAN_FOLDER_ROOTS
+            .try_with(|snapshot| snapshot.all.clone())
+            .ok()
     }
 }
 
@@ -284,13 +299,16 @@ pub(crate) async fn title_folder_is_outside_its_library(
     title: &Title,
     folder_path: &str,
 ) -> AppResult<bool> {
-    let library_roots = if let Ok(roots) = SCAN_FOLDER_ROOTS.try_with(|snapshot| {
-        snapshot
-            .by_library
-            .get(&title.library_id)
-            .cloned()
-            .unwrap_or_default()
-    }) {
+    let snapshot_roots = SCAN_FOLDER_ROOTS
+        .try_with(|snapshot| {
+            snapshot
+                .by_library
+                .get(&title.library_id)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .ok();
+    let library_roots = if let Some(roots) = snapshot_roots {
         roots
     } else {
         app.services
@@ -459,13 +477,14 @@ pub(crate) struct FolderOverlapKeys {
     /// Whether a folder below a library root is a link, shared by owners
     /// under the same organizing folders.
     links: std::collections::HashMap<std::path::PathBuf, bool>,
+    link_probes: u64,
 }
 
 impl FolderOverlapKeys {
     async fn load(app: &AppUseCase, folder_path: &str) -> AppResult<Self> {
-        let root_paths = match SCAN_FOLDER_ROOTS.try_with(|snapshot| snapshot.all.clone()) {
-            Ok(roots) => roots,
-            Err(_) => app
+        let root_paths = match ScanFolderRoots::current_all() {
+            Some(roots) => roots,
+            None => app
                 .all_library_root_folders()
                 .await?
                 .into_iter()
@@ -499,6 +518,7 @@ impl FolderOverlapKeys {
             candidate,
             roots,
             links: Default::default(),
+            link_probes: 0,
         })
     }
 
@@ -506,6 +526,14 @@ impl FolderOverlapKeys {
     /// An owner unrelated by key, also after substituting its resolved library
     /// root, with no link between that root and its folder, cannot overlap.
     pub(crate) fn needs_exact_comparison(&mut self, owned_path: &str) -> AppResult<bool> {
+        self.needs_exact_comparison_with_evidence(owned_path, &mut |_| false)
+    }
+
+    fn needs_exact_comparison_with_evidence(
+        &mut self,
+        owned_path: &str,
+        verified_directory: &mut impl FnMut(&Path) -> bool,
+    ) -> AppResult<bool> {
         let Some(owner) = overlap_prefilter_key(owned_path) else {
             return Ok(true);
         };
@@ -547,6 +575,11 @@ impl FolderOverlapKeys {
             let is_link = match self.links.get(ancestor) {
                 Some(is_link) => *is_link,
                 None => {
+                    if verified_directory(ancestor) {
+                        self.links.insert(ancestor.to_path_buf(), false);
+                        continue;
+                    }
+                    self.link_probes += 1;
                     let is_link = match std::fs::symlink_metadata(ancestor) {
                         Ok(metadata) => metadata.file_type().is_symlink(),
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
@@ -580,6 +613,9 @@ pub(crate) async fn ensure_folder_move_available_to_title(
         ));
     }
     let folder_path = path_to_stored_string(folder_path);
+    if let Some(context) = ScanOwnershipContext::current() {
+        return context.check(app, title, folder_path).await;
+    }
     let mut keys = None;
     for owner in app
         .services
@@ -774,18 +810,27 @@ pub(crate) async fn claim_title_folder_for_scan_if_missing(
     title: &mut Title,
     folder_path: &Path,
 ) -> AppResult<()> {
+    claim_title_folder_for_scan_with_evidence(app, title, folder_path, None).await
+}
+
+pub(crate) async fn claim_title_folder_for_scan_with_evidence(
+    app: &AppUseCase,
+    title: &mut Title,
+    folder_path: &Path,
+    evidence: Option<&crate::library_discovery::DiscoveredBoundaryEvidence>,
+) -> AppResult<()> {
     claim_title_folder_with_layout(
         app,
         title,
         folder_path,
-        TitleFolderClaimLayout::Conventional,
+        TitleFolderClaimLayout::Conventional(evidence),
     )
     .await
 }
 
-enum TitleFolderClaimLayout {
+enum TitleFolderClaimLayout<'a> {
     Configured,
-    Conventional,
+    Conventional(Option<&'a crate::library_discovery::DiscoveredBoundaryEvidence>),
 }
 
 /// Every check [`claim_title_folder_if_missing`] makes before recording
@@ -804,7 +849,7 @@ async fn claim_title_folder_with_layout(
     app: &AppUseCase,
     title: &mut Title,
     folder_path: &Path,
-    layout: TitleFolderClaimLayout,
+    layout: TitleFolderClaimLayout<'_>,
 ) -> AppResult<()> {
     ensure_folder_available_to_title(app, title, folder_path).await?;
     if non_empty_folder_path(title.folder_path.as_deref()).is_some() {
@@ -826,22 +871,34 @@ async fn ensure_unowned_folder_claimable(
     app: &AppUseCase,
     title: &Title,
     folder_path: &Path,
-    layout: TitleFolderClaimLayout,
+    layout: TitleFolderClaimLayout<'_>,
 ) -> AppResult<()> {
     ensure_folder_move_available_to_title(app, title, folder_path).await?;
+    let boundary_verified = match &layout {
+        TitleFolderClaimLayout::Conventional(Some(evidence)) => {
+            evidence
+                .verify(folder_path, &title.facet, &title.external_ids)
+                .await?
+        }
+        _ => false,
+    };
     // Imports reserve missing or empty destinations before writing media. A
     // destination with contents must not hold other titles' folders; stray
     // files or empty subfolders left by an earlier attempt do not block it.
-    let has_contents = match tokio::fs::symlink_metadata(folder_path).await {
-        Ok(_) => tokio::fs::read_dir(folder_path)
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?
-            .next_entry()
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?
-            .is_some(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(AppError::Repository(error.to_string())),
+    let has_contents = if boundary_verified {
+        false
+    } else {
+        match tokio::fs::symlink_metadata(folder_path).await {
+            Ok(_) => tokio::fs::read_dir(folder_path)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?
+                .next_entry()
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?
+                .is_some(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(AppError::Repository(error.to_string())),
+        }
     };
     if has_contents {
         match layout {
@@ -854,7 +911,7 @@ async fn ensure_unowned_folder_claimable(
                 )
                 .await?;
             }
-            TitleFolderClaimLayout::Conventional => {
+            TitleFolderClaimLayout::Conventional(_) => {
                 crate::library_discovery::ensure_scanned_folder_holds_no_child_titles(
                     folder_path,
                     title,
@@ -1169,6 +1226,159 @@ mod tests {
             .unwrap();
         assert!(created.title.folder_path.is_none());
         (app, created.title)
+    }
+
+    #[tokio::test]
+    async fn scan_ownership_context_reads_new_catalog_owners() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("candidate");
+        std::fs::create_dir(&folder).unwrap();
+        let sentinel = folder.join("preserved.mkv");
+        std::fs::write(&sentinel, b"preserved").unwrap();
+        let (app, title) = unowned_scan_title(MediaFacet::Movie, root.path()).await;
+        let context = ScanOwnershipContext::new();
+        with_scan_ownership(Some(context), async {
+            ensure_folder_move_available_to_title(&app, &title, &folder)
+                .await
+                .unwrap();
+            let mut owner = title.clone();
+            owner.id = "new-owner".into();
+            owner.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+            owner.name = "New Owner".into();
+            owner.folder_path = Some(path_to_stored_string(&folder));
+            app.services
+                .catalog
+                .titles
+                .create_or_get_existing(owner)
+                .await
+                .unwrap();
+            let error = ensure_folder_move_available_to_title(&app, &title, &folder)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE)
+            );
+            let other = root.path().join("other");
+            std::fs::create_dir(&other).unwrap();
+            app.services
+                .catalog
+                .titles
+                .set_folder_path("new-owner", &path_to_stored_string(&other))
+                .await
+                .unwrap();
+            ensure_folder_move_available_to_title(&app, &title, &folder)
+                .await
+                .unwrap();
+            app.services
+                .catalog
+                .titles
+                .set_folder_path("new-owner", &path_to_stored_string(&folder))
+                .await
+                .unwrap();
+            assert!(
+                ensure_folder_move_available_to_title(&app, &title, &folder)
+                    .await
+                    .is_err()
+            );
+        })
+        .await;
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"preserved");
+    }
+
+    #[tokio::test]
+    async fn discovery_evidence_claim_preserves_ownership_and_library_boundaries() {
+        for mode in ["valid", "root", "outside", "owner", "descendant_owner"] {
+            let root = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let folder = root.path().join("Scan Fixture");
+            std::fs::create_dir(&folder).unwrap();
+            let file = folder.join("Scan.Fixture.mkv");
+            std::fs::write(&file, b"preserved media").unwrap();
+            let mut discoveries = crate::library_discovery::stream_title_folder_boundaries(
+                root.path().into(),
+                crate::library_discovery::TitleFolderBoundaryPolicy {
+                    facet: MediaFacet::Movie,
+                    stored_folders: vec![],
+                    other_roots: vec![],
+                },
+                1,
+                Default::default(),
+            );
+            let evidence =
+                tokio::time::timeout(std::time::Duration::from_secs(30), discoveries.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .remove(0)
+                    .evidence;
+            assert_eq!(evidence.is_some(), cfg!(unix));
+            let library_root = match mode {
+                "root" => folder.as_path(),
+                "outside" => outside.path(),
+                _ => root.path(),
+            };
+            let (app, mut title) = unowned_scan_title(MediaFacet::Movie, library_root).await;
+            let owner_path = match mode {
+                "owner" => Some(folder.clone()),
+                "descendant_owner" => Some(folder.join("Recorded Child")),
+                _ => None,
+            };
+            if let Some(owner_path) = &owner_path {
+                // Catalog ownership can change after discovery, without any
+                // filesystem change that would invalidate the cached stamps.
+                let mut owner = title.clone();
+                owner.id = "other-owner".into();
+                owner.name = "Other Owner".into();
+                owner.folder_path = Some(path_to_stored_string(owner_path));
+                app.services
+                    .catalog
+                    .titles
+                    .create_or_get_existing(owner)
+                    .await
+                    .unwrap();
+            }
+            let result = claim_title_folder_for_scan_with_evidence(
+                &app,
+                &mut title,
+                &folder,
+                evidence.as_ref(),
+            )
+            .await;
+            if mode == "valid" {
+                result.unwrap();
+                assert!(title_owns_folder(&title, &folder));
+            } else {
+                assert!(result.is_err());
+                assert!(title.folder_path.is_none());
+                assert!(
+                    app.services
+                        .catalog
+                        .titles
+                        .get_by_id(&title.id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .folder_path
+                        .is_none()
+                );
+            }
+            if let Some(owner_path) = owner_path {
+                assert_eq!(
+                    app.services
+                        .catalog
+                        .titles
+                        .get_by_id("other-owner")
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .folder_path,
+                    Some(path_to_stored_string(&owner_path)),
+                );
+            }
+            assert_eq!(std::fs::read(file).unwrap(), b"preserved media");
+        }
     }
 
     #[tokio::test]

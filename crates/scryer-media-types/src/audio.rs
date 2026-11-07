@@ -1,5 +1,25 @@
 //! Audio labels and ranking shared by catalog summaries and import scoring.
 
+/// Select the default non-commentary stream, or the first eligible stream.
+/// Inputs are (default disposition, commentary disposition, track title) in file order.
+/// Channel count and codec quality never override the authored primary track.
+pub fn primary_audio_stream_index<'a>(
+    streams: impl IntoIterator<Item = (bool, bool, Option<&'a str>)>,
+) -> Option<usize> {
+    streams
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (_, commentary, name))| {
+            !commentary
+                && !name.is_some_and(|name| {
+                    name.split(|ch: char| !ch.is_alphanumeric())
+                        .any(|word| word.eq_ignore_ascii_case("commentary"))
+                })
+        })
+        .min_by_key(|(index, (default, _, _))| (!default, *index))
+        .map(|(index, _)| index)
+}
+
 pub fn normalize_audio_codec_for_release(
     codec: Option<&str>,
     profile: Option<&str>,

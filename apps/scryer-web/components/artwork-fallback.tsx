@@ -52,7 +52,7 @@ export function ArtworkFallback({
         </div>
       ) : showText ? (
         <div className="relative z-10 flex h-full w-full flex-col items-center justify-end px-3 pb-5 text-center">
-          <p className="line-clamp-3 font-[var(--font-space-grotesk)] text-base font-bold leading-tight text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.55)]">
+          <p className="line-clamp-3 font-[family-name:var(--font-space-grotesk)] text-base font-bold leading-tight text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.55)]">
             {displayTitle}
           </p>
           {displaySubtitle ? (

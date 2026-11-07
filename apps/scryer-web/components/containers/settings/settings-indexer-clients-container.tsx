@@ -80,6 +80,7 @@ import { indexerClientOutcomeMessage } from "@/lib/utils/indexer-client-outcome"
 import { withMfaStepUp } from "@/lib/utils/with-mfa-step-up";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { indexerClientEndpointUrl } from "@/lib/utils/indexer-client-endpoint";
+import { copyText, selectFieldById } from "@/lib/utils/clipboard";
 import {
   sortIndexerClients,
   type IndexerClientSort,
@@ -97,6 +98,10 @@ const PROTOCOL_LABEL_KEYS: Readonly<Record<IndexerClientProtocol, string>> = {
   NEWZNAB: "indexerClients.protocol.newznab",
   TORZNAB: "indexerClients.protocol.torznab",
 };
+
+const REVEALED_KEY_FIELD_ID = "indexer-client-revealed-key";
+const endpointFieldId = (protocol: IndexerClientProtocol) =>
+  `indexer-client-endpoint-${protocol.toLowerCase()}`;
 
 function EndpointField({
   id,
@@ -122,7 +127,7 @@ function EndpointField({
         value={value}
         size={value.length + 2}
         onFocus={(event) => event.currentTarget.select()}
-        className="h-9 w-auto min-w-0 max-w-full rounded-r-none font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
+        className="h-9 w-auto min-w-0 max-w-full rounded-r-none font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]"
       />
       <IconButton
         id={`${id}-copy`}
@@ -316,13 +321,14 @@ export function SettingsIndexerClientsContainer() {
       endpointBase?.basePath ?? getRuntimeBasePath(),
       window.location.origin,
     );
-  const copyEndpoint = async (key: string, value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
+  const copyEndpoint = async (key: string, fieldId: string, value: string) => {
+    if (await copyText(value)) {
       setCopiedEndpoint(key);
-    } catch {
-      setError(t("indexerClients.endpointCopyFailed"));
+      return;
     }
+    setCopiedEndpoint(null);
+    selectFieldById(fieldId);
+    setError(t("status.copyFailedSelected"));
   };
 
   const requestMfa = useCallback(
@@ -429,14 +435,14 @@ export function SettingsIndexerClientsContainer() {
     }
   };
 
+  // The key is selected either way: a copy the browser refuses leaves the
+  // user's own copy keystroke as the next thing to do.
   const copyRevealed = async () => {
     if (!revealed) return;
-    try {
-      await navigator.clipboard.writeText(revealed.apiKey);
-      setRevealedCopied(true);
-    } catch {
-      setError(t("error.fallback.unableToCopyTheAPIKey"));
-    }
+    const taken = await copyText(revealed.apiKey);
+    selectFieldById(REVEALED_KEY_FIELD_ID);
+    setRevealedCopied(taken);
+    if (!taken) setError(t("status.copyFailedSelected"));
   };
 
   const setGrant = (id: string, categories: string[] | null | undefined) =>
@@ -494,12 +500,16 @@ export function SettingsIndexerClientsContainer() {
                 {t(PROTOCOL_LABEL_KEYS[protocol])}
               </span>
               <EndpointField
-                id={`indexer-client-endpoint-${protocol.toLowerCase()}`}
+                id={endpointFieldId(protocol)}
                 label={t(PROTOCOL_LABEL_KEYS[protocol])}
                 value={endpointUrl(protocol)}
                 copied={copiedEndpoint === protocol}
                 onCopy={() =>
-                  void copyEndpoint(protocol, endpointUrl(protocol))
+                  void copyEndpoint(
+                    protocol,
+                    endpointFieldId(protocol),
+                    endpointUrl(protocol),
+                  )
                 }
                 t={t}
               />
@@ -777,14 +787,14 @@ export function SettingsIndexerClientsContainer() {
                           </div>
                           <div className="flex w-fit max-w-full items-center">
                             <Input
-                              id="indexer-client-revealed-key"
+                              id={REVEALED_KEY_FIELD_ID}
                               aria-label={t("indexerClients.apiKey")}
                               readOnly
                               value={revealed.apiKey}
                               size={revealed.apiKey.length + 2}
                               autoComplete="off"
                               onFocus={(event) => event.currentTarget.select()}
-                              className="h-9 w-auto max-w-full rounded-r-none font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
+                              className="h-9 w-auto max-w-full rounded-r-none font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]"
                             />
                             <IconButton
                               id="indexer-client-revealed-copy"

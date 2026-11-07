@@ -150,14 +150,9 @@ impl PlannedFile {
     }
 }
 
-/// What the confirmed plan already decided this title's outcome would be, for
-/// the FR-091 counters Activity shows.
-///
-/// These are plan facts, not run facts: the collision engine decided at preview
-/// time which files are proven duplicates and which have to be renamed, and the
-/// title either carries out those decisions or does not finish at all. Counting
-/// them off the plan is what lets a resumed run report the same totals as the
-/// run it resumed, without a per-file counter table.
+/// The FR-091 outcomes Activity shows once a title completes. The plan supplies
+/// a baseline for older operations without per-file resolutions; current runs
+/// combine confirmed rename identities with completed transfer decisions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TitleOutcomeCounts {
     /// Files or companion assets recycled as proven duplicates (FR-073).
@@ -176,6 +171,9 @@ pub struct PlannedTitle {
     pub classification: Option<TitleLocationClass>,
     pub placement: TitleCheckpointPlacement,
     pub files: Vec<PlannedFile>,
+    /// Sources whose relative destination name the confirmed plan changed.
+    /// The transfer may rename one again; either way it counts once per source.
+    pub planned_rename_sources: BTreeSet<PathBuf>,
     /// Dedup and rename decisions this title carries out, counted only once the
     /// title actually finishes.
     pub outcomes: TitleOutcomeCounts,
@@ -830,7 +828,7 @@ impl<'a> LocationOperationRunner<'a> {
                 .store
                 .file_resolutions(operation_id, &title.title_id)
                 .await?;
-            progress.record_resolved_outcomes(&title.title_id, &resolutions);
+            progress.record_resolved_outcomes(title, &resolutions);
         }
         progress.verification_fallbacks = operation.verification_fallback_count;
 
@@ -890,6 +888,7 @@ impl<'a> LocationOperationRunner<'a> {
         let mut failures: Vec<TitleFailure> = Vec::new();
 
         if let Some(hub) = self.transfers {
+            self.release_stale_transfer_rows(&operation.id).await?;
             let outcome = self
                 .run_pipeline(&operation, plan, &mut progress, hub)
                 .await?;
@@ -1124,6 +1123,62 @@ impl<'a> LocationOperationRunner<'a> {
         let detail = (!progress.warnings.is_empty()).then(|| progress.warnings.join("\n"));
         self.finish(&operation, plan, &progress, final_state, None, detail, None)
             .await
+    }
+
+    /// A run starts with nothing in flight, so a title still recorded as moving
+    /// or verifying is one a killed process left behind. It is waiting again,
+    /// so it reads Pending until this run reaches it. Titles past the catalog
+    /// update (reconciling, cleaning up) keep their state.
+    async fn release_stale_transfer_rows(&self, operation_id: &str) -> AppResult<()> {
+        const PAGE: i64 = 200;
+        let mut stale = Vec::new();
+        let mut offset = 0;
+        'pages: loop {
+            let page = self
+                .store
+                .transfer_title_page(operation_id, offset, PAGE)
+                .await?;
+            for row in &page {
+                // Pages sort in-flight rows first; nothing after the first
+                // settled or waiting row can be in flight.
+                if row.rank() > 1 {
+                    break 'pages;
+                }
+                if row.copying > 0
+                    || row.verifying > 0
+                    || row.recording > 0
+                    || matches!(
+                        row.state,
+                        TitleCheckpointState::Moving | TitleCheckpointState::Verifying
+                    )
+                {
+                    let mut row = row.clone();
+                    if matches!(
+                        row.state,
+                        TitleCheckpointState::Moving | TitleCheckpointState::Verifying
+                    ) {
+                        row.state = TitleCheckpointState::Pending;
+                    }
+                    row.copying = 0;
+                    row.verifying = 0;
+                    row.recording = 0;
+                    row.current_file = None;
+                    row.copy_bytes = 0;
+                    row.verification_bytes = 0;
+                    stale.push(row);
+                }
+            }
+            if (page.len() as i64) < PAGE {
+                break;
+            }
+            offset += PAGE;
+        }
+        if !stale.is_empty() {
+            self.store
+                .upsert_transfer_titles(operation_id, &stale)
+                .await?;
+        }
+        Ok(())
     }
 
     /// One title, in FR-031 order: move → verify → reconcile → clean up.
@@ -1574,13 +1629,13 @@ impl<'a> LocationOperationRunner<'a> {
         ) {
             // The transfer, not the plan, decides which files merged with an
             // identical copy or landed under another name (FR-073/FR-074), so
-            // a title's outcome counts come from its recorded resolutions —
-            // the same rows a resumed run reads for titles settled earlier.
+            // completed resolutions and planned source identities together
+            // provide the same counts a resumed run reads for settled titles.
             let resolutions = self
                 .store
                 .file_resolutions(&operation.id, &title.title_id)
                 .await?;
-            progress.record_resolved_outcomes(&title.title_id, &resolutions);
+            progress.record_resolved_outcomes(title, &resolutions);
         }
         progress.settle(title, state);
         self.write_title_checkpoint(operation, title, state, detail, progress, reason_code)
@@ -1648,6 +1703,7 @@ impl<'a> LocationOperationRunner<'a> {
                 if state.is_settled() || state == TitleCheckpointState::Failed {
                     row.copying = 0;
                     row.verifying = 0;
+                    row.recording = 0;
                     row.current_file = None;
                 }
                 self.store
@@ -1913,14 +1969,14 @@ struct RunProgress {
 impl RunProgress {
     fn record_resolved_outcomes(
         &mut self,
-        title_id: &str,
+        title: &PlannedTitle,
         resolutions: &[super::resolution::FileResolution],
     ) {
         if resolutions.is_empty() {
             return;
         }
         self.resolved_outcomes.insert(
-            title_id.into(),
+            title.title_id.clone(),
             TitleOutcomeCounts {
                 dedups: resolutions
                     .iter()
@@ -1932,8 +1988,18 @@ impl RunProgress {
                     .count() as i64,
                 renames: resolutions
                     .iter()
-                    .filter(|row| row.completed && row.original_destination != row.destination_path)
-                    .count() as i64,
+                    .filter(|row| {
+                        row.completed
+                            && !row.is_disposal()
+                            && row.disposition
+                                != super::resolution::ResolutionDisposition::Identical
+                            && (title.planned_rename_sources.contains(
+                                &crate::stored_paths::stored_path_to_path_buf(&row.source_path),
+                            ) || row.original_destination != row.destination_path)
+                    })
+                    .map(|row| crate::stored_paths::stored_path_to_path_buf(&row.source_path))
+                    .collect::<BTreeSet<_>>()
+                    .len() as i64,
             },
         );
     }
@@ -2207,6 +2273,14 @@ mod tests {
     struct FakeStore {
         inner: Mutex<FakeStoreState>,
         writer_gate: Option<Arc<tokio::sync::Mutex<()>>>,
+        /// Scheduler turns each verification record gives up before it lands:
+        /// a recorder that is slow relative to an instant copier, measured in
+        /// scheduling steps rather than time.
+        record_yields: usize,
+        /// Verification records written so far.
+        recorded: Arc<AtomicU64>,
+        /// The size of every batched verification write, in order.
+        record_batches: Arc<std::sync::Mutex<Vec<usize>>>,
     }
 
     #[derive(Default)]
@@ -2508,6 +2582,32 @@ mod tests {
             Ok(self.transfer_title_row(operation_id, title_id))
         }
 
+        /// The same order as the SQL store: in-flight rows first.
+        async fn transfer_title_page(
+            &self,
+            operation_id: &str,
+            offset: i64,
+            limit: i64,
+        ) -> AppResult<Vec<crate::location::live::TransferTitle>> {
+            let mut rows: Vec<_> = self
+                .inner
+                .lock()
+                .expect("lock")
+                .transfer_titles
+                .iter()
+                .filter(|((operation, _), _)| operation == operation_id)
+                .map(|(_, row)| row.clone())
+                .collect();
+            rows.sort_by(|a, b| {
+                (a.rank(), a.sequence, &a.title_id).cmp(&(b.rank(), b.sequence, &b.title_id))
+            });
+            Ok(rows
+                .into_iter()
+                .skip(offset.max(0) as usize)
+                .take(limit.max(0) as usize)
+                .collect())
+        }
+
         async fn upsert_location_title_checkpoint(
             &self,
             checkpoint: &TitleCheckpoint,
@@ -2543,12 +2643,40 @@ mod tests {
             &self,
             record: &FileVerificationRecord,
         ) -> AppResult<()> {
+            for _ in 0..self.record_yields {
+                tokio::task::yield_now().await;
+            }
             let mut state = self.inner.lock().expect("lock");
             state.verifications.retain(|existing| {
                 existing.operation_id != record.operation_id
                     || existing.destination_path != record.destination_path
             });
             state.verifications.push(record.clone());
+            self.recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn record_location_file_verifications(
+            &self,
+            records: &[FileVerificationRecord],
+        ) -> AppResult<()> {
+            for _ in 0..self.record_yields {
+                tokio::task::yield_now().await;
+            }
+            self.record_batches
+                .lock()
+                .expect("lock")
+                .push(records.len());
+            let mut state = self.inner.lock().expect("lock");
+            for record in records {
+                state.verifications.retain(|existing| {
+                    existing.operation_id != record.operation_id
+                        || existing.destination_path != record.destination_path
+                });
+                state.verifications.push(record.clone());
+            }
+            self.recorded
+                .fetch_add(records.len() as u64, Ordering::SeqCst);
             Ok(())
         }
 
@@ -2833,6 +2961,7 @@ mod tests {
                 })
                 .collect(),
             outcomes: TitleOutcomeCounts::default(),
+            planned_rename_sources: BTreeSet::new(),
         }
     }
 
@@ -3211,6 +3340,7 @@ mod tests {
                 current_file: None,
                 copying: 0,
                 verifying: 0,
+                recording: 0,
                 detail: None,
             },
         );
@@ -3266,6 +3396,93 @@ mod tests {
         assert!(temp.path().join("source/movie.mkv").exists());
         assert!(temp.path().join("source/movie.en.srt").exists());
         assert!(reconciler.cleaned.lock().unwrap().is_empty());
+    }
+
+    /// A killed process leaves rows marked moving or verifying with nothing in
+    /// flight. The next run reads them as waiting, and leaves alone what is
+    /// settled or already past the catalog update.
+    #[tokio::test]
+    async fn a_run_releases_transfer_rows_a_killed_process_left_in_flight() {
+        let store = FakeStore::with_operation(operation());
+        let row =
+            |id: &str, sequence, state, copying, verifying| crate::location::live::TransferTitle {
+                title_id: id.into(),
+                name: id.into(),
+                sequence,
+                state,
+                files_total: 1,
+                files_done: 0,
+                bytes_total: 10,
+                copy_bytes: 4,
+                verification_bytes: 2,
+                current_file: Some(format!("/dest/{id}.mkv")),
+                copying,
+                verifying,
+                recording: 0,
+                detail: None,
+            };
+        // More stale rows than one page, so the release pages through them.
+        for index in 0..250 {
+            store.seed_transfer_title(
+                "op-1",
+                row(
+                    &format!("verifying-{index:03}"),
+                    index,
+                    TitleCheckpointState::Verifying,
+                    0,
+                    1,
+                ),
+            );
+        }
+        store.seed_transfer_title(
+            "op-1",
+            row("moving", 300, TitleCheckpointState::Moving, 1, 0),
+        );
+        store.seed_transfer_title(
+            "op-1",
+            row("cleaning", 301, TitleCheckpointState::CleaningUp, 0, 0),
+        );
+        store.seed_transfer_title(
+            "op-1",
+            row("done", 302, TitleCheckpointState::Completed, 0, 0),
+        );
+        store.seed_transfer_title(
+            "op-1",
+            row("waiting", 303, TitleCheckpointState::Pending, 0, 0),
+        );
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler);
+
+        runner.release_stale_transfer_rows("op-1").await.unwrap();
+
+        for id in ["verifying-000", "verifying-249", "moving"] {
+            let row = store.transfer_title_row("op-1", id).unwrap();
+            assert_eq!(row.state, TitleCheckpointState::Pending, "{id}");
+            assert_eq!(
+                (row.copying, row.verifying, row.recording),
+                (0, 0, 0),
+                "{id}"
+            );
+            assert_eq!(row.current_file, None, "{id}");
+        }
+        assert_eq!(
+            store.transfer_title_row("op-1", "cleaning").unwrap().state,
+            TitleCheckpointState::CleaningUp
+        );
+        assert_eq!(
+            store.transfer_title_row("op-1", "done").unwrap().state,
+            TitleCheckpointState::Completed
+        );
+        assert_eq!(
+            store
+                .transfer_title_row("op-1", "waiting")
+                .unwrap()
+                .current_file,
+            Some("/dest/waiting.mkv".into()),
+            "a row past the in-flight ones is not rewritten"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -3352,6 +3569,99 @@ mod tests {
         assert_eq!(reconciler.cleaned.lock().unwrap().len(), 2);
     }
 
+    /// Copies and verifies instantly; counts how far file starts ever run
+    /// ahead of the verification records the store has written.
+    struct InstantMover {
+        recorded: Arc<AtomicU64>,
+        started: AtomicU64,
+        max_ahead: AtomicU64,
+    }
+
+    #[async_trait]
+    impl TitleFileMover for InstantMover {
+        async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+            let started = self.started.fetch_add(1, Ordering::SeqCst) + 1;
+            let ahead = started.saturating_sub(self.recorded.load(Ordering::SeqCst));
+            self.max_ahead.fetch_max(ahead, Ordering::SeqCst);
+            request.progress.phase(
+                scryer_domain::ImportTransferPhase::Copying,
+                request.file.size_bytes,
+            );
+            request
+                .progress
+                .phase(scryer_domain::ImportTransferPhase::Verifying, 0);
+            Ok(VerifiedFile {
+                source_path: request.file.source_path.clone(),
+                destination_path: request.file.destination_path.clone(),
+                hashes: None,
+                depth: AppliedVerificationDepth::exact(request.depth),
+                outcome: FileVerificationOutcome::Verified,
+                detail: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_bounds_files_waiting_to_be_recorded_behind_a_slow_recorder() {
+        let mut store = FakeStore::with_operation(operation());
+        store.record_yields = 64;
+        let mover = InstantMover {
+            recorded: store.recorded.clone(),
+            started: AtomicU64::new(0),
+            max_ahead: AtomicU64::new(0),
+        };
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        // Many small titles of many small files: copies land far faster than
+        // one loop can record them.
+        let titles = 60;
+        let files_per_title = 10;
+        let plan = OperationWorkPlan::new(
+            (0..titles)
+                .map(|index| {
+                    planned_title(
+                        &format!("synthetic-fixture-{index:04}"),
+                        index as i64,
+                        files_per_title,
+                    )
+                })
+                .collect(),
+        );
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub);
+        let result = tokio::time::timeout(
+            crate::test_wait::TEST_WAIT_DEADLINE,
+            runner.run("op-1", &plan),
+        )
+        .await
+        .expect("the recorder must keep the run moving")
+        .unwrap();
+
+        assert_eq!(result.state, LocationOperationState::Completed);
+        let total = (titles * files_per_title) as u64;
+        assert_eq!(result.counters.files_processed, total as i64);
+        assert_eq!(store.recorded.load(Ordering::SeqCst), total);
+        assert_eq!(reconciler.cleaned.lock().unwrap().len(), titles);
+        // Every admitted file is either one of the copy slots or one of the
+        // bounded files past its copy; the one being recorded is the last.
+        let bound = (super::pipeline::PIPELINE_POST_COPY_LIMIT
+            + crate::location::transfer::CopyCoordinator::shared().capacity())
+            as u64;
+        let max_ahead = mover.max_ahead.load(Ordering::SeqCst);
+        assert!(
+            max_ahead <= bound,
+            "{max_ahead} files ran ahead of their records; the bound is {bound}"
+        );
+        let batches = store.record_batches.lock().unwrap().clone();
+        assert!(
+            batches
+                .iter()
+                .all(|size| (1..=super::pipeline::PIPELINE_RECORD_BATCH).contains(size)),
+            "every transaction records between one and the batch bound: {batches:?}"
+        );
+    }
+
     #[tokio::test]
     async fn pipeline_cancel_drains_verifiers_before_returning_and_keeps_sources() {
         let store = FakeStore::with_operation(operation());
@@ -3370,6 +3680,7 @@ mod tests {
                 current_file: None,
                 copying: 0,
                 verifying: 0,
+                recording: 0,
                 detail: None,
             },
         );
@@ -4220,6 +4531,111 @@ mod tests {
         assert_eq!(persisted.dedups, 1);
         assert_eq!(persisted.renames, 2);
         assert_eq!(persisted.no_ops, 3);
+    }
+
+    #[test]
+    fn resolved_outcome_union_counts_each_completed_source_once_and_resumes() {
+        use super::super::resolution::{FileResolution, ResolutionDisposition};
+        let mut title = planned_title("title-1", 1, 7);
+        // A companion can be renamed through its parent directory while its
+        // own basename remains unchanged.
+        title.files[0].source_path = PathBuf::from("/source/movie.trickplay/frame.jpg");
+        title.files[0].destination_path =
+            PathBuf::from("/destination/movie (from source).trickplay/frame.jpg");
+        title.planned_rename_sources = [0, 1, 4, 5, 6]
+            .map(|index| title.files[index].source_path.clone())
+            .into_iter()
+            .collect();
+        title.outcomes.renames = 5;
+        let resolution = |index: usize, runtime_rename: bool, completed: bool, disposition| {
+            let destination = title.files[index].stored_destination();
+            FileResolution {
+                operation_id: "op-1".into(),
+                title_id: title.title_id.clone(),
+                source_path: path_to_stored_string(&title.files[index].source_path),
+                original_destination: destination.clone(),
+                destination_path: if runtime_rename {
+                    format!("{destination}.preserved")
+                } else {
+                    destination
+                },
+                disposition,
+                completed,
+                source_version: None,
+                destination_version: None,
+                identity_hash: None,
+                warning: None,
+                reason_code: None,
+            }
+        };
+        let mut resolutions = vec![
+            resolution(0, false, true, ResolutionDisposition::Placed),
+            resolution(1, true, true, ResolutionDisposition::Preserved),
+            resolution(2, true, true, ResolutionDisposition::Preserved),
+            resolution(3, false, true, ResolutionDisposition::Placed),
+            resolution(4, false, false, ResolutionDisposition::Placed),
+            resolution(
+                5,
+                true,
+                true,
+                ResolutionDisposition::Disposal(super::super::conflicts::DisposalProof {
+                    sequence: 0,
+                    before_link_count: 1,
+                    after_link_count: Some(0),
+                    after_versions: BTreeMap::new(),
+                    recycle: None,
+                }),
+            ),
+            resolution(6, true, true, ResolutionDisposition::Identical),
+        ];
+        resolutions.push(resolutions[1].clone());
+        let plan = OperationWorkPlan::new(vec![title]);
+        let title = &plan.titles[0];
+        let mut progress = RunProgress::default();
+        progress.record_resolved_outcomes(title, &resolutions);
+        assert_eq!(
+            progress.counters(&plan).renames,
+            0,
+            "an unfinished title has no settled outcomes"
+        );
+        progress.settle(title, TitleCheckpointState::Completed);
+        assert_eq!(
+            progress.counters(&plan).renames,
+            3,
+            "planned-only, runtime-only, and both each count once; incomplete, disposal, and dedup rows are excluded"
+        );
+        assert_eq!(progress.counters(&plan).dedups, 1);
+        progress.record_resolved_outcomes(title, &resolutions);
+        progress.settle(title, TitleCheckpointState::Completed);
+        assert_eq!(
+            progress.counters(&plan).renames,
+            3,
+            "retry does not add another count"
+        );
+
+        let now = Utc::now();
+        let checkpoint = TitleCheckpoint {
+            operation_id: "op-1".into(),
+            title_id: title.title_id.clone(),
+            sequence: 1,
+            state: TitleCheckpointState::Completed,
+            classification: title.classification,
+            placement: title.placement.clone(),
+            files_total: 7,
+            files_verified: 7,
+            bytes_total: 700,
+            bytes_verified: 700,
+            detail: None,
+            reason_code: None,
+            started_at: Some(now),
+            updated_at: now,
+            completed_at: Some(now),
+        };
+        let mut resumed =
+            RunProgress::resume(&plan, &[(title.title_id.clone(), checkpoint)].into());
+        resumed.record_resolved_outcomes(title, &resolutions);
+        assert_eq!(resumed.counters(&plan).renames, 3);
+        assert_eq!(resumed.counters(&plan).dedups, 1);
     }
 
     #[tokio::test]

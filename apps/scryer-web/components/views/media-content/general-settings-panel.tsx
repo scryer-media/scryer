@@ -232,7 +232,7 @@ export function GeneralSettingsPanel({
           </Select>
         </div>
         {showUnixPermissions ? (
-          <div className="grid max-w-xl gap-4 sm:grid-cols-2">
+          <div className="grid max-w-xl grid-cols-1 gap-4 @md/facet-page:grid-cols-2">
             <ToggleSettingRow
               label={t("settings.setPermissionsLinuxLabel")}
               description={t("settings.setPermissionsLinuxDescription")}
@@ -264,7 +264,7 @@ export function GeneralSettingsPanel({
                         <span>
                           {option.value} - {t(option.labelKey)}
                         </span>
-                        <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                        <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                           {formatChmodMode(option.value, "file")}
                         </span>
                       </span>
@@ -276,7 +276,7 @@ export function GeneralSettingsPanel({
                         <span>
                           {customFileChmod} - {t("settings.chmodPresetCustom")}
                         </span>
-                        <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                        <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                           {formatChmodMode(customFileChmod, "file")}
                         </span>
                       </span>
@@ -302,7 +302,7 @@ export function GeneralSettingsPanel({
                         <span>
                           {option.value} - {t(option.labelKey)}
                         </span>
-                        <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                        <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                           {formatChmodMode(option.value, "folder")}
                         </span>
                       </span>
@@ -315,7 +315,7 @@ export function GeneralSettingsPanel({
                           {customFolderChmod} -{" "}
                           {t("settings.chmodPresetCustom")}
                         </span>
-                        <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                        <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                           {formatChmodMode(customFolderChmod, "folder")}
                         </span>
                       </span>
@@ -349,7 +349,7 @@ export function GeneralSettingsPanel({
         title={t("settings.sidecarFilesTitle")}
       >
         <div
-          className={`grid gap-3 ${showPlexmatch ? "md:grid-cols-2" : "md:grid-cols-1"}`}
+          className={`grid grid-cols-1 gap-3 ${showPlexmatch ? "@xl/facet-page:grid-cols-2" : ""}`}
         >
           <ToggleSettingRow
             label={t("settings.nfoWriteOnImportLabel")}
@@ -385,7 +385,7 @@ export function GeneralSettingsPanel({
           icon={SlidersVertical}
           title={t("settings.animeSettings")}
         >
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
             <div className="space-y-2">
               <Label>{t("settings.fillerPolicyLabel")}</Label>
               <Select
@@ -427,7 +427,7 @@ export function GeneralSettingsPanel({
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
             <ToggleSettingRow
               label={t("settings.monitorSpecialsLabel")}
               description={t("settings.monitorSpecialsDescription")}
