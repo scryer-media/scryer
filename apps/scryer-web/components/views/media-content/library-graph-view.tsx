@@ -312,35 +312,65 @@ const OVERVIEW_FIT_PADDING = 1.25;
 const MAX_POSTER_VIEW_SHARE = 2;
 const MAX_ZOOM_OUT_RATIO = 1.5;
 
+/** The median of the library's title sizes, or 4 for an empty one. */
+function medianTitleSize(sizes: ReadonlyMap<string, number>): number {
+  const values = Array.from(sizes.values()).sort((a, b) => a - b);
+  return values.length > 0 ? values[values.length >> 1] : 4;
+}
+
+/**
+ * The overview's typical title half-height, in pixels at ratio 1, from the
+ * whole library's median title rather than the titles unfolded right now:
+ * a neighbourhood folding or unfolding must never move the zoom limit, or
+ * the camera is pulled back out mid-zoom. Measured as the sync sizes titles,
+ * from the camera spacing at that moment.
+ */
+function overviewTypicalTitlePx(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  titleSize: number,
+): number {
+  const origin = sigma.graphToViewport({ x: 0, y: 0 });
+  const along = sigma.graphToViewport({ x: 34, y: 0 });
+  const spacing = Math.hypot(along.x - origin.x, along.y - origin.y);
+  return (
+    (sigma.scaleSize(1, 1) * graphDetailPosterSize(titleSize, spacing)) /
+    sigma.scaleSize(1)
+  );
+}
+
 function applyZoomLimits(
   sigma: Sigma<NodeAttributes, EdgeAttributes>,
   graph: LibraryGraphStore,
+  overviewTitlePx: number | null,
 ) {
-  // Titles only: a folded neighbourhood is drawn far larger than a title
-  // and would stop the zoom long before titles are readable. The median,
-  // not the largest: the overview draws its best-rated titles several times
-  // the size of the rest.
-  const sizes: number[] = [];
-  graph.forEachNode((_key, attributes) => {
-    if (attributes.collapsedClusterId !== undefined) return;
-    sizes.push(attributes.size);
-  });
-  sizes.sort((a, b) => a - b);
-  const typical = sizes.length > 0 ? sizes[sizes.length >> 1] : 0;
+  const camera = sigma.getCamera();
+  camera.maxRatio = MAX_ZOOM_OUT_RATIO;
   const height = sigma.getContainer().offsetHeight;
+  if (height <= 0) return;
   // A title's size is its on-screen half-height at ratio 1.
-  const minRatio =
-    typical > 0 && height > 0
-      ? Math.min(
-          MAX_ZOOM_OUT_RATIO,
-          (sigma.scaleSize(typical, 1) * 2) / (MAX_POSTER_VIEW_SHARE * height),
-        )
-      : null;
+  let typicalPx = overviewTitlePx;
+  if (typicalPx === null) {
+    // Titles only: a folded neighbourhood is drawn far larger than a title.
+    // The median, not the largest: the best-rated titles are drawn several
+    // times the size of the rest.
+    const sizes: number[] = [];
+    graph.forEachNode((_key, attributes) => {
+      if (attributes.collapsedClusterId !== undefined) return;
+      sizes.push(attributes.size);
+    });
+    sizes.sort((a, b) => a - b);
+    if (sizes.length > 0)
+      typicalPx = sigma.scaleSize(sizes[sizes.length >> 1], 1);
+  }
   // Set on the camera itself: `setSetting` refreshes every node, and this
   // runs each time a neighbourhood unfolds during a zoom.
-  const camera = sigma.getCamera();
-  camera.minRatio = minRatio;
-  camera.maxRatio = MAX_ZOOM_OUT_RATIO;
+  camera.minRatio =
+    typicalPx !== null && typicalPx > 0
+      ? Math.min(
+          MAX_ZOOM_OUT_RATIO,
+          (typicalPx * 2) / (MAX_POSTER_VIEW_SHARE * height),
+        )
+      : null;
 }
 
 // Panning keeps the view's centre over the titles' extent, widened by this
@@ -644,6 +674,9 @@ export default function LibraryGraphView({
   const viewportNodesRef = React.useRef(new Set<string>());
   const viewportRelationsRef = React.useRef(new Map<string, GraphRelation>());
   const relationHitsRef = React.useRef<GraphRelationHit[]>([]);
+  // The overview's typical title, measured at its last sync, which sets how
+  // far it zooms in; null elsewhere.
+  const overviewTitlePxRef = React.useRef<number | null>(null);
   const largeLayoutRef = React.useRef<ReturnType<
     typeof largeLibraryGraphLayout
   > | null>(null);
@@ -2211,7 +2244,9 @@ export default function LibraryGraphView({
     let latestPointer: { x: number; y: number } | null = null;
 
     sigma.on("afterRender", drawOverlay);
-    sigma.on("resize", () => applyZoomLimits(sigma, sigma.getGraph()));
+    sigma.on("resize", () =>
+      applyZoomLimits(sigma, sigma.getGraph(), overviewTitlePxRef.current),
+    );
     const unboundCamera = boundCameraToGraph(sigma, graph);
     // Ctrl-click (Cmd-click on a Mac) also opens the title's panel; a plain
     // click only focuses the graph on it.
@@ -2708,7 +2743,11 @@ export default function LibraryGraphView({
     relationsStoreRef.current = relations;
     applyDetailOpacity(sigma, detailOpacityRef, initialDetailOpacity);
     sigma.setGraph(graph);
-    applyZoomLimits(sigma, graph);
+    overviewTitlePxRef.current =
+      largeLayout && !focusing
+        ? overviewTypicalTitlePx(sigma, medianTitleSize(sizes))
+        : null;
+    applyZoomLimits(sigma, graph, overviewTitlePxRef.current);
     layoutRef.current = layout;
     const container = sigma.getContainer();
     const tick = () => {
