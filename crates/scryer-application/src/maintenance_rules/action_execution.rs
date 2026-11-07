@@ -1564,7 +1564,7 @@ impl AppUseCase {
                     }) => {
                         run.status = LifecycleActionRunStatus::Held;
                         run.hold_reason = Some(reason.to_string());
-                        run.detail = evidence.to_string();
+                        super::scoped_deletion::record_hold_detail(&mut run, &evidence);
                         run.finished_at = Some(Utc::now());
                         candidates.finish_action_run(&run).await?;
                         if self
@@ -1584,7 +1584,7 @@ impl AppUseCase {
                         reason,
                         detail: evidence,
                     }) => {
-                        run.detail = evidence.to_string();
+                        super::scoped_deletion::record_hold_detail(&mut run, &evidence);
                         if self
                             .finish_candidate_hold_and_release_attempt(&mut run, attempt, reason)
                             .await?
