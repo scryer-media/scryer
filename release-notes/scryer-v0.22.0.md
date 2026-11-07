@@ -17,7 +17,7 @@ These changes are relative to v0.21.24.
 
 - The library graph requires the experimental features switch.
 - File moves and folder-conflict resolution are marked **Beta**. Review the preview, including any recycling or permanent deletion, before applying a resolution.
-- **Copy verification** now applies to library and root moves as well as download-client imports, and moves no longer always verify in full. Quick is the default; choose **Full** before moving media off a disk you plan to erase.
+- **Copy verification** now applies to library and root moves as well as download-client imports, and moves no longer always verify in full. Quick is the default.
 - Automatic imports now hold a file for review instead of importing it when Scryer cannot read its media, or when the media is malformed or encrypted. An upgrade is held when the new file's video codec or runtime cannot be verified, so an existing library file is never replaced by unverified media. Disc companion files and playlists that point at local files are held as well. A manual import still imports a file whose media could not be read, but encrypted or malformed media stays held.
 - Library scans and imports now recognize the full set of video extensions Sonarr accepts, including DivX, XviD, RealMedia, WTV, 3GP, ASF, QuickTime and disc images, so a rescan can pick up files that were previously ignored.
 - Removing a root from a library now removes the titles under it from the catalog. Files on disk and the recycle bin are not touched. The interface asks for confirmation and shows how many titles will be removed; the removal is refused while any of those titles is part of a running location operation or deletion.
