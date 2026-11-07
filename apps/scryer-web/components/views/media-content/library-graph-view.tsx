@@ -35,6 +35,7 @@ import {
   type GraphPosterSprites,
   graphPosterArtworkOpacity,
   graphPosterUrls,
+  graphPosterVariantUrls,
   isOriginalGraphPosterUrl,
   createGraphPosterAdmission,
   prepareGraphPosterImages,
@@ -143,6 +144,8 @@ const CLUSTER_COLORS = [
   "#ef4444",
 ];
 const UNPLACED_COLOR = "#7a8499";
+/** How long the zoom must rest before posters load a sharper variant. */
+const POSTER_UPGRADE_REST_MS = 150;
 const LAYOUT_STEPS_PER_FRAME = 6;
 const MIN_POSTER_RADIUS_PX = 9;
 const HULL_PADDING_PX = 18;
@@ -495,6 +498,11 @@ export default function LibraryGraphView({
   const resumeLayoutRef = React.useRef<() => void>(() => {});
   const positionsRef = React.useRef(new Map<string, LayoutPoint>());
   const posterCacheRef = React.useRef(new Map<string, HTMLImageElement>());
+  const posterZoomRef = React.useRef({
+    ratio: Number.NaN,
+    changedAt: Number.NEGATIVE_INFINITY,
+    timer: 0,
+  });
   const viewportNodesRef = React.useRef(new Set<string>());
   const viewportRelationsRef = React.useRef(new Map<string, GraphRelation>());
   const relationHitsRef = React.useRef<GraphRelationHit[]>([]);
@@ -1107,6 +1115,22 @@ export default function LibraryGraphView({
     if (!context) {
       return;
     }
+    // Sharper poster variants wait until the zoom has rested briefly.
+    const zoom = sigma.getCamera().ratio;
+    const posterZoom = posterZoomRef.current;
+    const now = performance.now();
+    if (zoom !== posterZoom.ratio) {
+      if (Number.isFinite(posterZoom.ratio)) {
+        posterZoom.changedAt = now;
+        window.clearTimeout(posterZoom.timer);
+        posterZoom.timer = window.setTimeout(
+          () => sigmaRef.current?.scheduleRender(),
+          POSTER_UPGRADE_REST_MS,
+        );
+      }
+      posterZoom.ratio = zoom;
+    }
+    const zoomResting = now - posterZoom.changedAt >= POSTER_UPGRADE_REST_MS;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
 
@@ -1564,26 +1588,26 @@ export default function LibraryGraphView({
       if (radius < threshold || !point || !admitPoster(point, radius)) {
         return;
       }
-      // Load the variant this size needs; a loaded smaller or larger one
-      // stands in meanwhile, so zooming sharpens a poster instead of
-      // blanking it.
-      const [wanted, ...others] = graphPosterUrls(url, radius, ratio);
-      visiblePosters.add(wanted);
+      // Load the variant this size needs once the zoom rests; until then
+      // a loaded smaller or larger one stands in, so a zoom never fetches,
+      // decodes and cuts each poster at every size it passes through.
+      const urls = graphPosterUrls(url, radius, ratio);
       const ready = (image: HTMLImageElement | undefined) =>
         image?.complete && image.naturalWidth > 0 ? image : undefined;
       const sprites = (posterSpritesRef.current ??= createGraphPosterSprites(
         () => sigmaRef.current?.scheduleRender(),
       ));
-      const loaded = ready(posterCacheRef.current.get(wanted));
-      let image = loaded && sprites.artwork(loaded) ? loaded : undefined;
-      for (const other of others) {
-        if (image) break;
-        const candidate = ready(posterCacheRef.current.get(other));
-        if (candidate && sprites.artwork(candidate)) {
-          image = candidate;
-          visiblePosters.add(other);
+      let image: HTMLImageElement | undefined;
+      for (const candidate of urls) {
+        const loaded = ready(posterCacheRef.current.get(candidate));
+        if (loaded && sprites.artwork(loaded)) {
+          image = loaded;
+          visiblePosters.add(candidate);
+          break;
         }
       }
+      if (zoomResting) visiblePosters.add(urls[0]);
+      else if (!image) visiblePosters.add(graphPosterVariantUrls(url).w70);
       if (!image) {
         return;
       }
@@ -1922,6 +1946,7 @@ export default function LibraryGraphView({
     if (!container) {
       return;
     }
+    const posterZoom = posterZoomRef.current;
     const graph: LibraryGraphStore = new Graph<NodeAttributes, EdgeAttributes>({
       type: "undirected",
       multi: false,
@@ -2143,6 +2168,7 @@ export default function LibraryGraphView({
         window.cancelAnimationFrame(tweenFrameRef.current);
         tweenFrameRef.current = null;
       }
+      window.clearTimeout(posterZoom.timer);
       sigma.kill();
       sigmaRef.current = null;
       graphRef.current = null;

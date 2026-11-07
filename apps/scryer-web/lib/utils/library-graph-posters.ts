@@ -100,6 +100,26 @@ export function graphPosterVariant(
   return "original";
 }
 
+// Variant addresses are resolved once per poster; parsing them on every frame
+// costs milliseconds per frame at a few hundred posters.
+const variantUrls = new Map<string, Record<LocalPosterVariant, string>>();
+
+/** A poster's address at each stored variant. */
+export function graphPosterVariantUrls(
+  url: string,
+): Readonly<Record<LocalPosterVariant, string>> {
+  let urls = variantUrls.get(url);
+  if (!urls) {
+    urls = {
+      w70: selectPosterVariantUrl(url, "w70") ?? url,
+      w250: selectPosterVariantUrl(url, "w250") ?? url,
+      original: selectPosterVariantUrl(url, "original") ?? url,
+    };
+    variantUrls.set(url, urls);
+  }
+  return urls;
+}
+
 /** The poster URL to load at this size, then the other variants, largest
  * first, any one of which can stand in while the wanted one loads. */
 export function graphPosterUrls(
@@ -107,13 +127,10 @@ export function graphPosterUrls(
   size: number,
   pixelRatio: number,
 ): string[] {
-  const wanted = graphPosterVariant(size, pixelRatio);
-  const urls = [selectPosterVariantUrl(url, wanted) ?? url];
-  for (const variant of ["original", "w250", "w70"] as const) {
-    if (variant === wanted) continue;
-    const other = selectPosterVariantUrl(url, variant) ?? url;
+  const variants = graphPosterVariantUrls(url);
+  const urls = [variants[graphPosterVariant(size, pixelRatio)]];
+  for (const other of [variants.original, variants.w250, variants.w70])
     if (!urls.includes(other)) urls.push(other);
-  }
   return urls;
 }
 
