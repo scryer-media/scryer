@@ -761,6 +761,120 @@ async fn durable_torrent_cleanup_uses_frozen_info_hash_when_the_internal_name_di
     }
 }
 
+/// A hash-addressed torrent whose submission recorded no content hash: the
+/// indexer gave none, and the hash the client accepted was not kept. The
+/// client names the torrent differently from the release title, so only the
+/// submission's own item id (the torrent hash) can prove the entry is ours.
+async fn unhashed_qbit_cleanup_fixture(
+    client: &Arc<StubDownloadClient>,
+    can_remove: bool,
+) -> (
+    AppUseCase,
+    Arc<TrackingDownloadSubmissionRepo>,
+    crate::DownloadCleanupRecord,
+) {
+    let (app, user, submissions) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Lanternfall Signal").await;
+    let hash = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c";
+    let source_title = "Lanternfall.Signal.2031.1080p.WEB-DL.x264-SYNTH";
+    let client_name = "[Synthgroup] Lanternfall Signal (2031) [1080p] [Dual Audio]";
+    assert!(
+        !crate::import::import::cleanup_job_names_match(source_title, client_name),
+        "the fixture must exercise a client name the name check cannot match"
+    );
+    let mut tracked = tracked_for(
+        &config.id,
+        "qbittorrent",
+        hash,
+        &title,
+        TrackedDownloadState::Imported,
+        false,
+    );
+    tracked.source_title = Some(source_title.into());
+    tracked.client_item.download_id = None;
+    tracked.client_item.title_name = client_name.into();
+    tracked.client_item.seeding = Some(DownloadSeedingSnapshot {
+        is_private: Some(false),
+        can_remove: Some(can_remove),
+        ..Default::default()
+    });
+    record_host_job_ownership(&app, &tracked, source_title).await;
+    assert!(submissions.store.lock().await[0].info_hash.is_none());
+    app.services
+        .workflow
+        .download_registry
+        .resolve_observation(&ObservedClientJob {
+            locator: ClientJobLocator::new(Some(&config.id), "qbittorrent", hash),
+            wire_token: Some(tracked.download_id.to_wire()),
+            observed_name: Some(source_title.into()),
+            observed_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let record = cleanup_record_for(&tracked);
+    (app, submissions, record)
+}
+
+#[tokio::test]
+async fn durable_qbit_cleanup_proves_identity_by_the_submission_item_hash() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, _, record) = unhashed_qbit_cleanup_fixture(&client, true).await;
+    let (_, tracked, cleanup) =
+        crate::import::import::run_claimed_download_cleanup(&app, record, None)
+            .await
+            .expect("the same torrent hash proves identity despite the client's name");
+    assert!(
+        tracked.is_some(),
+        "identity passed, so the row was not abandoned"
+    );
+    assert_eq!(cleanup.outcome, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(
+        cleanup.seeding.unwrap().reason,
+        "client_reports_seeding_obligation_met"
+    );
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn durable_qbit_cleanup_holds_an_unhashed_torrent_until_its_seed_limit_is_met() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, _, record) = unhashed_qbit_cleanup_fixture(&client, false).await;
+    let (_, tracked, cleanup) =
+        crate::import::import::run_claimed_download_cleanup(&app, record, None)
+            .await
+            .expect("identity passes and the seeding gate decides");
+    assert!(tracked.is_some());
+    assert_eq!(
+        cleanup.outcome,
+        TerminalDownloadCleanupOutcome::HeldForSeeding
+    );
+    assert_eq!(
+        cleanup.seeding.unwrap().reason,
+        "client_reports_unmet_seed_limit"
+    );
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn durable_qbit_cleanup_refuses_an_item_hash_that_differs_from_the_submission() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, submissions, record) = unhashed_qbit_cleanup_fixture(&client, true).await;
+    // The submission names another torrent; the locator now points at a
+    // different hash, so the reused locator is still refused.
+    submissions.store.lock().await[0].download_client_item_id = "b".repeat(40);
+    assert_cleanup_abandoned(
+        crate::import::import::run_claimed_download_cleanup(&app, record, None).await,
+    );
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
 #[tokio::test]
 async fn durable_cleanup_recovers_an_untrackable_import_and_rejects_a_reused_locator() {
     let client = Arc::new(StubDownloadClient::default());
