@@ -22,6 +22,7 @@
     "fsevents@2.3.3": true
   },
   "dependencies": {
+    "@bokuweb/zstd-wasm": "0.0.27",
     "@codemirror/autocomplete": "6.20.4",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-go": "6.0.1",

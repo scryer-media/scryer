@@ -109,6 +109,13 @@ import {
   type LayoutPoint,
   type LayoutState,
 } from "@/lib/utils/library-graph-layout";
+import {
+  libraryGraphCacheKey,
+  libraryGraphStorage,
+  libraryGraphZstdCodec,
+  readCachedLibraryGraph,
+  writeCachedLibraryGraph,
+} from "@/lib/utils/library-graph-cache";
 import { libraryGraphSourceForCatalog } from "@/lib/utils/library-graph-source";
 import {
   beginExpansion,
@@ -610,8 +617,9 @@ export default function LibraryGraphView({
     null,
   );
   const graphRef = React.useRef<LibraryGraphStore | null>(null);
-  const relationsStoreRef =
-    React.useRef<GraphAdjacency<EdgeAttributes> | null>(null);
+  const relationsStoreRef = React.useRef<GraphAdjacency<EdgeAttributes> | null>(
+    null,
+  );
   const layoutRef = React.useRef<LayoutState | null>(null);
   const frameRef = React.useRef<number | null>(null);
   const tweenFrameRef = React.useRef<number | null>(null);
@@ -837,7 +845,11 @@ export default function LibraryGraphView({
   // node where it was, and a filter that leaves no titles and is then cleared
   // does not load it again. A new facet or library set starts exploring
   // afresh.
+  const viewerId = auth.user?.id ?? "";
+  const authLoading = auth.loading;
   const sourceKey = `${facet}|${libraryIdSignature}`;
+  // A graph is read again for another viewer, whose stored copy differs.
+  const loadKey = `${sourceKey}|${viewerId}`;
   // A new facet or library set drops what was explored from the old one,
   // including a "More like this" still waiting on its reply.
   const [exploredSourceKey, setExploredSourceKey] = React.useState(sourceKey);
@@ -876,29 +888,64 @@ export default function LibraryGraphView({
   }, []);
   const loadedSourceKeyRef = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (loadedSourceKeyRef.current === sourceKey) {
+    // Wait for the viewer: the stored graph is theirs alone.
+    if (authLoading || loadedSourceKeyRef.current === loadKey) {
       return;
     }
-    loadedSourceKeyRef.current = sourceKey;
+    loadedSourceKeyRef.current = loadKey;
     invalidateExpansions(expandTokenRef);
     let cancelled = false;
     let settled = false;
+    const request = {
+      facet,
+      libraryIds: libraryIdSignature ? libraryIdSignature.split(",") : [],
+    };
+    // The last graph read draws at once; the server's answer replaces it
+    // only when it is a different graph, and is kept for the next visit.
+    const storage = viewerId ? libraryGraphStorage() : null;
+    const cacheKey = libraryGraphCacheKey(viewerId, request);
+    let shown: LibraryGraphResult | null = null;
+    if (storage) {
+      void readCachedLibraryGraph(
+        storage,
+        cacheKey,
+        libraryGraphZstdCodec,
+      ).then((cached) => {
+        if (cancelled || settled || !cached) return;
+        shown = cached;
+        setResult(cached);
+        setLoadStatus("loaded");
+        resetExploration();
+      });
+    }
     void libraryGraphSourceForCatalog(client)
-      .load({
-        facet,
-        libraryIds: libraryIdSignature ? libraryIdSignature.split(",") : [],
-      })
+      .load(request)
       .then((loaded) => {
         settled = true;
-        if (!cancelled) {
+        const unchanged =
+          loaded !== null &&
+          shown !== null &&
+          loaded.generatedAt !== "" &&
+          loaded.generatedAt === shown.generatedAt;
+        if (!cancelled && !unchanged) {
           setResult(loaded);
           setLoadStatus(loaded ? "loaded" : "notBuilt");
           resetExploration();
         }
+        if (storage && !unchanged)
+          window.setTimeout(() => {
+            void writeCachedLibraryGraph(
+              storage,
+              cacheKey,
+              loaded,
+              libraryGraphZstdCodec,
+            );
+          }, 0);
       })
       .catch(() => {
         settled = true;
-        if (!cancelled) {
+        // A graph already drawn from the cache stays up.
+        if (!cancelled && shown === null) {
           setResult(null);
           setLoadStatus("failed");
           resetExploration();
@@ -907,11 +954,19 @@ export default function LibraryGraphView({
     return () => {
       cancelled = true;
       // A load cut short is not a load: the next run starts it again.
-      if (!settled && loadedSourceKeyRef.current === sourceKey) {
+      if (!settled && loadedSourceKeyRef.current === loadKey) {
         loadedSourceKeyRef.current = null;
       }
     };
-  }, [client, facet, libraryIdSignature, resetExploration, sourceKey]);
+  }, [
+    authLoading,
+    client,
+    facet,
+    libraryIdSignature,
+    loadKey,
+    resetExploration,
+    viewerId,
+  ]);
 
   const previewing =
     !titlesComplete &&
