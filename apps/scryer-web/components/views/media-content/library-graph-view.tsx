@@ -295,7 +295,7 @@ const OVERVIEW_FIT_PADDING = 1.25;
 
 // Zoom stops where a typical (median) title fills this share of the view's
 // height, and a little past the framing of the whole graph (ratio 1).
-const MAX_POSTER_VIEW_SHARE = 0.6;
+const MAX_POSTER_VIEW_SHARE = 0.85;
 const MAX_ZOOM_OUT_RATIO = 1.5;
 
 function applyZoomLimits(

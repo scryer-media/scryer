@@ -13,6 +13,7 @@ import {
   changedGraphViewportEdges,
   createGraphPosterAdmission,
   graphPosterUrls,
+  graphPosterSpriteMaxHeight,
   graphPosterVariant,
   isOriginalGraphPosterUrl,
   isThumbnailGraphPosterUrl,
@@ -549,4 +550,47 @@ test("a thumbnail still loading when its poster leaves the view finishes", () =>
   assert.equal(cache.has("/images/media/h0/w250"), false);
   // The thumbnail still holds the one request slot.
   assert.equal(created.length, 0);
+});
+
+test("a full-size image served for a thumbnail is cut at the thumbnail's size", async () => {
+  const bounds: number[] = [];
+  let released = 0;
+  const sprites = createGraphPosterSprites(
+    () => {},
+    () => ({
+      width: 0,
+      height: 0,
+      getContext: () =>
+        ({
+          beginPath() {},
+          roundRect() {},
+          clip() {},
+          drawImage() {},
+        }) as unknown as CanvasRenderingContext2D,
+    }),
+    async (image, maxHeight) => {
+      bounds.push(maxHeight);
+      return {
+        source: image,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        release: () => {
+          released += 1;
+        },
+      };
+    },
+  );
+  const image = {
+    src: "/images/media/fixture-hash/w70",
+    naturalWidth: 2000,
+    naturalHeight: 3000,
+  } as HTMLImageElement;
+  sprites.artwork(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  const sprite = sprites.artwork(image);
+  assert.deepEqual(bounds, [128]);
+  assert.equal(sprite?.height, 128);
+  assert.equal(released, 1);
+  assert.equal(graphPosterSpriteMaxHeight("/images/media/h/w250"), 384);
+  assert.equal(graphPosterSpriteMaxHeight("/images/media/h/original"), 1024);
 });

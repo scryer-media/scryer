@@ -293,16 +293,47 @@ type DecodedImage = {
   source: CanvasImageSource;
   width: number;
   height: number;
+  /** Frees a scaled copy made only for the cut. */
+  release?: () => void;
 };
+
+/** The tallest sprite worth cutting for each variant's URL: a little over
+ * the variant's own height, and a bound for full-size images. A title whose
+ * smaller variants are not made yet serves its full-size image under every
+ * variant's URL, and a sprite at that resolution costs megabytes and a slow
+ * scaled draw in every frame. */
+export function graphPosterSpriteMaxHeight(url: string): number {
+  if (/\/w70(?:[?#]|$)/.test(url)) return 128;
+  if (/\/w250(?:[?#]|$)/.test(url)) return 384;
+  return 1024;
+}
 
 // `decode` works off the main thread; `createImageBitmap` of an image
 // element decodes on it, about a millisecond a poster.
-function decodeOffThread(image: HTMLImageElement): Promise<DecodedImage> {
-  return image.decode().then(() => ({
-    source: image,
-    width: image.naturalWidth,
-    height: image.naturalHeight,
-  }));
+async function decodeOffThread(
+  image: HTMLImageElement,
+  maxHeight: number,
+): Promise<DecodedImage> {
+  await image.decode();
+  const width = image.naturalWidth;
+  const height = image.naturalHeight;
+  if (height <= maxHeight || typeof createImageBitmap !== "function") {
+    return { source: image, width, height };
+  }
+  // Scale an oversized image down before the cut, outside the frame.
+  const scaledHeight = maxHeight;
+  const scaledWidth = Math.max(1, Math.round((width * maxHeight) / height));
+  const bitmap = await createImageBitmap(image, {
+    resizeWidth: scaledWidth,
+    resizeHeight: scaledHeight,
+    resizeQuality: "high",
+  });
+  return {
+    source: bitmap,
+    width: scaledWidth,
+    height: scaledHeight,
+    release: () => bitmap.close(),
+  };
 }
 
 /**
@@ -316,15 +347,19 @@ function decodeOffThread(image: HTMLImageElement): Promise<DecodedImage> {
 export function createGraphPosterSprites(
   onReady: () => void,
   createCanvas: () => SpriteCanvas = () => document.createElement("canvas"),
-  decode: (image: HTMLImageElement) => Promise<DecodedImage> = decodeOffThread,
+  decode: (
+    image: HTMLImageElement,
+    maxHeight: number,
+  ) => Promise<DecodedImage> = decodeOffThread,
 ) {
   const shapeWidth = SHAPE_SPRITE_HEIGHT * GRAPH_POSTER_ASPECT_RATIO;
   let mask: SpriteCanvas | null = null;
   let backing: { color: string; canvas: SpriteCanvas } | null = null;
   const artwork = new WeakMap<HTMLImageElement, SpriteCanvas | "decoding">();
-  const cut = (image: DecodedImage) => {
-    // The image's own resolution, cropped to fill the poster's shape.
-    const height = image.height;
+  const cut = (image: DecodedImage, maxHeight: number) => {
+    // The image's own resolution up to the variant's bound, cropped to fill
+    // the poster's shape.
+    const height = Math.min(image.height, maxHeight);
     const width = height * GRAPH_POSTER_ASPECT_RATIO;
     return roundedSprite(createCanvas, width, height, (context) => {
       const scale = Math.max(width / image.width, height / image.height);
@@ -375,9 +410,11 @@ export function createGraphPosterSprites(
       if (sprite === "decoding") return null;
       if (sprite) return sprite;
       artwork.set(image, "decoding");
-      decode(image).then(
+      const maxHeight = graphPosterSpriteMaxHeight(image.src);
+      decode(image, maxHeight).then(
         (decoded) => {
-          artwork.set(image, cut(decoded));
+          artwork.set(image, cut(decoded, maxHeight));
+          decoded.release?.();
           onReady();
         },
         // An image that cannot be decoded is drawn without a poster.
