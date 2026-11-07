@@ -1,23 +1,33 @@
 # Scryer 0.22.0 release notes
 
-These changes are relative to v0.21.23.
+These changes are relative to v0.21.24.
 
 ## Highlights
 
 - Browse all matching Discovery candidates by genre or theme, open shelves as paginated grids, and explore related titles through the library graph.
 - Queue saved Wanted standby releases directly, with options to keep or cancel conflicting downloads.
 - Search for missing subtitles across selected episodes in one background batch using your configured search and synchronization settings.
-- Move titles between libraries and resolve conflicting folders with previews and tracked background operations. File moves are marked **Beta**.
+- Move titles between libraries and resolve conflicting folders with previews and tracked background operations. Move is now a bulk selection action. File moves are marked **Beta**.
 - Import selected indexers and download clients in background jobs with individual retry and skip controls.
 - Read Plex and Emby watch history, show media-server sync health, and make watch-based maintenance decisions more conservative when history is incomplete.
-- Choose Scryer's listening address from setup or **Security & Access**, and support Prowlarr 3.x.
+- Set the same-tier upgrade threshold per quality profile, and choose how much time the background acquisition walk takes.
+- Choose Scryer's listening address from setup or **Security & Access**.
 
 ## Upgrade notes
 
 - The library graph requires the experimental features switch.
 - File moves and folder-conflict resolution are marked **Beta**. Review the preview, including any recycling or permanent deletion, before applying a resolution.
+- Removing a root from a library now removes the titles under it from the catalog. Files on disk and the recycle bin are not touched. The interface asks for confirmation and shows how many titles will be removed; the removal is refused while any of those titles is part of a running location operation or deletion.
+- The minimum score a same-tier release must beat the current file by is now part of each quality profile (default 120). If you had changed the old instance-wide acquisition setting, upgrading copies your value into profiles that have none of their own; instances on the default are unchanged and nothing is re-searched.
 - Library users with only **View** access no longer receive full file paths, acquisition details, Wanted items, or download and import history. These surfaces require the appropriate management permissions. Subtitle managers retain their subtitle-specific actions.
 - `SCRYER_BIND` continues to override the saved listening address. Changes made through the network settings require a restart; the interface shows the effective address and any pending change.
+- The first start after upgrading builds catalog ordering keys for existing titles, so it can take longer on large libraries.
+
+### API changes
+
+- Library roots are set only through `updateLibrary`, by stored root id. `updateLibraryPaths`, `UpdateLibraryPathsInput`, `RootFolderInput`, and the `libraryPath` and `rootFolders` fields of `UpdateMediaSettingsInput` are removed. The read-side `libraryPaths` and `rootFolders` queries remain.
+- `updateLibrary` requires every stored root to be sent back with its `id`. A root without an id is a new root; a root without an id at a stored root's path is refused with `LIBRARY_ROOT_ID_REQUIRED`. Changing a root's path under the same id keeps the root and its titles. `LibraryPayload.removedTitleCount` reports titles removed with dropped roots, and a busy title refuses the removal with `LIBRARY_ROOT_TITLES_BUSY`.
+- The acquisition settings' `sameTierMinDelta` is deprecated: the field reports 0, the input is accepted but ignored, and both are removed in the next minor release. Set `minUpgradeScoreDelta` on the quality profile instead.
 - The synchronous `executeExternalImport` GraphQL mutation and `ExternalImportResultPayload` are removed. API clients must use `startExternalImportSources` and follow progress through `externalImportSourceStatus`.
 
 ## Discovery and library graph
@@ -25,17 +35,22 @@ These changes are relative to v0.21.23.
 - Open recommendation shelves as paginated section grids, with existing sort and filter controls. Add browse-by-genre and browse-by-theme cards and a per-viewer **From Your Watchlist** shelf.
 - Selecting a genre or theme in the sidebar opens a complete browse grid combining the locally stored personalized and public pools. Titles no longer need recommendation affinity, corroboration, popularity, or library media-mix eligibility to appear in explicit browsing. Recommendation shelves keep their existing eligibility rules.
 - Deduplicate cross-pool titles before counting and pagination. Browse-card counts use the same eligibility rules as their grids, including labels with only one eligible match. Browsing does not launch new searches or fetch additional recommendations.
-- Add an interactive library graph with title posters, named neighborhoods, highlighted connections, and a focused view explaining related titles. Follow connections, open titles with Ctrl-click, and close the focused panel with Escape.
-- Store library graphs as compressed payloads and support up to 10,000 subjects per media facet. Recover graph reads interrupted by replacement and retry syncs whose completed generation is missing its graph.
+- Add an interactive library graph with title posters, named neighborhoods, highlighted connections, and a focused view explaining related titles. Follow connections, open titles with Ctrl-click, and close the focused panel with Escape. Long navigation trails are compacted.
+- Store library graphs as compressed payloads and support up to 10,000 subjects per media facet. Load large graphs progressively and keep zooming smooth in large libraries. Recover graph reads interrupted by replacement and retry syncs whose completed generation is missing its graph.
+- Speed up Discovery on large catalogs by reading only the candidate pool and reusing the library profile until its inputs change. During bulk changes such as a library move, the profile is rebuilt at most once every five minutes. Discovery refreshes after catalog changes and ignores responses for a scope you have left.
 
 ## Wanted, acquisition, and download clients
 
 - Add **Download** to saved standby candidates. Queue the saved release using configured routing as an operator override, without reopening the grab dialog or running another search.
-- When the title already has in-flight downloads, show the affected downloads and offer **Queue** alongside them or **Cancel and queue**. Cancellation is best effort: the replacement still queues if a cancellation fails, and the interface reports the failures. Dismissing the dialog makes no changes.
-- Add acquisition-search cancellation from Activity for users with the required system-management permission.
+- When the title already has in-flight downloads, show the affected downloads and offer **Queue** alongside them or **Cancel and queue**. The saved release is submitted first, and conflicting downloads are cancelled only once the download client accepts it, so a refused submission leaves the existing downloads in place. Cancellation failures are reported. Dismissing the dialog makes no changes.
+- Add a **Search walk intensity** setting (quiet, normal, or eager; default normal) that sets the share of time the background walk spends searching, along with how many titles and indexer pages it reads at once. Recently active titles are walked first, and the rest of the library always receives a share. Very large libraries walk as quiet on the normal setting.
+- Leave indexers whose plugin is not loaded, or whose proxy is missing or disabled, out of routing so they no longer keep their scopes in every walk.
+- Score and prune search results without blocking other work.
 - Surface unavailable download-client plugins, indexers that cannot be initialized, and releases dropped by grab limits. Show download-client notices in movie and season interactive search, and retain client status on password-retry queue rows.
-- Support Prowlarr 2.x and 3.x. Newer major versions attempt the current API generation with a compatibility warning; versions older than 2.0.0 are refused.
-- Allow an explicit zero ratio in seeding profiles. Improve searches using untagged and romanized aliases, and preserve release groups after dot-separated tags.
+- Treat `-1` and other archive-protection flags reported by indexers as markers rather than passwords, so download clients use the real password from the NZB.
+- Remove imported torrents from hash-based clients such as qBittorrent even when the client's torrent name differs from the release title.
+- Stop sending Scryer's reserved `scryer:` title tags to download clients as client tags.
+- Allow an explicit zero ratio in seeding profiles, and improve searches using untagged and romanized aliases.
 
 ## Bulk subtitle search
 
@@ -48,11 +63,15 @@ These changes are relative to v0.21.23.
 ## Library moves, imports, and media files
 
 - Support library moves and folder-conflict resolution through previewed, tracked location operations. Choose **Adopt all** to consolidate media or **Keep one** to retain the best media and recycle inferior files. Remaining files are preserved by default; permanent deletions require explicit confirmation when no recycle bin is configured.
-- Strengthen folder ownership, changed-file, hardlink, and native-path handling. Report blocked renames and preserve additional movie files and recycle payloads during conflict handling.
-- Run selected source imports as durable background jobs. Show per-source progress and failure details, reconnect to progress, and retry failed or interrupted sources with corrected credentials or explicitly skip them. One source missing credentials no longer blocks its siblings.
-- Use a shared media-format registry across scanning, imports, and the web, including OGM support. Keep probe-only formats distinct from standalone import candidates and cleanup targets.
+- Add **Move** to the bulk selection panel and bar; it opens the move wizard to pick another root or library. Bulk conflict actions apply to the conflicting titles in a selection.
+- Refuse conflict folders that are or contain a library root, or that hold other works. Refuse **Keep one** for media split into parts. Resolve folders under nested roots to the most specific root, and compare other owners case-insensitively.
+- Make large root moves faster: plan reads are batched, previews sample large groups, and a confirmed move reuses its preview when nothing has changed. Transfers interrupted by a killed process resume as pending, a failed copy cleans up only its own partial files, and the transfer table sorts active, queued, then finished.
+- Strengthen folder ownership, changed-file, hardlink, and native-path handling. Report blocked renames and preserve additional movie files and recycle payloads during conflict handling. Reuse scan evidence only when filesystem change stamps are reliable.
+- Run selected source imports as durable background jobs. Show per-source progress and failure details, reconnect to progress, and retry failed or interrupted sources with corrected credentials or explicitly skip them. One source missing credentials no longer blocks its siblings, and NZBGet sources with authentication disabled are accepted.
+- Select every pending import for the current filters, not just the visible page. Imports held because no episode matched link to **Manual Import**.
+- Use a shared media-format registry across scanning, imports, and the web, including OGM support and video files whose names are not valid UTF-8. Keep probe-only formats distinct from standalone import candidates and cleanup targets.
 - Preserve primary audio metadata, re-analyze stored audio summaries, allow partially analyzed MKV inventories to upgrade, and report unreadable media runtimes and extensionless files.
-- Improve numbered and seeding-pack episode matching, including explicit manual mappings. Add rename tokens for dynamic range, release revision, and 3D, and derive Dolby Vision base-layer naming from analyzed files.
+- Improve seeding-pack episode matching, including explicit manual mappings, and derive Dolby Vision base-layer naming from analyzed files.
 - Skip scheduled library jobs when their only storage root is unavailable.
 
 ## Watch history, maintenance, and recycle bin
@@ -62,11 +81,18 @@ These changes are relative to v0.21.23.
 - Add audience watch facts so maintenance rules can distinguish whether anyone or all requesters have watched a title. Expose the fact document in rule preview for authorized managers.
 - Add an optional pending-deletion dashboard panel. Link recycle-bin items to expanded acquisition history and improve disclosures on narrow screens.
 
+## Plugins and notifications
+
+- Send provider artwork URLs in notifications instead of Scryer-local cache paths, fixing Discord import and upgrade notifications for titles with cached artwork.
+- Pass error response bodies through to command plugins, so failures such as Discord's rejected-field errors are reported in full.
+- Compile plugins in parallel at startup and install, and load runtime plugins once at startup with consistent loading rules during reloads.
+
 ## Network, permissions, and interface
 
 - Choose **Only this computer** or access from other computers during setup and in **Security & Access**, with an advanced listening-address option. Report unusable configured addresses and fall back to loopback on the same port.
 - Group listening address, public URL, and trusted proxies under Security. Move external-account invites to Users and require setup verification when exposed beyond loopback or through a trusted proxy unless explicitly configured otherwise.
-- Restrict root-folder listings to visible libraries and redact privileged acquisition fields for view-only users. Fix interactive search initialization for restricted title managers.
-- Improve phone layouts for title headers, season actions, settings, search with the keyboard open, notices, and toasts. Keep catalog counts aligned with active filters and make episode availability clearer.
+- Redact privileged acquisition fields for view-only users.
+- Badge **Activity** in the navigation with the number of jobs running for 30 seconds or more, and simplify the location operation panel and move toast.
+- Improve phone layouts for title headers, season actions, settings, search with the keyboard open, notices, and toasts. Keep season actions inline in the desktop side panel. Keep catalog counts aligned with active filters and make episode availability clearer.
 - Restore rule-editor error underlines, separate inline scripts from script-file selection, and support copy buttons when the browser's asynchronous clipboard API is unavailable.
-- Expand Russian localization and translate standby queue actions across the supported locales. Load runtime plugins once at startup and apply consistent loading rules during reloads.
+- Translate standby queue actions, bulk subtitle search, and other new 0.22 features across the supported locales, including Russian.
