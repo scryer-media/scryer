@@ -77,18 +77,27 @@ impl RootChangeFixture {
                 &library_id,
                 "Movies".to_string(),
                 "movies".to_string(),
-                vec![
-                    LibraryRootDraft {
-                        id: None,
-                        path: source.to_string_lossy().to_string(),
-                        is_default: true,
-                    },
-                    LibraryRootDraft {
-                        id: None,
-                        path: other.to_string_lossy().to_string(),
-                        is_default: false,
-                    },
-                ],
+                crate::lib_tests::with_stored_root_ids(
+                    &app.services
+                        .catalog
+                        .libraries
+                        .get_by_id(&library_id)
+                        .await
+                        .expect("library lookup")
+                        .expect("library exists"),
+                    vec![
+                        LibraryRootDraft {
+                            id: None,
+                            path: source.to_string_lossy().to_string(),
+                            is_default: true,
+                        },
+                        LibraryRootDraft {
+                            id: None,
+                            path: other.to_string_lossy().to_string(),
+                            is_default: false,
+                        },
+                    ],
+                ),
             )
             .await
             .expect("configure two roots");
