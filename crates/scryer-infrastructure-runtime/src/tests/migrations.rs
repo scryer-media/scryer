@@ -7602,3 +7602,96 @@ async fn migration_0330_carries_only_a_changed_global_delta_into_profiles() {
         "a changed global delta reaches every profile without its own"
     );
 }
+
+/// Migration 0331: a title keeps one SMG id. A facet-kinded copy of the
+/// `smg:title` id is dropped, a lone facet-kinded one becomes `title`, and the
+/// rest of the stored ids keep their order.
+#[tokio::test]
+async fn migration_0331_folds_facet_kinded_smg_ids_onto_title() {
+    const SCHEMA: &str = r#"CREATE TABLE titles (
+               id TEXT PRIMARY KEY,
+               external_ids TEXT NOT NULL DEFAULT '[]'
+           );
+           CREATE TABLE title_external_ids (
+               id TEXT PRIMARY KEY,
+               title_id TEXT NOT NULL,
+               source TEXT NOT NULL,
+               external_id TEXT NOT NULL,
+               library_id TEXT,
+               external_kind TEXT NOT NULL DEFAULT '',
+               external_key TEXT
+           );
+           CREATE UNIQUE INDEX idx_title_external_ids_library_kind_lookup
+               ON title_external_ids(library_id, source, external_kind, external_id);
+           INSERT INTO titles (id, external_ids) VALUES
+             ('both', '[{"source":"tmdb","kind":"movie","value":"1"},{"source":"smg","kind":"movie","value":"11"},{"source":"smg","kind":"title","value":"11"}]'),
+             ('lone', '[{"source":"smg","kind":"series","value":"22"},{"source":"tvdb","kind":"series","value":"2"}]'),
+             ('kindless', '[{"source":"smg","value":"33"}]');
+           INSERT INTO title_external_ids VALUES
+             ('r1', 'both', 'tmdb', '1', 'lib', 'movie', 'tmdb:movie:1'),
+             ('r2', 'both', 'smg', '11', 'lib', 'movie', 'smg:movie:11'),
+             ('r3', 'both', 'smg', '11', 'lib', 'title', 'smg:title:11'),
+             ('r4', 'lone', 'smg', '22', 'lib', 'series', 'smg:series:22'),
+             ('r5', 'lone', 'tvdb', '2', 'lib', 'series', 'tvdb:series:2'),
+             ('r6', 'kindless', 'smg', '33', 'lib', '', 'smg:33');"#;
+    const MIGRATION: &str =
+        include_str!("../../../scryer/src/db/migrations/0331_smg_title_external_id_kind.sql");
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
+        .await
+        .expect("fixture should initialize");
+    for _ in 0..2 {
+        sqlx::raw_sql(MIGRATION)
+            .execute(&pool)
+            .await
+            .expect("migration 0331 should apply and re-apply");
+    }
+
+    let stored: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, external_ids FROM titles ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("titles should load");
+    assert_eq!(
+        stored,
+        vec![
+            (
+                "both".to_string(),
+                r#"[{"source":"tmdb","kind":"movie","value":"1"},{"source":"smg","kind":"title","value":"11"}]"#
+                    .to_string()
+            ),
+            (
+                "kindless".to_string(),
+                r#"[{"source":"smg","value":"33"}]"#.to_string()
+            ),
+            (
+                "lone".to_string(),
+                r#"[{"source":"smg","kind":"title","value":"22"},{"source":"tvdb","kind":"series","value":"2"}]"#
+                    .to_string()
+            ),
+        ]
+    );
+
+    let projection: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, external_kind, external_key FROM title_external_ids ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("projection should load");
+    assert_eq!(
+        projection,
+        vec![
+            ("r1".into(), "movie".into(), "tmdb:movie:1".into()),
+            ("r3".into(), "title".into(), "smg:title:11".into()),
+            ("r4".into(), "title".into(), "smg:title:22".into()),
+            ("r5".into(), "series".into(), "tvdb:series:2".into()),
+            ("r6".into(), String::new(), "smg:33".into()),
+        ]
+    );
+}

@@ -2635,6 +2635,8 @@ mod tests {
             {"source": "tvdb", "kind": "Series", "id": "307111", "key": "tvdb:series:307111"},
             {"source": "anidb", "kind": "anime", "id": "11851", "key": "anidb:anime:11851"},
             {"source": "smg", "kind": "title", "id": "3036496", "key": "smg:title:3036496"},
+            // Search results kind SMG's own id by facet; it is still a title id.
+            {"source": "smg", "kind": "movie", "id": "2788780", "key": "smg:title:2788780"},
             // Blank source or id is dropped as before.
             {"source": "  ", "kind": "movie", "id": "1"},
             {"source": "imdb", "kind": "movie", "id": "   "}
@@ -2652,6 +2654,7 @@ mod tests {
                 "tvdb:series:307111".to_string(),
                 "anidb:anime:11851".to_string(),
                 "smg:title:3036496".to_string(),
+                "smg:title:2788780".to_string(),
             ]
         );
     }
@@ -6549,12 +6552,20 @@ fn external_ids_from_gateway(items: Vec<MetadataExternalIdItem>) -> Vec<External
     items
         .into_iter()
         .filter_map(|item| {
-            let kind = scryer_domain::normalize_external_id_kind(&item.kind);
             let source = item.source.trim();
             let value = item.id.trim();
             if source.is_empty() || value.is_empty() {
                 return None;
             }
+            // SMG's own id always names one of its titles (its key is
+            // `smg:title:N`), but search results kind it by facet. Hydration
+            // stores it as `title`, so a facet kind here kept a second copy of
+            // the same id on every title.
+            let kind = if source.eq_ignore_ascii_case("smg") {
+                Some("title".to_string())
+            } else {
+                scryer_domain::normalize_external_id_kind(&item.kind)
+            };
             Some(match kind {
                 Some(kind) => ExternalId::with_kind(source, kind, value),
                 None => ExternalId::new(source, value),
