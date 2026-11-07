@@ -148,7 +148,7 @@ const UNPLACED_COLOR = "#7a8499";
 /** How long the zoom must rest before posters load a sharper variant. */
 const POSTER_UPGRADE_REST_MS = 150;
 const LAYOUT_STEPS_PER_FRAME = 6;
-const MIN_POSTER_RADIUS_PX = 9;
+const MIN_POSTER_RADIUS_PX = 12;
 const HULL_PADDING_PX = 18;
 // How far a neighbourhood name may wander from its titles to find a spot
 // that covers none of them: rings this far apart, this many rings.
