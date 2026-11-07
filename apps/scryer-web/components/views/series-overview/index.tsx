@@ -506,6 +506,8 @@ function SeriesOverviewViewImpl({
 
   const handleClearEpisodeSelection = React.useCallback(() => {
     setSelectedEpisodeIds(new Set());
+    // A season still loading would otherwise select its episodes on arrival.
+    setQueuedSeasonSelections(new Set());
   }, []);
 
   const handleDeleteSelectedEpisodeFiles = React.useCallback(() => {
