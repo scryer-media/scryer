@@ -110,20 +110,45 @@ function availableSlots(points: readonly LayoutPoint[]) {
   };
 }
 
+/** A fixed point a title is drawn toward, such as the side of its
+ * neighbourhood that faces the titles it relates to elsewhere. */
+export type SpiralAnchor = { x: number; y: number; weight: number };
+
 /**
  * Assign canonical title keys to a fixed spiral's slots. The strongest ties
  * grow first; each title takes a free slot near its neighbours' weighted
- * centre. Two bounded local-swap passes then shorten incident relationships
- * without changing any spiral points or accepting a worse assignment.
+ * centre, and its anchor when it has one. Two bounded local-swap passes then
+ * shorten incident relationships without changing any spiral points or
+ * accepting a worse assignment.
  */
 export function relatedSpiralSlotPasses(
   keys: readonly string[],
   edges: readonly LibraryGraphEdge[],
   slots: readonly LayoutPoint[],
+  anchors: readonly (SpiralAnchor | undefined)[] = [],
 ): Int32Array[] {
   const count = keys.length;
   let assignment = Int32Array.from({ length: count }, (_, index) => index);
-  if (count < 2 || edges.length === 0)
+  const anchorX = new Float64Array(count);
+  const anchorY = new Float64Array(count);
+  const anchorWeight = new Float64Array(count);
+  let anchored = false;
+  for (let index = 0; index < count; index++) {
+    const anchor = anchors[index];
+    const weight = anchor ? clampEdgeWeight(anchor.weight) : 0;
+    if (
+      !anchor ||
+      weight === 0 ||
+      !Number.isFinite(anchor.x) ||
+      !Number.isFinite(anchor.y)
+    )
+      continue;
+    anchorX[index] = anchor.x;
+    anchorY[index] = anchor.y;
+    anchorWeight[index] = weight;
+    anchored = true;
+  }
+  if (count < 2 || (edges.length === 0 && !anchored))
     return [assignment, assignment, assignment];
   const indexByKey = new Map(keys.map((key, index) => [key, index]));
   const byPair = new Map<string, { a: number; b: number; weight: number }>();
@@ -141,7 +166,7 @@ export function relatedSpiralSlotPasses(
         weight,
       });
   }
-  if (!byPair.size) return [assignment, assignment, assignment];
+  if (!byPair.size && !anchored) return [assignment, assignment, assignment];
   // Canonical accumulation order makes both floating-point scores and ties
   // independent of the order in which upstream nodes and edges arrived.
   const links = [...byPair.values()].sort((a, b) => a.a - b.a || a.b - b.b);
@@ -171,17 +196,21 @@ export function relatedSpiralSlotPasses(
 
   const support = new Float64Array(count);
   const strongest = new Float64Array(count);
-  const centreX = new Float64Array(count);
-  const centreY = new Float64Array(count);
+  // Targets start at each title's anchor; placed neighbours add to them.
+  const pull = Float64Array.from(anchorWeight);
+  const centreX = anchorX.map((x, index) => x * anchorWeight[index]);
+  const centreY = anchorY.map((y, index) => y * anchorWeight[index]);
+  // The title with the largest share of its ties already placed grows next,
+  // so a group of related titles fills in before the growth moves on.
   // An indexed heap holds at most one entry per title, rather than one entry
   // per score update in a dense neighbourhood.
   const heap: number[] = [];
   const heapIndex = new Int32Array(count).fill(-1);
   const preferred = (a: number, b: number) =>
-    strongest[a] > strongest[b] ||
-    (strongest[a] === strongest[b] &&
-      (support[a] > support[b] ||
-        (support[a] === support[b] &&
+    support[a] * degree[b] > support[b] * degree[a] ||
+    (support[a] * degree[b] === support[b] * degree[a] &&
+      (strongest[a] > strongest[b] ||
+        (strongest[a] === strongest[b] &&
           (degree[a] > degree[b] || (degree[a] === degree[b] && a < b)))));
   const swap = (a: number, b: number) => {
     [heap[a], heap[b]] = [heap[b], heap[a]];
@@ -223,15 +252,31 @@ export function relatedSpiralSlotPasses(
   };
 
   const seeds = Array.from({ length: count }, (_, index) => index).sort(
-    (a, b) => degree[b] - degree[a] || a - b,
+    (a, b) =>
+      degree[b] - degree[a] || anchorWeight[b] - anchorWeight[a] || a - b,
   );
   const available = availableSlots(slots);
-  const score = (candidate: Int32Array) =>
-    links.reduce((sum, edge) => {
-      const a = slots[candidate[edge.a]];
-      const b = slots[candidate[edge.b]];
-      return sum + edge.weight * ((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-    }, 0);
+  // Plain, not squared, length: squaring rewards parking a title between
+  // distant ties, which breaks up tight groups of related titles.
+  const distance = (a: LayoutPoint, b: LayoutPoint) =>
+    Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+  const score = (candidate: Int32Array) => {
+    let sum = 0;
+    for (const edge of links)
+      sum +=
+        edge.weight *
+        distance(slots[candidate[edge.a]], slots[candidate[edge.b]]);
+    for (let node = 0; node < count; node++) {
+      if (!anchorWeight[node]) continue;
+      sum +=
+        anchorWeight[node] *
+        distance(slots[candidate[node]], {
+          x: anchorX[node],
+          y: anchorY[node],
+        });
+    }
+    return sum;
+  };
   const original = assignment;
   assignment = new Int32Array(count).fill(-1);
   let seed = 0;
@@ -241,8 +286,8 @@ export function relatedSpiralSlotPasses(
     const node = heap.length ? pop() : seeds[seed];
     while (available.used[firstFreeSlot]) firstFreeSlot++;
     const target =
-      support[node] > 0
-        ? { x: centreX[node] / support[node], y: centreY[node] / support[node] }
+      pull[node] > 0
+        ? { x: centreX[node] / pull[node], y: centreY[node] / pull[node] }
         : slots[firstFreeSlot];
     const slot = available.take(target);
     assignment[node] = slot;
@@ -252,6 +297,7 @@ export function relatedSpiralSlotPasses(
       if (assignment[neighbour] >= 0) continue;
       const weight = weights[at];
       support[neighbour] += weight;
+      pull[neighbour] += weight;
       strongest[neighbour] = Math.max(strongest[neighbour], weight);
       centreX[neighbour] += point.x * weight;
       centreY[neighbour] += point.y * weight;
@@ -262,28 +308,30 @@ export function relatedSpiralSlotPasses(
   const passes = [assignment.slice()];
   const occupant = new Int32Array(count);
   for (let node = 0; node < count; node++) occupant[assignment[node]] = node;
-  const distanceSquared = (a: LayoutPoint, b: LayoutPoint) =>
-    (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
   const incidentDelta = (node: number, other: number, next: LayoutPoint) => {
     const current = slots[assignment[node]];
     let delta = 0;
+    if (anchorWeight[node]) {
+      const anchor = { x: anchorX[node], y: anchorY[node] };
+      delta +=
+        anchorWeight[node] *
+        (distance(next, anchor) - distance(current, anchor));
+    }
     for (let at = offsets[node]; at < offsets[node + 1]; at++) {
       const neighbour = neighbours[at];
       // The edge between swapped endpoints keeps the same length.
       if (neighbour === other) continue;
       const point = slots[assignment[neighbour]];
-      delta +=
-        weights[at] *
-        (distanceSquared(next, point) - distanceSquared(current, point));
+      delta += weights[at] * (distance(next, point) - distance(current, point));
     }
     return delta;
   };
   for (let pass = 0; pass < 2; pass++) {
     for (const node of seeds) {
       const edgeCount = offsets[node + 1] - offsets[node];
-      if (!edgeCount) continue;
-      let x = 0,
-        y = 0,
+      if (!edgeCount && !anchorWeight[node]) continue;
+      let x = anchorX[node] * anchorWeight[node],
+        y = anchorY[node] * anchorWeight[node],
         strongestAt = offsets[node];
       for (let at = offsets[node]; at < offsets[node + 1]; at++) {
         const point = slots[assignment[neighbours[at]]];
@@ -293,9 +341,12 @@ export function relatedSpiralSlotPasses(
       }
       // At most two nearby buckets (32 slots), with a fixed incident-edge
       // budget. Hubs cannot turn refinement into an all-pairs operation.
+      const reach = degree[node] + anchorWeight[node];
       const candidates = new Set([
-        ...available.near({ x: x / degree[node], y: y / degree[node] }),
-        ...available.near(slots[assignment[neighbours[strongestAt]]]),
+        ...available.near({ x: x / reach, y: y / reach }),
+        ...(edgeCount
+          ? available.near(slots[assignment[neighbours[strongestAt]]])
+          : []),
       ]);
       let budget = 2048;
       let bestDelta = -1e-6;
@@ -304,7 +355,7 @@ export function relatedSpiralSlotPasses(
       for (const slot of candidates) {
         const other = occupant[slot];
         if (other === node) continue;
-        const work = edgeCount + offsets[other + 1] - offsets[other];
+        const work = edgeCount + offsets[other + 1] - offsets[other] + 2;
         if (work > budget) continue;
         budget -= work;
         const delta =
@@ -333,6 +384,147 @@ export function assignRelatedSpiralSlots(
   keys: readonly string[],
   edges: readonly LibraryGraphEdge[],
   slots: readonly LayoutPoint[],
+  anchors: readonly (SpiralAnchor | undefined)[] = [],
 ): Int32Array {
-  return relatedSpiralSlotPasses(keys, edges, slots)[2];
+  return relatedSpiralSlotPasses(keys, edges, slots, anchors)[2];
+}
+
+/**
+ * Pack circles so the most related ones touch. Circles join in order of
+ * their ties to those already placed, each at the free tangent position
+ * nearest the weighted centre of its placed relations. Unrelated circles
+ * gather around the origin. `affinity` is a symmetric row-major matrix.
+ */
+export function packRelatedCircles(
+  radii: readonly number[],
+  affinity: Float64Array,
+  gap: number,
+): LayoutPoint[] {
+  const count = radii.length;
+  const centres: LayoutPoint[] = Array.from({ length: count }, () => ({
+    x: 0,
+    y: 0,
+  }));
+  if (count < 2) return centres;
+  const placed: number[] = [];
+  const isPlaced = new Uint8Array(count);
+  const link = new Float64Array(count);
+  const total = new Float64Array(count);
+  for (let a = 0; a < count; a++)
+    for (let b = 0; b < count; b++)
+      if (a !== b) total[a] += affinity[a * count + b];
+  const better = (a: number, b: number, score: Float64Array) =>
+    score[a] > score[b] ||
+    (score[a] === score[b] &&
+      (radii[a] > radii[b] || (radii[a] === radii[b] && a < b)));
+  const fits = (point: LayoutPoint, radius: number) =>
+    placed.every(
+      (other) =>
+        Math.hypot(point.x - centres[other].x, point.y - centres[other].y) >=
+        radii[other] + radius + gap - 1e-6,
+    );
+  for (let step = 0; step < count; step++) {
+    let next = -1;
+    for (let index = 0; index < count; index++) {
+      if (isPlaced[index]) continue;
+      if (next < 0 || better(index, next, step ? link : total)) next = index;
+    }
+    const radius = radii[next];
+    if (step > 0) {
+      let target = { x: 0, y: 0 };
+      if (link[next] > 0) {
+        let x = 0,
+          y = 0;
+        for (const other of placed) {
+          const weight = affinity[next * count + other];
+          x += centres[other].x * weight;
+          y += centres[other].y * weight;
+        }
+        target = { x: x / link[next], y: y / link[next] };
+      }
+      // Tangent positions around the circles nearest the target bound the
+      // search; a far-side tangent always exists, so one of them fits.
+      const near = placed
+        .slice()
+        .sort(
+          (a, b) =>
+            Math.hypot(centres[a].x - target.x, centres[a].y - target.y) -
+              radii[a] -
+              (Math.hypot(centres[b].x - target.x, centres[b].y - target.y) -
+                radii[b]) || a - b,
+        )
+        .slice(0, 16);
+      const candidates: LayoutPoint[] = [];
+      for (const other of near) {
+        const centre = centres[other];
+        const reach = radii[other] + radius + gap;
+        let dx = target.x - centre.x,
+          dy = target.y - centre.y;
+        let length = Math.hypot(dx, dy);
+        if (length < 1e-9) {
+          dx = centre.x;
+          dy = centre.y;
+          length = Math.hypot(dx, dy);
+          if (length < 1e-9) [dx, dy, length] = [1, 0, 1];
+        }
+        candidates.push({
+          x: centre.x + (dx / length) * reach,
+          y: centre.y + (dy / length) * reach,
+        });
+      }
+      for (let i = 0; i < near.length; i++) {
+        for (let j = i + 1; j < near.length; j++) {
+          const a = centres[near[i]];
+          const b = centres[near[j]];
+          const ra = radii[near[i]] + radius + gap;
+          const rb = radii[near[j]] + radius + gap;
+          const span = Math.hypot(b.x - a.x, b.y - a.y);
+          if (span < 1e-9 || span > ra + rb || span < Math.abs(ra - rb))
+            continue;
+          const along = (ra * ra - rb * rb + span * span) / (2 * span);
+          const across = Math.sqrt(Math.max(0, ra * ra - along * along));
+          const ux = (b.x - a.x) / span,
+            uy = (b.y - a.y) / span;
+          const mx = a.x + ux * along,
+            my = a.y + uy * along;
+          candidates.push({ x: mx - uy * across, y: my + ux * across });
+          candidates.push({ x: mx + uy * across, y: my - ux * across });
+        }
+      }
+      let best: LayoutPoint | null = null;
+      let distance = Infinity;
+      for (const candidate of candidates) {
+        const candidateDistance = Math.hypot(
+          candidate.x - target.x,
+          candidate.y - target.y,
+        );
+        if (candidateDistance < distance - 1e-9 && fits(candidate, radius)) {
+          best = candidate;
+          distance = candidateDistance;
+        }
+      }
+      if (!best) {
+        const extent = Math.max(
+          ...placed.map(
+            (other) =>
+              Math.hypot(centres[other].x, centres[other].y) + radii[other],
+          ),
+        );
+        best = { x: extent + radius + gap, y: 0 };
+      }
+      centres[next] = best;
+    }
+    placed.push(next);
+    isPlaced[next] = 1;
+    for (let index = 0; index < count; index++)
+      if (!isPlaced[index]) link[index] += affinity[index * count + next];
+  }
+  // Centre the packing's bounding box so the framing extent stays tight.
+  const left = Math.min(...centres.map((c, i) => c.x - radii[i]));
+  const right = Math.max(...centres.map((c, i) => c.x + radii[i]));
+  const top = Math.min(...centres.map((c, i) => c.y - radii[i]));
+  const bottom = Math.max(...centres.map((c, i) => c.y + radii[i]));
+  const shiftX = (left + right) / 2;
+  const shiftY = (top + bottom) / 2;
+  return centres.map((c) => ({ x: c.x - shiftX, y: c.y - shiftY }));
 }
