@@ -1606,7 +1606,9 @@ export function SettingsQualityProfilesSection({
                               ariaLabel={t(
                                 "qualityProfile.minUpgradeScoreDelta",
                               )}
-                              text={t("qualityProfile.minUpgradeScoreDeltaInfo")}
+                              text={t(
+                                "qualityProfile.minUpgradeScoreDeltaInfo",
+                              )}
                             />
                           </Label>
                           <Input

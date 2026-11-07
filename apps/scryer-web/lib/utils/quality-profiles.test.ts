@@ -151,7 +151,10 @@ test("profile draft save and clone preserve Ignore PROPER/REPACK", () => {
 });
 
 test("the same-tier upgrade delta survives draft, save and mutation input", () => {
-  const draft = { ...makeDraft("default", "Cinema"), min_upgrade_score_delta: 5 };
+  const draft = {
+    ...makeDraft("default", "Cinema"),
+    min_upgrade_score_delta: 5,
+  };
   const saved = commitQualityProfileDraftToEntries(
     [makeEntry("default", "Cinema")],
     draft,

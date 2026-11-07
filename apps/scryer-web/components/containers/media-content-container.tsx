@@ -2392,7 +2392,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     await loadMoreCatalogTitles();
   }, [catalogPageRequestGate, loadMoreCatalogTitles]);
 
-
   const recordCriticalCatalogMutation = React.useCallback(() => {
     latestCriticalMutationEpochRef.current = reactiveRefreshEpoch();
   }, []);
