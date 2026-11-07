@@ -84,6 +84,7 @@ import type {
 } from "@/components/root/types";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type {
+  AudioLanguagePreferences,
   DownloadClientRecord,
   DownloadClientRoutingEntry,
   IndexerCategoryRoutingSettings,
@@ -1744,6 +1745,13 @@ export function MediaContentView({
     saveCategoryRequiredAudioLanguages: (
       languages: string[],
     ) => Promise<void> | void;
+    categoryAudioLanguagePreferences: Record<
+      ViewCategoryId,
+      AudioLanguagePreferences
+    >;
+    saveCategoryAudioLanguagePreferences: (
+      update: Partial<AudioLanguagePreferences>,
+    ) => Promise<void> | void;
     categoryPersonaSelections: Record<
       ViewCategoryId,
       FacetScoringPersonaSelectionRecord
@@ -2080,6 +2088,8 @@ export function MediaContentView({
     categoryQualityProfileOverrides,
     categoryRequiredAudioLanguages,
     saveCategoryRequiredAudioLanguages,
+    categoryAudioLanguagePreferences,
+    saveCategoryAudioLanguagePreferences,
     categoryPersonaSelections,
     activeQualityScopeId,
     categoryFolderTemplates,
@@ -3416,6 +3426,12 @@ export function MediaContentView({
               categoryRequiredAudioLanguages={categoryRequiredAudioLanguages}
               saveCategoryRequiredAudioLanguages={
                 saveCategoryRequiredAudioLanguages
+              }
+              categoryAudioLanguagePreferences={
+                categoryAudioLanguagePreferences
+              }
+              saveCategoryAudioLanguagePreferences={
+                saveCategoryAudioLanguagePreferences
               }
               activeQualityScopeId={activeQualityScopeId}
               globalScoringPersona={globalScoringPersona}

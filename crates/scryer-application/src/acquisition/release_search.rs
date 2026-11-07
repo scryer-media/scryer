@@ -1703,12 +1703,13 @@ pub(crate) fn incumbent_at_cutoff(
     subject: &crate::admission::AdmissionSubject,
     cutoff_score: Option<i32>,
 ) -> bool {
+    let best = subject.best_incumbent_record();
     quality_cutoff_met
-        && cutoff_score.is_none_or(|cutoff| {
-            subject
-                .best_incumbent()
-                .is_none_or(|(_, bar)| bar >= cutoff)
-        })
+        // A file the language preferences still want something from is never
+        // done: the search continues until a release in the preferred language
+        // (or, when configured, with every optional language) replaces it.
+        && best.is_none_or(|incumbent| !incumbent.language.wanted)
+        && cutoff_score.is_none_or(|cutoff| best.is_none_or(|incumbent| incumbent.score >= cutoff))
 }
 
 /// The one cutoff gate.
@@ -1825,6 +1826,7 @@ pub(crate) fn automatic_candidate_delay_decision(
         candidate_revision(candidate),
         candidate_score,
     )
+    .with_language(candidate_language(candidate))
     .with_release_title(&candidate.title)
     .with_revision_policy(
         candidate
@@ -2031,6 +2033,15 @@ fn candidate_is_pack_for_single_episode(candidate: &IndexerSearchResult) -> bool
         || episode.absolute_episode_numbers.len() >= SINGLE_EPISODE_PACK_MIN_EPISODES
 }
 
+/// The candidate's language standing, read off its scored decision like its
+/// score is. Neutral when the result was never scored.
+fn candidate_language(candidate: &IndexerSearchResult) -> crate::AudioLanguageRank {
+    candidate
+        .quality_profile_decision
+        .as_ref()
+        .map_or_else(Default::default, |decision| decision.language)
+}
+
 pub(crate) fn evaluate_auto_candidate(
     candidate: &IndexerSearchResult,
     context: &AutoCandidateEvaluationContext<'_>,
@@ -2212,6 +2223,7 @@ pub(crate) fn evaluate_auto_candidate(
         candidate_revision(candidate),
         candidate_score,
     )
+    .with_language(candidate_language(candidate))
     .with_release_title(&candidate.title)
     .with_revision_policy(
         candidate
@@ -4739,6 +4751,7 @@ mod tests {
                     file_path: "/data/Movies/Nightfall (2022)/Nightfall.mkv".to_string(),
                     release_group: None,
                     score,
+                    language: Default::default(),
                     covers: Vec::new(),
                     created_at: "2026-01-01T00:00:00Z".to_string(),
                 },
@@ -4757,6 +4770,7 @@ mod tests {
             tier_index: None,
             size_fit_penalty: 0,
             revision_preference: 0,
+            language: Default::default(),
         }
     }
 
@@ -6594,6 +6608,7 @@ mod tests {
                     file_path: existing[0].file_path.clone(),
                     release_group: None,
                     score: 900,
+                    language: Default::default(),
                     covers: vec!["episode-1".to_string()],
                     created_at: existing[0].created_at.clone(),
                 },
@@ -6809,6 +6824,7 @@ mod tests {
                         file_path: "/data/Movies/Nightfall (2022)/Nightfall.mkv".to_string(),
                         release_group: None,
                         score,
+                        language: Default::default(),
                         covers: Vec::new(),
                         created_at: "2026-08-20T00:00:00Z".to_string(),
                     },
@@ -6857,6 +6873,7 @@ mod tests {
                         file_path: "/data/Movies/Nightfall (2022)/Nightfall.mkv".to_string(),
                         release_group: Some("GRP".into()),
                         score: 900,
+                        language: Default::default(),
                         covers: Vec::new(),
                         created_at: (now() - chrono::Duration::days(days_ago)).to_rfc3339(),
                     },
@@ -6889,6 +6906,24 @@ mod tests {
             let empty = AdmissionSubject::new(AdmissionScope::Title, []);
             assert!(incumbent_at_cutoff(true, &empty, Some(500)));
             assert!(!incumbent_at_cutoff(false, &empty, Some(500)));
+        }
+
+        /// A file the audio language preferences still want something from is
+        /// never finished, whatever its quality and score: that is what keeps
+        /// an English file searched for until a German release replaces it.
+        #[test]
+        fn a_file_missing_the_preferred_language_is_never_at_cutoff() {
+            let mut english = holding_at(600);
+            let wanted = crate::AudioLanguageRank::for_test(1, 0, true);
+            english = AdmissionSubject::new(
+                AdmissionScope::Title,
+                english.incumbents().iter().cloned().map(|mut incumbent| {
+                    incumbent.language = wanted;
+                    (incumbent, true)
+                }),
+            );
+            assert!(!incumbent_at_cutoff(true, &english, Some(500)));
+            assert!(!incumbent_at_cutoff(true, &english, None));
         }
 
         /// …and through the real gate: a same-tier candidate scoring 600 over a
@@ -7146,6 +7181,7 @@ mod tests {
                         file_path: format!("/data/TV/{id}.mkv"),
                         release_group: Some("GRP".into()),
                         score,
+                        language: Default::default(),
                         covers: vec![covers.to_string()],
                         created_at: (now() - chrono::Duration::days(days_ago)).to_rfc3339(),
                     },
@@ -7336,6 +7372,7 @@ mod tests {
                     file_path: format!("/data/TV/Nightfall/{id}.mkv"),
                     release_group: None,
                     score: incumbent_score,
+                    language: Default::default(),
                     covers: vec![id.to_string()],
                     created_at: (now - chrono::Duration::hours(2)).to_rfc3339(),
                 },
@@ -7417,6 +7454,7 @@ mod tests {
                         file_path: file.file_path.clone(),
                         release_group: None,
                         score: 900,
+                        language: Default::default(),
                         covers: vec!["episode-1".to_string()],
                         created_at: file.created_at.clone(),
                     },

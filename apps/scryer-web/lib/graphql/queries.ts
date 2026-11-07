@@ -1354,6 +1354,11 @@ export const RELEASE_SEARCH_RESULT_FIELDS = `
       blockCodes
       releaseScore
       preferenceScore
+      audioLanguage {
+        preferredRank
+        preferredCount
+        optionalHits
+      }
       scoringLog {
         code
         delta
@@ -1690,6 +1695,14 @@ export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
     searchLanguages
     requiredAudioLanguagesOverride
     requiredAudioLanguages
+    preferredAudioLanguagesOverride
+    preferredAudioLanguages
+    optionalAudioLanguagesOverride
+    optionalAudioLanguages
+    audioLanguagePriorityOverride
+    audioLanguagePriority
+    optionalAudioLanguagesKeepSearchingOverride
+    optionalAudioLanguagesKeepSearching
     metadataLanguageOverride
     metadataLanguage
     useSeasonFoldersOverride
@@ -2716,6 +2729,10 @@ const mediaSettingsFieldSelection = `
       isDefault
     }
     requiredAudioLanguages
+    preferredAudioLanguages
+    optionalAudioLanguages
+    audioLanguagePriority
+    optionalAudioLanguagesKeepSearching
     useSeasonFolders
     folderTemplate
     seasonFolderTemplate
