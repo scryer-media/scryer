@@ -2818,7 +2818,13 @@ fn an_unnamed_media_file_takes_the_extension_of_the_container_it_holds() {
     opaque.container = None;
     let plan = plan_download(&source(vec![opaque]), Path::new("/srv/dl")).unwrap();
     let planned = &plan.files[0].final_path;
-    assert_eq!(scryer_domain::canonical_video_extension(planned), None);
+    // Planned under the disc image suffix `.bin`, which does not name a
+    // container the probe can verify.
+    assert_eq!(
+        planned.extension().and_then(|ext| ext.to_str()),
+        Some("bin")
+    );
+    assert!(scryer_domain::is_disc_image(planned));
 
     let read = |container: Option<&str>| MediaProbeOutcome::Probed {
         duration_seconds: None,

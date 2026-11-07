@@ -655,13 +655,13 @@ fn container_extension(container: &str) -> Option<&'static str> {
 
 /// The final name for a media file whose name does not say it is video
 /// (no container was stated and the URL had no usable extension), from the
-/// container the probe read. A name that already carries a video extension
-/// is kept.
+/// container the probe read. A name that already carries a video container
+/// extension is kept.
 pub(crate) fn media_path_for_probed_container(
     final_path: &Path,
     outcome: &MediaProbeOutcome,
 ) -> Option<std::path::PathBuf> {
-    if scryer_domain::canonical_video_extension(final_path).is_some() {
+    if names_video_container(final_path) {
         return None;
     }
     let MediaProbeOutcome::Probed {
@@ -672,6 +672,14 @@ pub(crate) fn media_path_for_probed_container(
         return None;
     };
     container_extension(container).map(|extension| final_path.with_extension(extension))
+}
+
+/// The name says the file is a video container. A disc image suffix does
+/// not: an HTTP payload is published only as a container its probe read, and
+/// `.bin`, the name an unnamed download is planned under, is also a disc
+/// image suffix.
+fn names_video_container(path: &Path) -> bool {
+    scryer_domain::canonical_video_extension(path).is_some() && !scryer_domain::is_disc_image(path)
 }
 
 /// The current time, injectable so tests decide when a URL has expired.
@@ -1478,7 +1486,7 @@ async fn finish_file(
         if let Some(named) = media_path_for_probed_container(&file.final_path, &outcome) {
             file.final_path = named;
         }
-        if scryer_domain::canonical_video_extension(&file.final_path).is_none() {
+        if !names_video_container(&file.final_path) {
             return Err(TransferError::Refused(http_release_refusal::UNKNOWN_CONTAINER,
                 "the payload could not be identified as a supported video container; the partial was preserved".into()));
         }
