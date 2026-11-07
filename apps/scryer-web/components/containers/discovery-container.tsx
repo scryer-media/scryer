@@ -50,6 +50,15 @@ import {
   type DiscoverySectionPaging,
 } from "@/lib/utils/discovery-section-paging";
 import { discoverySectionIdFromPath } from "@/lib/utils/routing";
+import {
+  browserCacheStore,
+  browserCacheZstdCodec,
+} from "@/lib/utils/browser-cache";
+import {
+  discoveryHomeCacheKey,
+  readCachedDiscoveryHome,
+  writeCachedDiscoveryHome,
+} from "@/lib/utils/discovery-home-cache";
 import type {
   DiscoveryHomeCard,
   DiscoveryHomeFilterOptions,
@@ -164,6 +173,8 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
     [requestableLibrariesByFacet],
   );
   const [home, setHome] = useState<DiscoveryHomePayload | null>(null);
+  // The home input the shown home answers; a refresh of it skips the cache.
+  const shownHomeInputRef = useRef<DiscoveryHomeInput | null>(null);
   const [filters, setFilters] = useState<DiscoveryHomeFilters>({});
   const [filterOptions, setFilterOptions] =
     useState<DiscoveryHomeFilterOptions>({
@@ -255,9 +266,33 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
     }
     if (!sameScope) {
       setHome(null);
+      shownHomeInputRef.current = null;
     }
     setLoading(true);
     setError(null);
+    const current = () =>
+      mountedRef.current && refreshRequestIdRef.current === requestId;
+    // The last home read draws at once; the server's answer replaces it only
+    // when it differs, and is kept for the next visit.
+    const cacheKey = discoveryHomeCacheKey(
+      userId,
+      uiLanguage,
+      authorizationSignature,
+      filters,
+    );
+    const store = cacheKey ? browserCacheStore() : null;
+    let answered = false;
+    let shownJson: string | null = null;
+    if (store && cacheKey && shownHomeInputRef.current !== homeInput) {
+      void readCachedDiscoveryHome(store, cacheKey, browserCacheZstdCodec).then(
+        (cached) => {
+          if (!cached || answered || !current()) return;
+          shownJson = JSON.stringify(cached);
+          shownHomeInputRef.current = homeInput;
+          setHome(cached);
+        },
+      );
+    }
     try {
       const { data, error: queryError } = await clientRef.current
         .query(
@@ -266,17 +301,32 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
           { requestPolicy: "network-only" },
         )
         .toPromise();
+      answered = true;
       if (queryError) {
         throw queryError;
       }
-      if (!mountedRef.current || refreshRequestIdRef.current !== requestId) {
+      if (!current()) {
         return;
       }
-      setHome(
-        (data?.discoveryHomeCards ?? null) as DiscoveryHomePayload | null,
-      );
+      const loaded = (data?.discoveryHomeCards ??
+        null) as DiscoveryHomePayload | null;
+      const loadedJson = JSON.stringify(loaded);
+      shownHomeInputRef.current = homeInput;
+      if (loadedJson !== shownJson) {
+        setHome(loaded);
+        if (store && cacheKey)
+          window.setTimeout(() => {
+            void writeCachedDiscoveryHome(
+              store,
+              cacheKey,
+              loaded,
+              browserCacheZstdCodec,
+            );
+          }, 0);
+      }
     } catch (caught) {
-      if (!mountedRef.current || refreshRequestIdRef.current !== requestId) {
+      answered = true;
+      if (!current()) {
         return;
       }
       const message =
@@ -290,7 +340,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
         setLoading(false);
       }
     }
-  }, [authorizationSignature, homeInput, uiLanguage, userId]);
+  }, [authorizationSignature, filters, homeInput, uiLanguage, userId]);
 
   const refresh = useCallback(async () => {
     if (sectionId !== null) {

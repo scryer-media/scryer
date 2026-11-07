@@ -110,9 +110,11 @@ import {
   type LayoutState,
 } from "@/lib/utils/library-graph-layout";
 import {
+  browserCacheStore,
+  browserCacheZstdCodec,
+} from "@/lib/utils/browser-cache";
+import {
   libraryGraphCacheKey,
-  libraryGraphStore,
-  libraryGraphZstdCodec,
   readCachedGraphTitles,
   readCachedLibraryGraph,
   writeCachedGraphTitles,
@@ -781,13 +783,13 @@ export default function LibraryGraphView({
       : null;
   React.useEffect(() => {
     if (authLoading || !titlesCacheKey) return;
-    const storage = libraryGraphStore();
+    const storage = browserCacheStore();
     if (!storage) return;
     let cancelled = false;
     void readCachedGraphTitles(
       storage,
       titlesCacheKey,
-      libraryGraphZstdCodec,
+      browserCacheZstdCodec,
     ).then((stored) => {
       if (!cancelled && stored)
         setCachedListing({ key: titlesCacheKey, titles: stored });
@@ -982,14 +984,14 @@ export default function LibraryGraphView({
     };
     // The last graph read draws at once; the server's answer replaces it
     // only when it is a different graph, and is kept for the next visit.
-    const storage = viewerId ? libraryGraphStore() : null;
+    const storage = viewerId ? browserCacheStore() : null;
     const cacheKey = libraryGraphCacheKey(viewerId, request);
     let shown: LibraryGraphResult | null = null;
     if (storage) {
       void readCachedLibraryGraph(
         storage,
         cacheKey,
-        libraryGraphZstdCodec,
+        browserCacheZstdCodec,
       ).then((cached) => {
         if (cancelled || settled || !cached) return;
         shown = cached;
@@ -1018,7 +1020,7 @@ export default function LibraryGraphView({
               storage,
               cacheKey,
               loaded,
-              libraryGraphZstdCodec,
+              browserCacheZstdCodec,
             );
           }, 0);
       })
@@ -1058,14 +1060,14 @@ export default function LibraryGraphView({
       titles === cachedTitles
     )
       return;
-    const storage = libraryGraphStore();
+    const storage = browserCacheStore();
     if (!storage) return;
     const timer = window.setTimeout(() => {
       void writeCachedGraphTitles(
         storage,
         titlesCacheKey,
         titles,
-        libraryGraphZstdCodec,
+        browserCacheZstdCodec,
       );
     }, 0);
     return () => window.clearTimeout(timer);

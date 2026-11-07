@@ -9,13 +9,15 @@ import {
   encodeLibraryGraph,
   encodeTitleListing,
   libraryGraphCacheKey,
-  libraryGraphZstdCodec,
   readCachedGraphTitles,
   readCachedLibraryGraph,
   writeCachedGraphTitles,
   writeCachedLibraryGraph,
-  type LibraryGraphStore,
 } from "./library-graph-cache.ts";
+import {
+  browserCacheZstdCodec,
+  type BrowserCacheStore,
+} from "./browser-cache.ts";
 
 const graph: LibraryGraphResult = {
   generatedAt: "2026-01-01T00:00:00Z",
@@ -38,7 +40,7 @@ const graph: LibraryGraphResult = {
   truncated: false,
 };
 
-function memoryStorage(limit = Infinity): LibraryGraphStore & {
+function memoryStorage(limit = Infinity): BrowserCacheStore & {
   items: Map<string, Uint8Array>;
 } {
   const items = new Map<string, Uint8Array>();
@@ -77,16 +79,16 @@ test("a listing survives the field-wise encoding, missing fields included", () =
 test("a stored graph reads back through zstd, and each viewer has their own", async () => {
   const storage = memoryStorage();
   const key = libraryGraphCacheKey("viewer-1", request);
-  await writeCachedLibraryGraph(storage, key, graph, libraryGraphZstdCodec);
+  await writeCachedLibraryGraph(storage, key, graph, browserCacheZstdCodec);
   assert.deepEqual(
-    await readCachedLibraryGraph(storage, key, libraryGraphZstdCodec),
+    await readCachedLibraryGraph(storage, key, browserCacheZstdCodec),
     graph,
   );
   assert.equal(
     await readCachedLibraryGraph(
       storage,
       libraryGraphCacheKey("viewer-2", request),
-      libraryGraphZstdCodec,
+      browserCacheZstdCodec,
     ),
     null,
   );
@@ -101,23 +103,23 @@ test("a facet keeps one entry, a damaged one is dropped, and with no room other 
   const all = libraryGraphCacheKey("v", { facet: "MOVIE", libraryIds: [] });
   const one = libraryGraphCacheKey("v", { facet: "MOVIE", libraryIds: ["l1"] });
   const series = libraryGraphCacheKey("v", { facet: "SERIES", libraryIds: [] });
-  await writeCachedLibraryGraph(storage, all, graph, libraryGraphZstdCodec);
-  await writeCachedLibraryGraph(storage, series, graph, libraryGraphZstdCodec);
-  await writeCachedLibraryGraph(storage, one, graph, libraryGraphZstdCodec);
+  await writeCachedLibraryGraph(storage, all, graph, browserCacheZstdCodec);
+  await writeCachedLibraryGraph(storage, series, graph, browserCacheZstdCodec);
+  await writeCachedLibraryGraph(storage, one, graph, browserCacheZstdCodec);
   assert.deepEqual([...storage.items.keys()].sort(), [one, series].sort());
   storage.items.set(one, new Uint8Array([1, 2, 3]));
   assert.equal(
-    await readCachedLibraryGraph(storage, one, libraryGraphZstdCodec),
+    await readCachedLibraryGraph(storage, one, browserCacheZstdCodec),
     null,
   );
   assert.equal(storage.items.has(one), false);
-  await writeCachedLibraryGraph(storage, series, null, libraryGraphZstdCodec);
+  await writeCachedLibraryGraph(storage, series, null, browserCacheZstdCodec);
   assert.equal(storage.items.has(series), false);
 
   const full = memoryStorage(10);
   const otherViewer = libraryGraphCacheKey("w", request);
   full.items.set(otherViewer, new Uint8Array([1]));
-  await writeCachedLibraryGraph(full, all, graph, libraryGraphZstdCodec);
+  await writeCachedLibraryGraph(full, all, graph, browserCacheZstdCodec);
   assert.deepEqual([...full.items.keys()], []);
 });
 
@@ -138,30 +140,30 @@ test("the listing is kept beside the graph and replaces only its own kind", asyn
     storage,
     graphKey,
     graph,
-    libraryGraphZstdCodec,
+    browserCacheZstdCodec,
   );
   await writeCachedGraphTitles(
     storage,
     otherTitles,
     titles,
-    libraryGraphZstdCodec,
+    browserCacheZstdCodec,
   );
   await writeCachedGraphTitles(
     storage,
     titlesKey,
     titles,
-    libraryGraphZstdCodec,
+    browserCacheZstdCodec,
   );
   assert.deepEqual(
     [...storage.items.keys()].sort(),
     [graphKey, titlesKey].sort(),
   );
   assert.deepEqual(
-    await readCachedGraphTitles(storage, titlesKey, libraryGraphZstdCodec),
+    await readCachedGraphTitles(storage, titlesKey, browserCacheZstdCodec),
     titles,
   );
   assert.deepEqual(
-    await readCachedLibraryGraph(storage, graphKey, libraryGraphZstdCodec),
+    await readCachedLibraryGraph(storage, graphKey, browserCacheZstdCodec),
     graph,
   );
 });
