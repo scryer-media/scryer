@@ -436,14 +436,6 @@ export function runAwaitingScriptOutput(
   return newestFinished.id;
 }
 
-function isScheduledTrigger(source: JobTriggerSource) {
-  return (
-    source === "SCHEDULED_STARTUP" ||
-    source === "SCHEDULED_INTERVAL" ||
-    source === "SCHEDULED_DAILY"
-  );
-}
-
 /** A run counts as long-running once it has been active at least this long. */
 export const LONG_RUNNING_JOB_THRESHOLD_MS = 30_000;
 
@@ -455,24 +447,23 @@ function progressString(run: Pick<JobRun, "progressJson">, key: string) {
 }
 
 /**
- * Jobs that have been running for at least the threshold, one per job. A
- * folder conflict task reports through its own run and runs each conflict as
- * a child location operation with a run of its own; the child is part of the
- * task, so it is not counted again. Scheduled runs are background maintenance
- * nobody asked for, so only work someone started, directly or through
- * Scryer, is counted.
+ * Activity jobs that have been running for at least the threshold, one per
+ * job. Only location operations have a panel on Activity, so only they are
+ * counted. A folder conflict task reports through its own run and runs each
+ * conflict as a child location operation with a run of its own; the child is
+ * part of the task, so it is not counted again.
  */
 export function longRunningJobs(
   runs: readonly Pick<
     JobRun,
-    "id" | "jobKey" | "status" | "triggerSource" | "startedAt" | "progressJson"
+    "id" | "jobKey" | "status" | "startedAt" | "progressJson"
   >[],
   nowMs: number,
 ): { count: number; nextChangeAtMs: number | null } {
   const active = runs.filter(
     (run) =>
-      (run.status === "RUNNING" || run.status === "DISCOVERING") &&
-      !isScheduledTrigger(run.triggerSource),
+      run.jobKey === "LOCATION_OPERATION" &&
+      (run.status === "RUNNING" || run.status === "DISCOVERING"),
   );
   const childOperationIds = new Set(
     active
@@ -482,10 +473,7 @@ export function longRunningJobs(
   let count = 0;
   let nextChangeAtMs: number | null = null;
   for (const run of active) {
-    const operationId =
-      run.jobKey === "LOCATION_OPERATION"
-        ? progressString(run, "operationId")
-        : null;
+    const operationId = progressString(run, "operationId");
     if (operationId !== null && childOperationIds.has(operationId)) continue;
     const startedAtMs = Date.parse(run.startedAt);
     if (!Number.isFinite(startedAtMs)) continue;

@@ -338,50 +338,42 @@ test("the newest finished run waits until its script run has settled", () => {
   assert.equal(runAwaitingScriptOutput([active], []), null);
 });
 
-test("long-running jobs count each active job once it passes the threshold", () => {
+test("long-running jobs count each active location operation once it passes the threshold", () => {
   const now = Date.parse("2026-01-01T00:10:00Z");
   const runs = [
-    jobRun({
-      id: "scan",
-      jobKey: "LIBRARY_SCAN_MOVIES",
-      status: "DISCOVERING",
-      triggerSource: "MANUAL",
-      startedAt: "2026-01-01T00:00:00Z",
-    }),
     jobRun({
       id: "move",
       jobKey: "LOCATION_OPERATION",
       status: "RUNNING",
-      triggerSource: "SYSTEM_INTERNAL",
       startedAt: "2026-01-01T00:05:00Z",
       progressJson: { operationId: "op-1" },
     }),
     jobRun({
-      id: "rss",
-      jobKey: "RSS_SYNC",
-      status: "RUNNING",
-      triggerSource: "MANUAL",
+      id: "fresh-move",
+      jobKey: "LOCATION_OPERATION",
+      status: "DISCOVERING",
       startedAt: "2026-01-01T00:09:50Z",
+      progressJson: { operationId: "op-2" },
     }),
     jobRun({
       id: "done",
-      jobKey: "HOUSEKEEPING",
+      jobKey: "LOCATION_OPERATION",
       status: "COMPLETED",
       startedAt: "2026-01-01T00:00:00Z",
     }),
     jobRun({
       id: "queued",
-      jobKey: "ACQUISITION_SEARCH",
+      jobKey: "LOCATION_OPERATION",
       status: "QUEUED",
       startedAt: "2026-01-01T00:00:00Z",
     }),
   ];
   assert.deepEqual(longRunningJobs(runs, now), {
-    count: 2,
+    count: 1,
     nextChangeAtMs: Date.parse("2026-01-01T00:10:20Z"),
   });
   assert.deepEqual(longRunningJobs(runs, now + 20_000), {
-    count: 3,
+    count: 2,
     nextChangeAtMs: null,
   });
 });
@@ -409,14 +401,18 @@ test("a folder conflict task counts once, not again for its current operation", 
   assert.equal(longRunningJobs(runs, now).count, 1);
 });
 
-test("scheduled background jobs never count as long-running", () => {
+test("jobs without a panel on Activity never count as long-running", () => {
   const now = Date.parse("2026-01-01T04:00:00Z");
   const runs = (
-    ["SCHEDULED_STARTUP", "SCHEDULED_INTERVAL", "SCHEDULED_DAILY"] as const
-  ).map((triggerSource) =>
+    [
+      ["ARTWORK_ENCODING", "SCHEDULED_DAILY"],
+      ["LIBRARY_SCAN_MOVIES", "MANUAL"],
+      ["ACQUISITION_SEARCH", "SYSTEM_INTERNAL"],
+    ] as const
+  ).map(([jobKey, triggerSource]) =>
     jobRun({
-      id: `artwork-${triggerSource}`,
-      jobKey: "ARTWORK_ENCODING",
+      id: jobKey,
+      jobKey,
       status: "RUNNING",
       triggerSource,
       startedAt: "2026-01-01T00:00:00Z",
