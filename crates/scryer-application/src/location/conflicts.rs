@@ -525,7 +525,14 @@ fn name_rank(title: &Title, raw: &str) -> i8 {
     if identity_match {
         return 1;
     }
-    let key = |name: &str| crate::title_matching::canonical_lookup_key(&name.replace('&', " and "));
+    // Spaces are dropped from the key because separators are not identity:
+    // "10,000 BC" and "10000.BC" are one name, but the comma splits the first
+    // into two words and the second stays one.
+    let key = |name: &str| {
+        crate::title_matching::canonical_lookup_key(&name.replace('&', " and "))
+            .split_whitespace()
+            .collect::<String>()
+    };
     let candidates = std::iter::once(parsed.normalized_title.as_str())
         .chain(parsed.normalized_title_variants.iter().map(String::as_str))
         .map(key)
@@ -1506,6 +1513,15 @@ mod folder_name_rank_tests {
         assert_eq!(file("Emberfall.2024.2160p.BluRay.mkv"), 1);
         assert_eq!(file("Other.Picture.2011.1080p.BluRay.mkv"), -1);
         assert_eq!(file("movie.mkv"), 0);
+    }
+
+    #[test]
+    fn a_file_stem_differing_only_in_separators_names_the_title() {
+        let title = movie("40,000 Lanterns", 2011, &[]);
+        let file = |name: &str| file_name_rank(&title, &format!("/library/ADEG78/{name}"));
+        assert_eq!(file("40000.Lanterns.2011.1080p.BluRay.mkv"), 1);
+        assert_eq!(file("40,000.Lanterns.2011.1080p.BluRay.mkv"), 1);
+        assert_eq!(file("40000.Lantern.Keepers.2011.1080p.BluRay.mkv"), -1);
     }
 
     #[test]
