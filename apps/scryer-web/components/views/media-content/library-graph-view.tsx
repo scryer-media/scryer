@@ -293,8 +293,8 @@ const HOVER_FADE_ALPHA = 0.18;
 /** Room around the titles when the overview is fitted to them. */
 const OVERVIEW_FIT_PADDING = 1.25;
 
-// Zoom stops where the largest title fills this share of the view's height,
-// and a little past the framing of the whole graph (ratio 1).
+// Zoom stops where a typical (median) title fills this share of the view's
+// height, and a little past the framing of the whole graph (ratio 1).
 const MAX_POSTER_VIEW_SHARE = 0.6;
 const MAX_ZOOM_OUT_RATIO = 1.5;
 
@@ -302,24 +302,113 @@ function applyZoomLimits(
   sigma: Sigma<NodeAttributes, EdgeAttributes>,
   graph: LibraryGraphStore,
 ) {
-  let largest = 0;
   // Titles only: a folded neighbourhood is drawn far larger than a title
-  // and would stop the zoom long before titles are readable.
+  // and would stop the zoom long before titles are readable. The median,
+  // not the largest: the overview draws its best-rated titles several times
+  // the size of the rest.
+  const sizes: number[] = [];
   graph.forEachNode((_key, attributes) => {
     if (attributes.collapsedClusterId !== undefined) return;
-    largest = Math.max(largest, attributes.size);
+    sizes.push(attributes.size);
   });
+  sizes.sort((a, b) => a - b);
+  const typical = sizes.length > 0 ? sizes[sizes.length >> 1] : 0;
   const height = sigma.getContainer().offsetHeight;
   // A title's size is its on-screen half-height at ratio 1.
   const minRatio =
-    largest > 0 && height > 0
+    typical > 0 && height > 0
       ? Math.min(
           MAX_ZOOM_OUT_RATIO,
-          (sigma.scaleSize(largest, 1) * 2) / (MAX_POSTER_VIEW_SHARE * height),
+          (sigma.scaleSize(typical, 1) * 2) / (MAX_POSTER_VIEW_SHARE * height),
         )
       : null;
   sigma.setSetting("minCameraRatio", minRatio);
   sigma.setSetting("maxCameraRatio", MAX_ZOOM_OUT_RATIO);
+}
+
+// Panning keeps the view's centre over the titles' extent, widened by this
+// share of its larger side (and at least the minimum, in graph units), so
+// the graph cannot be dragged away into empty space.
+const PAN_MARGIN_EXTENT_SHARE = 0.1;
+const PAN_MARGIN_MIN = 200;
+
+/**
+ * Bounds the camera's centre to the graph's own extent. Sigma's pan
+ * boundaries clamp to its node extent, which with `autoRescale: false` is the
+ * viewport around the origin rather than the graph, so the camera is
+ * constrained here instead. The extent is measured again only after the
+ * graph changes. Returns the cleanup.
+ */
+function boundCameraToGraph(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  graph: LibraryGraphStore,
+) {
+  let extent: {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  } | null = null;
+  let stale = true;
+  const markStale = () => {
+    stale = true;
+  };
+  const events = [
+    "nodeAdded",
+    "nodeDropped",
+    "nodeAttributesUpdated",
+    "eachNodeAttributesUpdated",
+    "cleared",
+  ] as const;
+  for (const event of events) graph.on(event, markStale);
+  const camera = sigma.getCamera();
+  const validate = camera.validateState.bind(camera);
+  camera.validateState = (state) => {
+    const valid = validate(state);
+    if (stale) {
+      stale = false;
+      extent = null;
+      graph.forEachNode((_key, { x, y }) => {
+        if (!extent) extent = { minX: x, minY: y, maxX: x, maxY: y };
+        else {
+          extent.minX = Math.min(extent.minX, x);
+          extent.minY = Math.min(extent.minY, y);
+          extent.maxX = Math.max(extent.maxX, x);
+          extent.maxY = Math.max(extent.maxY, y);
+        }
+      });
+    }
+    const bounds = extent as typeof extent;
+    if (!bounds) return valid;
+    const margin = Math.max(
+      PAN_MARGIN_MIN,
+      Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) *
+        PAN_MARGIN_EXTENT_SHARE,
+    );
+    const a = sigma.graphToFramedGraph({
+      x: bounds.minX - margin,
+      y: bounds.minY - margin,
+    });
+    const b = sigma.graphToFramedGraph({
+      x: bounds.maxX + margin,
+      y: bounds.maxY + margin,
+    });
+    // A view with no size yet has no projection to bound against.
+    if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return valid;
+    valid.x = Math.min(
+      Math.max(valid.x, Math.min(a.x, b.x)),
+      Math.max(a.x, b.x),
+    );
+    valid.y = Math.min(
+      Math.max(valid.y, Math.min(a.y, b.y)),
+      Math.max(a.y, b.y),
+    );
+    return valid;
+  };
+  return () => {
+    for (const event of events) graph.off(event, markStale);
+    camera.validateState = validate;
+  };
 }
 
 function restCamera(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
@@ -2056,6 +2145,7 @@ export default function LibraryGraphView({
 
     sigma.on("afterRender", drawOverlay);
     sigma.on("resize", () => applyZoomLimits(sigma, sigma.getGraph()));
+    const unboundCamera = boundCameraToGraph(sigma, graph);
     // Ctrl-click (Cmd-click on a Mac) also opens the title's panel; a plain
     // click only focuses the graph on it.
     sigma.on("clickNode", ({ node, event }) => {
@@ -2208,6 +2298,7 @@ export default function LibraryGraphView({
         tweenFrameRef.current = null;
       }
       window.clearTimeout(posterZoom.timer);
+      unboundCamera();
       sigma.kill();
       sigmaRef.current = null;
       graphRef.current = null;
