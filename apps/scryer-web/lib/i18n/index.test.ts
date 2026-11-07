@@ -41,6 +41,16 @@ test("offers Czech metadata using the canonical language code", () => {
   }
 });
 
+test("offers Russian metadata using the canonical language code", () => {
+  assert.deepEqual(
+    METADATA_LANGUAGES.find(({ code }) => code === "rus"),
+    { code: "rus", label: "Русский" },
+  );
+  for (const locale of ["rus", "ru", "ru-RU", "RU_ru"]) {
+    assert.equal(metadataLanguageForUi(locale), "rus");
+  }
+});
+
 test("keeps regional UI languages separate from generic Chinese metadata", () => {
   assert.equal(metadataLanguageForUi("zh-HK"), "zho");
   assert.equal(metadataLanguageForUi("zh-TW"), "zho");

@@ -1362,6 +1362,17 @@ mod metadata_language_tests {
     }
 
     #[test]
+    fn russian_metadata_is_preserved_at_every_override_level() {
+        for (title, library, global) in [
+            (Some(" RUS "), Some("deu"), "eng"),
+            (None, Some("rus"), "eng"),
+            (None, None, "rus"),
+        ] {
+            assert_eq!(resolve_metadata_language_overrides(title, library, global), "rus");
+        }
+    }
+
+    #[test]
     fn metadata_language_overrides_ignore_invalid_values() {
         assert_eq!(
             resolve_metadata_language_overrides(Some("not-a-language"), Some("jpn"), "eng"),
