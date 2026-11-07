@@ -88,7 +88,7 @@ export function LibraryGraphSelectionCard({
       aria-label={label}
       data-testid="library-graph-selection"
       data-ghost={ghost ? "true" : "false"}
-      className="absolute bottom-3 right-3 z-10 flex max-h-[calc(100%-1.5rem)] w-[min(26rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[13px] text-[var(--scry-ink2)] shadow-[0_16px_48px_rgba(0,0,0,0.45)]"
+      className="absolute bottom-3 right-3 z-10 flex max-h-[calc(100%-1.5rem)] max-sm:max-h-[55%] w-[min(26rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[13px] text-[var(--scry-ink2)] shadow-[0_16px_48px_rgba(0,0,0,0.45)]"
     >
       <div
         aria-hidden="true"

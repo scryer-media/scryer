@@ -3742,7 +3742,7 @@ export default function LibraryGraphView({
           role="application"
           aria-label={t("libraryGraph.canvasLabel")}
           onKeyDown={handleCanvasKeyDown}
-          className="absolute inset-0 touch-none outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)] max-sm:bottom-auto max-sm:aspect-square max-sm:max-h-full"
+          className="absolute inset-0 touch-none outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)] max-sm:bottom-14"
           data-testid="library-graph-canvas"
         />
         <div aria-live="polite" className="sr-only">
@@ -3760,10 +3760,10 @@ export default function LibraryGraphView({
                 ? "libraryGraph.recommendationGroupsLabel"
                 : "libraryGraph.clustersLabel",
             )}
-            className="absolute left-3 top-3 z-10 flex max-h-[calc(100%-1.5rem)] max-w-[calc(100%-1.5rem)] flex-col gap-1.5 overflow-y-auto overscroll-contain rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-card2)]/90 p-2 text-[12px] shadow-lg backdrop-blur-sm"
+            className="absolute left-3 top-3 z-10 flex max-h-[calc(100%-1.5rem)] max-w-[calc(100%-1.5rem)] flex-col gap-1.5 overflow-y-auto overscroll-contain rounded-[10px] max-sm:inset-x-3 max-sm:bottom-3 max-sm:top-auto max-sm:flex-row max-sm:overflow-x-auto max-sm:overflow-y-hidden border border-[var(--scry-border2)] bg-[var(--scry-card2)]/90 p-2 text-[12px] shadow-lg backdrop-blur-sm"
           >
             {neighborhoodLegend.map((band) => (
-              <li key={band.key}>
+              <li key={band.key} className="max-sm:shrink-0">
                 <button
                   type="button"
                   disabled={focusCenterKey !== null}
@@ -3781,7 +3781,9 @@ export default function LibraryGraphView({
                     className="h-2 w-2 shrink-0 rounded-full"
                     style={{ backgroundColor: band.color }}
                   />
-                  <span className="min-w-0 break-words">{band.name}</span>
+                  <span className="min-w-0 break-words max-sm:whitespace-nowrap">
+                    {band.name}
+                  </span>
                   <span className="ml-auto shrink-0 pl-2 tabular-nums text-[var(--scry-muted2)]">
                     {band.count}
                   </span>
@@ -3805,7 +3807,7 @@ export default function LibraryGraphView({
               }}
               onClick={() => focusGroup(group.id)}
               style={{ visibility: "hidden" }}
-              className="absolute left-0 top-0 max-w-[14rem] truncate rounded-full border-2 bg-[var(--scry-card2)] px-3 py-1 text-[13px] font-bold text-[var(--scry-ink)] shadow-[0_2px_10px_rgba(0,0,0,0.6)]"
+              className="absolute left-0 top-0 max-w-[14rem] truncate rounded-full border-2 bg-[var(--scry-card2)] px-3 py-1 text-[13px] font-bold max-sm:max-w-[9rem] max-sm:px-2 max-sm:py-0.5 max-sm:text-[11px] text-[var(--scry-ink)] shadow-[0_2px_10px_rgba(0,0,0,0.6)]"
             >
               <span
                 aria-hidden="true"
