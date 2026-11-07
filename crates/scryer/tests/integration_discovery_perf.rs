@@ -1285,6 +1285,13 @@ async fn discovery_reads_stay_pool_bounded_as_the_catalog_grows() {
     }
 }
 
+async fn affinity_revision(pool: &sqlx::SqlitePool) -> String {
+    sqlx::query_scalar("SELECT revision FROM discovery_affinity_revision WHERE id = 1")
+        .fetch_one(pool)
+        .await
+        .expect("a migrated database keeps an affinity revision")
+}
+
 async fn affinity_reads(seeded: &SeededDiscovery) -> usize {
     let sample = call(seeded, Endpoint::HomeCards).await;
     assert!(sample.error.is_none(), "home failed: {:?}", sample.error);
@@ -1346,13 +1353,22 @@ async fn the_affinity_profile_is_reused_until_one_of_its_inputs_changes() {
             "DELETE FROM discovery_submitted_subjects WHERE title_id = 'perf-title-3'",
         ),
     ];
+    // Each change moves the revision the profile was built from. Rebuilds are
+    // rate limited, so inside the rebuild window the kept profile is still
+    // served without another whole-catalog read; the cache's own tests cover
+    // the rebuild once the window has passed.
     for (label, sql) in changes {
+        let before = affinity_revision(pool).await;
         run_sql(pool, sql).await;
-        assert_eq!(affinity_reads(&seeded).await, 1, "{label} must refill");
+        assert_ne!(
+            affinity_revision(pool).await,
+            before,
+            "{label} must change the affinity revision"
+        );
         assert_eq!(
             affinity_reads(&seeded).await,
             0,
-            "{label}: the refill is reused"
+            "{label}: the kept profile is served inside the rebuild window"
         );
     }
 

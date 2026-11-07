@@ -952,9 +952,29 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
     assert_eq!(summary["totalCount"], 51);
     assert!(summary["titles"].as_array().unwrap().is_empty());
     assert_eq!(page["titles"].as_array().unwrap().len(), 50);
-    assert_eq!(page["titles"][0]["titleId"], "title-50");
-    assert_eq!(page["titles"][0]["hasException"], true);
+    // Queued titles sort ahead of finished ones, so the blocked title waits
+    // on the next page behind the fifty pending ones.
+    assert_eq!(page["titles"][0]["titleId"], "title-0");
+    assert_eq!(page["titles"][0]["hasException"], false);
+    assert!(
+        page["titles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|title| title["titleId"] != "title-50")
+    );
     assert_eq!(page["hasMore"], true);
+    let next = gql(
+        &ctx,
+        r#"query($id: ID!) { locationTransferPage(id: $id, offset: 50) { titles { titleId hasException } } }"#,
+        json!({"id": operation_id}),
+    )
+    .await;
+    assert_no_errors(&next);
+    let next_titles = &next["data"]["locationTransferPage"]["titles"];
+    assert_eq!(next_titles.as_array().unwrap().len(), 1);
+    assert_eq!(next_titles[0]["titleId"], "title-50");
+    assert_eq!(next_titles[0]["hasException"], true);
     assert_eq!(page["generation"], summary["generation"]);
     assert!(summary["etaSeconds"].is_null());
     assert_eq!(
