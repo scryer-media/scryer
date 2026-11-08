@@ -496,6 +496,11 @@ function librarySettingsInput(
   }
   return {
     requiredAudioLanguages: settings.requiredAudioLanguages,
+    preferredAudioLanguages: settings.preferredAudioLanguages,
+    optionalAudioLanguages: settings.optionalAudioLanguages,
+    audioLanguagePriority: settings.audioLanguagePriority,
+    optionalAudioLanguagesKeepSearching:
+      settings.optionalAudioLanguagesKeepSearching,
     metadataLanguage: settings.metadataLanguage,
     useSeasonFolders: settings.useSeasonFolders,
     qualityProfileId: settings.qualityProfileId,
@@ -1638,6 +1643,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     categoryQualityProfileOverrides,
     categoryRequiredAudioLanguages,
     saveCategoryRequiredAudioLanguages,
+    categoryAudioLanguagePreferences,
+    saveCategoryAudioLanguagePreferences,
     categoryPersonaSelections,
     categoryFolderTemplates,
     setCategoryFolderTemplates,
@@ -5411,6 +5418,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           categoryQualityProfileOverrides,
           categoryRequiredAudioLanguages,
           saveCategoryRequiredAudioLanguages,
+          categoryAudioLanguagePreferences,
+          saveCategoryAudioLanguagePreferences,
           categoryPersonaSelections,
           activeQualityScopeId,
           categoryFolderTemplates,

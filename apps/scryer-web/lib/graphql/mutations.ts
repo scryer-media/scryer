@@ -1430,6 +1430,10 @@ const mediaSettingsFieldSelection = `
       isDefault
     }
     requiredAudioLanguages
+    preferredAudioLanguages
+    optionalAudioLanguages
+    audioLanguagePriority
+    optionalAudioLanguagesKeepSearching
     useSeasonFolders
     folderTemplate
     seasonFolderTemplate
