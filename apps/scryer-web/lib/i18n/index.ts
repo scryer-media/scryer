@@ -113,6 +113,7 @@ const METADATA_LANGUAGE_CODES = new Set([
   "jpn",
   "nld",
   "ces",
+  "rus",
 ]);
 
 /** {@link AVAILABLE_LANGUAGES}, less the ones metadata cannot be fetched in. */

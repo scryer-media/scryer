@@ -1457,7 +1457,7 @@ impl AppUseCase {
         let metadata_language_override = normalize_optional_string(settings.metadata_language.clone())
             .map(|value| {
                 crate::normalize_metadata_language_code(&value).ok_or_else(|| {
-                    AppError::validation_refused(crate::error_reasons::settings::METADATA_LANGUAGE_INVALID, "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn"
+                    AppError::validation_refused(crate::error_reasons::settings::METADATA_LANGUAGE_INVALID, "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus"
                             .to_string())
                 })
             })

@@ -463,7 +463,7 @@ impl AppUseCase {
             .filter(|language| !language.trim().is_empty())
             .map(|language| {
                 crate::normalize_metadata_language_code(&language).ok_or_else(|| {
-                    AppError::validation_refused(crate::error_reasons::catalog::METADATA_LANGUAGE_INVALID, "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn".to_string())
+                    AppError::validation_refused(crate::error_reasons::catalog::METADATA_LANGUAGE_INVALID, "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus".to_string())
                 })
             })
             .transpose()?;
@@ -1358,6 +1358,17 @@ mod metadata_language_tests {
             (None, None, "ces"),
         ] {
             assert_eq!(resolve_metadata_language_overrides(title, library, global), "ces");
+        }
+    }
+
+    #[test]
+    fn russian_metadata_is_preserved_at_every_override_level() {
+        for (title, library, global) in [
+            (Some(" RUS "), Some("deu"), "eng"),
+            (None, Some("rus"), "eng"),
+            (None, None, "rus"),
+        ] {
+            assert_eq!(resolve_metadata_language_overrides(title, library, global), "rus");
         }
     }
 

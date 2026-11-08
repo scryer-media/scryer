@@ -198,7 +198,7 @@ fn resolved_title_options(
             MaybeUndefined::Value(value) => Some(Some(
                 scryer_application::normalize_metadata_language_code(&value).ok_or_else(|| {
                     validation_error(scryer_interface_core::refusal::INTERFACE_METADATA_LANGUAGE_UNSUPPORTED,
-                        "metadataLanguage must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn",
+                        "metadataLanguage must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus",
                     )
                 })?,
             )),

@@ -2143,12 +2143,10 @@ async fn graphql_reused_add_preserves_metadata_language_tri_state() {
         "jpn"
     );
 
-    let rejected = gql(&ctx, query, input(json!({ "metadataLanguage": "rus" }))).await;
-    assert!(
-        rejected.to_string().contains(
-            "metadataLanguage must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn"
-        ),
-        "invalid metadata language should be rejected: {rejected}"
+    let rejected = gql(&ctx, query, input(json!({ "metadataLanguage": "pol" }))).await;
+    assert_eq!(
+        rejected["errors"][0]["extensions"]["reason"], "INTERFACE_METADATA_LANGUAGE_UNSUPPORTED",
+        "unsupported metadata language should be rejected: {rejected}"
     );
 }
 

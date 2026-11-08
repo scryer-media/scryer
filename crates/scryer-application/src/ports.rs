@@ -11272,6 +11272,13 @@ pub struct IndexerLoginChallenge {
     pub image_base64: String,
 }
 
+/// The indexer provider surface the application consumes.
+///
+/// Every method on this trait is dispatched by
+/// [`crate::IndexerProviderRegistry`], which routes each call to a host-native
+/// provider or to the plugin provider. A new method must get its dispatch
+/// there in the same change; otherwise production calls fall through to the
+/// default body below.
 pub trait IndexerPluginProvider: Send + Sync {
     /// Validate normalized instance configuration using provider-owned
     /// descriptor metadata. Providers without such metadata accept it.

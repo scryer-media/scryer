@@ -324,15 +324,22 @@ fn effective_request_deadline(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TitleGuardMode {
-    SkipTitleMatch,
-    ExactTitleMatch,
+    Skip,
+    Exact,
+    /// An id lookup's answer: a release stays when the indexer tagged it with
+    /// one of the title's own ids, or when its name is the title or an alias.
+    /// Indexers pad id lookups with unrelated, untagged releases, so the id in
+    /// the request alone does not vouch for them.
+    IdOrTitle,
 }
 
 fn title_guard_mode_for_strategy(strategy: &SearchStrategy) -> TitleGuardMode {
-    if !strategy.ids.is_empty() || strategy.request_query.trim().is_empty() {
-        TitleGuardMode::SkipTitleMatch
+    if !strategy.ids.is_empty() {
+        TitleGuardMode::IdOrTitle
+    } else if strategy.request_query.trim().is_empty() {
+        TitleGuardMode::Skip
     } else {
-        TitleGuardMode::ExactTitleMatch
+        TitleGuardMode::Exact
     }
 }
 
@@ -607,6 +614,8 @@ struct FilterStrategyContext<'a> {
     episode: Option<u32>,
     numbering_context: &'a IndexerSearchNumberingContext,
     tagged_aliases: &'a [scryer_domain::TaggedAlias],
+    /// The searched title's own external ids, keyed like `imdb_id`.
+    known_ids: &'a HashMap<String, String>,
     title_guard_mode: TitleGuardMode,
     strategy_label: &'a str,
     is_rss_request: bool,
@@ -798,6 +807,7 @@ struct ReplayFilter {
     episode: Option<u32>,
     numbering_context: IndexerSearchNumberingContext,
     tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+    known_ids: HashMap<String, String>,
     title_guard_mode: TitleGuardMode,
     strategy_label: String,
 }
@@ -812,6 +822,7 @@ impl ReplayFilter {
                 episode: self.episode,
                 numbering_context: &self.numbering_context,
                 tagged_aliases: &self.tagged_aliases,
+                known_ids: &self.known_ids,
                 title_guard_mode: self.title_guard_mode,
                 strategy_label: &self.strategy_label,
                 is_rss_request: false,
@@ -828,6 +839,7 @@ struct ListingGuardScope {
     absolute_episode: Option<u32>,
     numbering_context: IndexerSearchNumberingContext,
     tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+    known_ids: HashMap<String, String>,
 }
 
 impl ListingGuardScope {
@@ -1300,6 +1312,7 @@ impl ListingProbe {
             episode: self.scope.episode,
             numbering_context: self.scope.numbering_context.clone(),
             tagged_aliases: self.scope.tagged_aliases.clone(),
+            known_ids: self.scope.known_ids.clone(),
             title_guard_mode: entry.title_guard_mode,
             strategy_label: entry.label.clone(),
         })
@@ -1513,6 +1526,7 @@ fn listing_persisted_response(
             episode: None,
             numbering_context: &IndexerSearchNumberingContext::default(),
             tagged_aliases: &[],
+            known_ids: &HashMap::new(),
             title_guard_mode,
             strategy_label,
             is_rss_request: false,
@@ -5507,6 +5521,16 @@ impl MultiIndexerSearchClient {
         })
     }
 
+    /// The categories a direct *nab search falls back to when nothing is
+    /// routed for its facet. Anime takes the whole TV section: indexers file
+    /// anime under their SD and HD TV categories as often as under 5070.
+    fn direct_nab_default_search_categories(facet: &str) -> Option<Vec<String>> {
+        match facet {
+            "anime" => Some(vec!["5000".to_string()]),
+            _ => Self::default_newznab_categories_for_facet(facet),
+        }
+    }
+
     /// The one category list an indexer's RSS poll asks for: every routed
     /// category, trimmed, sorted and deduplicated, or `None` when nothing is
     /// routed.
@@ -6176,7 +6200,7 @@ impl MultiIndexerSearchClient {
                     strategy_id: format!("protocol:{plan_id}"),
                     label: "protocol".to_string(),
                     labels: vec!["protocol".to_string()],
-                    title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                    title_guard_mode: TitleGuardMode::Skip,
                     response: Err(AppError::Repository(error.to_string())),
                     page_reservation: None,
                     request_fired: true,
@@ -6856,6 +6880,16 @@ impl IndexerClient for MultiIndexerSearchClient {
             // category, and one catch-up marker per indexer.
             let category_request = if is_rss_request {
                 Self::merged_rss_category_request(per_indexer_categories)
+            } else if matches!(
+                config.nab_transport_kind(),
+                Some(NabTransportKind::DirectNab)
+            ) {
+                // Radarr and Sonarr never send a *nab search without `cat=`;
+                // an uncategorized lookup lets an indexer answer from music,
+                // sport and every other section.
+                per_indexer_categories
+                    .filter(|categories| categories.iter().any(|value| !value.trim().is_empty()))
+                    .or_else(|| Self::direct_nab_default_search_categories(&facet))
             } else {
                 per_indexer_categories
             };
@@ -7778,6 +7812,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             absolute_episode,
                             numbering_context: numbering_context.clone(),
                             tagged_aliases: tagged_aliases.clone(),
+                            known_ids: available_ids.clone(),
                         },
                     )
                 })
@@ -7791,6 +7826,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             let category_for_indexer = category.clone();
             let tagged_aliases_for_indexer = tagged_aliases.clone();
             let numbering_context_for_indexer = numbering_context.clone();
+            let known_ids_for_indexer = available_ids.clone();
             let stats_tracker = self.stats_tracker.clone();
             let search_learning = self.search_learning.clone();
             let learning_context = learning_context.clone();
@@ -8033,7 +8069,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             strategy_id: "join".into(),
                             labels: vec!["join".into()],
                             label: "join".into(),
-                            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                            title_guard_mode: TitleGuardMode::Skip,
                             response: Err(AppError::Repository(format!(
                                 "indexer search task panicked: {error}"
                             ))),
@@ -8163,6 +8199,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     episode,
                                     numbering_context: &numbering_context_for_indexer,
                                     tagged_aliases: &tagged_aliases_for_indexer,
+                                    known_ids: &known_ids_for_indexer,
                                     title_guard_mode: outcome.title_guard_mode,
                                     strategy_label: &outcome.label,
                                     is_rss_request,
@@ -8460,7 +8497,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 strategy_id: "join".into(),
                                 labels: vec!["join".into()],
                                 label: "join".into(),
-                                title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                                title_guard_mode: TitleGuardMode::Skip,
                                 response: Err(AppError::Repository(format!(
                                     "indexer search task panicked: {error}"
                                 ))),
@@ -8575,6 +8612,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         episode,
                                         numbering_context: &numbering_context_for_indexer,
                                         tagged_aliases: &tagged_aliases_for_indexer,
+                                        known_ids: &known_ids_for_indexer,
                                         title_guard_mode: outcome.title_guard_mode,
                                         strategy_label: &outcome.label,
                                         is_rss_request,
@@ -10279,7 +10317,7 @@ fn filter_strategy_results(
                 context.strategy_label,
                 context.is_rss_request,
             ),
-            title_validated_upstream: context.title_guard_mode == TitleGuardMode::SkipTitleMatch,
+            title_validated_upstream: context.title_guard_mode != TitleGuardMode::Exact,
         });
         if result.parsed_release_metadata.is_none() {
             result.parsed_release_metadata =
@@ -10312,9 +10350,12 @@ fn filter_strategy_results(
             return true;
         };
 
-        if context.title_guard_mode == TitleGuardMode::ExactTitleMatch
-            && !expected_titles.is_empty()
-        {
+        let guards_title = match context.title_guard_mode {
+            TitleGuardMode::Exact => true,
+            TitleGuardMode::IdOrTitle => !release_carries_known_id(result, context.known_ids),
+            TitleGuardMode::Skip => false,
+        };
+        if guards_title && !expected_titles.is_empty() {
             let release_titles = parsed_title_candidates(parsed);
             let title_ok = release_titles.iter().any(|release_title| {
                 expected_titles
@@ -10418,6 +10459,37 @@ fn filter_strategy_results(
     }
 }
 
+/// Whether the indexer tagged a release with one of the searched title's own
+/// ids. Newznab writes IMDb ids with or without `tt` and zero padding, so both
+/// sides compare as bare digits.
+fn release_carries_known_id(
+    result: &IndexerSearchResult,
+    known_ids: &HashMap<String, String>,
+) -> bool {
+    fn bare(value: &str) -> &str {
+        let value = value.trim();
+        let value = value
+            .get(..2)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("tt"))
+            .map_or(value, |_| &value[2..]);
+        value.trim_start_matches('0')
+    }
+    let attributes = &result.response_attributes;
+    [
+        ("tvdb_id", attributes.tvdb_id.as_deref()),
+        ("tmdb_id", attributes.tmdb_id.as_deref()),
+        ("imdb_id", attributes.imdb_id.as_deref()),
+    ]
+    .into_iter()
+    .any(|(key, returned)| {
+        let (Some(returned), Some(known)) = (returned, known_ids.get(key)) else {
+            return false;
+        };
+        let (returned, known) = (bare(returned), bare(known));
+        !returned.is_empty() && returned == known
+    })
+}
+
 /// Caps resolved the ordinary way, with no refresh problem to explain.
 fn nominal_caps_diagnostic(caps: &scryer_application::IndexerCapsDiagnostic) -> bool {
     matches!(
@@ -10491,7 +10563,7 @@ mod tests {
             strategy_id: "strategy".into(),
             labels: vec!["synthetic".into()],
             label: "synthetic".into(),
-            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+            title_guard_mode: TitleGuardMode::Skip,
             response,
             page_reservation: None,
             request_fired,
@@ -10562,7 +10634,7 @@ mod tests {
     }
 
     #[test]
-    fn id_strategies_skip_the_text_title_guard() {
+    fn id_strategies_check_the_title_or_the_release_id() {
         let mut ids = HashMap::new();
         ids.insert("tmdb".to_string(), "123".to_string());
         let id_strategy = SearchStrategy {
@@ -10590,11 +10662,11 @@ mod tests {
 
         assert_eq!(
             title_guard_mode_for_strategy(&id_strategy),
-            TitleGuardMode::SkipTitleMatch
+            TitleGuardMode::IdOrTitle
         );
         assert_eq!(
             title_guard_mode_for_strategy(&text_strategy),
-            TitleGuardMode::ExactTitleMatch
+            TitleGuardMode::Exact
         );
     }
 
@@ -12727,7 +12799,7 @@ mod tests {
                 tagged_aliases: Vec::new(),
                 rss_catch_up: None,
             },
-            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+            title_guard_mode: TitleGuardMode::Skip,
         }
     }
 
@@ -12816,10 +12888,7 @@ mod tests {
         // The year is a qualifier on the subject, not an id: it must not turn a
         // freetext strategy into an id-backed one.
         assert!(prepared[0].request.ids.is_empty());
-        assert_eq!(
-            prepared[0].title_guard_mode,
-            TitleGuardMode::ExactTitleMatch
-        );
+        assert_eq!(prepared[0].title_guard_mode, TitleGuardMode::Exact);
     }
 
     #[test]
@@ -15885,7 +15954,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn direct_newznab_searches_stay_uncategorized_when_routing_is_empty() {
+    async fn direct_newznab_searches_send_the_movie_default_category_when_routing_is_empty() {
         let mut config = mock_indexer_config();
         config.provider_type = "newznab".into();
 
@@ -15925,7 +15994,7 @@ mod tests {
 
         let recorded = calls.lock().expect("calls").clone();
         assert_eq!(recorded.len(), 1);
-        assert!(recorded[0].categories.is_empty());
+        assert_eq!(recorded[0].categories, vec!["2000".to_string()]);
     }
 
     #[tokio::test]
@@ -15982,7 +16051,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn id_backed_movie_results_skip_freetext_title_guard() {
+    async fn id_backed_movie_results_tagged_with_the_id_skip_freetext_title_guard() {
         let calls = StdArc::new(StdMutex::new(Vec::new()));
         let client = Arc::new(ScriptedIndexerClient {
             calls: calls.clone(),
@@ -15990,7 +16059,10 @@ mod tests {
                 if call.ids.is_empty() {
                     response_with_titles(&["Should.Not.Fallback.2024"])
                 } else {
-                    response_with_titles(&["Completely.Different.Title.2024.1080p.BluRay"])
+                    response_with_results(vec![result_tagged(
+                        "Completely.Different.Title.2024.1080p.BluRay",
+                        |attrs| attrs.imdb_id = Some("tt12345678".to_string()),
+                    )])
                 }
             }),
         });
@@ -17335,6 +17407,257 @@ mod tests {
             response.results[0].title,
             "12.Lanterns.of.Winter.2013.1080p.BluRay.x264-GROUP"
         );
+    }
+
+    fn result_tagged(
+        title: &str,
+        tag: impl FnOnce(&mut IndexerResponseAttributes),
+    ) -> IndexerSearchResult {
+        let mut result = search_result(title);
+        tag(&mut result.response_attributes);
+        result
+    }
+
+    fn response_with_results(
+        results: Vec<IndexerSearchResult>,
+    ) -> AppResult<IndexerSearchResponse> {
+        let mut response = response_with_titles(&[])?;
+        response.results = results;
+        Ok(response)
+    }
+
+    fn sorted_result_titles(response: &IndexerSearchResponse) -> Vec<&str> {
+        let mut titles: Vec<&str> = response.results.iter().map(|r| r.title.as_str()).collect();
+        titles.sort_unstable();
+        titles
+    }
+
+    #[tokio::test]
+    async fn movie_id_lookup_drops_untagged_unrelated_releases() {
+        let (client, calls) = scripted_search_client(movie_caps(), |_call| {
+            response_with_results(vec![
+                search_result("1917.2019.1080p.BluRay.x264-GRP"),
+                search_result("No.Mans.Land.2021.1080p.WEB-DL-GRP"),
+                search_result("Fairway.Classic.2026.Round.1.1080p.WEB-GRP"),
+                result_tagged("Zwischen.den.Fronten.2019.1080p.WEB-GRP", |attrs| {
+                    attrs.imdb_id = Some("08579674".to_string());
+                }),
+                result_tagged("Other.Film.2019.1080p.WEB-GRP", |attrs| {
+                    attrs.imdb_id = Some("tt1234567".to_string());
+                }),
+            ])
+        });
+
+        let response = client
+            .search(
+                "1917".into(),
+                HashMap::from([("imdb_id".to_string(), "tt8579674".to_string())]),
+                Some("movie".into()),
+                Some("movie".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        assert_eq!(calls.lock().expect("call log mutex").len(), 1);
+        assert_eq!(
+            sorted_result_titles(&response),
+            vec![
+                "1917.2019.1080p.BluRay.x264-GRP",
+                "Zwischen.den.Fronten.2019.1080p.WEB-GRP",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn series_id_lookup_keeps_tagged_foreign_names_and_drops_untagged_strangers() {
+        let (client, _calls) = scripted_search_client(series_caps(), |_call| {
+            response_with_results(vec![
+                search_result("Signal.Run.S01E12.720p.WEB-DL-GRP"),
+                search_result("Harbor.Lights.S01E12.720p.WEB-DL-GRP"),
+                result_tagged("Senyou.Kairo.S01E12.1080p.WEB-GRP", |attrs| {
+                    attrs.tvdb_id = Some("78874".to_string());
+                }),
+            ])
+        });
+
+        let response = client
+            .search(
+                "Signal Run S01E12".into(),
+                HashMap::from([("tvdb_id".to_string(), "78874".to_string())]),
+                Some("series".into()),
+                Some("series".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(12),
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        assert_eq!(
+            sorted_result_titles(&response),
+            vec![
+                "Senyou.Kairo.S01E12.1080p.WEB-GRP",
+                "Signal.Run.S01E12.720p.WEB-DL-GRP",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn anime_id_lookup_keeps_releases_named_by_an_alias() {
+        let (client, _calls) = scripted_search_client(anime_caps(), |call| {
+            if call.ids.contains_key("anidb_id") {
+                response_with_results(vec![
+                    search_result("[Group] Touka no Sora - 05 (1080p)"),
+                    search_result("[Group] Unrelated Mecha - 05 (1080p)"),
+                ])
+            } else {
+                response_with_titles(&[])
+            }
+        });
+
+        let response = client
+            .search(
+                "Lantern Verge 05".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                Some(5),
+                vec![scryer_domain::TaggedAlias {
+                    name: "Touka no Sora".to_string(),
+                    language: "ja-Latn".to_string(),
+                    country: None,
+                }],
+            )
+            .await
+            .expect("search should succeed");
+
+        assert_eq!(
+            sorted_result_titles(&response),
+            vec!["[Group] Touka no Sora - 05 (1080p)"]
+        );
+    }
+
+    fn scripted_direct_nab_client(
+        caps: IndexerProviderCapabilities,
+    ) -> (
+        MultiIndexerSearchClient,
+        StdArc<StdMutex<Vec<RecordedCall>>>,
+    ) {
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let client = Arc::new(ScriptedIndexerClient {
+            calls: calls.clone(),
+            responder: StdArc::new(|_call: &RecordedCall| response_with_titles(&[])),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![IndexerConfig {
+                    provider_type: "newznab".into(),
+                    ..mock_indexer_config()
+                }],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider { client, caps }),
+        );
+        (multi, calls)
+    }
+
+    #[tokio::test]
+    async fn direct_nab_searches_without_routed_categories_send_facet_defaults() {
+        for (facet, caps, ids, expected) in [
+            (
+                "movie",
+                movie_caps(),
+                HashMap::from([("imdb_id".to_string(), "tt8579674".to_string())]),
+                "2000",
+            ),
+            (
+                "series",
+                series_caps(),
+                HashMap::from([("tvdb_id".to_string(), "78874".to_string())]),
+                "5000",
+            ),
+            (
+                "anime",
+                anime_caps(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                "5000",
+            ),
+        ] {
+            let (client, calls) = scripted_direct_nab_client(caps);
+            client
+                .search(
+                    "Signal Run".into(),
+                    ids,
+                    Some(facet.into()),
+                    Some(facet.into()),
+                    None,
+                    None,
+                    None,
+                    SearchMode::Interactive,
+                    None,
+                    None,
+                    None,
+                    vec![],
+                )
+                .await
+                .expect("search should succeed");
+
+            let calls = calls.lock().expect("call log mutex");
+            assert!(!calls.is_empty(), "{facet}: the indexer should be asked");
+            for call in calls.iter() {
+                assert_eq!(call.categories, vec![expected.to_string()], "{facet}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_nab_searches_keep_routed_categories() {
+        let (client, calls) = scripted_direct_nab_client(movie_caps());
+        client
+            .search(
+                "Signal Run".into(),
+                HashMap::from([("imdb_id".to_string(), "tt8579674".to_string())]),
+                Some("movie".into()),
+                Some("movie".into()),
+                None,
+                Some(vec!["2040".to_string(), "2045".to_string()]),
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert!(!calls.is_empty());
+        for call in calls.iter() {
+            assert_eq!(
+                call.categories,
+                vec!["2040".to_string(), "2045".to_string()]
+            );
+        }
     }
 
     #[tokio::test]
@@ -19500,12 +19823,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_backed_id_searches_skip_title_guard() {
+    async fn query_backed_id_searches_keep_releases_tagged_with_the_id() {
         let (client, _calls) = scripted_search_client(movie_caps(), |call| {
             if call.ids.contains_key("imdb_id") {
-                response_with_titles(&[
-                    "Lantern.Tide.Hidden.Current.2001.1080p.BluRay",
-                    "Lantern.Tide.2001.1080p.BluRay",
+                response_with_results(vec![
+                    result_tagged("Lantern.Tide.Hidden.Current.2001.1080p.BluRay", |attrs| {
+                        attrs.imdb_id = Some("0245429".to_string());
+                    }),
+                    search_result("Lantern.Tide.2001.1080p.BluRay"),
                 ])
             } else {
                 response_with_titles(&[])
@@ -23083,6 +23408,12 @@ mod tests {
         );
     }
 
+    fn no_known_ids() -> &'static HashMap<String, String> {
+        static NONE: std::sync::LazyLock<HashMap<String, String>> =
+            std::sync::LazyLock::new(HashMap::new);
+        &NONE
+    }
+
     fn numbering_guard_context<'a>(
         query: &'a str,
         numbering_context: &'a IndexerSearchNumberingContext,
@@ -23093,9 +23424,10 @@ mod tests {
             episode: Some(53),
             numbering_context,
             tagged_aliases: &[],
+            known_ids: no_known_ids(),
             // The numbering tests are what this exercises; the title guard has
             // its own coverage.
-            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+            title_guard_mode: TitleGuardMode::Skip,
             strategy_label: "freetext",
             is_rss_request: false,
         }
@@ -23142,7 +23474,8 @@ mod tests {
                 episode: Some(12),
                 numbering_context: &numbering_context,
                 tagged_aliases: &[],
-                title_guard_mode: TitleGuardMode::ExactTitleMatch,
+                known_ids: no_known_ids(),
+                title_guard_mode: TitleGuardMode::Exact,
                 strategy_label: "freetext",
                 is_rss_request: false,
             };
@@ -23173,7 +23506,8 @@ mod tests {
                     episode,
                     numbering_context: &numbering_context,
                     tagged_aliases: &[],
-                    title_guard_mode: TitleGuardMode::ExactTitleMatch,
+                    known_ids: no_known_ids(),
+                    title_guard_mode: TitleGuardMode::Exact,
                     strategy_label: "freetext",
                     is_rss_request: false,
                 };
@@ -23323,11 +23657,8 @@ mod tests {
     fn exact_cour_title_admits_only_the_bounded_community_mapping() {
         let numbering_context = lantern_verge_cour_context();
         for (title_guard_mode, query) in [
-            (TitleGuardMode::SkipTitleMatch, "Lantern Verge"),
-            (
-                TitleGuardMode::ExactTitleMatch,
-                "Lantern Verge Glass Meridian",
-            ),
+            (TitleGuardMode::Skip, "Lantern Verge"),
+            (TitleGuardMode::Exact, "Lantern Verge Glass Meridian"),
         ] {
             let mut results = [
                 "Lantern Verge Glass Meridian S01E08 1080p WEB-DL",
@@ -23354,6 +23685,7 @@ mod tests {
                     episode: Some(34),
                     numbering_context: &numbering_context,
                     tagged_aliases: &[],
+                    known_ids: no_known_ids(),
                     title_guard_mode,
                     strategy_label: "freetext",
                     is_rss_request: false,
@@ -23364,7 +23696,7 @@ mod tests {
                 "Lantern Verge Glass Meridian S01E08 1080p WEB-DL".to_string(),
                 "Lantern Verge Glass Meridian - 08 1080p WEB-DL".to_string(),
             ];
-            if title_guard_mode == TitleGuardMode::SkipTitleMatch {
+            if title_guard_mode == TitleGuardMode::Skip {
                 // Bare absolute numbers remain deferred to application coverage;
                 // they are distinct from seasonless episode-number lists.
                 expected.push("Lantern Verge - 08 1080p WEB-DL".to_string());
@@ -23448,7 +23780,8 @@ mod tests {
                 episode: Some(34),
                 numbering_context: &numbering_context,
                 tagged_aliases: &[],
-                title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                known_ids: no_known_ids(),
+                title_guard_mode: TitleGuardMode::Skip,
                 strategy_label: "freetext",
                 is_rss_request: false,
             },
