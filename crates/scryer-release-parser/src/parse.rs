@@ -6817,26 +6817,6 @@ fn parse_parenthetical_standard_after_absolute_at(
     None
 }
 
-/// Is the token at `index` a bare number sitting in its own hyphen-delimited
-/// slot (` - NNN - `)?
-///
-/// Sonarr renames anime episodes as `Show - SxxEyy - NNN - Episode Title`, so a
-/// number fenced by hyphens on both sides is the absolute episode number rather
-/// than a range endpoint. A genuine spaced range (`Show S01E01 - 03 [1080p]`)
-/// is followed by metadata or nothing at all, never by another hyphenated
-/// segment.
-fn is_delimited_absolute_number_slot(tokens: &[Token], index: usize) -> bool {
-    let Some(token) = tokens.get(index) else {
-        return false;
-    };
-    if token.normalized.is_empty() || !token.normalized.bytes().all(|byte| byte.is_ascii_digit()) {
-        return false;
-    }
-    tokens
-        .get(index + 1)
-        .is_some_and(|following| following.separator_before == SeparatorKind::Hyphen)
-}
-
 fn parse_hyphenated_standard_episode_range_at(
     tokens: &[Token],
     index: usize,
@@ -6846,41 +6826,44 @@ fn parse_hyphenated_standard_episode_range_at(
     if episode_numbers.len() != 1 {
         return Some((season, episode_numbers, index));
     }
-    let next = tokens.get(index + 1)?;
-    if next.separator_before != SeparatorKind::Hyphen {
-        return Some((season, episode_numbers, index));
-    }
-    if is_delimited_absolute_number_slot(tokens, index + 1) {
-        // Sonarr's anime layout writes the absolute episode number in its own
-        // ` - NNN - ` slot: `Show (1997) - S02E01 - 083 - Episode Title`. That
-        // number is a second coordinate for the *same* episode, not the far end
-        // of a range, and reading it as one silently widens one file into a
-        // season-sized pack that nothing downstream can place.
-        return Some((season, episode_numbers, index));
-    }
-    let endpoint = split_episode_revision(&next.normalized)
-        .map_or(next.normalized.as_str(), |(episode, _)| episode);
     let range_start = *episode_numbers.first()?;
-    let range_end = parse_episode_component(endpoint)
-        // A bare year after a short episode coordinate is release metadata.
-        // Four-digit episode coordinates and explicit E/SxxE endpoints remain
-        // valid; bound the number of members below instead of their values.
-        .filter(|end| {
-            !(range_start < 1000
-                && endpoint.len() == 4
-                && endpoint.bytes().all(|byte| byte.is_ascii_digit())
-                && (1900..=2099).contains(end))
-        })
-        .or_else(|| {
-            let (end_season, end_episodes) =
-                parse_standard_episode_token(next.normalized.as_str())?;
-            let range_end = *end_episodes.first()?;
-            (end_season == season && end_episodes.len() == 1).then_some(range_end)
-        })?;
-    if range_end < range_start || range_end - range_start > 999 {
-        return Some((season, episode_numbers, index));
+    let mut range_end = range_start;
+    let mut last_token = index;
+    while let Some(next) = tokens.get(last_token + 1) {
+        if next.separator_before != SeparatorKind::Hyphen {
+            break;
+        }
+        let endpoint = split_episode_revision(&next.normalized)
+            .map_or(next.normalized.as_str(), |(episode, _)| episode);
+        let bare_number = endpoint.bytes().all(|byte| byte.is_ascii_digit());
+        // A spaced bare number is an episode title or an anime absolute slot.
+        // Unambiguous ranges use a fused hyphen or an explicit E/SxxE endpoint.
+        if bare_number && next.span.start.saturating_sub(tokens[last_token].span.end) != 1 {
+            break;
+        }
+        let endpoint = parse_episode_component(endpoint)
+            .filter(|end| {
+                !(range_start < 1000
+                    && bare_number
+                    && endpoint.len() == 4
+                    && (1900..=2099).contains(end))
+            })
+            .or_else(|| {
+                let (end_season, end_episodes) =
+                    parse_standard_episode_token(next.normalized.as_str())?;
+                let end = *end_episodes.first()?;
+                (end_season == season && end_episodes.len() == 1).then_some(end)
+            });
+        let Some(end) = endpoint else {
+            break;
+        };
+        if end < range_end || end - range_start > 999 {
+            break;
+        }
+        range_end = end;
+        last_token += 1;
     }
-    Some((season, (range_start..=range_end).collect(), index + 1))
+    Some((season, (range_start..=range_end).collect(), last_token))
 }
 
 fn parse_season_token(token: &str) -> Option<u32> {

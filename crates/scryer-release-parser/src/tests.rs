@@ -9,6 +9,67 @@ use crate::{
 };
 
 #[test]
+fn numeric_episode_titles_do_not_extend_standard_ranges() {
+    for facet in [
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+        ContextFacetHint::Unknown,
+    ] {
+        let target = context(facet, "Show A");
+        for (marker, season, expected) in [
+            ("S13E01 - 13", 13, 1),
+            ("S13E02 - 113 AM", 13, 2),
+            ("S01E05 - 12 Angry Men", 1, 5),
+            ("S01E05 - 24 Hours", 1, 5),
+            ("S01E10 - 11", 1, 10),
+            ("S01E05 - 6", 1, 5),
+            ("S01E05 - 3", 1, 5),
+            ("S01E05 - 5 Years Later", 1, 5),
+            ("S01E01 - 03", 1, 1),
+            ("S01E08 - 09", 1, 8),
+            ("S02E01 - 083", 2, 1),
+            ("S03E05 - 049 - Title", 3, 5),
+        ] {
+            for suffix in ["", " [WEBDL-1080p][EAC3 5.1][h264]-Grp.mkv"] {
+                let raw = format!("Show A (2011) - {marker}{suffix}");
+                let parsed = crate::best_parse_for_target(&raw, &target);
+                let episode = parsed.episode.expect(&raw);
+                assert_eq!(episode.season, Some(season), "{raw}");
+                assert_eq!(episode.episode_numbers, vec![expected], "{raw}");
+                assert!(!episode.full_season, "{raw}");
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_standard_ranges_preserve_members_before_episode_titles() {
+    for facet in [
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+        ContextFacetHint::Unknown,
+    ] {
+        let target = context(facet, "Show A");
+        for marker in [
+            "S01E01-03",
+            "S01E01-E03",
+            "S01E01-S01E03",
+            "S01E01 - E03",
+            "S01E01-02-03",
+            "S01E01E02E03",
+        ] {
+            for suffix in ["", " - Title", " - 13", " - 083 - Title"] {
+                let raw = format!("Show A (2011) - {marker}{suffix} [WEBDL-1080p]-Grp.mkv");
+                let parsed = crate::best_parse_for_target(&raw, &target);
+                let episode = parsed.episode.expect(&raw);
+                assert_eq!(episode.season, Some(1), "{raw}");
+                assert_eq!(episode.episode_numbers, vec![1, 2, 3], "{raw}");
+            }
+        }
+    }
+}
+
+#[test]
 fn parenthetical_qualifiers_do_not_create_independent_title_identities() {
     for (name, full_title) in [
         ("The Office (US)", "THE OFFICE US"),
