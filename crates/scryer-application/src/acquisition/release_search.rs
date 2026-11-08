@@ -972,7 +972,28 @@ pub(crate) fn match_parsed_release_with_asserted_ids(
             .alias_release_years
             .get(&evidence_match.matched_key)
             .is_some_and(|year| *year == parsed_year);
-        if !evidence.episode_release_years.contains(&parsed_year) && !matched_alias_supports_year {
+        // A later season may be labelled with its production year rather than
+        // its premiere year. Admit only the preceding year of the requested
+        // episode, with an explicit matching later-season number. This is not
+        // positive year evidence for distinguishing same-name titles.
+        let scoped_production_year = matches!(
+            evidence.parse_context.facet_hint,
+            crate::release_parser::ContextFacetHint::Series
+        ) && parsed.episode.as_ref().is_some_and(|release_episode| {
+            release_episode.season.is_some_and(|season| {
+                season > 1
+                    && evidence.parse_context.episodes.iter().any(|episode| {
+                        episode.season == Some(season)
+                            && episode.air_date.is_some_and(|date| {
+                                chrono::Datelike::year(&date).checked_sub(1) == Some(parsed_year)
+                            })
+                    })
+            })
+        }) && parsed_year > expected_year;
+        if !evidence.episode_release_years.contains(&parsed_year)
+            && !matched_alias_supports_year
+            && !scoped_production_year
+        {
             return None;
         }
         if matched_alias_supports_year {
@@ -6071,6 +6092,86 @@ mod tests {
 
         assert!(evidence.episode_release_years.contains(&2023));
         assert!(parsed_release_matches_title_evidence(&release, &evidence));
+    }
+
+    #[test]
+    fn series_production_year_before_episode_air_year_matches() {
+        let mut title = make_title();
+        title.name = "Северный маршрут".to_string();
+        title.facet = MediaFacet::Series;
+        title.year = Some(2022);
+        title.aliases.clear();
+        title.tagged_aliases.clear();
+        let episode = Episode {
+            id: "production-year-episode".into(),
+            title_id: title.id.clone(),
+            collection_id: None,
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".into()),
+            season_number: Some("2".into()),
+            episode_label: None,
+            title: None,
+            air_date: Some("2026-01-22".into()),
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        let evidence = canonical_title_evidence_for_episode(&title, Some(&episode));
+        for raw in [
+            "Северный маршрут - S2E1-12 - 2025 РУ WEBDL 2160p - RUSSIAN",
+            "Северный маршрут / S2E1-12 of 12 (2025) WEBRip [H.264/1080p] RUS",
+        ] {
+            let release = crate::parse_release_metadata(raw);
+            assert_eq!(release.year, Some(2025));
+            let matched = match_parsed_release_to_title_evidence(&release, &evidence)
+                .expect("a scoped later season can carry its preceding production year");
+            assert!(
+                !matched.year_corroborated,
+                "production year is not an identity disambiguator"
+            );
+        }
+
+        for raw in [
+            "Северный маршрут.S02E01.2024.1080p.WEB-DL",
+            "Северный маршрут.S02E01.2027.1080p.WEB-DL",
+            "Северный маршрут.S01E01.2025.1080p.WEB-DL",
+            "Северный маршрут.S03E01.2025.1080p.WEB-DL",
+            "Северный маршрут.2025.1080p.WEB-DL",
+            "Другой маршрут.S02E01.2025.1080p.WEB-DL",
+        ] {
+            let release = crate::parse_release_metadata(raw);
+            assert!(
+                match_parsed_release_to_title_evidence(&release, &evidence).is_none(),
+                "{raw}"
+            );
+        }
+        let release = crate::parse_release_metadata("Северный маршрут.S02E01.2025.1080p.WEB-DL");
+        let unscoped = canonical_title_evidence(&title);
+        assert!(match_parsed_release_to_title_evidence(&release, &unscoped).is_none());
+        let mut movie = evidence.clone();
+        movie.parse_context.facet_hint = crate::release_parser::ContextFacetHint::Movie;
+        assert!(match_parsed_release_to_title_evidence(&release, &movie).is_none());
+        let mut ambiguous = evidence.clone();
+        ambiguous.ambiguity.shared_lookup_keys = ambiguous.lookup_keys.clone();
+        let matched = match_parsed_release_to_title_evidence(&release, &ambiguous)
+            .expect("matching title still requires independent identity proof");
+        assert!(!candidate_presents_identity_disambiguator(
+            &ambiguous,
+            &CandidateTitleMatch {
+                evidence_match: Some(matched)
+            },
+            None,
+        ));
     }
 
     // ── Identity ambiguity and required disambiguators ──────────────────────
