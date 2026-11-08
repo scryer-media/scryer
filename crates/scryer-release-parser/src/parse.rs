@@ -6838,7 +6838,7 @@ fn parse_hyphenated_standard_episode_range_at(
         let bare_number = endpoint.bytes().all(|byte| byte.is_ascii_digit());
         // A spaced bare number is an episode title or an anime absolute slot.
         // Unambiguous ranges use a fused hyphen or an explicit E/SxxE endpoint.
-        if bare_number && next.span.start.saturating_sub(tokens[last_token].span.end) != 1 {
+        if bare_number && next.separator_before_has_space {
             break;
         }
         let endpoint = parse_episode_component(endpoint)

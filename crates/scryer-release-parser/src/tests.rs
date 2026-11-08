@@ -27,6 +27,10 @@ fn numeric_episode_titles_do_not_extend_standard_ranges() {
             ("S01E05 - 5 Years Later", 1, 5),
             ("S01E01 - 03", 1, 1),
             ("S01E08 - 09", 1, 8),
+            ("S01E01 \u{2013} 13", 1, 1),
+            ("S01E01- 13", 1, 1),
+            ("S01E01\u{2013} 13", 1, 1),
+            ("S01E01-- 13", 1, 1),
             ("S02E01 - 083", 2, 1),
             ("S03E05 - 049 - Title", 3, 5),
         ] {
@@ -52,6 +56,11 @@ fn explicit_standard_ranges_preserve_members_before_episode_titles() {
         let target = context(facet, "Show A");
         for marker in [
             "S01E01-03",
+            "S01E01\u{2013}03",
+            "S01E01\u{2014}03",
+            "S01E01\u{2212}03",
+            "S01E01~03",
+            "S01E01\u{ff5e}03",
             "S01E01-E03",
             "S01E01-S01E03",
             "S01E01 - E03",
