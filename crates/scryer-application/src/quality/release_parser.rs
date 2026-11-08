@@ -55,6 +55,7 @@ pub(crate) fn build_release_parse_context_from_episodes<'a>(
     episodes: impl IntoIterator<Item = &'a Episode>,
     facet_hint: Option<&str>,
 ) -> ReleaseParseContext {
+    let title = title.with_custom_search_aliases();
     let aliases = title
         .aliases
         .iter()

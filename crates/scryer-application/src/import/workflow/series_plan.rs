@@ -1663,6 +1663,89 @@ mod series_plan_tests {
     }
 
     #[test]
+    fn issue_430_pack_members_accept_explicit_search_aliases_only() {
+        let mut title = scene_pack_title();
+        title.name = "Show C -Foo Bar Baz-".into();
+        title.facet = scryer_domain::MediaFacet::Anime;
+        title.tags = vec!["scryer:search-aliases:Show C".into()];
+        let catalog: Vec<_> = (1..=13)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let mut evidence = episode_scoped_pack_evidence(
+            "[Judas] Show C -Foo Bar Baz- (S01) [1080p][HEVC x265 10bit][Multi-Subs]v2 (Batch)",
+        );
+        if let ReleaseEvidence::ScryerSubmission { facet, .. } = &mut evidence {
+            *facet = "anime".into();
+        }
+        let EpisodePackVerification::Verified(pack) =
+            verified_episode_pack(&evidence, &title, &catalog, None, None, None)
+        else {
+            panic!("the submitted pack should verify");
+        };
+        for n in 1..=13 {
+            let filename = format!("[Judas] Show C - S01E{n:02}v2.mkv");
+            let path = Path::new(&filename);
+            let plan = |title: &scryer_domain::Title| {
+                plan_episode_pack_member(
+                    title,
+                    Path::new(""),
+                    path,
+                    &catalog,
+                    None,
+                    None,
+                    Some(&pack),
+                )
+            };
+            let PlannedMemberDraft::Resolved(episodes) = plan(&title) else {
+                panic!("explicit search alias should resolve {filename}");
+            };
+            assert_eq!(
+                episodes
+                    .iter()
+                    .map(|episode| &episode.id)
+                    .collect::<Vec<_>>(),
+                vec![&format!("ep-{n}")],
+                "{filename}"
+            );
+            let mut without_alias = title.clone();
+            without_alias.tags.clear();
+            assert!(matches!(
+                plan(&without_alias),
+                PlannedMemberDraft::Hold {
+                    reason_code: "member_title_mismatch",
+                    ..
+                }
+            ));
+        }
+        for filename in [
+            "[Judas] Show C Other - S01E01v2.mkv",
+            "[Judas] Other Show C - S01E01v2.mkv",
+            "[Judas] Show C 2 - S01E01v2.mkv",
+            "[Judas] Other Show - S01E01v2.mkv",
+        ] {
+            let draft = plan_episode_pack_member(
+                &title,
+                Path::new(""),
+                Path::new(filename),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            assert!(
+                matches!(
+                    draft,
+                    PlannedMemberDraft::Hold {
+                        reason_code: "member_title_mismatch",
+                        ..
+                    }
+                ),
+                "{filename}: {draft:?}"
+            );
+        }
+    }
+
+    #[test]
     fn issue_393_verified_pack_scope_is_bounded_by_release_not_initiating_episode() {
         let title = scene_pack_title();
         let catalog: Vec<_> = (1..=4)
