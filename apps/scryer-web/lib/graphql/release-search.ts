@@ -1,9 +1,3 @@
-// Hotfix 0.17.1: client loop for the server-side interactive release-search
-// job. Starts the job, polls its snapshot every second, and reports each
-// snapshot through `onUpdate` so results stream into the UI as individual
-// indexers complete. The returned promise NEVER rejects: on abort or error it
-// resolves with the releases accumulated so far, matching the resolve-with-
-// array contract the existing one-shot call sites rely on.
 import type { Client } from "urql";
 
 import type { Release } from "@/lib/types";
@@ -15,6 +9,7 @@ import {
 import { interactiveReleaseSearchQuery } from "./queries";
 import type { InteractiveReleaseSearchInput } from "./release-search-input";
 import { isAbortError, makeAbortableFetch } from "./urql-client";
+import { boundedQuery, QueryTimeoutError } from "./bounded-query";
 
 export type InteractiveSearchIndexerProgress = {
   indexerId: string;
@@ -117,7 +112,10 @@ const POLL_INTERVAL_MS = 1_000;
 // Raw pages answer within 75 seconds; this leaves room for the final poll.
 const CLIENT_DEADLINE_MS = 90_000;
 
-function waitForNextPoll(signal?: AbortSignal): Promise<void> {
+function waitForNextPoll(
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve();
@@ -128,7 +126,7 @@ function waitForNextPoll(signal?: AbortSignal): Promise<void> {
       signal?.removeEventListener("abort", finish);
       resolve();
     };
-    const timer = window.setTimeout(finish, POLL_INTERVAL_MS);
+    const timer = window.setTimeout(finish, timeoutMs);
     signal?.addEventListener("abort", finish);
   });
 }
@@ -141,12 +139,21 @@ export async function runIterativeReleaseSearch(
     /** `nextCursor` of the previous page; fetches the following page instead of starting a search. */
     after?: string;
     onUpdate?: (snapshot: InteractiveSearchProgress) => void;
+    /** Polling failures retain partial results but must still be shown to the operator. */
+    onError?: (error: unknown) => void;
   } = {},
 ): Promise<Release[]> {
-  const { signal, onUpdate } = options;
-  const fetchOptions = signal ? { fetch: makeAbortableFetch(signal) } : {};
+  const { onUpdate, onError } = options;
+  const requestController = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, requestController.signal])
+    : requestController.signal;
+  const fetchOptions = { fetch: makeAbortableFetch(signal) };
+  const deadline = Date.now() + CLIENT_DEADLINE_MS;
+  const timeRemaining = () => Math.max(1, deadline - Date.now());
   let releases: Release[] = [];
   let jobId: string | null = null;
+  let lastJob: InteractiveReleaseSearchJobPayload | undefined;
 
   // Best-effort server-side cancel; intentionally NOT bound to the (already
   // aborted) signal so the request still leaves the browser.
@@ -154,13 +161,16 @@ export async function runIterativeReleaseSearch(
     if (jobId === null) {
       return;
     }
-    void client
-      .mutation(cancelInteractiveReleaseSearchMutation, { id: jobId })
-      .toPromise()
-      .catch(() => {});
+    void boundedQuery(
+      client.mutation(cancelInteractiveReleaseSearchMutation, { id: jobId }),
+      new AbortController().signal,
+    ).catch((error: unknown) => {
+      console.warn("Interactive release search cancellation failed", error);
+    });
   };
 
   const applySnapshot = (job: InteractiveReleaseSearchJobPayload) => {
+    lastJob = job;
     releases = job.results ?? [];
     onUpdate?.({
       searchId: job.id,
@@ -175,93 +185,120 @@ export async function runIterativeReleaseSearch(
       failureReasonCode: job.failureReasonCode,
     });
   };
+  const endSearch = (error?: unknown) => {
+    if (lastJob?.state === "RUNNING") {
+      applySnapshot({ ...lastJob, state: "CANCELLED" });
+    }
+    if (error) {
+      if (onError) onError(error);
+      else console.warn("Interactive release search could not complete", error);
+    }
+    return releases;
+  };
 
   // Start-phase failures REJECT: nothing has begun, there are no partials to
   // lose, and every call site's existing catch -> status-toast path relies on
   // the rejection to surface the error (a silently resolved [] would render as
   // "no releases found"). Only the polling phase below is resolve-never-reject.
-  let job: InteractiveReleaseSearchJobPayload | undefined;
   try {
-    const { data, error } = await client
-      .mutation(
+    let job: InteractiveReleaseSearchJobPayload | undefined;
+    try {
+      const { data, error } = await boundedQuery(
+        client.mutation(
+          options.after
+            ? continueInteractiveReleaseSearchMutation
+            : startInteractiveReleaseSearchMutation,
+          options.after
+            ? { after: options.after, first: input.aggregatePageSize }
+            : { input },
+          fetchOptions,
+        ),
+        signal,
+        timeRemaining(),
+      );
+      if (error) throw error;
+      job = (
         options.after
-          ? continueInteractiveReleaseSearchMutation
-          : startInteractiveReleaseSearchMutation,
-        options.after
-          ? { after: options.after, first: input.aggregatePageSize }
-          : { input },
-        fetchOptions,
-      )
-      .toPromise();
-    if (error) throw error;
-    job = (
-      options.after
-        ? data?.continueInteractiveReleaseSearch
-        : data?.startInteractiveReleaseSearch
-    ) as InteractiveReleaseSearchJobPayload | undefined;
-  } catch (startError) {
-    if (signal?.aborted || isAbortError(startError)) {
-      return releases;
-    }
-    throw startError;
-  }
-  if (!job) {
-    return releases;
-  }
-  jobId = job.id;
-  applySnapshot(job);
-  if (signal?.aborted) {
-    cancelJob();
-    return releases;
-  }
-  if (job.state !== "RUNNING") {
-    return releases;
-  }
-
-  try {
-    const deadline = Date.now() + CLIENT_DEADLINE_MS;
-    while (Date.now() < deadline) {
-      await waitForNextPoll(signal);
-      if (signal?.aborted) {
-        cancelJob();
+          ? data?.continueInteractiveReleaseSearch
+          : data?.startInteractiveReleaseSearch
+      ) as InteractiveReleaseSearchJobPayload | undefined;
+    } catch (startError) {
+      if (signal?.aborted || isAbortError(startError)) {
         return releases;
       }
+      throw startError;
+    }
+    if (!job) {
+      throw new Error("Interactive release search did not return a session");
+    }
+    jobId = job.id;
+    applySnapshot(job);
+    if (signal?.aborted) {
+      cancelJob();
+      return endSearch();
+    }
+    if (job.state !== "RUNNING") {
+      return releases;
+    }
+
+    while (Date.now() < deadline) {
+      await waitForNextPoll(
+        signal,
+        Math.min(POLL_INTERVAL_MS, timeRemaining()),
+      );
+      if (signal?.aborted) {
+        cancelJob();
+        return endSearch();
+      }
+      if (Date.now() >= deadline) break;
+      let snapshot: InteractiveReleaseSearchJobPayload | null;
       try {
-        const { data: pollData, error: pollError } = await client
-          .query(
+        const { data: pollData, error: pollError } = await boundedQuery(
+          client.query(
             interactiveReleaseSearchQuery,
             { id: jobId },
             { requestPolicy: "network-only", ...fetchOptions },
-          )
-          .toPromise();
-        if (signal?.aborted) {
-          cancelJob();
-          return releases;
-        }
+          ),
+          signal,
+          timeRemaining(),
+        );
         if (pollError) throw pollError;
-        const snapshot = (pollData?.interactiveReleaseSearch ??
+        snapshot = (pollData?.interactiveReleaseSearch ??
           null) as InteractiveReleaseSearchJobPayload | null;
-        if (!snapshot) {
-          // Unknown/evicted job — treat as finished with what we have.
-          return releases;
-        }
-        applySnapshot(snapshot);
-        if (snapshot.state !== "RUNNING") {
-          return releases;
-        }
       } catch (pollFailure) {
         if (signal?.aborted || isAbortError(pollFailure)) {
           cancelJob();
-          return releases;
+          return endSearch();
         }
-        // Transient poll failure — keep polling until the deadline.
+        if (pollFailure instanceof QueryTimeoutError) {
+          cancelJob();
+          return endSearch(pollFailure);
+        }
+        console.warn(
+          "Interactive release search poll failed; retrying",
+          pollFailure,
+        );
+        continue;
+      }
+      if (signal.aborted) {
+        cancelJob();
+        return endSearch();
+      }
+      if (!snapshot) {
+        return endSearch(
+          new Error(
+            "Interactive release search session is no longer available",
+          ),
+        );
+      }
+      applySnapshot(snapshot);
+      if (snapshot.state !== "RUNNING") {
+        return releases;
       }
     }
-    return releases;
-  } catch (error) {
-    if (signal?.aborted || isAbortError(error)) {
-      cancelJob();
-    }
-    return releases;
+    cancelJob();
+    return endSearch(new QueryTimeoutError());
+  } finally {
+    requestController.abort();
   }
 }

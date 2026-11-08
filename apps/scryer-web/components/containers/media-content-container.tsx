@@ -3625,7 +3625,15 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         const results = await runIterativeReleaseSearch(
           client,
           { titleId: title.id },
-          { signal: abortController.signal, onUpdate },
+          {
+            signal: abortController.signal,
+            onUpdate,
+            onError: () => {
+              if (!abortController.signal.aborted) {
+                setGlobalStatus(t("nzb.searchFailed"), { level: "ERROR" });
+              }
+            },
+          },
         );
         if (abortController.signal.aborted) {
           return [];

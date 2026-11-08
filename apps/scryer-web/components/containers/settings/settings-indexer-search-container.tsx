@@ -317,6 +317,14 @@ export function SettingsIndexerSearchContainer() {
           {
             signal: controller.signal,
             after: nextPage,
+            onError: () => {
+              if (
+                !controller.signal.aborted &&
+                searchAbortRef.current === controller
+              ) {
+                setGlobalStatus(t("nzb.searchFailed"), { level: "ERROR" });
+              }
+            },
             onUpdate: (snapshot) => {
               if (
                 controller.signal.aborted ||

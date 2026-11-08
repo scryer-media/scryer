@@ -888,6 +888,11 @@ export const WantedContainer = memo(function WantedContainer({
           setCutoffActiveInteractiveItemId(itemKey);
         }
       };
+      let searchFailed = false;
+      const onError = () => {
+        searchFailed = true;
+        setGlobalStatus(t("nzb.searchFailed"), { level: "ERROR" });
+      };
       try {
         if (item.episodeId) {
           const season = item.seasonNumber?.trim();
@@ -904,26 +909,30 @@ export const WantedContainer = memo(function WantedContainer({
               season,
               episode,
             },
-            { onUpdate },
+            { onUpdate, onError },
           );
           setCutoffSearchResultsByItemId((current) => ({
             ...current,
             [itemKey]: results,
           }));
           setCutoffActiveInteractiveItemId(itemKey);
-          setGlobalStatus(t("status.foundNzb", { count: results.length }));
+          if (!searchFailed) {
+            setGlobalStatus(t("status.foundNzb", { count: results.length }));
+          }
         } else {
           const results = await runIterativeReleaseSearch(
             client,
             { titleId: item.titleId },
-            { onUpdate },
+            { onUpdate, onError },
           );
           setCutoffSearchResultsByItemId((current) => ({
             ...current,
             [itemKey]: results,
           }));
           setCutoffActiveInteractiveItemId(itemKey);
-          setGlobalStatus(t("status.foundNzb", { count: results.length }));
+          if (!searchFailed) {
+            setGlobalStatus(t("status.foundNzb", { count: results.length }));
+          }
         }
       } catch (error) {
         setGlobalStatus(

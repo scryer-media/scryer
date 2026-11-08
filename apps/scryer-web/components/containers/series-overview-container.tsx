@@ -2179,6 +2179,11 @@ export const SeriesOverviewContainer = React.memo(
           }),
           {
             signal: abortController.signal,
+            onError: () => {
+              if (!abortController.signal.aborted) {
+                setGlobalStatus(t("nzb.searchFailed"), { level: "ERROR" });
+              }
+            },
             onUpdate: (snapshot) => {
               if (abortController.signal.aborted) return;
               setSeasonSearchResultsByCollection((prev) => ({
