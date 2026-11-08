@@ -183,6 +183,8 @@ pub(crate) struct ResolvedReleaseSearchSubject {
     /// availability. Coverage from such a search proves nothing about the
     /// released catalog, so it is fingerprinted apart from released coverage.
     pub(crate) pre_release: bool,
+    /// The scoped episode's automatic acquisition window; absent for an unknown schedule.
+    pub(crate) episode_search_not_before: Option<DateTime<Utc>>,
 }
 
 /// How long after an air or availability date a search still counts as
@@ -229,6 +231,7 @@ pub(crate) enum ReleaseAutoDecisionCode {
     TitleMismatch,
     EpisodeMismatch,
     EpisodeNotMonitored,
+    EpisodeAvailabilityBlocked,
     AcquisitionPaused,
     AcquisitionStateUnavailable,
     CategoryMismatch,
@@ -285,6 +288,7 @@ impl ReleaseAutoDecisionCode {
             "title_mismatch" => Some(Self::TitleMismatch),
             "episode_mismatch" => Some(Self::EpisodeMismatch),
             "episode_not_monitored" => Some(Self::EpisodeNotMonitored),
+            "episode_availability_blocked" => Some(Self::EpisodeAvailabilityBlocked),
             "acquisition_paused" => Some(Self::AcquisitionPaused),
             "acquisition_state_unavailable" => Some(Self::AcquisitionStateUnavailable),
             // Deliberately the same string the pre-submission gate records on
@@ -326,6 +330,7 @@ impl ReleaseAutoDecisionCode {
             Self::TitleMismatch => "title_mismatch",
             Self::EpisodeMismatch => "episode_mismatch",
             Self::EpisodeNotMonitored => "episode_not_monitored",
+            Self::EpisodeAvailabilityBlocked => "episode_availability_blocked",
             Self::AcquisitionPaused => "acquisition_paused",
             Self::AcquisitionStateUnavailable => "acquisition_state_unavailable",
             Self::CategoryMismatch => "category_mismatch",
@@ -369,6 +374,9 @@ impl ReleaseAutoDecisionCode {
             // not match" and "one of these episodes is unmonitored" call for
             // different operator actions.
             Self::EpisodeNotMonitored => "release covers an episode this library is not monitoring",
+            Self::EpisodeAvailabilityBlocked => {
+                "episode has not reached its automatic acquisition window"
+            }
             Self::AcquisitionPaused => "acquisition is paused for content covered by this release",
             Self::AcquisitionStateUnavailable => {
                 "acquisition state could not be checked; try again"
@@ -460,8 +468,8 @@ pub(crate) struct AutoCandidateEvaluationContext<'a> {
     /// (`if (information.SearchCriteria != null) return Accept()`). The old-file
     /// guard binds only here.
     pub(crate) is_rss_lane: bool,
-    /// Interactive searches bypass protocol delay while retaining hard minimum
-    /// age and permanent diagnostics.
+    /// Interactive searches bypass protocol delay and the episode air window
+    /// while retaining hard minimum age and permanent diagnostics.
     pub(crate) user_invoked: bool,
     /// Publication timestamp of the oldest active pending release overlapping
     /// this scope. Populated only by the RSS merge lane.
@@ -2334,6 +2342,15 @@ pub(crate) fn evaluate_auto_candidate(
         return ReleaseAutoDecisionCode::AmbiguousIdentity;
     }
 
+    if !context.user_invoked
+        && context
+            .subject
+            .episode_search_not_before
+            .is_some_and(|opens_at| *context.now < opens_at)
+    {
+        return ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked;
+    }
+
     let is_allowed = candidate
         .quality_profile_decision
         .as_ref()
@@ -3254,6 +3271,7 @@ impl AppUseCase {
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
+            episode_search_not_before: None,
             pre_release: title.facet == MediaFacet::Movie
                 && movie_is_pre_release(
                     title.first_aired.as_deref(),
@@ -3451,6 +3469,11 @@ impl AppUseCase {
                     .and_then(|episode| episode.air_date.as_deref()),
                 &Utc::now(),
             ),
+            episode_search_not_before: crate::acquisition_policy::episode_search_not_before(
+                episode_record
+                    .as_ref()
+                    .and_then(|episode| episode.air_date.as_deref()),
+            ),
         })
     }
 
@@ -3580,6 +3603,7 @@ impl AppUseCase {
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Season,
                 submission_scope,
+                episode_search_not_before: None,
                 pre_release: false,
             },
             // Results come back under any name the index holds for the title,
@@ -3650,6 +3674,7 @@ impl AppUseCase {
                 submission_scope: SubmissionScope::SeriesMovie {
                     series_movie_link_id: link.id.clone(),
                 },
+                episode_search_not_before: None,
                 pre_release: false,
             },
         ))
@@ -3786,6 +3811,13 @@ impl AppUseCase {
                     _ => ReleaseSearchSubjectKind::Title,
                 },
                 submission_scope: direct_download_submission_scope_for_wanted_item(item, episode),
+                episode_search_not_before: if item.media_type == "episode" {
+                    crate::acquisition_policy::episode_search_not_before(
+                        episode.and_then(|episode| episode.air_date.as_deref()),
+                    )
+                } else {
+                    None
+                },
                 pre_release: match item.media_type.as_str() {
                     "episode" => episode_is_pre_release(
                         episode.and_then(|episode| episode.air_date.as_deref()),
@@ -4864,6 +4896,7 @@ mod tests {
                 episode_ids: episode_ids.iter().map(|id| (*id).to_string()).collect(),
             },
             pre_release: false,
+            episode_search_not_before: None,
         }
     }
 
@@ -5029,6 +5062,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
             pre_release: false,
+            episode_search_not_before: None,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -5107,6 +5141,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
             pre_release: false,
+            episode_search_not_before: None,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -5203,6 +5238,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Episode,
             submission_scope: SubmissionScope::Title,
             pre_release: false,
+            episode_search_not_before: None,
         }
     }
 
@@ -6159,6 +6195,81 @@ mod tests {
     }
 
     #[test]
+    fn issue_427_automatic_episode_acquisition_obeys_pre_air_window() {
+        let mut title = make_title();
+        title.name = "Example Show".into();
+        title.facet = MediaFacet::Series;
+        title.year = Some(2026);
+        title.aliases.clear();
+        title.tagged_aliases.clear();
+        let mut subject = numbering_scoped_subject(&title, Some(1), Some(1));
+        subject.submission_scope = SubmissionScope::Episode {
+            episode_id: "episode-1".into(),
+        };
+        let mut candidate = make_candidate(
+            "EXAMPLE.SHOW.S01E01.Pilot.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-GROUP",
+            None,
+        );
+        candidate.quality_profile_decision = Some(allowed_quality_decision(895));
+        let now = DateTime::parse_from_rfc3339("2026-11-04T08:19:43Z")
+            .expect("fixture time")
+            .with_timezone(&Utc);
+        let profile = QualityProfile::default();
+        let thresholds = AcquisitionThresholds::default();
+        let admission = empty_admission();
+        let db_blocklist = crate::app_usecase_discovery::TitleReleaseBlocklistSignatures::default();
+        let minimum_seeders = HashMap::new();
+        let unmonitored_episode_ids = HashSet::new();
+
+        for (air_date, blocked) in [
+            (Some("2026-11-23"), true),
+            (Some("2026-11-04T14:19:44Z"), true),
+            (Some("2026-11-04T14:19:43Z"), false),
+            (Some("2026-11-04T14:19:42Z"), false),
+            (Some("2026-11-03"), false),
+            (None, false),
+            (Some("unknown"), false),
+        ] {
+            subject.episode_search_not_before =
+                crate::acquisition_policy::episode_search_not_before(air_date);
+            for is_rss_lane in [true, false] {
+                for user_invoked in [false, true] {
+                    let context = AutoCandidateEvaluationContext {
+                        title: &title,
+                        subject: &subject,
+                        admission: &admission,
+                        profile: &profile,
+                        thresholds: &thresholds,
+                        incumbent_at_cutoff: false,
+                        is_rss_lane,
+                        user_invoked,
+                        oldest_overlapping_pending_published_at: None,
+                        now: &now,
+                        dl_snapshot: None,
+                        db_blocklist: &db_blocklist,
+                        existing_files: &[],
+                        delay_profiles: &[],
+                        failed_routes: None,
+                        minimum_seeders: &minimum_seeders,
+                        unmonitored_episode_ids: &unmonitored_episode_ids,
+                    };
+                    assert_eq!(
+                        evaluate_auto_candidate(&candidate, &context),
+                        if blocked && !user_invoked {
+                            ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked
+                        } else {
+                            ReleaseAutoDecisionCode::Eligible
+                        },
+                        "{air_date:?}, rss={is_rss_lane}, manual={user_invoked}",
+                    );
+                }
+            }
+        }
+        let code = ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked;
+        assert_eq!(ReleaseAutoDecisionCode::parse(code.as_str()), Some(code));
+    }
+
+    #[test]
     fn numbered_episode_completion_title_is_not_rejected_as_an_unresolved_pack() {
         let title = make_title();
         let subject = numbering_scoped_subject(&title, Some(1), Some(1));
@@ -7084,6 +7195,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
             pre_release: false,
+            episode_search_not_before: None,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -7176,6 +7288,7 @@ mod tests {
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 submission_scope: SubmissionScope::Title,
                 pre_release: false,
+                episode_search_not_before: None,
             }
         }
 

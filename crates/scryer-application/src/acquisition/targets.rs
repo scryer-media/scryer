@@ -813,8 +813,8 @@ impl AppUseCase {
             {
                 continue;
             }
-            // An unaired (or undated) episode is not yet available — RSS still
-            // grabs an early posting; active search waits for the air window.
+            // Active search requires a schedule. RSS can accept an undated
+            // posting, but shares the pre-air window when the date is known.
             if !episode_search_window_is_open(episode.air_date.as_deref(), now) {
                 transitions.note(
                     &episode.title_id,
