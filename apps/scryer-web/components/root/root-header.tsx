@@ -1345,6 +1345,7 @@ export const RootHeader = React.memo(function RootHeader({
       <header
         ref={headerRef}
         data-slot="root-header"
+        data-mobile-hidden={(isMobile && !isMobileHeaderVisible) || undefined}
         className={cn(
           "relative z-50 border-b border-[var(--scry-border3)] bg-transparent pt-safe-comfort px-safe backdrop-blur transition-transform duration-200 ease-out",
           isMobile ? "fixed inset-x-0 top-0" : "sticky top-0",

@@ -578,6 +578,82 @@ body {
   margin-bottom: 0.9rem;
 }
 
+/* Series overview episodes panel: while episodes are selected, the header and
+   its bulk actions dock to the top of the scroller as a full-width bar.
+   `overflow: clip` keeps the card's clipping without turning it into a scroll
+   container, which would stop the header from sticking. The header bleeds to
+   the card edges so the docked bar spans the whole panel. */
+[data-slot="card"][data-ui="series-episodes"]:not(.bg-transparent) {
+  overflow: clip;
+}
+
+[data-slot="card"][data-ui="series-episodes"] > [data-slot="card-header"] {
+  margin: -1rem -1rem 0;
+  padding: 1rem 1rem 0.75rem;
+  border-radius: calc(0.75rem - 1px) calc(0.75rem - 1px) 0 0;
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    border-radius 180ms ease;
+}
+
+.dark [data-slot="card"][data-ui="series-episodes"] > [data-slot="card-header"] {
+  padding-bottom: 0.9rem;
+  margin-bottom: 0.9rem;
+}
+
+@media (max-width: 639px) {
+  [data-slot="card"][data-ui="series-episodes"] > [data-slot="card-header"] {
+    margin-inline: -0.5rem;
+    margin-top: -0.5rem;
+    padding-inline: 0.75rem;
+    padding-top: 0.75rem;
+  }
+}
+
+[data-slot="card"][data-ui="series-episodes"]
+  > [data-slot="card-header"][data-sticky] {
+  position: sticky;
+  top: var(--root-header-height, 0px);
+  z-index: 20;
+  transition:
+    top 200ms ease-out,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    border-radius 180ms ease;
+}
+
+/* The mobile header slides away while scrolling down; take its place. */
+:root:has([data-slot="root-header"][data-mobile-hidden])
+  [data-slot="card"][data-ui="series-episodes"]
+  > [data-slot="card-header"][data-sticky] {
+  top: 0;
+}
+
+@media (min-width: 1280px) {
+  [data-slot="card"][data-ui="series-episodes"]
+    > [data-slot="card-header"][data-sticky] {
+    top: 0;
+  }
+}
+
+[data-slot="card"][data-ui="series-episodes"]
+  > [data-slot="card-header"][data-docked] {
+  border-radius: 0;
+  background-color: color-mix(in srgb, var(--card) 94%, transparent);
+  backdrop-filter: blur(16px) saturate(130%);
+  box-shadow:
+    0 1px 0 var(--scry-border),
+    0 14px 28px -18px rgba(2, 6, 23, 0.45);
+}
+
+.dark
+  [data-slot="card"][data-ui="series-episodes"]
+  > [data-slot="card-header"][data-docked] {
+  background-color: rgba(10, 15, 29, 0.94);
+  box-shadow: 0 16px 32px -18px rgba(2, 6, 23, 0.85);
+}
+
 .dark [data-slot="sidebar-inner"] {
   background:
     linear-gradient(180deg, rgba(12, 18, 34, 0.96), rgba(7, 12, 24, 0.98)),
