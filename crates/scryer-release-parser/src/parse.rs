@@ -4807,6 +4807,7 @@ fn build_candidate(
             .collect::<Vec<_>>(),
         audio_channels: state.metadata.audio_channels.clone(),
         is_dual_audio: false,
+        is_multi_audio: false,
         is_atmos: false,
         is_dolby_vision: false,
         detected_hdr: false,

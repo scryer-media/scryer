@@ -5133,3 +5133,37 @@ fn a_dotted_channel_layout_after_a_multi_part_codec_is_not_an_episode() {
         }
     }
 }
+
+#[test]
+fn enrichment_flags_multi_audio_markers_without_naming_a_language() {
+    let projected_for_anime = |raw: &str| {
+        crate::best_parse_for_target(raw, &context(ContextFacetHint::Anime, "Amber Lantern"))
+    };
+    // Name structures taken from real anime listings, with the titles swapped.
+    for raw in [
+        "Amber Lantern S02E02 A Quiet Morning 1080p CR WEB-DL MULTi AAC2.0 H.264-GRP (Amber Lantern 2nd Season, Multi-Audio, Multi-Subs)",
+        "[Enc] Amber Lantern - S01 (BD 1080p x265 10-bit Opus 2.0) [Multi-Audio]",
+        "[Enc] Amber Lantern 01-12 (DVDRip VFR HEVC AC3) [MultiAudio][MultiSubs]",
+        "Amber Lantern S01 1080p ADN WEB-DL AAC2.0 x264-GRP (Multi Audio, Amber Lantern Uncut)",
+        "Amber.Lantern.S01E01.MULTi.AD.1080p.BluRay.x265-GRP",
+    ] {
+        let parsed = projected_for_anime(raw);
+        assert!(parsed.is_multi_audio, "{raw}");
+        assert!(!parsed.is_dual_audio, "{raw}");
+        assert!(
+            !parsed
+                .languages_audio
+                .iter()
+                .any(|language| language == "eng"),
+            "{raw}"
+        );
+    }
+
+    for raw in [
+        "Amber Lantern S04E18 A Quiet Morning 1080p CR WEB-DL AAC2.0 H.264-GRP (Amber Lantern, Multi-Subs)",
+        "[Enc] Amber Lantern S01E01 [WEBRip 1080p AV1 Opus] (Dual Audio, Multi Subs)",
+        "[Enc] Amber Lantern 01-12 (BDRip VFR HEVC FLAC) [DualAudio][MultiSubs]",
+    ] {
+        assert!(!projected_for_anime(raw).is_multi_audio, "{raw}");
+    }
+}

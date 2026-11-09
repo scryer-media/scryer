@@ -798,6 +798,9 @@ pub struct ParsedReleaseMetadata {
     pub audio_codecs: Vec<AudioCodec>,
     pub audio_channels: Option<String>,
     pub is_dual_audio: bool,
+    /// A multi-audio marker (`MULTi`, `Multi-Audio`): several audio tracks,
+    /// the original language among them. It names no language by itself.
+    pub is_multi_audio: bool,
     pub is_atmos: bool,
     pub is_dolby_vision: bool,
     pub detected_hdr: bool,
@@ -857,6 +860,7 @@ impl ParsedReleaseMetadata {
             audio_codecs: Vec::new(),
             audio_channels: None,
             is_dual_audio: false,
+            is_multi_audio: false,
             is_atmos: false,
             is_dolby_vision: false,
             detected_hdr: false,
@@ -1096,6 +1100,9 @@ pub struct MetadataEnrichment {
     pub audio_codecs: Vec<String>,
     pub audio_channels: Option<String>,
     pub is_dual_audio: bool,
+    /// A multi-audio marker (`MULTi`, `Multi-Audio`): several audio tracks,
+    /// the original language among them. It names no language by itself.
+    pub is_multi_audio: bool,
     pub is_atmos: bool,
     pub is_dolby_vision: bool,
     pub detected_hdr: bool,

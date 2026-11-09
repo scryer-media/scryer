@@ -229,6 +229,15 @@ pub(crate) fn release_audio_language_hints_for_title(
         push_language(&mut normalized, original_language);
     }
 
+    if parsed.is_multi_audio && !parsed.is_dual_audio {
+        // A multi-audio release keeps the original-language track next to
+        // whichever dubs it names. The marker never implies English: French
+        // and German groups use it for their own dub plus the original.
+        if let Some(context) = title_language_context {
+            push_language(&mut normalized, &context.inferred_original_audio_language);
+        }
+    }
+
     if normalized.is_empty()
         && !parsed.is_dual_audio
         && infer_unlabeled_audio
@@ -474,6 +483,39 @@ mod tests {
             release_audio_language_hints_for_title(&parsed, None, Some(&context), false),
             vec!["eng".to_string()]
         );
+    }
+
+    #[test]
+    fn multi_audio_adds_the_original_language_and_never_english() {
+        let anime = title_audio_language_context(None, None, Some("anime"), &[]);
+
+        // A French group's multi release: French dub plus the original.
+        let parsed = parse_release_metadata(
+            "Example Title S01E08 MULTi 1080p WEB x265 E-AC-3 -GRP (VF, FRENCH, VOSTFR, Multi-Subs, Multi-Audio)",
+        );
+        assert_eq!(
+            release_audio_language_hints_for_title(&parsed, None, Some(&anime), false),
+            vec!["fra".to_string(), "jpn".to_string()]
+        );
+
+        // A German group's multi release naming only its dub.
+        let parsed = parse_release_metadata(
+            "[Enc] Example Title - S01 (BD 720p x264 DTS 5.1) (Multi-Audio) (German/Deutsch)",
+        );
+        assert_eq!(
+            release_audio_language_hints_for_title(&parsed, None, Some(&anime), false),
+            vec!["deu".to_string(), "jpn".to_string()]
+        );
+
+        // No language named: only the original is known.
+        let parsed = parse_release_metadata(
+            "Example Title S02E02 1080p CR WEB-DL MULTi AAC2.0 H.264-GRP (Multi-Audio, Multi-Subs)",
+        );
+        assert_eq!(
+            release_audio_language_hints_for_title(&parsed, None, Some(&anime), false),
+            vec!["jpn".to_string()]
+        );
+        assert!(release_audio_language_hints_for_title(&parsed, None, None, false).is_empty());
     }
 
     #[test]
