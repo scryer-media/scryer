@@ -3789,7 +3789,7 @@ fn parse_identity_at(
                 return None;
             }
             if let Some((season, episode_numbers, last_token)) =
-                parse_hyphenated_standard_episode_range_at(tokens, index)
+                parse_hyphenated_standard_episode_range_at(tokens, index, false)
             {
                 let score = if episode_numbers.len() > 1 { 32 } else { 28 };
                 return Some((
@@ -6603,7 +6603,8 @@ fn is_resolution_dimension(token: &str) -> bool {
 }
 
 fn is_standard_episode_range_endpoint_at(tokens: &[Token], index: usize) -> bool {
-    let Some((_, episode_numbers, _)) = parse_hyphenated_standard_episode_range_at(tokens, index)
+    let Some((_, episode_numbers, _)) =
+        parse_hyphenated_standard_episode_range_at(tokens, index, false)
     else {
         return false;
     };
@@ -6817,9 +6818,12 @@ fn parse_parenthetical_standard_after_absolute_at(
     None
 }
 
+/// `spaced_bare_end` lets the first endpoint be a spaced bare number. Only a
+/// caller whose scope rules out a numeric episode title may pass it.
 fn parse_hyphenated_standard_episode_range_at(
     tokens: &[Token],
     index: usize,
+    spaced_bare_end: bool,
 ) -> Option<(Option<u32>, Vec<u32>, usize)> {
     let (season, episode_numbers) =
         parse_standard_episode_token(tokens.get(index)?.normalized.as_str())?;
@@ -6838,7 +6842,10 @@ fn parse_hyphenated_standard_episode_range_at(
         let bare_number = endpoint.bytes().all(|byte| byte.is_ascii_digit());
         // A spaced bare number is an episode title or an anime absolute slot.
         // Unambiguous ranges use a fused hyphen or an explicit E/SxxE endpoint.
-        if bare_number && next.separator_before_has_space {
+        if bare_number
+            && next.separator_before_has_space
+            && !(spaced_bare_end && last_token == index)
+        {
             break;
         }
         let endpoint = parse_episode_component(endpoint)
@@ -8039,7 +8046,9 @@ fn parse_multi_season_bounded_range_at(tokens: &[Token], index: usize) -> Option
         .is_some_and(|token| token.normalized.starts_with('E'))
     {
         let (_, episodes, last_token) =
-            parse_hyphenated_standard_episode_range_at(tokens, range_index)?;
+            // The explicit multi-season scope before the range rules out a
+            // numeric episode title, so a spaced bare endpoint is a range end.
+            parse_hyphenated_standard_episode_range_at(tokens, range_index, true)?;
         return (episodes.len() > 1).then(|| RangePackParse {
             season: None,
             range_start: *episodes.first().expect("non-empty range"),
@@ -8067,7 +8076,7 @@ fn parse_standard_episode_range_pack_at(tokens: &[Token], index: usize) -> Optio
         });
     }
     if let Some((season, episode_numbers, last_token)) =
-        parse_hyphenated_standard_episode_range_at(tokens, index)
+        parse_hyphenated_standard_episode_range_at(tokens, index, false)
         && episode_numbers.len() > 1
     {
         return Some(RangePackParse {

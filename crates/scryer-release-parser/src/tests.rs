@@ -79,6 +79,53 @@ fn explicit_standard_ranges_preserve_members_before_episode_titles() {
 }
 
 #[test]
+fn multi_season_scope_keeps_a_spaced_episode_range() {
+    for facet in [
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+        ContextFacetHint::Unknown,
+    ] {
+        let raw = "Show A S01-S03 E01 - 10 1080p";
+        let parsed = crate::best_parse_for_target(raw, &context(facet, "Show A"));
+        let episode = parsed.episode.expect(raw);
+        assert!(episode.is_multi_season, "{raw}");
+        assert_eq!(episode.season_numbers, vec![1, 2, 3], "{raw}");
+        assert_eq!(episode.season, None, "{raw}");
+        assert_eq!(
+            episode.absolute_episode_numbers,
+            (1..=10).collect::<Vec<_>>(),
+            "{raw}"
+        );
+        assert!(!episode.full_season, "{raw}");
+        assert_eq!(parsed.release_group, None, "{raw}");
+    }
+}
+
+#[test]
+fn fused_and_explicit_ranges_survive_following_segments() {
+    for (raw, expected) in [
+        (
+            "Show A - S01E01-14 - 1080p WEB H.264 -GRP (SVC)",
+            (1..=14).collect::<Vec<_>>(),
+        ),
+        (
+            "[Grp] Show A (2024) - S01E01-12 - 001-012 - Season 1 - [Batch]",
+            (1..=12).collect(),
+        ),
+        ("Show-A-[E01-E02-E03]-[1280x720p]", vec![1, 2, 3]),
+        ("[Grp] Show A E01-02 - Some Title [1080p]", vec![1, 2]),
+    ] {
+        let parsed =
+            crate::best_parse_for_target(raw, &context(ContextFacetHint::Series, "Show A"));
+        let episode = parsed.episode.expect(raw);
+        assert_eq!(episode.season, Some(1), "{raw}");
+        assert_eq!(episode.episode_numbers, expected, "{raw}");
+        assert!(!episode.full_season, "{raw}");
+        assert!(!episode.is_multi_season, "{raw}");
+    }
+}
+
+#[test]
 fn parenthetical_qualifiers_do_not_create_independent_title_identities() {
     for (name, full_title) in [
         ("The Office (US)", "THE OFFICE US"),
