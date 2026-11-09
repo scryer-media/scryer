@@ -2258,7 +2258,8 @@ const fr: LocaleDictionary = {
   "wanted.decision.eligible": "Éligible",
   "wanted.decision.titleMismatch": "Titre non correspondant",
   "wanted.decision.qualityBlocked": "Bloqué par la qualité",
-  "wanted.decision.episodeAvailabilityBlocked": "En attente de la date de diffusion",
+  "wanted.decision.episodeAvailabilityBlocked":
+    "En attente de la date de diffusion",
   "wanted.decision.upgradeRejected": "Mise à niveau rejetée",
   "wanted.decision.pendingDelay": "Délai en attente",
   "wanted.decision.alreadyActive": "Déjà actif",
