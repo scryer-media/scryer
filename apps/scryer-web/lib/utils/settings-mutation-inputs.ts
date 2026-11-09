@@ -1,4 +1,5 @@
 import type {
+  AcquisitionWalkIntensity,
   ProxyDraft,
   UiDateTimeFormat,
   VerificationDepth,
@@ -241,6 +242,34 @@ export function buildDownloadClientProxyUpdateInput(
   proxyConfigId: string | null,
 ): { proxyConfigId: string | null } {
   return { proxyConfigId };
+}
+
+export type AcquisitionSettingsInput = {
+  enabled: boolean;
+  pollIntervalSeconds: number;
+  walkIntervalSeconds: number;
+  walkIntensity: AcquisitionWalkIntensity;
+  longTailBackfillMaxScopesPerCycle: number;
+  longTailReconvergeDays: number;
+};
+
+/**
+ * The acquisition form edits the query result in place, and urql stamps that
+ * object with `__typename`, which the server rejects as an unknown input
+ * field. The input is therefore rebuilt from exactly the fields it accepts.
+ */
+export function buildAcquisitionSettingsInput(
+  settings: AcquisitionSettingsInput,
+): AcquisitionSettingsInput {
+  return {
+    enabled: settings.enabled,
+    pollIntervalSeconds: settings.pollIntervalSeconds,
+    walkIntervalSeconds: settings.walkIntervalSeconds,
+    walkIntensity: settings.walkIntensity,
+    longTailBackfillMaxScopesPerCycle:
+      settings.longTailBackfillMaxScopesPerCycle,
+    longTailReconvergeDays: settings.longTailReconvergeDays,
+  };
 }
 
 export function parseUiDateTimeFormat(value: string): UiDateTimeFormat | null {

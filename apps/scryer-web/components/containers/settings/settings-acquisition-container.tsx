@@ -11,6 +11,7 @@ import { acquisitionSettingsQuery } from "@/lib/graphql/queries";
 import { updateAcquisitionSettingsMutation } from "@/lib/graphql/mutations";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { APP_PERMISSIONS, hasAnyAppPermission } from "@/lib/utils/permissions";
+import { buildAcquisitionSettingsInput } from "@/lib/utils/settings-mutation-inputs";
 
 type AcquisitionSettingsQueryResult = {
   acquisitionSettings?: AcquisitionSettings | null;
@@ -70,7 +71,7 @@ export function SettingsAcquisitionContainer() {
           .mutation<UpdateAcquisitionSettingsResult>(
             updateAcquisitionSettingsMutation,
             {
-              input: next,
+              input: buildAcquisitionSettingsInput(next),
             },
           )
           .toPromise();

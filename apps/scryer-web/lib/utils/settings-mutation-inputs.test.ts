@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildAcquisitionSettingsInput,
   buildCreateProxyInput,
   buildDownloadClientConnectionTestInput,
   buildDownloadClientProxyCreateInput,
@@ -495,6 +496,29 @@ test("download client proxy assignments omit on create and clear on update", () 
   assert.deepEqual(buildDownloadClientProxyUpdateInput(null), {
     proxyConfigId: null,
   });
+});
+
+test("acquisition settings built from a query result carry no __typename", () => {
+  // The form's draft is the query result itself, as urql returns it.
+  const fromQuery = {
+    __typename: "AcquisitionSettingsPayload",
+    enabled: true,
+    pollIntervalSeconds: 60,
+    walkIntervalSeconds: 3600,
+    walkIntensity: "NORMAL" as const,
+    longTailBackfillMaxScopesPerCycle: 25,
+    longTailReconvergeDays: 30,
+  };
+
+  assert.deepEqual(buildAcquisitionSettingsInput(fromQuery), {
+    enabled: true,
+    pollIntervalSeconds: 60,
+    walkIntervalSeconds: 3600,
+    walkIntensity: "NORMAL",
+    longTailBackfillMaxScopesPerCycle: 25,
+    longTailReconvergeDays: 30,
+  });
+  assert.equal("__typename" in buildAcquisitionSettingsInput(fromQuery), false);
 });
 
 test("time format values preserve GraphQL enum casing", () => {
