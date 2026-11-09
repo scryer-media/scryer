@@ -236,10 +236,16 @@ pub(crate) fn release_audio_language_hints_for_title(
     });
     if parsed.is_multi_audio && !parsed.is_dual_audio && !indexer_reported_audio {
         // A multi-audio release keeps the original-language track next to
-        // whichever dubs it names. The marker never implies English: French
-        // and German groups use it for their own dub plus the original.
+        // its dubs. French and German groups use the marker for their own
+        // dub plus the original and name that dub, so a named language is
+        // taken at its word and English is not added. A release that names
+        // no language at all is the streaming-service kind, which carries
+        // the English dub among its tracks.
         // An indexer that lists the audio tracks is the better witness, so
         // the marker only fills in when it reported none.
+        if normalized.is_empty() {
+            push_language(&mut normalized, "eng");
+        }
         if let Some(context) = title_language_context {
             push_language(&mut normalized, &context.inferred_original_audio_language);
         }
@@ -493,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_audio_adds_the_original_language_and_never_english() {
+    fn multi_audio_adds_the_original_language_and_english_only_when_no_language_is_named() {
         let anime = title_audio_language_context(None, None, Some("anime"), &[]);
 
         // A French group's multi release: French dub plus the original.
@@ -514,15 +520,37 @@ mod tests {
             vec!["deu".to_string(), "jpn".to_string()]
         );
 
-        // No language named: only the original is known.
-        let parsed = parse_release_metadata(
+        // No language named: English next to the original. Name structures
+        // taken from real anime listings, with the titles swapped.
+        for raw in [
             "Example Title S02E02 1080p CR WEB-DL MULTi AAC2.0 H.264-GRP (Multi-Audio, Multi-Subs)",
-        );
-        assert_eq!(
-            release_audio_language_hints_for_title(&parsed, None, Some(&anime), false),
-            vec!["jpn".to_string()]
-        );
-        assert!(release_audio_language_hints_for_title(&parsed, None, None, false).is_empty());
+            "[Enc] Example Title S01E06 1080p AMZN WEB-DL MULTi DDP5.1 H.264 (Example Title, Multi-Audio, Multi-Subs)",
+            "[Enc] Example Title (Season 2) [1080p][HEVC x265 10bit][Multi-Audio][Multi-Subs] (Batch)",
+            "[Enc] Example Title - S01E06 [WEB.1080p.AV1] | Example Title (Multi-Audio, Multi-Subs) (Weekly)",
+        ] {
+            let parsed = parse_release_metadata(raw);
+            assert_eq!(
+                release_audio_language_hints_for_title(&parsed, None, Some(&anime), false),
+                vec!["eng".to_string(), "jpn".to_string()],
+                "{raw}"
+            );
+            assert_eq!(
+                release_audio_language_hints_for_title(&parsed, None, None, false),
+                vec!["eng".to_string()],
+                "{raw}"
+            );
+            // An indexer that lists the tracks is believed over the marker.
+            assert_eq!(
+                release_audio_language_hints_for_title(
+                    &parsed,
+                    Some(&["Japanese".to_string(), "German".to_string()]),
+                    Some(&anime),
+                    false,
+                ),
+                vec!["jpn".to_string(), "deu".to_string()],
+                "{raw}"
+            );
+        }
     }
 
     #[test]
