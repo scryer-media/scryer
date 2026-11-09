@@ -925,18 +925,12 @@ impl AppUseCase {
                 );
                 let criteria = &context.profile.criteria;
                 let history_cutoff_reached = state.status == crate::AcquisitionScopeStatus::Wanted
-                    && criteria.cutoff_tier.as_deref().is_some_and(|cutoff| {
+                    && criteria.quality_cutoff_met(
                         facts
                             .tier_index
                             .and_then(|index| criteria.quality_tiers.get(index))
-                            .is_some_and(|quality| {
-                                crate::quality_profile::quality_meets_or_exceeds_cutoff(
-                                    quality,
-                                    cutoff,
-                                    &criteria.quality_tiers,
-                                )
-                            })
-                    })
+                            .map(String::as_str),
+                    )
                     && criteria
                         .cutoff_score
                         .is_none_or(|cutoff| facts.score >= cutoff);
@@ -1097,6 +1091,8 @@ impl AppUseCase {
             .with_queued(queued);
         let candidate =
             crate::admission::CandidateFacts::new(facts.tier_index, facts.revision, facts.score)
+                .with_language(facts.language)
+                .with_ranking_mode(upgrade.profile.criteria.ranking_mode)
                 .with_release_title(release_title)
                 .with_revision_policy(
                     facts.release_group.as_deref(),

@@ -879,6 +879,10 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同級最小分數差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一品質級別的資源必須比當前檔案的分數至少高出此值。",
+  "qualityProfile.scoreAlwaysWins": "分數始終優先",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "無論品質級別如何，都保留分數最高的資源，並忽略品質截止級別。",
+  "qualityProfile.cutoffTierNotApplicable": "啟用「分數始終優先」時不適用。",
   "settings.acquisitionCrossTierMinDelta": "跨級最小分數差",
   "settings.acquisitionCrossTierMinDeltaHelp":
     "更高品質級別的資源必須比當前檔案的分數至少高出此值。",

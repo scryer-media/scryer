@@ -982,6 +982,11 @@ const ru: LocaleDictionary = {
     "Минимальная разница оценки в одном уровне качества",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Релиз того же уровня качества должен превзойти оценку текущего файла как минимум на указанное значение.",
+  "qualityProfile.scoreAlwaysWins": "Оценка всегда важнее",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "Сохраняется релиз с лучшей оценкой независимо от уровня качества, а пороговый уровень качества игнорируется.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Не применяется, пока включено «Оценка всегда важнее».",
   "settings.acquisitionConvergence": "Сходимость и распределение нагрузки",
   "settings.acquisitionPollIntervalSeconds": "Интервал опроса (секунды)",
   "settings.acquisitionPollIntervalSecondsHelp":

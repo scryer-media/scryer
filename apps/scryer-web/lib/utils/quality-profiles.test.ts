@@ -19,6 +19,7 @@ const { commitQualityProfileDraftToEntries, hasDuplicateQualityProfileName } =
 const {
   DEFAULT_MIN_UPGRADE_SCORE_DELTA,
   normalizeQualityProfileEntry,
+  qualityProfileEntryFromGraph,
   qualityProfileEntryToMutationInput,
   toQualityProfileDraft,
 } = await import("./quality-profiles.ts");
@@ -52,6 +53,7 @@ function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
       cutoff_tier: null,
       min_score_to_grab: null,
       min_upgrade_score_delta: 120,
+      ranking_mode: "tier_first",
     },
   };
 }
@@ -79,6 +81,7 @@ function makeDraft(id: string, name: string): QualityProfileDraft {
     cutoff_tier: "",
     min_score_to_grab: null,
     min_upgrade_score_delta: 120,
+    ranking_mode: "tier_first",
   };
 }
 
@@ -191,4 +194,79 @@ test("a profile without a same-tier upgrade delta reads as the default", () => {
     negative?.criteria.min_upgrade_score_delta,
     DEFAULT_MIN_UPGRADE_SCORE_DELTA,
   );
+});
+
+test("score always wins survives draft, save and mutation input", () => {
+  const draft: QualityProfileDraft = {
+    ...makeDraft("default", "Cinema"),
+    cutoff_tier: "2160P",
+    ranking_mode: "score_first",
+  };
+  const saved = commitQualityProfileDraftToEntries(
+    [makeEntry("default", "Cinema")],
+    draft,
+  );
+  const entry = saved.catalogEntries[0];
+  assert.ok(entry);
+  assert.equal(entry.criteria.ranking_mode, "score_first");
+  // The cutoff tier is kept while it does not apply.
+  assert.equal(entry.criteria.cutoff_tier, "2160P");
+  assert.equal(
+    toQualityProfileDraft(entry, "x", "x").ranking_mode,
+    "score_first",
+  );
+  assert.equal(
+    qualityProfileEntryToMutationInput(entry).criteria.rankingMode,
+    "SCORE_FIRST",
+  );
+  const tierFirst = {
+    ...entry,
+    criteria: { ...entry.criteria, ranking_mode: "tier_first" as const },
+  };
+  assert.equal(
+    qualityProfileEntryToMutationInput(tierFirst).criteria.rankingMode,
+    "TIER_FIRST",
+  );
+});
+
+test("a missing or unknown ranking mode reads as tier-first", () => {
+  for (const ranking_mode of [undefined, "something_new", 3, "score_first"]) {
+    const parsed = normalizeQualityProfileEntry({
+      id: "imported",
+      name: "Imported",
+      criteria: { quality_tiers: ["1080P"], ranking_mode },
+    });
+    assert.equal(
+      parsed?.criteria.ranking_mode,
+      ranking_mode === "score_first" ? "score_first" : "tier_first",
+    );
+  }
+  const graph = makeEntry("graph", "Graph");
+  const fromGraph = qualityProfileEntryFromGraph({
+    id: graph.id,
+    name: graph.name,
+    criteria: {
+      qualityTiers: ["2160P"],
+      archivalQuality: "2160P",
+      allowUnknownQuality: false,
+      sourceAllowlist: [],
+      sourceBlocklist: [],
+      videoCodecAllowlist: [],
+      videoCodecBlocklist: [],
+      audioCodecAllowlist: [],
+      audioCodecBlocklist: [],
+      dolbyVisionAllowed: true,
+      detectedHdrAllowed: true,
+      preferRemux: false,
+      allowBdDisk: true,
+      allowUpgrades: true,
+      ignoreProperRepack: false,
+      scoringOverrides: {},
+      cutoffTier: null,
+      minScoreToGrab: null,
+      minUpgradeScoreDelta: 120,
+      rankingMode: "SCORE_FIRST",
+    },
+  });
+  assert.equal(fromGraph.criteria.ranking_mode, "score_first");
 });

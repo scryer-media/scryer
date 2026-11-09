@@ -799,6 +799,11 @@ const fr: LocaleDictionary = {
     "Delta de score minimal au même palier",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Une release du même palier de qualité doit dépasser le score du fichier actuel d'au moins cette valeur.",
+  "qualityProfile.scoreAlwaysWins": "Le score l'emporte toujours",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "La release au meilleur score est conservée quel que soit son palier de qualité, et le palier de qualité seuil est ignoré.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Sans effet tant que « Le score l'emporte toujours » est activé.",
   "settings.acquisitionConvergence": "Convergence et cadence",
   "settings.acquisitionPollIntervalSeconds":
     "Intervalle d'interrogation (secondes)",

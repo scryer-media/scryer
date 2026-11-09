@@ -330,7 +330,8 @@ pub(crate) async fn decide_import(
                     .profile()
                     .criteria
                     .ignore_proper_repack,
-            );
+            )
+            .with_ranking_mode(input.scoring_context.profile().criteria.ranking_mode);
 
     match evaluate_import_admission(
         &subject,

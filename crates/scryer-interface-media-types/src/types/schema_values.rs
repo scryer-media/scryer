@@ -359,6 +359,17 @@ pub enum AudioLanguagePriorityValue {
     LanguageFirst,
 }
 
+/// Whether a quality profile ranks releases on quality tier or on score.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum QualityRankingModeValue {
+    /// Quality tier first; the score decides between releases of equal tier.
+    TierFirst,
+    /// The best score wins whatever its quality tier; the tier only breaks
+    /// ties, and the cutoff tier does not apply.
+    ScoreFirst,
+}
+
 /// Monitoring mode applied to episodic content.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]

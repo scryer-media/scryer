@@ -737,6 +737,11 @@ const ja: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同一ティア内の最小スコア差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同じ品質ティアのリリースは、現在のファイルのスコアを少なくともこの値だけ上回る必要があります。",
+  "qualityProfile.scoreAlwaysWins": "常にスコアを優先",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "品質ティアに関係なく最高スコアのリリースを保持し、品質カットオフのティアは無視します。",
+  "qualityProfile.cutoffTierNotApplicable":
+    "「常にスコアを優先」が有効な間は適用されません。",
   "settings.acquisitionConvergence": "収束とペース",
   "settings.acquisitionPollIntervalSeconds": "ポーリング間隔（秒）",
   "settings.acquisitionPollIntervalSecondsHelp":

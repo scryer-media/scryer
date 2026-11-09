@@ -1,8 +1,8 @@
 use super::{
     AudioLanguagePriorityValue, ContentScopeValue, DelayProfilePreferredProtocolValue,
-    FillerPolicyValue, ImportModeValue, Long, MediaFacetValue, RecapPolicyValue,
-    RenameCollisionPolicyValue, RenameMissingMetadataPolicyValue, RootFolderPayload,
-    ScoringPersonaValue, VerificationDepthValue,
+    FillerPolicyValue, ImportModeValue, Long, MediaFacetValue, QualityRankingModeValue,
+    RecapPolicyValue, RenameCollisionPolicyValue, RenameMissingMetadataPolicyValue,
+    RootFolderPayload, ScoringPersonaValue, VerificationDepthValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -928,6 +928,9 @@ pub struct QualityProfileCriteriaPayload {
     /// Score a same-tier candidate must beat the current file by to count as
     /// an upgrade. Profiles that never set it report the default, 120.
     pub min_upgrade_score_delta: i32,
+    /// Whether releases are ranked on quality tier first or on score first.
+    /// Profiles that never set it report `TIER_FIRST`.
+    pub ranking_mode: QualityRankingModeValue,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1730,6 +1733,8 @@ pub struct QualityProfileCriteriaInput {
     /// value, and sending the default (120) stores the profile as using the
     /// default.
     pub min_upgrade_score_delta: Option<i32>,
+    /// Optional ranking mode. Omitting it keeps the stored value.
+    pub ranking_mode: Option<QualityRankingModeValue>,
 }
 
 #[derive(InputObject, Clone)]

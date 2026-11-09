@@ -309,7 +309,8 @@ impl AppUseCase {
 
         let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
         let dl_snapshot = super::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
-        let mut keys: std::collections::HashMap<String, (bool, usize, i32, i32, i32)> =
+        let score_first = profile.criteria.ranking_mode.is_score_first();
+        let mut keys: std::collections::HashMap<String, (bool, usize, i32, i32, usize, i32)> =
             std::collections::HashMap::with_capacity(releases.len());
         for release in releases.iter() {
             let facts = crate::quality::canonical_context::score_parked_release_title(
@@ -360,13 +361,18 @@ impl AppUseCase {
                 profile.criteria.ignore_proper_repack,
             );
             let revision_preference = crate::admission::revision_preference(candidate, &admission);
+            let tier = crate::admission::tier_sort_key(facts.tier_index);
+            // Score-first profiles rank on score with tier only breaking ties,
+            // matching the admission ladder for that mode.
+            let (tier_before, tier_after) = if score_first { (0, tier) } else { (tier, 0) };
             keys.insert(
                 release.id.clone(),
                 (
                     !facts.allowed,
-                    crate::admission::tier_sort_key(facts.tier_index),
+                    tier_before,
                     revision_preference.saturating_neg(),
                     facts.score.saturating_neg(),
+                    tier_after,
                     facts.size_fit_penalty,
                 ),
             );
@@ -1547,7 +1553,8 @@ impl AppUseCase {
         .with_revision_policy(
             facts.release_group.as_deref(),
             upgrade_context.profile.criteria.ignore_proper_repack,
-        );
+        )
+        .with_ranking_mode(upgrade_context.profile.criteria.ranking_mode);
         // The same candidate-aware cutoff gate the search and RSS lanes run
         // (D15). It used to be a scope-level `if cutoff_reached { return }`
         // above the score, which meant a PROPER parked behind a delay profile

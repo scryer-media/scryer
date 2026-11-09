@@ -5415,6 +5415,11 @@ const en: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "Same-tier minimum score delta",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "A release in the same quality tier must beat the current file's score by at least this much.",
+  "qualityProfile.scoreAlwaysWins": "Score always wins",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "The release with the best score is kept regardless of quality tier, and the quality cutoff tier is ignored.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Not applicable while Score always wins is on.",
   "settings.acquisitionConvergence": "Convergence & pacing",
   "settings.acquisitionPollIntervalSeconds": "Poll interval (seconds)",
   "settings.acquisitionPollIntervalSecondsHelp":

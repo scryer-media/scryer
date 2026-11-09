@@ -1194,7 +1194,9 @@ impl AppUseCase {
             .iter()
             .chain(std::iter::once(&default_profile))
             .any(|profile| {
-                profile.criteria.allow_upgrades && profile.criteria.cutoff_score.is_some()
+                profile.criteria.allow_upgrades
+                    && (profile.criteria.cutoff_score.is_some()
+                        || profile.criteria.ranking_mode.is_score_first())
             });
         let libraries = self.services.catalog.libraries.list(None).await?;
         if !any_cutoff_score {
@@ -1222,7 +1224,8 @@ impl AppUseCase {
             .await?;
         // Titles whose library or facet sets audio language preferences can be
         // language targets without any `cutoff_score`: a file missing the
-        // preferred language is never done (see `incumbent_at_cutoff`).
+        // preferred language still lets a better-language release past its
+        // cutoff (see `cutoff_refusal`), so it stays a search target.
         let mut preference_scopes: Vec<&str> = titles
             .iter()
             .flat_map(|(title, _)| [title.library_id.as_str(), title.facet.as_str()])
@@ -1232,14 +1235,22 @@ impl AppUseCase {
         let language_scopes = self
             .scopes_with_audio_language_preferences(&preference_scopes)
             .await?;
-        let scored: Vec<(scryer_domain::Title, Option<i32>)> = titles
+        // A score-first profile ignores the tier cutoff, so its titles are
+        // nominated here: below `cutoff_score` when one is set, and always
+        // (upgrading continues, limited by churn) when none is.
+        let scored: Vec<(scryer_domain::Title, Option<i32>, bool)> = titles
             .into_iter()
             .filter(|(_, profile)| profile.criteria.allow_upgrades)
             .filter_map(|(title, profile)| {
                 let language = language_scopes.contains(title.library_id.as_str())
                     || language_scopes.contains(title.facet.as_str());
                 let cutoff_score = profile.criteria.cutoff_score;
-                (language || cutoff_score.is_some()).then_some((title, cutoff_score))
+                let score_first = profile.criteria.ranking_mode.is_score_first();
+                (language || cutoff_score.is_some() || score_first).then_some((
+                    title,
+                    cutoff_score,
+                    score_first,
+                ))
             })
             .collect();
         if scored.is_empty() {
@@ -1249,15 +1260,18 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
 
-        let cutoff_by_title: HashMap<&str, Option<i32>> = scored
+        let cutoff_by_title: HashMap<&str, (Option<i32>, bool)> = scored
             .iter()
-            .map(|(title, cutoff)| (title.id.as_str(), *cutoff))
+            .map(|(title, cutoff, score_first)| (title.id.as_str(), (*cutoff, *score_first)))
             .collect();
         let title_by_id: HashMap<&str, &scryer_domain::Title> = scored
             .iter()
-            .map(|(title, _)| (title.id.as_str(), title))
+            .map(|(title, _, _)| (title.id.as_str(), title))
             .collect();
-        let title_ids: Vec<String> = scored.iter().map(|(title, _)| title.id.clone()).collect();
+        let title_ids: Vec<String> = scored
+            .iter()
+            .map(|(title, _, _)| title.id.clone())
+            .collect();
 
         // The same enumeration the quality sweep uses: one row per occupied
         // scope, already narrowed to titles whose profile asks the question.
@@ -1313,11 +1327,12 @@ impl AppUseCase {
                 // No bar means nothing scored for this scope; a scope with no
                 // number is not evidence that the number is low.
                 let Some(bar) = bar else { continue };
-                let Some(cutoff_score) = cutoff_by_title.get(summary.title_id.as_str()).copied()
+                let Some((cutoff_score, score_first)) =
+                    cutoff_by_title.get(summary.title_id.as_str()).copied()
                 else {
                     continue;
                 };
-                let below_cutoff = cutoff_score.is_some_and(|cutoff| bar.score < cutoff);
+                let below_cutoff = cutoff_score.map_or(score_first, |cutoff| bar.score < cutoff);
                 if !below_cutoff && !bar.language.wanted {
                     continue;
                 }

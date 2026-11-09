@@ -2831,7 +2831,8 @@ const qualityProfileCriteriaFields = `
       }
       cutoffTier
       minScoreToGrab
-      minUpgradeScoreDelta`;
+      minUpgradeScoreDelta
+      rankingMode`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId

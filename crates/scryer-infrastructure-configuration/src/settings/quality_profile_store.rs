@@ -344,6 +344,7 @@ fn decode_quality_profile(
             min_score_to_grab: scoring_config.min_score_to_grab,
             cutoff_score: scoring_config.cutoff_score,
             min_upgrade_score_delta: scoring_config.min_upgrade_score_delta,
+            ranking_mode: scoring_config.ranking_mode,
             facet_persona_overrides: scoring_config.facet_persona_overrides,
         },
     })
@@ -414,6 +415,7 @@ async fn upsert_quality_profile_tx(
         min_score_to_grab: criteria.min_score_to_grab,
         cutoff_score: criteria.cutoff_score,
         min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+        ranking_mode: criteria.ranking_mode,
         facet_persona_overrides: criteria.facet_persona_overrides,
     })
     .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -985,6 +987,71 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<JsonValue>(&raw).unwrap()["min_upgrade_score_delta"],
             5
+        );
+    }
+
+    #[tokio::test]
+    async fn quality_profile_ranking_mode_round_trips_and_stays_absent_when_tier_first() {
+        let (store, pool) = fixture().await;
+        insert_profile(&pool, "mode-profile", "Mode Profile", None).await;
+        let mut profiles = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(
+            profiles[0].criteria.ranking_mode,
+            scryer_application::QualityRankingMode::TierFirst
+        );
+
+        // Tier-first is the default: the key never reaches the stored JSON.
+        store
+            .replace_quality_profiles(SCOPE, None, profiles.clone())
+            .await
+            .unwrap();
+        let raw: String = sqlx::query_scalar(
+            "SELECT scoring_config FROM quality_profiles WHERE id = 'mode-profile'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            serde_json::from_str::<JsonValue>(&raw)
+                .unwrap()
+                .get("ranking_mode")
+                .is_none()
+        );
+
+        profiles[0].criteria.ranking_mode = scryer_application::QualityRankingMode::ScoreFirst;
+        store
+            .replace_quality_profiles(SCOPE, None, profiles)
+            .await
+            .unwrap();
+        store.invalidate_cache();
+        let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(
+            loaded[0].criteria.ranking_mode,
+            scryer_application::QualityRankingMode::ScoreFirst
+        );
+        let raw: String = sqlx::query_scalar(
+            "SELECT scoring_config FROM quality_profiles WHERE id = 'mode-profile'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&raw).unwrap()["ranking_mode"],
+            "score_first"
+        );
+
+        // A value this build does not know reads as tier-first.
+        sqlx::query(
+            "UPDATE quality_profiles SET scoring_config = json_set(scoring_config, '$.ranking_mode', 'some_future_mode') WHERE id = 'mode-profile'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        store.invalidate_cache();
+        let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(
+            loaded[0].criteria.ranking_mode,
+            scryer_application::QualityRankingMode::TierFirst
         );
     }
 

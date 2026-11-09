@@ -1571,6 +1571,7 @@ mod auto_eligibility_reason_tests {
                 size_fit_penalty: 0,
                 revision_preference: 0,
                 language: Default::default(),
+                ranking_mode: Default::default(),
             }),
             extra: Default::default(),
             response_attributes: Default::default(),

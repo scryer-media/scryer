@@ -261,6 +261,7 @@ pub fn from_quality_profile_criteria(
         min_upgrade_score_delta: criteria
             .min_upgrade_score_delta
             .unwrap_or(scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
+        ranking_mode: QualityRankingModeValue::from_application(criteria.ranking_mode),
     }
 }
 

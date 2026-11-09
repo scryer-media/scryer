@@ -1389,9 +1389,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     for name in ["AudioLanguageRankPayload", "AudioLanguagePriorityValue"] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // The per-profile ranking mode adds QualityRankingModeValue: public types
+    // 1021->1022, ENUM 210->211.
+    assert!(public_type_names.contains(&"QualityRankingModeValue"));
     assert_eq!(
         public_types.len(),
-        1021,
+        1022,
         "public types: {public_type_names:?}"
     );
     assert_eq!(kind_count("OBJECT"), 552);
@@ -1401,7 +1404,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert_eq!(kind_count("INPUT_OBJECT"), 247);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 210);
+    assert_eq!(kind_count("ENUM"), 211);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

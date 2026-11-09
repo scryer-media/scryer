@@ -725,6 +725,11 @@ const ko: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "동일 등급 최소 점수 차",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "같은 품질 등급의 릴리스는 현재 파일의 점수를 최소 이 값만큼 넘어야 합니다.",
+  "qualityProfile.scoreAlwaysWins": "항상 점수 우선",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "품질 등급과 관계없이 점수가 가장 높은 릴리스를 유지하며, 품질 컷오프 등급은 무시됩니다.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "'항상 점수 우선'이 켜져 있는 동안에는 적용되지 않습니다.",
   "settings.acquisitionConvergence": "수렴 및 속도",
   "settings.acquisitionPollIntervalSeconds": "폴링 간격(초)",
   "settings.acquisitionPollIntervalSecondsHelp":

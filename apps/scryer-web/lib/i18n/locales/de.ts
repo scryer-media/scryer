@@ -743,6 +743,11 @@ const de: LocaleDictionary = {
     "Mindest-Punktabstand innerhalb derselben Stufe",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Ein Release derselben Qualitätsstufe muss den Score der aktuellen Datei um mindestens diesen Wert übertreffen.",
+  "qualityProfile.scoreAlwaysWins": "Score gewinnt immer",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "Das Release mit dem besten Score wird unabhängig von der Qualitätsstufe behalten, und die Grenz-Qualitätsstufe wird ignoriert.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Nicht anwendbar, solange „Score gewinnt immer“ aktiv ist.",
   "settings.acquisitionConvergence": "Konvergenz & Taktung",
   "settings.acquisitionPollIntervalSeconds": "Abfrageintervall (Sekunden)",
   "settings.acquisitionPollIntervalSecondsHelp":

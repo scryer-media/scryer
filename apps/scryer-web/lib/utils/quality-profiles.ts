@@ -7,6 +7,8 @@ import type {
   QualityProfileDraft,
   QualityProfileGraphPayload,
   QualityProfileSettingsPayload,
+  QualityRankingMode,
+  QualityRankingModeValue,
   ProfileListChoice,
   ProfileRawRecord,
   ScoringPersonaId,
@@ -121,6 +123,7 @@ export function normalizeQualityProfileEntry(
       min_upgrade_score_delta: readMinUpgradeScoreDelta(
         criteria.min_upgrade_score_delta,
       ),
+      ranking_mode: readRankingMode(criteria.ranking_mode),
     },
   };
 }
@@ -211,6 +214,7 @@ export function qualityProfileEntryFromGraph(
       min_upgrade_score_delta: readMinUpgradeScoreDelta(
         profile.criteria.minUpgradeScoreDelta,
       ),
+      ranking_mode: rankingModeFromGraph(profile.criteria.rankingMode),
     },
   };
 }
@@ -266,6 +270,19 @@ function readMinUpgradeScoreDelta(raw: unknown): number {
   return typeof raw === "number" && Number.isInteger(raw) && raw >= 0
     ? raw
     : DEFAULT_MIN_UPGRADE_SCORE_DELTA;
+}
+
+/** Anything other than `score_first` reads as the default, tier-first. */
+export function readRankingMode(raw: unknown): QualityRankingMode {
+  return raw === "score_first" ? "score_first" : "tier_first";
+}
+
+function rankingModeFromGraph(raw: unknown): QualityRankingMode {
+  return raw === "SCORE_FIRST" ? "score_first" : "tier_first";
+}
+
+function rankingModeToGraph(mode: QualityRankingMode): QualityRankingModeValue {
+  return mode === "score_first" ? "SCORE_FIRST" : "TIER_FIRST";
 }
 
 function readScoringOverrides(raw: unknown): ScoringOverridesPayload {
@@ -475,6 +492,7 @@ export function buildQualityProfileTemplate(
     cutoff_tier: "",
     min_score_to_grab: null,
     min_upgrade_score_delta: DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+    ranking_mode: "tier_first",
   };
 }
 
@@ -563,6 +581,7 @@ export function toQualityProfileDraft(
     min_upgrade_score_delta: readMinUpgradeScoreDelta(
       entry.criteria.min_upgrade_score_delta,
     ),
+    ranking_mode: readRankingMode(entry.criteria.ranking_mode),
   };
 }
 
@@ -605,6 +624,7 @@ export function qualityProfileCatalogEntryFromDraft(
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
+      ranking_mode: draft.ranking_mode,
     },
   };
 }
@@ -637,6 +657,7 @@ export function qualityProfileEntryToMutationInput(
       cutoffTier: entry.criteria.cutoff_tier,
       minScoreToGrab: entry.criteria.min_score_to_grab,
       minUpgradeScoreDelta: entry.criteria.min_upgrade_score_delta,
+      rankingMode: rankingModeToGraph(entry.criteria.ranking_mode),
     },
   };
 }

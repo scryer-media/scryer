@@ -743,6 +743,11 @@ const pt_BR: LocaleDictionary = {
     "Delta mínimo de pontuação no mesmo nível",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Um lançamento do mesmo nível de qualidade deve superar a pontuação do arquivo atual em pelo menos este valor.",
+  "qualityProfile.scoreAlwaysWins": "A pontuação sempre vence",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "O lançamento com a melhor pontuação é mantido independentemente do nível de qualidade, e o nível de qualidade de corte é ignorado.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Não se aplica enquanto “A pontuação sempre vence” estiver ativado.",
   "settings.acquisitionConvergence": "Convergência e ritmo",
   "settings.acquisitionPollIntervalSeconds": "Intervalo de sondagem (segundos)",
   "settings.acquisitionPollIntervalSecondsHelp":
