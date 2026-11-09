@@ -406,6 +406,8 @@ fn title_catalog_filter_from_input(
                 .into_iter()
                 .map(String::from),
         ),
+        // Not offered to clients: only the calendar narrows by release date.
+        release_date_window: None,
     })
 }
 

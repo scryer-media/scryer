@@ -3888,10 +3888,14 @@ pub trait ShowRepository: Send + Sync {
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<PrimaryCollectionSummary>>;
+    /// Episodes of non-movie titles in `library_ids` whose air date falls
+    /// between the two dates, both inclusive, in air-date order. An empty
+    /// `library_ids` matches nothing.
     async fn list_episodes_in_date_range(
         &self,
         start_date: &str,
         end_date: &str,
+        library_ids: &[String],
     ) -> AppResult<Vec<CalendarEpisode>>;
     async fn replace_anibridge_scoped_external_ids_for_title(
         &self,
@@ -9138,6 +9142,16 @@ pub trait MediaFileRepository: Send + Sync {
     async fn list_episode_media_availability(
         &self,
         _title_ids: &[String],
+    ) -> AppResult<Vec<EpisodeMediaAvailability>> {
+        Ok(Vec::new())
+    }
+
+    /// [`Self::list_episode_media_availability`] for exactly these episodes
+    /// rather than every episode of their titles. Each episode's answer is the
+    /// one the title-scoped read gives it.
+    async fn list_episode_media_availability_for_episodes(
+        &self,
+        _episode_ids: &[String],
     ) -> AppResult<Vec<EpisodeMediaAvailability>> {
         Ok(Vec::new())
     }

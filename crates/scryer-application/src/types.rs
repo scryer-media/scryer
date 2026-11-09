@@ -1362,6 +1362,26 @@ pub struct TitleCatalogFilter {
     /// client refreshing a few titles under its active filters asks for just
     /// those rather than reloading the whole list.
     pub title_ids: Vec<String>,
+    /// Keep only titles holding a stored release date that may fall inside
+    /// this window; `None` keeps every title. A pre-filter, not a decision:
+    /// it may keep titles whose dates turn out not to matter, never the
+    /// reverse. Implementations that cannot evaluate it may ignore it.
+    pub release_date_window: Option<TitleReleaseDateWindow>,
+}
+
+/// Inclusive `YYYY-MM-DD` bounds on the release dates a title stores: the
+/// legacy `first_aired` and `digital_release_date` columns and every date list
+/// of the movie release dates. A missing bound leaves that side open.
+///
+/// A stored date is kept when its leading `YYYY-MM-DD` falls inside the
+/// bounds. A stored value without that leading form, but not blank, is kept
+/// too, since the store cannot read it the way the availability rules do.
+/// The bounds therefore have to absorb what reading can move a date by: an
+/// RFC 3339 timestamp's offset moves its UTC day by at most one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TitleReleaseDateWindow {
+    pub earliest: Option<String>,
+    pub latest: Option<String>,
 }
 
 /// How much of a title is on disk.

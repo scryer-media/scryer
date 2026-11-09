@@ -527,6 +527,7 @@ impl ShowRepository for TestShowRepo {
         &self,
         _: &str,
         _: &str,
+        _: &[String],
     ) -> AppResult<Vec<CalendarEpisode>> {
         Ok(vec![])
     }

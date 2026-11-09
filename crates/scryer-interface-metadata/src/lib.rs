@@ -466,14 +466,17 @@ impl MetadataQueries {
             return Ok(Vec::new());
         }
 
-        let mut title_ids = episodes
+        // A movie event is keyed by its title, not an episode, so it has no
+        // episode availability to look up.
+        let mut episode_ids = episodes
             .iter()
-            .map(|episode| episode.title_id.clone())
+            .filter(|episode| episode.title_facet != "movie")
+            .map(|episode| episode.id.clone())
             .collect::<Vec<_>>();
-        title_ids.sort_unstable();
-        title_ids.dedup();
+        episode_ids.sort_unstable();
+        episode_ids.dedup();
         let mut availability_by_episode = app
-            .list_episode_media_availability(&actor, &title_ids)
+            .list_episode_media_availability_for_episodes(&actor, &episode_ids)
             .await
             .map_err(to_gql_error)?
             .into_iter()

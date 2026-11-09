@@ -282,7 +282,8 @@ pub(crate) fn movie_availability_decision(
                     earliest_movie_release_date(&release_dates.theatrical_dates)
                 {
                     {
-                        let Some(estimated) = theatrical.checked_add_signed(Duration::days(90))
+                        let Some(estimated) = theatrical
+                            .checked_add_signed(Duration::days(THEATRICAL_TO_HOME_ESTIMATE_DAYS))
                         else {
                             return movie_availability_result(
                                 MovieAvailabilityStatus::Unknown,
@@ -371,7 +372,9 @@ pub(crate) fn movie_availability_decision(
                         "home_release_date_unknown",
                     );
                 };
-                let Some(estimated) = theatrical.checked_add_signed(Duration::days(90)) else {
+                let Some(estimated) =
+                    theatrical.checked_add_signed(Duration::days(THEATRICAL_TO_HOME_ESTIMATE_DAYS))
+                else {
                     return movie_availability_result(
                         MovieAvailabilityStatus::Unknown,
                         None,
@@ -409,8 +412,10 @@ pub(crate) fn movie_availability_decision(
 }
 
 /// The typical gap between a US theatrical release and its home release
-/// (measured median: 88 days).
-const THEATRICAL_TO_HOME_ESTIMATE_DAYS: i64 = 90;
+/// (measured median: 88 days). It is the only amount a decision adds to a
+/// stored date before the policy delay, which is what lets the calendar bound
+/// the stored dates that can land a movie inside its range.
+pub(crate) const THEATRICAL_TO_HOME_ESTIMATE_DAYS: i64 = 90;
 
 struct WorldwideRung {
     date: NaiveDate,

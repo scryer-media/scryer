@@ -1634,85 +1634,30 @@ impl MediaFileRepository for MediaFileStore {
         if title_ids.is_empty() {
             return Ok(Vec::new());
         }
+        list_episode_media_availability_query(
+            &self.datastore,
+            EpisodeAvailabilityScope::Titles,
+            title_ids,
+        )
+        .await
+    }
 
-        let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        let sql = format!(
-            "WITH requested_episodes AS (
-                SELECT id, title_id, monitored
-                FROM episodes
-                WHERE title_id IN ({placeholders})
-             ), ranked_availability_files AS (
-                SELECT fem.episode_id,
-                       mf.scan_status,
-                       mf.video_width,
-                       mf.video_height,
-                       mf.quality_id,
-                       mf.resolution,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY fem.episode_id
-                           ORDER BY CASE WHEN mf.scan_status = 'review_required' THEN 1 ELSE 0 END,
-                                    CASE WHEN fem.role = 'primary' THEN 0 ELSE 1 END,
-                                    CASE WHEN fem.role = 'primary' THEN 0 ELSE mf.size_bytes END DESC,
-                                    mf.created_at DESC,
-                                    mf.id DESC
-                       ) AS row_number
-                FROM file_episode_map fem
-                INNER JOIN requested_episodes e ON e.id = fem.episode_id
-                INNER JOIN media_files mf ON mf.id = fem.file_id
-                WHERE {} AND fem.role IN ('primary', 'additional')
-             )
-             SELECT e.title_id,
-                    e.id AS episode_id,
-                    e.monitored,
-                    availability_file.scan_status,
-                    availability_file.video_width,
-                    availability_file.video_height,
-                    availability_file.quality_id,
-                    availability_file.resolution
-             FROM requested_episodes e
-             LEFT JOIN ranked_availability_files availability_file
-               ON availability_file.episode_id = e.id AND availability_file.row_number = 1",
-            live_media_file_predicate(dialect, "mf"),
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                let scan_status = row.opt_text("scan_status")?;
-                let state = match scan_status.as_deref() {
-                    Some("imported") => EpisodeMediaAvailabilityState::PendingScan,
-                    Some("scan_failed") => EpisodeMediaAvailabilityState::ScanFailed,
-                    Some("review_required") => EpisodeMediaAvailabilityState::ReviewRequired,
-                    Some(_) => EpisodeMediaAvailabilityState::Available,
-                    None if row.bool("monitored")? => EpisodeMediaAvailabilityState::Missing,
-                    None => EpisodeMediaAvailabilityState::Unmonitored,
-                };
-                let primary_quality_label = if state == EpisodeMediaAvailabilityState::Available {
-                    let quality_label = row.opt_text("quality_id")?;
-                    let resolution = row.opt_text("resolution")?;
-                    derive_primary_quality_label(
-                        row.opt_i32("video_width")?,
-                        row.opt_i32("video_height")?,
-                        quality_label.as_deref(),
-                        resolution.as_deref(),
-                    )
-                } else {
-                    None
-                };
-                Ok(EpisodeMediaAvailability {
-                    title_id: row.text("title_id")?,
-                    episode_id: row.text("episode_id")?,
-                    state,
-                    primary_quality_label,
-                })
-            })
-            .collect()
+    async fn list_episode_media_availability_for_episodes(
+        &self,
+        episode_ids: &[String],
+    ) -> AppResult<Vec<EpisodeMediaAvailability>> {
+        let mut availability = Vec::new();
+        for chunk in episode_ids.chunks(EPISODE_AVAILABILITY_ID_CHUNK) {
+            availability.extend(
+                list_episode_media_availability_query(
+                    &self.datastore,
+                    EpisodeAvailabilityScope::Episodes,
+                    chunk,
+                )
+                .await?,
+            );
+        }
+        Ok(availability)
     }
 
     async fn list_collection_episode_progress_summaries(
@@ -2634,6 +2579,111 @@ impl MediaFileRepository for MediaFileStore {
 /// Paths per batched lookup. Windows spends two binds per path, so the chunk
 /// stays well under sqlite's historical 999-variable ceiling.
 const MEDIA_FILE_PATH_LOOKUP_CHUNK: usize = 400;
+
+/// Episode ids per availability lookup, one bind each, under sqlite's
+/// historical 999-variable ceiling.
+const EPISODE_AVAILABILITY_ID_CHUNK: usize = 900;
+
+/// Which column the ids handed to [`list_episode_media_availability_query`]
+/// name.
+#[derive(Clone, Copy)]
+enum EpisodeAvailabilityScope {
+    /// Every episode of these titles.
+    Titles,
+    /// Exactly these episodes.
+    Episodes,
+}
+
+/// Each requested episode's availability, read from its best file. The scope
+/// only decides which episodes are requested; an episode's answer is the same
+/// whichever way it was asked for.
+async fn list_episode_media_availability_query(
+    datastore: &StoreDatastore,
+    scope: EpisodeAvailabilityScope,
+    ids: &[String],
+) -> AppResult<Vec<EpisodeMediaAvailability>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dialect = dialect_for_datastore(datastore);
+    let placeholders = placeholders(ids.len());
+    let requested_column = match scope {
+        EpisodeAvailabilityScope::Titles => "title_id",
+        EpisodeAvailabilityScope::Episodes => "id",
+    };
+    let sql = format!(
+        "WITH requested_episodes AS (
+            SELECT id, title_id, monitored
+            FROM episodes
+            WHERE {requested_column} IN ({placeholders})
+         ), ranked_availability_files AS (
+            SELECT fem.episode_id,
+                   mf.scan_status,
+                   mf.video_width,
+                   mf.video_height,
+                   mf.quality_id,
+                   mf.resolution,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY fem.episode_id
+                       ORDER BY CASE WHEN mf.scan_status = 'review_required' THEN 1 ELSE 0 END,
+                                CASE WHEN fem.role = 'primary' THEN 0 ELSE 1 END,
+                                CASE WHEN fem.role = 'primary' THEN 0 ELSE mf.size_bytes END DESC,
+                                mf.created_at DESC,
+                                mf.id DESC
+                   ) AS row_number
+            FROM file_episode_map fem
+            INNER JOIN requested_episodes e ON e.id = fem.episode_id
+            INNER JOIN media_files mf ON mf.id = fem.file_id
+            WHERE {} AND fem.role IN ('primary', 'additional')
+         )
+         SELECT e.title_id,
+                e.id AS episode_id,
+                e.monitored,
+                availability_file.scan_status,
+                availability_file.video_width,
+                availability_file.video_height,
+                availability_file.quality_id,
+                availability_file.resolution
+         FROM requested_episodes e
+         LEFT JOIN ranked_availability_files availability_file
+           ON availability_file.episode_id = e.id AND availability_file.row_number = 1",
+        live_media_file_predicate(dialect, "mf"),
+    );
+    let args = ids.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+    SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args)
+        .await?
+        .iter()
+        .map(|row| {
+            let scan_status = row.opt_text("scan_status")?;
+            let state = match scan_status.as_deref() {
+                Some("imported") => EpisodeMediaAvailabilityState::PendingScan,
+                Some("scan_failed") => EpisodeMediaAvailabilityState::ScanFailed,
+                Some("review_required") => EpisodeMediaAvailabilityState::ReviewRequired,
+                Some(_) => EpisodeMediaAvailabilityState::Available,
+                None if row.bool("monitored")? => EpisodeMediaAvailabilityState::Missing,
+                None => EpisodeMediaAvailabilityState::Unmonitored,
+            };
+            let primary_quality_label = if state == EpisodeMediaAvailabilityState::Available {
+                let quality_label = row.opt_text("quality_id")?;
+                let resolution = row.opt_text("resolution")?;
+                derive_primary_quality_label(
+                    row.opt_i32("video_width")?,
+                    row.opt_i32("video_height")?,
+                    quality_label.as_deref(),
+                    resolution.as_deref(),
+                )
+            } else {
+                None
+            };
+            Ok(EpisodeMediaAvailability {
+                title_id: row.text("title_id")?,
+                episode_id: row.text("episode_id")?,
+                state,
+                primary_quality_label,
+            })
+        })
+        .collect()
+}
 
 /// The key two paths share when [`media_file_path_predicate`] treats them as
 /// the same file, used to attribute batched rows back to a requested path.
@@ -7130,6 +7180,36 @@ mod tests {
                 .as_deref(),
             Some("1080p"),
             "the episode-scoped primary supplies the collapsed-row quality"
+        );
+
+        // Asking for chosen episodes reads only those, with the answers the
+        // title-scoped read gives them. An unknown id contributes nothing.
+        let requested = [
+            available.id.clone(),
+            missing.id.clone(),
+            additional_only.id.clone(),
+            legacy_multiple_primary.id.clone(),
+            "episode-availability-unknown".to_string(),
+        ];
+        let mut scoped = media_files
+            .list_episode_media_availability_for_episodes(&requested)
+            .await
+            .expect("episode-scoped availability should load");
+        scoped.sort_by(|left, right| left.episode_id.cmp(&right.episode_id));
+        let mut expected = summaries
+            .iter()
+            .filter(|summary| requested.contains(&summary.episode_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        expected.sort_by(|left, right| left.episode_id.cmp(&right.episode_id));
+        assert_eq!(scoped.len(), 4);
+        assert_eq!(scoped, expected);
+        assert!(
+            media_files
+                .list_episode_media_availability_for_episodes(&[])
+                .await
+                .expect("an empty request should load")
+                .is_empty()
         );
 
         let _ = std::fs::remove_file(db);
