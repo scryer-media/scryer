@@ -1,12 +1,19 @@
 import type { LibrarySettingsDraft } from "../types/titles.ts";
 
+// Every draft field must be named here, optional ones included, so a field
+// added to LibrarySettingsDraft without being mapped fails the typecheck
+// instead of being silently dropped from the saved settings.
+type CompleteLibrarySettingsInput = {
+  [K in keyof Required<LibrarySettingsDraft>]: LibrarySettingsDraft[K];
+};
+
 export function librarySettingsInput(
   settings: LibrarySettingsDraft | undefined,
 ): LibrarySettingsDraft | undefined {
   if (!settings) {
     return undefined;
   }
-  return {
+  const input: CompleteLibrarySettingsInput = {
     searchLanguages: settings.searchLanguages,
     requiredAudioLanguages: settings.requiredAudioLanguages,
     preferredAudioLanguages: settings.preferredAudioLanguages,
@@ -37,4 +44,5 @@ export function librarySettingsInput(
     indexerRouting: settings.indexerRouting,
     downloadClientRouting: settings.downloadClientRouting,
   };
+  return input;
 }

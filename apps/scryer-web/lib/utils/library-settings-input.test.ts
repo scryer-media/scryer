@@ -34,11 +34,21 @@ const settings: LibrarySettingsDraft = {
   downloadClientRouting: [],
 };
 
-test("library mutation settings preserve selected and cleared release search languages", () => {
-  for (const searchLanguages of [["eng"], ["eng", "jpn"], [], null]) {
+// The server keeps the stored list when searchLanguages is null or omitted
+// and clears it only for an empty list, so each form must reach it unchanged.
+test("library mutation settings pass selected, cleared and kept release search languages through", () => {
+  for (const searchLanguages of [["eng"], ["eng", "jpn"]]) {
     const draft = { ...settings, searchLanguages };
     assert.deepEqual(librarySettingsInput(draft), draft);
   }
+  assert.deepEqual(
+    librarySettingsInput({ ...settings, searchLanguages: [] })?.searchLanguages,
+    [],
+  );
+  assert.equal(
+    librarySettingsInput({ ...settings, searchLanguages: null })?.searchLanguages,
+    null,
+  );
 });
 
 test("omitted settings and search languages remain omitted", () => {
