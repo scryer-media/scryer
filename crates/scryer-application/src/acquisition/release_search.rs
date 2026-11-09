@@ -6235,15 +6235,23 @@ mod tests {
         let minimum_seeders = HashMap::new();
         let unmonitored_episode_ids = HashSet::new();
 
+        // The window opens exactly EPISODE_PRE_AIR_WINDOW_HOURS before air.
+        let opens_now =
+            now + chrono::Duration::hours(crate::acquisition::policy::EPISODE_PRE_AIR_WINDOW_HOURS);
+        let at = |offset_seconds: i64| {
+            (opens_now + chrono::Duration::seconds(offset_seconds))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        };
         for (air_date, blocked) in [
-            (Some("2026-11-23"), true),
-            (Some("2026-11-04T14:19:44Z"), true),
-            (Some("2026-11-04T14:19:43Z"), false),
-            (Some("2026-11-04T14:19:42Z"), false),
-            (Some("2026-11-03"), false),
+            (Some("2026-11-23".to_string()), true),
+            (Some(at(1)), true),
+            (Some(at(0)), false),
+            (Some(at(-1)), false),
+            (Some("2026-11-03".to_string()), false),
             (None, false),
-            (Some("unknown"), false),
+            (Some("unknown".to_string()), false),
         ] {
+            let air_date = air_date.as_deref();
             subject.episode_search_not_before =
                 crate::acquisition_policy::episode_search_not_before(air_date);
             for is_rss_lane in [true, false] {

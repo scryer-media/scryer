@@ -2,8 +2,9 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 
 use crate::quality_profile::{DEFAULT_MIN_UPGRADE_SCORE_DELTA, QualityProfileCriteria};
 
-/// Episodes become searchable six hours before air time.
-pub(crate) const EPISODE_PRE_AIR_WINDOW_HOURS: i64 = 6;
+/// Episodes become searchable twelve hours before air time, for active search
+/// and for automatic RSS grabs alike.
+pub(crate) const EPISODE_PRE_AIR_WINDOW_HOURS: i64 = 12;
 
 /// Thresholds for the acquisition upgrade policy.
 ///
