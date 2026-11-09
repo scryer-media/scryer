@@ -8512,6 +8512,7 @@ const en: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Category mismatch",
   "wanted.decision.ambiguousIdentity": "Ambiguous identity",
   "wanted.decision.qualityBlocked": "Quality blocked",
+  "wanted.decision.episodeAvailabilityBlocked": "Waiting for air date",
   "wanted.decision.minimumSeeders": "Too few seeders",
   "wanted.decision.packBelowMissingThreshold": "Pack below missing threshold",
   "wanted.decision.packForSingleEpisode": "Pack for a single episode",

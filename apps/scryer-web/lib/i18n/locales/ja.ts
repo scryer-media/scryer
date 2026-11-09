@@ -2104,6 +2104,7 @@ const ja: LocaleDictionary = {
   "wanted.decision.eligible": "対象",
   "wanted.decision.titleMismatch": "タイトル不一致",
   "wanted.decision.qualityBlocked": "品質でブロック",
+  "wanted.decision.episodeAvailabilityBlocked": "放送日待ち",
   "wanted.decision.upgradeRejected": "アップグレード拒否",
   "wanted.decision.pendingDelay": "保留中の遅延",
   "wanted.decision.alreadyActive": "すでにアクティブ",

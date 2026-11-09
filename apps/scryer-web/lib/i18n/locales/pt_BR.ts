@@ -2171,6 +2171,7 @@ const pt_BR: LocaleDictionary = {
   "wanted.decision.eligible": "Elegível",
   "wanted.decision.titleMismatch": "Título divergente",
   "wanted.decision.qualityBlocked": "Bloqueado pela qualidade",
+  "wanted.decision.episodeAvailabilityBlocked": "Aguardando a data de exibição",
   "wanted.decision.upgradeRejected": "Upgrade rejeitado",
   "wanted.decision.pendingDelay": "Atraso pendente",
   "wanted.decision.alreadyActive": "Já ativo",
