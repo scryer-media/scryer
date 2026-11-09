@@ -17,7 +17,10 @@ import {
   wantedItemsQuery,
   wantedNavigationCountsQuery,
 } from "@/lib/graphql/queries";
-import { runIterativeReleaseSearch } from "@/lib/graphql/release-search";
+import {
+  isInteractiveReleaseSearchLifecycleError,
+  runIterativeReleaseSearch,
+} from "@/lib/graphql/release-search";
 import {
   cancelAcquisitionSearchMutation,
   triggerAcquisitionSearchMutation,
@@ -936,7 +939,9 @@ export const WantedContainer = memo(function WantedContainer({
         }
       } catch (error) {
         setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          isInteractiveReleaseSearchLifecycleError(error)
+            ? t("nzb.searchFailed")
+            : userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
       } finally {

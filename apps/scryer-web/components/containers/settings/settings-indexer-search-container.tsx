@@ -21,6 +21,7 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { indexersQuery } from "@/lib/graphql/queries";
 import {
+  isInteractiveReleaseSearchLifecycleError,
   runIterativeReleaseSearch,
   type InteractiveSearchIndexerProgress,
 } from "@/lib/graphql/release-search";
@@ -404,9 +405,12 @@ export function SettingsIndexerSearchContainer() {
           },
         );
       } catch (error) {
-        setGlobalStatus(rawSearchErrorMessage(error, t, t("status.apiError")), {
-          level: "ERROR",
-        });
+        setGlobalStatus(
+          isInteractiveReleaseSearchLifecycleError(error)
+            ? t("nzb.searchFailed")
+            : rawSearchErrorMessage(error, t, t("status.apiError")),
+          { level: "ERROR" },
+        );
       } finally {
         if (searchAbortRef.current === controller) {
           searchAbortRef.current = null;

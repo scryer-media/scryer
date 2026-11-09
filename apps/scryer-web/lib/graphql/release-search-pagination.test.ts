@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 import type { Client } from "urql";
+import type * as ReleaseSearch from "./release-search.ts";
 import type {
   InteractiveSearchProgress,
   runIterativeReleaseSearch,
@@ -12,6 +13,12 @@ import { boundedQuery, QueryTimeoutError } from "./bounded-query.ts";
 function runner(
   onSignal?: (signal: AbortSignal) => void,
 ): typeof runIterativeReleaseSearch {
+  return releaseSearchModule(onSignal).runIterativeReleaseSearch;
+}
+
+function releaseSearchModule(
+  onSignal?: (signal: AbortSignal) => void,
+): typeof ReleaseSearch {
   const source = readFileSync(
     new URL("./release-search.ts", import.meta.url),
     "utf8",
@@ -36,11 +43,7 @@ function runner(
     },
     "./bounded-query": { boundedQuery, QueryTimeoutError },
   };
-  const module = {
-    exports: {} as {
-      runIterativeReleaseSearch: typeof runIterativeReleaseSearch;
-    },
-  };
+  const module = { exports: {} as typeof ReleaseSearch };
   new Function("require", "module", "exports", "window", code)(
     (id: string) => {
       assert.ok(id in dependencies, `unexpected dependency ${id}`);
@@ -50,7 +53,7 @@ function runner(
     module.exports,
     { setTimeout, clearTimeout },
   );
-  return module.exports.runIterativeReleaseSearch;
+  return module.exports;
 }
 
 function operation<T>(value: T) {
@@ -245,7 +248,7 @@ test(
     await started.promise;
     t.mock.timers.tick(1_000);
     await polling.promise;
-    t.mock.timers.tick(90_000);
+    t.mock.timers.tick(130_000);
     assert.deepEqual(await request, [partial]);
     assert.equal(unsubscribed, 1);
     assert.equal(updates.at(-1)?.state, "CANCELLED");
@@ -277,13 +280,47 @@ test(
     const request = runner((signal) => {
       fetchSignal = signal;
     })(client, { titleId: "movie-start" });
+    let settled = false;
     const rejected = assert.rejects(request, QueryTimeoutError);
-    t.mock.timers.tick(90_000);
+    void rejected.finally(() => {
+      settled = true;
+    });
+    // The server ends its job at 120 s; the client must still be waiting then.
+    t.mock.timers.tick(120_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    t.mock.timers.tick(10_000);
     await rejected;
     assert.equal(unsubscribed, 1);
     assert.equal(fetchSignal?.aborted, true);
   },
 );
+
+test("a start without a session rejects with a lifecycle error, not server text", async () => {
+  const search = releaseSearchModule();
+  const client = {
+    mutation() {
+      return operation({ data: { startInteractiveReleaseSearch: null } });
+    },
+  } as unknown as Client;
+  const failure = await search
+    .runIterativeReleaseSearch(client, { titleId: "movie-none" })
+    .then(
+      () => assert.fail("expected the search to reject"),
+      (error: unknown) => error,
+    );
+  assert.ok(failure instanceof search.InteractiveReleaseSearchError);
+  assert.equal(failure.reason, "NO_SESSION");
+  assert.equal(search.isInteractiveReleaseSearchLifecycleError(failure), true);
+  assert.equal(
+    search.isInteractiveReleaseSearchLifecycleError(new QueryTimeoutError()),
+    true,
+  );
+  assert.equal(
+    search.isInteractiveReleaseSearchLifecycleError(new Error("server text")),
+    false,
+  );
+});
 
 test(
   "cancellation interrupts a hung poll without reporting a failure",

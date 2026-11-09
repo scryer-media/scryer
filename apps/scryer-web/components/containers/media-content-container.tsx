@@ -77,7 +77,10 @@ import {
   catalogTitlesRefreshDetail,
 } from "@/lib/events/catalog-titles";
 import { isAbortError } from "@/lib/graphql/urql-client";
-import { runIterativeReleaseSearch } from "@/lib/graphql/release-search";
+import {
+  isInteractiveReleaseSearchLifecycleError,
+  runIterativeReleaseSearch,
+} from "@/lib/graphql/release-search";
 import type { InteractiveSearchProgress } from "@/lib/graphql/release-search";
 import { useClient } from "urql";
 import type {
@@ -3646,7 +3649,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           return [];
         }
         setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("nzb.searchFailed"), t),
+          isInteractiveReleaseSearchLifecycleError(error)
+            ? t("nzb.searchFailed")
+            : userFacingGraphQlErrorMessage(error, t("nzb.searchFailed"), t),
           { level: "ERROR" },
         );
         return [];

@@ -109,8 +109,43 @@ type InteractiveReleaseSearchJobPayload = {
 };
 
 const POLL_INTERVAL_MS = 1_000;
-// Raw pages answer within 75 seconds; this leaves room for the final poll.
-const CLIENT_DEADLINE_MS = 90_000;
+// Only a failure bound: reaching it cancels the server job and reports an
+// error. It must exceed the server job deadline
+// (INTERACTIVE_RELEASE_SEARCH_DEADLINE, which is INDEXER_HTTP_TIMEOUT, 120 s)
+// plus room for the final poll, so a slow indexer ends the job on the server
+// and its late results still arrive instead of the search failing.
+const CLIENT_DEADLINE_MS = 130_000;
+
+/** Why a search ended without a usable server session. */
+export type InteractiveReleaseSearchErrorReason =
+  /** The start or continue request returned no session. */
+  | "NO_SESSION"
+  /** The server no longer knows the session while it was being polled. */
+  | "SESSION_LOST";
+
+export class InteractiveReleaseSearchError extends Error {
+  readonly reason: InteractiveReleaseSearchErrorReason;
+
+  constructor(reason: InteractiveReleaseSearchErrorReason) {
+    super(`Interactive release search failed: ${reason}`);
+    this.name = "InteractiveReleaseSearchError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * True for a failure raised by the search lifecycle itself (a missing or lost
+ * session, or the client deadline) rather than by the server. Such errors carry
+ * no operator-facing text, so callers show their translated search failure.
+ */
+export function isInteractiveReleaseSearchLifecycleError(
+  error: unknown,
+): boolean {
+  return (
+    error instanceof InteractiveReleaseSearchError ||
+    error instanceof QueryTimeoutError
+  );
+}
 
 function waitForNextPoll(
   signal: AbortSignal,
@@ -229,7 +264,7 @@ export async function runIterativeReleaseSearch(
       throw startError;
     }
     if (!job) {
-      throw new Error("Interactive release search did not return a session");
+      throw new InteractiveReleaseSearchError("NO_SESSION");
     }
     jobId = job.id;
     applySnapshot(job);
@@ -285,11 +320,7 @@ export async function runIterativeReleaseSearch(
         return endSearch();
       }
       if (!snapshot) {
-        return endSearch(
-          new Error(
-            "Interactive release search session is no longer available",
-          ),
-        );
+        return endSearch(new InteractiveReleaseSearchError("SESSION_LOST"));
       }
       applySnapshot(snapshot);
       if (snapshot.state !== "RUNNING") {
