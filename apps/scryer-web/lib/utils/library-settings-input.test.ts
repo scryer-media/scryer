@@ -46,7 +46,8 @@ test("library mutation settings pass selected, cleared and kept release search l
     [],
   );
   assert.equal(
-    librarySettingsInput({ ...settings, searchLanguages: null })?.searchLanguages,
+    librarySettingsInput({ ...settings, searchLanguages: null })
+      ?.searchLanguages,
     null,
   );
 });
