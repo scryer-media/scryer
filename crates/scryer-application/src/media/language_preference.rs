@@ -95,14 +95,6 @@ impl AudioLanguageRank {
             optional_wanted: preferences.optional_wanted(matched),
         }
     }
-
-    /// Whether the preferences still want something the gates of `pipeline`
-    /// compare: a language whose gate the profile has removed cannot be
-    /// improved on, so it keeps nothing wanted.
-    pub(crate) fn wanted_under(self, pipeline: &crate::DecisionPipeline) -> bool {
-        (self.preferred_wanted && pipeline.contains(crate::DecisionGate::PreferredLanguage))
-            || (self.optional_wanted && pipeline.contains(crate::DecisionGate::OptionalLanguages))
-    }
 }
 
 impl AudioLanguagePreferences {
@@ -345,19 +337,24 @@ mod tests {
     fn a_language_keeps_a_file_wanted_only_while_its_gate_runs() {
         let mut prefs = prefs(&["deu"], &["eng"]);
         prefs.optional_keep_searching = true;
-        let english_only = AudioLanguageRank::new(&prefs, prefs.evaluate(&langs(&["eng"])));
-        let german_only = AudioLanguageRank::new(&prefs, prefs.evaluate(&langs(&["deu"])));
+        let english_rank = AudioLanguageRank::new(&prefs, prefs.evaluate(&langs(&["eng"])));
+        let german_rank = AudioLanguageRank::new(&prefs, prefs.evaluate(&langs(&["deu"])));
+        let held = |language| crate::decision_pipeline::SideFacts {
+            language,
+            ..Default::default()
+        };
+        let (english_only, german_only) = (held(english_rank), held(german_rank));
         let default_order = crate::DecisionPipeline::default_order();
-        assert!(english_only.wanted_under(&default_order));
-        assert!(german_only.wanted_under(&default_order));
+        assert!(default_order.still_wants(&english_only));
+        assert!(default_order.still_wants(&german_only));
         let without_preferred = default_order.without(crate::DecisionGate::PreferredLanguage);
-        assert!(!english_only.wanted_under(&without_preferred));
-        assert!(german_only.wanted_under(&without_preferred));
+        assert!(!without_preferred.still_wants(&english_only));
+        assert!(without_preferred.still_wants(&german_only));
         let without_optional = default_order.without(crate::DecisionGate::OptionalLanguages);
-        assert!(english_only.wanted_under(&without_optional));
-        assert!(!german_only.wanted_under(&without_optional));
-        assert!(!english_only.wanted_under(&crate::DecisionPipeline::score_only()));
-        assert!(english_only.wanted && german_only.wanted);
+        assert!(without_optional.still_wants(&english_only));
+        assert!(!without_optional.still_wants(&german_only));
+        assert!(!crate::DecisionPipeline::score_only().still_wants(&english_only));
+        assert!(english_rank.wanted && german_rank.wanted);
     }
 
     #[test]

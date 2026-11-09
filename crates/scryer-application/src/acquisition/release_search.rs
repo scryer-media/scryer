@@ -1829,13 +1829,7 @@ fn revision_upgrade_over(
     candidate: crate::admission::CandidateFacts,
     incumbent: &crate::admission::Incumbent,
 ) -> bool {
-    candidate
-        .revision_cmp(
-            incumbent.tier_index,
-            incumbent.release_group.as_deref(),
-            incumbent.revision,
-        )
-        .is_gt()
+    candidate.facts().revision_cmp(&incumbent.facts()).is_gt()
 }
 
 /// Has this scope reached its cutoff — **both** halves of it?
@@ -1882,7 +1876,7 @@ pub(crate) fn scope_still_wants_language(
 ) -> bool {
     subject
         .best_incumbent_record(pipeline)
-        .is_some_and(|incumbent| incumbent.language.wanted_under(pipeline))
+        .is_some_and(|incumbent| pipeline.still_wants(&incumbent.facts().side))
 }
 
 /// The language escape from the cutoff: the candidate is a step up in audio
@@ -1904,25 +1898,13 @@ fn candidate_is_language_upgrade(
     let Some(incumbent) = subject.best_incumbent_record(pipeline) else {
         return false;
     };
-    let held = incumbent.language;
-    let offered = candidate.language;
-    if !held.wanted_under(pipeline) {
-        return false;
-    }
-    if pipeline.contains(crate::DecisionGate::PreferredLanguage) {
-        match offered
-            .matched
-            .preferred_rank
-            .cmp(&held.matched.preferred_rank)
-        {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-    pipeline.contains(crate::DecisionGate::OptionalLanguages)
-        && held.optional_wanted
-        && offered.matched.optional_hits > held.matched.optional_hits
+    let held = incumbent.facts();
+    pipeline.still_wants(&held.side)
+        && pipeline.passes_cutoff(
+            crate::decision_pipeline::CutoffEscape::Language,
+            &candidate.facts(),
+            &held,
+        )
 }
 
 /// The one cutoff gate.

@@ -436,11 +436,10 @@ fn evaluate_candidate(
                 || pack_below_missing_threshold
                 || numbering_ambiguous
                 || !protocol_enabled,
-            tier_index: decision.tier_index.unwrap_or(usize::MAX),
+            side: crate::decision_pipeline::SideFacts::of_decision(Some(&decision)),
             negated_revision: 0,
             negated_score: decision.preference_score.saturating_neg(),
             size_fit_penalty: decision.size_fit_penalty,
-            language: decision.language,
             pipeline: decision.decision_pipeline,
         },
         non_preferred_protocol: !source_kind_matches_preference(

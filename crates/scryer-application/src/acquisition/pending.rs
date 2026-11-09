@@ -356,15 +356,15 @@ impl AppUseCase {
                 facts.revision,
                 facts.score,
             )
-            .with_profile_policy(facts.release_group.as_deref(), &profile.criteria);
+            .with_profile_policy(facts.release_group.as_deref(), &profile.criteria)
+            .with_language(facts.language);
             let revision_preference = crate::admission::revision_preference(candidate, &admission);
             let rank = crate::acquisition::scoring::RankHead {
                 blocked: !facts.allowed,
-                tier_index: crate::admission::tier_sort_key(facts.tier_index),
+                side: candidate.facts().side,
                 negated_revision: revision_preference.saturating_neg(),
                 negated_score: facts.score.saturating_neg(),
                 size_fit_penalty: facts.size_fit_penalty,
-                language: facts.language,
                 pipeline: profile.criteria.decision_pipeline,
             };
             keys.insert(release.id.clone(), rank.key());

@@ -472,6 +472,7 @@ pub(crate) fn disposition_for(
         | Reason::LowerLanguagePreference { .. }
         | Reason::FewerOptionalLanguages { .. }
         | Reason::LowerRevision { .. }
+        | Reason::LostAtStep { .. }
         | Reason::QueuedEqualOrBetter { .. }
         | Reason::QueuedSameRelease { .. } => RejectionDisposition::Skip,
         // Reopening a scope whose profile forbids upgrades is pure churn: the
@@ -507,7 +508,8 @@ pub(crate) fn better_library_copy(
         | Reason::LowerQualityTier
         | Reason::LowerRevision { .. }
         | Reason::LowerLanguagePreference { .. }
-        | Reason::FewerOptionalLanguages { .. } => {}
+        | Reason::FewerOptionalLanguages { .. }
+        | Reason::LostAtStep { .. } => {}
         Reason::QueuedEqualOrBetter { .. }
         | Reason::QueuedSameRelease { .. }
         | Reason::FormatCutoffReached { .. }
@@ -605,6 +607,13 @@ pub(crate) fn admission_rejection_to_import(
             format!(
                 "existing file {path} for {scope_label} carries more of the optional audio \
                  languages ({incumbent_optional_hits} > {candidate_optional_hits})"
+            ),
+        ),
+        Reason::LostAtStep { step } => (
+            "already_imported",
+            ImportSkipReason::AlreadyImported,
+            format!(
+                "existing file {path} for {scope_label} is preferred at the profile's {step} step"
             ),
         ),
         Reason::BroaderIncumbentSpan => (

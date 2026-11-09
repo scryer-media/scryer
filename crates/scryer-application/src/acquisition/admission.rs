@@ -49,6 +49,7 @@ use std::collections::HashSet;
 
 use crate::decision_pipeline::{
     CutoffEscape, DecisionGate, DecisionPipeline, Facts, LadderOutcome, ReleaseDecidingStep,
+    SideFacts,
 };
 
 /// What the candidate is trying to occupy.
@@ -318,41 +319,23 @@ impl<'a> CandidateFacts<'a> {
     }
 
     /// Whether PROPER/REPACK ranks are ignored: the profile's switch is on, or
-    /// its pipeline has no revision gate. The one place the two are joined.
+    /// its pipeline has no revision gate; see
+    /// [`DecisionPipeline::ignores_revisions`].
     pub(crate) fn ignores_revision(self) -> bool {
-        self.ignore_proper_repack || !self.pipeline.contains(DecisionGate::Revision)
+        self.pipeline.ignores_revisions(self.ignore_proper_repack)
     }
 
-    fn gate_facts(&self) -> Facts<'a> {
+    /// The candidate as the decision steps read it. The one builder for a
+    /// candidate; see [`SideFacts`].
+    pub(crate) fn facts(&self) -> Facts<'a> {
         Facts {
-            tier_index: self.tier_index,
+            side: SideFacts {
+                tier_sort_key: tier_sort_key(self.tier_index),
+                language: self.language,
+            },
             release_group: self.release_group,
             revision: self.revision,
-            language: self.language,
             ignores_revision: self.ignores_revision(),
-        }
-    }
-
-    fn is_related(self, tier: Option<usize>, group: Option<&str>) -> bool {
-        self.gate_facts().is_related_to(&Facts {
-            tier_index: tier,
-            release_group: group,
-            revision: 0,
-            language: crate::AudioLanguageRank::default(),
-            ignores_revision: false,
-        })
-    }
-
-    pub(crate) fn revision_cmp(
-        self,
-        tier: Option<usize>,
-        group: Option<&str>,
-        revision: i32,
-    ) -> std::cmp::Ordering {
-        if self.is_related(tier, group) {
-            self.revision.cmp(&revision)
-        } else {
-            std::cmp::Ordering::Equal
         }
     }
 
@@ -374,28 +357,17 @@ pub(crate) fn revision_preference(
     subject: &AdmissionSubject,
 ) -> i32 {
     let mut improves = false;
+    let facts = candidate.facts();
     let occupied = subject
         .incumbents
         .iter()
-        .map(|file| {
-            (
-                file.tier_index,
-                file.release_group.as_deref(),
-                file.revision,
-            )
-        })
-        .chain(subject.queued.iter().map(|queued| {
-            (
-                queued.tier_index,
-                queued.release_group.as_deref(),
-                queued.revision,
-            )
-        }));
-    for (tier, group, revision) in occupied {
-        if !candidate.is_related(tier, group) || candidate.revision < revision {
+        .map(Incumbent::facts)
+        .chain(subject.queued.iter().map(QueuedRelease::facts));
+    for held in occupied {
+        if !facts.is_related_to(&held) || candidate.revision < held.revision {
             return 0;
         }
-        improves |= candidate.revision > revision;
+        improves |= candidate.revision > held.revision;
     }
     if improves { candidate.revision } else { 0 }
 }
@@ -415,39 +387,46 @@ pub(crate) fn tier_sort_key(tier_index: Option<usize>) -> usize {
 /// better. The gates of `pipeline`, in its order.
 pub(crate) fn incumbent_ladder_key(
     pipeline: &DecisionPipeline,
-    tier_index: Option<usize>,
-    language: crate::AudioLanguageRank,
+    side: SideFacts,
 ) -> crate::decision_pipeline::GateKey {
-    crate::decision_pipeline::held_key(pipeline, tier_index, language)
+    crate::decision_pipeline::held_key(pipeline, side)
 }
 
-fn incumbent_facts(incumbent: &Incumbent) -> Facts<'_> {
-    Facts {
-        tier_index: incumbent.tier_index,
-        release_group: incumbent.release_group.as_deref(),
-        revision: incumbent.revision,
-        language: incumbent.language,
-        ignores_revision: false,
+impl Incumbent {
+    /// The file as the decision steps read it. The one builder for a file
+    /// on disk; see [`SideFacts`].
+    pub(crate) fn facts(&self) -> Facts<'_> {
+        Facts {
+            side: SideFacts {
+                tier_sort_key: tier_sort_key(self.tier_index),
+                language: self.language,
+            },
+            release_group: self.release_group.as_deref(),
+            revision: self.revision,
+            ignores_revision: false,
+        }
     }
 }
 
-fn queued_facts(queued: &QueuedRelease) -> Facts<'_> {
-    Facts {
-        tier_index: queued.tier_index,
-        release_group: queued.release_group.as_deref(),
-        revision: queued.revision,
-        language: queued.language,
-        ignores_revision: false,
+impl QueuedRelease {
+    /// The queued release as the decision steps read it. The one builder for
+    /// a queued release; see [`SideFacts`].
+    pub(crate) fn facts(&self) -> Facts<'_> {
+        Facts {
+            side: SideFacts {
+                tier_sort_key: tier_sort_key(self.tier_index),
+                language: self.language,
+            },
+            release_group: self.release_group.as_deref(),
+            revision: self.revision,
+            ignores_revision: false,
+        }
     }
 }
 
 /// The profile's ladder between the candidate and one held file.
 fn ladder_against_incumbent(candidate: CandidateFacts, incumbent: &Incumbent) -> LadderOutcome {
-    crate::decision_pipeline::walk(
-        &candidate.pipeline,
-        &candidate.gate_facts(),
-        &incumbent_facts(incumbent),
-    )
+    crate::decision_pipeline::walk(&candidate.pipeline, &candidate.facts(), &incumbent.facts())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -500,6 +479,10 @@ pub(crate) enum AdmissionRejectionReason {
     /// name, still in flight or still unresolved. Never fetched twice, whatever
     /// the scores say: a second copy of the same bytes is never an upgrade.
     QueuedSameRelease { queued_title: String },
+    /// Every step ahead of `step` tied and what is held wins at `step`: the
+    /// refusal of a preference step that does not raise a reason of its own
+    /// (see [`crate::acquisition::decision_steps::PreferenceStep::refusal`]).
+    LostAtStep { step: DecisionGate },
     /// The incumbent has already reached the profile's `cutoff_score`, so no
     /// same-tier candidate is worth the bandwidth however far ahead it scores.
     /// Sonarr's `CustomFormatCutoff`, kept distinct from `NotAnUpgrade` because
@@ -517,14 +500,15 @@ impl AdmissionRejectionReason {
     /// comparison: the upgrade guard, the queue, the span, the season.
     pub(crate) fn deciding_step(&self) -> Option<ReleaseDecidingStep> {
         match self {
-            Self::LowerQualityTier => Some(ReleaseDecidingStep::Gate(DecisionGate::QualityTier)),
-            Self::LowerRevision { .. } => Some(ReleaseDecidingStep::Gate(DecisionGate::Revision)),
-            Self::LowerLanguagePreference { .. } => {
-                Some(ReleaseDecidingStep::Gate(DecisionGate::PreferredLanguage))
-            }
-            Self::FewerOptionalLanguages { .. } => {
-                Some(ReleaseDecidingStep::Gate(DecisionGate::OptionalLanguages))
-            }
+            Self::LostAtStep { step } => Some(ReleaseDecidingStep::Gate(*step)),
+            // A step's own refusal: the step that claims it raised it.
+            Self::LowerQualityTier
+            | Self::LowerRevision { .. }
+            | Self::LowerLanguagePreference { .. }
+            | Self::FewerOptionalLanguages { .. } => crate::acquisition::decision_steps::STEPS
+                .iter()
+                .find(|step| step.claims(self))
+                .map(|step| ReleaseDecidingStep::Gate(step.id())),
             Self::NotAnUpgrade { .. } | Self::FormatCutoffReached { .. } => {
                 Some(ReleaseDecidingStep::Score)
             }
@@ -735,9 +719,8 @@ impl AdmissionSubject {
     /// profile's pipeline, then by score.
     pub(crate) fn best_incumbent_record(&self, pipeline: &DecisionPipeline) -> Option<&Incumbent> {
         self.incumbents.iter().min_by(|left, right| {
-            let rank = |incumbent: &Incumbent| {
-                incumbent_ladder_key(pipeline, incumbent.tier_index, incumbent.language)
-            };
+            let rank =
+                |incumbent: &Incumbent| incumbent_ladder_key(pipeline, incumbent.facts().side);
             rank(left)
                 .cmp(&rank(right))
                 .then_with(|| right.score.cmp(&left.score))
@@ -760,22 +743,20 @@ fn queued_candidate_win(
     queued: &QueuedRelease,
     policy: &AdmissionPolicy,
 ) -> Option<ReleaseDecidingStep> {
-    let candidate_facts = candidate.gate_facts();
-    let held = queued_facts(queued);
+    let candidate_facts = candidate.facts();
+    let held = queued.facts();
     // A recent grab that already met the cutoffs still yields to the gates an
     // incumbent at its format cutoff yields to: a revision or a language step,
     // when the profile compares them at all.
     if queued.history_cutoff_reached
-        && ![CutoffEscape::Revision, CutoffEscape::Language]
-            .into_iter()
-            .any(|escape| {
-                crate::decision_pipeline::wins_cutoff_escape(
-                    &candidate.pipeline,
-                    escape,
-                    &candidate_facts,
-                    &held,
-                )
-            })
+        && !CutoffEscape::FAMILIES.into_iter().any(|escape| {
+            crate::decision_pipeline::wins_cutoff_escape(
+                &candidate.pipeline,
+                escape,
+                &candidate_facts,
+                &held,
+            )
+        })
     {
         return None;
     }
@@ -876,65 +857,12 @@ fn queued_rejection(
 /// "The profile forbids upgrades and this file is in the way." One
 /// construction because three branches of the ladder reach it and their wording
 /// must not drift.
-fn upgrades_disabled(incumbent: &Incumbent) -> AdmissionRejection {
+pub(crate) fn upgrades_disabled(incumbent: &Incumbent) -> AdmissionRejection {
     AdmissionRejection {
         reason: AdmissionRejectionReason::UpgradesDisabled,
         message: format!(
             "existing file {} cannot be replaced because the quality profile disallows upgrades",
             incumbent.file_path
-        ),
-        incumbent_file_id: incumbent.file_id.clone(),
-        incumbent_file_path: incumbent.file_path.clone(),
-    }
-}
-
-fn lower_language_preference(
-    incumbent: &Incumbent,
-    candidate: CandidateFacts,
-) -> AdmissionRejection {
-    AdmissionRejection {
-        reason: AdmissionRejectionReason::LowerLanguagePreference {
-            incumbent_preferred_rank: incumbent.language.matched.preferred_rank,
-            candidate_preferred_rank: candidate.language.matched.preferred_rank,
-        },
-        message: format!(
-            "existing file {} carries a more preferred audio language than this candidate",
-            incumbent.file_path
-        ),
-        incumbent_file_id: incumbent.file_id.clone(),
-        incumbent_file_path: incumbent.file_path.clone(),
-    }
-}
-
-fn fewer_optional_languages(
-    incumbent: &Incumbent,
-    candidate: CandidateFacts,
-) -> AdmissionRejection {
-    AdmissionRejection {
-        reason: AdmissionRejectionReason::FewerOptionalLanguages {
-            incumbent_optional_hits: incumbent.language.matched.optional_hits,
-            candidate_optional_hits: candidate.language.matched.optional_hits,
-        },
-        message: format!(
-            "existing file {} carries more of the optional audio languages ({} > {})",
-            incumbent.file_path,
-            incumbent.language.matched.optional_hits,
-            candidate.language.matched.optional_hits
-        ),
-        incumbent_file_id: incumbent.file_id.clone(),
-        incumbent_file_path: incumbent.file_path.clone(),
-    }
-}
-
-fn lower_revision(incumbent: &Incumbent, candidate: CandidateFacts) -> AdmissionRejection {
-    AdmissionRejection {
-        reason: AdmissionRejectionReason::LowerRevision {
-            incumbent_revision: incumbent.revision,
-            candidate_revision: candidate.revision,
-        },
-        message: format!(
-            "existing file {} is a later revision (PROPER/REPACK {} > {})",
-            incumbent.file_path, incumbent.revision, candidate.revision
         ),
         incumbent_file_id: incumbent.file_id.clone(),
         incumbent_file_path: incumbent.file_path.clone(),
@@ -983,69 +911,14 @@ fn not_an_upgrade(
     }
 }
 
-fn lower_quality_tier(incumbent: &Incumbent) -> AdmissionRejection {
-    AdmissionRejection {
-        reason: AdmissionRejectionReason::LowerQualityTier,
-        message: format!(
-            "existing file {} is a better quality than this candidate",
-            incumbent.file_path
-        ),
-        incumbent_file_id: incumbent.file_id.clone(),
-        incumbent_file_path: incumbent.file_path.clone(),
-    }
-}
-
-/// The refusal for losing to an incumbent at `gate`. Each gate is a step, not
-/// a delta, so no churn threshold or format cutoff weighs it.
+/// The refusal for losing to an incumbent at `gate`: the step builds it.
 fn lost_at_gate(
     gate: DecisionGate,
     incumbent: &Incumbent,
     candidate: CandidateFacts,
     policy: &AdmissionPolicy,
 ) -> AdmissionRejection {
-    match gate {
-        // No score rescues a lower tier: this is Sonarr's
-        // `qualityCompare < 0 => BetterQuality`, and it is what stops a
-        // custom-format bonus or a size term buying its way across a
-        // resolution step.
-        DecisionGate::QualityTier => lower_quality_tier(incumbent),
-        DecisionGate::Revision if !policy.allow_upgrades => upgrades_disabled(incumbent),
-        DecisionGate::Revision => lower_revision(incumbent, candidate),
-        DecisionGate::PreferredLanguage => lower_language_preference(incumbent, candidate),
-        DecisionGate::OptionalLanguages => fewer_optional_languages(incumbent, candidate),
-    }
-}
-
-/// The pack summary for losing to every member at `gate`, when that gate has
-/// one.
-fn pack_lost_at_gate(
-    gate: DecisionGate,
-    blocker: &Incumbent,
-    candidate: CandidateFacts,
-) -> Option<(AdmissionRejectionReason, String)> {
-    match gate {
-        DecisionGate::QualityTier => Some((
-            AdmissionRejectionReason::LowerQualityTier,
-            "every episode in this pack is already held by a better quality file".to_string(),
-        )),
-        DecisionGate::PreferredLanguage => Some((
-            AdmissionRejectionReason::LowerLanguagePreference {
-                incumbent_preferred_rank: blocker.language.matched.preferred_rank,
-                candidate_preferred_rank: candidate.language.matched.preferred_rank,
-            },
-            "every episode in this pack is already held by a file in a more preferred audio language"
-                .to_string(),
-        )),
-        DecisionGate::OptionalLanguages => Some((
-            AdmissionRejectionReason::FewerOptionalLanguages {
-                incumbent_optional_hits: blocker.language.matched.optional_hits,
-                candidate_optional_hits: candidate.language.matched.optional_hits,
-            },
-            "every episode in this pack is already held by a file with more of the optional audio languages"
-                .to_string(),
-        )),
-        DecisionGate::Revision => None,
-    }
+    gate.step().refusal(incumbent, candidate, policy)
 }
 
 /// Admit when at least one member of the scope would be improved.
@@ -1178,7 +1051,7 @@ fn evaluate_any_member(
             match ladder_against_incumbent(candidate, incumbent) {
                 LadderOutcome::Lost(_) => false,
                 LadderOutcome::Won(gate) => {
-                    gate.admits_despite_upgrade_guard() || policy.allow_upgrades
+                    gate.step().admits_despite_upgrade_guard() || policy.allow_upgrades
                 }
                 LadderOutcome::ReachedScore => {
                     policy.allow_upgrades
@@ -1234,18 +1107,15 @@ fn evaluate_any_member(
     // operator might go and tune, when the honest answer is that no score
     // crosses a tier.
     let lost_to_every_member = candidate.pipeline.pack_summary_gates().find_map(|gate| {
-        let candidate_facts = candidate.gate_facts();
+        let candidate_facts = candidate.facts();
         subject
             .incumbents
             .iter()
             .all(|incumbent| {
-                crate::decision_pipeline::compare_at(
-                    gate,
-                    &candidate_facts,
-                    &incumbent_facts(incumbent),
-                ) == std::cmp::Ordering::Less
+                crate::decision_pipeline::compare_at(gate, &candidate_facts, &incumbent.facts())
+                    == std::cmp::Ordering::Less
             })
-            .then(|| pack_lost_at_gate(gate, blocker, candidate))
+            .then(|| gate.step().pack_refusal(blocker, candidate))
             .flatten()
     });
 
@@ -1367,7 +1237,7 @@ pub(crate) fn evaluate_admission(
         // a Bluray release of the same resolution from the same group.
         match ladder_against_incumbent(candidate, incumbent) {
             LadderOutcome::Won(gate) => {
-                if !gate.admits_despite_upgrade_guard() && !policy.allow_upgrades {
+                if !gate.step().admits_despite_upgrade_guard() && !policy.allow_upgrades {
                     return AdmissionVerdict::Reject(upgrades_disabled(incumbent));
                 }
                 continue;

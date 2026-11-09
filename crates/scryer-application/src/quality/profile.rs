@@ -217,7 +217,8 @@ impl QualityProfileCriteria {
     }
 
     /// Whether the tier cutoff applies at all: only while the quality tier
-    /// is one of the profile's gates.
+    /// is one of the profile's gates. The one place that ties the tier cutoff
+    /// to a step.
     pub(crate) fn tier_cutoff_applies(&self) -> bool {
         self.decision_pipeline.contains(DecisionGate::QualityTier)
     }
@@ -225,7 +226,15 @@ impl QualityProfileCriteria {
     /// Whether PROPER/REPACK ranks are ignored: the stored switch is on, or
     /// the pipeline has no revision gate.
     pub fn ignores_revision(&self) -> bool {
-        self.ignore_proper_repack || !self.decision_pipeline.contains(DecisionGate::Revision)
+        self.decision_pipeline
+            .ignores_revisions(self.ignore_proper_repack)
+    }
+
+    /// The pipeline this profile runs, with the legacy revision switch
+    /// applied.
+    pub fn effective_decision_pipeline(&self) -> DecisionPipeline {
+        self.decision_pipeline
+            .reconciled_with_ignore_proper_repack(self.ignore_proper_repack)
     }
 
     /// Bring the pipeline and the `ignore_proper_repack` switch into agreement
@@ -235,23 +244,19 @@ impl QualityProfileCriteria {
         self.decision_pipeline = self
             .decision_pipeline
             .reconciled_with_ignore_proper_repack(self.ignore_proper_repack);
-        self.ignore_proper_repack = !self.decision_pipeline.contains(DecisionGate::Revision);
+        self.ignore_proper_repack = !self.decision_pipeline.compares_revisions();
     }
 
     /// Replace the pipeline; the revision switch follows it.
     pub fn set_decision_pipeline(&mut self, pipeline: DecisionPipeline) {
         self.decision_pipeline = pipeline;
-        self.ignore_proper_repack = !pipeline.contains(DecisionGate::Revision);
+        self.ignore_proper_repack = !pipeline.compares_revisions();
     }
 
     /// Set the legacy revision switch; the pipeline follows it, losing or
     /// regaining its revision gate.
     pub fn set_ignore_proper_repack(&mut self, ignore: bool) {
-        self.decision_pipeline = if ignore {
-            self.decision_pipeline.without(DecisionGate::Revision)
-        } else {
-            self.decision_pipeline.with_revision()
-        };
+        self.decision_pipeline = self.decision_pipeline.with_ignore_proper_repack(ignore);
         self.ignore_proper_repack = ignore;
     }
 
