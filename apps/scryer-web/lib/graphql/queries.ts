@@ -782,7 +782,7 @@ export const TITLE_MUTATION_RESULT_FIELDS = `
     createdAt`;
 
 const HISTORY_SCORING_FIELDS = `scoring {
-  candidateScore previousScore delta decisionCode
+  candidateScore previousScore delta decisionCode decidedBy
   entries { code delta kind source origin }
   comparisons { fileId episodeIds previousScore delta }
 }`;
@@ -1380,6 +1380,7 @@ export const RELEASE_SEARCH_RESULT_FIELDS = `
         preferredCount
         optionalHits
       }
+      decidedBy
       scoringLog {
         code
         delta
@@ -1769,8 +1770,6 @@ export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
     preferredAudioLanguages
     optionalAudioLanguagesOverride
     optionalAudioLanguages
-    audioLanguagePriorityOverride
-    audioLanguagePriority
     optionalAudioLanguagesKeepSearchingOverride
     optionalAudioLanguagesKeepSearching
     metadataLanguageOverride
@@ -2831,8 +2830,9 @@ const qualityProfileCriteriaFields = `
       }
       cutoffTier
       minScoreToGrab
+      cutoffScore
       minUpgradeScoreDelta
-      rankingMode`;
+      decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
@@ -2882,7 +2882,6 @@ const mediaSettingsFieldSelection = `
     requiredAudioLanguages
     preferredAudioLanguages
     optionalAudioLanguages
-    audioLanguagePriority
     optionalAudioLanguagesKeepSearching
     useSeasonFolders
     folderTemplate
@@ -3882,6 +3881,7 @@ export const releaseDecisionsQuery = `query ReleaseDecisions($wantedItemId: ID!,
         currentScore
         scoreDelta
         explanationJson
+        decidedBy
         createdAt
       }
       hasMore

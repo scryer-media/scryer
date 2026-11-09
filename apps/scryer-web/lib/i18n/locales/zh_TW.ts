@@ -854,11 +854,6 @@ const zh_TW: LocaleDictionary = {
   "settings.audioOptionalLanguages": "選用語言",
   "settings.audioOptionalLanguagesHint":
     "有則更好。在品質相同的釋出中，包含較多這些語言的釋出勝出。",
-  "settings.audioLanguagePriority": "優先順序",
-  "settings.audioLanguagePriorityHint":
-    "語言優先：即使品質等級較低，也會選擇偏好語言的釋出。品質優先：語言只在品質相同的釋出之間起決定作用。",
-  "settings.audioLanguagePriorityQualityFirst": "品質優先",
-  "settings.audioLanguagePriorityLanguageFirst": "語言優先",
   "settings.audioOptionalKeepSearching": "繼續搜尋選用語言",
   "settings.audioOptionalKeepSearchingHint":
     "開啟後，缺少選用語言的檔案仍是升級目標。關閉後，找到這類釋出時仍會取代，但不會主動搜尋。",
@@ -879,10 +874,6 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同級最小分數差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一品質級別的資源必須比當前檔案的分數至少高出此值。",
-  "qualityProfile.scoreAlwaysWins": "分數始終優先",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "無論品質級別如何，都保留分數最高的資源，並忽略品質截止級別。",
-  "qualityProfile.cutoffTierNotApplicable": "啟用「分數始終優先」時不適用。",
   "settings.acquisitionCrossTierMinDelta": "跨級最小分數差",
   "settings.acquisitionCrossTierMinDeltaHelp":
     "更高品質級別的資源必須比當前檔案的分數至少高出此值。",
@@ -2713,7 +2704,7 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.qualityTiersAndArchival": "品質級別與存檔品質",
   "qualityProfile.qualityPreference": "品質偏好",
   "qualityProfile.qualityPreferenceHelp":
-    "最高偏好排在最前。層級偏好優先於評分。新層級會新增於最低偏好處。",
+    "最高偏好排在最前。發佈會在判定順序的品質等級步驟中依此順序比較。新層級會新增於最低偏好處。",
   "qualityProfile.moveQualityTierUp": "將 {{value}} 上移",
   "qualityProfile.moveQualityTierDown": "將 {{value}} 下移",
   "qualityProfile.dragQualityTier": "拖曳以重新排序 {{value}}",
@@ -5679,6 +5670,63 @@ const zh_TW: LocaleDictionary = {
   "setup.sourceImportState.failed": "失敗",
   "setup.sourceImportState.interrupted": "已中斷",
   "setup.sourceImportState.skipped": "已略過",
+  "qualityProfile.decisionOrder": "判定順序",
+  "qualityProfile.decisionOrderInfo":
+    "當兩個發佈都符合此設定檔時，Scryer 會由上而下檢查這些步驟。第一個能區分它們的步驟做出決定。評分一律最後決定。",
+  "qualityProfile.decisionPresets": "預設組合",
+  "qualityProfile.decisionPresetDefault": "預設",
+  "qualityProfile.decisionPresetLanguageFirst": "語言優先",
+  "qualityProfile.decisionPresetScoreOnly": "僅評分",
+  "qualityProfile.decisionGateQualityTier": "品質等級",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "在此設定檔的品質偏好中排名較高之等級的發佈勝出。",
+  "qualityProfile.decisionGateQualityTierSummary": "品質等級",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "在同一等級與同一發佈群組內，較新的 PROPER 或 REPACK 勝出。",
+  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK 修訂",
+  "qualityProfile.decisionGatePreferredLanguage": "偏好語言",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "音訊在媒體庫偏好音訊語言中排名較高的發佈勝出。",
+  "qualityProfile.decisionGatePreferredLanguageSummary": "偏好音訊語言",
+  "qualityProfile.decisionGateOptionalLanguages": "選用語言",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "包含較多媒體庫選用音訊語言的發佈勝出。",
+  "qualityProfile.decisionGateOptionalLanguagesSummary": "選用音訊語言數量",
+  "qualityProfile.decisionGateUnknown": "無法辨識的步驟（{{value}}）",
+  "qualityProfile.decisionGateUnknownDescription":
+    "此版本的網頁應用程式無法辨識這個步驟，它會保留在原位。",
+  "qualityProfile.decisionGateScore": "評分",
+  "qualityProfile.decisionGateScoreDescription":
+    "評分較高者勝出。評分一律是最後一個步驟。",
+  "qualityProfile.decisionScoreLocked": "一律最後",
+  "qualityProfile.decisionStepRemove": "從判定順序移除 {{value}}",
+  "qualityProfile.decisionStepAdd": "將 {{value}} 加入判定順序",
+  "qualityProfile.decisionAvailableSteps": "未使用的步驟",
+  "qualityProfile.decisionAllStepsInUse": "所有步驟皆已使用。",
+  "qualityProfile.decisionSummary": "發佈依序按{{steps}}比較，最後按評分比較。",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}，接著按{{next}}",
+  "qualityProfile.decisionSummaryScoreOnly": "發佈僅按評分比較。",
+  "qualityProfile.decisionWarningTierAbsent":
+    "沒有品質等級步驟時，較低等級的發佈可能取代較高等級的檔案，且截止等級不適用。只有截止評分會停止尋找升級；若也沒有截止評分，設定檔在有檔案後即視為滿足。",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "語言步驟位於品質等級之前，因此偏好語言的較低等級發佈可能取代較高等級的檔案。",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "沒有 PROPER/REPACK 步驟時，PROPER 與 REPACK 發佈不會自動獲得優先。評分規則仍可為其加分。",
+  "qualityProfile.decisionNoteLanguageGates":
+    "只有在媒體庫設定了偏好或選用音訊語言時，語言步驟才會生效。",
+  "qualityProfile.cutoffTierNotApplicable":
+    "判定順序中沒有品質等級步驟時不適用。",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "在品質設定檔的判定順序中，每個步驟只能出現一次。",
+  "qualityProfile.decidedBy": "決定步驟：{{step}}",
+  "qualityProfile.cutoffScore": "截止評分",
+  "qualityProfile.cutoffScoreInfo":
+    "磁碟上的檔案達到此評分後，設定檔便停止尋找升級。留空表示不使用截止評分。",
+  "qualityProfile.cutoffScorePlaceholder": "無截止評分",
+  "qualityProfile.decisionStepDrag": "拖曳以重新排序 {{value}}",
+  "qualityProfile.decisionStepMoveUp": "將 {{value}} 上移",
+  "qualityProfile.decisionStepMoveDown": "將 {{value}} 下移",
 };
 
 export default zh_TW;

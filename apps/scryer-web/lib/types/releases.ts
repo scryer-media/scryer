@@ -84,6 +84,8 @@ export type Release = {
       preferredCount: number;
       optionalHits: number;
     } | null;
+    /** Decision-order step that settled the comparison; null when none. */
+    decidedBy?: string | null;
   } | null;
   autoEligible?: boolean | null;
   autoDecisionCode?: string | null;

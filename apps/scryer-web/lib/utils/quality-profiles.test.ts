@@ -27,6 +27,7 @@ import { QUALITY_TIER_CHOICES } from "../constants/quality-profiles.ts";
 import type {
   ParsedQualityProfileEntry,
   QualityProfileDraft,
+  QualityProfileGraphCriteriaPayload,
 } from "@/lib/types";
 
 function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
@@ -52,8 +53,14 @@ function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
       scoring_overrides: {},
       cutoff_tier: null,
       min_score_to_grab: null,
+      cutoff_score: null,
       min_upgrade_score_delta: 120,
-      ranking_mode: "tier_first",
+      decision_pipeline: [
+        "QUALITY_TIER",
+        "REVISION",
+        "PREFERRED_LANGUAGE",
+        "OPTIONAL_LANGUAGES",
+      ],
     },
   };
 }
@@ -76,12 +83,17 @@ function makeDraft(id: string, name: string): QualityProfileDraft {
     prefer_remux: false,
     allow_bd_disk: true,
     allow_upgrades: true,
-    ignore_proper_repack: false,
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
+    cutoff_score: null,
     min_upgrade_score_delta: 120,
-    ranking_mode: "tier_first",
+    decision_pipeline: [
+      "QUALITY_TIER",
+      "REVISION",
+      "PREFERRED_LANGUAGE",
+      "OPTIONAL_LANGUAGES",
+    ],
   };
 }
 
@@ -135,10 +147,10 @@ test("quality profile choices expose 8k", () => {
   );
 });
 
-test("profile draft save and clone preserve Ignore PROPER/REPACK", () => {
+test("profile draft save and clone derive Ignore PROPER/REPACK from the decision order", () => {
   const draft = {
     ...makeDraft("default", "Cinema"),
-    ignore_proper_repack: true,
+    decision_pipeline: ["QUALITY_TIER", "PREFERRED_LANGUAGE"],
   };
   const saved = commitQualityProfileDraftToEntries(
     [makeEntry("default", "Cinema")],
@@ -175,6 +187,48 @@ test("the same-tier upgrade delta survives draft, save and mutation input", () =
   );
 });
 
+test("a cutoff score survives draft, save and mutation input, and clearing it sends null", () => {
+  const saved = commitQualityProfileDraftToEntries(
+    [makeEntry("default", "Cinema")],
+    { ...makeDraft("default", "Cinema"), cutoff_score: 450 },
+  );
+  const entry = saved.catalogEntries[0];
+  assert.ok(entry);
+  assert.equal(entry.criteria.cutoff_score, 450);
+  assert.equal(toQualityProfileDraft(entry, "x", "x").cutoff_score, 450);
+  assert.equal(
+    qualityProfileEntryToMutationInput(entry).criteria.cutoffScore,
+    450,
+  );
+
+  const cleared = commitQualityProfileDraftToEntries(saved.catalogEntries, {
+    ...toQualityProfileDraft(entry, "x", "x"),
+    cutoff_score: null,
+  });
+  const clearedInput = qualityProfileEntryToMutationInput(
+    cleared.catalogEntries[0]!,
+  ).criteria;
+  assert.ok("cutoffScore" in clearedInput);
+  assert.equal(clearedInput.cutoffScore, null);
+});
+
+test("a cutoff score from the server is read, and a missing one reads as none", () => {
+  const withScore = qualityProfileEntryFromGraph({
+    id: "graph",
+    name: "Graph",
+    criteria: graphCriteria({ cutoffScore: -20 }),
+  });
+  assert.equal(withScore.criteria.cutoff_score, -20);
+  assert.equal(
+    normalizeQualityProfileEntry({
+      id: "imported",
+      name: "Imported",
+      criteria: { quality_tiers: ["1080P"] },
+    })?.criteria.cutoff_score,
+    null,
+  );
+});
+
 test("a profile without a same-tier upgrade delta reads as the default", () => {
   const parsed = normalizeQualityProfileEntry({
     id: "imported",
@@ -196,11 +250,45 @@ test("a profile without a same-tier upgrade delta reads as the default", () => {
   );
 });
 
-test("score always wins survives draft, save and mutation input", () => {
+function graphCriteria(
+  overrides: Partial<QualityProfileGraphCriteriaPayload>,
+): QualityProfileGraphCriteriaPayload {
+  return {
+    qualityTiers: ["2160P"],
+    archivalQuality: "2160P",
+    allowUnknownQuality: false,
+    sourceAllowlist: [],
+    sourceBlocklist: [],
+    videoCodecAllowlist: [],
+    videoCodecBlocklist: [],
+    audioCodecAllowlist: [],
+    audioCodecBlocklist: [],
+    dolbyVisionAllowed: true,
+    detectedHdrAllowed: true,
+    preferRemux: false,
+    allowBdDisk: true,
+    allowUpgrades: true,
+    ignoreProperRepack: false,
+    scoringOverrides: {},
+    cutoffTier: null,
+    minScoreToGrab: null,
+    cutoffScore: null,
+    minUpgradeScoreDelta: 120,
+    decisionPipeline: [
+      "QUALITY_TIER",
+      "REVISION",
+      "PREFERRED_LANGUAGE",
+      "OPTIONAL_LANGUAGES",
+    ],
+    ...overrides,
+  };
+}
+
+test("the decision order survives draft, save and mutation input", () => {
   const draft: QualityProfileDraft = {
     ...makeDraft("default", "Cinema"),
     cutoff_tier: "2160P",
-    ranking_mode: "score_first",
+    decision_pipeline: ["PREFERRED_LANGUAGE", "REVISION"],
   };
   const saved = commitQualityProfileDraftToEntries(
     [makeEntry("default", "Cinema")],
@@ -208,65 +296,74 @@ test("score always wins survives draft, save and mutation input", () => {
   );
   const entry = saved.catalogEntries[0];
   assert.ok(entry);
-  assert.equal(entry.criteria.ranking_mode, "score_first");
+  assert.deepEqual(entry.criteria.decision_pipeline, [
+    "PREFERRED_LANGUAGE",
+    "REVISION",
+  ]);
   // The cutoff tier is kept while it does not apply.
   assert.equal(entry.criteria.cutoff_tier, "2160P");
-  assert.equal(
-    toQualityProfileDraft(entry, "x", "x").ranking_mode,
-    "score_first",
-  );
-  assert.equal(
-    qualityProfileEntryToMutationInput(entry).criteria.rankingMode,
-    "SCORE_FIRST",
-  );
-  const tierFirst = {
-    ...entry,
-    criteria: { ...entry.criteria, ranking_mode: "tier_first" as const },
-  };
-  assert.equal(
-    qualityProfileEntryToMutationInput(tierFirst).criteria.rankingMode,
-    "TIER_FIRST",
-  );
+  assert.deepEqual(toQualityProfileDraft(entry, "x", "x").decision_pipeline, [
+    "PREFERRED_LANGUAGE",
+    "REVISION",
+  ]);
+  const input = qualityProfileEntryToMutationInput(entry).criteria;
+  assert.deepEqual(input.decisionPipeline, ["PREFERRED_LANGUAGE", "REVISION"]);
+  assert.equal(input.ignoreProperRepack, false);
 });
 
-test("a missing or unknown ranking mode reads as tier-first", () => {
-  for (const ranking_mode of [undefined, "something_new", 3, "score_first"]) {
-    const parsed = normalizeQualityProfileEntry({
-      id: "imported",
-      name: "Imported",
-      criteria: { quality_tiers: ["1080P"], ranking_mode },
-    });
-    assert.equal(
-      parsed?.criteria.ranking_mode,
-      ranking_mode === "score_first" ? "score_first" : "tier_first",
-    );
-  }
-  const graph = makeEntry("graph", "Graph");
-  const fromGraph = qualityProfileEntryFromGraph({
-    id: graph.id,
-    name: graph.name,
-    criteria: {
-      qualityTiers: ["2160P"],
-      archivalQuality: "2160P",
-      allowUnknownQuality: false,
-      sourceAllowlist: [],
-      sourceBlocklist: [],
-      videoCodecAllowlist: [],
-      videoCodecBlocklist: [],
-      audioCodecAllowlist: [],
-      audioCodecBlocklist: [],
-      dolbyVisionAllowed: true,
-      detectedHdrAllowed: true,
-      preferRemux: false,
-      allowBdDisk: true,
-      allowUpgrades: true,
-      ignoreProperRepack: false,
-      scoringOverrides: {},
-      cutoffTier: null,
-      minScoreToGrab: null,
-      minUpgradeScoreDelta: 120,
-      rankingMode: "SCORE_FIRST",
-    },
+test("a score-only order is sent as an empty list that ignores PROPER/REPACK", () => {
+  const saved = commitQualityProfileDraftToEntries(
+    [makeEntry("default", "Cinema")],
+    { ...makeDraft("default", "Cinema"), decision_pipeline: [] },
+  );
+  const entry = saved.catalogEntries[0];
+  assert.ok(entry);
+  const input = qualityProfileEntryToMutationInput(entry).criteria;
+  assert.deepEqual(input.decisionPipeline, []);
+  assert.equal(input.ignoreProperRepack, true);
+});
+
+test("a catalog entry without a decision order falls back to its PROPER/REPACK setting", () => {
+  const plain = normalizeQualityProfileEntry({
+    id: "imported",
+    name: "Imported",
+    criteria: { quality_tiers: ["1080P"] },
   });
-  assert.equal(fromGraph.criteria.ranking_mode, "score_first");
+  assert.deepEqual(plain?.criteria.decision_pipeline, [
+    "QUALITY_TIER",
+    "REVISION",
+    "PREFERRED_LANGUAGE",
+    "OPTIONAL_LANGUAGES",
+  ]);
+  const ignoring = normalizeQualityProfileEntry({
+    id: "imported",
+    name: "Imported",
+    criteria: { quality_tiers: ["1080P"], ignore_proper_repack: true },
+  });
+  assert.deepEqual(ignoring?.criteria.decision_pipeline, [
+    "QUALITY_TIER",
+    "PREFERRED_LANGUAGE",
+    "OPTIONAL_LANGUAGES",
+  ]);
+  assert.equal(ignoring?.criteria.ignore_proper_repack, true);
+});
+
+test("a server order with an unknown gate is kept in place", () => {
+  const fromGraph = qualityProfileEntryFromGraph({
+    id: "graph",
+    name: "Graph",
+    criteria: graphCriteria({
+      decisionPipeline: ["PREFERRED_LANGUAGE", "FUTURE_GATE", "QUALITY_TIER"],
+    }),
+  });
+  assert.deepEqual(fromGraph.criteria.decision_pipeline, [
+    "PREFERRED_LANGUAGE",
+    "FUTURE_GATE",
+    "QUALITY_TIER",
+  ]);
+  assert.equal(fromGraph.criteria.ignore_proper_repack, true);
+  assert.deepEqual(
+    qualityProfileEntryToMutationInput(fromGraph).criteria.decisionPipeline,
+    ["PREFERRED_LANGUAGE", "FUTURE_GATE", "QUALITY_TIER"],
+  );
 });

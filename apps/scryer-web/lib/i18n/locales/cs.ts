@@ -995,11 +995,6 @@ const cs: LocaleDictionary = {
     "Minimální rozdíl skóre ve stejné úrovni",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Vydání ve stejné úrovni kvality musí překonat skóre aktuálního souboru alespoň o tuto hodnotu.",
-  "qualityProfile.scoreAlwaysWins": "Skóre vždy vítězí",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "Ponechá se vydání s nejlepším skóre bez ohledu na úroveň kvality a mezní úroveň kvality se ignoruje.",
-  "qualityProfile.cutoffTierNotApplicable":
-    "Nepoužije se, když je zapnuto Skóre vždy vítězí.",
   "settings.acquisitionConvergence": "Konvergence a tempo",
   "settings.acquisitionPollIntervalSeconds": "Interval kontroly (sekundy)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -3170,7 +3165,7 @@ const cs: LocaleDictionary = {
     "Úrovně kvality a archivační kvalita",
   "qualityProfile.qualityPreference": "Preference kvality",
   "qualityProfile.qualityPreferenceHelp":
-    "Nejvyšší preference je první. Preference úrovně má přednost před skóre. Nové úrovně se přidávají s nejnižší preferencí.",
+    "Nejvyšší preference je první. Podle tohoto pořadí se vydání porovnávají v kroku úroveň kvality v pořadí rozhodování. Nové úrovně se přidávají s nejnižší preferencí.",
   "qualityProfile.moveQualityTierUp": "Posunout {{value}} nahoru",
   "qualityProfile.moveQualityTierDown": "Posunout {{value}} dolů",
   "qualityProfile.dragQualityTier": "Přetažením změnit pořadí {{value}}",
@@ -3203,9 +3198,6 @@ const cs: LocaleDictionary = {
   "qualityProfile.allowBdDiskInfo":
     "Povolit vydání typu BD/obraz disku (ISO/Blu-ray disková vydání), aby prošla profilem.",
   "qualityProfile.allowDv": "Dolby Vision",
-  "qualityProfile.ignoreProperRepack": "Ignorovat PROPER/REPACK",
-  "qualityProfile.ignoreProperRepackInfo":
-    "Nechat o výběru rozhodnout kvalitu a skóre bez automatické preference nebo ochrany revize. Pravidla hodnocení mohou vydání PROPER/REPACK stále odměňovat.",
   "qualityProfile.allowUpgrades": "Upgrady povoleny",
   "qualityProfile.allowUpgradesInfo":
     "Povolit pozdější nahrazení spravovaných kopií lepší shodou, nikdy ale nad vybranou archivační kvalitu.",
@@ -7233,6 +7225,67 @@ const cs: LocaleDictionary = {
   "setup.sourceImportState.failed": "Selhalo",
   "setup.sourceImportState.interrupted": "Přerušeno",
   "setup.sourceImportState.skipped": "Přeskočeno",
+  "qualityProfile.decisionOrder": "Pořadí rozhodování",
+  "qualityProfile.decisionOrderInfo":
+    "Když dvě vydání splní tento profil, Scryer prochází tyto kroky shora. Rozhodne první krok, který je od sebe odliší. Skóre rozhoduje vždy jako poslední.",
+  "qualityProfile.decisionPresets": "Předvolby",
+  "qualityProfile.decisionPresetDefault": "Výchozí",
+  "qualityProfile.decisionPresetLanguageFirst": "Nejdřív jazyk",
+  "qualityProfile.decisionPresetScoreOnly": "Jen skóre",
+  "qualityProfile.decisionGateQualityTier": "Úroveň kvality",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "Vyhrává vydání v úrovni, která je v preferenci kvality tohoto profilu výše.",
+  "qualityProfile.decisionGateQualityTierSummary": "úrovně kvality",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "Ve stejné úrovni a od stejné skupiny vyhrává novější PROPER nebo REPACK.",
+  "qualityProfile.decisionGateRevisionSummary": "revize PROPER/REPACK",
+  "qualityProfile.decisionGatePreferredLanguage": "Preferovaný jazyk",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "Vyhrává vydání, jehož zvuk je v preferovaných jazycích zvuku knihovny výše.",
+  "qualityProfile.decisionGatePreferredLanguageSummary":
+    "preferovaného jazyka zvuku",
+  "qualityProfile.decisionGateOptionalLanguages": "Volitelné jazyky",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "Vyhrává vydání, které obsahuje více volitelných jazyků zvuku knihovny.",
+  "qualityProfile.decisionGateOptionalLanguagesSummary":
+    "počtu volitelných jazyků zvuku",
+  "qualityProfile.decisionGateUnknown": "Neznámý krok ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Tato verze webové aplikace tento krok nezná. Zůstává na svém místě.",
+  "qualityProfile.decisionGateScore": "Skóre",
+  "qualityProfile.decisionGateScoreDescription":
+    "Vyhrává vyšší skóre. Skóre je vždy posledním krokem.",
+  "qualityProfile.decisionScoreLocked": "Vždy poslední",
+  "qualityProfile.decisionStepRemove": "Odebrat {{value}} z pořadí rozhodování",
+  "qualityProfile.decisionStepAdd": "Přidat {{value}} do pořadí rozhodování",
+  "qualityProfile.decisionAvailableSteps": "Nepoužité kroky",
+  "qualityProfile.decisionAllStepsInUse": "Všechny kroky se používají.",
+  "qualityProfile.decisionSummary":
+    "Vydání se porovnávají podle {{steps}} a nakonec podle skóre.",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}, poté {{next}}",
+  "qualityProfile.decisionSummaryScoreOnly":
+    "Vydání se porovnávají pouze podle skóre.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Bez kroku úroveň kvality může vydání nižší úrovně nahradit soubor vyšší úrovně a hraniční úroveň neplatí. Hledání upgradů zastaví jen hraniční skóre; bez něj je profil spokojen, jakmile má soubor.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Jazykový krok je před úrovní kvality, takže vydání nižší úrovně v preferovaném jazyce může nahradit soubor vyšší úrovně.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Bez kroku PROPER/REPACK nemají vydání PROPER a REPACK automatickou přednost. Pravidla hodnocení je stále mohou zvýhodnit.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Jazykové kroky mají účinek jen tehdy, když má knihovna nastavené preferované nebo volitelné jazyky zvuku.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Nepoužije se, dokud v pořadí rozhodování chybí krok úroveň kvality.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Každý krok se může v pořadí rozhodování profilu kvality objevit jen jednou.",
+  "qualityProfile.decidedBy": "Rozhodl krok: {{step}}",
+  "qualityProfile.cutoffScore": "Hraniční skóre",
+  "qualityProfile.cutoffScoreInfo":
+    "Jakmile soubor na disku dosáhne tohoto skóre, profil přestane hledat upgrady. Ponechte prázdné, pokud nechcete hraniční skóre.",
+  "qualityProfile.cutoffScorePlaceholder": "Bez hraničního skóre",
+  "qualityProfile.decisionStepDrag": "Přetažením změnit pořadí {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Posunout {{value}} nahoru",
+  "qualityProfile.decisionStepMoveDown": "Posunout {{value}} dolů",
 };
 
 export default cs;

@@ -498,7 +498,6 @@ function librarySettingsInput(
     requiredAudioLanguages: settings.requiredAudioLanguages,
     preferredAudioLanguages: settings.preferredAudioLanguages,
     optionalAudioLanguages: settings.optionalAudioLanguages,
-    audioLanguagePriority: settings.audioLanguagePriority,
     optionalAudioLanguagesKeepSearching:
       settings.optionalAudioLanguagesKeepSearching,
     metadataLanguage: settings.metadataLanguage,

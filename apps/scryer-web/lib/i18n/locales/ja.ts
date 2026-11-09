@@ -714,11 +714,6 @@ const ja: LocaleDictionary = {
   "settings.audioOptionalLanguages": "任意の言語",
   "settings.audioOptionalLanguagesHint":
     "あれば望ましい言語です。同じ品質のリリースの中では、これらの言語を多く含むものが優先されます。",
-  "settings.audioLanguagePriority": "優先順位",
-  "settings.audioLanguagePriorityHint":
-    "言語優先では、品質ティアが低くても優先言語のリリースを選びます。品質優先では、言語は同じ品質のリリース同士でのみ判断材料になります。",
-  "settings.audioLanguagePriorityQualityFirst": "品質優先",
-  "settings.audioLanguagePriorityLanguageFirst": "言語優先",
   "settings.audioOptionalKeepSearching": "任意の言語を探し続ける",
   "settings.audioOptionalKeepSearchingHint":
     "オンにすると、任意の言語が欠けているファイルはアップグレード対象のままになります。オフの場合、そのようなリリースが見つかれば置き換えますが、検索はしません。",
@@ -737,11 +732,6 @@ const ja: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同一ティア内の最小スコア差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同じ品質ティアのリリースは、現在のファイルのスコアを少なくともこの値だけ上回る必要があります。",
-  "qualityProfile.scoreAlwaysWins": "常にスコアを優先",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "品質ティアに関係なく最高スコアのリリースを保持し、品質カットオフのティアは無視します。",
-  "qualityProfile.cutoffTierNotApplicable":
-    "「常にスコアを優先」が有効な間は適用されません。",
   "settings.acquisitionConvergence": "収束とペース",
   "settings.acquisitionPollIntervalSeconds": "ポーリング間隔（秒）",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -3799,6 +3789,67 @@ const ja: LocaleDictionary = {
   "setup.sourceImportState.failed": "失敗",
   "setup.sourceImportState.interrupted": "中断",
   "setup.sourceImportState.skipped": "スキップ済み",
+  "qualityProfile.decisionOrder": "判定順序",
+  "qualityProfile.decisionOrderInfo":
+    "2つのリリースがどちらもこのプロファイルを満たす場合、Scryer は上からこれらのステップを確認します。最初に差がついたステップで決まります。スコアは常に最後に判定します。",
+  "qualityProfile.decisionPresets": "プリセット",
+  "qualityProfile.decisionPresetDefault": "デフォルト",
+  "qualityProfile.decisionPresetLanguageFirst": "言語優先",
+  "qualityProfile.decisionPresetScoreOnly": "スコアのみ",
+  "qualityProfile.decisionGateQualityTier": "品質ティア",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "このプロファイルの品質の優先順位で上位にあるティアのリリースが勝ちます。",
+  "qualityProfile.decisionGateQualityTierSummary": "品質ティア",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "同じティアかつ同じリリースグループでは、新しい PROPER または REPACK が勝ちます。",
+  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK のリビジョン",
+  "qualityProfile.decisionGatePreferredLanguage": "優先言語",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "ライブラリの優先音声言語で上位にある音声を持つリリースが勝ちます。",
+  "qualityProfile.decisionGatePreferredLanguageSummary": "優先音声言語",
+  "qualityProfile.decisionGateOptionalLanguages": "任意の言語",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "ライブラリの任意の音声言語をより多く含むリリースが勝ちます。",
+  "qualityProfile.decisionGateOptionalLanguagesSummary": "任意の音声言語の数",
+  "qualityProfile.decisionGateUnknown": "不明なステップ ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "このバージョンのウェブアプリはこのステップを認識できません。位置はそのまま保持されます。",
+  "qualityProfile.decisionGateScore": "スコア",
+  "qualityProfile.decisionGateScoreDescription":
+    "スコアの高い方が勝ちます。スコアは常に最後のステップです。",
+  "qualityProfile.decisionScoreLocked": "常に最後",
+  "qualityProfile.decisionStepRemove": "{{value}} を判定順序から削除",
+  "qualityProfile.decisionStepAdd": "{{value}} を判定順序に追加",
+  "qualityProfile.decisionAvailableSteps": "未使用のステップ",
+  "qualityProfile.decisionAllStepsInUse": "すべてのステップを使用中です。",
+  "qualityProfile.decisionSummary":
+    "リリースは {{steps}}、最後にスコアの順で比較されます。",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}、次に {{next}}",
+  "qualityProfile.decisionSummaryScoreOnly":
+    "リリースはスコアのみで比較されます。",
+  "qualityProfile.decisionWarningTierAbsent":
+    "品質ティアのステップがないと、下位ティアのリリースが上位ティアのファイルを置き換えることがあり、カットオフティアは適用されません。アップグレードの検索を止めるのはカットオフスコアだけです。カットオフスコアもない場合、ファイルがあればプロファイルは満たされます。",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "言語のステップが品質ティアより前にあるため、優先言語の下位ティアのリリースが上位ティアのファイルを置き換えることがあります。",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "PROPER/REPACK のステップがないと、PROPER や REPACK のリリースは自動的に優先されません。スコアリングルールで加点することは引き続きできます。",
+  "qualityProfile.decisionNoteLanguageGates":
+    "言語のステップは、ライブラリに優先または任意の音声言語が設定されている場合にのみ効果があります。",
+  "qualityProfile.cutoffTierNotApplicable":
+    "判定順序に品質ティアのステップがないため適用されません。",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "品質プロファイルの判定順序では、各ステップは1回しか使えません。",
+  "qualityProfile.qualityPreferenceHelp":
+    "優先度の高いものが先頭です。リリースは判定順序の品質ティアのステップでこの順序に従って比較されます。新しいティアは最も低い優先度で追加されます。",
+  "qualityProfile.decidedBy": "判定したステップ: {{step}}",
+  "qualityProfile.cutoffScore": "カットオフスコア",
+  "qualityProfile.cutoffScoreInfo":
+    "ディスク上のファイルがこのスコアに達すると、プロファイルはアップグレードの検索を停止します。カットオフスコアを使わない場合は空欄にします。",
+  "qualityProfile.cutoffScorePlaceholder": "カットオフスコアなし",
+  "qualityProfile.decisionStepDrag": "ドラッグして {{value}} を並べ替え",
+  "qualityProfile.decisionStepMoveUp": "{{value}} を上へ移動",
+  "qualityProfile.decisionStepMoveDown": "{{value}} を下へ移動",
 };
 
 export default ja;
