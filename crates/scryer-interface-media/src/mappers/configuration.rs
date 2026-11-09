@@ -217,13 +217,10 @@ pub fn from_quality_profile_criteria(
     // A stored revision switch reads as an order without the revision gate.
     let ignore_proper_repack = criteria.ignores_revision();
     let decision_pipeline = criteria
-        .decision_pipeline
+        .effective_decision_pipeline()
         .gates()
         .iter()
         .copied()
-        .filter(|gate| {
-            !(ignore_proper_repack && *gate == scryer_application::DecisionGate::Revision)
-        })
         .map(QualityDecisionGateValue::from_application)
         .collect();
     QualityProfileCriteriaPayload {

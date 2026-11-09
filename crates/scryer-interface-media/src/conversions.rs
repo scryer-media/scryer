@@ -76,38 +76,19 @@ impl IntoApplication<AppScoringPersona> for ScoringPersonaValue {
 
 impl FromApplication<scryer_application::DecisionGate> for QualityDecisionGateValue {
     fn from_application(value: scryer_application::DecisionGate) -> Self {
-        use scryer_application::DecisionGate;
-        match value {
-            DecisionGate::QualityTier => Self::QualityTier,
-            DecisionGate::Revision => Self::Revision,
-            DecisionGate::PreferredLanguage => Self::PreferredLanguage,
-            DecisionGate::OptionalLanguages => Self::OptionalLanguages,
-        }
+        Self::from_gate(value)
     }
 }
 
 impl IntoApplication<scryer_application::DecisionGate> for QualityDecisionGateValue {
     fn into_application(self) -> scryer_application::DecisionGate {
-        use scryer_application::DecisionGate;
-        match self {
-            Self::QualityTier => DecisionGate::QualityTier,
-            Self::Revision => DecisionGate::Revision,
-            Self::PreferredLanguage => DecisionGate::PreferredLanguage,
-            Self::OptionalLanguages => DecisionGate::OptionalLanguages,
-        }
+        self.into_gate()
     }
 }
 
 impl FromApplication<scryer_application::ReleaseDecidingStep> for ReleaseDecidingStepValue {
     fn from_application(value: scryer_application::ReleaseDecidingStep) -> Self {
-        use scryer_application::{DecisionGate, ReleaseDecidingStep};
-        match value {
-            ReleaseDecidingStep::Gate(DecisionGate::QualityTier) => Self::QualityTier,
-            ReleaseDecidingStep::Gate(DecisionGate::Revision) => Self::Revision,
-            ReleaseDecidingStep::Gate(DecisionGate::PreferredLanguage) => Self::PreferredLanguage,
-            ReleaseDecidingStep::Gate(DecisionGate::OptionalLanguages) => Self::OptionalLanguages,
-            ReleaseDecidingStep::Score => Self::Score,
-        }
+        Self::from_step(value)
     }
 }
 

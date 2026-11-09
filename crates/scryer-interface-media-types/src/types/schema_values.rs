@@ -347,39 +347,121 @@ pub enum ScoringPersonaValue {
     Compatible,
 }
 
-/// One step of a quality profile's decision order. Releases are compared on
-/// each step in turn; the first step that tells two releases apart decides,
-/// and the score decides when none does.
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum QualityDecisionGateValue {
-    /// The profile's quality tier order. Without it the cutoff tier does not
-    /// apply.
-    QualityTier,
-    /// PROPER and REPACK releases from the same group. Without it they rank
-    /// like the original release.
-    Revision,
-    /// The library's ordered preferred audio languages.
-    PreferredLanguage,
-    /// How many of the library's optional audio languages a release carries.
-    OptionalLanguages,
+/// Both GraphQL views of the decision steps, and their conversions, from one
+/// list. A new step adds one entry here: its variant (named as in
+/// `scryer_application::DecisionGate`), the description it carries as a
+/// profile step, and the one it carries as the step that decided.
+macro_rules! decision_step_values {
+    (
+        gate_enum: { $(#[$gate_enum_doc:meta])* }
+        decided_enum: { $(#[$decided_enum_doc:meta])* }
+        steps: {
+            $(
+                $variant:ident {
+                    gate: { $(#[$gate_doc:meta])* }
+                    decided: { $(#[$decided_doc:meta])* }
+                }
+            )*
+        }
+        score: { $(#[$score_doc:meta])* }
+    ) => {
+        $(#[$gate_enum_doc])*
+        #[derive(Enum, Copy, Clone, Eq, PartialEq)]
+        #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+        pub enum QualityDecisionGateValue {
+            $(
+                $(#[$gate_doc])*
+                $variant,
+            )*
+        }
+
+        $(#[$decided_enum_doc])*
+        #[derive(Enum, Copy, Clone, Eq, PartialEq)]
+        #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+        pub enum ReleaseDecidingStepValue {
+            $(
+                $(#[$decided_doc])*
+                $variant,
+            )*
+            $(#[$score_doc])*
+            Score,
+        }
+
+        impl QualityDecisionGateValue {
+            pub fn from_gate(gate: scryer_application::DecisionGate) -> Self {
+                match gate {
+                    $(scryer_application::DecisionGate::$variant => Self::$variant,)*
+                }
+            }
+
+            pub fn into_gate(self) -> scryer_application::DecisionGate {
+                match self {
+                    $(Self::$variant => scryer_application::DecisionGate::$variant,)*
+                }
+            }
+        }
+
+        impl ReleaseDecidingStepValue {
+            pub fn from_step(step: scryer_application::ReleaseDecidingStep) -> Self {
+                use scryer_application::{DecisionGate, ReleaseDecidingStep};
+                match step {
+                    $(ReleaseDecidingStep::Gate(DecisionGate::$variant) => Self::$variant,)*
+                    ReleaseDecidingStep::Score => Self::Score,
+                }
+            }
+        }
+    };
 }
 
-/// The step of a quality profile's decision order that settled a comparison
-/// with what was already on disk.
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum ReleaseDecidingStepValue {
-    /// The quality tier decided.
-    QualityTier,
-    /// PROPER or REPACK decided.
-    Revision,
-    /// The preferred audio language decided.
-    PreferredLanguage,
-    /// The optional audio languages decided.
-    OptionalLanguages,
-    /// No step told the releases apart, so the score decided.
-    Score,
+decision_step_values! {
+    gate_enum: {
+        /// One step of a quality profile's decision order. Releases are compared on
+        /// each step in turn; the first step that tells two releases apart decides,
+        /// and the score decides when none does.
+    }
+    decided_enum: {
+        /// The step of a quality profile's decision order that settled a comparison
+        /// with what was already on disk.
+    }
+    steps: {
+        QualityTier {
+            gate: {
+                /// The profile's quality tier order. Without it the cutoff tier does not
+                /// apply.
+            }
+            decided: {
+                /// The quality tier decided.
+            }
+        }
+        Revision {
+            gate: {
+                /// PROPER and REPACK releases from the same group. Without it they rank
+                /// like the original release.
+            }
+            decided: {
+                /// PROPER or REPACK decided.
+            }
+        }
+        PreferredLanguage {
+            gate: {
+                /// The library's ordered preferred audio languages.
+            }
+            decided: {
+                /// The preferred audio language decided.
+            }
+        }
+        OptionalLanguages {
+            gate: {
+                /// How many of the library's optional audio languages a release carries.
+            }
+            decided: {
+                /// The optional audio languages decided.
+            }
+        }
+    }
+    score: {
+        /// No step told the releases apart, so the score decided.
+    }
 }
 
 /// Monitoring mode applied to episodic content.

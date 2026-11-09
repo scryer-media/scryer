@@ -1330,7 +1330,7 @@ impl AppUseCase {
                     continue;
                 };
                 let below_cutoff = cutoff_score.is_some_and(|cutoff| bar.score < cutoff);
-                if !below_cutoff && !bar.language.wanted_under(&pipeline) {
+                if !below_cutoff && !pipeline.still_wants(&bar.side()) {
                     continue;
                 }
                 let Some(title) = title_by_id.get(summary.title_id.as_str()) else {

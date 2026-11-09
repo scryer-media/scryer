@@ -2180,10 +2180,9 @@ fn score_first_ranking_order_matches_admission() {
             .into_iter()
             .map(|candidate| {
                 let head = RankHead {
-                    tier_index: tier_sort_key(candidate.tier_index),
+                    side: candidate.facts().side,
                     negated_revision: revision_preference(candidate, &subject).saturating_neg(),
                     negated_score: candidate.score.saturating_neg(),
-                    language: candidate.language,
                     pipeline: revision_then_score(),
                     ..Default::default()
                 };
@@ -2387,10 +2386,9 @@ fn walk_ranked_skipping_refusals<'a>(
         .into_iter()
         .map(|candidate| {
             let head = RankHead {
-                tier_index: tier_sort_key(candidate.tier_index),
+                side: candidate.facts().side,
                 negated_revision: revision_preference(candidate, subject).saturating_neg(),
                 negated_score: candidate.score.saturating_neg(),
-                language: candidate.language,
                 pipeline: candidate.pipeline,
                 ..Default::default()
             };

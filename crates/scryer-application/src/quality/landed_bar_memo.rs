@@ -54,6 +54,15 @@ pub(crate) struct LandedBar {
 }
 
 impl LandedBar {
+    /// The stored file as the decision steps read it. The one builder for a
+    /// landed bar; see [`crate::decision_pipeline::SideFacts`].
+    pub(crate) fn side(&self) -> crate::decision_pipeline::SideFacts {
+        crate::decision_pipeline::SideFacts {
+            tier_sort_key: crate::admission::tier_sort_key(self.tier_index),
+            language: self.language,
+        }
+    }
+
     /// Folds in another file of the same scope. The score is the better of the
     /// two; the language standing is that of the file the admission ladder
     /// ranks first, the one the cutoff reads through
@@ -61,7 +70,7 @@ impl LandedBar {
     pub(crate) fn with_file(self, other: Self, pipeline: &crate::DecisionPipeline) -> Self {
         let rank = |bar: &Self| {
             (
-                crate::admission::incumbent_ladder_key(pipeline, bar.tier_index, bar.language),
+                crate::admission::incumbent_ladder_key(pipeline, bar.side()),
                 std::cmp::Reverse(bar.score),
             )
         };
