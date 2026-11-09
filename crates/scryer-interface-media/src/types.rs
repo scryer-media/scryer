@@ -1182,6 +1182,10 @@ pub struct ReleaseDecisionPayload {
     pub score_delta: Option<i32>,
     /// Structured scoring explanation, or null when no explanation was stored.
     pub explanation_json: Option<Json<serde_json::Value>>,
+    /// The step of the profile's decision order that settled the comparison
+    /// with what the scope held, or null when nothing was compared or the
+    /// decision was recorded before this was captured.
+    pub decided_by: Option<ReleaseDecidingStepValue>,
     /// Time when the decision was recorded, in UTC.
     pub created_at: DateTime<Utc>,
 }

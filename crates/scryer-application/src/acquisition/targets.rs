@@ -1194,9 +1194,7 @@ impl AppUseCase {
             .iter()
             .chain(std::iter::once(&default_profile))
             .any(|profile| {
-                profile.criteria.allow_upgrades
-                    && (profile.criteria.cutoff_score.is_some()
-                        || profile.criteria.ranking_mode.is_score_first())
+                profile.criteria.allow_upgrades && profile.criteria.cutoff_score.is_some()
             });
         let libraries = self.services.catalog.libraries.list(None).await?;
         if !any_cutoff_score {
@@ -1235,21 +1233,20 @@ impl AppUseCase {
         let language_scopes = self
             .scopes_with_audio_language_preferences(&preference_scopes)
             .await?;
-        // A score-first profile ignores the tier cutoff, so its titles are
-        // nominated here: below `cutoff_score` when one is set, and always
-        // (upgrading continues, limited by churn) when none is.
-        let scored: Vec<(scryer_domain::Title, Option<i32>, bool)> = titles
+        // A profile without a quality-tier gate ignores the tier cutoff, so
+        // `cutoff_score` alone decides whether its files are done; without one
+        // the first file satisfies the scope.
+        let scored: Vec<(scryer_domain::Title, Option<i32>, crate::DecisionPipeline)> = titles
             .into_iter()
             .filter(|(_, profile)| profile.criteria.allow_upgrades)
             .filter_map(|(title, profile)| {
                 let language = language_scopes.contains(title.library_id.as_str())
                     || language_scopes.contains(title.facet.as_str());
                 let cutoff_score = profile.criteria.cutoff_score;
-                let score_first = profile.criteria.ranking_mode.is_score_first();
-                (language || cutoff_score.is_some() || score_first).then_some((
+                (language || cutoff_score.is_some()).then_some((
                     title,
                     cutoff_score,
-                    score_first,
+                    profile.criteria.decision_pipeline,
                 ))
             })
             .collect();
@@ -1260,9 +1257,9 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
 
-        let cutoff_by_title: HashMap<&str, (Option<i32>, bool)> = scored
+        let cutoff_by_title: HashMap<&str, (Option<i32>, crate::DecisionPipeline)> = scored
             .iter()
-            .map(|(title, cutoff, score_first)| (title.id.as_str(), (*cutoff, *score_first)))
+            .map(|(title, cutoff, pipeline)| (title.id.as_str(), (*cutoff, *pipeline)))
             .collect();
         let title_by_id: HashMap<&str, &scryer_domain::Title> = scored
             .iter()
@@ -1327,13 +1324,13 @@ impl AppUseCase {
                 // No bar means nothing scored for this scope; a scope with no
                 // number is not evidence that the number is low.
                 let Some(bar) = bar else { continue };
-                let Some((cutoff_score, score_first)) =
+                let Some((cutoff_score, pipeline)) =
                     cutoff_by_title.get(summary.title_id.as_str()).copied()
                 else {
                     continue;
                 };
-                let below_cutoff = cutoff_score.map_or(score_first, |cutoff| bar.score < cutoff);
-                if !below_cutoff && !bar.language.wanted {
+                let below_cutoff = cutoff_score.is_some_and(|cutoff| bar.score < cutoff);
+                if !below_cutoff && !bar.language.wanted_under(&pipeline) {
                     continue;
                 }
                 let Some(title) = title_by_id.get(summary.title_id.as_str()) else {

@@ -11,7 +11,7 @@ use crate::acquisition_release_search::title_with_bridge_cour_titles;
 use crate::acquisition_release_search::{
     AutoCandidateEvaluationContext, CandidateTitleMatch, ReleaseAutoDecisionCode,
     annotate_auto_decision, candidate_presents_identity_disambiguator, canonical_title_evidence,
-    context_free_identity_anchor_keys, evaluate_auto_candidate, external_id_agreement,
+    context_free_identity_anchor_keys, evaluate_auto_candidate_with_step, external_id_agreement,
     parsed_release_matches_title_evidence, serialize_decision_explanation,
     series_movie_search_title,
 };
@@ -3486,9 +3486,9 @@ impl AppUseCase {
                 parsed.map_or(0, crate::acquisition::scoring::revision_rank),
                 decision.map_or(0, |decision| decision.preference_score),
             )
-            .with_revision_policy(
+            .with_profile_policy(
                 parsed.and_then(|parsed| parsed.release_group.as_deref()),
-                upgrade_context.profile.criteria.ignore_proper_repack,
+                &upgrade_context.profile.criteria,
             );
             let mut rank = crate::acquisition::scoring::RankHead::from_result(candidate);
             rank.negated_revision =
@@ -3539,6 +3539,7 @@ impl AppUseCase {
                     upgrade_context.cutoff_reached,
                     &admission,
                     upgrade_context.profile.criteria.cutoff_score,
+                    &upgrade_context.profile.criteria.decision_pipeline,
                 ),
                 // A feed pass, so the PROPER old-file guard binds here — this
                 // is the lane Sonarr's `ProperSpecification` was written for.
@@ -3556,6 +3557,7 @@ impl AppUseCase {
             };
             let route_key = crate::acquisition_workflow::DownloadRouteKey::for_candidate(candidate)
                 .map(|route| format!("__rss_failed_route:{route:?}"));
+            let mut decided_by = None;
             let decision_code = if candidate.auto_decision_code.as_deref().is_some_and(|code| {
                 code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()
                     || code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
@@ -3579,7 +3581,21 @@ impl AppUseCase {
             {
                 ReleaseAutoDecisionCode::DownloadClientUnavailable
             } else {
-                evaluate_auto_candidate(candidate, &evaluation_context)
+                let (code, step) =
+                    evaluate_auto_candidate_with_step(candidate, &evaluation_context);
+                decided_by = step;
+                code
+            };
+            let with_step;
+            let candidate = if decided_by.is_some() {
+                let mut annotated = candidate.clone();
+                if let Some(decision) = annotated.quality_profile_decision.as_mut() {
+                    decision.decided_by = decided_by;
+                }
+                with_step = annotated;
+                &with_step
+            } else {
+                candidate
             };
             let candidate_score = candidate
                 .quality_profile_decision

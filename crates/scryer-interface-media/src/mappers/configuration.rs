@@ -214,6 +214,18 @@ pub fn from_scoring_overrides(
 pub fn from_quality_profile_criteria(
     criteria: QualityProfileCriteria,
 ) -> QualityProfileCriteriaPayload {
+    // A stored revision switch reads as an order without the revision gate.
+    let ignore_proper_repack = criteria.ignores_revision();
+    let decision_pipeline = criteria
+        .decision_pipeline
+        .gates()
+        .iter()
+        .copied()
+        .filter(|gate| {
+            !(ignore_proper_repack && *gate == scryer_application::DecisionGate::Revision)
+        })
+        .map(QualityDecisionGateValue::from_application)
+        .collect();
     QualityProfileCriteriaPayload {
         quality_tiers: criteria.quality_tiers,
         archival_quality: criteria.archival_quality,
@@ -253,7 +265,8 @@ pub fn from_quality_profile_criteria(
         prefer_remux: criteria.prefer_remux,
         allow_bd_disk: criteria.allow_bd_disk,
         allow_upgrades: criteria.allow_upgrades,
-        ignore_proper_repack: criteria.ignore_proper_repack,
+        ignore_proper_repack,
+        decision_pipeline,
         scoring_overrides: from_scoring_overrides(criteria.scoring_overrides),
         cutoff_tier: criteria.cutoff_tier,
         min_score_to_grab: criteria.min_score_to_grab,
@@ -261,7 +274,6 @@ pub fn from_quality_profile_criteria(
         min_upgrade_score_delta: criteria
             .min_upgrade_score_delta
             .unwrap_or(scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
-        ranking_mode: QualityRankingModeValue::from_application(criteria.ranking_mode),
     }
 }
 
@@ -459,12 +471,6 @@ pub fn from_library_settings(settings: LibrarySettings) -> LibrarySettingsPayloa
         preferred_audio_languages: settings.preferred_audio_languages,
         optional_audio_languages_override: settings.optional_audio_languages_override,
         optional_audio_languages: settings.optional_audio_languages,
-        audio_language_priority_override: settings
-            .audio_language_priority_override
-            .map(AudioLanguagePriorityValue::from_application),
-        audio_language_priority: AudioLanguagePriorityValue::from_application(
-            settings.audio_language_priority,
-        ),
         optional_audio_languages_keep_searching_override: settings
             .optional_audio_languages_keep_searching_override,
         optional_audio_languages_keep_searching: settings.optional_audio_languages_keep_searching,
@@ -604,9 +610,6 @@ pub fn from_media_settings(
         required_audio_languages: settings.required_audio_languages,
         preferred_audio_languages: settings.audio_language_preferences.preferred,
         optional_audio_languages: settings.audio_language_preferences.optional,
-        audio_language_priority: AudioLanguagePriorityValue::from_application(
-            settings.audio_language_preferences.priority,
-        ),
         optional_audio_languages_keep_searching: settings
             .audio_language_preferences
             .optional_keep_searching,

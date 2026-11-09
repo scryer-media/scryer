@@ -9,46 +9,17 @@
 //!   none ranks after every one that does.
 //! - **optional** languages are counted. More is better, none is acceptable.
 //!
-//! [`AudioLanguagePriority`] decides whether the preferred rank is compared before
-//! the quality tier (`LanguageFirst`) or after tier and revision
-//! (`QualityFirst`). Optional hits always come after tier and revision.
+//! Where each comparison sits relative to the quality tier and the revision is
+//! the quality profile's decision pipeline, not a property of the languages:
+//! see [`crate::decision_pipeline`].
 //!
 //! Empty lists give every release the same [`AudioLanguageMatch`], so every ordering
 //! and admission comparison degrades to the behaviour without preferences.
-
-use serde::{Deserialize, Serialize};
 
 use crate::audio_requirements::{
     normalize_required_audio_languages, resolve_required_audio_requirements,
     resolved_track_languages,
 };
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AudioLanguagePriority {
-    /// Tier, then revision, then preferred rank, then optional hits.
-    #[default]
-    QualityFirst,
-    /// Preferred rank, then tier, then revision, then optional hits.
-    LanguageFirst,
-}
-
-impl AudioLanguagePriority {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::QualityFirst => "quality_first",
-            Self::LanguageFirst => "language_first",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "quality_first" => Some(Self::QualityFirst),
-            "language_first" => Some(Self::LanguageFirst),
-            _ => None,
-        }
-    }
-}
 
 /// The resolved preferences for one title: concrete, normalized language codes
 /// with the `original` selector already expanded.
@@ -56,7 +27,6 @@ impl AudioLanguagePriority {
 pub struct AudioLanguagePreferences {
     pub preferred: Vec<String>,
     pub optional: Vec<String>,
-    pub priority: AudioLanguagePriority,
     /// Whether a file still missing optional languages keeps its title wanted.
     pub optional_keep_searching: bool,
 }
@@ -66,7 +36,6 @@ pub struct AudioLanguagePreferences {
 pub(crate) static NO_LANGUAGE_PREFERENCES: AudioLanguagePreferences = AudioLanguagePreferences {
     preferred: Vec::new(),
     optional: Vec::new(),
-    priority: AudioLanguagePriority::QualityFirst,
     optional_keep_searching: false,
 };
 
@@ -74,14 +43,14 @@ pub(crate) static NO_LANGUAGE_PREFERENCES: AudioLanguagePreferences = AudioLangu
 impl AudioLanguageRank {
     /// A rank with no preferences behind it, for tests that only compare ranks.
     /// It is wanted whenever a better preferred language exists.
-    pub(crate) fn for_test(preferred_rank: u16, optional_hits: u16, language_first: bool) -> Self {
+    pub(crate) fn for_test(preferred_rank: u16, optional_hits: u16) -> Self {
         Self {
             matched: AudioLanguageMatch {
                 preferred_rank,
                 optional_hits,
             },
-            language_first,
             wanted: preferred_rank > 0,
+            preferred_wanted: preferred_rank > 0,
             ..Default::default()
         }
     }
@@ -97,21 +66,20 @@ pub struct AudioLanguageMatch {
     pub optional_hits: u16,
 }
 
-/// A [`AudioLanguageMatch`] together with where its preferred rank is compared.
-///
-/// Orderings and admission read their language steps from here, so the
-/// priority travels with the facts and cannot be applied inconsistently.
+/// A [`AudioLanguageMatch`] together with what the preferences still want.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct AudioLanguageRank {
     pub matched: AudioLanguageMatch,
     /// Length of the preferred list; `matched.preferred_rank` equals it when
     /// none of the preferred languages is present. Display only, never ranked.
     pub preferred_count: u16,
-    pub language_first: bool,
     /// The preferences still want something this release or file lacks; see
     /// [`AudioLanguagePreferences::is_satisfied`]. A file with this set still
     /// reaches its cutoff, but a release in a better language can pass it.
     pub wanted: bool,
+    /// Part of `wanted`: a preferred language exists that this release or
+    /// file does not carry at the top rank.
+    pub preferred_wanted: bool,
     /// Part of `wanted`: the preferences keep searching for optional languages
     /// and this release or file lacks some of them.
     pub optional_wanted: bool,
@@ -122,34 +90,18 @@ impl AudioLanguageRank {
         Self {
             matched,
             preferred_count: saturating_u16(preferences.preferred.len()),
-            language_first: preferences.language_first(),
             wanted: !preferences.is_satisfied(matched),
-            optional_wanted: preferences.optional_keep_searching
-                && usize::from(matched.optional_hits) < preferences.optional.len(),
+            preferred_wanted: preferences.preferred_wanted(matched),
+            optional_wanted: preferences.optional_wanted(matched),
         }
     }
 
-    /// The preferred rank when it outranks the quality tier, else `0`.
-    pub(crate) fn before_tier(self) -> u16 {
-        if self.language_first {
-            self.matched.preferred_rank
-        } else {
-            0
-        }
-    }
-
-    /// The preferred rank when it follows tier and revision, else `0`.
-    pub(crate) fn after_revision(self) -> u16 {
-        if self.language_first {
-            0
-        } else {
-            self.matched.preferred_rank
-        }
-    }
-
-    /// Optional hits negated, so that less is better like every other step.
-    pub(crate) fn negated_optional_hits(self) -> i32 {
-        -i32::from(self.matched.optional_hits)
+    /// Whether the preferences still want something the gates of `pipeline`
+    /// compare: a language whose gate the profile has removed cannot be
+    /// improved on, so it keeps nothing wanted.
+    pub(crate) fn wanted_under(self, pipeline: &crate::DecisionPipeline) -> bool {
+        (self.preferred_wanted && pipeline.contains(crate::DecisionGate::PreferredLanguage))
+            || (self.optional_wanted && pipeline.contains(crate::DecisionGate::OptionalLanguages))
     }
 }
 
@@ -161,7 +113,6 @@ impl AudioLanguagePreferences {
     pub(crate) fn resolve(
         preferred: &[String],
         optional: &[String],
-        priority: AudioLanguagePriority,
         optional_keep_searching: bool,
         title_context: &crate::audio_requirements::TitleAudioLanguageContext,
     ) -> Self {
@@ -173,17 +124,12 @@ impl AudioLanguagePreferences {
         Self {
             preferred,
             optional,
-            priority,
             optional_keep_searching,
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.preferred.is_empty() && self.optional.is_empty()
-    }
-
-    pub fn language_first(&self) -> bool {
-        self.priority == AudioLanguagePriority::LanguageFirst
     }
 
     /// Rank a set of audio languages. Codes are normalized before matching, so
@@ -217,10 +163,15 @@ impl AudioLanguagePreferences {
     /// it, an RSS or manual result that carries more of them still upgrades the
     /// file, but none is sought.
     pub fn is_satisfied(&self, matched: AudioLanguageMatch) -> bool {
-        if !self.preferred.is_empty() && matched.preferred_rank > 0 {
-            return false;
-        }
-        !(self.optional_keep_searching && usize::from(matched.optional_hits) < self.optional.len())
+        !self.preferred_wanted(matched) && !self.optional_wanted(matched)
+    }
+
+    fn preferred_wanted(&self, matched: AudioLanguageMatch) -> bool {
+        !self.preferred.is_empty() && matched.preferred_rank > 0
+    }
+
+    fn optional_wanted(&self, matched: AudioLanguageMatch) -> bool {
+        self.optional_keep_searching && usize::from(matched.optional_hits) < self.optional.len()
     }
 }
 
@@ -277,7 +228,6 @@ mod tests {
         AudioLanguagePreferences {
             preferred: preferred.iter().map(|code| code.to_string()).collect(),
             optional: optional.iter().map(|code| code.to_string()).collect(),
-            priority: AudioLanguagePriority::LanguageFirst,
             optional_keep_searching: false,
         }
     }
@@ -355,7 +305,6 @@ mod tests {
         let prefs = AudioLanguagePreferences::resolve(
             &langs(&["deu"]),
             &langs(&["ger", "eng"]),
-            AudioLanguagePriority::LanguageFirst,
             false,
             &context,
         );
@@ -369,7 +318,6 @@ mod tests {
         let prefs = AudioLanguagePreferences::resolve(
             &langs(&["deu"]),
             &langs(&["original"]),
-            AudioLanguagePriority::LanguageFirst,
             false,
             &context,
         );
@@ -394,17 +342,22 @@ mod tests {
     }
 
     #[test]
-    fn priority_round_trips_through_its_setting_value() {
-        for priority in [
-            AudioLanguagePriority::QualityFirst,
-            AudioLanguagePriority::LanguageFirst,
-        ] {
-            assert_eq!(
-                AudioLanguagePriority::parse(priority.as_str()),
-                Some(priority)
-            );
-        }
-        assert_eq!(AudioLanguagePriority::parse("nonsense"), None);
+    fn a_language_keeps_a_file_wanted_only_while_its_gate_runs() {
+        let mut prefs = prefs(&["deu"], &["eng"]);
+        prefs.optional_keep_searching = true;
+        let english_only = AudioLanguageRank::new(&prefs, prefs.evaluate(&langs(&["eng"])));
+        let german_only = AudioLanguageRank::new(&prefs, prefs.evaluate(&langs(&["deu"])));
+        let default_order = crate::DecisionPipeline::default_order();
+        assert!(english_only.wanted_under(&default_order));
+        assert!(german_only.wanted_under(&default_order));
+        let without_preferred = default_order.without(crate::DecisionGate::PreferredLanguage);
+        assert!(!english_only.wanted_under(&without_preferred));
+        assert!(german_only.wanted_under(&without_preferred));
+        let without_optional = default_order.without(crate::DecisionGate::OptionalLanguages);
+        assert!(english_only.wanted_under(&without_optional));
+        assert!(!german_only.wanted_under(&without_optional));
+        assert!(!english_only.wanted_under(&crate::DecisionPipeline::score_only()));
+        assert!(english_only.wanted && german_only.wanted);
     }
 
     #[test]

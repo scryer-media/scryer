@@ -405,6 +405,7 @@ async fn recycled_item_history_correlates_upgrade_chain_and_enforces_library_acc
                     previous_score: Some(10),
                     delta: Some(10),
                     decision_code: "upgrade".into(),
+                    decided_by: None,
                     entries: Vec::new(),
                     comparisons: vec![scryer_domain::GrabScoreComparison {
                         file_id: "old-file".into(),

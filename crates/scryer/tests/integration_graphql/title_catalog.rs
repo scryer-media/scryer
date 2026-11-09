@@ -6079,7 +6079,7 @@ async fn graphql_library_audio_language_preferences_inherit_per_value() {
         json!({"input": {
             "scope": "SERIES",
             "preferredAudioLanguages": ["ger"],
-            "audioLanguagePriority": "LANGUAGE_FIRST"
+            "optionalAudioLanguagesKeepSearching": true
         }}),
     )
     .await;
@@ -6092,8 +6092,6 @@ async fn graphql_library_audio_language_preferences_inherit_per_value() {
             preferredAudioLanguages
             optionalAudioLanguagesOverride
             optionalAudioLanguages
-            audioLanguagePriorityOverride
-            audioLanguagePriority
             optionalAudioLanguagesKeepSearchingOverride
             optionalAudioLanguagesKeepSearching
         }
@@ -6110,7 +6108,7 @@ async fn graphql_library_audio_language_preferences_inherit_per_value() {
 
     let update = save(json!({
         "optionalAudioLanguages": ["en"],
-        "audioLanguagePriority": "QUALITY_FIRST"
+        "optionalAudioLanguagesKeepSearching": false
     }))
     .await;
     assert_no_errors(&update);
@@ -6119,21 +6117,17 @@ async fn graphql_library_audio_language_preferences_inherit_per_value() {
     let settings = &settings["data"]["librarySettings"];
     assert!(settings["preferredAudioLanguagesOverride"].is_null());
     assert_eq!(settings["optionalAudioLanguagesOverride"], json!(["eng"]));
-    assert_eq!(settings["audioLanguagePriorityOverride"], "QUALITY_FIRST");
-    assert!(settings["optionalAudioLanguagesKeepSearchingOverride"].is_null());
+    assert_eq!(
+        settings["optionalAudioLanguagesKeepSearchingOverride"],
+        false
+    );
     assert_eq!(
         (
             &settings["preferredAudioLanguages"],
             &settings["optionalAudioLanguages"],
-            &settings["audioLanguagePriority"],
             &settings["optionalAudioLanguagesKeepSearching"],
         ),
-        (
-            &json!(["deu"]),
-            &json!(["eng"]),
-            &json!("QUALITY_FIRST"),
-            &json!(false),
-        ),
+        (&json!(["deu"]), &json!(["eng"]), &json!(false),),
         "unset values come from the series facet"
     );
 
@@ -6148,8 +6142,8 @@ async fn graphql_library_audio_language_preferences_inherit_per_value() {
     let settings = gql(&ctx, read, json!({ "libraryId": library_id })).await;
     let settings = &settings["data"]["librarySettings"];
     assert!(settings["optionalAudioLanguagesOverride"].is_null());
-    assert!(settings["audioLanguagePriorityOverride"].is_null());
-    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
+    assert!(settings["optionalAudioLanguagesKeepSearchingOverride"].is_null());
+    assert_eq!(settings["optionalAudioLanguagesKeepSearching"], true);
 }
 
 /// The per-title override validates against the same picker set as the

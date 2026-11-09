@@ -2,7 +2,7 @@ use super::{
     ConvergenceStateValue, DownloadQueueStateValue, DownloadSourceKindValue, Long, MediaFacetValue,
     PendingReleaseStatusValue, PluginConfigFieldOptionPayload, PluginConfigFieldRoleValue,
     PluginConfigFieldTypeValue, PluginConfigValueSourceValue, QueueDownloadPurposeValue,
-    QueueDownloadScopeInput, WantedKindValue, WantedStatusValue,
+    QueueDownloadScopeInput, ReleaseDecidingStepValue, WantedKindValue, WantedStatusValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -307,6 +307,11 @@ pub struct QualityProfileDecisionPayload {
     pub scoring_log: Vec<ScoringEntryPayload>,
     /// Standing against the title's audio language preferences.
     pub audio_language: AudioLanguageRankPayload,
+    /// The step of the profile's decision order that settled the comparison
+    /// with what the scope already holds, or null when nothing was compared:
+    /// an empty scope, a refusal outside the order, or a release that was
+    /// never evaluated for automatic acquisition.
+    pub decided_by: Option<ReleaseDecidingStepValue>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -320,8 +325,6 @@ pub struct AudioLanguageRankPayload {
     pub preferred_count: i32,
     /// How many of the optional languages are present.
     pub optional_hits: i32,
-    /// Whether the preferred language is compared before the quality tier.
-    pub language_first: bool,
     /// Whether the preferences still want something this release lacks.
     pub wanted: bool,
 }

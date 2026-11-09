@@ -177,9 +177,11 @@ pub fn from_quality_profile_decision(
             preferred_rank: i32::from(decision.language.matched.preferred_rank),
             preferred_count: i32::from(decision.language.preferred_count),
             optional_hits: i32::from(decision.language.matched.optional_hits),
-            language_first: decision.language.language_first,
             wanted: decision.language.wanted,
         },
+        decided_by: decision
+            .decided_by
+            .map(ReleaseDecidingStepValue::from_application),
         allowed: decision.allowed,
         block_codes: decision.block_codes,
         release_score: decision.release_score,
@@ -585,10 +587,23 @@ pub fn from_release_decision(
         candidate_score: decision.candidate_score,
         current_score: decision.current_score,
         score_delta: decision.score_delta,
+        decided_by: recorded_deciding_step(decision.explanation_json.as_deref()),
         explanation_json: decision.explanation_json.map(json_string_to_value),
         created_at: parse_datetime(&decision.created_at, "release decision created_at")
             .map_err(scryer_application::AppError::Repository)?,
     })
+}
+
+/// The deciding step a release decision's explanation records under
+/// `auto_decision.decided_by`; null for decisions recorded before it was.
+fn recorded_deciding_step(explanation_json: Option<&str>) -> Option<ReleaseDecidingStepValue> {
+    let explanation: serde_json::Value = serde_json::from_str(explanation_json?).ok()?;
+    crate::conversions::deciding_step_from_recorded(
+        explanation
+            .get("auto_decision")?
+            .get("decided_by")?
+            .as_str(),
+    )
 }
 
 pub fn from_decision_code_count(

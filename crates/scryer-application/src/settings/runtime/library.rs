@@ -1004,8 +1004,6 @@ impl AppUseCase {
             preferred_audio_languages: audio_language_preferences.preferred,
             optional_audio_languages_override: audio_language_overrides.optional,
             optional_audio_languages: audio_language_preferences.optional,
-            audio_language_priority_override: audio_language_overrides.priority,
-            audio_language_priority: audio_language_preferences.priority,
             optional_audio_languages_keep_searching_override: audio_language_overrides
                 .optional_keep_searching,
             optional_audio_languages_keep_searching: audio_language_preferences
@@ -1583,19 +1581,6 @@ impl AppUseCase {
                 .await?;
         }
 
-        if let Some(priority) = settings.audio_language_priority {
-            self.upsert_scoped_system_setting_json(
-                crate::AUDIO_LANGUAGE_PRIORITY_KEY,
-                &library.id,
-                &priority.as_str(),
-                Some(actor.id.clone()),
-            )
-            .await?;
-        } else {
-            self.delete_scoped_system_setting(crate::AUDIO_LANGUAGE_PRIORITY_KEY, &library.id)
-                .await?;
-        }
-
         if let Some(keep_searching) = settings.optional_audio_languages_keep_searching {
             self.upsert_scoped_system_setting_json(
                 crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
@@ -1912,7 +1897,6 @@ impl AppUseCase {
             REQUIRED_AUDIO_LANGUAGES_KEY.to_string(),
             crate::PREFERRED_AUDIO_LANGUAGES_KEY.to_string(),
             crate::OPTIONAL_AUDIO_LANGUAGES_KEY.to_string(),
-            crate::AUDIO_LANGUAGE_PRIORITY_KEY.to_string(),
             crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY.to_string(),
             METADATA_LANGUAGE_KEY.to_string(),
             USE_SEASON_FOLDERS_KEY.to_string(),

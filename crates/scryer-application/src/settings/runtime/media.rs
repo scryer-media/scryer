@@ -35,7 +35,6 @@ pub struct MediaSettings {
 pub struct AudioLanguagePreferenceSettings {
     pub preferred: Vec<String>,
     pub optional: Vec<String>,
-    pub priority: crate::AudioLanguagePriority,
     pub optional_keep_searching: bool,
 }
 
@@ -45,7 +44,6 @@ pub struct AudioLanguagePreferenceSettings {
 pub struct AudioLanguagePreferenceOverrides {
     pub preferred: Option<Vec<String>>,
     pub optional: Option<Vec<String>>,
-    pub priority: Option<crate::AudioLanguagePriority>,
     pub optional_keep_searching: Option<bool>,
 }
 
@@ -55,7 +53,6 @@ impl AudioLanguagePreferenceOverrides {
         AudioLanguagePreferenceSettings {
             preferred: self.preferred.unwrap_or(inherited.preferred),
             optional: self.optional.unwrap_or(inherited.optional),
-            priority: self.priority.unwrap_or(inherited.priority),
             optional_keep_searching: self
                 .optional_keep_searching
                 .unwrap_or(inherited.optional_keep_searching),
@@ -87,7 +84,6 @@ pub struct UpdateMediaSettings {
     pub required_audio_languages: Option<Vec<String>>,
     pub preferred_audio_languages: Option<Vec<String>>,
     pub optional_audio_languages: Option<Vec<String>>,
-    pub audio_language_priority: Option<crate::AudioLanguagePriority>,
     pub optional_audio_languages_keep_searching: Option<bool>,
     pub use_season_folders: Option<bool>,
     pub folder_template: Option<String>,
@@ -460,7 +456,6 @@ impl AppUseCase {
         Ok(crate::AudioLanguagePreferences::resolve(
             &settings.preferred,
             &settings.optional,
-            settings.priority,
             settings.optional_keep_searching,
             &title_context,
         ))
@@ -490,11 +485,6 @@ impl AppUseCase {
         let optional = self
             .first_configured_language_list(crate::OPTIONAL_AUDIO_LANGUAGES_KEY, &[scope_id])
             .await?;
-        let priority = self
-            .read_setting_string_value_explicit(crate::AUDIO_LANGUAGE_PRIORITY_KEY, Some(scope_id))
-            .await?
-            .as_deref()
-            .and_then(crate::AudioLanguagePriority::parse);
         let optional_keep_searching = self
             .read_setting_bool_value_explicit(
                 crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
@@ -504,7 +494,6 @@ impl AppUseCase {
         Ok(AudioLanguagePreferenceOverrides {
             preferred: list(preferred),
             optional: list(optional),
-            priority,
             optional_keep_searching,
         })
     }
@@ -1148,22 +1137,6 @@ impl AppUseCase {
                 )
                 .await?;
             changed_keys.push(crate::OPTIONAL_AUDIO_LANGUAGES_KEY.to_string());
-        }
-
-        if let Some(priority) = input.audio_language_priority {
-            self.services
-                .config
-                .settings
-                .upsert_setting_json(
-                    SETTINGS_SCOPE_SYSTEM,
-                    crate::AUDIO_LANGUAGE_PRIORITY_KEY,
-                    Some(facet.as_str().to_string()),
-                    encode_setting_json(&priority.as_str())?,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                )
-                .await?;
-            changed_keys.push(crate::AUDIO_LANGUAGE_PRIORITY_KEY.to_string());
         }
 
         if let Some(keep_searching) = input.optional_audio_languages_keep_searching {

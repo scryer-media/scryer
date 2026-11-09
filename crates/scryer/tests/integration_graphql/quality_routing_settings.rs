@@ -816,21 +816,23 @@ async fn graphql_quality_profile_min_upgrade_score_delta_round_trip() {
     );
 }
 
-/// The ranking mode is a quality-profile field: it defaults to tier-first,
-/// round-trips score-first, survives a save that omits it, and is stored as
-/// absent when tier-first so an existing profile keeps its fingerprint.
+/// The decision order is a quality-profile field: it defaults to tier,
+/// revision, then the language steps; round-trips any other order, an empty
+/// one included; survives a save that omits it; refuses a repeated step with
+/// a code; and is stored as absent when the revision switch implies it, so an
+/// existing profile keeps its fingerprint.
 #[tokio::test]
-async fn graphql_quality_profile_ranking_mode_round_trip() {
+async fn graphql_quality_profile_decision_pipeline_round_trip() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
     let save = r#"
         mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
           saveQualityProfileSettings(input: $input) {
-            profiles { id criteria { rankingMode } }
+            profiles { id criteria { decisionPipeline ignoreProperRepack } }
           }
         }
         "#;
-    let input = |mode: Option<&str>| {
+    let input = |pipeline: Option<serde_json::Value>| {
         let mut criteria = json!({
             "qualityTiers": ["1080P"],
             "archivalQuality": "1080P",
@@ -850,65 +852,98 @@ async fn graphql_quality_profile_ranking_mode_round_trip() {
             "cutoffTier": null,
             "minScoreToGrab": null
         });
-        if let Some(mode) = mode {
-            criteria["rankingMode"] = json!(mode);
+        if let Some(pipeline) = pipeline {
+            criteria["decisionPipeline"] = pipeline;
         }
         json!({
             "input": {
-                "profiles": [{ "id": "mode-fixture", "name": "Mode Fixture", "criteria": criteria }],
+                "profiles": [{ "id": "order-fixture", "name": "Order Fixture", "criteria": criteria }],
                 "categorySelections": [],
                 "categoryPersonaSelections": [],
                 "replaceExisting": false
             }
         })
     };
-    let mode_of = |response: &serde_json::Value| {
+    let criteria_of = |response: &serde_json::Value| {
         response["data"]["saveQualityProfileSettings"]["profiles"]
             .as_array()
             .expect("profiles list")
             .iter()
-            .find(|profile| profile["id"] == "mode-fixture")
-            .expect("saved profile")["criteria"]["rankingMode"]
+            .find(|profile| profile["id"] == "order-fixture")
+            .expect("saved profile")["criteria"]
             .clone()
     };
     let stored_config = || async {
         let raw: String =
             sqlx::query_scalar("SELECT scoring_config FROM quality_profiles WHERE id = ?")
-                .bind("mode-fixture")
+                .bind("order-fixture")
                 .fetch_one(ctx.db.pool())
                 .await
                 .expect("stored scoring config");
         serde_json::from_str::<serde_json::Value>(&raw).expect("scoring config is JSON")
     };
+    let default_order = json!([
+        "QUALITY_TIER",
+        "REVISION",
+        "PREFERRED_LANGUAGE",
+        "OPTIONAL_LANGUAGES"
+    ]);
 
     let unset = gql(&ctx, save, input(None)).await;
     assert_no_errors(&unset);
     assert_eq!(
-        mode_of(&unset),
-        "TIER_FIRST",
-        "an unset mode reads as tier-first"
+        criteria_of(&unset)["decisionPipeline"],
+        default_order,
+        "an unset order reads as the default"
     );
-    assert!(stored_config().await.get("ranking_mode").is_none());
+    assert!(stored_config().await.get("decision_pipeline").is_none());
 
-    let set = gql(&ctx, save, input(Some("SCORE_FIRST"))).await;
+    let language_ahead = json!(["PREFERRED_LANGUAGE", "QUALITY_TIER", "REVISION"]);
+    let set = gql(&ctx, save, input(Some(language_ahead.clone()))).await;
     assert_no_errors(&set);
-    assert_eq!(mode_of(&set), "SCORE_FIRST");
-    assert_eq!(stored_config().await["ranking_mode"], "score_first");
+    assert_eq!(criteria_of(&set)["decisionPipeline"], language_ahead);
+    assert_eq!(criteria_of(&set)["ignoreProperRepack"], false);
+    assert_eq!(
+        stored_config().await["decision_pipeline"],
+        json!(["preferred_language", "quality_tier", "revision"])
+    );
 
     let omitted = gql(&ctx, save, input(None)).await;
     assert_no_errors(&omitted);
     assert_eq!(
-        mode_of(&omitted),
-        "SCORE_FIRST",
+        criteria_of(&omitted)["decisionPipeline"],
+        language_ahead,
         "omitting the field keeps the stored value"
     );
 
-    let reset = gql(&ctx, save, input(Some("TIER_FIRST"))).await;
+    let score_only = gql(&ctx, save, input(Some(json!([])))).await;
+    assert_no_errors(&score_only);
+    assert_eq!(criteria_of(&score_only)["decisionPipeline"], json!([]));
+    assert_eq!(
+        criteria_of(&score_only)["ignoreProperRepack"],
+        true,
+        "an order without the revision step ignores PROPER and REPACK"
+    );
+    assert_eq!(stored_config().await["decision_pipeline"], json!([]));
+
+    let repeated = gql(
+        &ctx,
+        save,
+        input(Some(json!(["QUALITY_TIER", "REVISION", "QUALITY_TIER"]))),
+    )
+    .await;
+    assert_eq!(
+        repeated["errors"][0]["extensions"]["reason"],
+        "INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE",
+        "a repeated step is refused with a code: {repeated}"
+    );
+
+    let reset = gql(&ctx, save, input(Some(default_order.clone()))).await;
     assert_no_errors(&reset);
-    assert_eq!(mode_of(&reset), "TIER_FIRST");
+    assert_eq!(criteria_of(&reset)["decisionPipeline"], default_order);
     let config = stored_config().await;
     assert!(
-        config.get("ranking_mode").is_none(),
-        "tier-first is stored as absent: {config}"
+        config.get("decision_pipeline").is_none(),
+        "the default order is stored as absent: {config}"
     );
 }

@@ -4662,6 +4662,11 @@ pub struct GrabScoringSnapshot {
     pub decision_code: String,
     pub comparisons: Vec<GrabScoreComparison>,
     pub entries: Vec<ScoringSnapshotEntry>,
+    /// The decision step that settled the comparison against what was on
+    /// disk (a gate name or `score`). Absent on grabs recorded before this
+    /// was captured, and on grabs with nothing to compare against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

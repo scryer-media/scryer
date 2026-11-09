@@ -2532,7 +2532,6 @@ fn german_first() -> crate::AudioLanguagePreferences {
     crate::AudioLanguagePreferences {
         preferred: vec!["deu".to_string()],
         optional: vec!["eng".to_string()],
-        priority: crate::AudioLanguagePriority::LanguageFirst,
         optional_keep_searching: false,
     }
 }
@@ -2568,7 +2567,6 @@ fn language_rank_follows_the_announcement_until_the_tracks_are_measured() {
 
     let announced_only = score_release(&german, &context);
     assert_eq!(announced_only.language.matched.preferred_rank, 0);
-    assert!(announced_only.language.language_first);
     assert!(!announced_only.language.wanted);
 
     // The file turned out to carry English only.

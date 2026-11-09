@@ -727,14 +727,6 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: scryer_application::AUDIO_LANGUAGE_PRIORITY_KEY,
-            data_type: "string",
-            default_value_json: "\"quality_first\"",
-            is_sensitive: false,
-        },
-        ServiceSettingSeed {
-            category: SETTINGS_CATEGORY_MEDIA,
-            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: scryer_application::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
             data_type: "boolean",
             default_value_json: "false",
@@ -3160,6 +3152,18 @@ mod tests {
                 .any(|seed| seed.key_name.starts_with("acquisition.")
                     && seed.key_name.contains("movie")),
             "the acquisition movie availability keys are retired"
+        );
+    }
+
+    #[test]
+    fn the_audio_language_priority_key_is_retired() {
+        // The quality profile's decision order replaced it; a row left behind
+        // by an earlier build is never read.
+        assert!(
+            !service_setting_seeds()
+                .iter()
+                .any(|seed| seed.key_name == "audio.language_priority"),
+            "audio.language_priority must not be registered"
         );
     }
 

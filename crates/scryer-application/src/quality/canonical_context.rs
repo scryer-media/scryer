@@ -1092,12 +1092,8 @@ impl AppUseCase {
         let candidate =
             crate::admission::CandidateFacts::new(facts.tier_index, facts.revision, facts.score)
                 .with_language(facts.language)
-                .with_ranking_mode(upgrade.profile.criteria.ranking_mode)
                 .with_release_title(release_title)
-                .with_revision_policy(
-                    facts.release_group.as_deref(),
-                    upgrade.profile.criteria.ignore_proper_repack,
-                );
+                .with_profile_policy(facts.release_group.as_deref(), &upgrade.profile.criteria);
         let policy = crate::admission::AdmissionPolicy {
             allow_upgrades: upgrade.profile.criteria.allow_upgrades,
             min_delta: upgrade.thresholds.same_tier_min_delta,
@@ -1112,6 +1108,7 @@ impl AppUseCase {
                 upgrade.cutoff_reached,
                 &admission,
                 upgrade.profile.criteria.cutoff_score,
+                &upgrade.profile.criteria.decision_pipeline,
             ),
             // Lane-specific old-file rules were already checked by the
             // caller. This final history guard must not impose RSS policy on searches.

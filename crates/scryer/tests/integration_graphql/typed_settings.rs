@@ -1896,7 +1896,6 @@ async fn graphql_audio_language_preferences_round_trip() {
           updateMediaSettings(input: $input) {
             preferredAudioLanguages
             optionalAudioLanguages
-            audioLanguagePriority
             optionalAudioLanguagesKeepSearching
           }
         }
@@ -1905,7 +1904,7 @@ async fn graphql_audio_language_preferences_round_trip() {
         gql(
             &ctx,
             r#"query($scope: ContentScopeValue!) { mediaSettings(scope: $scope) {
-                preferredAudioLanguages optionalAudioLanguages audioLanguagePriority
+                preferredAudioLanguages optionalAudioLanguages
                 optionalAudioLanguagesKeepSearching } }"#,
             json!({ "scope": scope }),
         )
@@ -1915,7 +1914,6 @@ async fn graphql_audio_language_preferences_round_trip() {
     assert_no_errors(&defaults);
     let settings = &defaults["data"]["mediaSettings"];
     assert_eq!(settings["preferredAudioLanguages"], json!([]));
-    assert_eq!(settings["audioLanguagePriority"], "QUALITY_FIRST");
     assert_eq!(settings["optionalAudioLanguagesKeepSearching"], false);
 
     let update = gql(
@@ -1925,7 +1923,6 @@ async fn graphql_audio_language_preferences_round_trip() {
             "scope": "MOVIE",
             "preferredAudioLanguages": ["ger", "en"],
             "optionalAudioLanguages": ["original"],
-            "audioLanguagePriority": "LANGUAGE_FIRST",
             "optionalAudioLanguagesKeepSearching": true
         }}),
     )
@@ -1934,7 +1931,6 @@ async fn graphql_audio_language_preferences_round_trip() {
     let settings = &update["data"]["updateMediaSettings"];
     assert_eq!(settings["preferredAudioLanguages"], json!(["deu", "eng"]));
     assert_eq!(settings["optionalAudioLanguages"], json!(["original"]));
-    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
     assert_eq!(settings["optionalAudioLanguagesKeepSearching"], true);
 
     // A partial update leaves the other values alone; an empty list clears.
@@ -1948,7 +1944,6 @@ async fn graphql_audio_language_preferences_round_trip() {
     let settings = &partial["data"]["updateMediaSettings"];
     assert_eq!(settings["preferredAudioLanguages"], json!(["deu", "eng"]));
     assert_eq!(settings["optionalAudioLanguages"], json!([]));
-    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
 
     // Preferences are per scope.
     let series = read("SERIES").await;

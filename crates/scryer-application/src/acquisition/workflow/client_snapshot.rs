@@ -2758,22 +2758,11 @@ where
                     | ReleaseAutoDecisionCode::DownloadClientUnavailable
             )
         {
-            // A fact about the *scope*, not about this candidate: the ranked
-            // order is (tier, revision, score) and admission compares the same
-            // three in the same order, so nothing below a rejected candidate
-            // can do better either.
-            //
-            // `CutoffReached` used to be listed here and no longer is. Since
-            // D15 it is candidate-aware — a same-tier revision upgrade escapes
-            // it — and a better-*tier* candidate refused by the cutoff sorts
-            // *above* the same-tier PROPER that would pass, so breaking on it
-            // would skip the one release worth having. (`NegativeScore` was
-            // also listed once; nothing emits it any more — the hardcoded zero
-            // floor is gone — and the variant survives only so historical
-            // decision rows still decode.)
-            if matches!(decision_code, ReleaseAutoDecisionCode::UpgradeRejected) {
-                break;
-            }
+            // No refusal ends the walk: a refused upgrade says nothing about
+            // the candidates ranked below it (a PROPER passes the
+            // upgrades-disabled guard that refuses a better tier above it, and
+            // a related lower revision sorts level with an unrelated release
+            // that is admitted).
             continue;
         }
 

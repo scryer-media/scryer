@@ -9,12 +9,14 @@ pub(crate) fn capture(
     admission: &AdmissionSubject,
     decision_code: &str,
 ) -> GrabScoringSnapshot {
-    capture_values(
+    let mut snapshot = capture_values(
         decision.preference_score,
         &decision.scoring_log,
         admission,
         decision_code,
-    )
+    );
+    snapshot.decided_by = decision.decided_by.map(|step| step.as_str().to_string());
+    snapshot
 }
 
 pub(crate) fn capture_values(
@@ -58,6 +60,7 @@ pub(crate) fn capture_values(
         },
         comparisons,
         entries: entries.iter().map(ScoreEvaluationEntry::from).collect(),
+        decided_by: None,
     }
 }
 

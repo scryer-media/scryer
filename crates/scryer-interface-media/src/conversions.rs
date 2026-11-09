@@ -74,40 +74,50 @@ impl IntoApplication<AppScoringPersona> for ScoringPersonaValue {
     }
 }
 
-impl FromApplication<scryer_application::AudioLanguagePriority> for AudioLanguagePriorityValue {
-    fn from_application(value: scryer_application::AudioLanguagePriority) -> Self {
+impl FromApplication<scryer_application::DecisionGate> for QualityDecisionGateValue {
+    fn from_application(value: scryer_application::DecisionGate) -> Self {
+        use scryer_application::DecisionGate;
         match value {
-            scryer_application::AudioLanguagePriority::QualityFirst => Self::QualityFirst,
-            scryer_application::AudioLanguagePriority::LanguageFirst => Self::LanguageFirst,
+            DecisionGate::QualityTier => Self::QualityTier,
+            DecisionGate::Revision => Self::Revision,
+            DecisionGate::PreferredLanguage => Self::PreferredLanguage,
+            DecisionGate::OptionalLanguages => Self::OptionalLanguages,
         }
     }
 }
 
-impl IntoApplication<scryer_application::AudioLanguagePriority> for AudioLanguagePriorityValue {
-    fn into_application(self) -> scryer_application::AudioLanguagePriority {
+impl IntoApplication<scryer_application::DecisionGate> for QualityDecisionGateValue {
+    fn into_application(self) -> scryer_application::DecisionGate {
+        use scryer_application::DecisionGate;
         match self {
-            Self::QualityFirst => scryer_application::AudioLanguagePriority::QualityFirst,
-            Self::LanguageFirst => scryer_application::AudioLanguagePriority::LanguageFirst,
+            Self::QualityTier => DecisionGate::QualityTier,
+            Self::Revision => DecisionGate::Revision,
+            Self::PreferredLanguage => DecisionGate::PreferredLanguage,
+            Self::OptionalLanguages => DecisionGate::OptionalLanguages,
         }
     }
 }
 
-impl FromApplication<scryer_application::QualityRankingMode> for QualityRankingModeValue {
-    fn from_application(value: scryer_application::QualityRankingMode) -> Self {
+impl FromApplication<scryer_application::ReleaseDecidingStep> for ReleaseDecidingStepValue {
+    fn from_application(value: scryer_application::ReleaseDecidingStep) -> Self {
+        use scryer_application::{DecisionGate, ReleaseDecidingStep};
         match value {
-            scryer_application::QualityRankingMode::TierFirst => Self::TierFirst,
-            scryer_application::QualityRankingMode::ScoreFirst => Self::ScoreFirst,
+            ReleaseDecidingStep::Gate(DecisionGate::QualityTier) => Self::QualityTier,
+            ReleaseDecidingStep::Gate(DecisionGate::Revision) => Self::Revision,
+            ReleaseDecidingStep::Gate(DecisionGate::PreferredLanguage) => Self::PreferredLanguage,
+            ReleaseDecidingStep::Gate(DecisionGate::OptionalLanguages) => Self::OptionalLanguages,
+            ReleaseDecidingStep::Score => Self::Score,
         }
     }
 }
 
-impl IntoApplication<scryer_application::QualityRankingMode> for QualityRankingModeValue {
-    fn into_application(self) -> scryer_application::QualityRankingMode {
-        match self {
-            Self::TierFirst => scryer_application::QualityRankingMode::TierFirst,
-            Self::ScoreFirst => scryer_application::QualityRankingMode::ScoreFirst,
-        }
-    }
+/// The deciding step recorded as text (on a grab or in a decision's
+/// explanation), or `None` for records that predate it or name a step this
+/// build does not know.
+pub fn deciding_step_from_recorded(value: Option<&str>) -> Option<ReleaseDecidingStepValue> {
+    value
+        .and_then(scryer_application::ReleaseDecidingStep::parse)
+        .map(ReleaseDecidingStepValue::from_application)
 }
 
 impl IntoApplication<AppDownloadSourceKind> for DownloadSourceKindValue {

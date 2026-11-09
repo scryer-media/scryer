@@ -57,9 +57,6 @@ fn library_settings_draft(
         required_audio_languages: input.required_audio_languages,
         preferred_audio_languages: input.preferred_audio_languages,
         optional_audio_languages: input.optional_audio_languages,
-        audio_language_priority: input
-            .audio_language_priority
-            .map(AudioLanguagePriorityValue::into_application),
         optional_audio_languages_keep_searching: input.optional_audio_languages_keep_searching,
         metadata_language: input.metadata_language,
         use_season_folders: input.use_season_folders,

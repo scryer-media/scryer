@@ -259,9 +259,10 @@ impl AppUseCase {
     }
 
     /// Order one scope's expired pending releases best-first, on facts derived
-    /// now rather than remembered from when they were parked (BL3).
+    /// now rather than remembered from when they were parked.
     ///
-    /// The key is `RankHead`'s: refused releases last, then tier, then revision,
+    /// The key is `RankHead`'s: refused releases last, then the profile's
+    /// decision order (tier, revision and the audio language steps it lists),
     /// then score, with size fit breaking otherwise equal search preferences.
     /// The admission ladder remains unchanged. A scope whose title
     /// or profile cannot be resolved keeps the stored order: an unorderable
@@ -309,8 +310,7 @@ impl AppUseCase {
 
         let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
         let dl_snapshot = super::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
-        let score_first = profile.criteria.ranking_mode.is_score_first();
-        let mut keys: std::collections::HashMap<String, (bool, usize, i32, i32, usize, i32)> =
+        let mut keys: std::collections::HashMap<String, crate::acquisition::scoring::RankHeadKey> =
             std::collections::HashMap::with_capacity(releases.len());
         for release in releases.iter() {
             let facts = crate::quality::canonical_context::score_parked_release_title(
@@ -356,26 +356,18 @@ impl AppUseCase {
                 facts.revision,
                 facts.score,
             )
-            .with_revision_policy(
-                facts.release_group.as_deref(),
-                profile.criteria.ignore_proper_repack,
-            );
+            .with_profile_policy(facts.release_group.as_deref(), &profile.criteria);
             let revision_preference = crate::admission::revision_preference(candidate, &admission);
-            let tier = crate::admission::tier_sort_key(facts.tier_index);
-            // Score-first profiles rank on score with tier only breaking ties,
-            // matching the admission ladder for that mode.
-            let (tier_before, tier_after) = if score_first { (0, tier) } else { (tier, 0) };
-            keys.insert(
-                release.id.clone(),
-                (
-                    !facts.allowed,
-                    tier_before,
-                    revision_preference.saturating_neg(),
-                    facts.score.saturating_neg(),
-                    tier_after,
-                    facts.size_fit_penalty,
-                ),
-            );
+            let rank = crate::acquisition::scoring::RankHead {
+                blocked: !facts.allowed,
+                tier_index: crate::admission::tier_sort_key(facts.tier_index),
+                negated_revision: revision_preference.saturating_neg(),
+                negated_score: facts.score.saturating_neg(),
+                size_fit_penalty: facts.size_fit_penalty,
+                language: facts.language,
+                pipeline: profile.criteria.decision_pipeline,
+            };
+            keys.insert(release.id.clone(), rank.key());
         }
         releases.sort_by(|left, right| {
             keys.get(&left.id)
@@ -1550,11 +1542,10 @@ impl AppUseCase {
         )
         .with_language(facts.language)
         .with_release_title(&pr.release_title)
-        .with_revision_policy(
+        .with_profile_policy(
             facts.release_group.as_deref(),
-            upgrade_context.profile.criteria.ignore_proper_repack,
-        )
-        .with_ranking_mode(upgrade_context.profile.criteria.ranking_mode);
+            &upgrade_context.profile.criteria,
+        );
         // The same candidate-aware cutoff gate the search and RSS lanes run
         // (D15). It used to be a scope-level `if cutoff_reached { return }`
         // above the score, which meant a PROPER parked behind a delay profile
@@ -1568,6 +1559,7 @@ impl AppUseCase {
                 upgrade_context.cutoff_reached,
                 &admission,
                 upgrade_context.profile.criteria.cutoff_score,
+                &upgrade_context.profile.criteria.decision_pipeline,
             ),
             true,
             now,
