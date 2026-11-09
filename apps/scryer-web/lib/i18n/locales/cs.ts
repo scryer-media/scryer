@@ -995,6 +995,11 @@ const cs: LocaleDictionary = {
     "Minimální rozdíl skóre ve stejné úrovni",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Vydání ve stejné úrovni kvality musí překonat skóre aktuálního souboru alespoň o tuto hodnotu.",
+  "qualityProfile.scoreAlwaysWins": "Skóre vždy vítězí",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "Ponechá se vydání s nejlepším skóre bez ohledu na úroveň kvality a mezní úroveň kvality se ignoruje.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Nepoužije se, když je zapnuto Skóre vždy vítězí.",
   "settings.acquisitionConvergence": "Konvergence a tempo",
   "settings.acquisitionPollIntervalSeconds": "Interval kontroly (sekundy)",
   "settings.acquisitionPollIntervalSecondsHelp":

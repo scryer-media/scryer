@@ -66,6 +66,7 @@ fn trash_pack_matches_native_numeric_golden() {
         size_fit_penalty: 0,
         revision_preference: 0,
         language: Default::default(),
+        ranking_mode: Default::default(),
     };
     let mut mismatches = 0;
     let mut samples = Vec::new();

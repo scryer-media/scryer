@@ -4887,11 +4887,16 @@ async fn process_single_target(
     // It is *not* a pre-search return, despite where it sits: the indexer query
     // already ran above. What it saves is the candidate loop — one decision row
     // per result plus the grab attempts.
+    //
+    // A scope whose file still lacks a wanted audio language is not finished:
+    // its candidates were already judged by the per-candidate cutoff gate,
+    // which refuses all but a language improvement, so the loop runs.
     if crate::acquisition_release_search::incumbent_at_cutoff(
         upgrade_context.cutoff_reached,
         &admission,
         profile.criteria.cutoff_score,
-    ) {
+    ) && !crate::acquisition_release_search::scope_still_wants_language(&admission)
+    {
         tracing::debug!(
             title_id = title.id.as_str(),
             cutoff = profile.criteria.cutoff_tier.as_deref().unwrap_or(""),
@@ -8764,6 +8769,7 @@ mod task_runner_tests {
                 size_fit_penalty: 0,
                 revision_preference: 0,
                 language: Default::default(),
+                ranking_mode: Default::default(),
             }),
         );
         let pack = arbitration_candidate(
@@ -8778,6 +8784,7 @@ mod task_runner_tests {
                 size_fit_penalty: 0,
                 revision_preference: 0,
                 language: Default::default(),
+                ranking_mode: Default::default(),
             }),
         );
         assert_eq!(

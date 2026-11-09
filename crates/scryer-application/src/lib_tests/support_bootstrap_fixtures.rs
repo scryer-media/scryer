@@ -1991,6 +1991,7 @@ pub(super) fn cutoff_projection_test_profile(id: &str, cutoff_tier: &str) -> Qua
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            ranking_mode: Default::default(),
             facet_persona_overrides: HashMap::new(),
         },
     }

@@ -2619,3 +2619,72 @@ fn a_spelled_season_without_a_number_keeps_the_title_text() {
         );
     }
 }
+
+// ── quality_cutoff_met per ranking mode ───────────────────────────────────
+
+#[test]
+fn tier_first_quality_cutoff_follows_the_cutoff_tier() {
+    let criteria = QualityProfileCriteria {
+        quality_tiers: vec!["2160P".into(), "1080P".into(), "720P".into()],
+        cutoff_tier: Some("1080P".into()),
+        cutoff_score: Some(500),
+        ..QualityProfileCriteria::default()
+    };
+    assert!(criteria.quality_cutoff_met(Some("2160P")));
+    assert!(criteria.quality_cutoff_met(Some("1080P")));
+    assert!(!criteria.quality_cutoff_met(Some("720P")));
+    assert!(!criteria.quality_cutoff_met(None));
+    let no_cutoff = QualityProfileCriteria {
+        cutoff_tier: None,
+        ..criteria
+    };
+    assert!(!no_cutoff.quality_cutoff_met(Some("2160P")));
+}
+
+/// Score-first ignores the cutoff tier: the quality half of the cutoff is met
+/// for any occupied scope when a `cutoff_score` is set, so the score alone
+/// decides, and never met without one, so upgrading continues.
+#[test]
+fn score_first_quality_cutoff_ignores_the_cutoff_tier() {
+    let criteria = QualityProfileCriteria {
+        quality_tiers: vec!["2160P".into(), "1080P".into(), "720P".into()],
+        cutoff_tier: Some("1080P".into()),
+        cutoff_score: Some(500),
+        ranking_mode: QualityRankingMode::ScoreFirst,
+        ..QualityProfileCriteria::default()
+    };
+    assert!(criteria.quality_cutoff_met(Some("720P")));
+    assert!(criteria.quality_cutoff_met(Some("2160P")));
+    assert!(!criteria.quality_cutoff_met(None));
+    assert!(!criteria.quality_cutoff_met(Some("  ")));
+    let no_cutoff_score = QualityProfileCriteria {
+        cutoff_score: None,
+        ..criteria
+    };
+    assert!(!no_cutoff_score.quality_cutoff_met(Some("2160P")));
+}
+
+#[test]
+fn ranking_mode_reads_unknown_or_missing_values_as_tier_first() {
+    for (raw, expected) in [
+        (r#""score_first""#, QualityRankingMode::ScoreFirst),
+        (r#""tier_first""#, QualityRankingMode::TierFirst),
+        (r#""something_new""#, QualityRankingMode::TierFirst),
+        ("null", QualityRankingMode::TierFirst),
+        ("7", QualityRankingMode::TierFirst),
+    ] {
+        assert_eq!(
+            serde_json::from_str::<QualityRankingMode>(raw).unwrap(),
+            expected,
+            "{raw}"
+        );
+    }
+    let config: ScoringConfig = serde_json::from_str("{}").unwrap();
+    assert_eq!(config.ranking_mode, QualityRankingMode::TierFirst);
+    assert!(
+        serde_json::to_value(&config)
+            .unwrap()
+            .get("ranking_mode")
+            .is_none()
+    );
+}

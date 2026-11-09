@@ -38,6 +38,7 @@ import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { DEFAULT_MIN_UPGRADE_SCORE_DELTA } from "@/lib/utils/quality-profiles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
+import type { QualityRankingMode } from "@/lib/types";
 
 const QUALITY_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
@@ -97,6 +98,7 @@ type QualityProfileCriteriaPayload = {
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
   min_upgrade_score_delta: number;
+  ranking_mode: QualityRankingMode;
 };
 
 type QualityProfileDraft = {
@@ -121,6 +123,7 @@ type QualityProfileDraft = {
   cutoff_tier: string;
   min_score_to_grab: number | null;
   min_upgrade_score_delta: number;
+  ranking_mode: QualityRankingMode;
 };
 
 type QualityProfileListField =
@@ -595,6 +598,9 @@ export function SettingsQualityProfilesSection({
   const isProfileDraftDirty =
     JSON.stringify(qualityProfileDraft) !==
     JSON.stringify(qualityProfileDraftBaseline);
+  // Score-first ignores the cutoff tier; its value is kept, only shown as
+  // not applicable.
+  const scoreAlwaysWins = qualityProfileDraft.ranking_mode === "score_first";
 
   const handleCategoryProfileOverrideChange = React.useCallback(
     (scopeId: ViewCategoryId, rawValue: string) => {
@@ -1540,6 +1546,33 @@ export function SettingsQualityProfilesSection({
                           />
                         </span>
                       </label>
+                      <label className="mb-2 flex items-start gap-3">
+                        <Checkbox
+                          id={selectorId(
+                            "settings-quality-profile-score-always-wins",
+                          )}
+                          className="mt-0.5"
+                          checked={
+                            qualityProfileDraft.ranking_mode === "score_first"
+                          }
+                          onCheckedChange={(checked) =>
+                            updateQualityProfileDraft({
+                              ranking_mode:
+                                checked === true ? "score_first" : "tier_first",
+                            })
+                          }
+                        />
+                        <span className="space-y-0.5 text-sm">
+                          <span className="block">
+                            {t("qualityProfile.scoreAlwaysWins")}
+                          </span>
+                          <span
+                            className={`block text-xs ${QUALITY_MUTED_TEXT_CLASS}`}
+                          >
+                            {t("qualityProfile.scoreAlwaysWinsDescription")}
+                          </span>
+                        </span>
+                      </label>
                       <div className="grid gap-3 md:grid-cols-2">
                         <label className="space-y-2">
                           <Label className="inline-flex items-center gap-2">
@@ -1550,6 +1583,7 @@ export function SettingsQualityProfilesSection({
                             />
                           </Label>
                           <Select
+                            disabled={scoreAlwaysWins}
                             value={
                               qualityProfileDraft.cutoff_tier || "__none__"
                             }
@@ -1573,6 +1607,16 @@ export function SettingsQualityProfilesSection({
                               ))}
                             </SelectContent>
                           </Select>
+                          {scoreAlwaysWins ? (
+                            <p
+                              id={selectorId(
+                                "settings-quality-profile-cutoff-tier-not-applicable",
+                              )}
+                              className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}
+                            >
+                              {t("qualityProfile.cutoffTierNotApplicable")}
+                            </p>
+                          ) : null}
                         </label>
 
                         <label className="space-y-2">

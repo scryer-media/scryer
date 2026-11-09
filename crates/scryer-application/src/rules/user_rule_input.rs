@@ -454,6 +454,7 @@ mod tests {
                 min_score_to_grab: None,
                 cutoff_score: None,
                 min_upgrade_score_delta: None,
+                ranking_mode: Default::default(),
                 facet_persona_overrides: HashMap::new(),
             },
         }
@@ -475,6 +476,7 @@ mod tests {
             size_fit_penalty: 0,
             revision_preference: 0,
             language: crate::AudioLanguageRank::default(),
+            ranking_mode: Default::default(),
         }
     }
 

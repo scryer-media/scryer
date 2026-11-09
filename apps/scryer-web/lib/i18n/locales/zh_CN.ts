@@ -684,6 +684,10 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同级最小分数差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一质量级别的资源必须比当前文件的分数至少高出此值。",
+  "qualityProfile.scoreAlwaysWins": "分数始终优先",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "无论质量级别如何，都保留分数最高的资源，并忽略质量截止级别。",
+  "qualityProfile.cutoffTierNotApplicable": "启用“分数始终优先”时不适用。",
   "settings.acquisitionConvergence": "收敛与节奏",
   "settings.acquisitionPollIntervalSeconds": "轮询间隔（秒）",
   "settings.acquisitionPollIntervalSecondsHelp":

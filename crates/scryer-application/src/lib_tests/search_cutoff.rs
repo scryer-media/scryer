@@ -306,6 +306,60 @@ async fn list_cutoff_unmet_titles_normalizes_lowercase_cutoff_tier() {
     assert_eq!(items[0].target_tier, "720P");
 }
 
+/// A score-first profile ignores its cutoff tier, so a file below that tier is
+/// not reported, or swept, as quality-cutoff unmet.
+#[tokio::test]
+async fn list_cutoff_unmet_titles_skips_score_first_profiles() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            r#""cutoff-score-first""#,
+        )
+        .await;
+    let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+    let mut profile = cutoff_projection_test_profile("cutoff-score-first", "720p");
+    profile.criteria.ranking_mode = crate::QualityRankingMode::ScoreFirst;
+    quality_profiles.set_profiles(vec![profile]).await;
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (app, user, _) =
+        bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
+
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Score Case".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+
+    media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: "/library/Score Case.mkv".to_string(),
+            size_bytes: 1_000,
+            quality_label: Some("480p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert media file");
+
+    let items = app
+        .list_cutoff_unmet_titles(&user, Some(MediaFacet::Movie), None)
+        .await
+        .expect("cutoff unmet query should succeed");
+    assert!(items.is_empty(), "{:?}", items.len());
+}
+
 #[tokio::test]
 async fn list_cutoff_unmet_titles_returns_episode_scoped_rows_for_series() {
     let settings = Arc::new(StoredSettingsRepo::default());

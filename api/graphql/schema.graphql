@@ -24766,6 +24766,10 @@ input QualityProfileCriteriaInput {
 	default.
 	"""
 	minUpgradeScoreDelta: Int
+	"""
+	Optional ranking mode. Omitting it keeps the stored value.
+	"""
+	rankingMode: QualityRankingModeValue
 }
 
 """
@@ -24855,6 +24859,11 @@ type QualityProfileCriteriaPayload {
 	an upgrade. Profiles that never set it report the default, 120.
 	"""
 	minUpgradeScoreDelta: Int!
+	"""
+	Whether releases are ranked on quality tier first or on score first.
+	Profiles that never set it report `TIER_FIRST`.
+	"""
+	rankingMode: QualityRankingModeValue!
 }
 
 """
@@ -24987,6 +24996,21 @@ type QualityProfileSettingsPayload {
 	Effective scoring-persona selection by content scope.
 	"""
 	categoryPersonaSelections: [FacetScoringPersonaSelectionPayload!]!
+}
+
+"""
+Whether a quality profile ranks releases on quality tier or on score.
+"""
+enum QualityRankingModeValue {
+	"""
+	Quality tier first; the score decides between releases of equal tier.
+	"""
+	TIER_FIRST
+	"""
+	The best score wins whatever its quality tier; the tier only breaks
+	ties, and the cutoff tier does not apply.
+	"""
+	SCORE_FIRST
 }
 
 """

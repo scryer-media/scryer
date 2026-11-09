@@ -815,3 +815,100 @@ async fn graphql_quality_profile_min_upgrade_score_delta_round_trip() {
         "a negative delta is refused with a code: {negative}"
     );
 }
+
+/// The ranking mode is a quality-profile field: it defaults to tier-first,
+/// round-trips score-first, survives a save that omits it, and is stored as
+/// absent when tier-first so an existing profile keeps its fingerprint.
+#[tokio::test]
+async fn graphql_quality_profile_ranking_mode_round_trip() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let save = r#"
+        mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
+          saveQualityProfileSettings(input: $input) {
+            profiles { id criteria { rankingMode } }
+          }
+        }
+        "#;
+    let input = |mode: Option<&str>| {
+        let mut criteria = json!({
+            "qualityTiers": ["1080P"],
+            "archivalQuality": "1080P",
+            "allowUnknownQuality": false,
+            "sourceAllowlist": [],
+            "sourceBlocklist": [],
+            "videoCodecAllowlist": [],
+            "videoCodecBlocklist": [],
+            "audioCodecAllowlist": [],
+            "audioCodecBlocklist": [],
+            "dolbyVisionAllowed": true,
+            "detectedHdrAllowed": true,
+            "preferRemux": false,
+            "allowBdDisk": true,
+            "allowUpgrades": true,
+            "scoringOverrides": {},
+            "cutoffTier": null,
+            "minScoreToGrab": null
+        });
+        if let Some(mode) = mode {
+            criteria["rankingMode"] = json!(mode);
+        }
+        json!({
+            "input": {
+                "profiles": [{ "id": "mode-fixture", "name": "Mode Fixture", "criteria": criteria }],
+                "categorySelections": [],
+                "categoryPersonaSelections": [],
+                "replaceExisting": false
+            }
+        })
+    };
+    let mode_of = |response: &serde_json::Value| {
+        response["data"]["saveQualityProfileSettings"]["profiles"]
+            .as_array()
+            .expect("profiles list")
+            .iter()
+            .find(|profile| profile["id"] == "mode-fixture")
+            .expect("saved profile")["criteria"]["rankingMode"]
+            .clone()
+    };
+    let stored_config = || async {
+        let raw: String =
+            sqlx::query_scalar("SELECT scoring_config FROM quality_profiles WHERE id = ?")
+                .bind("mode-fixture")
+                .fetch_one(ctx.db.pool())
+                .await
+                .expect("stored scoring config");
+        serde_json::from_str::<serde_json::Value>(&raw).expect("scoring config is JSON")
+    };
+
+    let unset = gql(&ctx, save, input(None)).await;
+    assert_no_errors(&unset);
+    assert_eq!(
+        mode_of(&unset),
+        "TIER_FIRST",
+        "an unset mode reads as tier-first"
+    );
+    assert!(stored_config().await.get("ranking_mode").is_none());
+
+    let set = gql(&ctx, save, input(Some("SCORE_FIRST"))).await;
+    assert_no_errors(&set);
+    assert_eq!(mode_of(&set), "SCORE_FIRST");
+    assert_eq!(stored_config().await["ranking_mode"], "score_first");
+
+    let omitted = gql(&ctx, save, input(None)).await;
+    assert_no_errors(&omitted);
+    assert_eq!(
+        mode_of(&omitted),
+        "SCORE_FIRST",
+        "omitting the field keeps the stored value"
+    );
+
+    let reset = gql(&ctx, save, input(Some("TIER_FIRST"))).await;
+    assert_no_errors(&reset);
+    assert_eq!(mode_of(&reset), "TIER_FIRST");
+    let config = stored_config().await;
+    assert!(
+        config.get("ranking_mode").is_none(),
+        "tier-first is stored as absent: {config}"
+    );
+}

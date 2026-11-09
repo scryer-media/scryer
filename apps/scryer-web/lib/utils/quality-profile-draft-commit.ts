@@ -106,6 +106,7 @@ function qualityProfileCatalogEntryFromDraft(
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
+      ranking_mode: draft.ranking_mode,
     },
   };
 }

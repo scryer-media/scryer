@@ -639,6 +639,7 @@ fn normalize_quality_profile(profile: QualityProfile) -> QualityProfile {
             min_upgrade_score_delta: criteria
                 .min_upgrade_score_delta
                 .filter(|delta| *delta != scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
+            ranking_mode: criteria.ranking_mode,
             facet_persona_overrides,
         },
     }
@@ -714,6 +715,15 @@ fn quality_profile_from_input(
             min_upgrade_score_delta: criteria
                 .min_upgrade_score_delta
                 .or_else(|| existing.and_then(|profile| profile.criteria.min_upgrade_score_delta)),
+            // Omitting it keeps the stored value, like `min_upgrade_score_delta`.
+            ranking_mode: criteria.ranking_mode.map_or_else(
+                || {
+                    existing
+                        .map(|profile| profile.criteria.ranking_mode)
+                        .unwrap_or_default()
+                },
+                IntoApplication::into_application,
+            ),
             facet_persona_overrides: std::collections::HashMap::new(),
         },
     });

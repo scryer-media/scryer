@@ -8,6 +8,11 @@ export type ScoringPersonaId =
 
 export type QualityTargetId = "8k" | "4k" | "1080p";
 
+/** How a quality profile ranks releases: quality tier first, or score first. */
+export type QualityRankingMode = "tier_first" | "score_first";
+
+export type QualityRankingModeValue = "TIER_FIRST" | "SCORE_FIRST";
+
 export type FacetQualityPrefs = {
   quality: QualityTargetId;
   persona: ScoringPersonaId;
@@ -48,6 +53,7 @@ export type QualityProfileCriteriaPayload = {
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
   min_upgrade_score_delta: number;
+  ranking_mode: QualityRankingMode;
 };
 
 export type ParsedQualityProfileEntry = ParsedQualityProfile & {
@@ -81,6 +87,7 @@ export type QualityProfileGraphCriteriaPayload = {
   cutoffTier: string | null;
   minScoreToGrab: number | null;
   minUpgradeScoreDelta: number;
+  rankingMode: QualityRankingModeValue;
 };
 
 export type QualityProfileGraphPayload = {
@@ -124,6 +131,7 @@ export type QualityProfileDraft = {
   cutoff_tier: string;
   min_score_to_grab: number | null;
   min_upgrade_score_delta: number;
+  ranking_mode: QualityRankingMode;
 };
 
 export type JsonPrimitive = string | number | boolean | null;

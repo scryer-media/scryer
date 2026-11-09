@@ -109,9 +109,12 @@ pub struct AudioLanguageRank {
     pub preferred_count: u16,
     pub language_first: bool,
     /// The preferences still want something this release or file lacks; see
-    /// [`AudioLanguagePreferences::is_satisfied`]. A file with this set is never
-    /// "done", whatever its tier and score.
+    /// [`AudioLanguagePreferences::is_satisfied`]. A file with this set still
+    /// reaches its cutoff, but a release in a better language can pass it.
     pub wanted: bool,
+    /// Part of `wanted`: the preferences keep searching for optional languages
+    /// and this release or file lacks some of them.
+    pub optional_wanted: bool,
 }
 
 impl AudioLanguageRank {
@@ -121,6 +124,8 @@ impl AudioLanguageRank {
             preferred_count: saturating_u16(preferences.preferred.len()),
             language_first: preferences.language_first(),
             wanted: !preferences.is_satisfied(matched),
+            optional_wanted: preferences.optional_keep_searching
+                && usize::from(matched.optional_hits) < preferences.optional.len(),
         }
     }
 

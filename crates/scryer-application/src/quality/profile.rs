@@ -66,11 +66,53 @@ pub struct QualityProfileCriteria {
     /// `Some(DEFAULT_MIN_UPGRADE_SCORE_DELTA)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    /// Whether the quality tier or the score decides between two releases.
+    ///
+    /// Omitted at the default for the same reason as `cutoff_score`: a
+    /// tier-first profile keeps the fingerprint it had before the field existed.
+    #[serde(default, skip_serializing_if = "QualityRankingMode::is_tier_first")]
+    pub ranking_mode: QualityRankingMode,
     pub facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
 /// Same-tier upgrade delta for a profile that does not set one.
 pub const DEFAULT_MIN_UPGRADE_SCORE_DELTA: i32 = 120;
+
+/// How a profile orders releases and decides upgrades.
+///
+/// `TierFirst` compares the quality tier before the score: a better tier wins
+/// whatever it scores, and the score only decides within a tier. `ScoreFirst`
+/// lets the score decide across tiers and keeps the tier as a tie-breaker, so
+/// the cutoff tier does not apply and `cutoff_score` is the only cutoff.
+///
+/// Anything stored that is not `score_first` reads as `TierFirst`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityRankingMode {
+    #[default]
+    TierFirst,
+    ScoreFirst,
+}
+
+impl<'de> Deserialize<'de> for QualityRankingMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            Some("score_first") => Self::ScoreFirst,
+            _ => Self::TierFirst,
+        })
+    }
+}
+
+impl QualityRankingMode {
+    pub fn is_tier_first(&self) -> bool {
+        *self == Self::TierFirst
+    }
+
+    pub fn is_score_first(self) -> bool {
+        self == Self::ScoreFirst
+    }
+}
 
 /// The acceptance-deciding subset of [`QualityProfileCriteria`], hashed by
 /// `convergence::profile_criteria_version` to version a scope's search
@@ -120,6 +162,10 @@ pub(crate) struct AcceptanceCriteria<'a> {
     pub cutoff_score: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    /// Acceptance, not ranking: under `ScoreFirst` a lower-tier release can
+    /// replace a file and the tier cutoff stops deciding when a scope is done.
+    #[serde(skip_serializing_if = "QualityRankingMode::is_tier_first")]
+    pub ranking_mode: QualityRankingMode,
 }
 
 impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
@@ -144,6 +190,7 @@ impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
             min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+            ranking_mode: criteria.ranking_mode,
         }
     }
 }
@@ -166,11 +213,32 @@ pub struct ScoringConfig {
     pub cutoff_score: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    #[serde(default, skip_serializing_if = "QualityRankingMode::is_tier_first")]
+    pub ranking_mode: QualityRankingMode,
     #[serde(default)]
     pub facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
 impl QualityProfileCriteria {
+    /// Whether a scope holding a file of `quality` has met the quality half of
+    /// the cutoff.
+    ///
+    /// Tier-first: the quality has reached `cutoff_tier`. Score-first has no
+    /// quality half, so an occupied scope meets it exactly when there is a
+    /// `cutoff_score` for the score half to test; without one, upgrading never
+    /// stops on a cutoff.
+    pub(crate) fn quality_cutoff_met(&self, quality: Option<&str>) -> bool {
+        let quality = quality.map(str::trim).filter(|quality| !quality.is_empty());
+        if self.ranking_mode.is_score_first() {
+            return quality.is_some() && self.cutoff_score.is_some();
+        }
+        quality
+            .zip(self.cutoff_tier.as_deref())
+            .is_some_and(|(quality, cutoff)| {
+                quality_meets_or_exceeds_cutoff(quality, cutoff, &self.quality_tiers)
+            })
+    }
+
     /// The same-tier upgrade delta this profile applies.
     pub fn min_upgrade_score_delta_or_default(&self) -> i32 {
         self.min_upgrade_score_delta
@@ -269,6 +337,9 @@ pub struct QualityProfileDecision {
     /// it off the decision. It never contributes to the score, so custom rules
     /// cannot outweigh it and it cannot outweigh them within its own step.
     pub language: crate::AudioLanguageRank,
+    /// The profile's [`QualityRankingMode`], so every ordering that reads tier
+    /// and score off the decision puts them in the order admission does.
+    pub ranking_mode: QualityRankingMode,
 }
 
 impl QualityProfileDecision {
@@ -283,6 +354,7 @@ impl QualityProfileDecision {
             size_fit_penalty: 0,
             revision_preference: 0,
             language: crate::AudioLanguageRank::default(),
+            ranking_mode: QualityRankingMode::TierFirst,
         }
     }
 
@@ -388,6 +460,8 @@ struct RawQualityProfileCriteria {
     #[serde(default)]
     min_upgrade_score_delta: Option<i32>,
     #[serde(default)]
+    ranking_mode: QualityRankingMode,
+    #[serde(default)]
     facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
@@ -456,6 +530,7 @@ pub fn builtin_4k_profile() -> QualityProfile {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            ranking_mode: QualityRankingMode::TierFirst,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -495,6 +570,7 @@ pub fn builtin_8k_profile() -> QualityProfile {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            ranking_mode: QualityRankingMode::TierFirst,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -529,6 +605,7 @@ pub fn builtin_1080p_profile() -> QualityProfile {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            ranking_mode: QualityRankingMode::TierFirst,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -563,6 +640,7 @@ pub fn builtin_anime_profile() -> QualityProfile {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            ranking_mode: QualityRankingMode::TierFirst,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -623,6 +701,7 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> Result<QualityProfile, se
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
             min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+            ranking_mode: criteria.ranking_mode,
             facet_persona_overrides: criteria.facet_persona_overrides,
         },
     })
@@ -661,6 +740,7 @@ impl Default for QualityProfile {
                 min_score_to_grab: None,
                 cutoff_score: None,
                 min_upgrade_score_delta: None,
+                ranking_mode: QualityRankingMode::TierFirst,
                 facet_persona_overrides: HashMap::new(),
             },
         }
@@ -694,6 +774,7 @@ impl Default for QualityProfileCriteria {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            ranking_mode: QualityRankingMode::TierFirst,
             facet_persona_overrides: HashMap::new(),
         }
     }
@@ -914,6 +995,7 @@ pub fn evaluate_profile_requirements(
     let mut decision = QualityProfileDecision::new();
     let criteria = &profile.criteria;
     decision.tier_index = quality_tier_index(criteria, release.quality.as_deref());
+    decision.ranking_mode = criteria.ranking_mode;
     // The lowest admitted resolution is the fallback floor. Each standard
     // resolution step above it earns 100 points, including skipped tiers. Profile
     // ordering remains authoritative even against arbitrary custom scores.

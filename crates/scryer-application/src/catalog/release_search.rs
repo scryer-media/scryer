@@ -441,6 +441,7 @@ fn evaluate_candidate(
             negated_score: decision.preference_score.saturating_neg(),
             size_fit_penalty: decision.size_fit_penalty,
             language: decision.language,
+            ranking_mode: decision.ranking_mode,
         },
         non_preferred_protocol: !source_kind_matches_preference(
             &result,

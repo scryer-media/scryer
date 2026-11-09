@@ -659,7 +659,9 @@ impl AppUseCase {
         let mut title_map = HashMap::new();
         let mut cutoff_profile_map = HashMap::new();
         for (title, profile) in monitored_titles {
-            if !profile.criteria.allow_upgrades {
+            // A score-first profile ignores the tier cutoff; its titles are
+            // nominated by the format-score cutoff sweep instead.
+            if !profile.criteria.allow_upgrades || profile.criteria.ranking_mode.is_score_first() {
                 continue;
             }
 

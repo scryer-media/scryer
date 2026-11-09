@@ -92,6 +92,24 @@ impl IntoApplication<scryer_application::AudioLanguagePriority> for AudioLanguag
     }
 }
 
+impl FromApplication<scryer_application::QualityRankingMode> for QualityRankingModeValue {
+    fn from_application(value: scryer_application::QualityRankingMode) -> Self {
+        match value {
+            scryer_application::QualityRankingMode::TierFirst => Self::TierFirst,
+            scryer_application::QualityRankingMode::ScoreFirst => Self::ScoreFirst,
+        }
+    }
+}
+
+impl IntoApplication<scryer_application::QualityRankingMode> for QualityRankingModeValue {
+    fn into_application(self) -> scryer_application::QualityRankingMode {
+        match self {
+            Self::TierFirst => scryer_application::QualityRankingMode::TierFirst,
+            Self::ScoreFirst => scryer_application::QualityRankingMode::ScoreFirst,
+        }
+    }
+}
+
 impl IntoApplication<AppDownloadSourceKind> for DownloadSourceKindValue {
     fn into_application(self) -> AppDownloadSourceKind {
         match self {

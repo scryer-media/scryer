@@ -291,17 +291,10 @@ impl AppUseCase {
         // it now has a real answer: D18's queued pseudo-incumbents, which compare
         // the in-flight release on the full tier → revision → score ladder
         // instead of asking whether it happened to clear the cutoff.
-        let cutoff_reached = analyzed_quality
-            .map(str::trim)
-            .filter(|quality| !quality.is_empty())
-            .zip(profile.criteria.cutoff_tier.as_deref())
-            .is_some_and(|(quality, cutoff)| {
-                crate::quality_profile::quality_meets_or_exceeds_cutoff(
-                    quality,
-                    cutoff,
-                    &profile.criteria.quality_tiers,
-                )
-            });
+        //
+        // A score-first profile has no quality half: its cutoff is
+        // `cutoff_score` alone, and none means upgrades never stop on a cutoff.
+        let cutoff_reached = profile.criteria.quality_cutoff_met(analyzed_quality);
 
         // The same-tier delta belongs to the profile that judges the title.
         let thresholds = AcquisitionThresholds::for_profile(&profile.criteria);

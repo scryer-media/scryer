@@ -840,6 +840,11 @@ const nl: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "Minimale scoreverschil binnen niveau",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Een release in dezelfde kwaliteitsniveaumoet de score van het huidige bestand met minstens deze waarde overtreffen.",
+  "qualityProfile.scoreAlwaysWins": "Score wint altijd",
+  "qualityProfile.scoreAlwaysWinsDescription":
+    "De release met de beste score blijft behouden, ongeacht het kwaliteitsniveau, en het grensniveau voor kwaliteit wordt genegeerd.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Niet van toepassing zolang Score wint altijd aan staat.",
   "settings.acquisitionConvergence": "Convergentie & timing",
   "settings.acquisitionPollIntervalSeconds": "Pollinterval (seconden)",
   "settings.acquisitionPollIntervalSecondsHelp":

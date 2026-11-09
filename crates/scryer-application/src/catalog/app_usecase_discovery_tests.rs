@@ -637,6 +637,7 @@ fn scored_search_result(
         size_fit_penalty: 0,
         revision_preference: 0,
         language: crate::AudioLanguageRank::default(),
+        ranking_mode: Default::default(),
     });
     result
 }
