@@ -2716,7 +2716,7 @@ impl AppUseCase {
             ));
         }
 
-        let title = self.title_for_naming(&title).await;
+        let mut title = self.title_for_naming(&title).await;
         let import_paths = crate::import_workflow::resolve_import_paths(self, &title).await?;
         let media_root_path = PathBuf::from(&import_paths.media_root);
         let title_dir = crate::effective_title_folder_path(
@@ -2726,6 +2726,65 @@ impl AppUseCase {
             None,
         );
         let title_dir_str = path_to_stored_string(&title_dir);
+        // A title with no recorded folder falls back to the configured folder
+        // path, and that folder may belong to another title. The walk reads
+        // and records it only once the ownership claim grants it, and only
+        // when the walk would otherwise have recorded it. A refused claim
+        // stops a scan the operator asked for with the claim's reason; a
+        // library scan walks nothing for the title and carries on.
+        if !scoped_discovered_files
+            && !title_has_recorded_folder(&title)
+            && (episodic_title_directory_present(&title_dir).await?
+                || matches!(
+                    library_root_state(&media_root_path).await?,
+                    LibraryRootState::Populated
+                ))
+        {
+            match crate::folder_ownership::claim_title_folder_for_scan_if_missing(
+                self, &mut title, &title_dir,
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err(
+                    error @ (AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }),
+                ) => {
+                    if !matches!(
+                        mode,
+                        LibraryScanTitleWalkMode::Full | LibraryScanTitleWalkMode::Additive
+                    ) {
+                        return Err(error);
+                    }
+                    warn!(
+                        title_id = %title.id,
+                        title_dir = %title_dir_str,
+                        error = %error,
+                        "title scan skipped: the title has no folder and the configured folder cannot be claimed for it"
+                    );
+                    if let Some(coordinator) = session_coordinator.as_ref() {
+                        match pre_scanned_files.as_ref() {
+                            Some(files) if !files.is_empty() => {
+                                coordinator.mark_file_completed(files.len()).await;
+                            }
+                            Some(_) => {}
+                            None if file_total_mode
+                                == LibraryScanFileTotalMode::MarkKnownAfterThisWalk =>
+                            {
+                                coordinator.mark_file_total_known().await;
+                            }
+                            None => {}
+                        }
+                        coordinator.publish_progress().await;
+                    }
+                    return Ok(LibraryTitleWalkResult {
+                        summary: LibraryScanSummary::default(),
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
         debug!(
             title_id = %title.id,
             title_name = %title.name,
@@ -3506,7 +3565,11 @@ impl AppUseCase {
                 lost_scope_keys.dedup();
                 reopen_lost_file_coverage(self, &title.id, lost_scope_keys).await;
 
-                if title.folder_path.as_deref() != Some(title_dir_str.as_str()) {
+                // Only a folder the title already holds, or was granted by the
+                // claim above, is recorded here.
+                if title_has_recorded_folder(&title)
+                    && title.folder_path.as_deref() != Some(title_dir_str.as_str())
+                {
                     let db_started = Instant::now();
                     self.services
                         .catalog

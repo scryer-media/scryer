@@ -2526,3 +2526,174 @@ async fn a_title_rescan_records_no_folder_it_cannot_settle() {
         assert!(path.exists(), "{}", path.display());
     }
 }
+
+impl FolderMatchFixture {
+    async fn create_dated_title_without_folder(&self, name: &str, year: i32) -> Title {
+        self.app
+            .add_title(
+                &self.user,
+                NewTitle {
+                    name: name.into(),
+                    facet: self.facet.clone(),
+                    monitored: true,
+                    year: Some(year),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title")
+    }
+}
+
+/// A series with no folder whose configured folder belongs to another title,
+/// set up so the other title's episode file also parses as an episode of the
+/// folder-less series.
+struct ClaimedTemplateFolderFixture {
+    fixture: FolderMatchFixture,
+    folderless: Title,
+    owner: Title,
+    owned_folder: std::path::PathBuf,
+    owned_file: std::path::PathBuf,
+}
+
+async fn seed_claimed_template_folder() -> ClaimedTemplateFolderFixture {
+    let fixture = FolderMatchFixture::new_series().await;
+    let owned_folder = fixture.folder("Emberfall (2026)");
+    let owned_file = fixture.write_media(&owned_folder, "Emberfall - S01E01.mkv");
+    fixture.scanner.set_files(&[&owned_file]).await;
+    let owner = fixture
+        .create_title_with_folder("Cinderwake", &owned_folder)
+        .await;
+    fixture.seed_media_row(&owner.id, &owned_file).await;
+    let folderless = fixture
+        .create_dated_title_without_folder("Emberfall", 2026)
+        .await;
+    fixture
+        .seed_season_with_episodes(&folderless.id, &[1])
+        .await;
+    ClaimedTemplateFolderFixture {
+        fixture,
+        folderless,
+        owner,
+        owned_folder,
+        owned_file,
+    }
+}
+
+impl ClaimedTemplateFolderFixture {
+    /// The other title keeps its folder and its file, and the folder-less
+    /// series picked up neither.
+    async fn assert_owner_untouched(&self) {
+        let fixture = &self.fixture;
+        assert_eq!(fixture.stored_folder_path(&self.folderless.id).await, None);
+        assert_eq!(
+            fixture.stored_folder_path(&self.owner.id).await.as_deref(),
+            Some(self.owned_folder.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            fixture.media_paths(&self.owner.id).await,
+            vec![self.owned_file.to_string_lossy().to_string()]
+        );
+        assert!(fixture.media_paths(&self.folderless.id).await.is_empty());
+        assert!(self.owned_file.exists());
+    }
+}
+
+#[tokio::test]
+async fn a_title_rescan_refuses_a_configured_folder_another_title_owns() {
+    let seeded = seed_claimed_template_folder().await;
+
+    let error = seeded
+        .fixture
+        .app
+        .scan_title_library(&seeded.fixture.user, &seeded.folderless.id)
+        .await
+        .expect_err("the rescan should refuse the other title's folder");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::folder_ownership::FOLDER_ALREADY_OWNED_TITLE)
+    );
+    seeded.assert_owner_untouched().await;
+}
+
+#[tokio::test]
+async fn a_library_scan_never_hands_a_folderless_title_another_titles_folder() {
+    let seeded = seed_claimed_template_folder().await;
+    // A loose folder named after the folder-less series brings it into the
+    // library scan; its configured folder is the other title's.
+    let loose_folder = seeded.fixture.folder("Emberfall");
+    let loose_file = seeded
+        .fixture
+        .write_media(&loose_folder, "Emberfall - S01E02.mkv");
+    seeded
+        .fixture
+        .scanner
+        .set_files(&[&seeded.owned_file, &loose_file])
+        .await;
+
+    seeded
+        .fixture
+        .app
+        .scan_library(&seeded.fixture.user, MediaFacet::Series)
+        .await
+        .expect("scan the library");
+
+    let fixture = &seeded.fixture;
+    assert_eq!(
+        fixture
+            .stored_folder_path(&seeded.folderless.id)
+            .await
+            .as_deref(),
+        Some(loose_folder.to_string_lossy().as_ref())
+    );
+    assert!(
+        !fixture
+            .media_paths(&seeded.folderless.id)
+            .await
+            .contains(&seeded.owned_file.to_string_lossy().to_string())
+    );
+    assert_eq!(
+        fixture
+            .stored_folder_path(&seeded.owner.id)
+            .await
+            .as_deref(),
+        Some(seeded.owned_folder.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        fixture.media_paths(&seeded.owner.id).await,
+        vec![seeded.owned_file.to_string_lossy().to_string()]
+    );
+    assert!(seeded.owned_file.exists());
+    assert!(loose_file.exists());
+}
+
+#[tokio::test]
+async fn a_title_rescan_claims_a_free_configured_folder() {
+    let fixture = FolderMatchFixture::new_series().await;
+    let folder = fixture.folder("Emberfall (2026)");
+    let file = fixture.write_media(&folder, "Emberfall - S01E01.mkv");
+    let bystander = fixture.write_media(fixture.root.path(), "notes.txt");
+    fixture.scanner.set_files(&[&file]).await;
+    let title = fixture
+        .create_dated_title_without_folder("Emberfall", 2026)
+        .await;
+    fixture.seed_season_with_episodes(&title.id, &[1]).await;
+
+    fixture
+        .app
+        .scan_title_library(&fixture.user, &title.id)
+        .await
+        .expect("rescan the title");
+
+    assert_eq!(
+        fixture.stored_folder_path(&title.id).await.as_deref(),
+        Some(folder.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        fixture.media_paths(&title.id).await,
+        vec![file.to_string_lossy().to_string()]
+    );
+    assert!(file.exists());
+    assert!(bystander.exists());
+}
