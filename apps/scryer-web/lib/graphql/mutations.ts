@@ -1383,7 +1383,7 @@ const qualityProfileCriteriaFields = `
       cutoffTier
       minScoreToGrab
       minUpgradeScoreDelta
-      rankingMode`;
+      decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
@@ -1433,7 +1433,6 @@ const mediaSettingsFieldSelection = `
     requiredAudioLanguages
     preferredAudioLanguages
     optionalAudioLanguages
-    audioLanguagePriority
     optionalAudioLanguagesKeepSearching
     useSeasonFolders
     folderTemplate

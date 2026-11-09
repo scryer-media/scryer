@@ -1769,8 +1769,6 @@ export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
     preferredAudioLanguages
     optionalAudioLanguagesOverride
     optionalAudioLanguages
-    audioLanguagePriorityOverride
-    audioLanguagePriority
     optionalAudioLanguagesKeepSearchingOverride
     optionalAudioLanguagesKeepSearching
     metadataLanguageOverride
@@ -2832,7 +2830,7 @@ const qualityProfileCriteriaFields = `
       cutoffTier
       minScoreToGrab
       minUpgradeScoreDelta
-      rankingMode`;
+      decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
@@ -2882,7 +2880,6 @@ const mediaSettingsFieldSelection = `
     requiredAudioLanguages
     preferredAudioLanguages
     optionalAudioLanguages
-    audioLanguagePriority
     optionalAudioLanguagesKeepSearching
     useSeasonFolders
     folderTemplate

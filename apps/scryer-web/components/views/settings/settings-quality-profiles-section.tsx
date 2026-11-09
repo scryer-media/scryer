@@ -4,7 +4,6 @@ import {
   ArrowUp,
   ArrowLeft,
   ArrowRight,
-  GripVertical,
   Edit,
   Plus,
   Trash2,
@@ -38,7 +37,10 @@ import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { DEFAULT_MIN_UPGRADE_SCORE_DELTA } from "@/lib/utils/quality-profiles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
-import type { QualityRankingMode } from "@/lib/types";
+import type { QualityDecisionGate } from "@/lib/constants/quality-decision-gates";
+import { decisionPipelineUsesTierCutoff } from "@/lib/utils/quality-decision-pipeline";
+import { PointerReorderHandle } from "@/components/common/pointer-reorder-handle";
+import { QualityDecisionOrderEditor } from "@/components/views/settings/quality-decision-order-editor";
 
 const QUALITY_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
@@ -58,6 +60,7 @@ const QUALITY_EDITOR_SECTION_BODY_CLASS =
   "border-t border-[var(--scry-border3)] p-4";
 const QUALITY_EDITOR_LIST_CLASS =
   "max-h-60 overflow-auto rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-2";
+const QUALITY_TIER_LIST = "quality-tiers";
 const QUALITY_EDITOR_LIST_ITEM_CLASS =
   "mb-1 flex items-center justify-between gap-2 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] px-2 py-1.5 text-[var(--scry-ink2)] hover:bg-[var(--scry-hover)]";
 
@@ -98,7 +101,7 @@ type QualityProfileCriteriaPayload = {
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
   min_upgrade_score_delta: number;
-  ranking_mode: QualityRankingMode;
+  decision_pipeline: QualityDecisionGate[];
 };
 
 type QualityProfileDraft = {
@@ -118,12 +121,11 @@ type QualityProfileDraft = {
   prefer_remux: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
-  ignore_proper_repack: boolean;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
   min_upgrade_score_delta: number;
-  ranking_mode: QualityRankingMode;
+  decision_pipeline: QualityDecisionGate[];
 };
 
 type QualityProfileListField =
@@ -243,6 +245,7 @@ function cloneQualityProfileDraft(
     audio_codec_blocklist: [...draft.audio_codec_blocklist],
     quality_tiers: [...draft.quality_tiers],
     scoring_overrides: { ...draft.scoring_overrides },
+    decision_pipeline: [...draft.decision_pipeline],
   };
 }
 
@@ -598,9 +601,11 @@ export function SettingsQualityProfilesSection({
   const isProfileDraftDirty =
     JSON.stringify(qualityProfileDraft) !==
     JSON.stringify(qualityProfileDraftBaseline);
-  // Score-first ignores the cutoff tier; its value is kept, only shown as
-  // not applicable.
-  const scoreAlwaysWins = qualityProfileDraft.ranking_mode === "score_first";
+  // Without a tier step the cutoff tier takes no part; its value is kept,
+  // only shown as not applicable.
+  const tierCutoffApplies = decisionPipelineUsesTierCutoff(
+    qualityProfileDraft.decision_pipeline,
+  );
 
   const handleCategoryProfileOverrideChange = React.useCallback(
     (scopeId: ViewCategoryId, rawValue: string) => {
@@ -1025,6 +1030,7 @@ export function SettingsQualityProfilesSection({
                         <div
                           className={QUALITY_EDITOR_LIST_CLASS}
                           data-quality-tier-list
+                          data-reorder-list={QUALITY_TIER_LIST}
                         >
                           {activeQualityProfileTierOptions.length === 0 ? (
                             <p
@@ -1039,50 +1045,21 @@ export function SettingsQualityProfilesSection({
                                   key={qualityTier}
                                   className={QUALITY_EDITOR_LIST_ITEM_CLASS}
                                   data-quality-tier={qualityTier}
+                                  data-reorder-item={qualityTier}
                                 >
-                                  <span
-                                    className="cursor-grab touch-none active:cursor-grabbing"
+                                  <PointerReorderHandle
                                     title={t("qualityProfile.dragQualityTier", {
                                       value: getQualityTierLabel(qualityTier),
                                     })}
-                                    onPointerDown={(event) => {
-                                      if (event.button !== 0) return;
-                                      event.preventDefault();
-                                      event.currentTarget.setPointerCapture(
-                                        event.pointerId,
-                                      );
-                                    }}
-                                    onPointerUp={(event) => {
+                                    onDrop={(target) => {
                                       if (
-                                        !event.currentTarget.hasPointerCapture(
-                                          event.pointerId,
-                                        )
-                                      )
-                                        return;
-                                      event.currentTarget.releasePointerCapture(
-                                        event.pointerId,
-                                      );
-                                      const target = document
-                                        .elementFromPoint(
-                                          event.clientX,
-                                          event.clientY,
-                                        )
-                                        ?.closest<HTMLElement>(
-                                          "[data-quality-tier]",
-                                        );
-                                      if (
-                                        !target ||
-                                        target.closest(
-                                          "[data-quality-tier-list]",
-                                        ) !==
-                                          event.currentTarget.closest(
-                                            "[data-quality-tier-list]",
-                                          )
+                                        target.list !== QUALITY_TIER_LIST ||
+                                        target.item === null
                                       )
                                         return;
                                       const targetIndex =
                                         activeQualityProfileTierOptions.indexOf(
-                                          target.dataset.qualityTier ?? "",
+                                          target.item,
                                         );
                                       if (targetIndex >= 0)
                                         reorderQualityTier(
@@ -1090,12 +1067,7 @@ export function SettingsQualityProfilesSection({
                                           targetIndex,
                                         );
                                     }}
-                                  >
-                                    <GripVertical
-                                      className="h-4 w-4"
-                                      aria-hidden="true"
-                                    />
-                                  </span>
+                                  />
                                   <span className="flex-1 text-xs">
                                     {getQualityTierLabel(qualityTier)}
                                   </span>
@@ -1254,6 +1226,13 @@ export function SettingsQualityProfilesSection({
                     </div>
                   </div>
                 </details>
+
+                <QualityDecisionOrderEditor
+                  pipeline={qualityProfileDraft.decision_pipeline}
+                  onChange={(decision_pipeline) =>
+                    updateQualityProfileDraft({ decision_pipeline })
+                  }
+                />
 
                 <details className={QUALITY_EDITOR_SECTION_CLASS} open>
                   <summary className={QUALITY_EDITOR_SECTION_SUMMARY_CLASS}>
@@ -1528,51 +1507,6 @@ export function SettingsQualityProfilesSection({
                           />
                         </span>
                       </label>
-                      <label className="mb-2 flex items-center gap-3">
-                        <Checkbox
-                          id="quality-profile-ignore-proper-repack"
-                          checked={qualityProfileDraft.ignore_proper_repack}
-                          onCheckedChange={(checked) =>
-                            updateQualityProfileDraft({
-                              ignore_proper_repack: checked === true,
-                            })
-                          }
-                        />
-                        <span className="inline-flex items-center gap-2 text-sm">
-                          {t("qualityProfile.ignoreProperRepack")}
-                          <InfoHelp
-                            ariaLabel={t("qualityProfile.ignoreProperRepack")}
-                            text={t("qualityProfile.ignoreProperRepackInfo")}
-                          />
-                        </span>
-                      </label>
-                      <label className="mb-2 flex items-start gap-3">
-                        <Checkbox
-                          id={selectorId(
-                            "settings-quality-profile-score-always-wins",
-                          )}
-                          className="mt-0.5"
-                          checked={
-                            qualityProfileDraft.ranking_mode === "score_first"
-                          }
-                          onCheckedChange={(checked) =>
-                            updateQualityProfileDraft({
-                              ranking_mode:
-                                checked === true ? "score_first" : "tier_first",
-                            })
-                          }
-                        />
-                        <span className="space-y-0.5 text-sm">
-                          <span className="block">
-                            {t("qualityProfile.scoreAlwaysWins")}
-                          </span>
-                          <span
-                            className={`block text-xs ${QUALITY_MUTED_TEXT_CLASS}`}
-                          >
-                            {t("qualityProfile.scoreAlwaysWinsDescription")}
-                          </span>
-                        </span>
-                      </label>
                       <div className="grid gap-3 md:grid-cols-2">
                         <label className="space-y-2">
                           <Label className="inline-flex items-center gap-2">
@@ -1583,7 +1517,7 @@ export function SettingsQualityProfilesSection({
                             />
                           </Label>
                           <Select
-                            disabled={scoreAlwaysWins}
+                            disabled={!tierCutoffApplies}
                             value={
                               qualityProfileDraft.cutoff_tier || "__none__"
                             }
@@ -1607,7 +1541,7 @@ export function SettingsQualityProfilesSection({
                               ))}
                             </SelectContent>
                           </Select>
-                          {scoreAlwaysWins ? (
+                          {!tierCutoffApplies ? (
                             <p
                               id={selectorId(
                                 "settings-quality-profile-cutoff-tier-not-applicable",

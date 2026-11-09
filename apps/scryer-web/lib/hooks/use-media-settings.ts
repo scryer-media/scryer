@@ -225,7 +225,6 @@ const DEFAULT_CATEGORY_REQUIRED_AUDIO_LANGUAGES: Record<
 const DEFAULT_AUDIO_LANGUAGE_PREFERENCES: AudioLanguagePreferences = {
   preferredAudioLanguages: [],
   optionalAudioLanguages: [],
-  audioLanguagePriority: "QUALITY_FIRST",
   optionalAudioLanguagesKeepSearching: false,
 };
 
@@ -235,9 +234,6 @@ function audioLanguagePreferencesFromSettings(
   return {
     preferredAudioLanguages: settings.preferredAudioLanguages ?? [],
     optionalAudioLanguages: settings.optionalAudioLanguages ?? [],
-    audioLanguagePriority:
-      settings.audioLanguagePriority ??
-      DEFAULT_AUDIO_LANGUAGE_PREFERENCES.audioLanguagePriority,
     optionalAudioLanguagesKeepSearching:
       settings.optionalAudioLanguagesKeepSearching ?? false,
   };
@@ -252,7 +248,6 @@ function sameAudioLanguagePreferences(
       right.preferredAudioLanguages.join("\n") &&
     left.optionalAudioLanguages.join("\n") ===
       right.optionalAudioLanguages.join("\n") &&
-    left.audioLanguagePriority === right.audioLanguagePriority &&
     left.optionalAudioLanguagesKeepSearching ===
       right.optionalAudioLanguagesKeepSearching
   );

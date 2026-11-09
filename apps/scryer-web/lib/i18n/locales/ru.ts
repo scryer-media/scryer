@@ -957,11 +957,6 @@ const ru: LocaleDictionary = {
   "settings.audioOptionalLanguages": "Дополнительные языки",
   "settings.audioOptionalLanguagesHint":
     "Желательны, но не обязательны. Среди релизов одного качества побеждает тот, в котором больше этих языков.",
-  "settings.audioLanguagePriority": "Приоритет",
-  "settings.audioLanguagePriorityHint":
-    "«Сначала язык» берёт релиз на предпочтительном языке даже при более низком уровне качества. «Сначала качество» позволяет языку решать только между релизами одного качества.",
-  "settings.audioLanguagePriorityQualityFirst": "Сначала качество",
-  "settings.audioLanguagePriorityLanguageFirst": "Сначала язык",
   "settings.audioOptionalKeepSearching":
     "Продолжать искать дополнительные языки",
   "settings.audioOptionalKeepSearchingHint":
@@ -982,11 +977,6 @@ const ru: LocaleDictionary = {
     "Минимальная разница оценки в одном уровне качества",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Релиз того же уровня качества должен превзойти оценку текущего файла как минимум на указанное значение.",
-  "qualityProfile.scoreAlwaysWins": "Оценка всегда важнее",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "Сохраняется релиз с лучшей оценкой независимо от уровня качества, а пороговый уровень качества игнорируется.",
-  "qualityProfile.cutoffTierNotApplicable":
-    "Не применяется, пока включено «Оценка всегда важнее».",
   "settings.acquisitionConvergence": "Сходимость и распределение нагрузки",
   "settings.acquisitionPollIntervalSeconds": "Интервал опроса (секунды)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -11425,9 +11415,6 @@ const ru: LocaleDictionary = {
   "qualityProfile.moveQualityTierDown": "Переместить {{value}} вниз",
   "qualityProfile.dragQualityTier":
     "Перетащите, чтобы изменить порядок {{value}}",
-  "qualityProfile.ignoreProperRepack": "Игнорировать PROPER/REPACK",
-  "qualityProfile.ignoreProperRepackInfo":
-    "Принимать решение по качеству и баллам без автоматического предпочтения или защиты ревизий. Правила оценки по-прежнему могут начислять баллы релизам PROPER/REPACK.",
   "seasonSection.seasonSearchResults": "Результаты поиска: {{season}}",
   "seriesOverview.selectColumn": "Выбрать",
   "seriesOverview.selectEpisodeForDelete": "Выбрать {{name}}",
@@ -13447,6 +13434,59 @@ const ru: LocaleDictionary = {
     "В этом экземпляре нет связанной истории. Тайтл или события могут отсутствовать, либо запись может быть старше сохранённых связей файлов и загрузок.",
   "settings.recycleBinHistoryTruncated":
     "В этой сводке показано до 50 связанных событий из последних 5000 событий загрузок и файлов тайтла. Более старая связанная история может быть не включена.",
+  "qualityProfile.decisionOrder": "Порядок решения",
+  "qualityProfile.decisionOrderInfo":
+    "Когда два релиза подходят под этот профиль, Scryer проверяет эти шаги сверху вниз. Решает первый шаг, который их различает. Оценка всегда решает последней.",
+  "qualityProfile.decisionPresets": "Предустановки",
+  "qualityProfile.decisionPresetDefault": "По умолчанию",
+  "qualityProfile.decisionPresetLanguageFirst": "Сначала язык",
+  "qualityProfile.decisionPresetScoreOnly": "Только оценка",
+  "qualityProfile.decisionGateQualityTier": "Уровень качества",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "Побеждает релиз из уровня, который стоит выше в предпочтениях качества этого профиля.",
+  "qualityProfile.decisionGateQualityTierSummary": "уровню качества",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "В пределах одного уровня и одной релиз-группы побеждает более новый PROPER или REPACK.",
+  "qualityProfile.decisionGateRevisionSummary": "ревизии PROPER/REPACK",
+  "qualityProfile.decisionGatePreferredLanguage": "Предпочитаемый язык",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "Побеждает релиз, аудио которого стоит выше в списке предпочитаемых языков аудио библиотеки.",
+  "qualityProfile.decisionGatePreferredLanguageSummary":
+    "предпочитаемому языку аудио",
+  "qualityProfile.decisionGateOptionalLanguages": "Дополнительные языки",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "Побеждает релиз, в котором больше дополнительных языков аудио библиотеки.",
+  "qualityProfile.decisionGateOptionalLanguagesSummary":
+    "числу дополнительных языков аудио",
+  "qualityProfile.decisionGateUnknown": "Неизвестный шаг ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Эта версия веб-приложения не знает этот шаг. Он остаётся на своём месте.",
+  "qualityProfile.decisionGateScore": "Оценка",
+  "qualityProfile.decisionGateScoreDescription":
+    "Побеждает более высокая оценка. Оценка всегда идёт последним шагом.",
+  "qualityProfile.decisionScoreLocked": "Всегда последний",
+  "qualityProfile.decisionStepRemove": "Убрать {{value}} из порядка решения",
+  "qualityProfile.decisionStepAdd": "Добавить {{value}} в порядок решения",
+  "qualityProfile.decisionAvailableSteps": "Неиспользуемые шаги",
+  "qualityProfile.decisionAllStepsInUse": "Все шаги используются.",
+  "qualityProfile.decisionSummary":
+    "Релизы сравниваются по {{steps}} и в конце по оценке.",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}, затем по {{next}}",
+  "qualityProfile.decisionSummaryScoreOnly":
+    "Релизы сравниваются только по оценке.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Без шага «Уровень качества» релиз более низкого уровня может заменить файл более высокого уровня, а пороговый уровень больше не действует. Обновления останавливает только пороговая оценка.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Языковой шаг стоит перед уровнем качества, поэтому релиз более низкого уровня на предпочитаемом языке может заменить файл более высокого уровня.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Без шага PROPER/REPACK релизы PROPER и REPACK не получают автоматического предпочтения. Правила оценки по-прежнему могут их поощрять.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Языковые шаги действуют, только если в библиотеке заданы предпочитаемые или дополнительные языки аудио.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Не применяется, пока в порядке решения нет шага «Уровень качества».",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Каждый шаг может встречаться в порядке решения профиля качества только один раз.",
 };
 
 export default ru;

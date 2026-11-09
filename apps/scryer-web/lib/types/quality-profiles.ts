@@ -1,3 +1,5 @@
+import type { QualityDecisionGate } from "../constants/quality-decision-gates.ts";
+
 export type ParsedQualityProfile = {
   id: string;
   name: string;
@@ -7,11 +9,6 @@ export type ScoringPersonaId =
   "BALANCED" | "AUDIOPHILE" | "EFFICIENT" | "COMPATIBLE";
 
 export type QualityTargetId = "8k" | "4k" | "1080p";
-
-/** How a quality profile ranks releases: quality tier first, or score first. */
-export type QualityRankingMode = "tier_first" | "score_first";
-
-export type QualityRankingModeValue = "TIER_FIRST" | "SCORE_FIRST";
 
 export type FacetQualityPrefs = {
   quality: QualityTargetId;
@@ -53,7 +50,8 @@ export type QualityProfileCriteriaPayload = {
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
   min_upgrade_score_delta: number;
-  ranking_mode: QualityRankingMode;
+  /** Ordered comparison steps before score; empty compares by score only. */
+  decision_pipeline: QualityDecisionGate[];
 };
 
 export type ParsedQualityProfileEntry = ParsedQualityProfile & {
@@ -87,7 +85,7 @@ export type QualityProfileGraphCriteriaPayload = {
   cutoffTier: string | null;
   minScoreToGrab: number | null;
   minUpgradeScoreDelta: number;
-  rankingMode: QualityRankingModeValue;
+  decisionPipeline: QualityDecisionGate[];
 };
 
 export type QualityProfileGraphPayload = {
@@ -126,12 +124,12 @@ export type QualityProfileDraft = {
   prefer_remux: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
-  ignore_proper_repack: boolean;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
   min_upgrade_score_delta: number;
-  ranking_mode: QualityRankingMode;
+  /** Ordered comparison steps before score; empty compares by score only. */
+  decision_pipeline: QualityDecisionGate[];
 };
 
 export type JsonPrimitive = string | number | boolean | null;

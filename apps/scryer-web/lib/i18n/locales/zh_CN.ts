@@ -662,11 +662,6 @@ const zh_CN: LocaleDictionary = {
   "settings.audioOptionalLanguages": "可选语言",
   "settings.audioOptionalLanguagesHint":
     "有则更好。在质量相同的发布中，包含更多这些语言的发布胜出。",
-  "settings.audioLanguagePriority": "优先级",
-  "settings.audioLanguagePriorityHint":
-    "语言优先：即使质量等级较低，也会选择首选语言的发布。质量优先：语言只在质量相同的发布之间起决定作用。",
-  "settings.audioLanguagePriorityQualityFirst": "质量优先",
-  "settings.audioLanguagePriorityLanguageFirst": "语言优先",
   "settings.audioOptionalKeepSearching": "继续搜索可选语言",
   "settings.audioOptionalKeepSearchingHint":
     "开启后，缺少可选语言的文件仍是升级目标。关闭后，找到此类发布时仍会替换，但不会主动搜索。",
@@ -684,10 +679,6 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同级最小分数差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一质量级别的资源必须比当前文件的分数至少高出此值。",
-  "qualityProfile.scoreAlwaysWins": "分数始终优先",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "无论质量级别如何，都保留分数最高的资源，并忽略质量截止级别。",
-  "qualityProfile.cutoffTierNotApplicable": "启用“分数始终优先”时不适用。",
   "settings.acquisitionConvergence": "收敛与节奏",
   "settings.acquisitionPollIntervalSeconds": "轮询间隔（秒）",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -3509,6 +3500,55 @@ const zh_CN: LocaleDictionary = {
   "setup.sourceImportState.failed": "失败",
   "setup.sourceImportState.interrupted": "已中断",
   "setup.sourceImportState.skipped": "已跳过",
+  "qualityProfile.decisionOrder": "判定顺序",
+  "qualityProfile.decisionOrderInfo":
+    "当两个发布都符合此配置文件时，Scryer 会从上到下检查这些步骤。第一个能区分它们的步骤做出决定。评分始终最后决定。",
+  "qualityProfile.decisionPresets": "预设",
+  "qualityProfile.decisionPresetDefault": "默认",
+  "qualityProfile.decisionPresetLanguageFirst": "语言优先",
+  "qualityProfile.decisionPresetScoreOnly": "仅评分",
+  "qualityProfile.decisionGateQualityTier": "质量等级",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "在此配置文件的质量偏好中排名更高的等级的发布胜出。",
+  "qualityProfile.decisionGateQualityTierSummary": "质量等级",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "在同一等级和同一发布组内，较新的 PROPER 或 REPACK 胜出。",
+  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK 修订",
+  "qualityProfile.decisionGatePreferredLanguage": "首选语言",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "音频在媒体库首选音频语言中排名更高的发布胜出。",
+  "qualityProfile.decisionGatePreferredLanguageSummary": "首选音频语言",
+  "qualityProfile.decisionGateOptionalLanguages": "可选语言",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "包含更多媒体库可选音频语言的发布胜出。",
+  "qualityProfile.decisionGateOptionalLanguagesSummary": "可选音频语言数量",
+  "qualityProfile.decisionGateUnknown": "未知步骤（{{value}}）",
+  "qualityProfile.decisionGateUnknownDescription":
+    "此版本的网页应用无法识别该步骤，它会保留在原位。",
+  "qualityProfile.decisionGateScore": "评分",
+  "qualityProfile.decisionGateScoreDescription":
+    "评分更高者胜出。评分始终是最后一步。",
+  "qualityProfile.decisionScoreLocked": "始终最后",
+  "qualityProfile.decisionStepRemove": "从判定顺序中移除 {{value}}",
+  "qualityProfile.decisionStepAdd": "将 {{value}} 加入判定顺序",
+  "qualityProfile.decisionAvailableSteps": "未使用的步骤",
+  "qualityProfile.decisionAllStepsInUse": "所有步骤均已使用。",
+  "qualityProfile.decisionSummary": "发布依次按{{steps}}比较，最后按评分比较。",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}，然后按{{next}}",
+  "qualityProfile.decisionSummaryScoreOnly": "发布仅按评分比较。",
+  "qualityProfile.decisionWarningTierAbsent":
+    "没有质量等级步骤时，较低等级的发布可能替换较高等级的文件，且截止等级不再生效。只有截止评分会停止升级。",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "语言步骤位于质量等级之前，因此首选语言的较低等级发布可能替换较高等级的文件。",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "没有 PROPER/REPACK 步骤时，PROPER 和 REPACK 发布不会被自动优先。评分规则仍可为其加分。",
+  "qualityProfile.decisionNoteLanguageGates":
+    "只有当媒体库设置了首选或可选音频语言时，语言步骤才会生效。",
+  "qualityProfile.cutoffTierNotApplicable":
+    "判定顺序中没有质量等级步骤时不适用。",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "在质量配置文件的判定顺序中，每个步骤只能出现一次。",
 };
 
 export default zh_CN;

@@ -818,11 +818,6 @@ const nl: LocaleDictionary = {
   "settings.audioOptionalLanguages": "Optionele talen",
   "settings.audioOptionalLanguagesHint":
     "Mooi meegenomen. Bij releases van dezelfde kwaliteit wint de release met meer van deze talen.",
-  "settings.audioLanguagePriority": "Prioriteit",
-  "settings.audioLanguagePriorityHint":
-    "Taal eerst neemt een release in een voorkeurstaal, ook op een lager kwaliteitsniveau. Kwaliteit eerst laat de taal alleen beslissen tussen releases van dezelfde kwaliteit.",
-  "settings.audioLanguagePriorityQualityFirst": "Kwaliteit eerst",
-  "settings.audioLanguagePriorityLanguageFirst": "Taal eerst",
   "settings.audioOptionalKeepSearching": "Blijven zoeken naar optionele talen",
   "settings.audioOptionalKeepSearchingHint":
     "Aan: een bestand waarin optionele talen ontbreken blijft een upgradedoel. Uit: zulke releases vervangen het nog steeds als ze gevonden worden, maar er wordt niet naar gezocht.",
@@ -840,11 +835,6 @@ const nl: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "Minimale scoreverschil binnen niveau",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Een release in dezelfde kwaliteitsniveaumoet de score van het huidige bestand met minstens deze waarde overtreffen.",
-  "qualityProfile.scoreAlwaysWins": "Score wint altijd",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "De release met de beste score blijft behouden, ongeacht het kwaliteitsniveau, en het grensniveau voor kwaliteit wordt genegeerd.",
-  "qualityProfile.cutoffTierNotApplicable":
-    "Niet van toepassing zolang Score wint altijd aan staat.",
   "settings.acquisitionConvergence": "Convergentie & timing",
   "settings.acquisitionPollIntervalSeconds": "Pollinterval (seconden)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -4591,6 +4581,59 @@ const nl: LocaleDictionary = {
   "setup.sourceImportState.failed": "Mislukt",
   "setup.sourceImportState.interrupted": "Onderbroken",
   "setup.sourceImportState.skipped": "Overgeslagen",
+  "qualityProfile.decisionOrder": "Beslisvolgorde",
+  "qualityProfile.decisionOrderInfo":
+    "Als twee releases allebei aan dit profiel voldoen, loopt Scryer deze stappen van boven af na. De eerste stap die ze onderscheidt, beslist. Score beslist altijd als laatste.",
+  "qualityProfile.decisionPresets": "Voorinstellingen",
+  "qualityProfile.decisionPresetDefault": "Standaard",
+  "qualityProfile.decisionPresetLanguageFirst": "Taal eerst",
+  "qualityProfile.decisionPresetScoreOnly": "Alleen score",
+  "qualityProfile.decisionGateQualityTier": "Kwaliteitsniveau",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "De release in het niveau dat hoger staat in de kwaliteitsvoorkeur van dit profiel wint.",
+  "qualityProfile.decisionGateQualityTierSummary": "kwaliteitsniveau",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "Binnen hetzelfde niveau en dezelfde releasegroep wint een nieuwere PROPER of REPACK.",
+  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK-revisie",
+  "qualityProfile.decisionGatePreferredLanguage": "Voorkeurstaal",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "De release waarvan de audio hoger staat in de voorkeursaudiotalen van de bibliotheek wint.",
+  "qualityProfile.decisionGatePreferredLanguageSummary": "voorkeursaudiotaal",
+  "qualityProfile.decisionGateOptionalLanguages": "Optionele talen",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "De release met meer optionele audiotalen van de bibliotheek wint.",
+  "qualityProfile.decisionGateOptionalLanguagesSummary":
+    "aantal optionele audiotalen",
+  "qualityProfile.decisionGateUnknown": "Onbekende stap ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Deze versie van de webapp kent deze stap niet. Hij blijft op zijn plaats.",
+  "qualityProfile.decisionGateScore": "Score",
+  "qualityProfile.decisionGateScoreDescription":
+    "De hoogste score wint. Score is altijd de laatste stap.",
+  "qualityProfile.decisionScoreLocked": "Altijd laatst",
+  "qualityProfile.decisionStepRemove":
+    "{{value}} uit de beslisvolgorde verwijderen",
+  "qualityProfile.decisionStepAdd": "{{value}} aan de beslisvolgorde toevoegen",
+  "qualityProfile.decisionAvailableSteps": "Ongebruikte stappen",
+  "qualityProfile.decisionAllStepsInUse": "Alle stappen zijn in gebruik.",
+  "qualityProfile.decisionSummary":
+    "Releases worden vergeleken op {{steps}} en ten slotte op score.",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}, daarna {{next}}",
+  "qualityProfile.decisionSummaryScoreOnly":
+    "Releases worden alleen op score vergeleken.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Zonder de stap kwaliteitsniveau kan een release van een lager niveau een bestand van een hoger niveau vervangen, en geldt het cutoff-niveau niet meer. Alleen een cutoff-score stopt upgrades.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Een taalstap staat vóór het kwaliteitsniveau, dus een release van een lager niveau in een voorkeurstaal kan een bestand van een hoger niveau vervangen.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Zonder de stap PROPER/REPACK krijgen PROPER- en REPACK-releases geen automatische voorkeur. Scoreregels kunnen ze nog steeds belonen.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Taalstappen hebben alleen effect als de bibliotheek voorkeurs- of optionele audiotalen heeft ingesteld.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Niet van toepassing zonder de stap kwaliteitsniveau in de beslisvolgorde.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Elke stap mag maar één keer voorkomen in de beslisvolgorde van een kwaliteitsprofiel.",
 };
 
 export default nl;

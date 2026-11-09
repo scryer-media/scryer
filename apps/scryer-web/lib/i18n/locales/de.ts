@@ -719,11 +719,6 @@ const de: LocaleDictionary = {
   "settings.audioOptionalLanguages": "Optionale Sprachen",
   "settings.audioOptionalLanguagesHint":
     "Schön zu haben. Bei gleicher Qualität gewinnt das Release mit mehr dieser Sprachen.",
-  "settings.audioLanguagePriority": "Priorität",
-  "settings.audioLanguagePriorityHint":
-    "Sprache zuerst nimmt ein Release in bevorzugter Sprache auch in schlechterer Qualitätsstufe. Qualität zuerst lässt die Sprache nur zwischen Releases gleicher Qualität entscheiden.",
-  "settings.audioLanguagePriorityQualityFirst": "Qualität zuerst",
-  "settings.audioLanguagePriorityLanguageFirst": "Sprache zuerst",
   "settings.audioOptionalKeepSearching":
     "Weiter nach optionalen Sprachen suchen",
   "settings.audioOptionalKeepSearchingHint":
@@ -743,11 +738,6 @@ const de: LocaleDictionary = {
     "Mindest-Punktabstand innerhalb derselben Stufe",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Ein Release derselben Qualitätsstufe muss den Score der aktuellen Datei um mindestens diesen Wert übertreffen.",
-  "qualityProfile.scoreAlwaysWins": "Score gewinnt immer",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "Das Release mit dem besten Score wird unabhängig von der Qualitätsstufe behalten, und die Grenz-Qualitätsstufe wird ignoriert.",
-  "qualityProfile.cutoffTierNotApplicable":
-    "Nicht anwendbar, solange „Score gewinnt immer“ aktiv ist.",
   "settings.acquisitionConvergence": "Konvergenz & Taktung",
   "settings.acquisitionPollIntervalSeconds": "Abfrageintervall (Sekunden)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -3871,6 +3861,61 @@ const de: LocaleDictionary = {
   "setup.sourceImportState.failed": "Fehlgeschlagen",
   "setup.sourceImportState.interrupted": "Unterbrochen",
   "setup.sourceImportState.skipped": "Übersprungen",
+  "qualityProfile.decisionOrder": "Entscheidungsreihenfolge",
+  "qualityProfile.decisionOrderInfo":
+    "Wenn zwei Releases dieses Profil erfüllen, prüft Scryer diese Schritte von oben nach unten. Der erste Schritt, der sie unterscheidet, entscheidet. Der Score entscheidet immer zuletzt.",
+  "qualityProfile.decisionPresets": "Vorlagen",
+  "qualityProfile.decisionPresetDefault": "Standard",
+  "qualityProfile.decisionPresetLanguageFirst": "Sprache zuerst",
+  "qualityProfile.decisionPresetScoreOnly": "Nur Score",
+  "qualityProfile.decisionGateQualityTier": "Qualitätsstufe",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "Das Release in der Stufe, die in der Qualitätspräferenz dieses Profils höher steht, gewinnt.",
+  "qualityProfile.decisionGateQualityTierSummary": "Qualitätsstufe",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "Innerhalb derselben Stufe und Release-Gruppe gewinnt ein neueres PROPER oder REPACK.",
+  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK-Revision",
+  "qualityProfile.decisionGatePreferredLanguage": "Bevorzugte Sprache",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "Das Release, dessen Audiospur in den bevorzugten Audiosprachen der Bibliothek höher steht, gewinnt.",
+  "qualityProfile.decisionGatePreferredLanguageSummary":
+    "bevorzugter Audiosprache",
+  "qualityProfile.decisionGateOptionalLanguages": "Optionale Sprachen",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "Das Release mit mehr optionalen Audiosprachen der Bibliothek gewinnt.",
+  "qualityProfile.decisionGateOptionalLanguagesSummary":
+    "Anzahl optionaler Audiosprachen",
+  "qualityProfile.decisionGateUnknown": "Unbekannter Schritt ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Diese Version der Web-App kennt diesen Schritt nicht. Er bleibt an seiner Stelle.",
+  "qualityProfile.decisionGateScore": "Score",
+  "qualityProfile.decisionGateScoreDescription":
+    "Der höhere Score gewinnt. Der Score ist immer der letzte Schritt.",
+  "qualityProfile.decisionScoreLocked": "Immer zuletzt",
+  "qualityProfile.decisionStepRemove":
+    "{{value}} aus der Entscheidungsreihenfolge entfernen",
+  "qualityProfile.decisionStepAdd":
+    "{{value}} zur Entscheidungsreihenfolge hinzufügen",
+  "qualityProfile.decisionAvailableSteps": "Nicht verwendete Schritte",
+  "qualityProfile.decisionAllStepsInUse": "Alle Schritte werden verwendet.",
+  "qualityProfile.decisionSummary":
+    "Releases werden nach {{steps}} und zuletzt nach Score verglichen.",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}, dann {{next}}",
+  "qualityProfile.decisionSummaryScoreOnly":
+    "Releases werden nur nach Score verglichen.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Ohne den Schritt Qualitätsstufe kann ein Release einer niedrigeren Stufe eine Datei einer höheren Stufe ersetzen, und die Cutoff-Stufe gilt nicht mehr. Nur ein Cutoff-Score beendet Upgrades.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Ein Sprachschritt steht vor der Qualitätsstufe, daher kann ein Release einer niedrigeren Stufe in einer bevorzugten Sprache eine Datei einer höheren Stufe ersetzen.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Ohne den Schritt PROPER/REPACK werden PROPER- und REPACK-Releases nicht automatisch bevorzugt. Bewertungsregeln können sie weiterhin belohnen.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Sprachschritte wirken nur, wenn in der Bibliothek bevorzugte oder optionale Audiosprachen festgelegt sind.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Nicht anwendbar ohne den Schritt Qualitätsstufe in der Entscheidungsreihenfolge.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Jeder Schritt darf in der Entscheidungsreihenfolge eines Qualitätsprofils nur einmal vorkommen.",
 };
 
 export default de;

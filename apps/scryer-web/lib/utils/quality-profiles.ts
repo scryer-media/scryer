@@ -1,5 +1,11 @@
 import { DEFAULT_QUALITY_PROFILE_QUALITY_TIERS } from "@/lib/constants/quality-profiles";
 import { QUALITY_PROFILE_INHERIT_VALUE } from "@/lib/constants/settings";
+import {
+  DEFAULT_DECISION_PIPELINE,
+  decisionPipelineForIgnoreProperRepack,
+  ignoresProperRepack,
+  normalizeDecisionPipeline,
+} from "@/lib/utils/quality-decision-pipeline";
 import type {
   FacetScoringPersonaSelectionRecord,
   ParsedQualityProfile,
@@ -7,8 +13,6 @@ import type {
   QualityProfileDraft,
   QualityProfileGraphPayload,
   QualityProfileSettingsPayload,
-  QualityRankingMode,
-  QualityRankingModeValue,
   ProfileListChoice,
   ProfileRawRecord,
   ScoringPersonaId,
@@ -88,6 +92,12 @@ export function normalizeQualityProfileEntry(
   const readList = (rawValue: unknown): string[] =>
     parseStringArrayValue(rawValue);
 
+  const decisionPipeline =
+    normalizeDecisionPipeline(criteria.decision_pipeline) ??
+    decisionPipelineForIgnoreProperRepack(
+      readBoolean(criteria.ignore_proper_repack, false),
+    );
+
   return {
     id: rawId,
     name,
@@ -110,7 +120,7 @@ export function normalizeQualityProfileEntry(
       prefer_remux: readBoolean(criteria.prefer_remux, false),
       allow_bd_disk: readBoolean(criteria.allow_bd_disk, false),
       allow_upgrades: readBoolean(criteria.allow_upgrades, false),
-      ignore_proper_repack: readBoolean(criteria.ignore_proper_repack, false),
+      ignore_proper_repack: ignoresProperRepack(decisionPipeline),
       scoring_overrides: readScoringOverrides(criteria.scoring_overrides),
       cutoff_tier:
         typeof criteria.cutoff_tier === "string" && criteria.cutoff_tier.trim()
@@ -123,7 +133,7 @@ export function normalizeQualityProfileEntry(
       min_upgrade_score_delta: readMinUpgradeScoreDelta(
         criteria.min_upgrade_score_delta,
       ),
-      ranking_mode: readRankingMode(criteria.ranking_mode),
+      decision_pipeline: decisionPipeline,
     },
   };
 }
@@ -170,6 +180,11 @@ function scoringOverridesToGraphInput(
 export function qualityProfileEntryFromGraph(
   profile: QualityProfileGraphPayload,
 ): ParsedQualityProfileEntry {
+  const decisionPipeline =
+    normalizeDecisionPipeline(profile.criteria.decisionPipeline) ??
+    decisionPipelineForIgnoreProperRepack(
+      profile.criteria.ignoreProperRepack ?? false,
+    );
   return {
     id: profile.id.trim(),
     name: profile.name.trim() || profile.id.trim(),
@@ -205,7 +220,7 @@ export function qualityProfileEntryFromGraph(
       prefer_remux: profile.criteria.preferRemux,
       allow_bd_disk: profile.criteria.allowBdDisk,
       allow_upgrades: profile.criteria.allowUpgrades,
-      ignore_proper_repack: profile.criteria.ignoreProperRepack ?? false,
+      ignore_proper_repack: ignoresProperRepack(decisionPipeline),
       scoring_overrides: scoringOverridesFromGraph(
         profile.criteria.scoringOverrides,
       ),
@@ -214,7 +229,7 @@ export function qualityProfileEntryFromGraph(
       min_upgrade_score_delta: readMinUpgradeScoreDelta(
         profile.criteria.minUpgradeScoreDelta,
       ),
-      ranking_mode: rankingModeFromGraph(profile.criteria.rankingMode),
+      decision_pipeline: decisionPipeline,
     },
   };
 }
@@ -270,19 +285,6 @@ function readMinUpgradeScoreDelta(raw: unknown): number {
   return typeof raw === "number" && Number.isInteger(raw) && raw >= 0
     ? raw
     : DEFAULT_MIN_UPGRADE_SCORE_DELTA;
-}
-
-/** Anything other than `score_first` reads as the default, tier-first. */
-export function readRankingMode(raw: unknown): QualityRankingMode {
-  return raw === "score_first" ? "score_first" : "tier_first";
-}
-
-function rankingModeFromGraph(raw: unknown): QualityRankingMode {
-  return raw === "SCORE_FIRST" ? "score_first" : "tier_first";
-}
-
-function rankingModeToGraph(mode: QualityRankingMode): QualityRankingModeValue {
-  return mode === "score_first" ? "SCORE_FIRST" : "TIER_FIRST";
 }
 
 function readScoringOverrides(raw: unknown): ScoringOverridesPayload {
@@ -487,12 +489,11 @@ export function buildQualityProfileTemplate(
     prefer_remux: false,
     allow_bd_disk: true,
     allow_upgrades: true,
-    ignore_proper_repack: false,
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
     min_upgrade_score_delta: DEFAULT_MIN_UPGRADE_SCORE_DELTA,
-    ranking_mode: "tier_first",
+    decision_pipeline: [...DEFAULT_DECISION_PIPELINE],
   };
 }
 
@@ -567,7 +568,6 @@ export function toQualityProfileDraft(
       typeof entry.criteria.allow_upgrades === "boolean"
         ? entry.criteria.allow_upgrades
         : true,
-    ignore_proper_repack: entry.criteria.ignore_proper_repack === true,
     scoring_overrides: readScoringOverrides(entry.criteria.scoring_overrides),
     cutoff_tier:
       typeof entry.criteria.cutoff_tier === "string" &&
@@ -581,7 +581,11 @@ export function toQualityProfileDraft(
     min_upgrade_score_delta: readMinUpgradeScoreDelta(
       entry.criteria.min_upgrade_score_delta,
     ),
-    ranking_mode: readRankingMode(entry.criteria.ranking_mode),
+    decision_pipeline:
+      normalizeDecisionPipeline(entry.criteria.decision_pipeline) ??
+      decisionPipelineForIgnoreProperRepack(
+        entry.criteria.ignore_proper_repack === true,
+      ),
   };
 }
 
@@ -619,12 +623,12 @@ export function qualityProfileCatalogEntryFromDraft(
       prefer_remux: draft.prefer_remux,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
-      ignore_proper_repack: draft.ignore_proper_repack,
+      ignore_proper_repack: ignoresProperRepack(draft.decision_pipeline),
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
-      ranking_mode: draft.ranking_mode,
+      decision_pipeline: [...draft.decision_pipeline],
     },
   };
 }
@@ -650,14 +654,14 @@ export function qualityProfileEntryToMutationInput(
       preferRemux: entry.criteria.prefer_remux,
       allowBdDisk: entry.criteria.allow_bd_disk,
       allowUpgrades: entry.criteria.allow_upgrades,
-      ignoreProperRepack: entry.criteria.ignore_proper_repack,
+      ignoreProperRepack: ignoresProperRepack(entry.criteria.decision_pipeline),
       scoringOverrides: scoringOverridesToGraphInput(
         entry.criteria.scoring_overrides,
       ),
       cutoffTier: entry.criteria.cutoff_tier,
       minScoreToGrab: entry.criteria.min_score_to_grab,
       minUpgradeScoreDelta: entry.criteria.min_upgrade_score_delta,
-      rankingMode: rankingModeToGraph(entry.criteria.ranking_mode),
+      decisionPipeline: [...entry.criteria.decision_pipeline],
     },
   };
 }
