@@ -1745,6 +1745,105 @@ mod series_plan_tests {
         }
     }
 
+    /// A name the catalog itself carries keeps matching beside a second name
+    /// it does not know; only a match resting on a custom search alias must
+    /// cover the whole title zone.
+    #[test]
+    fn issue_430_catalog_names_beside_unknown_names_keep_matching() {
+        let catalog: Vec<_> = (1..=13)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let names = [
+            ("Known Name - S01E02", true),
+            ("[Grp] Known Name - Other Name - 01 [1080p]", true),
+            ("[Grp] Known Name - Other Name - S01E02 [1080p]", true),
+            ("Known Name / Other Name - S01E02", true),
+            ("Known Name AKA Other Name S01E02", true),
+            ("Known.Name.AKA.Other.Name.S01E02.1080p.WEB-DL-Grp", true),
+            ("Known Name (Other Name) - S01E02", true),
+            ("Known Name: Subtitle - S01E02", true),
+            ("Known Name (2024) - S01E02", true),
+            ("Known.Name.2024.S01E02.1080p.WEB-DL-Grp", true),
+            ("Known Name US - S01E02", true),
+            ("Known Name (US) - S01E02", true),
+            ("Known.Name.US.S01E02.1080p.WEB-DL-Grp", true),
+            ("Other Name - S01E02", false),
+        ];
+        for facet in [
+            scryer_domain::MediaFacet::Series,
+            scryer_domain::MediaFacet::Anime,
+        ] {
+            let mut title = scene_pack_title();
+            title.name = "Known Name".into();
+            title.facet = facet.clone();
+            let context = crate::build_release_parse_context_for_title(&title, &catalog, None);
+            for (name, expected) in names {
+                let parsed = crate::parse_release_metadata_for_target(name, &context);
+                assert_eq!(
+                    parsed_title_matches_catalog_title(&parsed, &title),
+                    expected,
+                    "{facet:?} {name}"
+                );
+            }
+            // A custom alias does not take away a match on the catalog name.
+            let mut with_alias = title.clone();
+            with_alias.tags = vec!["scryer:search-aliases:Alias Name".into()];
+            let context = crate::build_release_parse_context_for_title(&with_alias, &catalog, None);
+            for (name, expected) in names {
+                let parsed = crate::parse_release_metadata_for_target(name, &context);
+                assert_eq!(
+                    parsed_title_matches_catalog_title(&parsed, &with_alias),
+                    expected,
+                    "{facet:?} with alias: {name}"
+                );
+            }
+        }
+
+        let title = {
+            let mut title = scene_pack_title();
+            title.name = "Known Name".into();
+            title
+        };
+        let EpisodePackVerification::Verified(pack) = verified_episode_pack(
+            &episode_scoped_pack_evidence("Known.Name.S01.1080p.WEB-DL-Grp"),
+            &title,
+            &catalog,
+            None,
+            None,
+            None,
+        ) else {
+            panic!("the submitted pack should verify");
+        };
+        for filename in [
+            "Known Name AKA Other Name S01E02.mkv",
+            "Known Name (Other Name) - S01E02.mkv",
+            "Known Name: Subtitle - S01E02.mkv",
+            "Known Name US - S01E02.mkv",
+            "[Grp] Known Name - Other Name - S01E02 [1080p].mkv",
+        ] {
+            let draft = plan_episode_pack_member(
+                &title,
+                Path::new(""),
+                Path::new(filename),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            let PlannedMemberDraft::Resolved(episodes) = draft else {
+                panic!("{filename}: {draft:?}");
+            };
+            assert_eq!(
+                episodes
+                    .iter()
+                    .map(|episode| episode.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["ep-2"],
+                "{filename}"
+            );
+        }
+    }
+
     #[test]
     fn issue_393_verified_pack_scope_is_bounded_by_release_not_initiating_episode() {
         let title = scene_pack_title();
