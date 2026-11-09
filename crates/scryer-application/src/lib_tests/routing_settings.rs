@@ -937,7 +937,6 @@ async fn library_audio_language_preferences_override_the_facet_one_value_at_a_ti
             MediaFacet::Movie,
             UpdateMediaSettings {
                 preferred_audio_languages: Some(vec!["de".into()]),
-                audio_language_priority: Some(AudioLanguagePriority::LanguageFirst),
                 ..empty_update_media_settings()
             },
         )
@@ -947,9 +946,7 @@ async fn library_audio_language_preferences_override_the_facet_one_value_at_a_ti
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let library = app.get_library_settings(&user, &library_id).await.unwrap();
     assert_eq!(library.preferred_audio_languages_override, None);
-    assert_eq!(library.audio_language_priority_override, None);
     assert_eq!(library.preferred_audio_languages, facet.preferred);
-    assert_eq!(library.audio_language_priority, facet.priority);
 
     let save = |draft: LibrarySettingsOverrideDraft| {
         app.update_library_settings(&user, &library_id, draft)
@@ -968,12 +965,9 @@ async fn library_audio_language_preferences_override_the_facet_one_value_at_a_ti
     assert_eq!(library.optional_audio_languages, optional);
     assert!(library.optional_audio_languages_keep_searching);
     assert_eq!(
-        (
-            library.preferred_audio_languages,
-            library.audio_language_priority
-        ),
-        (facet.preferred.clone(), facet.priority),
-        "the preferred list and the priority still come from the facet"
+        library.preferred_audio_languages,
+        facet.preferred.clone(),
+        "the preferred list still comes from the facet"
     );
 
     assert!(

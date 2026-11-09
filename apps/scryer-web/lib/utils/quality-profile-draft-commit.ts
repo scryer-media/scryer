@@ -4,6 +4,7 @@ import type {
   QualityProfileDraft,
 } from "../types/quality-profiles.ts";
 import { qualityProfileEntryToMutationInput } from "./quality-profiles.ts";
+import { ignoresProperRepack } from "./quality-decision-pipeline.ts";
 
 export function qualityProfileEditorSaveInput(
   entry: ParsedQualityProfileEntry,
@@ -101,12 +102,13 @@ function qualityProfileCatalogEntryFromDraft(
       prefer_remux: draft.prefer_remux,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
-      ignore_proper_repack: draft.ignore_proper_repack,
+      ignore_proper_repack: ignoresProperRepack(draft.decision_pipeline),
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
+      cutoff_score: draft.cutoff_score,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
-      ranking_mode: draft.ranking_mode,
+      decision_pipeline: [...draft.decision_pipeline],
     },
   };
 }

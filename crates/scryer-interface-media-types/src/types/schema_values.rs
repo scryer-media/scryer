@@ -347,27 +347,39 @@ pub enum ScoringPersonaValue {
     Compatible,
 }
 
-/// Where the preferred audio language is compared in release ranking and
-/// upgrade decisions.
+/// One step of a quality profile's decision order. Releases are compared on
+/// each step in turn; the first step that tells two releases apart decides,
+/// and the score decides when none does.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum AudioLanguagePriorityValue {
-    /// Quality tier and revision first; the preferred language decides between
-    /// releases of equal quality.
-    QualityFirst,
-    /// The preferred language first, even over a better quality tier.
-    LanguageFirst,
+pub enum QualityDecisionGateValue {
+    /// The profile's quality tier order. Without it the cutoff tier does not
+    /// apply.
+    QualityTier,
+    /// PROPER and REPACK releases from the same group. Without it they rank
+    /// like the original release.
+    Revision,
+    /// The library's ordered preferred audio languages.
+    PreferredLanguage,
+    /// How many of the library's optional audio languages a release carries.
+    OptionalLanguages,
 }
 
-/// Whether a quality profile ranks releases on quality tier or on score.
+/// The step of a quality profile's decision order that settled a comparison
+/// with what was already on disk.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum QualityRankingModeValue {
-    /// Quality tier first; the score decides between releases of equal tier.
-    TierFirst,
-    /// The best score wins whatever its quality tier; the tier only breaks
-    /// ties, and the cutoff tier does not apply.
-    ScoreFirst,
+pub enum ReleaseDecidingStepValue {
+    /// The quality tier decided.
+    QualityTier,
+    /// PROPER or REPACK decided.
+    Revision,
+    /// The preferred audio language decided.
+    PreferredLanguage,
+    /// The optional audio languages decided.
+    OptionalLanguages,
+    /// No step told the releases apart, so the score decided.
+    Score,
 }
 
 /// Monitoring mode applied to episodic content.

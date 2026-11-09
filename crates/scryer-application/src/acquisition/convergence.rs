@@ -454,14 +454,13 @@ pub(crate) fn compute_search_fingerprint(
     // Appended only when set, so scopes without preferences keep the
     // fingerprint they converged under and are not all re-opened by an upgrade.
     // Order is meaningful for the preferred list, so it is not sorted.
-    if !language_preferences.is_empty() || language_preferences.language_first() {
+    if !language_preferences.is_empty() {
         let mut optional = language_preferences.optional.clone();
         optional.sort();
         canonical.push_str(&format!(
-            ";preferred={};optional={};priority={};keep_searching={}",
+            ";preferred={};optional={};keep_searching={}",
             language_preferences.preferred.join(","),
             optional.join(","),
-            language_preferences.priority.as_str(),
             language_preferences.optional_keep_searching,
         ));
     }
@@ -1709,14 +1708,6 @@ mod tests {
             base, with_preferences,
             "setting preferences re-opens the scope"
         );
-        let language_first = crate::AudioLanguagePreferences {
-            priority: crate::AudioLanguagePriority::LanguageFirst,
-            ..german.clone()
-        };
-        assert_ne!(
-            with_preferences,
-            compute_search_fingerprint("p1", "v1", &["en".into()], &language_first, "m1")
-        );
     }
 
     #[test]
@@ -1990,12 +1981,17 @@ mod tests {
         assert_eq!(upgrade_delta.min_upgrade_score_delta, None);
         upgrade_delta.min_upgrade_score_delta = Some(5);
 
-        let mut ranking_mode = base.clone();
-        assert_eq!(
-            ranking_mode.ranking_mode,
-            crate::QualityRankingMode::TierFirst
+        let mut decision_order = base.clone();
+        assert!(decision_order.decision_pipeline.is_default());
+        decision_order.set_decision_pipeline(
+            crate::DecisionPipeline::try_from_gates([
+                crate::DecisionGate::PreferredLanguage,
+                crate::DecisionGate::QualityTier,
+                crate::DecisionGate::Revision,
+                crate::DecisionGate::OptionalLanguages,
+            ])
+            .unwrap(),
         );
-        ranking_mode.ranking_mode = crate::QualityRankingMode::ScoreFirst;
 
         for (label, edited) in [
             ("quality_tiers", tiers),
@@ -2004,7 +2000,7 @@ mod tests {
             ("cutoff_score", cutoff),
             ("allow_unknown_quality", unknown),
             ("min_upgrade_score_delta", upgrade_delta),
-            ("ranking_mode", ranking_mode),
+            ("decision_pipeline", decision_order),
         ] {
             assert_ne!(
                 baseline,
@@ -2057,8 +2053,17 @@ mod tests {
             "an unset `min_upgrade_score_delta` must not appear in the fingerprint input at all"
         );
         assert!(
-            serialized.get("ranking_mode").is_none(),
-            "a tier-first profile must not carry `ranking_mode` into the fingerprint input"
+            serialized.get("decision_pipeline").is_none(),
+            "a profile on the default order must not carry `decision_pipeline` into the fingerprint input"
+        );
+        let mut without_revision = base.clone();
+        without_revision.set_ignore_proper_repack(true);
+        assert!(
+            serde_json::to_value(AcceptanceCriteria::from(&without_revision))
+                .expect("criteria serialize for the fingerprint")
+                .get("decision_pipeline")
+                .is_none(),
+            "the revision switch alone already records the order it implies"
         );
         for ranking_key in [
             "scoring_persona",

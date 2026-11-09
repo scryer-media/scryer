@@ -991,22 +991,6 @@ input AssignTrackedDownloadTitleInput {
 }
 
 """
-Where the preferred audio language is compared in release ranking and
-upgrade decisions.
-"""
-enum AudioLanguagePriorityValue {
-	"""
-	Quality tier and revision first; the preferred language decides between
-	releases of equal quality.
-	"""
-	QUALITY_FIRST
-	"""
-	The preferred language first, even over a better quality tier.
-	"""
-	LANGUAGE_FIRST
-}
-
-"""
 How a release or file ranks against the title's audio language preferences.
 Every field is neutral when no preferences are configured.
 """
@@ -1024,10 +1008,6 @@ type AudioLanguageRankPayload {
 	How many of the optional languages are present.
 	"""
 	optionalHits: Int!
-	"""
-	Whether the preferred language is compared before the quality tier.
-	"""
-	languageFirst: Boolean!
 	"""
 	Whether the preferences still want something this release lacks.
 	"""
@@ -8285,6 +8265,12 @@ type HistoryScoringPayload {
 	Contributions and rejections recorded for the candidate.
 	"""
 	entries: [ScoreEvaluationEntryPayload!]!
+	"""
+	The step of the profile's decision order that settled the comparison
+	with the file it replaced, or null for a first grab and for events
+	recorded before this was captured.
+	"""
+	decidedBy: ReleaseDecidingStepValue
 }
 
 """
@@ -10871,10 +10857,6 @@ input LibrarySettingsInput {
 	"""
 	optionalAudioLanguages: [String!]
 	"""
-	Audio language priority; null inherits the facet's.
-	"""
-	audioLanguagePriority: AudioLanguagePriorityValue
-	"""
 	Whether a file missing optional languages stays an upgrade target; null inherits the facet's.
 	"""
 	optionalAudioLanguagesKeepSearching: Boolean
@@ -11003,14 +10985,6 @@ type LibrarySettingsPayload {
 	Effective optional audio languages after inheritance.
 	"""
 	optionalAudioLanguages: [String!]!
-	"""
-	Library override for the audio language priority; null means inherit the facet setting.
-	"""
-	audioLanguagePriorityOverride: AudioLanguagePriorityValue
-	"""
-	Effective audio language priority after inheritance.
-	"""
-	audioLanguagePriority: AudioLanguagePriorityValue!
 	"""
 	Library override for keep-searching on optional languages; null means inherit the facet setting.
 	"""
@@ -18439,10 +18413,6 @@ type MediaSettingsPayload {
 	"""
 	optionalAudioLanguages: [String!]!
 	"""
-	Whether the preferred language is compared before or after quality.
-	"""
-	audioLanguagePriority: AudioLanguagePriorityValue!
-	"""
 	Whether a file missing optional languages stays an upgrade target.
 	"""
 	optionalAudioLanguagesKeepSearching: Boolean!
@@ -24677,6 +24647,32 @@ enum PublicUrlErrorCodeValue {
 }
 
 """
+One step of a quality profile's decision order. Releases are compared on
+each step in turn; the first step that tells two releases apart decides,
+and the score decides when none does.
+"""
+enum QualityDecisionGateValue {
+	"""
+	The profile's quality tier order. Without it the cutoff tier does not
+	apply.
+	"""
+	QUALITY_TIER
+	"""
+	PROPER and REPACK releases from the same group. Without it they rank
+	like the original release.
+	"""
+	REVISION
+	"""
+	The library's ordered preferred audio languages.
+	"""
+	PREFERRED_LANGUAGE
+	"""
+	How many of the library's optional audio languages a release carries.
+	"""
+	OPTIONAL_LANGUAGES
+}
+
+"""
 Quality constraints and scoring rules for release selection.
 """
 input QualityProfileCriteriaInput {
@@ -24767,9 +24763,11 @@ input QualityProfileCriteriaInput {
 	"""
 	minUpgradeScoreDelta: Int
 	"""
-	Optional ranking mode. Omitting it keeps the stored value.
+	Optional decision order; each step at most once. Omitting it keeps the
+	stored order, and an empty list ranks on score alone. When sent,
+	whether it lists `REVISION` sets `ignoreProperRepack`.
 	"""
-	rankingMode: QualityRankingModeValue
+	decisionPipeline: [QualityDecisionGateValue!]
 }
 
 """
@@ -24860,10 +24858,12 @@ type QualityProfileCriteriaPayload {
 	"""
 	minUpgradeScoreDelta: Int!
 	"""
-	Whether releases are ranked on quality tier first or on score first.
-	Profiles that never set it report `TIER_FIRST`.
+	The steps releases are compared on, in order, before the score
+	decides. Profiles that never set it report `QUALITY_TIER, REVISION,
+	PREFERRED_LANGUAGE, OPTIONAL_LANGUAGES`; an empty list ranks on score
+	alone. Never lists `REVISION` while `ignoreProperRepack` is true.
 	"""
-	rankingMode: QualityRankingModeValue!
+	decisionPipeline: [QualityDecisionGateValue!]!
 }
 
 """
@@ -24894,6 +24894,13 @@ type QualityProfileDecisionPayload {
 	Standing against the title's audio language preferences.
 	"""
 	audioLanguage: AudioLanguageRankPayload!
+	"""
+	The step of the profile's decision order that settled the comparison
+	with what the scope already holds, or null when nothing was compared:
+	an empty scope, a refusal outside the order, or a release that was
+	never evaluated for automatic acquisition.
+	"""
+	decidedBy: ReleaseDecidingStepValue
 }
 
 """
@@ -24996,21 +25003,6 @@ type QualityProfileSettingsPayload {
 	Effective scoring-persona selection by content scope.
 	"""
 	categoryPersonaSelections: [FacetScoringPersonaSelectionPayload!]!
-}
-
-"""
-Whether a quality profile ranks releases on quality tier or on score.
-"""
-enum QualityRankingModeValue {
-	"""
-	Quality tier first; the score decides between releases of equal tier.
-	"""
-	TIER_FIRST
-	"""
-	The best score wins whatever its quality tier; the tier only breaks
-	ties, and the cutoff tier does not apply.
-	"""
-	SCORE_FIRST
 }
 
 """
@@ -27642,6 +27634,33 @@ type RehydrateAllMetadataPayload {
 }
 
 """
+The step of a quality profile's decision order that settled a comparison
+with what was already on disk.
+"""
+enum ReleaseDecidingStepValue {
+	"""
+	The quality tier decided.
+	"""
+	QUALITY_TIER
+	"""
+	PROPER or REPACK decided.
+	"""
+	REVISION
+	"""
+	The preferred audio language decided.
+	"""
+	PREFERRED_LANGUAGE
+	"""
+	The optional audio languages decided.
+	"""
+	OPTIONAL_LANGUAGES
+	"""
+	No step told the releases apart, so the score decided.
+	"""
+	SCORE
+}
+
+"""
 A scored release decision associated with a wanted scope.
 """
 type ReleaseDecisionPayload {
@@ -27693,6 +27712,12 @@ type ReleaseDecisionPayload {
 	Structured scoring explanation, or null when no explanation was stored.
 	"""
 	explanationJson: JSON
+	"""
+	The step of the profile's decision order that settled the comparison
+	with what the scope held, or null when nothing was compared or the
+	decision was recorded before this was captured.
+	"""
+	decidedBy: ReleaseDecidingStepValue
 	"""
 	Time when the decision was recorded, in UTC.
 	"""
@@ -34631,10 +34656,6 @@ input UpdateMediaSettingsInput {
 	Optional audio-language codes that rank higher when present; an empty list clears them.
 	"""
 	optionalAudioLanguages: [String!]
-	"""
-	Whether the preferred language is compared before or after quality.
-	"""
-	audioLanguagePriority: AudioLanguagePriorityValue
 	"""
 	Whether a file missing optional languages stays an upgrade target.
 	"""

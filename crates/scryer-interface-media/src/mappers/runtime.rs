@@ -601,9 +601,11 @@ fn history_scoring(json: Option<&str>) -> Option<HistoryScoringPayload> {
             decision_code: "upgrade".into(),
             comparisons: vec![],
             entries: vec![],
+            decided_by: None,
         })
     })?;
     Some(HistoryScoringPayload {
+        decided_by: crate::conversions::deciding_step_from_recorded(snapshot.decided_by.as_deref()),
         candidate_score: snapshot.candidate_score,
         previous_score: snapshot.previous_score,
         delta: snapshot.delta.map(Into::into),

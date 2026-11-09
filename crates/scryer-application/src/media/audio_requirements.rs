@@ -229,10 +229,17 @@ pub(crate) fn release_audio_language_hints_for_title(
         push_language(&mut normalized, original_language);
     }
 
-    if parsed.is_multi_audio && !parsed.is_dual_audio {
+    let indexer_reported_audio = indexer_languages.is_some_and(|languages| {
+        languages
+            .iter()
+            .any(|language| normalize_detected_audio_language_code(language).is_some())
+    });
+    if parsed.is_multi_audio && !parsed.is_dual_audio && !indexer_reported_audio {
         // A multi-audio release keeps the original-language track next to
         // whichever dubs it names. The marker never implies English: French
         // and German groups use it for their own dub plus the original.
+        // An indexer that lists the audio tracks is the better witness, so
+        // the marker only fills in when it reported none.
         if let Some(context) = title_language_context {
             push_language(&mut normalized, &context.inferred_original_audio_language);
         }

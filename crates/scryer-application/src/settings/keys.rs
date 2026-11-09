@@ -10,7 +10,6 @@ pub const REQUIRED_AUDIO_LANGUAGES_KEY: &str = "audio.required_languages";
 pub const SEARCH_LANGUAGES_KEY: &str = "search.languages";
 pub const PREFERRED_AUDIO_LANGUAGES_KEY: &str = "audio.preferred_languages";
 pub const OPTIONAL_AUDIO_LANGUAGES_KEY: &str = "audio.optional_languages";
-pub const AUDIO_LANGUAGE_PRIORITY_KEY: &str = "audio.language_priority";
 pub const OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY: &str =
     "audio.optional_languages_keep_searching";
 pub const TITLE_REQUIRED_AUDIO_OVERRIDE_KEY: &str = "audio.required_languages.title_override";

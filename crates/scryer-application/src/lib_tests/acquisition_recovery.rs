@@ -4259,7 +4259,8 @@ async fn acquisition_cycle_submits_one_hundred_episode_fallbacks_after_empty_pac
                             size_fit_penalty: 0,
                             revision_preference: 0,
                             language: Default::default(),
-                            ranking_mode: Default::default(),
+                            decision_pipeline: Default::default(),
+                            decided_by: None,
                         },
                     ),
                     extra: Default::default(),
@@ -13995,7 +13996,8 @@ impl IndexerClient for AmbiguousIdentityIndexerClient {
                                 size_fit_penalty: 0,
                                 revision_preference: 0,
                                 language: Default::default(),
-                                ranking_mode: Default::default(),
+                                decision_pipeline: Default::default(),
+                                decided_by: None,
                             },
                         ),
                         extra: Default::default(),
@@ -18508,6 +18510,46 @@ async fn expired_pending_ranking_prefers_revision_of_queued_group() {
     app.order_expired_releases_by_rank(&wanted, &mut releases, Utc::now())
         .await;
     assert_eq!(releases[0].id, "b-queued-group-revision");
+}
+
+/// Parked releases are tried in the same order a search would rank them, so a
+/// release in the preferred audio language goes ahead of one that is not,
+/// whatever their ids or scores say.
+#[tokio::test]
+async fn expired_pending_ranking_prefers_the_preferred_audio_language() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let (app, title, _) = season_pack_downloading_fixture(vec![queued_pack]).await;
+    for scope in ["series", title.library_id.as_str()] {
+        app.services
+            .config
+            .settings
+            .upsert_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::PREFERRED_AUDIO_LANGUAGES_KEY,
+                Some(scope.to_string()),
+                "[\"de\"]".to_string(),
+                "test",
+                None,
+            )
+            .await
+            .expect("seed preferred audio languages");
+    }
+    let wanted = season_scope_states(&app, &title, "7").await.remove(0);
+    let mut unmarked = pending_movie_release(
+        &wanted.id,
+        &title,
+        "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupB",
+        PendingReleaseStatus::Waiting,
+    );
+    unmarked.id = "a-unmarked-audio".into();
+    unmarked.release_size_bytes = None;
+    let mut german = unmarked.clone();
+    german.id = "b-german-audio".into();
+    german.release_title = "Recent.Failed.Season.Pack.S07.GERMAN.1080p.WEB-DL-GroupC".into();
+    let mut releases = vec![unmarked, german];
+    app.order_expired_releases_by_rank(&wanted, &mut releases, Utc::now())
+        .await;
+    assert_eq!(releases[0].id, "b-german-audio");
 }
 
 #[tokio::test]

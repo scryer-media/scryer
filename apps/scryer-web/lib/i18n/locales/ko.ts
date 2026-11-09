@@ -702,11 +702,6 @@ const ko: LocaleDictionary = {
   "settings.audioOptionalLanguages": "선택 언어",
   "settings.audioOptionalLanguagesHint":
     "있으면 좋은 언어입니다. 품질이 같은 릴리스 중에서는 이 언어를 더 많이 포함한 릴리스가 우선합니다.",
-  "settings.audioLanguagePriority": "우선순위",
-  "settings.audioLanguagePriorityHint":
-    "언어 우선은 품질 등급이 낮더라도 선호 언어의 릴리스를 선택합니다. 품질 우선은 같은 품질의 릴리스 사이에서만 언어로 결정합니다.",
-  "settings.audioLanguagePriorityQualityFirst": "품질 우선",
-  "settings.audioLanguagePriorityLanguageFirst": "언어 우선",
   "settings.audioOptionalKeepSearching": "선택 언어 계속 검색",
   "settings.audioOptionalKeepSearchingHint":
     "켜면 선택 언어가 빠진 파일은 계속 업그레이드 대상입니다. 끄면 그런 릴리스를 발견했을 때 교체는 하지만 검색은 하지 않습니다.",
@@ -725,11 +720,6 @@ const ko: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "동일 등급 최소 점수 차",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "같은 품질 등급의 릴리스는 현재 파일의 점수를 최소 이 값만큼 넘어야 합니다.",
-  "qualityProfile.scoreAlwaysWins": "항상 점수 우선",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "품질 등급과 관계없이 점수가 가장 높은 릴리스를 유지하며, 품질 컷오프 등급은 무시됩니다.",
-  "qualityProfile.cutoffTierNotApplicable":
-    "'항상 점수 우선'이 켜져 있는 동안에는 적용되지 않습니다.",
   "settings.acquisitionConvergence": "수렴 및 속도",
   "settings.acquisitionPollIntervalSeconds": "폴링 간격(초)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -3726,6 +3716,66 @@ const ko: LocaleDictionary = {
   "setup.sourceImportState.failed": "실패",
   "setup.sourceImportState.interrupted": "중단됨",
   "setup.sourceImportState.skipped": "건너뜀",
+  "qualityProfile.decisionOrder": "판정 순서",
+  "qualityProfile.decisionOrderInfo":
+    "두 릴리스가 모두 이 프로필을 통과하면 Scryer는 위에서부터 이 단계를 확인합니다. 둘을 처음으로 구분하는 단계가 결정합니다. 점수는 항상 마지막에 결정합니다.",
+  "qualityProfile.decisionPresets": "프리셋",
+  "qualityProfile.decisionPresetDefault": "기본값",
+  "qualityProfile.decisionPresetLanguageFirst": "언어 우선",
+  "qualityProfile.decisionPresetScoreOnly": "점수만",
+  "qualityProfile.decisionGateQualityTier": "품질 등급",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "이 프로필의 품질 선호 순서에서 더 위에 있는 등급의 릴리스가 이깁니다.",
+  "qualityProfile.decisionGateQualityTierSummary": "품질 등급",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "같은 등급, 같은 릴리스 그룹 안에서는 더 새로운 PROPER 또는 REPACK이 이깁니다.",
+  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK 리비전",
+  "qualityProfile.decisionGatePreferredLanguage": "선호 언어",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "라이브러리의 선호 오디오 언어에서 더 위에 있는 오디오를 가진 릴리스가 이깁니다.",
+  "qualityProfile.decisionGatePreferredLanguageSummary": "선호 오디오 언어",
+  "qualityProfile.decisionGateOptionalLanguages": "선택 언어",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "라이브러리의 선택 오디오 언어를 더 많이 포함한 릴리스가 이깁니다.",
+  "qualityProfile.decisionGateOptionalLanguagesSummary": "선택 오디오 언어 수",
+  "qualityProfile.decisionGateUnknown": "알 수 없는 단계 ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "이 버전의 웹 앱은 이 단계를 인식하지 못합니다. 현재 위치에 그대로 유지됩니다.",
+  "qualityProfile.decisionGateScore": "점수",
+  "qualityProfile.decisionGateScoreDescription":
+    "점수가 높은 쪽이 이깁니다. 점수는 항상 마지막 단계입니다.",
+  "qualityProfile.decisionScoreLocked": "항상 마지막",
+  "qualityProfile.decisionStepRemove": "판정 순서에서 {{value}} 제거",
+  "qualityProfile.decisionStepAdd": "판정 순서에 {{value}} 추가",
+  "qualityProfile.decisionAvailableSteps": "사용하지 않는 단계",
+  "qualityProfile.decisionAllStepsInUse": "모든 단계를 사용 중입니다.",
+  "qualityProfile.decisionSummary":
+    "릴리스는 {{steps}}, 마지막으로 점수 순으로 비교됩니다.",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}, 그다음 {{next}}",
+  "qualityProfile.decisionSummaryScoreOnly": "릴리스는 점수만으로 비교됩니다.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "품질 등급 단계가 없으면 낮은 등급의 릴리스가 높은 등급의 파일을 대체할 수 있고, 컷오프 등급은 적용되지 않습니다. 업그레이드 검색은 컷오프 점수로만 멈추며, 컷오프 점수도 없으면 파일이 있는 즉시 프로필이 충족됩니다.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "언어 단계가 품질 등급보다 앞에 있어, 선호 언어의 낮은 등급 릴리스가 높은 등급의 파일을 대체할 수 있습니다.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "PROPER/REPACK 단계가 없으면 PROPER 및 REPACK 릴리스는 자동으로 우선되지 않습니다. 점수 규칙으로는 여전히 가산할 수 있습니다.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "언어 단계는 라이브러리에 선호 또는 선택 오디오 언어가 설정된 경우에만 효과가 있습니다.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "판정 순서에 품질 등급 단계가 없으면 적용되지 않습니다.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "품질 프로필의 판정 순서에서 각 단계는 한 번만 사용할 수 있습니다.",
+  "qualityProfile.qualityPreferenceHelp":
+    "선호도가 가장 높은 항목이 먼저입니다. 릴리스는 판정 순서의 품질 등급 단계에서 이 순서로 비교됩니다. 새 등급은 가장 낮은 선호도로 추가됩니다.",
+  "qualityProfile.decidedBy": "결정 단계: {{step}}",
+  "qualityProfile.cutoffScore": "컷오프 점수",
+  "qualityProfile.cutoffScoreInfo":
+    "디스크의 파일이 이 점수에 도달하면 프로필은 업그레이드 검색을 멈춥니다. 컷오프 점수를 쓰지 않으려면 비워 두세요.",
+  "qualityProfile.cutoffScorePlaceholder": "컷오프 점수 없음",
+  "qualityProfile.decisionStepDrag": "드래그하여 {{value}} 순서 변경",
+  "qualityProfile.decisionStepMoveUp": "{{value}} 위로 이동",
+  "qualityProfile.decisionStepMoveDown": "{{value}} 아래로 이동",
 };
 
 export default ko;

@@ -1743,6 +1743,9 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "eligible": candidate.auto_eligible,
             "code": candidate.auto_decision_code.as_deref(),
             "summary": candidate.auto_decision_summary.as_deref(),
+            "decided_by": quality
+                .and_then(|decision| decision.decided_by)
+                .map(crate::ReleaseDecidingStep::as_str),
         },
         "quality_profile_decision": {
             "allowed": quality.map(|decision| decision.allowed),
@@ -1849,8 +1852,9 @@ fn revision_upgrade_over(
 /// no analyzed quality either and the quality half is already `false`.
 ///
 /// The quality half comes from
-/// `QualityProfileCriteria::quality_cutoff_met`, which a score-first profile
-/// answers from `cutoff_score` alone.
+/// `QualityProfileCriteria::quality_cutoff_met`, which a profile without a
+/// quality-tier gate answers as met for any file, leaving `cutoff_score`
+/// alone to decide.
 ///
 /// The audio language preferences do not move the cutoff. A file still
 /// missing its preferred language is at cutoff like any other; what it keeps
@@ -1861,19 +1865,24 @@ pub(crate) fn incumbent_at_cutoff(
     quality_cutoff_met: bool,
     subject: &crate::admission::AdmissionSubject,
     cutoff_score: Option<i32>,
+    pipeline: &crate::DecisionPipeline,
 ) -> bool {
-    let best = subject.best_incumbent_record();
+    let best = subject.best_incumbent_record(pipeline);
     quality_cutoff_met
         && cutoff_score.is_none_or(|cutoff| best.is_none_or(|incumbent| incumbent.score >= cutoff))
 }
 
 /// Whether the scope's best file still lacks something the audio language
-/// preferences ask for — so a scope at cutoff is not finished, because a
-/// release in a better language can still escape the cutoff.
-pub(crate) fn scope_still_wants_language(subject: &crate::admission::AdmissionSubject) -> bool {
+/// preferences ask for, through a language gate the profile runs — so a scope
+/// at cutoff is not finished, because a release in a better language can still
+/// escape the cutoff.
+pub(crate) fn scope_still_wants_language(
+    subject: &crate::admission::AdmissionSubject,
+    pipeline: &crate::DecisionPipeline,
+) -> bool {
     subject
-        .best_incumbent_record()
-        .is_some_and(|incumbent| incumbent.language.wanted)
+        .best_incumbent_record(pipeline)
+        .is_some_and(|incumbent| incumbent.language.wanted_under(pipeline))
 }
 
 /// The language escape from the cutoff: the candidate is a step up in audio
@@ -1884,29 +1893,36 @@ pub(crate) fn scope_still_wants_language(subject: &crate::admission::AdmissionSu
 /// libraries keep searching for optional languages; otherwise an optional
 /// language improves a file when one turns up but is not worth going past the
 /// cutoff for.
+///
+/// Each half applies only while its gate is in the profile's pipeline: a
+/// language the profile does not compare cannot be an upgrade.
 fn candidate_is_language_upgrade(
     candidate: crate::admission::CandidateFacts,
     subject: &crate::admission::AdmissionSubject,
 ) -> bool {
-    let Some(incumbent) = subject.best_incumbent_record() else {
+    let pipeline = &candidate.pipeline;
+    let Some(incumbent) = subject.best_incumbent_record(pipeline) else {
         return false;
     };
     let held = incumbent.language;
     let offered = candidate.language;
-    if !held.wanted {
+    if !held.wanted_under(pipeline) {
         return false;
     }
-    match offered
-        .matched
-        .preferred_rank
-        .cmp(&held.matched.preferred_rank)
-    {
-        std::cmp::Ordering::Less => true,
-        std::cmp::Ordering::Greater => false,
-        std::cmp::Ordering::Equal => {
-            held.optional_wanted && offered.matched.optional_hits > held.matched.optional_hits
+    if pipeline.contains(crate::DecisionGate::PreferredLanguage) {
+        match offered
+            .matched
+            .preferred_rank
+            .cmp(&held.matched.preferred_rank)
+        {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
         }
     }
+    pipeline.contains(crate::DecisionGate::OptionalLanguages)
+        && held.optional_wanted
+        && offered.matched.optional_hits > held.matched.optional_hits
 }
 
 /// The one cutoff gate.
@@ -2032,12 +2048,12 @@ pub(crate) fn automatic_candidate_delay_decision(
     )
     .with_language(candidate_language(candidate))
     .with_release_title(&candidate.title)
-    .with_revision_policy(
+    .with_profile_policy(
         candidate
             .parsed_release_metadata
             .as_ref()
             .and_then(|parsed| parsed.release_group.as_deref()),
-        profile.criteria.ignore_proper_repack,
+        &profile.criteria,
     );
     let delay_context = crate::delay_profile::DelayPolicyContext {
         user_invoked,
@@ -2246,9 +2262,31 @@ fn candidate_language(candidate: &IndexerSearchResult) -> crate::AudioLanguageRa
         .map_or_else(Default::default, |decision| decision.language)
 }
 
+#[cfg(test)]
 pub(crate) fn evaluate_auto_candidate(
     candidate: &IndexerSearchResult,
     context: &AutoCandidateEvaluationContext<'_>,
+) -> ReleaseAutoDecisionCode {
+    evaluate_auto_candidate_with_step(candidate, context).0
+}
+
+/// [`evaluate_auto_candidate`], together with the step of the profile's
+/// decision pipeline that settled the comparison with what the scope holds:
+/// `None` when no comparison settled it (an unoccupied scope, or a refusal
+/// before or beside the ladder).
+pub(crate) fn evaluate_auto_candidate_with_step(
+    candidate: &IndexerSearchResult,
+    context: &AutoCandidateEvaluationContext<'_>,
+) -> (ReleaseAutoDecisionCode, Option<crate::ReleaseDecidingStep>) {
+    let mut decided_by = None;
+    let code = evaluate_auto_candidate_recording(candidate, context, &mut decided_by);
+    (code, decided_by)
+}
+
+fn evaluate_auto_candidate_recording(
+    candidate: &IndexerSearchResult,
+    context: &AutoCandidateEvaluationContext<'_>,
+    decided_by: &mut Option<crate::ReleaseDecidingStep>,
 ) -> ReleaseAutoDecisionCode {
     // Ahead of every other gate: a subtitle-only release carries no video, so
     // nothing the rest of the ladder measures can make it grabbable.
@@ -2429,14 +2467,13 @@ pub(crate) fn evaluate_auto_candidate(
     )
     .with_language(candidate_language(candidate))
     .with_release_title(&candidate.title)
-    .with_revision_policy(
+    .with_profile_policy(
         candidate
             .parsed_release_metadata
             .as_ref()
             .and_then(|parsed| parsed.release_group.as_deref()),
-        context.profile.criteria.ignore_proper_repack,
-    )
-    .with_ranking_mode(context.profile.criteria.ranking_mode);
+        &context.profile.criteria,
+    );
 
     if let Some(code) = cutoff_refusal(
         candidate_facts,
@@ -2494,6 +2531,7 @@ pub(crate) fn evaluate_auto_candidate(
         applies_to_queue: true,
     };
     let verdict = crate::admission::evaluate_admission(context.admission, candidate_facts, &policy);
+    *decided_by = verdict.decided_by(context.admission, candidate_facts);
     if let Some(rejection) = verdict.rejection() {
         // The decision row records the *bar* the gate compared against; this
         // records which file set it. Two files can share a score, and an
@@ -3068,6 +3106,7 @@ impl AppUseCase {
                 upgrade_context.cutoff_reached,
                 &admission,
                 upgrade_context.profile.criteria.cutoff_score,
+                &upgrade_context.profile.criteria.decision_pipeline,
             ),
             // Convergence and interactive both land here, and neither is a feed
             // pass: the old-file guard is Sonarr's RSS-only rule.
@@ -3187,15 +3226,20 @@ impl AppUseCase {
                     parsed.map_or(0, crate::acquisition::scoring::revision_rank),
                     decision.preference_score,
                 )
-                .with_revision_policy(
+                .with_profile_policy(
                     parsed.and_then(|parsed| parsed.release_group.as_deref()),
-                    evaluation_context.profile.criteria.ignore_proper_repack,
+                    &evaluation_context.profile.criteria,
                 );
                 decision.revision_preference =
                     crate::admission::revision_preference(facts, candidate_context.admission);
             }
+            let (auto_code, decided_by) =
+                evaluate_auto_candidate_with_step(candidate, &candidate_context);
+            if let Some(decision) = candidate.quality_profile_decision.as_mut() {
+                decision.decided_by = decided_by;
+            }
             let evaluated_code = active_pending_release_delay_code(
-                evaluate_auto_candidate(candidate, &candidate_context),
+                auto_code,
                 user_invoked,
                 has_active_pending_overlap,
             );
@@ -4976,7 +5020,8 @@ mod tests {
             size_fit_penalty: 0,
             revision_preference: 0,
             language: Default::default(),
-            ranking_mode: Default::default(),
+            decision_pipeline: Default::default(),
+            decided_by: None,
         }
     }
 
@@ -7253,6 +7298,18 @@ mod tests {
         }
 
         /// One primary file at tier 1, revision 0, imported `days_ago` days back.
+        const DEFAULT_ORDER: crate::DecisionPipeline = crate::DecisionPipeline::DEFAULT;
+
+        fn language_ahead_of_tier() -> crate::DecisionPipeline {
+            crate::DecisionPipeline::try_from_gates([
+                crate::DecisionGate::PreferredLanguage,
+                crate::DecisionGate::QualityTier,
+                crate::DecisionGate::Revision,
+                crate::DecisionGate::OptionalLanguages,
+            ])
+            .unwrap()
+        }
+
         fn holding(revision: i32, days_ago: i64) -> AdmissionSubject {
             AdmissionSubject::new(
                 AdmissionScope::Title,
@@ -7285,18 +7342,28 @@ mod tests {
         fn the_cutoff_needs_both_the_quality_and_the_score() {
             // Quality at cutoff, bar 300, cutoff_score 500: not finished.
             let below = holding_at(300);
-            assert!(!incumbent_at_cutoff(true, &below, Some(500)));
+            assert!(!incumbent_at_cutoff(
+                true,
+                &below,
+                Some(500),
+                &DEFAULT_ORDER
+            ));
             // Bar 600: finished.
             let at = holding_at(600);
-            assert!(incumbent_at_cutoff(true, &at, Some(500)));
+            assert!(incumbent_at_cutoff(true, &at, Some(500), &DEFAULT_ORDER));
             // No `cutoff_score` configured: the quality half decides alone.
-            assert!(incumbent_at_cutoff(true, &below, None));
-            assert!(!incumbent_at_cutoff(false, &at, Some(500)));
+            assert!(incumbent_at_cutoff(true, &below, None, &DEFAULT_ORDER));
+            assert!(!incumbent_at_cutoff(false, &at, Some(500), &DEFAULT_ORDER));
             // An unoccupied scope has no bar to fall short of; the quality half
             // is what keeps it out.
             let empty = AdmissionSubject::new(AdmissionScope::Title, []);
-            assert!(incumbent_at_cutoff(true, &empty, Some(500)));
-            assert!(!incumbent_at_cutoff(false, &empty, Some(500)));
+            assert!(incumbent_at_cutoff(true, &empty, Some(500), &DEFAULT_ORDER));
+            assert!(!incumbent_at_cutoff(
+                false,
+                &empty,
+                Some(500),
+                &DEFAULT_ORDER
+            ));
         }
 
         /// The scope's one file, speaking `language`, at tier 1 and score 600.
@@ -7318,13 +7385,23 @@ mod tests {
         /// and what the file keeps instead is the language escape below.
         #[test]
         fn a_file_missing_the_preferred_language_still_reaches_its_cutoff() {
-            let english = speaking(crate::AudioLanguageRank::for_test(1, 0, true));
-            assert!(incumbent_at_cutoff(true, &english, Some(500)));
-            assert!(incumbent_at_cutoff(true, &english, None));
-            assert!(!incumbent_at_cutoff(false, &english, None));
-            assert!(scope_still_wants_language(&english));
-            let german = speaking(crate::AudioLanguageRank::for_test(0, 0, true));
-            assert!(!scope_still_wants_language(&german));
+            let english = speaking(crate::AudioLanguageRank::for_test(1, 0));
+            assert!(incumbent_at_cutoff(
+                true,
+                &english,
+                Some(500),
+                &DEFAULT_ORDER
+            ));
+            assert!(incumbent_at_cutoff(true, &english, None, &DEFAULT_ORDER));
+            assert!(!incumbent_at_cutoff(false, &english, None, &DEFAULT_ORDER));
+            assert!(scope_still_wants_language(&english, &DEFAULT_ORDER));
+            let german = speaking(crate::AudioLanguageRank::for_test(0, 0));
+            assert!(!scope_still_wants_language(&german, &DEFAULT_ORDER));
+            // A language the profile does not compare is never wanted.
+            let without_languages = crate::DecisionPipeline::default_order()
+                .without(crate::DecisionGate::PreferredLanguage)
+                .without(crate::DecisionGate::OptionalLanguages);
+            assert!(!scope_still_wants_language(&english, &without_languages));
         }
 
         /// At cutoff with the preferred language still wanted, a release in
@@ -7332,9 +7409,8 @@ mod tests {
         /// score.
         #[test]
         fn a_same_language_candidate_is_refused_at_cutoff_while_language_is_wanted() {
-            for priority_language_first in [false, true] {
-                let english_rank =
-                    crate::AudioLanguageRank::for_test(1, 0, priority_language_first);
+            for pipeline in [DEFAULT_ORDER, language_ahead_of_tier()] {
+                let english_rank = crate::AudioLanguageRank::for_test(1, 0);
                 let english = speaking(english_rank);
                 for candidate in [
                     // Higher tier, same language.
@@ -7346,7 +7422,8 @@ mod tests {
                         cutoff_refusal(
                             candidate
                                 .with_language(english_rank)
-                                .with_revision_policy(Some("GRP"), false),
+                                .with_revision_policy(Some("GRP"), false)
+                                .with_pipeline(pipeline),
                             &english,
                             true,
                             true,
@@ -7359,21 +7436,22 @@ mod tests {
         }
 
         /// …while a release in a better language escapes the cutoff, in
-        /// either priority, and goes on to the ladder.
+        /// either order, and goes on to the ladder.
         #[test]
         fn a_better_language_candidate_escapes_the_cutoff() {
-            for language_first in [false, true] {
-                let english = speaking(crate::AudioLanguageRank::for_test(1, 0, language_first));
-                let german = crate::AudioLanguageRank::for_test(0, 0, language_first);
+            for pipeline in [DEFAULT_ORDER, language_ahead_of_tier()] {
+                let english = speaking(crate::AudioLanguageRank::for_test(1, 0));
+                let german = crate::AudioLanguageRank::for_test(0, 0);
                 let candidate = CandidateFacts::new(Some(1), 0, 600)
                     .with_language(german)
-                    .with_revision_policy(Some("GRP"), false);
+                    .with_revision_policy(Some("GRP"), false)
+                    .with_pipeline(pipeline);
                 assert_eq!(
                     cutoff_refusal(candidate, &english, true, true, &now()),
                     None
                 );
-                // The ladder admits it: the same tier in quality-first, any
-                // tier in language-first.
+                // The ladder admits it: the same tier with the tier ahead,
+                // any tier with the language ahead.
                 let verdict = crate::admission::evaluate_admission(
                     &english,
                     candidate,
@@ -7389,16 +7467,31 @@ mod tests {
             }
         }
 
+        /// A language the profile's order does not compare opens no escape.
+        #[test]
+        fn a_better_language_does_not_escape_the_cutoff_without_its_step() {
+            let english = speaking(crate::AudioLanguageRank::for_test(1, 0));
+            let candidate = CandidateFacts::new(Some(1), 0, 600)
+                .with_language(crate::AudioLanguageRank::for_test(0, 0))
+                .with_revision_policy(Some("GRP"), false)
+                .with_pipeline(DEFAULT_ORDER.without(crate::DecisionGate::PreferredLanguage));
+            assert_eq!(
+                cutoff_refusal(candidate, &english, true, true, &now()),
+                Some(ReleaseAutoDecisionCode::CutoffReached)
+            );
+        }
+
         /// A worse language never escapes the cutoff, and the ladder rejects
         /// it even where the cutoff does not apply.
         #[test]
         fn a_worse_language_candidate_is_still_rejected() {
             // Second preferred language on disk, still wanted for the first.
-            let second = speaking(crate::AudioLanguageRank::for_test(1, 0, true));
-            let none_preferred = crate::AudioLanguageRank::for_test(2, 0, true);
+            let second = speaking(crate::AudioLanguageRank::for_test(1, 0));
+            let none_preferred = crate::AudioLanguageRank::for_test(2, 0);
             let candidate = CandidateFacts::new(Some(0), 0, 9_000)
                 .with_language(none_preferred)
-                .with_revision_policy(Some("GRP"), false);
+                .with_revision_policy(Some("GRP"), false)
+                .with_pipeline(language_ahead_of_tier());
             assert_eq!(
                 cutoff_refusal(candidate, &second, true, true, &now()),
                 Some(ReleaseAutoDecisionCode::CutoffReached)
@@ -7428,11 +7521,11 @@ mod tests {
                 let held = crate::AudioLanguageRank {
                     wanted: keep_searching,
                     optional_wanted: keep_searching,
-                    ..crate::AudioLanguageRank::for_test(0, 0, false)
+                    ..crate::AudioLanguageRank::for_test(0, 0)
                 };
                 let subject = speaking(held);
                 let candidate = CandidateFacts::new(Some(1), 0, 600)
-                    .with_language(crate::AudioLanguageRank::for_test(0, 1, false))
+                    .with_language(crate::AudioLanguageRank::for_test(0, 1))
                     .with_revision_policy(Some("GRP"), false);
                 let expected = (!keep_searching).then_some(ReleaseAutoDecisionCode::CutoffReached);
                 assert_eq!(
@@ -7468,7 +7561,12 @@ mod tests {
                     admission,
                     profile: &profile,
                     thresholds: &thresholds,
-                    incumbent_at_cutoff: incumbent_at_cutoff(true, admission, Some(500)),
+                    incumbent_at_cutoff: incumbent_at_cutoff(
+                        true,
+                        admission,
+                        Some(500),
+                        &DEFAULT_ORDER,
+                    ),
                     is_rss_lane: true,
                     user_invoked: false,
                     oldest_overlapping_pending_published_at: None,

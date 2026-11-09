@@ -184,7 +184,6 @@ test(
       requiredAudioLanguages: [],
       preferredAudioLanguages: ["deu", "jpn"],
       optionalAudioLanguages: [],
-      audioLanguagePriority: "LANGUAGE_FIRST",
       optionalAudioLanguagesKeepSearching: false,
     };
     const h = harness({
@@ -210,7 +209,6 @@ test(
     assert.deepEqual(render().categoryAudioLanguagePreferences.ANIME, {
       preferredAudioLanguages: ["deu", "jpn"],
       optionalAudioLanguages: [],
-      audioLanguagePriority: "LANGUAGE_FIRST",
       optionalAudioLanguagesKeepSearching: false,
     });
     assert.equal(render().mediaSettingsSaving, false);
@@ -233,11 +231,12 @@ test(
     const scope = "ANIME";
     const before = render().categoryAudioLanguagePreferences[scope];
     const saving = render().saveCategoryAudioLanguagePreferences({
-      audioLanguagePriority: "LANGUAGE_FIRST",
+      optionalAudioLanguagesKeepSearching: true,
     }) as Promise<void>;
     assert.equal(
-      render().categoryAudioLanguagePreferences[scope].audioLanguagePriority,
-      "LANGUAGE_FIRST",
+      render().categoryAudioLanguagePreferences[scope]
+        .optionalAudioLanguagesKeepSearching,
+      true,
     );
     assert.equal(render().mediaSettingsSaving, true);
     response.resolve({ error: new Error("save rejected") });

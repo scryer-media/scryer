@@ -33,7 +33,9 @@ import {
   releaseSearchResultQueueId,
   releaseSearchResultQueueReasonId,
   releaseSearchResultRowId,
+  selectorId,
 } from "@/lib/utils/dom-ids";
+import { DecidedByBadge } from "@/components/common/decided-by-badge";
 import type { Release } from "@/lib/types";
 
 import {
@@ -307,6 +309,13 @@ function SearchResultRow({
     !onQueueAdditional;
   const idVariant = mobile ? "mobile" : undefined;
   const rowId = releaseSearchResultRowId(result, idVariant);
+  const decidedByBadge = (
+    <DecidedByBadge
+      id={selectorId(rowId, "decided-by")}
+      step={decision?.decidedBy}
+      className="rounded-[6px] px-[7px] py-px text-[10px] font-bold"
+    />
+  );
   const queueButtonId = releaseSearchResultQueueId(result, idVariant);
   const queueReasonId = releaseSearchResultQueueReasonId(result, idVariant);
   const queueAdditionalButtonId = releaseSearchResultQueueAdditionalId(
@@ -406,6 +415,7 @@ function SearchResultRow({
               {currentFileBadge}
               {packBadge}
               {languageBadge}
+              {decidedByBadge}
               {rejectionBadge}
             </div>
             {selectedTitleTags.length > 0 ? (
@@ -595,6 +605,7 @@ function SearchResultRow({
             {currentFileBadge}
             {packBadge}
             {languageBadge}
+            {decidedByBadge}
             {rejectionBadge}
           </div>
           {parsedBits.length > 0 ? (
@@ -723,6 +734,7 @@ function SearchResultRow({
               {currentFileBadge}
               {packBadge}
               {languageBadge}
+              {decidedByBadge}
               {rejectionBadge}
             </div>
             {parsedBits.length > 0 ? (

@@ -5392,11 +5392,6 @@ const en: LocaleDictionary = {
   "settings.audioOptionalLanguages": "Optional languages",
   "settings.audioOptionalLanguagesHint":
     "Nice to have. Among releases of the same quality, the one carrying more of these languages wins.",
-  "settings.audioLanguagePriority": "Priority",
-  "settings.audioLanguagePriorityHint":
-    "Language first takes a release in a preferred language even at a lower quality tier. Quality first lets the language decide only between releases of the same quality.",
-  "settings.audioLanguagePriorityQualityFirst": "Quality first",
-  "settings.audioLanguagePriorityLanguageFirst": "Language first",
   "settings.audioOptionalKeepSearching":
     "Keep searching for optional languages",
   "settings.audioOptionalKeepSearchingHint":
@@ -5415,11 +5410,6 @@ const en: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "Same-tier minimum score delta",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "A release in the same quality tier must beat the current file's score by at least this much.",
-  "qualityProfile.scoreAlwaysWins": "Score always wins",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "The release with the best score is kept regardless of quality tier, and the quality cutoff tier is ignored.",
-  "qualityProfile.cutoffTierNotApplicable":
-    "Not applicable while Score always wins is on.",
   "settings.acquisitionConvergence": "Convergence & pacing",
   "settings.acquisitionPollIntervalSeconds": "Poll interval (seconds)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -7744,7 +7734,7 @@ const en: LocaleDictionary = {
     "Quality tiers and archival quality",
   "qualityProfile.qualityPreference": "Quality preference",
   "qualityProfile.qualityPreferenceHelp":
-    "Highest preference first. Tier preference takes priority over score. New tiers are added at the lowest preference.",
+    "Highest preference first. Releases are compared on this order at the quality tier step of the decision order. New tiers are added at the lowest preference.",
   "qualityProfile.moveQualityTierUp": "Move {{value}} up",
   "qualityProfile.moveQualityTierDown": "Move {{value}} down",
   "qualityProfile.dragQualityTier": "Drag to reorder {{value}}",
@@ -7775,9 +7765,6 @@ const en: LocaleDictionary = {
   "qualityProfile.allowBdDiskInfo":
     "Allow BD/Disc image releases (ISO/Blu-ray disk style releases) to pass the profile.",
   "qualityProfile.allowDv": "Dolby Vision",
-  "qualityProfile.ignoreProperRepack": "Ignore PROPER/REPACK",
-  "qualityProfile.ignoreProperRepackInfo":
-    "Let quality and scores decide without automatic revision preference or protection. Scoring rules can still reward PROPER/REPACK releases.",
   "qualityProfile.allowUpgrades": "Upgrades allowed",
   "qualityProfile.allowUpgradesInfo":
     "Allow managed copies to be replaced later by a better match, but never above the selected archival quality.",
@@ -12527,6 +12514,68 @@ const en: LocaleDictionary = {
   "routeError.technicalDetails": "Technical details",
   "routeError.retry": "Retry",
   "mediaFile.bitDepthValue": "{{depth}}-bit",
+  "qualityProfile.decisionOrder": "Decision order",
+  "qualityProfile.decisionOrderInfo":
+    "When two releases both pass this profile, Scryer checks these steps from the top. The first step that tells them apart decides. Score always decides last.",
+  "qualityProfile.decisionPresets": "Presets",
+  "qualityProfile.decisionPresetDefault": "Default",
+  "qualityProfile.decisionPresetLanguageFirst": "Language first",
+  "qualityProfile.decisionPresetScoreOnly": "Score only",
+  "qualityProfile.decisionGateQualityTier": "Quality tier",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "The release in the tier ranked higher in this profile's quality preference wins.",
+  "qualityProfile.decisionGateQualityTierSummary": "quality tier",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "Within the same tier and release group, a newer PROPER or REPACK wins.",
+  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK revision",
+  "qualityProfile.decisionGatePreferredLanguage": "Preferred language",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "The release whose audio ranks higher in the library's preferred audio languages wins.",
+  "qualityProfile.decisionGatePreferredLanguageSummary":
+    "preferred audio language",
+  "qualityProfile.decisionGateOptionalLanguages": "Optional languages",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "The release carrying more of the library's optional audio languages wins.",
+  "qualityProfile.decisionGateOptionalLanguagesSummary":
+    "number of optional audio languages",
+  "qualityProfile.decisionGateUnknown": "Unrecognized step ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "This version of the web app does not recognize this step. It stays where it is.",
+  "qualityProfile.decisionGateScore": "Score",
+  "qualityProfile.decisionGateScoreDescription":
+    "The higher score wins. Score is always the final step.",
+  "qualityProfile.decisionScoreLocked": "Always last",
+  "qualityProfile.decisionStepRemove":
+    "Remove {{value}} from the decision order",
+  "qualityProfile.decisionStepAdd": "Add {{value}} to the decision order",
+  "qualityProfile.decisionAvailableSteps": "Steps not in use",
+  "qualityProfile.decisionAllStepsInUse": "Every step is in use.",
+  "qualityProfile.decisionSummary":
+    "Releases are compared by {{steps}}, and finally by score.",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}, then {{next}}",
+  "qualityProfile.decisionSummaryScoreOnly":
+    "Releases are compared by score alone.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Without the quality tier step, a lower-tier release can replace a higher-tier file, and the cutoff tier does not apply. Only the cutoff score stops the search for upgrades; with no cutoff score either, the profile is satisfied once it has a file.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "A language step comes before quality tier, so a lower-tier release in a preferred language can replace a higher-tier file.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Without the PROPER/REPACK step, PROPER and REPACK releases get no automatic preference. Scoring rules can still reward them.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Language steps only have an effect when the library has preferred or optional audio languages set.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Not applicable without the quality tier step in the decision order.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Each step can appear only once in a quality profile's decision order.",
+  "qualityProfile.decidedBy": "Decided by: {{step}}",
+  "qualityProfile.cutoffScore": "Cutoff score",
+  "qualityProfile.cutoffScoreInfo":
+    "Once the file on disk reaches this score, the profile stops looking for upgrades. Leave empty for no score cutoff.",
+  "qualityProfile.cutoffScorePlaceholder": "No cutoff score",
+  "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
+  "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
 };
 
 export default en;

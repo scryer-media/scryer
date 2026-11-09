@@ -323,15 +323,10 @@ pub(crate) async fn decide_import(
     let candidate =
         crate::admission::CandidateFacts::new(scored.tier_index, scored.revision, scored.score)
             .with_language(scored.language)
-            .with_revision_policy(
+            .with_profile_policy(
                 scored.parsed.release_group.as_deref(),
-                input
-                    .scoring_context
-                    .profile()
-                    .criteria
-                    .ignore_proper_repack,
-            )
-            .with_ranking_mode(input.scoring_context.profile().criteria.ranking_mode);
+                &input.scoring_context.profile().criteria,
+            );
 
     match evaluate_import_admission(
         &subject,

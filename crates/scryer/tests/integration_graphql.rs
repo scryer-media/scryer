@@ -1830,15 +1830,6 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
             SettingDefinitionSeed {
                 category: "media".into(),
                 scope: "system".into(),
-                key_name: "audio.language_priority".into(),
-                data_type: "string".into(),
-                default_value_json: "\"quality_first\"".into(),
-                is_sensitive: false,
-                validation_json: None,
-            },
-            SettingDefinitionSeed {
-                category: "media".into(),
-                scope: "system".into(),
                 key_name: "audio.optional_languages_keep_searching".into(),
                 data_type: "boolean".into(),
                 default_value_json: "false".into(),

@@ -372,7 +372,9 @@ impl AppUseCase {
                             bar
                         });
                     bars[scope_index] = Some(
-                        bars[scope_index].map_or(landed, |current| current.with_file(landed)),
+                        bars[scope_index].map_or(landed, |current| {
+                            current.with_file(landed, &context.profile().criteria.decision_pipeline)
+                        }),
                     );
                 }
             }

@@ -58,10 +58,10 @@ impl LandedBar {
     /// two; the language standing is that of the file the admission ladder
     /// ranks first, the one the cutoff reads through
     /// [`crate::admission::AdmissionSubject::best_incumbent_record`].
-    pub(crate) fn with_file(self, other: Self) -> Self {
+    pub(crate) fn with_file(self, other: Self, pipeline: &crate::DecisionPipeline) -> Self {
         let rank = |bar: &Self| {
             (
-                crate::admission::incumbent_ladder_key(bar.tier_index, bar.language),
+                crate::admission::incumbent_ladder_key(pipeline, bar.tier_index, bar.language),
                 std::cmp::Reverse(bar.score),
             )
         };
@@ -287,20 +287,33 @@ mod tests {
 
     #[test]
     fn a_scope_takes_its_language_standing_from_the_file_the_ladder_ranks_first() {
-        let file = |score, tier, language_first, preferred_rank| LandedBar {
+        let file = |score, tier, preferred_rank| LandedBar {
             score,
             tier_index: Some(tier),
-            language: crate::AudioLanguageRank::for_test(preferred_rank, 0, language_first),
+            language: crate::AudioLanguageRank::for_test(preferred_rank, 0),
         };
+        let language_ahead = crate::DecisionPipeline::try_from_gates([
+            crate::DecisionGate::PreferredLanguage,
+            crate::DecisionGate::QualityTier,
+            crate::DecisionGate::Revision,
+            crate::DecisionGate::OptionalLanguages,
+        ])
+        .unwrap();
         // An English 1080p file beside a German 720p one, German preferred.
-        for (language_first, wanted) in [(false, true), (true, false)] {
-            let english = file(900, 0, language_first, 1);
-            let german = file(300, 1, language_first, 0);
-            for merged in [english.with_file(german), german.with_file(english)] {
+        for (pipeline, wanted) in [
+            (crate::DecisionPipeline::default_order(), true),
+            (language_ahead, false),
+        ] {
+            let english = file(900, 0, 1);
+            let german = file(300, 1, 0);
+            for merged in [
+                english.with_file(german, &pipeline),
+                german.with_file(english, &pipeline),
+            ] {
                 assert_eq!(merged.score, 900, "the bar is still the better score");
                 assert_eq!(
                     merged.language.wanted, wanted,
-                    "language_first={language_first}: the cutoff's file decides"
+                    "{pipeline:?}: the cutoff's file decides"
                 );
             }
         }

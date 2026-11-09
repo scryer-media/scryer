@@ -4895,8 +4895,11 @@ async fn process_single_target(
         upgrade_context.cutoff_reached,
         &admission,
         profile.criteria.cutoff_score,
-    ) && !crate::acquisition_release_search::scope_still_wants_language(&admission)
-    {
+        &profile.criteria.decision_pipeline,
+    ) && !crate::acquisition_release_search::scope_still_wants_language(
+        &admission,
+        &profile.criteria.decision_pipeline,
+    ) {
         tracing::debug!(
             title_id = title.id.as_str(),
             cutoff = profile.criteria.cutoff_tier.as_deref().unwrap_or(""),
@@ -5036,22 +5039,12 @@ async fn process_single_target(
                 )
                 .await;
             }
-            // A fact about the *scope*, not about this candidate: the ranked
-            // order is (tier, revision, score) and admission compares the same
-            // three in the same order, so nothing below a rejected candidate
-            // can do better either.
-            //
-            // `CutoffReached` used to be listed here and no longer is. Since
-            // D15 it is candidate-aware — a same-tier revision upgrade escapes
-            // it — and a better-*tier* candidate refused by the cutoff sorts
-            // *above* the same-tier PROPER that would pass, so breaking on it
-            // would skip the one release worth having. (`NegativeScore` was
-            // also listed once; nothing emits it any more — the hardcoded zero
-            // floor is gone — and the variant survives only so historical
-            // decision rows still decode.)
-            if matches!(decision_code, ReleaseAutoDecisionCode::UpgradeRejected) {
-                break;
-            }
+            // No refusal ends the walk. A refused upgrade says nothing about
+            // the candidates ranked below it: a related lower revision sorts
+            // level with an unrelated release yet is refused while the
+            // unrelated one is admitted, and a PROPER passes the
+            // upgrades-disabled guard that refuses a better tier ranked
+            // above it. The cutoff is candidate-aware for the same reason.
             if matches!(decision_code, ReleaseAutoDecisionCode::AmbiguousIdentity)
                 && !parked_ambiguous_identity
             {
@@ -8769,7 +8762,8 @@ mod task_runner_tests {
                 size_fit_penalty: 0,
                 revision_preference: 0,
                 language: Default::default(),
-                ranking_mode: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
             }),
         );
         let pack = arbitration_candidate(
@@ -8784,7 +8778,8 @@ mod task_runner_tests {
                 size_fit_penalty: 0,
                 revision_preference: 0,
                 language: Default::default(),
-                ranking_mode: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
             }),
         );
         assert_eq!(

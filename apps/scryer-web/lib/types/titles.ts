@@ -5,7 +5,7 @@ import type {
   MediaRequestLeaseRecord,
   RequestRuleDecisionRecord,
 } from "./request-rule-sets";
-import type { AudioLanguagePriority, ImportMode } from "./settings";
+import type { ImportMode } from "./settings";
 
 export type { CanonicalMediaTag };
 
@@ -387,8 +387,6 @@ export type LibrarySettingsRecord = {
   preferredAudioLanguages: string[];
   optionalAudioLanguagesOverride: string[] | null;
   optionalAudioLanguages: string[];
-  audioLanguagePriorityOverride: AudioLanguagePriority | null;
-  audioLanguagePriority: AudioLanguagePriority;
   optionalAudioLanguagesKeepSearchingOverride: boolean | null;
   optionalAudioLanguagesKeepSearching: boolean;
   metadataLanguageOverride: string | null;
@@ -441,7 +439,6 @@ export type LibrarySettingsDraft = {
   requiredAudioLanguages: string[] | null;
   preferredAudioLanguages: string[] | null;
   optionalAudioLanguages: string[] | null;
-  audioLanguagePriority: AudioLanguagePriority | null;
   optionalAudioLanguagesKeepSearching: boolean | null;
   metadataLanguage: string | null;
   useSeasonFolders: boolean | null;

@@ -1,8 +1,8 @@
 use super::{
-    AudioLanguagePriorityValue, ContentScopeValue, DelayProfilePreferredProtocolValue,
-    FillerPolicyValue, ImportModeValue, Long, MediaFacetValue, QualityRankingModeValue,
-    RecapPolicyValue, RenameCollisionPolicyValue, RenameMissingMetadataPolicyValue,
-    RootFolderPayload, ScoringPersonaValue, VerificationDepthValue,
+    ContentScopeValue, DelayProfilePreferredProtocolValue, FillerPolicyValue, ImportModeValue,
+    Long, MediaFacetValue, QualityDecisionGateValue, RecapPolicyValue, RenameCollisionPolicyValue,
+    RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
+    VerificationDepthValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -928,9 +928,11 @@ pub struct QualityProfileCriteriaPayload {
     /// Score a same-tier candidate must beat the current file by to count as
     /// an upgrade. Profiles that never set it report the default, 120.
     pub min_upgrade_score_delta: i32,
-    /// Whether releases are ranked on quality tier first or on score first.
-    /// Profiles that never set it report `TIER_FIRST`.
-    pub ranking_mode: QualityRankingModeValue,
+    /// The steps releases are compared on, in order, before the score
+    /// decides. Profiles that never set it report `QUALITY_TIER, REVISION,
+    /// PREFERRED_LANGUAGE, OPTIONAL_LANGUAGES`; an empty list ranks on score
+    /// alone. Never lists `REVISION` while `ignoreProperRepack` is true.
+    pub decision_pipeline: Vec<QualityDecisionGateValue>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1036,8 +1038,6 @@ pub struct MediaSettingsPayload {
     /// Optional audio languages; among releases of equal quality, more of them
     /// rank higher.
     pub optional_audio_languages: Vec<String>,
-    /// Whether the preferred language is compared before or after quality.
-    pub audio_language_priority: AudioLanguagePriorityValue,
     /// Whether a file missing optional languages stays an upgrade target.
     pub optional_audio_languages_keep_searching: bool,
     /// Whether episodic titles use season folders.
@@ -1379,8 +1379,6 @@ pub struct UpdateMediaSettingsInput {
     pub preferred_audio_languages: Option<Vec<String>>,
     /// Optional audio-language codes that rank higher when present; an empty list clears them.
     pub optional_audio_languages: Option<Vec<String>>,
-    /// Whether the preferred language is compared before or after quality.
-    pub audio_language_priority: Option<AudioLanguagePriorityValue>,
     /// Whether a file missing optional languages stays an upgrade target.
     pub optional_audio_languages_keep_searching: Option<bool>,
     /// Whether episodic titles use season folders.
@@ -1733,8 +1731,10 @@ pub struct QualityProfileCriteriaInput {
     /// value, and sending the default (120) stores the profile as using the
     /// default.
     pub min_upgrade_score_delta: Option<i32>,
-    /// Optional ranking mode. Omitting it keeps the stored value.
-    pub ranking_mode: Option<QualityRankingModeValue>,
+    /// Optional decision order; each step at most once. Omitting it keeps the
+    /// stored order, and an empty list ranks on score alone. When sent,
+    /// whether it lists `REVISION` sets `ignoreProperRepack`.
+    pub decision_pipeline: Option<Vec<QualityDecisionGateValue>>,
 }
 
 #[derive(InputObject, Clone)]

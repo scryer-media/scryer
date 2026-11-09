@@ -1382,8 +1382,9 @@ const qualityProfileCriteriaFields = `
       }
       cutoffTier
       minScoreToGrab
+      cutoffScore
       minUpgradeScoreDelta
-      rankingMode`;
+      decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
@@ -1433,7 +1434,6 @@ const mediaSettingsFieldSelection = `
     requiredAudioLanguages
     preferredAudioLanguages
     optionalAudioLanguages
-    audioLanguagePriority
     optionalAudioLanguagesKeepSearching
     useSeasonFolders
     folderTemplate

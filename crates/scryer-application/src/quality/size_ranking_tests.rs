@@ -37,7 +37,7 @@ fn rank(decision: &QualityProfileDecision) -> RankHead {
         negated_score: -decision.preference_score,
         size_fit_penalty: decision.size_fit_penalty,
         language: decision.language,
-        ranking_mode: decision.ranking_mode,
+        pipeline: decision.decision_pipeline,
     }
 }
 

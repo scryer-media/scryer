@@ -719,11 +719,6 @@ const pt_BR: LocaleDictionary = {
   "settings.audioOptionalLanguages": "Idiomas opcionais",
   "settings.audioOptionalLanguagesHint":
     "Desejáveis. Entre lançamentos da mesma qualidade, vence o que tiver mais destes idiomas.",
-  "settings.audioLanguagePriority": "Prioridade",
-  "settings.audioLanguagePriorityHint":
-    "Idioma primeiro aceita um lançamento em um idioma preferido mesmo em um nível de qualidade inferior. Qualidade primeiro deixa o idioma decidir apenas entre lançamentos da mesma qualidade.",
-  "settings.audioLanguagePriorityQualityFirst": "Qualidade primeiro",
-  "settings.audioLanguagePriorityLanguageFirst": "Idioma primeiro",
   "settings.audioOptionalKeepSearching": "Continuar buscando idiomas opcionais",
   "settings.audioOptionalKeepSearchingHint":
     "Ativado, um arquivo sem idiomas opcionais continua sendo alvo de upgrade. Desativado, esses lançamentos ainda o substituem quando encontrados, mas não são buscados.",
@@ -743,11 +738,6 @@ const pt_BR: LocaleDictionary = {
     "Delta mínimo de pontuação no mesmo nível",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Um lançamento do mesmo nível de qualidade deve superar a pontuação do arquivo atual em pelo menos este valor.",
-  "qualityProfile.scoreAlwaysWins": "A pontuação sempre vence",
-  "qualityProfile.scoreAlwaysWinsDescription":
-    "O lançamento com a melhor pontuação é mantido independentemente do nível de qualidade, e o nível de qualidade de corte é ignorado.",
-  "qualityProfile.cutoffTierNotApplicable":
-    "Não se aplica enquanto “A pontuação sempre vence” estiver ativado.",
   "settings.acquisitionConvergence": "Convergência e ritmo",
   "settings.acquisitionPollIntervalSeconds": "Intervalo de sondagem (segundos)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -3881,6 +3871,69 @@ const pt_BR: LocaleDictionary = {
   "setup.sourceImportState.failed": "Falhou",
   "setup.sourceImportState.interrupted": "Interrompida",
   "setup.sourceImportState.skipped": "Ignorada",
+  "qualityProfile.decisionOrder": "Ordem de decisão",
+  "qualityProfile.decisionOrderInfo":
+    "Quando dois lançamentos atendem a este perfil, o Scryer verifica estas etapas de cima para baixo. Decide a primeira etapa que os diferencia. A pontuação sempre decide por último.",
+  "qualityProfile.decisionPresets": "Predefinições",
+  "qualityProfile.decisionPresetDefault": "Padrão",
+  "qualityProfile.decisionPresetLanguageFirst": "Idioma primeiro",
+  "qualityProfile.decisionPresetScoreOnly": "Só pontuação",
+  "qualityProfile.decisionGateQualityTier": "Nível de qualidade",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "Vence o lançamento no nível posicionado mais alto na preferência de qualidade deste perfil.",
+  "qualityProfile.decisionGateQualityTierSummary": "nível de qualidade",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "No mesmo nível e grupo de lançamento, vence um PROPER ou REPACK mais recente.",
+  "qualityProfile.decisionGateRevisionSummary": "revisão PROPER/REPACK",
+  "qualityProfile.decisionGatePreferredLanguage": "Idioma preferido",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "Vence o lançamento cujo áudio está mais alto nos idiomas de áudio preferidos da biblioteca.",
+  "qualityProfile.decisionGatePreferredLanguageSummary":
+    "idioma de áudio preferido",
+  "qualityProfile.decisionGateOptionalLanguages": "Idiomas opcionais",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "Vence o lançamento que traz mais idiomas de áudio opcionais da biblioteca.",
+  "qualityProfile.decisionGateOptionalLanguagesSummary":
+    "quantidade de idiomas de áudio opcionais",
+  "qualityProfile.decisionGateUnknown": "Etapa desconhecida ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Esta versão do aplicativo web não reconhece esta etapa. Ela permanece no lugar.",
+  "qualityProfile.decisionGateScore": "Pontuação",
+  "qualityProfile.decisionGateScoreDescription":
+    "Vence a maior pontuação. A pontuação é sempre a última etapa.",
+  "qualityProfile.decisionScoreLocked": "Sempre por último",
+  "qualityProfile.decisionStepRemove": "Remover {{value}} da ordem de decisão",
+  "qualityProfile.decisionStepAdd": "Adicionar {{value}} à ordem de decisão",
+  "qualityProfile.decisionAvailableSteps": "Etapas não usadas",
+  "qualityProfile.decisionAllStepsInUse": "Todas as etapas estão em uso.",
+  "qualityProfile.decisionSummary":
+    "Os lançamentos são comparados por {{steps}} e, por fim, por pontuação.",
+  "qualityProfile.decisionSummaryJoin": "{{previous}}, depois {{next}}",
+  "qualityProfile.decisionSummaryScoreOnly":
+    "Os lançamentos são comparados apenas por pontuação.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Sem a etapa de nível de qualidade, um lançamento de nível inferior pode substituir um arquivo de nível superior, e o nível de corte não se aplica. Só a pontuação de corte interrompe a busca por atualizações; sem ela, o perfil fica satisfeito assim que tem um arquivo.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Uma etapa de idioma vem antes do nível de qualidade, então um lançamento de nível inferior em um idioma preferido pode substituir um arquivo de nível superior.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Sem a etapa PROPER/REPACK, lançamentos PROPER e REPACK não recebem preferência automática. Regras de pontuação ainda podem recompensá-los.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "As etapas de idioma só têm efeito quando a biblioteca tem idiomas de áudio preferidos ou opcionais definidos.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Não se aplica sem a etapa de nível de qualidade na ordem de decisão.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Cada etapa só pode aparecer uma vez na ordem de decisão de um perfil de qualidade.",
+  "qualityProfile.qualityPreferenceHelp":
+    "Maior preferência primeiro. Os lançamentos são comparados por esta ordem na etapa de nível de qualidade da ordem de decisão. Novos níveis são adicionados com a menor preferência.",
+  "qualityProfile.decidedBy": "Decidido por: {{step}}",
+  "qualityProfile.cutoffScore": "Pontuação de corte",
+  "qualityProfile.cutoffScoreInfo":
+    "Quando o arquivo no disco atinge esta pontuação, o perfil para de procurar atualizações. Deixe vazio para não usar pontuação de corte.",
+  "qualityProfile.cutoffScorePlaceholder": "Sem pontuação de corte",
+  "qualityProfile.decisionStepDrag": "Arraste para reordenar {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Mover {{value}} para cima",
+  "qualityProfile.decisionStepMoveDown": "Mover {{value}} para baixo",
 };
 
 export default pt_BR;

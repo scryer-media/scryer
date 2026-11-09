@@ -1,4 +1,4 @@
-use super::{ActorKindValue, Long, MediaFacetValue};
+use super::{ActorKindValue, Long, MediaFacetValue, ReleaseDecidingStepValue};
 use async_graphql::{Enum, ID, InputObject, Json, SimpleObject};
 use chrono::{DateTime, Utc};
 use scryer_domain::TitleHistoryEventType;
@@ -115,6 +115,10 @@ pub struct HistoryScoringPayload {
     pub comparisons: Vec<HistoryScoreComparisonPayload>,
     /// Contributions and rejections recorded for the candidate.
     pub entries: Vec<ScoreEvaluationEntryPayload>,
+    /// The step of the profile's decision order that settled the comparison
+    /// with the file it replaced, or null for a first grab and for events
+    /// recorded before this was captured.
+    pub decided_by: Option<ReleaseDecidingStepValue>,
 }
 
 #[derive(SimpleObject, Clone)]

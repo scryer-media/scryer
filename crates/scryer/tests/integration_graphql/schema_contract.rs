@@ -1386,12 +1386,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Ranking-only audio language preferences add the per-release rank on a
     // decision and the priority enum: public types 1019->1021, OBJECT 551->552,
     // ENUM 209->210.
-    for name in ["AudioLanguageRankPayload", "AudioLanguagePriorityValue"] {
+    assert!(public_type_names.contains(&"AudioLanguageRankPayload"));
+    // The per-profile decision order replaces the library audio language
+    // priority and the profile ranking mode: QualityDecisionGateValue and
+    // ReleaseDecidingStepValue arrive as AudioLanguagePriorityValue and
+    // QualityRankingModeValue leave, so every count is unchanged.
+    for name in ["QualityDecisionGateValue", "ReleaseDecidingStepValue"] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
-    // The per-profile ranking mode adds QualityRankingModeValue: public types
-    // 1021->1022, ENUM 210->211.
-    assert!(public_type_names.contains(&"QualityRankingModeValue"));
+    for name in ["AudioLanguagePriorityValue", "QualityRankingModeValue"] {
+        assert!(!public_type_names.contains(&name), "retired type {name}");
+    }
     assert_eq!(
         public_types.len(),
         1022,

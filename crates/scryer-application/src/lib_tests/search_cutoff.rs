@@ -306,8 +306,8 @@ async fn list_cutoff_unmet_titles_normalizes_lowercase_cutoff_tier() {
     assert_eq!(items[0].target_tier, "720P");
 }
 
-/// A score-first profile ignores its cutoff tier, so a file below that tier is
-/// not reported, or swept, as quality-cutoff unmet.
+/// A profile whose order has no quality tier step ignores its cutoff tier, so
+/// a file below that tier is not reported, or swept, as quality-cutoff unmet.
 #[tokio::test]
 async fn list_cutoff_unmet_titles_skips_score_first_profiles() {
     let settings = Arc::new(StoredSettingsRepo::default());
@@ -320,7 +320,9 @@ async fn list_cutoff_unmet_titles_skips_score_first_profiles() {
         .await;
     let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
     let mut profile = cutoff_projection_test_profile("cutoff-score-first", "720p");
-    profile.criteria.ranking_mode = crate::QualityRankingMode::ScoreFirst;
+    profile.criteria.set_decision_pipeline(
+        crate::DecisionPipeline::default_order().without(crate::DecisionGate::QualityTier),
+    );
     quality_profiles.set_profiles(vec![profile]).await;
     let media_files = Arc::new(MockMediaFileRepo::default());
     let (app, user, _) =
