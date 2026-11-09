@@ -9,6 +9,11 @@ export function librarySettingsInput(
   return {
     searchLanguages: settings.searchLanguages,
     requiredAudioLanguages: settings.requiredAudioLanguages,
+    preferredAudioLanguages: settings.preferredAudioLanguages,
+    optionalAudioLanguages: settings.optionalAudioLanguages,
+    audioLanguagePriority: settings.audioLanguagePriority,
+    optionalAudioLanguagesKeepSearching:
+      settings.optionalAudioLanguagesKeepSearching,
     metadataLanguage: settings.metadataLanguage,
     useSeasonFolders: settings.useSeasonFolders,
     qualityProfileId: settings.qualityProfileId,

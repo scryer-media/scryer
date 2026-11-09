@@ -1184,37 +1184,62 @@ impl AppUseCase {
         let memo = &self.runtime.acquisition.landed_bar_memo;
         let full_pass = title_id.is_none().then(|| memo.begin_pass());
 
-        // No profile asks the score question: nothing to load or score. This
-        // is every install that has not set a `cutoff_score`.
+        // No profile asks the score question and no library or facet sets
+        // audio language preferences: nothing to load or score. This is every
+        // install that has set neither.
         let profile_settings = self.load_quality_profile_settings().await?;
         let default_profile = crate::builtin_default_quality_profile();
-        if !profile_settings
+        let any_cutoff_score = profile_settings
             .profiles
             .iter()
             .chain(std::iter::once(&default_profile))
             .any(|profile| {
                 profile.criteria.allow_upgrades && profile.criteria.cutoff_score.is_some()
-            })
-        {
-            if let Some(pass) = full_pass {
-                memo.finish_pass(pass);
+            });
+        let libraries = self.services.catalog.libraries.list(None).await?;
+        if !any_cutoff_score {
+            let mut scopes: Vec<&str> = libraries
+                .iter()
+                .flat_map(|library| [library.id.as_str(), library.facet.as_str()])
+                .collect();
+            scopes.sort_unstable();
+            scopes.dedup();
+            if self
+                .scopes_with_audio_language_preferences(&scopes)
+                .await?
+                .is_empty()
+            {
+                if let Some(pass) = full_pass {
+                    memo.finish_pass(pass);
+                }
+                return Ok(Vec::new());
             }
-            return Ok(Vec::new());
         }
 
-        let libraries = self.services.catalog.libraries.list(None).await?;
         let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
         let titles = self
             .titles_with_profiles_for_search(None, &library_ids, title_id, respect_title_monitoring)
             .await?;
-        let scored: Vec<(scryer_domain::Title, i32)> = titles
+        // Titles whose library or facet sets audio language preferences can be
+        // language targets without any `cutoff_score`: a file missing the
+        // preferred language is never done (see `incumbent_at_cutoff`).
+        let mut preference_scopes: Vec<&str> = titles
+            .iter()
+            .flat_map(|(title, _)| [title.library_id.as_str(), title.facet.as_str()])
+            .collect();
+        preference_scopes.sort_unstable();
+        preference_scopes.dedup();
+        let language_scopes = self
+            .scopes_with_audio_language_preferences(&preference_scopes)
+            .await?;
+        let scored: Vec<(scryer_domain::Title, Option<i32>)> = titles
             .into_iter()
             .filter(|(_, profile)| profile.criteria.allow_upgrades)
             .filter_map(|(title, profile)| {
-                profile
-                    .criteria
-                    .cutoff_score
-                    .map(|cutoff_score| (title, cutoff_score))
+                let language = language_scopes.contains(title.library_id.as_str())
+                    || language_scopes.contains(title.facet.as_str());
+                let cutoff_score = profile.criteria.cutoff_score;
+                (language || cutoff_score.is_some()).then_some((title, cutoff_score))
             })
             .collect();
         if scored.is_empty() {
@@ -1224,7 +1249,7 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
 
-        let cutoff_by_title: HashMap<&str, i32> = scored
+        let cutoff_by_title: HashMap<&str, Option<i32>> = scored
             .iter()
             .map(|(title, cutoff)| (title.id.as_str(), *cutoff))
             .collect();
@@ -1292,7 +1317,8 @@ impl AppUseCase {
                 else {
                     continue;
                 };
-                if bar >= cutoff_score {
+                let below_cutoff = cutoff_score.is_some_and(|cutoff| bar.score < cutoff);
+                if !below_cutoff && !bar.language.wanted {
                     continue;
                 }
                 let Some(title) = title_by_id.get(summary.title_id.as_str()) else {

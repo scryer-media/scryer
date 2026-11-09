@@ -114,6 +114,7 @@ mod tests {
                         file_path: String::new(),
                         release_group: None,
                         score: *score,
+                        language: Default::default(),
                         covers: vec![format!("ep-{i}")],
                         created_at: String::new(),
                     },

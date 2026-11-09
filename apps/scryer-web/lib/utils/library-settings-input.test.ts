@@ -6,6 +6,10 @@ import { librarySettingsInput } from "./library-settings-input.ts";
 
 const settings: LibrarySettingsDraft = {
   requiredAudioLanguages: ["eng"],
+  preferredAudioLanguages: ["jpn"],
+  optionalAudioLanguages: ["spa"],
+  audioLanguagePriority: "LANGUAGE_FIRST",
+  optionalAudioLanguagesKeepSearching: false,
   metadataLanguage: "eng",
   useSeasonFolders: true,
   qualityProfileId: "profile",

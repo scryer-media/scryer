@@ -3,6 +3,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { useBeforeUnload, useBlocker } from "react-router";
 import {
+  AudioLines,
   CalendarClock,
   FileText,
   Folder,
@@ -24,6 +25,7 @@ import { ChangeRootDialog } from "@/components/dialogs/change-root-dialog";
 import { InfoHelp } from "@/components/common/info-help";
 import { SearchLanguagePicker } from "@/components/common/search-language-picker";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
+import { PreferredAudioLanguageList } from "@/components/common/preferred-audio-language-list";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -40,6 +42,8 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
 import {
+  AUDIO_LANGUAGE_PRIORITY_OPTIONS,
+  audioLanguagePriorityLabelKey,
   formatAudioLanguageLabels,
   formatSearchLanguageLabels,
 } from "@/lib/constants/audio-languages";
@@ -59,6 +63,7 @@ import {
 import type {
   DownloadClientRecord,
   DownloadClientRoutingEntry,
+  AudioLanguagePriority,
   LibraryRecord,
   LibraryRootRecord,
   LibraryScanSummary,
@@ -353,6 +358,16 @@ export const MediaLibrarySettingsPanel = React.memo(
     );
     const [draftRequiredAudioLanguages, setDraftRequiredAudioLanguages] =
       React.useState<string[]>([]);
+    const [draftPreferredAudioLanguages, setDraftPreferredAudioLanguages] =
+      React.useState<string[]>([]);
+    const [draftOptionalAudioLanguages, setDraftOptionalAudioLanguages] =
+      React.useState<string[]>([]);
+    const [draftAudioLanguagePriority, setDraftAudioLanguagePriority] =
+      React.useState(INHERIT_VALUE);
+    const [
+      draftOptionalAudioKeepSearching,
+      setDraftOptionalAudioKeepSearching,
+    ] = React.useState(INHERIT_VALUE);
     const [draftSearchLanguages, setDraftSearchLanguages] = React.useState<
       string[]
     >([]);
@@ -470,6 +485,20 @@ export const MediaLibrarySettingsPanel = React.memo(
         setDraftRequiredAudioLanguages(
           settings?.requiredAudioLanguagesOverride ?? [],
         );
+        setDraftPreferredAudioLanguages(
+          settings?.preferredAudioLanguagesOverride ?? [],
+        );
+        setDraftOptionalAudioLanguages(
+          settings?.optionalAudioLanguagesOverride ?? [],
+        );
+        setDraftAudioLanguagePriority(
+          settings?.audioLanguagePriorityOverride ?? INHERIT_VALUE,
+        );
+        setDraftOptionalAudioKeepSearching(
+          booleanOverrideSelectValue(
+            settings?.optionalAudioLanguagesKeepSearchingOverride,
+          ),
+        );
         setDraftSearchLanguages(settings?.searchLanguages ?? []);
         setDraftMetadataLanguage(
           settings?.metadataLanguageOverride ?? INHERIT_VALUE,
@@ -551,6 +580,10 @@ export const MediaLibrarySettingsPanel = React.memo(
       if (mode === "new") {
         setSavedSettings(null);
         setDraftRequiredAudioLanguages([]);
+        setDraftPreferredAudioLanguages([]);
+        setDraftOptionalAudioLanguages([]);
+        setDraftAudioLanguagePriority(INHERIT_VALUE);
+        setDraftOptionalAudioKeepSearching(INHERIT_VALUE);
         setDraftMetadataLanguage(INHERIT_VALUE);
         setDraftUseSeasonFolders(INHERIT_VALUE);
         setDraftQualityProfileId(INHERIT_VALUE);
@@ -763,6 +796,21 @@ export const MediaLibrarySettingsPanel = React.memo(
           draftRequiredAudioLanguages.length > 0
             ? draftRequiredAudioLanguages
             : null,
+        preferredAudioLanguages:
+          draftPreferredAudioLanguages.length > 0
+            ? draftPreferredAudioLanguages
+            : null,
+        optionalAudioLanguages:
+          draftOptionalAudioLanguages.length > 0
+            ? draftOptionalAudioLanguages
+            : null,
+        audioLanguagePriority:
+          draftAudioLanguagePriority === INHERIT_VALUE
+            ? null
+            : (draftAudioLanguagePriority as AudioLanguagePriority),
+        optionalAudioLanguagesKeepSearching: booleanOverrideFromSelectValue(
+          draftOptionalAudioKeepSearching,
+        ),
         metadataLanguage:
           draftMetadataLanguage === INHERIT_VALUE
             ? null
@@ -835,11 +883,15 @@ export const MediaLibrarySettingsPanel = React.memo(
     }, [
       canManageDownloadClientRouting,
       draftDownloadClientRoutingEntries,
+      draftAudioLanguagePriority,
       draftFillerPolicy,
       draftMetadataLanguage,
       draftMovieAvailability,
       draftMovieAvailabilityDelayDays,
       draftMovieReleaseMarket,
+      draftOptionalAudioKeepSearching,
+      draftOptionalAudioLanguages,
+      draftPreferredAudioLanguages,
       draftSearchLanguages,
       draftChownGroup,
       draftFileChmod,
@@ -870,6 +922,14 @@ export const MediaLibrarySettingsPanel = React.memo(
           (savedSettings.requiredAudioLanguagesOverride ?? []).join("\n") ||
           draftSearchLanguages.join("\n") !==
             (savedSettings.searchLanguages ?? []).join("\n") ||
+          draftPreferredAudioLanguages.join("\n") !==
+            (savedSettings.preferredAudioLanguagesOverride ?? []).join("\n") ||
+          draftOptionalAudioLanguages.join("\n") !==
+            (savedSettings.optionalAudioLanguagesOverride ?? []).join("\n") ||
+          settingsDraft.audioLanguagePriority !==
+            savedSettings.audioLanguagePriorityOverride ||
+          settingsDraft.optionalAudioLanguagesKeepSearching !==
+            savedSettings.optionalAudioLanguagesKeepSearchingOverride ||
           settingsDraft.metadataLanguage !==
             savedSettings.metadataLanguageOverride ||
           settingsDraft.useSeasonFolders !==
@@ -970,6 +1030,10 @@ export const MediaLibrarySettingsPanel = React.memo(
           setDraftRoots([]);
           setSavedSettings(null);
           setDraftRequiredAudioLanguages([]);
+          setDraftPreferredAudioLanguages([]);
+          setDraftOptionalAudioLanguages([]);
+          setDraftAudioLanguagePriority(INHERIT_VALUE);
+          setDraftOptionalAudioKeepSearching(INHERIT_VALUE);
           setDraftQualityProfileId(INHERIT_VALUE);
           setDraftRequestQualityProfileIds([]);
           setDraftScoringPersona(INHERIT_VALUE);
@@ -2014,6 +2078,117 @@ export const MediaLibrarySettingsPanel = React.memo(
                   </div>
                 </LibrarySettingsSection>
               ) : null}
+
+              <LibrarySettingsSection
+                icon={AudioLines}
+                title={t("settings.audioLanguagePreferences")}
+                description={t("settings.libraryAudioLanguagePreferencesHelp")}
+              >
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>{t("settings.audioPreferredLanguages")}</Label>
+                    <PreferredAudioLanguageList
+                      value={draftPreferredAudioLanguages}
+                      onChange={setDraftPreferredAudioLanguages}
+                      disabled={settingsBusy}
+                    />
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveAudio", {
+                          value:
+                            formatAudioLanguageLabels(
+                              savedSettings.preferredAudioLanguages,
+                              t("title.originalAudioLanguagePerTitle"),
+                            ) || t("label.none"),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t("settings.audioOptionalLanguages")}</Label>
+                    <AudioLanguagePicker
+                      value={draftOptionalAudioLanguages}
+                      onChange={setDraftOptionalAudioLanguages}
+                      disabled={settingsBusy}
+                      ariaLabel={t("settings.audioOptionalLanguages")}
+                    />
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveAudio", {
+                          value:
+                            formatAudioLanguageLabels(
+                              savedSettings.optionalAudioLanguages,
+                              t("title.originalAudioLanguagePerTitle"),
+                            ) || t("label.none"),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t("settings.audioLanguagePriority")}</Label>
+                    <Select
+                      value={draftAudioLanguagePriority}
+                      onValueChange={setDraftAudioLanguagePriority}
+                      disabled={settingsBusy}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={INHERIT_VALUE}>
+                          {t("settings.libraryInheritFacet")}
+                        </SelectItem>
+                        {AUDIO_LANGUAGE_PRIORITY_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {t(option.labelKey)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveProfile", {
+                          value: t(
+                            audioLanguagePriorityLabelKey(
+                              savedSettings.audioLanguagePriority,
+                            ),
+                          ),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t("settings.audioOptionalKeepSearching")}</Label>
+                    <Select
+                      value={draftOptionalAudioKeepSearching}
+                      onValueChange={setDraftOptionalAudioKeepSearching}
+                      disabled={settingsBusy}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {BOOLEAN_OVERRIDE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {t(option.labelKey)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveProfile", {
+                          value: t(
+                            savedSettings.optionalAudioLanguagesKeepSearching
+                              ? "label.enabled"
+                              : "label.disabled",
+                          ),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
+                  </div>
+                </div>
+              </LibrarySettingsSection>
 
               <LibrarySettingsSection
                 icon={ImportIcon}
