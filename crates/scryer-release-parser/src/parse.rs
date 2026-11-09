@@ -3769,6 +3769,16 @@ fn parse_identity_at(
     {
         return None;
     }
+    // An explicit `S01E01-16 of 16` describes the whole season, not
+    // sixteen split episodes. Do not retain competing range identities for
+    // the same coordinates: automatic acquisition routes these by pack type.
+    if matches!(
+        family,
+        ParseFamily::StandardEpisode | ParseFamily::EpisodeRangePack
+    ) && parse_complete_standard_episode_range_at(tokens, index).is_some()
+    {
+        return None;
+    }
     match family {
         ParseFamily::Movie => None,
         ParseFamily::StandardEpisode => {
@@ -7411,7 +7421,41 @@ struct RangePackParse {
     consumed: Vec<usize>,
 }
 
+fn parse_complete_standard_episode_range_at(
+    tokens: &[Token],
+    index: usize,
+) -> Option<SeasonPackParse> {
+    let (season, episodes, last_token) = parse_hyphenated_standard_episode_range_at(tokens, index)?;
+    let season = season.filter(|season| valid_explicit_season(*season))?;
+    if episodes.len() < 2 || episodes.first() != Some(&1) {
+        return None;
+    }
+    let marker = tokens.get(last_token + 1)?;
+    let total_token = tokens.get(last_token + 2)?;
+    let group_id = tokens.get(index)?.group_id;
+    if marker.group_id != group_id
+        || total_token.group_id != group_id
+        || !matches!(marker.normalized.as_str(), "OF" | "ИЗ")
+    {
+        return None;
+    }
+    let total = parse_numeric_token(total_token.normalized.as_str())?;
+    if episodes.last() != Some(&total) || episodes.len() != total as usize {
+        return None;
+    }
+    Some(SeasonPackParse {
+        seasons: vec![season],
+        consumed: (index..=last_token + 2).collect(),
+        is_partial: false,
+        season_part: None,
+        is_series_pack: false,
+    })
+}
+
 fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackParse> {
+    if let Some(complete_range) = parse_complete_standard_episode_range_at(tokens, index) {
+        return Some(complete_range);
+    }
     if invalid_all_seasons_restriction_at(tokens, index) {
         return None;
     }
