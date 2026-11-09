@@ -1003,6 +1003,8 @@ const en: LocaleDictionary = {
     "Recycle restore path is outside the title's current owned folder; resolve the folder change before restoring.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_ALREADY_OWNS_ANOTHER_FOLDER":
     "Title the selected value already owns another folder.",
+  "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED":
+    "The title's folder changed while this was being saved. Reload and try again.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
     "Title folder must be an absolute path without parent traversal.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR":

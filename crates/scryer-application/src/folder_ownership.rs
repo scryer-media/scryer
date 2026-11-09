@@ -418,11 +418,21 @@ pub(crate) async fn reclaim_stale_title_folder(
     {
         return Ok(false);
     }
-    app.services
+    let write = crate::TitleFolderWrite::assign(&title.id, &folder_path)
+        .expecting(title.folder_path.clone());
+    match app
+        .services
         .catalog
         .titles
-        .set_folder_path(&title.id, &folder_path)
-        .await?;
+        .assign_title_folders(&[write])
+        .await
+    {
+        Ok(()) => {}
+        // Another writer took the folder, or changed this title's, after the
+        // checks above: the same outcome as finding the conflict there.
+        Err(error) if title_folder_write_lost(&error) => return Ok(false),
+        Err(error) => return Err(error),
+    }
     title.folder_path = Some(folder_path.clone());
     tracing::info!(
         title_id = %title.id,
@@ -431,6 +441,21 @@ pub(crate) async fn reclaim_stale_title_folder(
         "re-pointed stale title folder ownership to the scanned folder"
     );
     Ok(true)
+}
+
+/// Whether a title folder write was refused because the catalog moved on
+/// between the caller's checks and the write: another title holds or nests
+/// with the folder, or the title's own folder changed.
+pub(crate) fn title_folder_write_lost(error: &AppError) -> bool {
+    use crate::error_reasons::folder_ownership as reasons;
+    matches!(
+        error.validation_reason(),
+        Some(
+            reasons::FOLDER_ALREADY_OWNED_TITLE
+                | reasons::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE
+                | reasons::TITLE_FOLDER_CHANGED
+        )
+    )
 }
 
 pub(crate) async fn find_other_folder_owner(
@@ -788,17 +813,22 @@ pub(crate) async fn claim_title_folder_for_delete(
     }
     ensure_unowned_folder_claimable(app, title, folder_path, TitleFolderClaimLayout::Configured)
         .await?;
-    if !app
+    let write = crate::TitleFolderWrite::assign(&title.id, &stored).expecting(None);
+    match app
         .services
         .catalog
         .titles
-        .claim_missing_folder_path(&title.id, &stored)
-        .await?
+        .assign_title_folders(&[write])
+        .await
     {
-        return Err(AppError::validation_refused(
-            crate::title_delete::FOLDER_CLAIM_LOST,
-            "title folder ownership changed before deletion",
-        ));
+        Ok(()) => {}
+        Err(error) if title_folder_write_lost(&error) => {
+            return Err(AppError::validation_refused(
+                crate::title_delete::FOLDER_CLAIM_LOST,
+                "title folder ownership changed before deletion",
+            ));
+        }
+        Err(error) => return Err(error),
     }
     title.folder_path = Some(stored);
     Ok(())
@@ -869,7 +899,9 @@ async fn claim_title_folder_with_layout(
     app.services
         .catalog
         .titles
-        .set_folder_path(&title.id, &folder_path)
+        .assign_title_folders(&[
+            crate::TitleFolderWrite::assign(&title.id, &folder_path).expecting(None)
+        ])
         .await?;
     title.folder_path = Some(folder_path);
     Ok(())

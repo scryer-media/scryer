@@ -2680,12 +2680,25 @@ pub trait TitleRepository: Send + Sync {
         tags: Vec<String>,
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
-    async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()>;
-    /// Atomically claim a missing folder without overwriting another writer.
-    async fn claim_missing_folder_path(&self, _id: &str, _folder_path: &str) -> AppResult<bool> {
+    /// The one write path for titles' recorded folders.
+    ///
+    /// Applies every write in one transaction or none of them. Each write is
+    /// checked, under the store's write lock, against every other title's
+    /// folder (no two titles share a folder and none lies inside another,
+    /// whatever their library), against the configured library roots, and
+    /// against the folder it expects the title to have now. A swap or a
+    /// takeover is one call with one write per title. Refusals carry the
+    /// `folder_ownership` reason codes.
+    async fn assign_title_folders(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
+        let _ = writes;
         Err(AppError::Repository(
-            "atomic folder claims are unsupported by this repository".into(),
+            "this title repository cannot write title folders".into(),
         ))
+    }
+    /// Record a title's folder through [`Self::assign_title_folders`].
+    async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
+        self.assign_title_folders(&[crate::TitleFolderWrite::assign(id, folder_path)])
+            .await
     }
     /// Move a title into another library and onto a root in that library, in one
     /// transaction, carrying its library projections with it (FR-056).
@@ -2724,7 +2737,11 @@ pub trait TitleRepository: Send + Sync {
             "this title repository cannot transfer title {id} between libraries"
         )))
     }
-    async fn clear_folder_path(&self, id: &str) -> AppResult<()>;
+    /// Clear a title's folder through [`Self::assign_title_folders`].
+    async fn clear_folder_path(&self, id: &str) -> AppResult<()> {
+        self.assign_title_folders(&[crate::TitleFolderWrite::clear(id)])
+            .await
+    }
     async fn clear_metadata_language_for_all(&self) -> AppResult<u64>;
     async fn list_page_after_id(
         &self,

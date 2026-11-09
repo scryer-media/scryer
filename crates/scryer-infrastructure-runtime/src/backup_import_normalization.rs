@@ -43,6 +43,13 @@ pub fn normalize_import_object_for_target(
 ) -> AppResult<()> {
     strip_nonportable_backup_fields(table, object);
     normalize_import_object(table, object, now)?;
+    if table == "titles"
+        && columns
+            .iter()
+            .any(|column| column.name == "folder_path_key")
+    {
+        restore_title_folder_key(object);
+    }
 
     for column in columns {
         normalize_column_value(table, object, column, line_number)?;
@@ -61,6 +68,19 @@ pub fn normalize_import_object_for_target(
     }
 
     Ok(())
+}
+
+/// The folder key is derived from the folder, so a restored title gets the key
+/// this build computes rather than whatever the backup carried.
+fn restore_title_folder_key(object: &mut JsonMap<String, JsonValue>) {
+    let key = object
+        .get("folder_path")
+        .and_then(JsonValue::as_str)
+        .and_then(scryer_application::title_folder_keys::title_folder_key);
+    object.insert(
+        "folder_path_key".to_string(),
+        key.map_or(JsonValue::Null, JsonValue::String),
+    );
 }
 
 fn normalize_import_object(

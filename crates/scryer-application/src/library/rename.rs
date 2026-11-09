@@ -1700,11 +1700,34 @@ impl AppUseCase {
             folder_path = %planned.folder_path,
             "repaired a title folder record that was not a title folder"
         );
-        self.services
+        self.record_renamed_title_folder(&title, &planned.folder_path)
+            .await
+    }
+
+    /// Record a title folder chosen by rename, unless the catalog moved on
+    /// since the checks above: a conflict found at the write is kept the
+    /// same way as one found before it.
+    async fn record_renamed_title_folder(&self, title: &Title, folder_path: &str) -> AppResult<()> {
+        let write = crate::TitleFolderWrite::assign(&title.id, folder_path)
+            .expecting(title.folder_path.clone());
+        match self
+            .services
             .catalog
             .titles
-            .set_folder_path(&title.id, &planned.folder_path)
+            .assign_title_folders(&[write])
             .await
+        {
+            Err(error) if crate::folder_ownership::title_folder_write_lost(&error) => {
+                warn!(
+                    title_id = %title.id,
+                    folder_path = %folder_path,
+                    reason = error.validation_reason().unwrap_or_default(),
+                    "keeping the title's previous folder: the folder record changed before the write"
+                );
+                Ok(())
+            }
+            result => result,
+        }
     }
 
     async fn persist_rename_title_folder(&self, planned: &RenamePlanTitleFolder) -> AppResult<()> {
@@ -1794,11 +1817,7 @@ impl AppUseCase {
             );
             return Ok(());
         }
-        self.services
-            .catalog
-            .titles
-            .set_folder_path(&title.id, folder_path)
-            .await
+        self.record_renamed_title_folder(&title, folder_path).await
     }
 
     /// The on-disk spelling lookup scans the planned folder's parent, which is

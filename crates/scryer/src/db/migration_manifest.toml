@@ -3891,6 +3891,51 @@ file = "postgres/migrations/0332_episodes_air_date_index.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 333
+description = "title folder comparison key and conflict columns"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0333_title_folder_path_key.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0333_title_folder_path_key.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 334
+description = "repair overlapping title folders and fill folder keys"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "repair_title_folder_keys"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 335
+description = "unique title folder key"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0335_titles_folder_path_key_unique.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0335_titles_folder_path_key_unique.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

@@ -3164,6 +3164,8 @@ pub mod folder_ownership {
     /// Cannot claim a library root as a title folder.
     pub const CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER: &str =
         "FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER";
+    /// The title's recorded folder changed between reading it and writing a new one.
+    pub const TITLE_FOLDER_CHANGED: &str = "FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         TITLE_FOLDER_INVALID,
@@ -3181,6 +3183,7 @@ pub mod folder_ownership {
         FOLDER_ALREADY_OWNED_TITLE,
         TITLE_ALREADY_OWNS_ANOTHER_FOLDER,
         CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER,
+        TITLE_FOLDER_CHANGED,
     ];
 }
 

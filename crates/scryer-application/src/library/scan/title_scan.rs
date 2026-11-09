@@ -3571,13 +3571,29 @@ impl AppUseCase {
                     && title.folder_path.as_deref() != Some(title_dir_str.as_str())
                 {
                     let db_started = Instant::now();
-                    self.services
+                    let write = crate::TitleFolderWrite::assign(&title.id, &title_dir_str)
+                        .expecting(title.folder_path.clone());
+                    match self
+                        .services
                         .catalog
                         .titles
-                        .set_folder_path(&title.id, &title_dir_str)
-                        .await?;
+                        .assign_title_folders(&[write])
+                        .await
+                    {
+                        Ok(()) => title_updated_after_scan = true,
+                        // The record changed while the walk ran; the next
+                        // scan respells whatever it holds then.
+                        Err(error) if crate::folder_ownership::title_folder_write_lost(&error) => {
+                            tracing::warn!(
+                                title_id = %title.id,
+                                folder_path = %title_dir_str,
+                                reason = error.validation_reason().unwrap_or_default(),
+                                "not respelling the title folder: its record changed during the scan"
+                            );
+                        }
+                        Err(error) => return Err(error),
+                    }
                     db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
-                    title_updated_after_scan = true;
                 }
 
                 if mode != LibraryScanTitleWalkMode::FolderReconciliation

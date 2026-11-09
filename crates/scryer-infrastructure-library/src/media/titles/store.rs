@@ -9,11 +9,15 @@ use scryer_application::{
     TitleCatalogFilter, TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogPresence,
     TitleCatalogProfileNames, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleDeletePreviewInfo, TitleExternalIdLookup,
-    TitleExternalIdLookupMatch, TitleListProjection, TitleMetadataUpdate, TitleOptionsPatch,
-    TitleRatingSummary, TitleRepository, TitleTagDefinitionSummary, TitleTagMembershipCounts,
-    is_reserved_title_tag,
+    TitleExternalIdLookupMatch, TitleFolderWrite, TitleListProjection, TitleMetadataUpdate,
+    TitleOptionsPatch, TitleRatingSummary, TitleRepository, TitleTagDefinitionSummary,
+    TitleTagMembershipCounts, is_reserved_title_tag,
     persisted_records::{
         PersistedTitleDecodeOptions, PersistedTitleReadMode, finalize_persisted_title,
+    },
+    title_folder_keys::{
+        TitleFolderOccupant, plan_title_folder_writes, title_folder_key,
+        title_folder_key_ancestors, title_folder_key_descendant_bounds,
     },
 };
 use scryer_domain::{
@@ -52,14 +56,14 @@ const TITLE_INSERT_SQL: &str = "INSERT INTO titles (
     year, overview, poster_url, background_url, sort_title, catalog_sort_key, catalog_name_tie_key, slug, imdb_id,
     runtime_minutes, popularity, content_status, language, first_aired, network, studio,
     country, aliases, metadata_language, metadata_fetched_at, min_availability,
-    digital_release_date, movie_release_dates_json, folder_path, tagged_aliases_json,
+    digital_release_date, movie_release_dates_json, tagged_aliases_json,
     metadata_hydration_next_attempt_at, metadata_hydration_attempt_count
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}
+    {}, {}, {}
 )";
 
 const TITLE_UPSERT_SQL: &str = "INSERT INTO titles (
@@ -67,14 +71,14 @@ const TITLE_UPSERT_SQL: &str = "INSERT INTO titles (
     year, overview, poster_url, background_url, sort_title, catalog_sort_key, catalog_name_tie_key, slug, imdb_id,
     runtime_minutes, popularity, content_status, language, first_aired, network, studio,
     country, aliases, metadata_language, metadata_fetched_at, min_availability,
-    digital_release_date, movie_release_dates_json, folder_path, tagged_aliases_json,
+    digital_release_date, movie_release_dates_json, tagged_aliases_json,
     metadata_hydration_next_attempt_at, metadata_hydration_attempt_count
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}
+    {}, {}, {}
 )
 ON CONFLICT (id) DO UPDATE SET
     library_id = excluded.library_id,
@@ -117,7 +121,6 @@ ON CONFLICT (id) DO UPDATE SET
     min_availability = excluded.min_availability,
     digital_release_date = excluded.digital_release_date,
     movie_release_dates_json = excluded.movie_release_dates_json,
-    folder_path = excluded.folder_path,
     tagged_aliases_json = excluded.tagged_aliases_json,
     metadata_hydration_next_attempt_at = CASE
         WHEN {} THEN titles.metadata_hydration_next_attempt_at
@@ -3228,31 +3231,14 @@ impl TitleRepository for TitleStore {
         result
     }
 
-    async fn claim_missing_folder_path(&self, id: &str, folder_path: &str) -> AppResult<bool> {
-        let rows = SqlRuntime::execute_write(
-            &self.datastore,
-            "claim_missing_title_folder",
-            "UPDATE titles SET folder_path = {} WHERE id = {} AND (folder_path IS NULL OR folder_path = '')",
-            vec![SqlArg::Text(folder_path.to_owned()), SqlArg::Text(id.to_owned())],
-        ).await?;
-        Ok(rows == 1)
-    }
-
-    async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
-        let id = id.to_string();
-        let folder_path = folder_path.to_string();
-        SqlRuntime::run_in_transaction(&self.datastore, "set_title_folder_path", move |tx| {
-            let id = id.clone();
-            let folder_path = folder_path.clone();
-            Box::pin(async move {
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "UPDATE titles SET folder_path = {} WHERE id = {}",
-                    &[SqlArg::Text(folder_path), SqlArg::Text(id)],
-                )
-                .await?;
-                Ok(())
-            })
+    async fn assign_title_folders(&self, writes: &[TitleFolderWrite]) -> AppResult<()> {
+        if writes.is_empty() {
+            return Ok(());
+        }
+        let writes = writes.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "assign_title_folders", move |tx| {
+            let writes = writes.clone();
+            Box::pin(async move { assign_title_folders_tx(tx, &writes).await })
         })
         .await
     }
@@ -3331,23 +3317,6 @@ impl TitleRepository for TitleStore {
                         SqlArg::Text(title.library_id.clone()),
                         SqlArg::Text(id.clone()),
                     ],
-                )
-                .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-
-    async fn clear_folder_path(&self, id: &str) -> AppResult<()> {
-        let id = id.to_string();
-        SqlRuntime::run_in_transaction(&self.datastore, "clear_title_folder_path", move |tx| {
-            let id = id.clone();
-            Box::pin(async move {
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "UPDATE titles SET folder_path = NULL WHERE id = {}",
-                    &[SqlArg::Text(id)],
                 )
                 .await?;
                 Ok(())
@@ -6229,10 +6198,175 @@ async fn create_title_tx(tx: &mut SqlTx<'_>, title: &Title) -> AppResult<()> {
         ));
     }
 
+    // A new title's folder is recorded through the one folder write path, in
+    // this transaction, so it is held to the same uniqueness as any other.
+    let folder = title
+        .folder_path
+        .as_deref()
+        .filter(|folder| title_folder_key(folder).is_some());
+    if folder.is_some() {
+        lock_title_folder_writes_tx(tx, &title.id).await?;
+    }
     let args = title_write_args(title, scheduled_hydration_attempt(title), 0);
     SqlRuntime::execute(SqlExec::Tx(tx), TITLE_INSERT_SQL, &args).await?;
+    if let Some(folder) = folder {
+        assign_title_folders_tx(tx, &[TitleFolderWrite::assign(&title.id, folder)]).await?;
+    }
     replace_title_search_projection_sql_tx(tx, title).await?;
     replace_title_external_ids_projection_sql_tx(tx, title).await?;
+    Ok(())
+}
+
+/// Arbitrary key of the transaction-scoped Postgres lock that serializes
+/// title folder writes, so two writers cannot both pass the checks below for
+/// one folder. On SQLite the writer gate already serializes them.
+const TITLE_FOLDER_WRITE_LOCK_KEY: i64 = 0x7469_746c_6564_6972;
+
+/// Take the title folder write lock for the rest of the transaction. A
+/// transaction that will also lock or write `titles` some other way takes
+/// this first, so every folder writer queues in one order. Taking it again
+/// in the same transaction is harmless.
+pub(crate) async fn lock_title_folder_writes_tx(
+    tx: &mut SqlTx<'_>,
+    title_id: &str,
+) -> AppResult<()> {
+    if let SqlTx::Postgres(_) = tx {
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            "SELECT pg_advisory_xact_lock({})",
+            &[SqlArg::I64(TITLE_FOLDER_WRITE_LOCK_KEY)],
+        )
+        .await?;
+    } else {
+        // Take the database write lock before any read that a check relies on.
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            "UPDATE titles SET id = id WHERE id = {}",
+            &[SqlArg::Text(title_id.to_string())],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The only statement sequence that writes `titles.folder_path`.
+///
+/// Takes the folder write lock before reading anything, reads the written
+/// titles' current folders, every title whose folder key equals, contains or
+/// lies inside a new folder, and every library root, refuses the batch if any
+/// write conflicts, and then writes each folder with its key. The written
+/// titles' keys are released first, so a swap never trips the unique index
+/// halfway through.
+pub(crate) async fn assign_title_folders_tx(
+    tx: &mut SqlTx<'_>,
+    writes: &[TitleFolderWrite],
+) -> AppResult<()> {
+    let Some(first) = writes.first() else {
+        return Ok(());
+    };
+    lock_title_folder_writes_tx(tx, &first.title_id).await?;
+
+    let ids = writes
+        .iter()
+        .map(|write| SqlArg::Text(write.title_id.clone()))
+        .collect::<Vec<_>>();
+    let mut current = BTreeMap::new();
+    for row in SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT id, folder_path FROM titles WHERE id IN ({})",
+            sql_placeholders(ids.len())
+        ),
+        &ids,
+    )
+    .await?
+    {
+        current.insert(row.text("id")?, row.opt_text("folder_path")?);
+    }
+
+    let mut occupants = Vec::new();
+    let mut seen = BTreeSet::new();
+    for key in writes
+        .iter()
+        .filter_map(|write| write.folder.as_deref().and_then(title_folder_key))
+    {
+        let mut lookups = Vec::new();
+        let mut related = title_folder_key_ancestors(&key);
+        related.push(key.clone());
+        lookups.push((
+            format!(
+                "SELECT id, name, folder_path, folder_path_key FROM titles WHERE folder_path_key IN ({})",
+                sql_placeholders(related.len())
+            ),
+            related.into_iter().map(SqlArg::Text).collect::<Vec<_>>(),
+        ));
+        if let Some((low, high)) = title_folder_key_descendant_bounds(&key) {
+            lookups.push((
+                "SELECT id, name, folder_path, folder_path_key FROM titles \
+                 WHERE folder_path_key >= {} AND folder_path_key < {}"
+                    .to_string(),
+                vec![SqlArg::Text(low), SqlArg::Text(high)],
+            ));
+        }
+        for (sql, args) in lookups {
+            for row in SqlRuntime::fetch_all(SqlExec::Tx(tx), &sql, &args).await? {
+                let title_id = row.text("id")?;
+                if !seen.insert(title_id.clone()) {
+                    continue;
+                }
+                let (Some(folder_path), Some(key)) = (
+                    row.opt_text("folder_path")?,
+                    row.opt_text("folder_path_key")?,
+                ) else {
+                    continue;
+                };
+                occupants.push(TitleFolderOccupant {
+                    title_id,
+                    title_name: row.text("name")?,
+                    folder_path,
+                    key,
+                });
+            }
+        }
+    }
+
+    let roots = SqlRuntime::fetch_all(SqlExec::Tx(tx), "SELECT path FROM library_roots", &[])
+        .await?
+        .into_iter()
+        .map(|row| row.text("path"))
+        .collect::<AppResult<Vec<_>>>()?;
+
+    let planned = plan_title_folder_writes(writes, &current, &occupants, &roots)?;
+
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        &format!(
+            "UPDATE titles SET folder_path_key = NULL WHERE id IN ({})",
+            sql_placeholders(ids.len())
+        ),
+        &ids,
+    )
+    .await?;
+    for write in planned {
+        let sql = if write.folder_path.is_some() {
+            // A title that holds a folder again no longer carries the reason
+            // an earlier repair cleared it for.
+            "UPDATE titles SET folder_path = {}, folder_path_key = {}, \
+             folder_conflict_reason = NULL, folder_conflict_path = NULL WHERE id = {}"
+        } else {
+            "UPDATE titles SET folder_path = {}, folder_path_key = {} WHERE id = {}"
+        };
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            sql,
+            &[
+                SqlArg::OptText(write.folder_path),
+                SqlArg::OptText(write.key),
+                SqlArg::Text(write.title_id),
+            ],
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -6562,7 +6696,6 @@ fn title_write_args(
                 .as_ref()
                 .and_then(|dates| serde_json::to_string(dates).ok()),
         ),
-        SqlArg::OptText(title.folder_path.clone()),
         SqlArg::Json(
             serde_json::to_value(&title.tagged_aliases).unwrap_or(JsonValue::Array(Vec::new())),
         ),
@@ -6795,6 +6928,8 @@ mod catalog_order_tests;
 
 #[cfg(test)]
 mod affinity_revision_tests;
+#[cfg(test)]
+mod folder_write_tests;
 #[cfg(test)]
 mod owned_probe_tests;
 

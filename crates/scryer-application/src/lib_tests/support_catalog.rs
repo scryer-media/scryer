@@ -1418,28 +1418,53 @@ impl TitleRepository for MockTitleRepo {
         Ok(())
     }
 
-    async fn claim_missing_folder_path(&self, id: &str, folder_path: &str) -> AppResult<bool> {
-        if self.lose_folder_claim.load(Ordering::SeqCst) {
-            return Ok(false);
-        }
-        if let Some(error) = self.folder_path_write_failure(id).await {
-            return Err(error);
+    /// The production write path, with the store's checks run in memory.
+    async fn assign_title_folders(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
+        for write in writes {
+            if let Some(error) = self.folder_path_write_failure(&write.title_id).await {
+                return Err(error);
+            }
+            if self.lose_folder_claim.load(Ordering::SeqCst)
+                && matches!(
+                    write.expected_current,
+                    crate::ExpectedTitleFolder::Exactly(_)
+                )
+            {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::folder_ownership::TITLE_FOLDER_CHANGED,
+                    "title folder changed before this write",
+                ));
+            }
         }
         let mut list = self.store.lock().await;
-        let Some(title) = list.iter_mut().find(|entry| entry.id == id) else {
-            return Ok(false);
-        };
-        if title
-            .folder_path
-            .as_deref()
-            .is_some_and(|path| !path.is_empty())
-        {
-            return Ok(false);
+        let current = list
+            .iter()
+            .map(|title| (title.id.clone(), title.folder_path.clone()))
+            .collect();
+        let occupants = list
+            .iter()
+            .filter_map(|title| {
+                let folder = title.folder_path.clone()?;
+                Some(crate::title_folder_keys::TitleFolderOccupant {
+                    title_id: title.id.clone(),
+                    title_name: title.name.clone(),
+                    key: crate::title_folder_keys::title_folder_key(&folder)?,
+                    folder_path: folder,
+                })
+            })
+            .collect::<Vec<_>>();
+        let planned =
+            crate::title_folder_keys::plan_title_folder_writes(writes, &current, &occupants, &[])?;
+        for write in planned {
+            if let Some(title) = list.iter_mut().find(|entry| entry.id == write.title_id) {
+                title.folder_path = write.folder_path;
+            }
         }
-        title.folder_path = Some(folder_path.to_owned());
-        Ok(true)
+        Ok(())
     }
 
+    /// Seeds a folder without the ownership checks, so fixtures can stage the
+    /// overlapping records older releases left behind.
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
         if let Some(error) = self.folder_path_write_failure(id).await {
             return Err(error);

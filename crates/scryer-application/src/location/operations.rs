@@ -3902,7 +3902,7 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             .services
             .catalog
             .titles
-            .set_folder_path(title_id, stored_path)
+            .assign_title_folders(&[crate::TitleFolderWrite::assign(title_id, stored_path)])
             .await
     }
 

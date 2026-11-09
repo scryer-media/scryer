@@ -2666,11 +2666,7 @@ impl TitleRepository for ManualImportCleanupTitleRepo {
         Ok(())
     }
 
-    async fn set_folder_path(&self, _: &str, _: &str) -> AppResult<()> {
-        Ok(())
-    }
-
-    async fn clear_folder_path(&self, _: &str) -> AppResult<()> {
+    async fn assign_title_folders(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
         Ok(())
     }
 

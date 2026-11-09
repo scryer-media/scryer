@@ -259,6 +259,9 @@ impl LocationOperationRepository for LocationOperationStore {
                     return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_PLAN_UNRESOLVED, "Recovery plan changed or remains unresolved"));
                 }
                 if matches!(tx, crate::queries::sql_runtime::SqlTx::Postgres(_)) {
+                    // The folder write lock comes before the table locks, in the
+                    // order every other folder writer takes it.
+                    crate::media::titles::store::lock_title_folder_writes_tx(tx, &plan.title.id).await?;
                     SqlRuntime::execute(SqlExec::Tx(tx), "LOCK TABLE titles, library_roots, media_files IN SHARE ROW EXCLUSIVE MODE", &[]).await?;
                 }
                 let catalog = recovery_catalog_tx(tx).await?;
@@ -289,9 +292,14 @@ impl LocationOperationRepository for LocationOperationStore {
                           SqlArg::Text(plan.title.id.clone()), SqlArg::Text(file.media.file_path.clone()), SqlArg::I64(file.media.size_bytes)]).await?;
                     if changed != 1 { return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_MEDIA_CHANGED, "Media changed during recovery")); }
                 }
+                let folder_write = match plan.destination.clone() {
+                    Some(destination) => scryer_application::TitleFolderWrite::assign(&plan.title.id, destination),
+                    None => scryer_application::TitleFolderWrite::clear(&plan.title.id),
+                };
+                crate::media::titles::store::assign_title_folders_tx(tx, &[folder_write]).await?;
                 SqlRuntime::execute(SqlExec::Tx(tx),
-                    "UPDATE titles SET folder_path = {}, root_folder_id = {}, updated_at = {} WHERE id = {}",
-                    &[SqlArg::OptText(plan.destination.clone()), SqlArg::Text(root.id.clone()), SqlArg::Timestamp(Utc::now()), SqlArg::Text(plan.title.id.clone())]).await?;
+                    "UPDATE titles SET root_folder_id = {}, updated_at = {} WHERE id = {}",
+                    &[SqlArg::Text(root.id.clone()), SqlArg::Timestamp(Utc::now()), SqlArg::Text(plan.title.id.clone())]).await?;
                 // Only the conflict at the now-authoritatively owned folder is
                 // obsolete. Other pending items and ignored decisions survive.
                 SqlRuntime::execute(SqlExec::Tx(tx),

@@ -7292,6 +7292,8 @@ const ru: LocaleDictionary = {
     "Путь восстановления из корзины находится за пределами текущей папки тайтла; разрешите изменение папки перед восстановлением.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_ALREADY_OWNS_ANOTHER_FOLDER":
     "Тайтлу с выбранным значением уже принадлежит другая папка.",
+  "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED":
+    "Папка тайтла изменилась во время сохранения. Обновите страницу и попробуйте снова.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
     "Путь к папке тайтла должен быть абсолютным и не содержать переходов к родительским каталогам.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR":

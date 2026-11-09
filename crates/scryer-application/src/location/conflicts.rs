@@ -2772,13 +2772,13 @@ impl AppUseCase {
         self.services
             .catalog
             .titles
-            .set_folder_path(
+            .assign_title_folders(&[crate::TitleFolderWrite::assign(
                 &planned.title_id,
                 planned
                     .destination_folder_path
                     .as_deref()
                     .expect("survivor folder"),
-            )
+            )])
             .await?;
         self.services
             .catalog
