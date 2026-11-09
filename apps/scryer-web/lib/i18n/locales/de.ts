@@ -3905,7 +3905,7 @@ const de: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Releases werden nur nach Score verglichen.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Ohne den Schritt Qualitätsstufe kann ein Release einer niedrigeren Stufe eine Datei einer höheren Stufe ersetzen, und die Cutoff-Stufe gilt nicht mehr. Nur ein Cutoff-Score beendet Upgrades.",
+    "Ohne den Schritt Qualitätsstufe kann ein Release einer niedrigeren Stufe eine Datei einer höheren Stufe ersetzen, und die Cutoff-Stufe gilt nicht. Nur der Cutoff-Score beendet die Suche nach Upgrades; ohne Cutoff-Score ist das Profil zufrieden, sobald eine Datei vorhanden ist.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "Ein Sprachschritt steht vor der Qualitätsstufe, daher kann ein Release einer niedrigeren Stufe in einer bevorzugten Sprache eine Datei einer höheren Stufe ersetzen.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -3916,6 +3916,16 @@ const de: LocaleDictionary = {
     "Nicht anwendbar ohne den Schritt Qualitätsstufe in der Entscheidungsreihenfolge.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Jeder Schritt darf in der Entscheidungsreihenfolge eines Qualitätsprofils nur einmal vorkommen.",
+  "qualityProfile.qualityPreferenceHelp":
+    "Höchste Präferenz zuerst. Releases werden im Schritt Qualitätsstufe der Entscheidungsreihenfolge nach dieser Reihenfolge verglichen. Neue Stufen werden mit der niedrigsten Präferenz hinzugefügt.",
+  "qualityProfile.decidedBy": "Entschieden durch: {{step}}",
+  "qualityProfile.cutoffScore": "Cutoff-Score",
+  "qualityProfile.cutoffScoreInfo":
+    "Sobald die Datei auf der Festplatte diesen Score erreicht, sucht das Profil nicht mehr nach Upgrades. Leer lassen für keinen Cutoff-Score.",
+  "qualityProfile.cutoffScorePlaceholder": "Kein Cutoff-Score",
+  "qualityProfile.decisionStepDrag": "Ziehen, um {{value}} neu anzuordnen",
+  "qualityProfile.decisionStepMoveUp": "{{value}} nach oben verschieben",
+  "qualityProfile.decisionStepMoveDown": "{{value}} nach unten verschieben",
 };
 
 export default de;

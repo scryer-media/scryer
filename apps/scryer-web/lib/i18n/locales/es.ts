@@ -3942,7 +3942,7 @@ const es: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Los lanzamientos se comparan solo por puntuación.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Sin el paso de nivel de calidad, un lanzamiento de nivel inferior puede reemplazar un archivo de nivel superior y el nivel de corte deja de aplicarse. Solo una puntuación de corte detiene las mejoras.",
+    "Sin el paso de nivel de calidad, un lanzamiento de nivel inferior puede reemplazar un archivo de nivel superior y el nivel de corte no se aplica. Solo la puntuación de corte detiene la búsqueda de mejoras; sin ella, el perfil queda satisfecho en cuanto tiene un archivo.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "Un paso de idioma va antes del nivel de calidad, así que un lanzamiento de nivel inferior en un idioma preferido puede reemplazar un archivo de nivel superior.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -3953,6 +3953,16 @@ const es: LocaleDictionary = {
     "No se aplica sin el paso de nivel de calidad en el orden de decisión.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Cada paso solo puede aparecer una vez en el orden de decisión de un perfil de calidad.",
+  "qualityProfile.qualityPreferenceHelp":
+    "La preferencia más alta primero. Los lanzamientos se comparan según este orden en el paso de nivel de calidad del orden de decisión. Los niveles nuevos se añaden con la preferencia más baja.",
+  "qualityProfile.decidedBy": "Decidido por: {{step}}",
+  "qualityProfile.cutoffScore": "Puntuación de corte",
+  "qualityProfile.cutoffScoreInfo":
+    "Cuando el archivo en disco alcanza esta puntuación, el perfil deja de buscar mejoras. Déjalo vacío para no usar puntuación de corte.",
+  "qualityProfile.cutoffScorePlaceholder": "Sin puntuación de corte",
+  "qualityProfile.decisionStepDrag": "Arrastra para reordenar {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Subir {{value}}",
+  "qualityProfile.decisionStepMoveDown": "Bajar {{value}}",
 };
 
 export default es;

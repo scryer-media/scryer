@@ -4017,7 +4017,7 @@ const fr: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Les releases sont comparées uniquement par score.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Sans l'étape niveau de qualité, une release de niveau inférieur peut remplacer un fichier de niveau supérieur, et le niveau limite ne s'applique plus. Seul un score limite arrête les mises à niveau.",
+    "Sans l'étape niveau de qualité, une release de niveau inférieur peut remplacer un fichier de niveau supérieur, et le niveau limite ne s'applique pas. Seul le score limite arrête la recherche de mises à niveau ; sans score limite, le profil est satisfait dès qu'il a un fichier.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "Une étape de langue précède le niveau de qualité : une release de niveau inférieur dans une langue préférée peut donc remplacer un fichier de niveau supérieur.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -4028,6 +4028,16 @@ const fr: LocaleDictionary = {
     "Non applicable sans l'étape niveau de qualité dans l'ordre de décision.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Chaque étape ne peut apparaître qu'une seule fois dans l'ordre de décision d'un profil de qualité.",
+  "qualityProfile.qualityPreferenceHelp":
+    "Préférence la plus élevée en premier. Les releases sont comparées selon cet ordre à l'étape niveau de qualité de l'ordre de décision. Les nouveaux niveaux sont ajoutés avec la préférence la plus basse.",
+  "qualityProfile.decidedBy": "Décidé par : {{step}}",
+  "qualityProfile.cutoffScore": "Score limite",
+  "qualityProfile.cutoffScoreInfo":
+    "Dès que le fichier sur le disque atteint ce score, le profil cesse de chercher des mises à niveau. Laissez vide pour ne pas utiliser de score limite.",
+  "qualityProfile.cutoffScorePlaceholder": "Pas de score limite",
+  "qualityProfile.decisionStepDrag": "Faire glisser pour réordonner {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Monter {{value}}",
+  "qualityProfile.decisionStepMoveDown": "Descendre {{value}}",
 };
 
 export default fr;

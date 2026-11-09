@@ -4,6 +4,7 @@ import {
   DECISION_PIPELINE_PRESETS,
   DEFAULT_DECISION_PIPELINE,
   addDecisionGate,
+  decidedByLabel,
   availableDecisionGates,
   decisionPipelineForIgnoreProperRepack,
   decisionPipelineNotices,
@@ -162,4 +163,28 @@ test("the summary chains each step in order and handles score only", () => {
   assert.deepEqual(steps, [
     "decisionGatePreferredLanguageSummary > ?FUTURE_GATE > decisionGateRevisionSummary",
   ]);
+});
+
+test("the deciding step reads as a label, score and unknown steps included", () => {
+  assert.equal(decidedByLabel(null, translate), null);
+  assert.equal(decidedByLabel(undefined, translate), null);
+  assert.equal(decidedByLabel("  ", translate), null);
+  assert.equal(
+    decidedByLabel("SCORE", translate),
+    `qualityProfile.decidedBy(${JSON.stringify({
+      step: "qualityProfile.decisionGateScore",
+    })})`,
+  );
+  assert.equal(
+    decidedByLabel("quality_tier", translate),
+    `qualityProfile.decidedBy(${JSON.stringify({
+      step: "qualityProfile.decisionGateQualityTier",
+    })})`,
+  );
+  assert.equal(
+    decidedByLabel("FUTURE_STEP", translate),
+    `qualityProfile.decidedBy(${JSON.stringify({
+      step: `qualityProfile.decisionGateUnknown(${JSON.stringify({ value: "FUTURE_STEP" })})`,
+    })})`,
+  );
 });

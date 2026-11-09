@@ -3165,7 +3165,7 @@ const cs: LocaleDictionary = {
     "Úrovně kvality a archivační kvalita",
   "qualityProfile.qualityPreference": "Preference kvality",
   "qualityProfile.qualityPreferenceHelp":
-    "Nejvyšší preference je první. Preference úrovně má přednost před skóre. Nové úrovně se přidávají s nejnižší preferencí.",
+    "Nejvyšší preference je první. Podle tohoto pořadí se vydání porovnávají v kroku úroveň kvality v pořadí rozhodování. Nové úrovně se přidávají s nejnižší preferencí.",
   "qualityProfile.moveQualityTierUp": "Posunout {{value}} nahoru",
   "qualityProfile.moveQualityTierDown": "Posunout {{value}} dolů",
   "qualityProfile.dragQualityTier": "Přetažením změnit pořadí {{value}}",
@@ -7267,7 +7267,7 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Vydání se porovnávají pouze podle skóre.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Bez kroku úroveň kvality může vydání nižší úrovně nahradit soubor vyšší úrovně a hraniční úroveň přestává platit. Upgrady zastaví jen hraniční skóre.",
+    "Bez kroku úroveň kvality může vydání nižší úrovně nahradit soubor vyšší úrovně a hraniční úroveň neplatí. Hledání upgradů zastaví jen hraniční skóre; bez něj je profil spokojen, jakmile má soubor.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "Jazykový krok je před úrovní kvality, takže vydání nižší úrovně v preferovaném jazyce může nahradit soubor vyšší úrovně.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -7278,6 +7278,14 @@ const cs: LocaleDictionary = {
     "Nepoužije se, dokud v pořadí rozhodování chybí krok úroveň kvality.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Každý krok se může v pořadí rozhodování profilu kvality objevit jen jednou.",
+  "qualityProfile.decidedBy": "Rozhodl krok: {{step}}",
+  "qualityProfile.cutoffScore": "Hraniční skóre",
+  "qualityProfile.cutoffScoreInfo":
+    "Jakmile soubor na disku dosáhne tohoto skóre, profil přestane hledat upgrady. Ponechte prázdné, pokud nechcete hraniční skóre.",
+  "qualityProfile.cutoffScorePlaceholder": "Bez hraničního skóre",
+  "qualityProfile.decisionStepDrag": "Přetažením změnit pořadí {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Posunout {{value}} nahoru",
+  "qualityProfile.decisionStepMoveDown": "Posunout {{value}} dolů",
 };
 
 export default cs;

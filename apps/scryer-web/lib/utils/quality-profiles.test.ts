@@ -53,6 +53,7 @@ function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
       scoring_overrides: {},
       cutoff_tier: null,
       min_score_to_grab: null,
+      cutoff_score: null,
       min_upgrade_score_delta: 120,
       decision_pipeline: [
         "QUALITY_TIER",
@@ -85,6 +86,7 @@ function makeDraft(id: string, name: string): QualityProfileDraft {
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
+    cutoff_score: null,
     min_upgrade_score_delta: 120,
     decision_pipeline: [
       "QUALITY_TIER",
@@ -185,6 +187,48 @@ test("the same-tier upgrade delta survives draft, save and mutation input", () =
   );
 });
 
+test("a cutoff score survives draft, save and mutation input, and clearing it sends null", () => {
+  const saved = commitQualityProfileDraftToEntries(
+    [makeEntry("default", "Cinema")],
+    { ...makeDraft("default", "Cinema"), cutoff_score: 450 },
+  );
+  const entry = saved.catalogEntries[0];
+  assert.ok(entry);
+  assert.equal(entry.criteria.cutoff_score, 450);
+  assert.equal(toQualityProfileDraft(entry, "x", "x").cutoff_score, 450);
+  assert.equal(
+    qualityProfileEntryToMutationInput(entry).criteria.cutoffScore,
+    450,
+  );
+
+  const cleared = commitQualityProfileDraftToEntries(saved.catalogEntries, {
+    ...toQualityProfileDraft(entry, "x", "x"),
+    cutoff_score: null,
+  });
+  const clearedInput = qualityProfileEntryToMutationInput(
+    cleared.catalogEntries[0]!,
+  ).criteria;
+  assert.ok("cutoffScore" in clearedInput);
+  assert.equal(clearedInput.cutoffScore, null);
+});
+
+test("a cutoff score from the server is read, and a missing one reads as none", () => {
+  const withScore = qualityProfileEntryFromGraph({
+    id: "graph",
+    name: "Graph",
+    criteria: graphCriteria({ cutoffScore: -20 }),
+  });
+  assert.equal(withScore.criteria.cutoff_score, -20);
+  assert.equal(
+    normalizeQualityProfileEntry({
+      id: "imported",
+      name: "Imported",
+      criteria: { quality_tiers: ["1080P"] },
+    })?.criteria.cutoff_score,
+    null,
+  );
+});
+
 test("a profile without a same-tier upgrade delta reads as the default", () => {
   const parsed = normalizeQualityProfileEntry({
     id: "imported",
@@ -228,6 +272,7 @@ function graphCriteria(
     scoringOverrides: {},
     cutoffTier: null,
     minScoreToGrab: null,
+    cutoffScore: null,
     minUpgradeScoreDelta: 120,
     decisionPipeline: [
       "QUALITY_TIER",

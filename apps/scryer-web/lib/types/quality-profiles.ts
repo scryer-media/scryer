@@ -49,6 +49,8 @@ export type QualityProfileCriteriaPayload = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
+  /** Score at which upgrade searching stops; null means no score cutoff. */
+  cutoff_score: number | null;
   min_upgrade_score_delta: number;
   /** Ordered comparison steps before score; empty compares by score only. */
   decision_pipeline: QualityDecisionGate[];
@@ -84,6 +86,7 @@ export type QualityProfileGraphCriteriaPayload = {
   scoringOverrides: ScoringOverridesPayload;
   cutoffTier: string | null;
   minScoreToGrab: number | null;
+  cutoffScore: number | null;
   minUpgradeScoreDelta: number;
   decisionPipeline: QualityDecisionGate[];
 };
@@ -127,6 +130,8 @@ export type QualityProfileDraft = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
+  /** Score at which upgrade searching stops; null means no score cutoff. */
+  cutoff_score: number | null;
   min_upgrade_score_delta: number;
   /** Ordered comparison steps before score; empty compares by score only. */
   decision_pipeline: QualityDecisionGate[];

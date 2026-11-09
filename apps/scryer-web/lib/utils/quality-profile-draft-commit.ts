@@ -106,6 +106,7 @@ function qualityProfileCatalogEntryFromDraft(
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
+      cutoff_score: draft.cutoff_score,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
       decision_pipeline: [...draft.decision_pipeline],
     },

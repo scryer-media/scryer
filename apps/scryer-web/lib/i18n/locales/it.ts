@@ -3935,7 +3935,7 @@ const it: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Le release vengono confrontate solo per punteggio.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Senza il passaggio livello di qualità, una release di livello inferiore può sostituire un file di livello superiore e il livello di cutoff non si applica più. Solo un punteggio di cutoff ferma gli upgrade.",
+    "Senza il passaggio livello di qualità, una release di livello inferiore può sostituire un file di livello superiore e il livello di cutoff non si applica. Solo il punteggio di cutoff ferma la ricerca di upgrade; senza di esso, il profilo è soddisfatto appena ha un file.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "Un passaggio di lingua viene prima del livello di qualità, quindi una release di livello inferiore in una lingua preferita può sostituire un file di livello superiore.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -3946,6 +3946,16 @@ const it: LocaleDictionary = {
     "Non applicabile senza il passaggio livello di qualità nell'ordine di decisione.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Ogni passaggio può comparire una sola volta nell'ordine di decisione di un profilo di qualità.",
+  "qualityProfile.qualityPreferenceHelp":
+    "Preferenza più alta per prima. Le release vengono confrontate secondo questo ordine nel passaggio livello di qualità dell'ordine di decisione. I nuovi livelli vengono aggiunti con la preferenza più bassa.",
+  "qualityProfile.decidedBy": "Deciso da: {{step}}",
+  "qualityProfile.cutoffScore": "Punteggio di cutoff",
+  "qualityProfile.cutoffScoreInfo":
+    "Quando il file su disco raggiunge questo punteggio, il profilo smette di cercare upgrade. Lascia vuoto per nessun punteggio di cutoff.",
+  "qualityProfile.cutoffScorePlaceholder": "Nessun punteggio di cutoff",
+  "qualityProfile.decisionStepDrag": "Trascina per riordinare {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Sposta {{value}} in alto",
+  "qualityProfile.decisionStepMoveDown": "Sposta {{value}} in basso",
 };
 
 export default it;

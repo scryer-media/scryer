@@ -782,7 +782,7 @@ export const TITLE_MUTATION_RESULT_FIELDS = `
     createdAt`;
 
 const HISTORY_SCORING_FIELDS = `scoring {
-  candidateScore previousScore delta decisionCode
+  candidateScore previousScore delta decisionCode decidedBy
   entries { code delta kind source origin }
   comparisons { fileId episodeIds previousScore delta }
 }`;
@@ -1380,6 +1380,7 @@ export const RELEASE_SEARCH_RESULT_FIELDS = `
         preferredCount
         optionalHits
       }
+      decidedBy
       scoringLog {
         code
         delta
@@ -2829,6 +2830,7 @@ const qualityProfileCriteriaFields = `
       }
       cutoffTier
       minScoreToGrab
+      cutoffScore
       minUpgradeScoreDelta
       decisionPipeline`;
 
@@ -3879,6 +3881,7 @@ export const releaseDecisionsQuery = `query ReleaseDecisions($wantedItemId: ID!,
         currentScore
         scoreDelta
         explanationJson
+        decidedBy
         createdAt
       }
       hasMore

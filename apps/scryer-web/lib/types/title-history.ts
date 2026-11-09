@@ -4,6 +4,8 @@ export type TitleHistoryEvent = {
     previousScore: number | null;
     delta: number | null;
     decisionCode: string;
+    /** Decision-order step that settled the comparison; null when none. */
+    decidedBy?: string | null;
     entries: import("./file-score").ScoreEntry[];
     comparisons: {
       fileId: string;

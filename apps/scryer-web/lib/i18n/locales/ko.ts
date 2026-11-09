@@ -3755,7 +3755,7 @@ const ko: LocaleDictionary = {
   "qualityProfile.decisionSummaryJoin": "{{previous}}, 그다음 {{next}}",
   "qualityProfile.decisionSummaryScoreOnly": "릴리스는 점수만으로 비교됩니다.",
   "qualityProfile.decisionWarningTierAbsent":
-    "품질 등급 단계가 없으면 낮은 등급의 릴리스가 높은 등급의 파일을 대체할 수 있고, 컷오프 등급도 더 이상 적용되지 않습니다. 업그레이드는 컷오프 점수로만 멈춥니다.",
+    "품질 등급 단계가 없으면 낮은 등급의 릴리스가 높은 등급의 파일을 대체할 수 있고, 컷오프 등급은 적용되지 않습니다. 업그레이드 검색은 컷오프 점수로만 멈추며, 컷오프 점수도 없으면 파일이 있는 즉시 프로필이 충족됩니다.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "언어 단계가 품질 등급보다 앞에 있어, 선호 언어의 낮은 등급 릴리스가 높은 등급의 파일을 대체할 수 있습니다.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -3766,6 +3766,16 @@ const ko: LocaleDictionary = {
     "판정 순서에 품질 등급 단계가 없으면 적용되지 않습니다.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "품질 프로필의 판정 순서에서 각 단계는 한 번만 사용할 수 있습니다.",
+  "qualityProfile.qualityPreferenceHelp":
+    "선호도가 가장 높은 항목이 먼저입니다. 릴리스는 판정 순서의 품질 등급 단계에서 이 순서로 비교됩니다. 새 등급은 가장 낮은 선호도로 추가됩니다.",
+  "qualityProfile.decidedBy": "결정 단계: {{step}}",
+  "qualityProfile.cutoffScore": "컷오프 점수",
+  "qualityProfile.cutoffScoreInfo":
+    "디스크의 파일이 이 점수에 도달하면 프로필은 업그레이드 검색을 멈춥니다. 컷오프 점수를 쓰지 않으려면 비워 두세요.",
+  "qualityProfile.cutoffScorePlaceholder": "컷오프 점수 없음",
+  "qualityProfile.decisionStepDrag": "드래그하여 {{value}} 순서 변경",
+  "qualityProfile.decisionStepMoveUp": "{{value}} 위로 이동",
+  "qualityProfile.decisionStepMoveDown": "{{value}} 아래로 이동",
 };
 
 export default ko;

@@ -7734,7 +7734,7 @@ const en: LocaleDictionary = {
     "Quality tiers and archival quality",
   "qualityProfile.qualityPreference": "Quality preference",
   "qualityProfile.qualityPreferenceHelp":
-    "Highest preference first. Tier preference takes priority over score. New tiers are added at the lowest preference.",
+    "Highest preference first. Releases are compared on this order at the quality tier step of the decision order. New tiers are added at the lowest preference.",
   "qualityProfile.moveQualityTierUp": "Move {{value}} up",
   "qualityProfile.moveQualityTierDown": "Move {{value}} down",
   "qualityProfile.dragQualityTier": "Drag to reorder {{value}}",
@@ -12557,7 +12557,7 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Releases are compared by score alone.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Without the quality tier step, a lower-tier release can replace a higher-tier file, and the cutoff tier no longer applies. Only a cutoff score stops upgrades.",
+    "Without the quality tier step, a lower-tier release can replace a higher-tier file, and the cutoff tier does not apply. Only the cutoff score stops the search for upgrades; with no cutoff score either, the profile is satisfied once it has a file.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "A language step comes before quality tier, so a lower-tier release in a preferred language can replace a higher-tier file.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -12568,6 +12568,14 @@ const en: LocaleDictionary = {
     "Not applicable without the quality tier step in the decision order.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Each step can appear only once in a quality profile's decision order.",
+  "qualityProfile.decidedBy": "Decided by: {{step}}",
+  "qualityProfile.cutoffScore": "Cutoff score",
+  "qualityProfile.cutoffScoreInfo":
+    "Once the file on disk reaches this score, the profile stops looking for upgrades. Leave empty for no score cutoff.",
+  "qualityProfile.cutoffScorePlaceholder": "No cutoff score",
+  "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
+  "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
 };
 
 export default en;

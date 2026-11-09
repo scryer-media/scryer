@@ -100,6 +100,7 @@ type QualityProfileCriteriaPayload = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
+  cutoff_score: number | null;
   min_upgrade_score_delta: number;
   decision_pipeline: QualityDecisionGate[];
 };
@@ -124,6 +125,7 @@ type QualityProfileDraft = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
+  cutoff_score: number | null;
   min_upgrade_score_delta: number;
   decision_pipeline: QualityDecisionGate[];
 };
@@ -1551,6 +1553,36 @@ export function SettingsQualityProfilesSection({
                               {t("qualityProfile.cutoffTierNotApplicable")}
                             </p>
                           ) : null}
+                        </label>
+
+                        <label className="space-y-2">
+                          <Label className="inline-flex items-center gap-2">
+                            {t("qualityProfile.cutoffScore")}
+                            <InfoHelp
+                              ariaLabel={t("qualityProfile.cutoffScore")}
+                              text={t("qualityProfile.cutoffScoreInfo")}
+                            />
+                          </Label>
+                          <Input
+                            id={selectorId(
+                              "settings-quality-profile-cutoff-score",
+                            )}
+                            {...signedIntegerInputProps}
+                            placeholder={t(
+                              "qualityProfile.cutoffScorePlaceholder",
+                            )}
+                            value={qualityProfileDraft.cutoff_score ?? ""}
+                            onChange={(event) => {
+                              const raw = event.target.value.trim();
+                              const parsed = Number(raw);
+                              updateQualityProfileDraft({
+                                cutoff_score:
+                                  raw === "" || !Number.isInteger(parsed)
+                                    ? null
+                                    : parsed,
+                              });
+                            }}
+                          />
                         </label>
 
                         <label className="space-y-2">

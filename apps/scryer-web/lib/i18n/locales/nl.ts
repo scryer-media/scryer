@@ -4623,7 +4623,7 @@ const nl: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Releases worden alleen op score vergeleken.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Zonder de stap kwaliteitsniveau kan een release van een lager niveau een bestand van een hoger niveau vervangen, en geldt het cutoff-niveau niet meer. Alleen een cutoff-score stopt upgrades.",
+    "Zonder de stap kwaliteitsniveau kan een release van een lager niveau een bestand van een hoger niveau vervangen, en geldt het cutoff-niveau niet. Alleen de cutoff-score stopt het zoeken naar upgrades; zonder cutoff-score is het profiel tevreden zodra er een bestand is.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "Een taalstap staat vóór het kwaliteitsniveau, dus een release van een lager niveau in een voorkeurstaal kan een bestand van een hoger niveau vervangen.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -4634,6 +4634,16 @@ const nl: LocaleDictionary = {
     "Niet van toepassing zonder de stap kwaliteitsniveau in de beslisvolgorde.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Elke stap mag maar één keer voorkomen in de beslisvolgorde van een kwaliteitsprofiel.",
+  "qualityProfile.qualityPreferenceHelp":
+    "Hoogste voorkeur eerst. Releases worden bij de stap kwaliteitsniveau van de beslisvolgorde op deze volgorde vergeleken. Nieuwe niveaus worden met de laagste voorkeur toegevoegd.",
+  "qualityProfile.decidedBy": "Beslist door: {{step}}",
+  "qualityProfile.cutoffScore": "Cutoff-score",
+  "qualityProfile.cutoffScoreInfo":
+    "Zodra het bestand op schijf deze score haalt, zoekt het profiel niet meer naar upgrades. Laat leeg voor geen cutoff-score.",
+  "qualityProfile.cutoffScorePlaceholder": "Geen cutoff-score",
+  "qualityProfile.decisionStepDrag": "Sleep om {{value}} te verplaatsen",
+  "qualityProfile.decisionStepMoveUp": "{{value}} omhoog verplaatsen",
+  "qualityProfile.decisionStepMoveDown": "{{value}} omlaag verplaatsen",
 };
 
 export default nl;

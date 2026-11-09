@@ -3913,7 +3913,7 @@ const pt_BR: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Os lançamentos são comparados apenas por pontuação.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Sem a etapa de nível de qualidade, um lançamento de nível inferior pode substituir um arquivo de nível superior, e o nível de corte deixa de valer. Só uma pontuação de corte interrompe as atualizações.",
+    "Sem a etapa de nível de qualidade, um lançamento de nível inferior pode substituir um arquivo de nível superior, e o nível de corte não se aplica. Só a pontuação de corte interrompe a busca por atualizações; sem ela, o perfil fica satisfeito assim que tem um arquivo.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "Uma etapa de idioma vem antes do nível de qualidade, então um lançamento de nível inferior em um idioma preferido pode substituir um arquivo de nível superior.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -3924,6 +3924,16 @@ const pt_BR: LocaleDictionary = {
     "Não se aplica sem a etapa de nível de qualidade na ordem de decisão.",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Cada etapa só pode aparecer uma vez na ordem de decisão de um perfil de qualidade.",
+  "qualityProfile.qualityPreferenceHelp":
+    "Maior preferência primeiro. Os lançamentos são comparados por esta ordem na etapa de nível de qualidade da ordem de decisão. Novos níveis são adicionados com a menor preferência.",
+  "qualityProfile.decidedBy": "Decidido por: {{step}}",
+  "qualityProfile.cutoffScore": "Pontuação de corte",
+  "qualityProfile.cutoffScoreInfo":
+    "Quando o arquivo no disco atinge esta pontuação, o perfil para de procurar atualizações. Deixe vazio para não usar pontuação de corte.",
+  "qualityProfile.cutoffScorePlaceholder": "Sem pontuação de corte",
+  "qualityProfile.decisionStepDrag": "Arraste para reordenar {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Mover {{value}} para cima",
+  "qualityProfile.decisionStepMoveDown": "Mover {{value}} para baixo",
 };
 
 export default pt_BR;

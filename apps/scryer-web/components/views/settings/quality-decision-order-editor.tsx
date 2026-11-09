@@ -208,7 +208,7 @@ export function QualityDecisionOrderEditor({
                       gate,
                     )}
                     className={MUTED_TEXT_CLASS}
-                    title={t("qualityProfile.dragQualityTier", {
+                    title={t("qualityProfile.decisionStepDrag", {
                       value: label,
                     })}
                     onDrop={(target) => dropActiveGate(gate, target)}
@@ -222,7 +222,7 @@ export function QualityDecisionOrderEditor({
                       )}
                       tone="reorder"
                       disabled={index === 0}
-                      label={t("qualityProfile.moveQualityTierUp", {
+                      label={t("qualityProfile.decisionStepMoveUp", {
                         value: label,
                       })}
                       onClick={() =>
@@ -238,7 +238,7 @@ export function QualityDecisionOrderEditor({
                       )}
                       tone="reorder"
                       disabled={index === pipeline.length - 1}
-                      label={t("qualityProfile.moveQualityTierDown", {
+                      label={t("qualityProfile.decisionStepMoveDown", {
                         value: label,
                       })}
                       onClick={() =>

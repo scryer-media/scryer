@@ -3538,7 +3538,7 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.decisionSummaryJoin": "{{previous}}，然后按{{next}}",
   "qualityProfile.decisionSummaryScoreOnly": "发布仅按评分比较。",
   "qualityProfile.decisionWarningTierAbsent":
-    "没有质量等级步骤时，较低等级的发布可能替换较高等级的文件，且截止等级不再生效。只有截止评分会停止升级。",
+    "没有质量等级步骤时，较低等级的发布可能替换较高等级的文件，且截止等级不适用。只有截止评分会停止寻找升级；若也没有截止评分，配置文件在有文件后即视为满足。",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "语言步骤位于质量等级之前，因此首选语言的较低等级发布可能替换较高等级的文件。",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -3549,6 +3549,16 @@ const zh_CN: LocaleDictionary = {
     "判定顺序中没有质量等级步骤时不适用。",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "在质量配置文件的判定顺序中，每个步骤只能出现一次。",
+  "qualityProfile.qualityPreferenceHelp":
+    "偏好最高的排在最前。发布会在判定顺序的质量等级步骤中按此顺序比较。新等级以最低偏好添加。",
+  "qualityProfile.decidedBy": "决定步骤：{{step}}",
+  "qualityProfile.cutoffScore": "截止评分",
+  "qualityProfile.cutoffScoreInfo":
+    "磁盘上的文件达到此评分后，配置文件将停止寻找升级。留空表示不使用截止评分。",
+  "qualityProfile.cutoffScorePlaceholder": "无截止评分",
+  "qualityProfile.decisionStepDrag": "拖动以重新排序 {{value}}",
+  "qualityProfile.decisionStepMoveUp": "上移 {{value}}",
+  "qualityProfile.decisionStepMoveDown": "下移 {{value}}",
 };
 
 export default zh_CN;

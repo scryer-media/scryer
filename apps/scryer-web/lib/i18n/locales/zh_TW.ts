@@ -2704,7 +2704,7 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.qualityTiersAndArchival": "品質級別與存檔品質",
   "qualityProfile.qualityPreference": "品質偏好",
   "qualityProfile.qualityPreferenceHelp":
-    "最高偏好排在最前。層級偏好優先於評分。新層級會新增於最低偏好處。",
+    "最高偏好排在最前。發佈會在判定順序的品質等級步驟中依此順序比較。新層級會新增於最低偏好處。",
   "qualityProfile.moveQualityTierUp": "將 {{value}} 上移",
   "qualityProfile.moveQualityTierDown": "將 {{value}} 下移",
   "qualityProfile.dragQualityTier": "拖曳以重新排序 {{value}}",
@@ -5708,7 +5708,7 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.decisionSummaryJoin": "{{previous}}，接著按{{next}}",
   "qualityProfile.decisionSummaryScoreOnly": "發佈僅按評分比較。",
   "qualityProfile.decisionWarningTierAbsent":
-    "沒有品質等級步驟時，較低等級的發佈可能取代較高等級的檔案，且截止等級不再適用。只有截止評分會停止升級。",
+    "沒有品質等級步驟時，較低等級的發佈可能取代較高等級的檔案，且截止等級不適用。只有截止評分會停止尋找升級；若也沒有截止評分，設定檔在有檔案後即視為滿足。",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "語言步驟位於品質等級之前，因此偏好語言的較低等級發佈可能取代較高等級的檔案。",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -5719,6 +5719,14 @@ const zh_TW: LocaleDictionary = {
     "判定順序中沒有品質等級步驟時不適用。",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "在品質設定檔的判定順序中，每個步驟只能出現一次。",
+  "qualityProfile.decidedBy": "決定步驟：{{step}}",
+  "qualityProfile.cutoffScore": "截止評分",
+  "qualityProfile.cutoffScoreInfo":
+    "磁碟上的檔案達到此評分後，設定檔便停止尋找升級。留空表示不使用截止評分。",
+  "qualityProfile.cutoffScorePlaceholder": "無截止評分",
+  "qualityProfile.decisionStepDrag": "拖曳以重新排序 {{value}}",
+  "qualityProfile.decisionStepMoveUp": "將 {{value}} 上移",
+  "qualityProfile.decisionStepMoveDown": "將 {{value}} 下移",
 };
 
 export default zh_TW;

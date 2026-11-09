@@ -1382,6 +1382,7 @@ const qualityProfileCriteriaFields = `
       }
       cutoffTier
       minScoreToGrab
+      cutoffScore
       minUpgradeScoreDelta
       decisionPipeline`;
 

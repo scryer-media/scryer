@@ -11410,7 +11410,7 @@ const ru: LocaleDictionary = {
     "Выберите хотя бы один тип содержимого. Scryer никогда не выполняет поиск через провайдера, у которого не выбран ни один тип.",
   "qualityProfile.qualityPreference": "Приоритет качества",
   "qualityProfile.qualityPreferenceHelp":
-    "Наиболее предпочтительное качество — вверху. Приоритет уровня качества важнее баллов. Новые уровни добавляются с самым низким приоритетом.",
+    "Наиболее предпочтительное — вверху. По этому порядку релизы сравниваются на шаге «Уровень качества» в порядке решения. Новые уровни добавляются с самым низким приоритетом.",
   "qualityProfile.moveQualityTierUp": "Переместить {{value}} вверх",
   "qualityProfile.moveQualityTierDown": "Переместить {{value}} вниз",
   "qualityProfile.dragQualityTier":
@@ -13476,7 +13476,7 @@ const ru: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "Релизы сравниваются только по оценке.",
   "qualityProfile.decisionWarningTierAbsent":
-    "Без шага «Уровень качества» релиз более низкого уровня может заменить файл более высокого уровня, а пороговый уровень больше не действует. Обновления останавливает только пороговая оценка.",
+    "Без шага «Уровень качества» релиз более низкого уровня может заменить файл более высокого уровня, а пороговый уровень не действует. Поиск обновлений останавливает только пороговая оценка; без неё профиль считается выполненным, как только есть файл.",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "Языковой шаг стоит перед уровнем качества, поэтому релиз более низкого уровня на предпочитаемом языке может заменить файл более высокого уровня.",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -13487,6 +13487,15 @@ const ru: LocaleDictionary = {
     "Не применяется, пока в порядке решения нет шага «Уровень качества».",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "Каждый шаг может встречаться в порядке решения профиля качества только один раз.",
+  "qualityProfile.decidedBy": "Решил шаг: {{step}}",
+  "qualityProfile.cutoffScore": "Пороговая оценка",
+  "qualityProfile.cutoffScoreInfo":
+    "Когда файл на диске достигает этой оценки, профиль перестаёт искать обновления. Оставьте пустым, чтобы не использовать пороговую оценку.",
+  "qualityProfile.cutoffScorePlaceholder": "Без пороговой оценки",
+  "qualityProfile.decisionStepDrag":
+    "Перетащите, чтобы изменить порядок {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Переместить {{value}} вверх",
+  "qualityProfile.decisionStepMoveDown": "Переместить {{value}} вниз",
 };
 
 export default ru;

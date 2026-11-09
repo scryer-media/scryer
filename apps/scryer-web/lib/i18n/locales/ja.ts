@@ -3829,7 +3829,7 @@ const ja: LocaleDictionary = {
   "qualityProfile.decisionSummaryScoreOnly":
     "リリースはスコアのみで比較されます。",
   "qualityProfile.decisionWarningTierAbsent":
-    "品質ティアのステップがないと、下位ティアのリリースが上位ティアのファイルを置き換えることがあり、カットオフティアも適用されなくなります。アップグレードを止めるのはカットオフスコアだけです。",
+    "品質ティアのステップがないと、下位ティアのリリースが上位ティアのファイルを置き換えることがあり、カットオフティアは適用されません。アップグレードの検索を止めるのはカットオフスコアだけです。カットオフスコアもない場合、ファイルがあればプロファイルは満たされます。",
   "qualityProfile.decisionNoteTierBelowLanguage":
     "言語のステップが品質ティアより前にあるため、優先言語の下位ティアのリリースが上位ティアのファイルを置き換えることがあります。",
   "qualityProfile.decisionNoteRevisionAbsent":
@@ -3840,6 +3840,16 @@ const ja: LocaleDictionary = {
     "判定順序に品質ティアのステップがないため適用されません。",
   "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
     "品質プロファイルの判定順序では、各ステップは1回しか使えません。",
+  "qualityProfile.qualityPreferenceHelp":
+    "優先度の高いものが先頭です。リリースは判定順序の品質ティアのステップでこの順序に従って比較されます。新しいティアは最も低い優先度で追加されます。",
+  "qualityProfile.decidedBy": "判定したステップ: {{step}}",
+  "qualityProfile.cutoffScore": "カットオフスコア",
+  "qualityProfile.cutoffScoreInfo":
+    "ディスク上のファイルがこのスコアに達すると、プロファイルはアップグレードの検索を停止します。カットオフスコアを使わない場合は空欄にします。",
+  "qualityProfile.cutoffScorePlaceholder": "カットオフスコアなし",
+  "qualityProfile.decisionStepDrag": "ドラッグして {{value}} を並べ替え",
+  "qualityProfile.decisionStepMoveUp": "{{value}} を上へ移動",
+  "qualityProfile.decisionStepMoveDown": "{{value}} を下へ移動",
 };
 
 export default ja;

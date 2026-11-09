@@ -210,6 +210,26 @@ export function decisionGateLabel(
     : t("qualityProfile.decisionGateUnknown", { value: gate });
 }
 
+/** The final step a recorded decision can name besides the order's gates. */
+export const SCORE_DECIDING_STEP = "SCORE";
+
+/**
+ * "Decided by" text for the step that settled a recorded comparison, or null
+ * when nothing was recorded. Score and unknown steps are labelled too.
+ */
+export function decidedByLabel(
+  step: string | null | undefined,
+  t: SummaryTranslate,
+): string | null {
+  const value = typeof step === "string" ? step.trim().toUpperCase() : "";
+  if (!value) return null;
+  const label =
+    value === SCORE_DECIDING_STEP
+      ? t("qualityProfile.decisionGateScore")
+      : decisionGateLabel(value, t);
+  return t("qualityProfile.decidedBy", { step: label });
+}
+
 /** One plain-language sentence describing the order, score included. */
 export function describeDecisionPipeline(
   pipeline: readonly QualityDecisionGate[],

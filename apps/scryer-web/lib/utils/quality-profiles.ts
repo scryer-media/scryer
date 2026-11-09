@@ -130,6 +130,10 @@ export function normalizeQualityProfileEntry(
         typeof criteria.min_score_to_grab === "number"
           ? criteria.min_score_to_grab
           : null,
+      cutoff_score:
+        typeof criteria.cutoff_score === "number"
+          ? criteria.cutoff_score
+          : null,
       min_upgrade_score_delta: readMinUpgradeScoreDelta(
         criteria.min_upgrade_score_delta,
       ),
@@ -226,6 +230,7 @@ export function qualityProfileEntryFromGraph(
       ),
       cutoff_tier: profile.criteria.cutoffTier?.trim().toUpperCase() || null,
       min_score_to_grab: profile.criteria.minScoreToGrab,
+      cutoff_score: profile.criteria.cutoffScore ?? null,
       min_upgrade_score_delta: readMinUpgradeScoreDelta(
         profile.criteria.minUpgradeScoreDelta,
       ),
@@ -492,6 +497,7 @@ export function buildQualityProfileTemplate(
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
+    cutoff_score: null,
     min_upgrade_score_delta: DEFAULT_MIN_UPGRADE_SCORE_DELTA,
     decision_pipeline: [...DEFAULT_DECISION_PIPELINE],
   };
@@ -578,6 +584,10 @@ export function toQualityProfileDraft(
       typeof entry.criteria.min_score_to_grab === "number"
         ? entry.criteria.min_score_to_grab
         : null,
+    cutoff_score:
+      typeof entry.criteria.cutoff_score === "number"
+        ? entry.criteria.cutoff_score
+        : null,
     min_upgrade_score_delta: readMinUpgradeScoreDelta(
       entry.criteria.min_upgrade_score_delta,
     ),
@@ -627,6 +637,7 @@ export function qualityProfileCatalogEntryFromDraft(
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
+      cutoff_score: draft.cutoff_score,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
       decision_pipeline: [...draft.decision_pipeline],
     },
@@ -660,6 +671,7 @@ export function qualityProfileEntryToMutationInput(
       ),
       cutoffTier: entry.criteria.cutoff_tier,
       minScoreToGrab: entry.criteria.min_score_to_grab,
+      cutoffScore: entry.criteria.cutoff_score,
       minUpgradeScoreDelta: entry.criteria.min_upgrade_score_delta,
       decisionPipeline: [...entry.criteria.decision_pipeline],
     },
