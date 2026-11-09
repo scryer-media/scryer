@@ -6822,13 +6822,19 @@ fn parse_parenthetical_standard_after_absolute_at(
 ///
 /// Sonarr renames anime episodes as `Show - SxxEyy - NNN - Episode Title`, so a
 /// number fenced by hyphens on both sides is the absolute episode number rather
-/// than a range endpoint. A genuine spaced range (`Show S01E01 - 03 [1080p]`)
-/// is followed by metadata or nothing at all, never by another hyphenated
-/// segment.
+/// than a range endpoint. A compact range endpoint (`S01E01-13`) is attached
+/// to its coordinate, not in a separate slot, even when metadata follows it
+/// after another hyphen (`S01E01-13 - 2026`).
 fn is_delimited_absolute_number_slot(tokens: &[Token], index: usize) -> bool {
+    let Some(previous) = index.checked_sub(1).and_then(|i| tokens.get(i)) else {
+        return false;
+    };
     let Some(token) = tokens.get(index) else {
         return false;
     };
+    if token.span.start.saturating_sub(previous.span.end) == 1 {
+        return false;
+    }
     if token.normalized.is_empty() || !token.normalized.bytes().all(|byte| byte.is_ascii_digit()) {
         return false;
     }
