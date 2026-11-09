@@ -119,6 +119,20 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         disposition = ParseDisposition::Unparseable;
         ambiguity_margin = 0;
     }
+    if matches!(disposition, ParseDisposition::Parsed)
+        && best_candidate_index
+            .and_then(|index| candidates.get(index))
+            .is_some_and(|candidate| {
+                single_episode_may_end_spaced_range(
+                    &candidate.identity,
+                    &lexed.tokens,
+                    &annotations,
+                )
+            })
+    {
+        disposition = ParseDisposition::Ambiguous;
+        ambiguity_margin = 0;
+    }
     let is_ambiguous = matches!(disposition, ParseDisposition::Ambiguous);
     // Zones an ambiguous winner may safely treat as title text: the union over
     // every contender close enough to have caused the ambiguity. Tokens outside
@@ -326,6 +340,80 @@ struct IndependentTechnicalMetadata {
     video_codec_conflicts: bool,
     is_10bit: bool,
     bit_depth_conflicts: bool,
+}
+
+/// A single standard episode read from `S01E01 - 12 [Batch]`, where the spaced
+/// bare number could also end a range. The strict reading keeps the single
+/// episode, but the parse cannot tell the two apart, so it is ambiguous.
+///
+/// Only a forward endpoint that ends its segment counts: one followed by
+/// nothing, a bracket, technical metadata, or only a file extension. A following word or
+/// hyphenated segment (`S01E05 - 12 Angry Men`, `S02E01 - 083 - Title`) reads
+/// as an episode title or an absolute slot, not a range end.
+fn single_episode_may_end_spaced_range(
+    identity: &ReleaseIdentity,
+    tokens: &[Token],
+    annotations: &[TokenAnnotations],
+) -> bool {
+    let ReleaseIdentity::StandardEpisodeIdentity {
+        season,
+        episode_numbers,
+    } = identity
+    else {
+        return false;
+    };
+    let [start] = episode_numbers.as_slice() else {
+        return false;
+    };
+    tokens.iter().enumerate().any(|(index, token)| {
+        parse_standard_episode_token(&token.normalized).is_some_and(|(token_season, episodes)| {
+            token_season == *season && episodes.as_slice() == [*start]
+        }) && spaced_bare_range_end_at(tokens, annotations, index + 1, *start)
+    })
+}
+
+fn spaced_bare_range_end_at(
+    tokens: &[Token],
+    annotations: &[TokenAnnotations],
+    index: usize,
+    start: u32,
+) -> bool {
+    let Some(next) = tokens.get(index) else {
+        return false;
+    };
+    if next.separator_before != SeparatorKind::Hyphen || !next.separator_before_has_space {
+        return false;
+    }
+    let endpoint = split_episode_revision(&next.normalized)
+        .map_or(next.normalized.as_str(), |(episode, _)| episode);
+    if endpoint.is_empty() || !endpoint.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    let Ok(end) = endpoint.parse::<u32>() else {
+        return false;
+    };
+    let year_like = start < 1000 && endpoint.len() == 4 && (1900..=2099).contains(&end);
+    if end <= start || end - start > 999 || year_like {
+        return false;
+    }
+    let Some(after) = tokens.get(index + 1) else {
+        return true;
+    };
+    matches!(
+        next.separator_after,
+        SeparatorKind::CloseBracket | SeparatorKind::CloseParen | SeparatorKind::CloseBrace
+    ) || matches!(
+        after.separator_before,
+        SeparatorKind::OpenBracket | SeparatorKind::OpenParen | SeparatorKind::OpenBrace
+    ) || annotations
+        .get(index + 1)
+        .is_some_and(|annotation| is_strong_anchor(annotation.primary_role))
+        || (index + 2 == tokens.len()
+            && after.separator_before == SeparatorKind::Dot
+            && matches!(
+                after.normalized.as_str(),
+                "MKV" | "MP4" | "AVI" | "M4V" | "WEBM"
+            ))
 }
 
 fn unknown_target_has_episodic_identity(candidate: &ReleaseParseCandidate) -> bool {
