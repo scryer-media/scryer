@@ -187,6 +187,9 @@ impl ReleaseEvidence {
 pub(crate) struct ScoringContext<'a> {
     pub profile: &'a QualityProfile,
     pub required_audio_languages: &'a [String],
+    /// Ranking-only language preferences. Empty preferences leave every
+    /// decision's [`crate::AudioLanguageMatch`] at its default.
+    pub language_preferences: &'a crate::AudioLanguagePreferences,
     pub category: &'a str,
     /// What size scoring compares the reported bytes against: the coverage's
     /// total runtime, one member's, and the member count. Resolved once per
@@ -351,6 +354,9 @@ pub(crate) struct ScoredRelease {
     /// always re-derives it rather than reading it back. A veto never appears
     /// here: it travels as `allowed` / `block_codes` / [`ScoredRelease::truth_verdict`].
     pub total: i32,
+    /// Language standing from the same pass as `total`: the probed tracks once
+    /// the bytes are measured, the announcement before.
+    pub language: crate::AudioLanguageRank,
 }
 
 /// Score a release from whatever evidence exists.
@@ -559,7 +565,7 @@ fn score_single_release_with_rules(
         .as_ref()
         .is_some_and(|facts| facts.analysis.container_format.as_deref() == Some("strm"));
     let listing = evidence.listing.as_ref();
-    let announced_decision = run_term_pipeline(
+    let mut announced_decision = run_term_pipeline(
         &evidence.parsed,
         evidence.announced_size_bytes.filter(|_| !is_stream_pointer),
         None,
@@ -567,6 +573,8 @@ fn score_single_release_with_rules(
         ctx,
         rules,
     );
+    let announced_languages = announced_audio_languages(&evidence.parsed, ctx);
+    announced_decision.language = language_rank(&announced_languages, ctx);
     let release_score = announced_decision.preference_score;
     // Preserve the acquisition score while comparing only facts measurable for
     // this playback title. Filesystem overhead and other cuts have no title size.
@@ -585,13 +593,21 @@ fn score_single_release_with_rules(
                 Some(&analyzed.analysis),
             )
             .0;
-            let analyzed_pass = run_term_pipeline(
+            let mut analyzed_pass = run_term_pipeline(
                 &analyzed_parsed,
                 (!is_disc && !is_stream_pointer).then_some(analyzed.actual_size_bytes),
                 analyzed.rule_file_doc.clone(),
                 listing,
                 ctx,
                 rules,
+            );
+            analyzed_pass.language = language_rank(
+                &crate::media::language_preference::file_audio_languages(
+                    &analyzed.analysis.audio_streams,
+                    &analyzed.analysis.audio_languages,
+                    &announced_languages,
+                ),
+                ctx,
             );
             let mut classified = classify_truth(
                 &evidence.parsed,
@@ -666,16 +682,49 @@ fn score_single_release_with_rules(
     let total = numeric_score(analyzed_decision.as_ref().unwrap_or(&announced_decision));
     let parsed_quality = analyzed_quality.or_else(|| evidence.parsed.quality.clone());
 
+    let language = analyzed_decision
+        .as_ref()
+        .map_or(announced_decision.language, |decision| decision.language);
+
     ScoredRelease {
         parsed_quality,
         revision: crate::acquisition::scoring::revision_rank(&evidence.parsed),
         total,
+        language,
         release_score,
         announced_decision,
         analyzed_decision,
         truth_variance,
         truth_verdict,
     }
+}
+
+/// The audio languages a release announces, for language ranking.
+///
+/// Unlike the required-language enrichment, this always infers the title's
+/// original language for an unlabelled release: ranking an unlabelled release
+/// as carrying no language at all would sort it behind every labelled one.
+fn announced_audio_languages(
+    parsed: &ParsedReleaseMetadata,
+    ctx: &ScoringContext<'_>,
+) -> Vec<String> {
+    if ctx.language_preferences.is_empty() {
+        return Vec::new();
+    }
+    let title_context = crate::title_audio_language_context(
+        ctx.original_language,
+        ctx.original_country,
+        Some(ctx.category),
+        ctx.title_tags,
+    );
+    crate::release_audio_language_hints_for_title(parsed, None, Some(&title_context), true)
+}
+
+fn language_rank(languages: &[String], ctx: &ScoringContext<'_>) -> crate::AudioLanguageRank {
+    crate::AudioLanguageRank::new(
+        ctx.language_preferences,
+        ctx.language_preferences.evaluate(languages),
+    )
 }
 
 /// Sum every numeric contribution, including strong penalties. Mandatory

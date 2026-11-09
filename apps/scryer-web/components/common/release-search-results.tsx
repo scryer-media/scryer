@@ -18,6 +18,7 @@ import {
   Database,
   Download,
   FilePlus2,
+  Languages,
   Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -95,6 +96,57 @@ function ScoringLogPanel({
   );
 }
 
+/**
+ * Where the release stands against the title's audio language preferences.
+ * Nothing is shown when the title has none, so rows look as they always did.
+ */
+function audioLanguageBadge(
+  rank: NonNullable<Release["qualityProfileDecision"]>["audioLanguage"],
+  t: ReturnType<typeof useTranslate>,
+): React.ReactNode {
+  if (!rank || (rank.preferredCount === 0 && rank.optionalHits === 0)) {
+    return null;
+  }
+  const parts: string[] = [];
+  let tone = "bg-[var(--scry-info-bg-strong)] text-[var(--scry-info-text)]";
+  if (rank.preferredCount > 0) {
+    if (rank.preferredRank >= rank.preferredCount) {
+      parts.push(t("nzb.audioLanguageNotPreferred"));
+      tone = "bg-[var(--scry-chip)] text-[var(--scry-muted3)]";
+    } else if (rank.preferredCount === 1) {
+      parts.push(t("nzb.audioLanguagePreferred"));
+      tone =
+        "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text-soft)]";
+    } else {
+      parts.push(
+        t("nzb.audioLanguagePreferredRank", { rank: rank.preferredRank + 1 }),
+      );
+      if (rank.preferredRank === 0) {
+        tone =
+          "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text-soft)]";
+      }
+    }
+  }
+  if (rank.optionalHits > 0) {
+    parts.push(
+      t("nzb.audioLanguageOptionalHits", { count: rank.optionalHits }),
+    );
+  }
+  return (
+    <span
+      data-ui="release-search-result-audio-language"
+      title={t("nzb.audioLanguageHint")}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-[6px] px-[7px] py-px text-[10px] font-bold",
+        tone,
+      )}
+    >
+      <Languages className="h-2.5 w-2.5 shrink-0" />
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
 function SearchResultRow({
   result,
   currentFile = false,
@@ -137,6 +189,7 @@ function SearchResultRow({
       {t("requests.status.approved")}
     </span>
   ) : null;
+  const languageBadge = audioLanguageBadge(decision?.audioLanguage, t);
   const currentFileBadge = currentFile ? (
     <span
       data-ui="release-search-result-current-file"
@@ -352,6 +405,7 @@ function SearchResultRow({
               {approvedBadge}
               {currentFileBadge}
               {packBadge}
+              {languageBadge}
               {rejectionBadge}
             </div>
             {selectedTitleTags.length > 0 ? (
@@ -540,6 +594,7 @@ function SearchResultRow({
             ) : null}
             {currentFileBadge}
             {packBadge}
+            {languageBadge}
             {rejectionBadge}
           </div>
           {parsedBits.length > 0 ? (
@@ -667,6 +722,7 @@ function SearchResultRow({
               ) : null}
               {currentFileBadge}
               {packBadge}
+              {languageBadge}
               {rejectionBadge}
             </div>
             {parsedBits.length > 0 ? (
