@@ -3857,6 +3857,40 @@ file = "postgres/migrations/0330_quality_profile_min_upgrade_score_delta.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 331
+description = "store one SMG id per title"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0331_smg_title_external_id_kind.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0331_smg_title_external_id_kind.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 332
+description = "index episodes by air date"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0332_episodes_air_date_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0332_episodes_air_date_index.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"
