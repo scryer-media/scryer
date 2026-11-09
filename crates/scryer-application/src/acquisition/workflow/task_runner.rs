@@ -6191,15 +6191,62 @@ impl AcquisitionWalkCadence {
     }
 }
 
-fn acquisition_walk_interval_may_have_changed(
-    changed: Result<Vec<String>, tokio::sync::broadcast::error::RecvError>,
+/// Whether a settings broadcast may have changed `key`. A lagged receiver
+/// missed some broadcasts, so it has to assume the key changed.
+fn settings_change_may_touch(
+    changed: &Result<Vec<String>, tokio::sync::broadcast::error::RecvError>,
+    key: &str,
 ) -> bool {
     match changed {
-        Ok(keys) => keys
-            .iter()
-            .any(|key| key == crate::settings::runtime::ACQUISITION_WALK_INTERVAL_SECONDS_KEY),
+        Ok(keys) => keys.iter().any(|changed_key| changed_key == key),
         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
         Err(tokio::sync::broadcast::error::RecvError::Closed) => false,
+    }
+}
+
+/// Whether `SCRYER_BACKGROUND_ACQUISITION` leaves background acquisition on.
+/// Unset means on.
+fn background_acquisition_env_allows(value: Option<&str>) -> bool {
+    value.is_none_or(|value| {
+        !matches!(
+            value.trim().to_lowercase().as_str(),
+            "false" | "0" | "no" | "off"
+        )
+    })
+}
+
+/// Start the run-once legacy convergence seed in the background. The seed
+/// records when it ran and returns early afterwards, so a repeat is harmless.
+fn spawn_legacy_convergence_seed(app: &AppUseCase) {
+    let app = app.clone();
+    tokio::spawn(async move {
+        app.seed_convergence_from_legacy_history().await;
+    });
+}
+
+/// Advertise or clear the next run of the jobs that only exist for
+/// acquisition. With acquisition off they are not scheduled, so the jobs view
+/// shows no next run for them; every other scheduled job keeps running.
+async fn advertise_acquisition_job_schedule(
+    app: &AppUseCase,
+    acquisition_enabled: bool,
+    rss_sync_tick: std::time::Duration,
+) {
+    if acquisition_enabled {
+        app.advertise_job_next_run_at(
+            JobKey::RssSync,
+            Utc::now() + rss_sync_next_run_delta(rss_sync_tick),
+        )
+        .await;
+        app.advertise_job_next_run_at(
+            JobKey::PendingReleaseProcessing,
+            Utc::now() + chrono::Duration::minutes(1),
+        )
+        .await;
+    } else {
+        app.clear_job_next_run_at(JobKey::RssSync).await;
+        app.clear_job_next_run_at(JobKey::PendingReleaseProcessing)
+            .await;
     }
 }
 
@@ -6403,14 +6450,19 @@ pub async fn start_background_acquisition_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
 ) {
-    // Check feature flag
-    let enabled = std::env::var("SCRYER_BACKGROUND_ACQUISITION")
-        .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
-        .unwrap_or(true);
-
-    if !enabled {
-        info!("background acquisition poller is disabled (SCRYER_BACKGROUND_ACQUISITION=false)");
-        return;
+    // Both switches turn off acquisition only. This loop also owns the
+    // maintenance jobs (plugin catalog refresh, staged NZB prune,
+    // housekeeping, health checks, Prowlarr sync, list sync and the rest), so
+    // it keeps running with acquisition off.
+    let env_allows_acquisition = background_acquisition_env_allows(
+        std::env::var("SCRYER_BACKGROUND_ACQUISITION")
+            .ok()
+            .as_deref(),
+    );
+    if !env_allows_acquisition {
+        info!(
+            "background acquisition is disabled (SCRYER_BACKGROUND_ACQUISITION=false); scheduled maintenance jobs still run"
+        );
     }
 
     let settings = match app.acquisition_settings().await {
@@ -6433,22 +6485,22 @@ pub async fn start_background_acquisition_poller(
         }
     };
 
-    if !settings.enabled {
-        info!("background acquisition poller is disabled (acquisition.enabled != true)");
-        return;
+    let mut acquisition_enabled = env_allows_acquisition && settings.enabled;
+    if env_allows_acquisition && !settings.enabled {
+        info!(
+            "background acquisition is disabled (acquisition.enabled != true); scheduled maintenance jobs still run"
+        );
     }
 
-    info!("background acquisition poller started");
+    info!(acquisition_enabled, "background acquisition poller started");
 
     // Run-once cutover seed: recently-searched legacy scopes
     // start converged so first boot does not re-sweep the back-catalog.
     // Spawned so startup stays non-blocking; the cycle racing the seed is
-    // harmless (either path only causes a safe converge).
-    {
-        let app = app.clone();
-        tokio::spawn(async move {
-            app.seed_convergence_from_legacy_history().await;
-        });
+    // harmless (either path only causes a safe converge). With acquisition
+    // off it waits until acquisition is turned on.
+    if acquisition_enabled {
+        spawn_legacy_convergence_seed(&app);
     }
 
     // Run initial health checks after a short delay to let services initialize
@@ -6523,16 +6575,9 @@ pub async fn start_background_acquisition_poller(
     // here made the jobs view promise a sweep four minutes before the worker
     // would actually wake for it.
     let rss_sync_tick = crate::acquisition::rss::rss_sync_tick_period();
-    app.advertise_job_next_run_at(
-        JobKey::RssSync,
-        Utc::now() + rss_sync_next_run_delta(rss_sync_tick),
-    )
-    .await;
-    app.advertise_job_next_run_at(
-        JobKey::PendingReleaseProcessing,
-        Utc::now() + chrono::Duration::minutes(1),
-    )
-    .await;
+    if acquisition_enabled {
+        advertise_acquisition_job_schedule(&app, true, rss_sync_tick).await;
+    }
 
     // Maintenance evaluation (RFC 137 section 10) runs on an eight-hour
     // cadence, offset by a per-instance jitter so a fleet of instances does not
@@ -6706,8 +6751,9 @@ pub async fn start_background_acquisition_poller(
     }
 
     let wake = app.runtime.acquisition.acquisition_wake.clone();
-    // The walk interval applies without a restart. The poll interval, and so
-    // the failure check's cadence, is still read once at startup.
+    // The walk interval and the stored acquisition switch apply without a
+    // restart. The poll interval, and so the failure check's cadence, is
+    // still read once at startup.
     let mut settings_changed = app.runtime.events.settings_changed_broadcast.subscribe();
 
     /// Run a scheduled task inside a spawned task to isolate panics.
@@ -6880,7 +6926,7 @@ pub async fn start_background_acquisition_poller(
             _ = watchdog_interval.tick(), if !supervisor.is_empty() => {
                 supervisor.report_overdue(tokio::time::Instant::now());
             }
-            _ = wake.notified(), if acquisition_cycle.is_none() => {
+            _ = wake.notified(), if acquisition_enabled && acquisition_cycle.is_none() => {
                 acquisition_cycle = spawn_acquisition_cycle(
                     &app,
                     &mut supervisor,
@@ -6891,7 +6937,7 @@ pub async fn start_background_acquisition_poller(
             _ = poll_interval.tick() => {
                 // A tick during a running cycle is skipped and counted; only an
                 // admitted cycle moves the walk count.
-                if let Some(cycle) = spawn_acquisition_cycle(
+                if acquisition_enabled && let Some(cycle) = spawn_acquisition_cycle(
                     &app,
                     &mut supervisor,
                     &mut walk_cadence,
@@ -6900,7 +6946,7 @@ pub async fn start_background_acquisition_poller(
                     acquisition_cycle = Some(cycle);
                 }
             }
-            _ = tokio::time::sleep_until(deferred_retry_deadline), if deferred_retry_at.is_some() && acquisition_cycle.is_none() => {
+            _ = tokio::time::sleep_until(deferred_retry_deadline), if acquisition_enabled && deferred_retry_at.is_some() && acquisition_cycle.is_none() => {
                 acquisition_cycle = spawn_acquisition_cycle(
                     &app,
                     &mut supervisor,
@@ -6914,13 +6960,49 @@ pub async fn start_background_acquisition_poller(
                 if crate::acquisition::target_cache::settings_change_may_move_targets(&changed) {
                     app.runtime.acquisition.target_cache.mark_everything();
                 }
-                if acquisition_walk_interval_may_have_changed(changed) {
+                let walk_changed = settings_change_may_touch(
+                    &changed,
+                    crate::settings::runtime::ACQUISITION_WALK_INTERVAL_SECONDS_KEY,
+                );
+                // The environment switch is read once; only the stored
+                // setting can turn acquisition back on while running.
+                let enabled_changed = env_allows_acquisition
+                    && settings_change_may_touch(
+                        &changed,
+                        crate::settings::runtime::ACQUISITION_ENABLED_KEY,
+                    );
+                if walk_changed || enabled_changed {
                     match app.acquisition_settings().await {
-                        Ok(settings) => walk_cadence.set_walk_period(std::time::Duration::from_secs(
-                            settings.walk_interval_seconds.max(1) as u64,
-                        )),
+                        Ok(settings) => {
+                            if walk_changed {
+                                walk_cadence.set_walk_period(std::time::Duration::from_secs(
+                                    settings.walk_interval_seconds.max(1) as u64,
+                                ));
+                            }
+                            if enabled_changed && settings.enabled != acquisition_enabled {
+                                acquisition_enabled = settings.enabled;
+                                info!(acquisition_enabled, "background acquisition switched");
+                                if acquisition_enabled {
+                                    // Their ticks went unpolled while off;
+                                    // restart them so missed ticks do not
+                                    // fire back to back.
+                                    rss_sync_interval.reset();
+                                    pending_release_interval.reset();
+                                    // A no-op once seeded, so an instance
+                                    // started with acquisition off still gets
+                                    // its seed before the first walk.
+                                    spawn_legacy_convergence_seed(&app);
+                                }
+                                advertise_acquisition_job_schedule(
+                                    &app,
+                                    acquisition_enabled,
+                                    rss_sync_tick,
+                                )
+                                .await;
+                            }
+                        }
                         Err(error) => {
-                            warn!(error = %error, "failed to reload the acquisition walk interval");
+                            warn!(error = %error, "failed to reload the acquisition settings");
                         }
                     }
                 }
@@ -6972,7 +7054,7 @@ pub async fn start_background_acquisition_poller(
                     }
                 }).await;
             }
-            _ = pending_release_interval.tick() => {
+            _ = pending_release_interval.tick(), if acquisition_enabled => {
                 admit_scheduled_job(&app, &mut supervisor, "pending_releases", std::time::Duration::from_mins(1), Some((JobKey::PendingReleaseProcessing, chrono::Duration::minutes(1))), move |app| async move {
                     app.advertise_job_next_run_at(
                         JobKey::PendingReleaseProcessing,
@@ -7065,7 +7147,7 @@ pub async fn start_background_acquisition_poller(
                     }
                 }).await;
             }
-            _ = rss_sync_interval.tick() => {
+            _ = rss_sync_interval.tick(), if acquisition_enabled => {
                 let next_run_in = rss_sync_next_run_delta(rss_sync_tick);
                 admit_scheduled_job(&app, &mut supervisor, RSS_SYNC_TASK, rss_sync_tick, Some((JobKey::RssSync, next_run_in)), move |app| async move {
                     app.advertise_job_next_run_at(
@@ -7805,15 +7887,40 @@ mod task_runner_tests {
         );
 
         let key = crate::settings::runtime::ACQUISITION_WALK_INTERVAL_SECONDS_KEY;
-        assert!(acquisition_walk_interval_may_have_changed(Ok(vec![
-            key.to_string()
-        ])));
-        assert!(!acquisition_walk_interval_may_have_changed(Ok(vec![
-            "acquisition.poll_interval_seconds".to_string()
-        ])));
-        assert!(acquisition_walk_interval_may_have_changed(Err(
-            tokio::sync::broadcast::error::RecvError::Lagged(1)
-        )));
+        assert!(settings_change_may_touch(&Ok(vec![key.to_string()]), key));
+        assert!(!settings_change_may_touch(
+            &Ok(vec!["acquisition.poll_interval_seconds".to_string()]),
+            key
+        ));
+        assert!(settings_change_may_touch(
+            &Err(tokio::sync::broadcast::error::RecvError::Lagged(1)),
+            key
+        ));
+    }
+
+    #[test]
+    fn the_acquisition_switch_follows_the_stored_setting_and_the_environment() {
+        let key = crate::settings::runtime::ACQUISITION_ENABLED_KEY;
+        // The settings save broadcasts the enabled key, so the poller can
+        // follow the switch without a restart.
+        assert!(settings_change_may_touch(&Ok(vec![key.to_string()]), key));
+        assert!(!settings_change_may_touch(
+            &Ok(vec![
+                crate::settings::runtime::ACQUISITION_WALK_INTERVAL_SECONDS_KEY.to_string()
+            ]),
+            key
+        ));
+        assert!(!settings_change_may_touch(
+            &Err(tokio::sync::broadcast::error::RecvError::Closed),
+            key
+        ));
+
+        assert!(background_acquisition_env_allows(None));
+        assert!(background_acquisition_env_allows(Some("true")));
+        assert!(background_acquisition_env_allows(Some("1")));
+        for off in ["false", "0", "no", "off", "OFF", " False "] {
+            assert!(!background_acquisition_env_allows(Some(off)), "{off:?}");
+        }
     }
 
     #[test]

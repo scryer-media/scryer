@@ -3,7 +3,7 @@ use crate::acquisition::convergence::{
     ACQUISITION_LONG_TAIL_RECONVERGE_DAYS_KEY, DEFAULT_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE,
 };
 
-const ACQUISITION_ENABLED_KEY: &str = "acquisition.enabled";
+pub(crate) const ACQUISITION_ENABLED_KEY: &str = "acquisition.enabled";
 
 const ACQUISITION_POLL_INTERVAL_SECONDS_KEY: &str = "acquisition.poll_interval_seconds";
 pub(crate) const ACQUISITION_WALK_INTERVAL_SECONDS_KEY: &str = "acquisition.walk_interval_seconds";
