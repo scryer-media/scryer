@@ -116,11 +116,19 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
     }
 }
 
+/// Whether two stored folders are the same folder or one holds the other, as
+/// spelled. Nothing on disk is read, so a link or a case-insensitive
+/// filesystem can make two folders overlap that this calls unrelated;
+/// [`title_folders_overlap`] resolves those.
+pub(crate) fn stored_title_folders_overlap(left: &str, right: &str) -> bool {
+    folder_paths_match(left, right)
+        || crate::title_folder_rules::path_is_strictly_within(left, right)
+        || crate::title_folder_rules::path_is_strictly_within(right, left)
+}
+
 pub(crate) fn title_folders_overlap(left: &str, right: &str) -> AppResult<bool> {
     fn overlaps(left: &str, right: &str) -> bool {
-        folder_paths_match(left, right)
-            || crate::title_folder_rules::path_is_strictly_within(left, right)
-            || crate::title_folder_rules::path_is_strictly_within(right, left)
+        stored_title_folders_overlap(left, right)
     }
     if overlaps(left, right) {
         return Ok(true);

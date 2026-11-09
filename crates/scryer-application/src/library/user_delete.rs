@@ -197,6 +197,32 @@ struct MediaFileDeleteContext {
     facet: MediaFacet,
 }
 
+/// Who asked for a single media file's delete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MediaFileDeleteOrigin {
+    /// A person previewed and confirmed this file, alone or as part of an
+    /// episode selection.
+    User,
+    /// A maintenance policy chose the file with nobody confirming it.
+    Automatic,
+}
+
+/// A title and its library roots, read once for a batch of its files.
+#[derive(Debug)]
+struct MediaFileDeleteTitle {
+    title: Title,
+    root_folders: Vec<RootFolderEntry>,
+}
+
+/// Run a delete check that reads the filesystem on the blocking pool.
+async fn run_blocking_delete_check<T: Send + 'static>(
+    check: impl FnOnce() -> AppResult<T> + Send + 'static,
+) -> AppResult<T> {
+    tokio::task::spawn_blocking(check)
+        .await
+        .map_err(|error| AppError::Repository(format!("delete preview task failed: {error}")))?
+}
+
 #[derive(Clone, Debug)]
 struct SubtitleDeleteContext {
     title_id: String,
@@ -485,7 +511,9 @@ impl AppUseCase {
         actor: &User,
         file_id: &str,
     ) -> AppResult<DeletePreview> {
-        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let context = self
+            .resolve_media_file_delete_context(file_id, MediaFileDeleteOrigin::User, None)
+            .await?;
         self.require_delete_context_permission(actor, &context)
             .await?;
         let manifest = self.build_delete_manifest(context.clone()).await?;
@@ -506,6 +534,13 @@ impl AppUseCase {
         let targets = self
             .resolve_episode_file_delete_targets(actor, title_id, episode_ids)
             .await?;
+        // Every target is a file of `title_id`, so its title and library
+        // roots are read once for the request rather than once per file.
+        let shared_title = if targets.is_empty() {
+            None
+        } else {
+            self.load_media_file_delete_title(title_id).await
+        };
         let mut items = Vec::with_capacity(targets.len());
         for chunk in targets.chunks(BULK_DELETE_PREVIEW_CONCURRENCY) {
             let mut tasks = Vec::with_capacity(chunk.len());
@@ -513,8 +548,11 @@ impl AppUseCase {
                 let app = self.clone();
                 let file_id = target.file_id.clone();
                 let episode_ids = target.episode_ids.clone();
+                let shared_title = shared_title.clone();
                 tasks.push(tokio::spawn(async move {
-                    let result = app.build_media_file_delete_preview(&file_id).await;
+                    let result = app
+                        .build_media_file_delete_preview(&file_id, shared_title.as_deref())
+                        .await;
                     DeleteEpisodeFilePreviewResult {
                         file_id,
                         episode_id: episode_ids[0].clone(),
@@ -613,8 +651,14 @@ impl AppUseCase {
 
     /// Build the delete preview for one media file without re-checking
     /// permissions; callers that already authorized the whole batch use this.
-    async fn build_media_file_delete_preview(&self, file_id: &str) -> AppResult<DeletePreview> {
-        let context = self.resolve_media_file_delete_context(file_id).await?;
+    async fn build_media_file_delete_preview(
+        &self,
+        file_id: &str,
+        shared_title: Option<&MediaFileDeleteTitle>,
+    ) -> AppResult<DeletePreview> {
+        let context = self
+            .resolve_media_file_delete_context(file_id, MediaFileDeleteOrigin::User, shared_title)
+            .await?;
         let manifest = self.build_delete_manifest(context).await?;
         Ok(manifest.to_preview())
     }
@@ -724,7 +768,9 @@ impl AppUseCase {
         &self,
         file_id: &str,
     ) -> AppResult<PolicyMediaFileDeletePlan> {
-        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let context = self
+            .resolve_media_file_delete_context(file_id, MediaFileDeleteOrigin::Automatic, None)
+            .await?;
         let manifest = self.build_delete_manifest(context.clone()).await?;
         ensure_delete_context_roots_available(&context)?;
         let mut paths = Vec::new();
@@ -752,7 +798,9 @@ impl AppUseCase {
         plan: &PolicyMediaFileDeletePlan,
         authorization: &PolicyDeleteAuthorization,
     ) -> AppResult<()> {
-        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let context = self
+            .resolve_media_file_delete_context(file_id, MediaFileDeleteOrigin::Automatic, None)
+            .await?;
         let manifest = self.build_delete_manifest(context.clone()).await?;
         // A resumed attempt may have removed part of its manifest. Only a
         // strict subset of the persisted ownership manifest is still authorized;
@@ -798,7 +846,9 @@ impl AppUseCase {
         preview_fingerprint: &str,
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
-        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let context = self
+            .resolve_media_file_delete_context(file_id, MediaFileDeleteOrigin::User, None)
+            .await?;
         self.execute_delete_context(
             context,
             preview_fingerprint,
@@ -813,7 +863,9 @@ impl AppUseCase {
         preview_fingerprint: &str,
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
-        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let context = self
+            .resolve_media_file_delete_context(file_id, MediaFileDeleteOrigin::User, None)
+            .await?;
         self.validate_delete_context(
             context,
             preview_fingerprint,
@@ -1028,11 +1080,16 @@ impl AppUseCase {
     /// aggregate preview fingerprint covering this file. The root-folder
     /// availability guard still runs per file so an offline root aborts the
     /// individual delete instead of silently removing catalog rows.
+    ///
+    /// The only caller is the episode-file delete a person previewed and
+    /// confirmed, so this is held to that preview's checks.
     pub(crate) async fn execute_delete_media_file_preapproved(
         &self,
         file_id: &str,
     ) -> AppResult<()> {
-        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let context = self
+            .resolve_media_file_delete_context(file_id, MediaFileDeleteOrigin::User, None)
+            .await?;
         let manifest = self.build_delete_manifest(context.clone()).await?;
         ensure_delete_context_roots_available(&context)?;
         apply_delete_manifest(&manifest).await
@@ -1233,9 +1290,36 @@ impl AppUseCase {
         Ok(Some(path_to_stored_string(&folder)))
     }
 
+    /// The title and library roots shared by every file of one batch request,
+    /// read once for the batch. `None` when they could not be read; each file
+    /// then reads them itself and reports what goes wrong as its own error.
+    async fn load_media_file_delete_title(
+        &self,
+        title_id: &str,
+    ) -> Option<Arc<MediaFileDeleteTitle>> {
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await
+            .ok()
+            .flatten()?;
+        let root_folders = self
+            .root_folders_for_library(&title.library_id, &title.facet)
+            .await
+            .ok()?;
+        Some(Arc::new(MediaFileDeleteTitle {
+            title,
+            root_folders,
+        }))
+    }
+
     async fn resolve_media_file_delete_context(
         &self,
         file_id: &str,
+        origin: MediaFileDeleteOrigin,
+        shared_title: Option<&MediaFileDeleteTitle>,
     ) -> AppResult<UserDeleteContext> {
         let media_file = self
             .services
@@ -1249,52 +1333,78 @@ impl AppUseCase {
                     format!("media file {}", file_id),
                 )
             })?;
-        let title = self
-            .services
-            .catalog
-            .titles
-            .get_by_id(&media_file.title_id)
-            .await?
-            .ok_or_else(|| {
-                AppError::not_found_reason(
-                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
-                    format!("title {}", media_file.title_id),
-                )
-            })?;
+        let shared_title = shared_title.filter(|shared| shared.title.id == media_file.title_id);
+        let title = match shared_title {
+            Some(shared) => shared.title.clone(),
+            None => self
+                .services
+                .catalog
+                .titles
+                .get_by_id(&media_file.title_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", media_file.title_id),
+                    )
+                })?,
+        };
         crate::folder_ownership::ensure_title_folder_is_not_a_library_root(self, &title).await?;
         let owned_folder = required_title_delete_folder(title.folder_path.clone())?;
-        let owned_path = crate::folder_ownership::resolved_folder_identity(
-            &stored_path_to_path_buf(&owned_folder),
-        )?;
-        let source_path = crate::folder_ownership::resolved_folder_identity(
-            &stored_path_to_path_buf(&media_file.file_path),
-        )?;
-        if source_path == owned_path || !source_path.starts_with(&owned_path) {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::library::RECORDED_MEDIA_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER,
-                "recorded media path is outside its title's owned folder",
-            ));
-        }
-        for owner in self
-            .services
-            .catalog
-            .titles
-            .list_delete_preview_info()
+        let owned_path = {
+            let owned_folder = owned_folder.clone();
+            let file_path = media_file.file_path.clone();
+            run_blocking_delete_check(move || {
+                let owned_path = crate::folder_ownership::resolved_folder_identity(
+                    &stored_path_to_path_buf(&owned_folder),
+                )?;
+                let source_path = crate::folder_ownership::resolved_folder_identity(
+                    &stored_path_to_path_buf(&file_path),
+                )?;
+                if source_path == owned_path || !source_path.starts_with(&owned_path) {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::library::RECORDED_MEDIA_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER,
+                        "recorded media path is outside its title's owned folder",
+                    ));
+                }
+                Ok(owned_path)
+            })
             .await?
-        {
-            if owner.title_id != title.id
-                && let Some(folder) = owner.folder_path
-                && crate::folder_ownership::title_folders_overlap(&owned_folder, &folder)?
+        };
+        // A person deleting one of a title's files chose that file; whatever
+        // other title shares or nests with this folder keeps its own files,
+        // because only this file's own paths are deleted. An unattended delete
+        // still stops at an overlap.
+        if origin == MediaFileDeleteOrigin::Automatic {
+            // TODO: remove in 0.22.4, once 0.22.3 enforces folder ownership at
+            // the storage layer and no two titles can hold the same or nested
+            // folders. Until then this compares the stored folders as spelled
+            // and reads nothing on disk.
+            for owner in self
+                .services
+                .catalog
+                .titles
+                .list_delete_preview_info()
+                .await?
             {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::library::TITLE_FOLDER_OVERLAPS_ANOTHER_TITLE,
-                    "title folder overlaps another title; refusing media deletion",
-                ));
+                if owner.title_id != title.id
+                    && let Some(folder) = owner.folder_path
+                    && crate::folder_ownership::stored_title_folders_overlap(&owned_folder, &folder)
+                {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::library::TITLE_FOLDER_OVERLAPS_ANOTHER_TITLE,
+                        "title folder overlaps another title; refusing media deletion",
+                    ));
+                }
             }
         }
-        let root_folders = self
-            .root_folders_for_library(&title.library_id, &title.facet)
-            .await?;
+        let root_folders = match shared_title {
+            Some(shared) => shared.root_folders.clone(),
+            None => {
+                self.root_folders_for_library(&title.library_id, &title.facet)
+                    .await?
+            }
+        };
         let subtitles = self
             .services
             .workflow
@@ -1302,13 +1412,23 @@ impl AppUseCase {
             .list_for_media_file(file_id)
             .await?;
 
-        for subtitle in &subtitles {
-            let path = crate::folder_ownership::resolved_folder_identity(
-                &stored_path_to_path_buf(&subtitle.file_path),
-            )?;
-            if path == owned_path || !path.starts_with(&owned_path) {
-                return Err(AppError::validation_refused(crate::error_reasons::library::RECORDED_SUBTITLE_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER, "recorded subtitle path is outside its title's owned folder"));
-            }
+        if !subtitles.is_empty() {
+            let subtitle_paths = subtitles
+                .iter()
+                .map(|subtitle| subtitle.file_path.clone())
+                .collect::<Vec<_>>();
+            run_blocking_delete_check(move || {
+                for subtitle_path in &subtitle_paths {
+                    let path = crate::folder_ownership::resolved_folder_identity(
+                        &stored_path_to_path_buf(subtitle_path),
+                    )?;
+                    if path == owned_path || !path.starts_with(&owned_path) {
+                        return Err(AppError::validation_refused(crate::error_reasons::library::RECORDED_SUBTITLE_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER, "recorded subtitle path is outside its title's owned folder"));
+                    }
+                }
+                Ok(())
+            })
+            .await?;
         }
 
         Ok(UserDeleteContext::MediaFile(MediaFileDeleteContext {
