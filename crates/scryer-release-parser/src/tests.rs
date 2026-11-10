@@ -1284,8 +1284,14 @@ fn complete_standard_episode_range_with_total_projects_season_pack() {
     let target = context(ContextFacetHint::Series, "Пример шоу");
     for (raw, season) in [
         ("Пример шоу / S1E1-16 of 16 (2026) WEBRip 1080p RUS", 1),
-        ("Пример шоу / Example Show / S2E1-8 of 8 [2026, WEB-DL 1080p] RUS", 2),
-        ("Пример шоу / S1E1-16 of 16 [2026, Боевик, WEBRip 1080p] RUS", 1),
+        (
+            "Пример шоу / Example Show / S2E1-8 of 8 [2026, WEB-DL 1080p] RUS",
+            2,
+        ),
+        (
+            "Пример шоу / S1E1-16 of 16 [2026, Боевик, WEBRip 1080p] RUS",
+            1,
+        ),
     ] {
         let parsed = crate::best_parse_for_target(raw, &target);
         let episode = parsed.episode.expect(raw);

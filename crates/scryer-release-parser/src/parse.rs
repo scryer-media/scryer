@@ -7522,7 +7522,10 @@ fn parse_complete_standard_episode_range_at(
     }
     let endpoint = tokens.get(last_token)?;
     if endpoint.separator_before_has_space
-        || !endpoint.normalized.bytes().all(|byte| byte.is_ascii_digit())
+        || !endpoint
+            .normalized
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
     {
         return None;
     }
