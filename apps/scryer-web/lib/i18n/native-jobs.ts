@@ -3,6 +3,13 @@ type Translate = (
   values?: Record<string, string | number | boolean | null | undefined>,
 ) => string;
 
+type JobRunName = { jobKey: string; displayName: string };
+
+/** Display name supplied to job-run notifications. */
+export function jobRunDisplayName(run: JobRunName, t: Translate): string {
+  return builtinText({ key: run.jobKey }, "name", run.displayName, t);
+}
+
 type NativeJob = {
   key: string;
   displayName: string;
@@ -61,7 +68,7 @@ function jobKind(key: string): string {
 }
 
 function builtinText(
-  job: NativeJob,
+  job: Pick<NativeJob, "key">,
   field: "name" | "description",
   fallback: string,
   t: Translate,

@@ -4,6 +4,7 @@ import {
   jobDescription,
   jobDisplayName,
   jobScheduleDescription,
+  jobRunDisplayName,
 } from "./native-jobs.ts";
 import ru from "./locales/ru.ts";
 import { interpolate } from "./types.ts";
@@ -20,6 +21,17 @@ function job(
 ) {
   return { key, displayName, description, schedule: { description: schedule } };
 }
+
+test("job-run notification names use the selected locale and preserve user names", () => {
+  for (const [jobKey, displayName, expected] of [
+    ["ACQUISITION_SEARCH", "Acquisition Search", "Поиск для загрузки"],
+    ["RSS_SYNC", "RSS Sync", ru["jobs.builtin.RssSync.name"]],
+    ["CUSTOM_JOB", "Acquisition Search", "Acquisition Search"],
+    ["NEW_UPSTREAM_JOB", "My new job", "My new job"],
+  ]) {
+    assert.equal(jobRunDisplayName({ jobKey, displayName }, t), expected);
+  }
+});
 
 test("built-in job names follow the job key, not the backend's wording", () => {
   assert.equal(
