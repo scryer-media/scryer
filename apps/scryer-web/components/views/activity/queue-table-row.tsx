@@ -75,6 +75,7 @@ export type QueueTableRowProps = {
   onManualImport: () => void;
   onAssignTitle: () => void;
   onIgnore: () => void;
+  onSetImportDismissed: () => void;
   onReleaseHeldSources: () => void;
   onMarkFailedSearchAgain: () => void;
   onMarkFailedOnly: () => void;
@@ -173,6 +174,7 @@ export const QueueTableRow = memo(function QueueTableRow({
   onManualImport,
   onAssignTitle,
   onIgnore,
+  onSetImportDismissed,
   onReleaseHeldSources,
   onMarkFailedSearchAgain,
   onMarkFailedOnly,
@@ -366,6 +368,28 @@ export const QueueTableRow = memo(function QueueTableRow({
                 }}
               >
                 <Link2 className="h-5 w-5" />
+              </QueueIconAction>
+            )}
+            {(row.canDismissImport || row.canResumeImportTracking) && (
+              <QueueIconAction
+                id={selectorId(
+                  "activity",
+                  activeTab,
+                  "import-tracking",
+                  rowSelectorKey,
+                )}
+                className={`h-10 w-10 border border-border/50 bg-muted/70 text-foreground hover:bg-accent/90 ${rowActionVisualClass}`}
+                disabled={isRowFullyBusy}
+                label={t(
+                  row.canResumeImportTracking
+                    ? "queue.resumeImportTracking"
+                    : "queue.dismissImportWarning",
+                )}
+                onClick={() => {
+                  if (!isActionLoading && !isRowBlocked) onSetImportDismissed();
+                }}
+              >
+                <CircleOff className="h-5 w-5" />
               </QueueIconAction>
             )}
             {row.canIgnore && (

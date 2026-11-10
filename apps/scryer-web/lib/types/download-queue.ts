@@ -38,6 +38,7 @@ export type TrackedDownloadState =
   | "IMPORTED"
   | "IMPORTED_SEEDING"
   | "IMPORT_BLOCKED"
+  | "IMPORT_DISMISSED"
   | "FAILED_PENDING"
   | "FAILED"
   | "IGNORED";
@@ -74,7 +75,13 @@ export type DownloadActivityFilter =
   | "WARNING";
 
 export type DownloadImportFilter =
-  "ALL" | "ATTENTION" | "IMPORTING" | "PENDING" | "BLOCKED" | "FAILED";
+  | "ALL"
+  | "ATTENTION"
+  | "IMPORTING"
+  | "PENDING"
+  | "BLOCKED"
+  | "FAILED"
+  | "DISMISSED";
 
 export type DownloadActivityStatus = Exclude<DownloadActivityFilter, "ALL">;
 export type DownloadImportStatus = Exclude<
@@ -210,6 +217,8 @@ export type DownloadImportActions = {
   assignTitle: boolean;
   ignore: boolean;
   markFailed: boolean;
+  dismissImportWarning?: boolean;
+  resumeImportTracking?: boolean;
 };
 
 export type ActiveImportStream = {

@@ -161,10 +161,10 @@ async fn check_with_lookup_remaps_remote_completed_download_paths_before_readine
                 id: "client-1".to_string(),
                 name: "qBittorrent".to_string(),
                 client_type: "qbittorrent".to_string(),
-                config_json: format!(
-                    r#"{{"remote_path_mappings":"/downloads => {}"}}"#,
-                    local_root.to_string_lossy()
-                ),
+                config_json: serde_json::json!({
+                    "remote_path_mappings": format!("/downloads => {}", local_root.display())
+                })
+                .to_string(),
                 is_enabled: true,
                 status: scryer_domain::DownloadClientStatus::Healthy,
                 last_error: None,
