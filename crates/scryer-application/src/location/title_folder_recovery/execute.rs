@@ -409,6 +409,20 @@ impl TitleAdmissionCheck for RecoveryExecution<'_> {
             return Ok(TitleAdmission::Stale(error.to_string()));
         }
         self.revalidate_folder_identity().await?;
+        // The commit records the destination through the checked folder
+        // write; ask it now, so a folder the title cannot own is refused
+        // before the first copy rather than after every file is copied.
+        if let Some(destination) = &self.plan.destination {
+            self.app
+                .services
+                .catalog
+                .titles
+                .check_title_folder_writes(&[crate::TitleFolderWrite::assign(
+                    &self.plan.title.id,
+                    destination,
+                )])
+                .await?;
+        }
         if let Some(reason) = self
             .app
             .active_work_blocking_a_move(&self.plan.title)

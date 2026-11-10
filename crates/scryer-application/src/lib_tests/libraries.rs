@@ -2779,6 +2779,42 @@ async fn folder_ownership_accepts_a_folder_in_any_root_of_the_titles_own_library
     );
 }
 
+/// Two imports of one new title finishing together each claim its folder
+/// from a copy that records none; the second finds the claim already made.
+#[tokio::test]
+async fn a_second_claim_of_the_same_folder_from_a_stale_copy_succeeds() {
+    let (app, title) = folder_ownership_two_movie_libraries(&["/Volumes/Media/Movies"]).await;
+    let folder = "/Volumes/Media/Movies/Synthetic Ownership Film (2024)";
+    let mut first = title.clone();
+    crate::folder_ownership::claim_title_folder_if_missing(&app, &mut first, Path::new(folder))
+        .await
+        .expect("first claim");
+
+    let mut stale = title.clone();
+    assert_eq!(stale.folder_path, None);
+    crate::folder_ownership::claim_title_folder_if_missing(
+        &app,
+        &mut stale,
+        Path::new(&format!("{folder}/")),
+    )
+    .await
+    .expect("the title already holds this folder");
+    assert_eq!(stale.folder_path.as_deref(), Some(folder));
+    assert_eq!(
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .folder_path
+            .as_deref(),
+        Some(folder),
+        "the stored spelling stays"
+    );
+}
+
 #[tokio::test]
 async fn folder_ownership_scan_snapshot_preserves_root_and_library_boundaries() {
     let (app, title) = folder_ownership_two_movie_libraries(&["/Volumes/Media/Movies"]).await;

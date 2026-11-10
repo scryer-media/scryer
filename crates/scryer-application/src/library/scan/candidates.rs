@@ -633,6 +633,20 @@ enum MovieMetadataResolution {
     Unmatched,
 }
 
+/// Ask the catalog whether a title about to be created by a scan could claim
+/// `folder_path`, so a refused claim leaves no folder-less title behind.
+async fn check_new_scan_title_folder(app: &AppUseCase, folder_path: String) -> AppResult<()> {
+    app.services
+        .catalog
+        .titles
+        .check_title_folder_writes(&[crate::TitleFolderWrite::assign(
+            scryer_domain::Id::new().0,
+            folder_path,
+        )
+        .expecting(None)])
+        .await
+}
+
 /// Create a scan-discovered title on the root the scan actually walked.
 ///
 /// `library_path` is the configured scan path of this pipeline run, so the
@@ -952,16 +966,7 @@ async fn resolve_movie_metadata_match(
         Path::new(library_path),
         &candidate.file.path,
         candidate.representative_is_directory,
-    ) && let Err(error) = app
-        .services
-        .catalog
-        .titles
-        .check_title_folder_writes(&[crate::TitleFolderWrite::assign(
-            scryer_domain::Id::new().0,
-            folder_path,
-        )
-        .expecting(None)])
-        .await
+    ) && let Err(error) = check_new_scan_title_folder(app, folder_path).await
     {
         return Ok(MovieMetadataResolution::CreateFailed(error));
     }
@@ -1695,15 +1700,22 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
         return Ok(());
     }
 
-    match create_title_without_hydration_for_library_scan(
-        app,
-        actor,
-        library_id,
-        library_path,
-        new_title,
-    )
-    .await
-    {
+    let created =
+        match check_new_scan_title_folder(app, path_to_stored_string(&candidate.folder_path)).await
+        {
+            Ok(()) => {
+                create_title_without_hydration_for_library_scan(
+                    app,
+                    actor,
+                    library_id,
+                    library_path,
+                    new_title,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
+    match created {
         Ok(created) => {
             let was_created = !created.reused_existing;
             let mut created_title = created.title;
@@ -1958,15 +1970,22 @@ pub(super) async fn process_resolved_series_refresh_candidate(
         return Ok(());
     }
 
-    match create_title_without_hydration_for_library_scan(
-        app,
-        actor,
-        library_id,
-        library_path,
-        new_title,
-    )
-    .await
-    {
+    let created =
+        match check_new_scan_title_folder(app, path_to_stored_string(&candidate.folder_path)).await
+        {
+            Ok(()) => {
+                create_title_without_hydration_for_library_scan(
+                    app,
+                    actor,
+                    library_id,
+                    library_path,
+                    new_title,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
+    match created {
         Ok(created) => {
             let was_created = !created.reused_existing;
             let mut created_title = created.title;

@@ -290,6 +290,69 @@ async fn a_folder_check_refuses_what_the_write_would_and_writes_nothing() {
     assert_eq!(folder_of(&pool, "cinderwake").await, (None, None));
 }
 
+#[tokio::test]
+async fn a_second_claim_of_the_same_folder_by_the_same_title_succeeds() {
+    let (store, pool) = store_with_titles(&["emberfall"]).await;
+    for _ in 0..2 {
+        store
+            .assign_title_folders(&[
+                TitleFolderWrite::assign("emberfall", "/media/Emberfall").expecting(None)
+            ])
+            .await
+            .expect("a title already holding the folder has its claim");
+    }
+    let owners: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM titles WHERE folder_path = '/media/Emberfall'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(owners, 1);
+    assert_eq!(
+        folder_of(&pool, "emberfall").await,
+        (
+            Some("/media/Emberfall".into()),
+            Some("/media/Emberfall".into())
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_title_recording_a_library_root_does_not_block_folders_inside_it() {
+    let (store, pool) = store_with_titles(&["stale", "emberfall"]).await;
+    store
+        .assign_title_folders(&[TitleFolderWrite::assign("stale", "/srv/films")])
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO library_roots
+             (id, library_id, path, normalized_path, is_default, created_at, updated_at)
+         VALUES ('root-films', 'movie_default_library', '/srv/films', '/srv/films', 0,
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    store
+        .assign_title_folders(&[TitleFolderWrite::assign(
+            "emberfall",
+            "/srv/films/Emberfall",
+        )])
+        .await
+        .expect("a root-sized record owns nothing under the root");
+    let error = store
+        .assign_title_folders(&[TitleFolderWrite::assign("emberfall", "/srv/films")])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reason(error),
+        folder_ownership::CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER
+    );
+    assert_eq!(
+        folder_of(&pool, "emberfall").await.0.as_deref(),
+        Some("/srv/films/Emberfall")
+    );
+}
+
 /// Two titles claim one folder: exactly one owns it and the other is refused.
 /// The store's writer gate runs the claims one after the other, so this
 /// proves the second claim is checked against the first, not how a race

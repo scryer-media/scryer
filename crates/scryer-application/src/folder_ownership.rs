@@ -433,7 +433,8 @@ pub(crate) async fn reclaim_stale_title_folder(
         Err(error) if title_folder_write_lost(&error) => return Ok(false),
         Err(error) => return Err(error),
     }
-    title.folder_path = Some(folder_path.clone());
+    title.folder_path =
+        Some(recorded_folder_after_claim(app, &title.id, folder_path.clone()).await?);
     tracing::info!(
         title_id = %title.id,
         previous_folder_path = %previous_folder_path,
@@ -830,7 +831,7 @@ pub(crate) async fn claim_title_folder_for_delete(
         }
         Err(error) => return Err(error),
     }
-    title.folder_path = Some(stored);
+    title.folder_path = Some(recorded_folder_after_claim(app, &title.id, stored).await?);
     Ok(())
 }
 
@@ -903,8 +904,27 @@ async fn claim_title_folder_with_layout(
             crate::TitleFolderWrite::assign(&title.id, &folder_path).expecting(None)
         ])
         .await?;
-    title.folder_path = Some(folder_path);
+    title.folder_path = Some(recorded_folder_after_claim(app, &title.id, folder_path).await?);
     Ok(())
+}
+
+/// The folder a title records after a claim of `claimed`. A title that
+/// already recorded that folder keeps its stored spelling, which can differ
+/// from `claimed` while naming the same folder.
+async fn recorded_folder_after_claim(
+    app: &AppUseCase,
+    title_id: &str,
+    claimed: String,
+) -> AppResult<String> {
+    Ok(app
+        .services
+        .catalog
+        .titles
+        .get_by_id(title_id)
+        .await?
+        .and_then(|title| title.folder_path)
+        .filter(|recorded| crate::title_folder_keys::title_folder_key(recorded).is_some())
+        .unwrap_or(claimed))
 }
 
 async fn ensure_unowned_folder_claimable(

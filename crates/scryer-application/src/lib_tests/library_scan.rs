@@ -4889,6 +4889,142 @@ async fn movie_full_scan_creates_no_title_for_a_folder_it_cannot_claim() {
     assert_eq!(std::fs::read(&movie_path).unwrap(), b"movie");
 }
 
+/// Answers every title search, of any kind, with one fixed match.
+struct FixedSeriesSearchMetadataGateway(FixedBatchSearchMetadataGateway);
+
+#[async_trait]
+impl MetadataGateway for FixedSeriesSearchMetadataGateway {
+    async fn search_titles_batch(
+        &self,
+        queries: &[MetadataSearchQuery],
+        _kind: &str,
+        language: &str,
+        _create_missing: bool,
+    ) -> AppResult<HashMap<MetadataSearchQuery, Vec<MetadataSearchItem>>> {
+        self.0.search_tvdb_batch(queries, language).await
+    }
+
+    async fn search_tvdb(
+        &self,
+        query: &str,
+        type_hint: &str,
+        year: Option<i32>,
+    ) -> AppResult<Vec<MetadataSearchItem>> {
+        self.0.search_tvdb(query, type_hint, year).await
+    }
+
+    async fn search_tvdb_batch(
+        &self,
+        queries: &[MetadataSearchQuery],
+        language: &str,
+    ) -> AppResult<HashMap<MetadataSearchQuery, Vec<MetadataSearchItem>>> {
+        self.0.search_tvdb_batch(queries, language).await
+    }
+
+    async fn search_tvdb_rich(
+        &self,
+        query: &str,
+        type_hint: &str,
+        limit: i32,
+        language: &str,
+        year: Option<i32>,
+    ) -> AppResult<Vec<RichMetadataSearchItem>> {
+        self.0
+            .search_tvdb_rich(query, type_hint, limit, language, year)
+            .await
+    }
+
+    async fn search_tvdb_multi(
+        &self,
+        query: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<MultiMetadataSearchResult> {
+        self.0.search_tvdb_multi(query, limit, language).await
+    }
+
+    async fn get_movie(&self, tvdb_id: i64, language: &str) -> AppResult<MovieMetadata> {
+        self.0.get_movie(tvdb_id, language).await
+    }
+
+    async fn get_metadata_bulk(
+        &self,
+        movie_tvdb_ids: &[i64],
+        series_tvdb_ids: &[i64],
+        language: &str,
+    ) -> AppResult<BulkMetadataResult> {
+        self.0
+            .get_metadata_bulk(movie_tvdb_ids, series_tvdb_ids, language)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn series_full_scan_creates_no_title_for_a_folder_it_cannot_claim() {
+    for refuse in [false, true] {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let series_folder = tempdir.path().join("Emberfall (2020)");
+        std::fs::create_dir(&series_folder).expect("create series folder");
+        let episode_path = series_folder.join("Emberfall - S01E01.mkv");
+        std::fs::write(&episode_path, b"episode").expect("write episode file");
+
+        let settings = Arc::new(StoredSettingsRepo::default());
+        settings
+            .set_value(
+                SETTINGS_SCOPE_MEDIA,
+                "series.path",
+                tempdir.path().to_string_lossy().as_ref(),
+            )
+            .await;
+        let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+        let (app, user, titles) = bootstrap_with_scan_unmatched_and_metadata_tracking_and_titles(
+            settings,
+            Arc::new(MutableLibraryScanner::default()),
+            unmatched_items.clone(),
+            Arc::new(FixedSeriesSearchMetadataGateway(
+                FixedBatchSearchMetadataGateway {
+                    results: vec![MetadataSearchItem {
+                        tvdb_id: "123456".to_string(),
+                        smg_id: None,
+                        primary_source: None,
+                        external_ids: vec![],
+                        name: "Emberfall".to_string(),
+                        year: Some(2020),
+                        auto_match_safe: true,
+                        auto_match_signals: vec!["exact_title".into(), "exact_year".into()],
+                    }],
+                },
+            )),
+        );
+        app.reconcile_default_library_roots()
+            .await
+            .expect("reconcile series root");
+        titles.refuse_folder_checks.store(refuse, Ordering::SeqCst);
+
+        app.scan_library(&user, MediaFacet::Series)
+            .await
+            .expect("series scan should continue");
+
+        let created = app
+            .list_titles_unpaged(&user, Some(MediaFacet::Series), None, None)
+            .await
+            .expect("list titles");
+        if !refuse {
+            assert_eq!(created.len(), 1, "the scan creates the series it matched");
+            continue;
+        }
+        assert!(
+            created.is_empty(),
+            "no title is created for a folder the catalog refuses"
+        );
+        let items = unmatched_items.items().await;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].reason_code, "title_create_from_search_failed");
+        assert_eq!(items[0].item_path, series_folder.to_string_lossy());
+        assert_eq!(std::fs::read(&episode_path).unwrap(), b"episode");
+    }
+}
+
 #[tokio::test]
 async fn series_full_scan_persists_unmatched_folders() {
     let tempdir = tempfile::tempdir().expect("tempdir");

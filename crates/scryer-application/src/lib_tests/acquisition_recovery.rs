@@ -12265,6 +12265,7 @@ async fn bootstrap_rss_with_media_files_and_profiles(
         )
         .await;
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles,
         shows,
@@ -12282,7 +12283,7 @@ async fn bootstrap_rss_with_media_files_and_profiles(
     .with_download_submissions(download_submissions.clone())
     .with_pending_releases(pending_releases.clone())
     .with_blocklist_repo(Arc::new(MockBlocklistRepo::default()))
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .with_media_files(media_files)
     .build_partial_for_tests();
 
