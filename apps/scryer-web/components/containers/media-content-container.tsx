@@ -1471,7 +1471,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     [canManageTitlesInLibrary, selectedTitleLibraryIds],
   );
   // Moving rewrites files on disk, so it needs the same rights as renaming.
-  const canMoveSelectedTitles = canRenameSelectedTitles;
+  // A move plans against one library's roots, so the action is offered only
+  // while the selection sits in a single library.
+  const canMoveSelectedTitles =
+    canRenameSelectedTitles && selectedTitleLibraryIds.length === 1;
   const [bulkMoveDialogOpen, setBulkMoveDialogOpen] = React.useState(false);
   const bulkMoveLibraries = React.useMemo(
     () =>
@@ -2541,7 +2544,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     openBulkTitleDelete,
   } = useBulkDelete({
     selectedTitles,
-    selectedTitleLibraryIds,
     bulkActionBusy,
     setBulkActionBusy,
     canExcludeFromLists: canManageLists,
@@ -4325,21 +4327,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     };
   }, [client, rootFolderValidationSnapshot]);
 
+  // Edit changes per-title options and tags, saved title by title, so the
+  // selection may span libraries. Only moves are limited to one library.
   const openBulkTitleEdit = React.useCallback(() => {
     if (selectedTitles.length === 0 || bulkActionBusy) {
       return;
     }
-    if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus("Bulk actions require titles from one library.");
-      return;
-    }
     setBulkEditDialogOpen(true);
-  }, [
-    bulkActionBusy,
-    selectedTitleLibraryIds.length,
-    selectedTitles.length,
-    setGlobalStatus,
-  ]);
+  }, [bulkActionBusy, selectedTitles.length]);
 
   const openBulkTitleMove = React.useCallback(() => {
     if (
@@ -4349,18 +4344,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     ) {
       return;
     }
-    if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus("Bulk actions require titles from one library.");
-      return;
-    }
     setBulkMoveDialogOpen(true);
-  }, [
-    bulkActionBusy,
-    canMoveSelectedTitles,
-    selectedTitleLibraryIds.length,
-    selectedTitles.length,
-    setGlobalStatus,
-  ]);
+  }, [bulkActionBusy, canMoveSelectedTitles, selectedTitles.length]);
 
   const requestDeleteTitle = React.useCallback(
     (title: TitleRecord) => {
