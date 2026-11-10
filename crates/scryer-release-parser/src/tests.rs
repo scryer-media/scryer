@@ -203,6 +203,38 @@ fn parenthetical_qualifiers_do_not_create_independent_title_identities() {
 }
 
 #[test]
+fn compact_episode_ranges_before_hyphenated_metadata_are_not_absolute_slots() {
+    for facet in [
+        ContextFacetHint::Unknown,
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+    ] {
+        let target = context(facet, "Northern Route");
+        for raw in [
+            "Northern Route - S1E1-13 - 2026 WEBDL 2160p",
+            "Northern Route.S01E01-13-2026.1080p.WEB-DL",
+            "Northern Route S01E01-13 - Complete [1080p]",
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(1), "{raw}");
+            assert_eq!(
+                episode.episode_numbers,
+                (1..=13).collect::<Vec<_>>(),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "Northern Route (1997) - S02E01 - 083 - Episode Title [1080p]",
+            "Northern Route S01E01 - 2026 - Episode Title [1080p]",
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            assert_eq!(parsed.episode.expect(raw).episode_numbers, vec![1], "{raw}");
+        }
+    }
+}
+
+#[test]
 fn four_digit_episode_ranges_preserve_coverage_without_consuming_trailing_years() {
     for facet in [
         ContextFacetHint::Unknown,
