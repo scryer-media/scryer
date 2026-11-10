@@ -396,6 +396,39 @@ pub fn title_lookup_form(value: &str) -> String {
     tokens.join(" ")
 }
 
+/// The lookup form of `value` written without its word-internal apostrophes,
+/// when it has any: `Cartographer's Key` gives `cartographers key`.
+///
+/// Release names usually drop an apostrophe, while [`title_lookup_form`]
+/// reads one as a word break (`cartographer s key`), so a matcher offers this
+/// spelling beside the lookup form. It never replaces it: stored keys stay put,
+/// and a release that keeps the apostrophe still meets the lookup form. Only an
+/// apostrophe between two letters or digits is dropped; a quote around a word
+/// still separates it.
+pub fn title_lookup_form_without_apostrophes(value: &str) -> Option<String> {
+    let chars = value.nfkc().collect::<Vec<_>>();
+    let mut elided = String::with_capacity(value.len());
+    let mut changed = false;
+    for (index, ch) in chars.iter().copied().enumerate() {
+        let joins_word = matches!(ch, '\'' | '\u{2019}' | '\u{02bc}')
+            && index > 0
+            && chars[index - 1].is_alphanumeric()
+            && chars
+                .get(index + 1)
+                .is_some_and(|next| next.is_alphanumeric());
+        if joins_word {
+            changed = true;
+        } else {
+            elided.push(ch);
+        }
+    }
+    if !changed {
+        return None;
+    }
+    let form = title_lookup_form(&elided);
+    (!form.is_empty() && form != title_lookup_form(value)).then_some(form)
+}
+
 /// The form a person typing into the library search box is matched against:
 /// [`normalize_title_spelling`] with diacritics folded away and two
 /// affordances a keyboard needs.
@@ -1249,6 +1282,34 @@ mod tests {
                 "{left} / {right}"
             );
         }
+    }
+
+    #[test]
+    fn the_apostrophe_free_spelling_joins_only_word_internal_apostrophes() {
+        for apostrophe in ['\'', '\u{2019}', '\u{02bc}'] {
+            assert_eq!(
+                title_lookup_form_without_apostrophes(&format!(
+                    "Wren Halloway and the Cartographer{apostrophe}s Key"
+                ))
+                .as_deref(),
+                Some("wren halloway and the cartographers key"),
+                "{apostrophe:?}"
+            );
+        }
+        assert_eq!(
+            title_lookup_form_without_apostrophes("Тінь м'ятного саду").as_deref(),
+            Some("тінь мятного саду")
+        );
+        assert_eq!(
+            title_lookup_form_without_apostrophes("Tavern 'Copper' Kettle").as_deref(),
+            None
+        );
+        assert_eq!(title_lookup_form_without_apostrophes("Copper Kettle"), None);
+        // The existing lookup form is unchanged.
+        assert_eq!(
+            title_lookup_form("Cartographer's Key"),
+            "cartographer s key"
+        );
     }
 
     #[test]

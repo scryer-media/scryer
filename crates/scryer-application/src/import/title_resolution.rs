@@ -217,13 +217,15 @@ impl MonitoredTitleMatcher {
         &self,
         title: &Title,
     ) -> crate::AppResult<crate::acquisition_release_search::TitleIdentityAmbiguity> {
+        let shared = self
+            .shared_lookup_keys(
+                &title.id,
+                &crate::acquisition_release_search::canonical_title_lookup_keys(title),
+            )
+            .await?;
         Ok(
             crate::acquisition_release_search::TitleIdentityAmbiguity::from_shared_keys(
-                self.shared_lookup_keys(
-                    &title.id,
-                    &crate::acquisition_release_search::canonical_title_lookup_keys(title),
-                )
-                .await?,
+                crate::acquisition_release_search::share_apostrophe_free_keys(title, shared),
             ),
         )
     }
@@ -609,9 +611,14 @@ impl MonitoredTitleMatcher {
                 })
                 .collect(),
         };
-        Ok(shared
-            .into_iter()
-            .map(crate::acquisition_release_search::TitleIdentityAmbiguity::from_shared_keys)
+        Ok(titles
+            .iter()
+            .zip(shared)
+            .map(|(title, shared)| {
+                crate::acquisition_release_search::TitleIdentityAmbiguity::from_shared_keys(
+                    crate::acquisition_release_search::share_apostrophe_free_keys(title, shared),
+                )
+            })
             .collect())
     }
 

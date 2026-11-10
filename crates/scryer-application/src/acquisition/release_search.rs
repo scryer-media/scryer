@@ -497,7 +497,48 @@ pub fn release_strategy_kind_for_label(label: &str, is_rss_request: bool) -> Rel
 
 /// One definition, shared with the persisted projection's exact lane.
 pub(crate) fn canonical_title_lookup_keys(title: &Title) -> Vec<String> {
-    crate::ports::title_lookup_forms(title)
+    let mut keys = crate::ports::title_lookup_forms(title);
+    // Release names usually drop an apostrophe the catalog keeps, so each name
+    // also answers to its apostrophe-free spelling.
+    for (_, key) in apostrophe_free_lookup_keys(title) {
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// Add to `shared` the apostrophe-free spelling of every name whose lookup
+/// form another title claims. The store keeps only the apostrophe spelling, so
+/// without this the apostrophe-free key would pass as a name unique to the
+/// title.
+pub(crate) fn share_apostrophe_free_keys(title: &Title, mut shared: Vec<String>) -> Vec<String> {
+    for (form, elided) in apostrophe_free_lookup_keys(title) {
+        if shared.contains(&form) && !shared.contains(&elided) {
+            shared.push(elided);
+        }
+    }
+    shared
+}
+
+/// Each of the title's names that has an apostrophe-free spelling, as
+/// `(lookup form, apostrophe-free form)`.
+fn apostrophe_free_lookup_keys(title: &Title) -> Vec<(String, String)> {
+    let title = title.with_custom_search_aliases();
+    std::iter::once(title.name.as_str())
+        .chain(title.aliases.iter().map(String::as_str))
+        .chain(title.tagged_aliases.iter().map(|alias| alias.name.as_str()))
+        .filter_map(|name| {
+            scryer_domain::title_spelling::title_lookup_form_without_apostrophes(name).map(
+                |elided| {
+                    (
+                        scryer_domain::title_spelling::title_lookup_form(name),
+                        elided,
+                    )
+                },
+            )
+        })
+        .collect()
 }
 
 /// Present a title's anime numbering bridge cour names as tagged aliases.
@@ -4168,6 +4209,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_release_that_drops_a_possessive_apostrophe_matches_the_title() {
+        let mut title = spelling_title("Wren Halloway and the Cartographer's Key", "eng");
+        title.year = Some(2001);
+        title.aliases = vec!["Wren Halloway and the Navigator\u{2019}s Key".into()];
+        let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;
+        for raw in [
+            "Wren.Halloway.and.the.Cartographers.Key.2001.2160p.BluRay.x265-GROUP",
+            "Wren.Halloway.and.the.Navigators.Key.2001.1080p.BluRay.x264-GROUP",
+            "Wren.Halloway.and.the.Cartographer's.Key.2001.2160p.BluRay.x265-GROUP",
+        ] {
+            assert!(
+                candidate_title_match(&make_candidate(raw, None), &evidence).is_some(),
+                "{raw}"
+            );
+        }
+        // Dropping the apostrophe joins only the letters it sat between.
+        for raw in [
+            "Wren.Halloway.and.the.Cartographer.Key.2001.1080p.BluRay.x264-GROUP",
+            "Wren.Halloway.and.the.Cartographers.Lock.2001.1080p.BluRay.x264-GROUP",
+        ] {
+            assert!(
+                candidate_title_match(&make_candidate(raw, None), &evidence).is_none(),
+                "{raw}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn slash_separated_anime_titles_match_with_standard_episode_markers() {
         let mut title = spelling_title("Battle Through the Heavens", "eng");
         title.facet = MediaFacet::Anime;
@@ -6203,12 +6272,10 @@ mod tests {
     async fn library_local_ambiguity(subject: &Title, library: &[Title]) -> TitleIdentityAmbiguity {
         let matcher =
             crate::import_title_resolution::MonitoredTitleMatcher::over_titles(library.to_vec());
-        TitleIdentityAmbiguity::from_shared_keys(
-            matcher
-                .shared_lookup_keys(&subject.id, &canonical_title_lookup_keys(subject))
-                .await
-                .expect("shared lookup keys"),
-        )
+        matcher
+            .identity_ambiguity(subject)
+            .await
+            .expect("identity ambiguity")
     }
 
     async fn ambiguous_episode_subject(
@@ -6341,6 +6408,25 @@ mod tests {
         assert_eq!(ambiguity.shared_lookup_keys, vec!["tide chart".to_string()]);
         assert!(!ambiguity.key_is_unique_to_title("tide chart"));
         assert!(ambiguity.key_is_unique_to_title("tide chart live action"));
+    }
+
+    #[tokio::test]
+    async fn an_apostrophe_free_key_is_shared_when_its_name_is() {
+        let (mut live_action, mut library) = tide_chart_library(Vec::new());
+        for title in library.iter_mut() {
+            title.name = "Keeper's Tide".into();
+        }
+        live_action.name = "Keeper's Tide".into();
+        let ambiguity = library_local_ambiguity(&live_action, &library).await;
+        assert!(!ambiguity.key_is_unique_to_title("keeper s tide"));
+        assert!(!ambiguity.key_is_unique_to_title("keepers tide"));
+
+        let subject = ambiguous_episode_subject(&live_action, &library, Some(2), Some(1)).await;
+        let candidate = make_candidate("Keepers.Tide.S02E01.1080p.WEB-DL.x264-GRP", None);
+        assert_eq!(
+            decision_for(&live_action, &subject, &candidate),
+            ReleaseAutoDecisionCode::AmbiguousIdentity
+        );
     }
 
     #[tokio::test]
