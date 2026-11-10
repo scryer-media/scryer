@@ -8142,8 +8142,6 @@ const en: LocaleDictionary = {
   "status.bulkTitleUpdatePartial":
     "Updated {{count}} titles; {{failed}} failed.",
   "status.bulkTitleUpdateFailed": "Failed to update selected titles.",
-  "status.bulkDeleteRequiresOneLibrary":
-    "Titles can only be deleted one library at a time. Select titles from a single library.",
   "status.bulkDeletePreviewFailed":
     "Failed to prepare delete preview for {{failed}} selected titles.",
   "status.bulkTitleDeleteFailed": "Failed to delete selected titles.",

@@ -2406,6 +2406,146 @@ async fn delete_titles_job_from_disk_reports_the_tracked_files_it_removed() {
 }
 
 #[tokio::test]
+async fn delete_titles_job_spanning_two_libraries_removes_only_the_selected_titles() {
+    let fixture = seed_episode_delete_fixture().await;
+    let (series_tracked, bystander) = fixture.seed_title_files_and_bystander().await;
+
+    // A movie in the movie library, under its own root.
+    let movie_root = fixture.root.with_file_name("movies");
+    std::fs::create_dir_all(&movie_root).expect("create movie root");
+    update_default_library_roots(
+        &fixture.app,
+        &fixture.admin,
+        MediaFacet::Movie,
+        vec![build_root_folder_entry(&movie_root, true)],
+    )
+    .await
+    .expect("save movie roots");
+    let add_movie = |name: &str| NewTitle {
+        name: name.into(),
+        facet: MediaFacet::Movie,
+        monitored: true,
+        ..Default::default()
+    };
+    let movie = fixture
+        .app
+        .add_title(&fixture.admin, add_movie("Kestrel Point"))
+        .await
+        .expect("create selected movie");
+    let kept_movie = fixture
+        .app
+        .add_title(&fixture.admin, add_movie("Lanternfall"))
+        .await
+        .expect("create unselected movie");
+    let series_library_id = fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&fixture.title_id)
+        .await
+        .expect("read series")
+        .expect("series exists")
+        .library_id;
+    assert_ne!(movie.library_id, series_library_id);
+
+    let mut movie_file = String::new();
+    let mut kept_movie_file = PathBuf::new();
+    for (title, folder) in [
+        (&movie, "Kestrel Point (2026)"),
+        (&kept_movie, "Lanternfall (2026)"),
+    ] {
+        let dir = movie_root.join(folder);
+        std::fs::create_dir_all(&dir).expect("create movie folder");
+        let path = dir.join(format!("{folder}.mkv"));
+        std::fs::write(&path, b"video").expect("write movie file");
+        fixture
+            .app
+            .services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, &dir.to_string_lossy())
+            .await
+            .expect("record movie folder");
+        fixture
+            .app
+            .services
+            .library
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.to_string_lossy().to_string(),
+                size_bytes: 5,
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .expect("insert movie file");
+        if title.id == movie.id {
+            movie_file = path.to_string_lossy().to_string();
+        } else {
+            kept_movie_file = path;
+        }
+    }
+
+    let mut items = Vec::new();
+    for title_id in [&fixture.title_id, &movie.id] {
+        let preview = fixture
+            .app
+            .preview_delete_title_files(&fixture.admin, title_id)
+            .await
+            .expect("preview title delete");
+        items.push(DeleteTitlesJobItem {
+            title_id: title_id.clone(),
+            preview_fingerprint: Some(preview.fingerprint),
+        });
+    }
+    let accepted = fixture
+        .app
+        .start_delete_titles_job(
+            &fixture.admin,
+            DeleteTitlesJobRequest {
+                items,
+                delete_files_on_disk: true,
+                typed_confirmation: None,
+            },
+        )
+        .await
+        .expect("start cross-library deletion job");
+    let run_id = accepted.job_run.id.clone();
+    let run = wait_for(
+        "the title deletion job to reach a terminal status",
+        || async {
+            fixture
+                .app
+                .list_job_runs(&fixture.admin, JobKey::TitleDeletion, 10)
+                .await
+                .expect("list title deletion runs")
+                .into_iter()
+                .find(|run| run.id == run_id && run.status.is_terminal())
+        },
+    )
+    .await;
+    assert_eq!(run.status, JobRunStatus::Completed);
+
+    for path in series_tracked.iter().chain([&movie_file]) {
+        assert!(!Path::new(path).exists(), "{path} should be gone");
+    }
+    assert!(bystander.exists(), "unrelated file must be preserved");
+    assert!(
+        kept_movie_file.exists(),
+        "an unselected title's file must be preserved"
+    );
+    let titles = &fixture.app.services.catalog.titles;
+    assert!(titles.get_by_id(&fixture.title_id).await.unwrap().is_none());
+    assert!(titles.get_by_id(&movie.id).await.unwrap().is_none());
+    assert!(
+        titles.get_by_id(&kept_movie.id).await.unwrap().is_some(),
+        "an unselected title stays in the catalog"
+    );
+}
+
+#[tokio::test]
 async fn delete_title_from_disk_omits_tracked_files_outside_the_title_folder() {
     let fixture = seed_episode_delete_fixture().await;
     let (tracked, bystander) = fixture.seed_title_files_and_bystander().await;

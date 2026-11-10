@@ -2544,7 +2544,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     openBulkTitleDelete,
   } = useBulkDelete({
     selectedTitles,
-    selectedTitleLibraryIds,
     bulkActionBusy,
     setBulkActionBusy,
     canExcludeFromLists: canManageLists,
