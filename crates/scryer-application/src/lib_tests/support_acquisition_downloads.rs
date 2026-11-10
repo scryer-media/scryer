@@ -395,6 +395,10 @@ pub(super) struct TrackingDownloadSubmissionRepo {
             >,
         >,
     >,
+    /// Client items whose binding has ended, as the real store ends it once a
+    /// download settles: the binding-backed lookup no longer finds their
+    /// submission, while the by-client-item reads still do.
+    pub(super) closed_bindings: Arc<Mutex<HashSet<ClientJobLocator>>>,
 }
 
 #[derive(Default, Clone)]
@@ -1223,6 +1227,17 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
                     && entry.download_client_item_id == identity.item_id.as_str()
             })
             .cloned())
+    }
+
+    async fn find_by_client_item_id_for_download(
+        &self,
+        _canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        identity: &ClientJobLocator,
+    ) -> AppResult<Option<DownloadSubmission>> {
+        if self.closed_bindings.lock().await.contains(identity) {
+            return Ok(None);
+        }
+        self.find_by_client_item_id(identity).await
     }
 
     async fn find_by_canonical_download_id(

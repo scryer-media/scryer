@@ -563,6 +563,22 @@ export function deriveDownloadQueueDisplayState(
     return "importing";
   }
 
+  // Mirrors the server: an import record on a download Scryer already settled
+  // is history, not something left to import.
+  if (
+    importStatusKey === "skipped" &&
+    trackedStateKey === "imported" &&
+    stateKey !== "warning"
+  ) {
+    return "completed";
+  }
+  if (
+    (importStatusKey === "failed" || importStatusKey === "skipped") &&
+    trackedStateKey === "failed"
+  ) {
+    return "failed";
+  }
+
   if (
     (importStatusKey === "failed" || importStatusKey === "skipped") &&
     (trackedStateKey === "import_blocked" ||

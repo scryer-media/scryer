@@ -59,6 +59,23 @@ fn base_download_queue_display_state(item: &DownloadQueueItem) -> DownloadDispla
                 DownloadDisplayState::Completed
             };
         }
+        // An import record on a download Scryer has already settled is history,
+        // not a decision still owed. A skip that ends with the download
+        // imported is the library already holding an equal or better file; a
+        // download that ended failed was rejected, blocklisted and replaced. A
+        // failed import on an imported download still shows: that failure
+        // came after the outcome and is news.
+        Some(ImportStatus::Skipped)
+            if item.tracked_state == Some(TrackedDownloadState::Imported)
+                && item.state != DownloadQueueState::Warning =>
+        {
+            return DownloadDisplayState::Completed;
+        }
+        Some(ImportStatus::Failed | ImportStatus::Skipped)
+            if item.tracked_state == Some(TrackedDownloadState::Failed) =>
+        {
+            return DownloadDisplayState::Failed;
+        }
         Some(ImportStatus::Failed | ImportStatus::Skipped)
             if matches!(
                 item.tracked_state,
