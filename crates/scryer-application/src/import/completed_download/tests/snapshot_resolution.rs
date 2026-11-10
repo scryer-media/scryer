@@ -3,15 +3,15 @@ use super::*;
 #[tokio::test]
 async fn dismissed_import_resume_cannot_approve_id_only_when_matcher_is_unavailable() {
     for restored_without_messages in [false, true] {
-        let title = build_title("title-a", "Paper Lantern", MediaFacet::Movie);
+        let title = build_title("title-a", "Example Movie", MediaFacet::Movie);
         let mut app = build_app(vec![title.clone()], vec![], vec![], vec![]);
         app.services.catalog.titles = Arc::new(TestTitleRepo {
             titles: Arc::new(Mutex::new(vec![title])),
             fail_matching: true,
         });
-        // Resume enters Downloading. A restored dismissed row has no in-memory
-        // conflict message, so infrastructure failure itself must close the gate.
-        let mut td = build_tracked_download("title-a", "movie", "The.Other.Movie.2020.1080p");
+        // A row restored after a restart has no in-memory conflict message, so
+        // infrastructure failure itself must close the gate.
+        let mut td = build_tracked_download("title-a", "movie", "Another.Example.Movie.2020.1080p");
         td.state = TrackedDownloadState::Downloading;
         td.match_type = TitleMatchType::IdOnly;
         if !restored_without_messages {
@@ -21,11 +21,11 @@ async fn dismissed_import_resume_cannot_approve_id_only_when_matcher_is_unavaila
             );
         }
         let mut completed = build_completed_download(
-            "The.Other.Movie.2020.1080p",
+            "Another.Example.Movie.2020.1080p",
             "/synthetic/completed",
             Some("movie"),
         );
-        completed.release_name = Some("The.Other.Movie.2020.1080p".to_string());
+        completed.release_name = Some("Another.Example.Movie.2020.1080p".to_string());
         assert!(!maybe_resolve_title_from_completed_download(&app, &mut td, &completed).await);
         assert_eq!(td.state, TrackedDownloadState::Downloading);
         if !restored_without_messages {
