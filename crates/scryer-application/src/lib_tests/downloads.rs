@@ -14084,6 +14084,207 @@ async fn ignore_tracked_download_uses_durable_fallback_idempotently() {
     );
 }
 
+async fn record_settled_submission(
+    app: &AppUseCase,
+    user: &User,
+    download_submissions: &TrackingDownloadSubmissionRepo,
+    item_id: &str,
+) -> (
+    ClientJobLocator,
+    scryer_domain::download_identity::DownloadId,
+) {
+    let title = app
+        .add_title(
+            user,
+            NewTitle {
+                name: "Harbor Lantern".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    download_submissions
+        .record_submission_with_identity(
+            DownloadSubmission {
+                download_id,
+                title_id: title.id,
+                purpose: crate::DownloadSubmissionPurpose::Standard,
+                facet: "movie".to_string(),
+                download_client_id: None,
+                download_client_type: "sabnzbd".to_string(),
+                download_client_item_id: item_id.to_string(),
+                source_hint: None,
+                source_provider_id: None,
+                source_provider_name: Some("Fixture Indexer".to_string()),
+                source_kind: None,
+                source_title: Some("Harbor.Lantern.2026.1080p.WEB-DL".to_string()),
+                info_hash: None,
+                release_size_bytes: None,
+                request_signature: None,
+                scope: SubmissionScope::Title,
+                release_listing_json: None,
+            },
+            DownloadSubmissionIdentity::default(),
+            None,
+        )
+        .await
+        .expect("record submission");
+    let source_identity = ClientJobLocator::new(None, "sabnzbd", item_id);
+    // Settled: the binding ended, but the client still lists the job.
+    download_submissions
+        .closed_bindings
+        .lock()
+        .await
+        .insert(source_identity.clone());
+    (source_identity, download_id)
+}
+
+/// A download Scryer already settled has no open binding, yet its client
+/// entry still draws an Import row. Ignoring that row must settle the same
+/// submission instead of answering "tracked download was not found".
+#[tokio::test]
+async fn ignore_settles_a_download_whose_binding_already_ended() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let (source_identity, download_id) =
+        record_settled_submission(&app, &user, &download_submissions, "sab-settled-1").await;
+
+    for attempt in ["first", "repeat"] {
+        assert!(
+            matches!(
+                crate::integration::workflow::finalize_scryer_download_ignored(
+                    &app,
+                    crate::domain_events::DomainEventActor::from(&user),
+                    source_identity.clone(),
+                )
+                .await
+                .expect("ignore a settled download"),
+                crate::integration::workflow::FinalizeIgnoredOutcome::Finalized
+            ),
+            "{attempt} ignore should settle the download"
+        );
+    }
+
+    // The ignore lands on the submission the row came from, by its canonical
+    // id, and does not bind a placeholder download to the client item.
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&download_id),
+                &DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await
+            .expect("load durable state")
+            .as_deref(),
+        Some(TrackedDownloadState::Ignored.as_str())
+    );
+    assert_eq!(download_submissions.store.lock().await.len(), 1);
+}
+
+/// Ignoring a settled download checks the library of the title its latest
+/// submission names, not merely that the actor may resolve imports somewhere.
+#[tokio::test]
+async fn ignore_of_a_settled_download_requires_its_titles_library() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let (source_identity, download_id) =
+        record_settled_submission(&app, &user, &download_submissions, "sab-settled-3").await;
+    let series_resolver = library_permission_user(
+        "series-only-resolver",
+        &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+        &[scryer_domain::LibraryPermission::ResolveImports],
+    );
+
+    let error = app
+        .ignore_tracked_download(&series_resolver, None, "sabnzbd", &source_identity.item_id)
+        .await
+        .expect_err("the movie belongs to a library this actor cannot resolve");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&download_id),
+                &DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await
+            .expect("load durable state"),
+        None
+    );
+
+    app.ignore_tracked_download(&user, None, "sabnzbd", &source_identity.item_id)
+        .await
+        .expect("an admin may ignore it");
+}
+
+/// A settled download keeps a terminal outcome it already reached; the ignore
+/// reports it rather than overwriting it.
+#[tokio::test]
+async fn ignore_keeps_the_outcome_of_a_download_whose_binding_ended() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let (source_identity, download_id) =
+        record_settled_submission(&app, &user, &download_submissions, "sab-settled-2").await;
+    download_submissions.tracked_states.lock().await.insert(
+        download_source_identity_key(&source_identity),
+        TrackedDownloadState::Failed.as_str().to_string(),
+    );
+
+    assert!(matches!(
+        crate::integration::workflow::finalize_scryer_download_ignored(
+            &app,
+            crate::domain_events::DomainEventActor::from(&user),
+            source_identity.clone(),
+        )
+        .await
+        .expect("ignore a failed download"),
+        crate::integration::workflow::FinalizeIgnoredOutcome::PreservedTerminal(state)
+            if state == TrackedDownloadState::Failed.as_str()
+    ));
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&download_id),
+                &DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await
+            .expect("load durable state"),
+        None
+    );
+}
+
 /// The download-queue poller memoizes the identity resolution of completed
 /// history rows against the registry generation. A lifecycle event that can
 /// rebind or retire a binding inside the store's own transaction has to move

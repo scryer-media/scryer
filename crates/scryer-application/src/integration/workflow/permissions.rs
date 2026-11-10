@@ -165,7 +165,15 @@ impl AppUseCase {
             .await
         {
             Ok(Some(binding)) => binding,
-            Ok(None) => return Ok(None),
+            Ok(None) => {
+                // A settled download has no open binding, yet its client entry
+                // can still be acted on (an ignore settles that latest
+                // submission), so that submission's title decides.
+                return Ok(latest_submission_for_client_item(self, &locator)
+                    .await?
+                    .map(|submission| submission.title_id)
+                    .filter(|title_id| !title_id.trim().is_empty()));
+            }
             Err(error) => {
                 // Same degradation as the queue delete itself: a registry
                 // fault leaves the legacy (any-library) authorization path.

@@ -545,6 +545,50 @@ pub(crate) async fn finalize_scryer_download_ignored(
     finalize_scryer_download_ignored_for_download(app, actor, None, source_identity).await
 }
 
+fn same_client_item(left: &ClientJobLocator, right: &ClientJobLocator) -> bool {
+    normalized_download_client_id(left.client_id.as_deref())
+        == normalized_download_client_id(right.client_id.as_deref())
+        && left.client_type.eq_ignore_ascii_case(&right.client_type)
+        && left.item_id == right.item_id
+}
+
+/// The newest submission for a client item, whether or not its binding is
+/// still open: the same one the queue row was attributed from.
+async fn latest_submission_for_client_item(
+    app: &AppUseCase,
+    source_identity: &ClientJobLocator,
+) -> AppResult<Option<crate::DownloadSubmission>> {
+    Ok(app
+        .services
+        .workflow
+        .download_submissions
+        .list_for_client_items(std::slice::from_ref(source_identity))
+        .await?
+        .into_iter()
+        .find(|submission| {
+            same_client_item(
+                &ClientJobLocator::from_submission(submission),
+                source_identity,
+            )
+        }))
+}
+
+/// The durable tracked state the queue row reads for a client item.
+async fn latest_tracked_state_for_client_item(
+    app: &AppUseCase,
+    source_identity: &ClientJobLocator,
+) -> AppResult<Option<String>> {
+    Ok(app
+        .services
+        .workflow
+        .download_submissions
+        .list_identity_tracked_states_for_client_items(std::slice::from_ref(source_identity))
+        .await?
+        .into_iter()
+        .find(|(locator, _)| same_client_item(locator, source_identity))
+        .map(|(_, state)| state))
+}
+
 pub(crate) async fn finalize_scryer_download_ignored_for_download(
     app: &AppUseCase,
     actor: crate::domain_events::DomainEventActor,
@@ -574,24 +618,55 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
     ];
 
     let submission_repository = &app.services.workflow.download_submissions;
-    let Some(submission) = submission_repository
+    let (submission, binding_closed) = match submission_repository
         .find_by_client_item_id_for_download(canonical_download_id, &source_identity)
         .await?
-    else {
-        return Ok(FinalizeIgnoredOutcome::NoSubmission);
+    {
+        Some(submission) => (submission, false),
+        // A download Scryer already settled has no open client binding, but
+        // its client entry (and so its queue row) can outlive that. The row is
+        // drawn from the latest submission for the client item, so the ignore
+        // settles that same submission.
+        None if canonical_download_id.is_none() => {
+            match latest_submission_for_client_item(app, &source_identity).await? {
+                Some(submission) => (submission, true),
+                None => return Ok(FinalizeIgnoredOutcome::NoSubmission),
+            }
+        }
+        None => return Ok(FinalizeIgnoredOutcome::NoSubmission),
     };
     if submission.title_id.trim().is_empty() {
         return Ok(FinalizeIgnoredOutcome::NoSubmission);
     }
+    // With the binding closed nothing resolves the canonical id from the
+    // client item any more, so every write below names it.
+    let canonical_download_id =
+        canonical_download_id.or(binding_closed.then_some(&submission.download_id));
     let incident_download_id = canonical_download_id
         .cloned()
         .or(Some(submission.download_id));
 
-    match submission_repository
-        .get_tracked_state(&source_identity)
-        .await?
-        .as_deref()
-    {
+    let current_state = if binding_closed {
+        // Read this submission's own outcome first: a client that reuses an
+        // item id lists an older grab's state for the same item. The per-item
+        // read only covers a submission that predates identity states.
+        match submission_repository
+            .get_identity_tracked_state_for_download(
+                Some(&submission.download_id),
+                &crate::DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await?
+        {
+            Some(state) => Some(state),
+            None => latest_tracked_state_for_client_item(app, &source_identity).await?,
+        }
+    } else {
+        submission_repository
+            .get_tracked_state(&source_identity)
+            .await?
+    };
+    match current_state.as_deref() {
         Some(state) if state == ignored => {
             crate::import_checks::retire_space_blocks(
                 app,
@@ -655,9 +730,14 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
         _ => {}
     }
 
-    submission_repository
-        .update_tracked_state(&source_identity, ignored)
-        .await?;
+    // The legacy column lives on whichever submission the open binding names;
+    // with none open, writing it would bind a new placeholder download to this
+    // client item. The identity state above is what a closed one is read by.
+    if !binding_closed {
+        submission_repository
+            .update_tracked_state(&source_identity, ignored)
+            .await?;
+    }
 
     crate::import_checks::retire_space_blocks(app, &source_identity, incident_download_id.as_ref())
         .await;

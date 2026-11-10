@@ -1513,6 +1513,77 @@ mod tests {
         assert_eq!(merged[0].state, DownloadQueueState::Failed);
     }
 
+    /// Skipped because the library already holds an equal or better file, and
+    /// Scryer settled the download as imported: nothing is left to decide, so
+    /// the row is history rather than a failed import waiting in Import.
+    #[test]
+    fn a_skip_on_an_imported_download_is_history_not_an_import_failure() {
+        let mut queue_item = item("job-already-imported", DownloadQueueState::Completed);
+        queue_item.import_status = Some(ImportStatus::Skipped);
+        queue_item.tracked_state = Some(TrackedDownloadState::Imported);
+
+        let classified = classify_download_queue_item(&queue_item);
+
+        assert_eq!(
+            derive_download_queue_display_state(&queue_item),
+            DownloadDisplayState::Completed
+        );
+        assert_eq!(classified.bucket, DownloadQueueBucket::HistorySuccess);
+        assert!(
+            !crate::app_usecase_integration::matches_download_import_filter(
+                &queue_item,
+                crate::DownloadImportFilter::Attention
+            )
+        );
+    }
+
+    /// A rejected import whose download Scryer already failed (blocklisted and
+    /// replaced) is failed history, not an Import row.
+    #[test]
+    fn a_rejected_import_on_a_failed_download_is_failed_history() {
+        for import_status in [ImportStatus::Failed, ImportStatus::Skipped] {
+            let mut queue_item = item("job-rejected", DownloadQueueState::Completed);
+            queue_item.import_status = Some(import_status);
+            queue_item.tracked_state = Some(TrackedDownloadState::Failed);
+
+            assert_eq!(
+                derive_download_queue_display_state(&queue_item),
+                DownloadDisplayState::Failed
+            );
+            assert_eq!(
+                classify_download_queue_item(&queue_item).bucket,
+                DownloadQueueBucket::HistoryFailed
+            );
+        }
+    }
+
+    /// Only a settled outcome moves the row: a failure on an imported download
+    /// came after the outcome and still shows, and an undecided download still
+    /// waits in Import.
+    #[test]
+    fn unsettled_or_later_import_failures_stay_in_import() {
+        let mut later_failure = item("job-later-failure", DownloadQueueState::Completed);
+        later_failure.import_status = Some(ImportStatus::Failed);
+        later_failure.tracked_state = Some(TrackedDownloadState::Imported);
+        assert_eq!(
+            derive_download_queue_display_state(&later_failure),
+            DownloadDisplayState::ImportFailed
+        );
+
+        let mut undecided = item("job-undecided", DownloadQueueState::Completed);
+        undecided.import_status = Some(ImportStatus::Skipped);
+        assert_eq!(
+            derive_download_queue_display_state(&undecided),
+            DownloadDisplayState::ImportFailed
+        );
+        assert!(
+            crate::app_usecase_integration::matches_download_import_filter(
+                &undecided,
+                crate::DownloadImportFilter::Attention
+            )
+        );
+    }
+
     #[test]
     fn ignored_state_overrides_a_stale_failed_import_overlay() {
         let mut queue_item = item("job-ignored", DownloadQueueState::Failed);
