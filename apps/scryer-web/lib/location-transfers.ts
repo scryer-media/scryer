@@ -27,6 +27,8 @@ export type TransferTitle = {
   verificationBytes: LongValue;
   copying: number;
   verifying: number;
+  /** Verified files waiting for the runner to record them. */
+  recording?: number;
   currentFile: string | null;
   hasException: boolean;
 };

@@ -292,17 +292,16 @@ async fn run_recovery_import_with_submissions(
             .unwrap()
             .join(format!("{}-library", title.facet.as_str()));
         std::fs::create_dir_all(&root).expect("create isolated import root");
+        let roots = crate::lib_tests::with_stored_root_ids(
+            &library,
+            vec![crate::LibraryRootDraft {
+                id: None,
+                path: root.to_string_lossy().into_owned(),
+                is_default: true,
+            }],
+        );
         let configured = libraries
-            .update(
-                &library.id,
-                library.name,
-                library.slug,
-                vec![crate::LibraryRootDraft {
-                    id: None,
-                    path: root.to_string_lossy().into_owned(),
-                    is_default: true,
-                }],
-            )
+            .update(&library.id, library.name, library.slug, roots)
             .await
             .expect("configure import fixture library");
         title.root_folder_id = configured.roots[0].id.clone();

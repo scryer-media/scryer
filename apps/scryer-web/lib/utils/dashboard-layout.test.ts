@@ -174,16 +174,18 @@ test("panel ids are stable kebab-case the server accepts, and every default is a
       const placed = DEFAULT_DASHBOARD_LAYOUTS[breakpoint].find(
         (entry) => entry.panelId === panelId,
       );
-      assert.ok(placed, `${breakpoint} ${panelId} placed`);
+      assert.equal(Boolean(placed), PAGE_ORDER.includes(panelId));
       const min = spec.min[breakpoint];
       assert.ok(
         min.w <= DASHBOARD_COLUMNS[breakpoint],
         `${breakpoint} ${panelId} min fits`,
       );
-      assert.ok(
-        placed.w >= min.w && placed.h >= min.h,
-        `${breakpoint} ${panelId} default ≥ min`,
-      );
+      if (placed) {
+        assert.ok(
+          placed.w >= min.w && placed.h >= min.h,
+          `${breakpoint} ${panelId} default ≥ min`,
+        );
+      }
     }
   }
   for (const breakpoint of DASHBOARD_BREAKPOINTS) {
@@ -193,6 +195,22 @@ test("panel ids are stable kebab-case the server accepts, and every default is a
     );
   }
   assert.ok(DASHBOARD_PANEL_IDS.length <= DASHBOARD_MAX_ITEMS);
+});
+
+test("recycle bin is optional at every breakpoint and survives layout persistence", () => {
+  assert.ok(DASHBOARD_PANEL_IDS.includes("recycle-bin"));
+  for (const breakpoint of DASHBOARD_BREAKPOINTS) {
+    const defaults = DEFAULT_DASHBOARD_LAYOUTS[breakpoint];
+    assert.ok(!defaults.some((entry) => entry.panelId === "recycle-bin"));
+    const added = appendDashboardPanel(defaults, "recycle-bin", breakpoint);
+    const saved = dashboardLayoutInput(breakpoint, added);
+    assert.ok(
+      effectiveDashboardLayouts([saved])[breakpoint].some(
+        (entry) => entry.panelId === "recycle-bin",
+      ),
+    );
+    assert.deepEqual(removeDashboardPanel(added, "recycle-bin"), defaults);
+  }
 });
 
 test("tiers follow size: smaller is compact, wider and taller is expanded", () => {

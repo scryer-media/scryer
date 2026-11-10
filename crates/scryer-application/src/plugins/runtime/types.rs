@@ -152,9 +152,99 @@ impl AppUseCase {
         }
     }
 }
+/// Blocker recorded for an enabled plugin whose saved settings do not validate.
+const SETTINGS_BLOCKER: &str = "plugin settings require configuration";
+
+/// Whether an installation runs from its own persisted artifact rather than
+/// a bundled builtin.
+fn installation_runs_persisted_artifact(installation: &PluginInstallation) -> bool {
+    matches!(
+        installation.source_kind,
+        PluginSourceKind::Downloaded | PluginSourceKind::Community | PluginSourceKind::Manual
+    )
+}
+
+/// Whether an enabled installation's persisted artifact may load into the
+/// runtime on this host.
+///
+/// The boot load and every later reload are the same reload, and it selects
+/// candidates with this one rule, so a plugin is never running after a
+/// restart and then gone after the next reload, or the other way round.
+pub fn runtime_plugin_installation_is_loadable(installation: &PluginInstallation) -> bool {
+    installation_runs_persisted_artifact(installation)
+        && installation_sdk_contract_is_host_compatible(installation)
+        && !installation_is_host_blocked(installation)
+}
+
+/// What one full provider reload put into service and what it held back.
+#[derive(Debug, Default)]
+pub struct RuntimePluginLoadReport {
+    /// Persisted plugins now running, each with its saved settings bound.
+    pub loaded: Vec<RuntimePluginLoad>,
+    /// Plugin ids held back because their saved settings do not validate.
+    pub settings_blocked: Vec<String>,
+    /// Enabled plugin ids held back by a compatibility blocker.
+    pub compatibility_blocked: Vec<String>,
+    /// Plugin ids skipped because their SDK contract does not match this host.
+    pub sdk_incompatible: Vec<String>,
+    /// Plugin ids whose persisted artifact failed to decode or validate.
+    pub failed: Vec<String>,
+    /// Provider types whose bundled builtin is not running: disabled by the
+    /// operator, or held back by a blocker.
+    pub disabled_builtins: Vec<String>,
+}
+
 impl AppUseCase {
+    /// Blockers that survive a reload. Settings blockers are re-evaluated on
+    /// every load, so they are dropped here and recomputed.
+    async fn retained_compatibility_blockers(&self) -> std::collections::HashMap<String, String> {
+        let mut blockers = self
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .clone();
+        blockers.retain(|_, reason| reason != SETTINGS_BLOCKER);
+        blockers
+    }
+
     /// Reload runtime plugin providers from database state + builtins.
     pub async fn reload_plugin_providers(&self) -> AppResult<()> {
+        self.reload_runtime_plugin_providers().await.map(|_| ())
+    }
+
+    /// Load every runtime plugin once at boot.
+    ///
+    /// The providers the application is assembled with carry the bundled
+    /// builtins only. This is the load that puts persisted plugins into
+    /// service, binds saved settings to them and to the builtins, and records
+    /// settings blockers. It runs after the startup plugin compatibility pass
+    /// has made its repairs and set its blockers, and before anything that
+    /// uses a plugin starts. It is the same reload every later plugin change
+    /// runs, so a plugin behaves the same after a restart as after a save.
+    pub async fn load_runtime_plugins_at_boot(&self) -> AppResult<RuntimePluginLoadReport> {
+        let report = self.reload_runtime_plugin_providers().await?;
+        if !report.sdk_incompatible.is_empty() {
+            warn!(
+                plugin_count = report.sdk_incompatible.len(),
+                plugin_ids = %report.sdk_incompatible.join(","),
+                "skipping installed plugins with incompatible sdk contracts; upgrade them from Plugins"
+            );
+        }
+        tracing::info!(
+            loaded = report.loaded.len(),
+            settings_blocked = report.settings_blocked.len(),
+            compatibility_blocked = report.compatibility_blocked.len(),
+            sdk_incompatible = report.sdk_incompatible.len(),
+            failed = report.failed.len(),
+            disabled_builtins = report.disabled_builtins.len(),
+            "runtime plugins loaded at boot"
+        );
+        Ok(report)
+    }
+
+    async fn reload_runtime_plugin_providers(&self) -> AppResult<RuntimePluginLoadReport> {
         let _settings_guard = self.runtime.plugins.settings_write_lock.lock().await;
         let enabled = self
             .services
@@ -162,44 +252,35 @@ impl AppUseCase {
             .plugin_installations
             .get_enabled_plugin_wasm_bytes()
             .await?;
-
-        let installations: std::collections::HashMap<_, _> = enabled
-            .iter()
-            .map(|(installation, _)| (installation.plugin_id.clone(), installation.clone()))
-            .collect();
-        let mut runtime_plugins = Vec::new();
-        const SETTINGS_BLOCKER: &str = "plugin settings require configuration";
-        let mut settings_blockers = std::collections::HashMap::new();
-        let mut compatibility_blockers = self
-            .runtime
-            .plugins
-            .compatibility_blockers
-            .read()
-            .await
-            .clone();
-        // Re-evaluate configuration blockers after a settings edit or plugin upgrade.
-        compatibility_blockers.retain(|_, reason| reason != SETTINGS_BLOCKER);
-        let mut pending_plugins = enabled.into_iter().filter_map(|(installation, payload)| {
+        let compatibility_blockers = self.retained_compatibility_blockers().await;
+        let mut report = RuntimePluginLoadReport::default();
+        let mut enabled_installations = Vec::with_capacity(enabled.len());
+        let mut candidates = Vec::new();
+        for (installation, payload) in enabled {
             if compatibility_blockers.contains_key(&installation.plugin_id) {
-                return None;
+                report
+                    .compatibility_blocked
+                    .push(installation.plugin_id.clone());
+            } else if runtime_plugin_installation_is_loadable(&installation)
+                && let Some(payload) = payload
+            {
+                candidates.push((installation.clone(), payload));
+            } else if installation_runs_persisted_artifact(&installation)
+                && validate_sdk_contract(
+                    installation.plugin_id.as_str(),
+                    installation.sdk_version.as_str(),
+                    installation.sdk_constraint.as_str(),
+                    SDK_VERSION,
+                )
+                .is_err()
+            {
+                report.sdk_incompatible.push(installation.plugin_id.clone());
             }
-            if !matches!(
-                installation.source_kind,
-                PluginSourceKind::Downloaded
-                    | PluginSourceKind::Community
-                    | PluginSourceKind::Manual
-            ) {
-                return None;
-            }
-            if !installation_sdk_contract_is_host_compatible(&installation) {
-                return None;
-            }
-            if installation_is_host_blocked(&installation) {
-                return None;
-            }
+            enabled_installations.push(installation);
+        }
 
-            payload.map(|payload| (installation, payload))
-        });
+        let mut loaded_plugins = Vec::new();
+        let mut pending_plugins = candidates.into_iter();
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..RUNTIME_PLUGIN_LOAD_CONCURRENCY {
             let Some((installation, payload)) = pending_plugins.next() else {
@@ -221,31 +302,7 @@ impl AppUseCase {
                 AppError::Repository(format!("runtime plugin load task panicked: {error}"))
             })?;
             match loaded {
-                Ok(mut runtime_plugin) => {
-                    let settings = match installations.get(&plugin_id) {
-                        Some(installation) => {
-                            self.runtime_plugin_settings(installation, &runtime_plugin.descriptor)
-                                .await
-                        }
-                        None => Err(AppError::Repository(
-                            "plugin installation disappeared during reload".into(),
-                        )),
-                    };
-                    match settings {
-                        Ok(settings) => {
-                            runtime_plugin.settings = settings;
-                            runtime_plugins.push(runtime_plugin);
-                        }
-                        Err(_) => {
-                            warn!(
-                                plugin_id = plugin_id.as_str(),
-                                "skipping plugin whose settings require configuration"
-                            );
-                            settings_blockers
-                                .insert(plugin_id.clone(), SETTINGS_BLOCKER.to_string());
-                        }
-                    }
-                }
+                Ok(runtime_plugin) => loaded_plugins.push(runtime_plugin),
                 Err(error) => {
                     warn!(
                         plugin_id = plugin_id.as_str(),
@@ -253,6 +310,7 @@ impl AppUseCase {
                         error = %error,
                         "skipping installed plugin after persisted payload validation failed"
                     );
+                    report.failed.push(plugin_id);
                 }
             }
 
@@ -267,6 +325,59 @@ impl AppUseCase {
                     .await;
                     (plugin_id, version, loaded)
                 });
+            }
+        }
+
+        self.apply_loaded_runtime_plugins(&enabled_installations, loaded_plugins, report)
+            .await
+    }
+
+    /// The single place that decides which decoded plugins and builtins run,
+    /// records settings blockers, and swaps every provider family.
+    async fn apply_loaded_runtime_plugins(
+        &self,
+        enabled_installations: &[PluginInstallation],
+        loaded_plugins: Vec<RuntimePluginLoad>,
+        mut report: RuntimePluginLoadReport,
+    ) -> AppResult<RuntimePluginLoadReport> {
+        let compatibility_blockers = self.retained_compatibility_blockers().await;
+        let installations_by_id = enabled_installations
+            .iter()
+            .map(|installation| (installation.id.as_str(), installation))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut settings_blockers = std::collections::HashMap::new();
+        let mut runtime_plugins = Vec::new();
+        for mut runtime_plugin in loaded_plugins {
+            let Some(installation) = runtime_plugin
+                .installation_id
+                .as_deref()
+                .and_then(|id| installations_by_id.get(id).copied())
+            else {
+                warn!(
+                    plugin_id = runtime_plugin.descriptor.id.as_str(),
+                    "skipping loaded plugin whose installation is no longer enabled"
+                );
+                continue;
+            };
+            if compatibility_blockers.contains_key(&installation.plugin_id) {
+                continue;
+            }
+            match self
+                .runtime_plugin_settings(installation, &runtime_plugin.descriptor)
+                .await
+            {
+                Ok(settings) => {
+                    runtime_plugin.settings = settings;
+                    runtime_plugins.push(runtime_plugin);
+                }
+                Err(_) => {
+                    warn!(
+                        plugin_id = installation.plugin_id.as_str(),
+                        "skipping plugin whose settings require configuration"
+                    );
+                    settings_blockers
+                        .insert(installation.plugin_id.clone(), SETTINGS_BLOCKER.to_string());
+                }
             }
         }
         let indexer_plugins = runtime_plugins
@@ -347,6 +458,8 @@ impl AppUseCase {
                 subtitle_builtin_settings.insert(installation.provider_type.clone(), settings);
             }
         }
+        report.settings_blocked = settings_blockers.keys().cloned().collect();
+        report.settings_blocked.sort();
         {
             let mut blockers = self.runtime.plugins.compatibility_blockers.write().await;
             blockers.retain(|_, reason| reason != SETTINGS_BLOCKER);
@@ -430,7 +543,9 @@ impl AppUseCase {
                 AppError::Repository(format!("failed to reload list provider plugins: {e}"))
             })?;
 
-        Ok(())
+        report.loaded = runtime_plugins;
+        report.disabled_builtins = disabled_builtins;
+        Ok(report)
     }
 }
 impl AppUseCase {
@@ -449,6 +564,7 @@ impl AppUseCase {
     /// stale at install time.
     pub async fn reconcile_indexer_configs(&self) -> AppResult<()> {
         self.reconcile_orphaned_managed_indexer_configs().await?;
+        let reserved = self.source_import_reserved_providers().await?;
         let Some(provider) = self.services.integrations.plugin_provider.available() else {
             return Ok(());
         };
@@ -462,6 +578,7 @@ impl AppUseCase {
             else {
                 continue;
             };
+            if reserved.contains(&pt) { continue; }
             let Some(default_url) = provider.default_base_url_for_provider(&pt) else {
                 continue;
             };

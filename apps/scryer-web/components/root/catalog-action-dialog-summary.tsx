@@ -1,3 +1,4 @@
+import { useTranslate } from "@/lib/context/translate-context";
 import { Clock3 } from "lucide-react";
 
 import { ExternalMediaLinkButton } from "@/components/common/external-media-links";
@@ -232,6 +233,7 @@ export function CatalogActionDialogSummary({
   result,
   facet,
 }: CatalogActionDialogSummaryProps) {
+  const t = useTranslate();
   const posterUrl = selectPosterVariantUrl(result.posterUrl, "w250");
   const backgroundUrl =
     selectBackdropVariantUrl(result.backgroundUrl, "original") ??
@@ -269,7 +271,7 @@ export function CatalogActionDialogSummary({
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted-foreground">
-              No art
+              {t("uiText.noArt")}
             </div>
           )}
         </div>

@@ -286,7 +286,7 @@ export function ExternalSubtitleSection({
                     </div>
                   ) : null}
                 </div>
-                <p className="mt-5 break-all font-[var(--font-code)] text-[11px] leading-5 text-muted-foreground">
+                <p className="mt-5 break-all font-[family-name:var(--font-code)] text-[11px] leading-5 text-muted-foreground">
                   {download.filePath}
                 </p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">

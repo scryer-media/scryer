@@ -20,7 +20,7 @@ use scryer_application::{
     ExternalImportSetupInstanceApiKeyDraft,
     ExternalImportSetupSecretDraftInput as AppExternalImportSetupSecretDraftInput,
     ExternalImportSetupSecretDraftSaveResult, ExternalImportSetupSecretInstanceKind,
-    ExternalImportSetupSecretOverrideDraft, FOLDER_CHMOD_KEY, IndexerConfigUpdate, LibraryScanHint,
+    ExternalImportSetupSecretOverrideDraft, FOLDER_CHMOD_KEY, LibraryScanHint,
     LibraryScanHintFacet, LibraryScanHintSet, LibraryScanHintSource, NFO_WRITE_ON_IMPORT_ANIME_KEY,
     NFO_WRITE_ON_IMPORT_MOVIE_KEY, NFO_WRITE_ON_IMPORT_SERIES_KEY,
     PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY, PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY,
@@ -1675,16 +1675,6 @@ fn prowlarr_parent_config_json(base_url: &str, api_key: &str) -> String {
     .to_string()
 }
 
-fn indexer_config_base_url(config_json: Option<&str>) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(config_json?).ok()?;
-    value
-        .get("base_url")
-        .or_else(|| value.get("baseUrl"))?
-        .as_str()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-}
-
 fn merge_prowlarr_group(
     groups: &mut HashMap<String, ProwlarrImportGroup>,
     detected: DetectedProwlarrIndexer,
@@ -1709,63 +1699,8 @@ fn detect_imported_prowlarr_proxy_indexer(
     }
 }
 
-fn version_from_validation_result(
-    result: &scryer_application::IndexerValidationResult,
-) -> Option<String> {
-    let message = result.message.as_deref()?.trim();
-    message
-        .strip_prefix("Connected to Prowlarr ")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn same_base_url(left: &str, right: &str) -> bool {
-    left.trim()
-        .trim_end_matches('/')
-        .eq_ignore_ascii_case(right.trim().trim_end_matches('/'))
-}
-
-fn imported_indexer_config_json(
-    fields: &[scryer_domain::ConfigFieldDef],
-    base_url: &str,
-    api_key: Option<&str>,
-    api_path: Option<&str>,
-) -> String {
-    let mut object = serde_json::Map::new();
-    if let Some(connection_field) = fields
-        .iter()
-        .find(|field| field.role == Some(scryer_domain::ConfigFieldRole::ConnectionUrl))
-        && !base_url.trim().is_empty()
-    {
-        object.insert(
-            connection_field.key.clone(),
-            serde_json::Value::String(base_url.trim().to_string()),
-        );
-    }
-    if let Some(api_key) = api_key.map(str::trim).filter(|value| !value.is_empty())
-        && let Some(api_key_field) = fields.iter().find(|field| {
-            field.key == "api_key"
-                || (field.field_type == scryer_domain::ConfigFieldType::Password
-                    && field.key.to_ascii_lowercase().contains("api"))
-        })
-    {
-        object.insert(
-            api_key_field.key.clone(),
-            serde_json::Value::String(api_key.to_string()),
-        );
-    }
-    if let Some(api_path) = api_path.map(str::trim).filter(|value| !value.is_empty())
-        && let Some(api_path_field) = fields.iter().find(|field| field.key == "api_path")
-    {
-        object.insert(
-            api_path_field.key.clone(),
-            serde_json::Value::String(api_path.to_string()),
-        );
-    }
-
-    serde_json::Value::Object(object).to_string()
-}
+#[cfg(test)]
+use scryer_application::source_import::imported_indexer_config_json;
 
 #[Object]
 impl ExternalImportMutations {
@@ -2113,7 +2048,7 @@ impl ExternalImportMutations {
             {
                 Ok((validation, plan)) => {
                     payload.prowlarr_connected = true;
-                    payload.prowlarr_version = version_from_validation_result(&validation);
+                    payload.prowlarr_version = validation.server_version.clone();
                     let child_names = plan
                         .children
                         .into_iter()
@@ -2224,6 +2159,11 @@ impl ExternalImportMutations {
         require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
         let actor = actor_from_ctx(ctx)?;
         let app = app_from_ctx(ctx)?;
+        if let Some(id) = input.source_import_run_id.as_deref() {
+            app.require_source_import_resolved(&actor, id)
+                .await
+                .map_err(to_gql_error)?;
+        }
         maintain_external_import_source_sessions(&app, &actor).await?;
 
         let mut source_results = BTreeMap::<String, ExternalImportArrSourceWarmupResult>::new();
@@ -2476,458 +2416,379 @@ impl ExternalImportMutations {
         })
     }
 
-    /// Re-connect to Sonarr/Radarr, fetch configs, and create selected items in Scryer.
-    async fn execute_external_import(
+    /// Accept selected sources durably before starting connection checks.
+    async fn start_external_import_sources(
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Selected imported clients and indexers plus any credentials needed to create them."
+            desc = "Stable caller-generated request identity reused when a response is lost."
+        )]
+        request_key: String,
+        #[graphql(
+            desc = "Fixed selected clients and indexers with the discovery snapshots and credentials required to import them."
         )]
         input: ExecuteExternalImportInput,
-    ) -> GqlResult<ExternalImportResultPayload> {
+    ) -> GqlResult<ExternalImportSourceJobPayload> {
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
         let app = app_from_ctx(ctx)?;
-
-        let selected_dc_keys: HashSet<String> = input
+        let keys = input
             .selected_download_client_dedup_keys
-            .into_iter()
+            .iter()
+            .chain(&input.selected_indexer_dedup_keys)
+            .cloned()
             .collect();
-        let selected_idx_keys: HashSet<String> =
-            input.selected_indexer_dedup_keys.into_iter().collect();
-        let dc_api_key_overrides: HashMap<String, String> = input
-            .download_client_api_key_overrides
-            .into_iter()
-            .map(|o| (o.dedup_key, o.api_key))
-            .collect();
-        let dc_password_overrides: HashMap<String, String> = input
-            .download_client_password_overrides
-            .into_iter()
-            .map(|o| (o.dedup_key, o.password))
-            .collect();
-        let idx_api_key_overrides: HashMap<String, String> = input
-            .indexer_api_key_overrides
-            .into_iter()
-            .map(|o| (o.dedup_key, o.api_key))
-            .collect();
+        if let Some(run) = app
+            .existing_source_import(&actor, &request_key, keys)
+            .await
+            .map_err(to_gql_error)?
+        {
+            return source_import_payload(&app, &actor, &run.id).await;
+        }
+        let selections = source_import_selections(&app, &actor, input)
+            .await
+            .map_err(to_gql_error)?;
+        let run = app
+            .start_source_import(&actor, &request_key, selections)
+            .await
+            .map_err(to_gql_error)?;
+        source_import_payload(&app, &actor, &run.id).await
+    }
 
-        let mut result = ExternalImportResultPayload {
-            media_paths_saved: false,
-            download_clients_created: 0,
-            indexers_created: 0,
-            plugins_installed: Vec::new(),
-            errors: Vec::new(),
+    /// Read the caller-owned durable source import and its per-item receipts.
+    async fn external_import_source_status(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Accepted source import workflow run identity.")] run_id: ID,
+    ) -> GqlResult<ExternalImportSourceJobPayload> {
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        source_import_payload(&app_from_ctx(ctx)?, &actor, run_id.as_str()).await
+    }
+
+    /// Retry only failed or interrupted sources, retaining successful configuration identities.
+    async fn retry_external_import_sources(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Caller-owned terminal source import to retry.")] run_id: ID,
+        #[graphql(
+            desc = "Optional corrected credentials for unresolved sources, keyed by their stable source identities."
+        )]
+        corrections: Vec<IndexerApiKeyOverrideInput>,
+    ) -> GqlResult<ExternalImportSourceJobPayload> {
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let app = app_from_ctx(ctx)?;
+        app.retry_source_import(
+            &actor,
+            run_id.as_str(),
+            corrections
+                .into_iter()
+                .map(|item| (item.dedup_key, item.api_key))
+                .collect(),
+        )
+        .await
+        .map_err(to_gql_error)?;
+        source_import_payload(&app, &actor, run_id.as_str()).await
+    }
+
+    /// Explicitly skip one unresolved terminal source so it no longer blocks finishing setup.
+    async fn skip_external_import_source(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Caller-owned terminal source import containing the item.")] run_id: ID,
+        #[graphql(desc = "Stable identity of the failed or interrupted source to skip.")]
+        key: String,
+    ) -> GqlResult<ExternalImportSourceJobPayload> {
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let app = app_from_ctx(ctx)?;
+        app.skip_source_import_item(&actor, run_id.as_str(), &key)
+            .await
+            .map_err(to_gql_error)?;
+        source_import_payload(&app, &actor, run_id.as_str()).await
+    }
+}
+
+async fn source_import_payload(
+    app: &scryer_application::AppUseCase,
+    actor: &scryer_domain::User,
+    id: &str,
+) -> GqlResult<ExternalImportSourceJobPayload> {
+    let (run, progress) = app
+        .source_import_status(actor, id)
+        .await
+        .map_err(to_gql_error)?;
+    Ok(ExternalImportSourceJobPayload {
+        // Fixed width and offset so clients can order snapshots by comparing strings.
+        updated_at: run
+            .updated_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        run_id: run.id.into(),
+        active: !run.status.is_terminal(),
+        ready: progress.items.iter().all(|item| item.state.resolved()),
+        items: progress
+            .items
+            .into_iter()
+            .map(|item| ExternalImportSourceItemPayload {
+                key: item.key,
+                name: item.name,
+                config_id: item.config_id.into(),
+                kind: item.kind,
+                state: match item.state {
+                    scryer_application::source_import::SourceImportState::Queued => "queued",
+                    scryer_application::source_import::SourceImportState::Installing => {
+                        "installing"
+                    }
+                    scryer_application::source_import::SourceImportState::Checking => "checking",
+                    scryer_application::source_import::SourceImportState::Saving => "saving",
+                    scryer_application::source_import::SourceImportState::Succeeded => "succeeded",
+                    scryer_application::source_import::SourceImportState::Failed => "failed",
+                    scryer_application::source_import::SourceImportState::Interrupted => {
+                        "interrupted"
+                    }
+                    scryer_application::source_import::SourceImportState::Skipped => "skipped",
+                }
+                .into(),
+                reason: item.reason,
+                message: item.message,
+            })
+            .collect(),
+    })
+}
+
+async fn source_import_selections(
+    app: &scryer_application::AppUseCase,
+    actor: &scryer_domain::User,
+    input: ExecuteExternalImportInput,
+) -> scryer_application::AppResult<Vec<scryer_application::source_import::SourceImportSelection>> {
+    let selected_dc_keys: HashSet<String> = input
+        .selected_download_client_dedup_keys
+        .into_iter()
+        .collect();
+    let selected_idx_keys: HashSet<String> =
+        input.selected_indexer_dedup_keys.into_iter().collect();
+    let dc_api_key_overrides: HashMap<String, String> = input
+        .download_client_api_key_overrides
+        .into_iter()
+        .map(|o| (o.dedup_key, o.api_key))
+        .collect();
+    let dc_password_overrides: HashMap<String, String> = input
+        .download_client_password_overrides
+        .into_iter()
+        .map(|o| (o.dedup_key, o.password))
+        .collect();
+    let idx_api_key_overrides: HashMap<String, String> = input
+        .indexer_api_key_overrides
+        .into_iter()
+        .map(|o| (o.dedup_key, o.api_key))
+        .collect();
+
+    let mut selections = Vec::new();
+
+    // ── Collect download clients + indexers from external apps ─────────
+    let mut all_download_clients: Vec<(ArrDownloadClient, String)> = Vec::new();
+    let mut all_indexers: Vec<(ArrIndexer, String)> = Vec::new();
+    let mut seen_dc_keys: HashSet<String> = HashSet::new();
+    let mut seen_idx_keys: HashSet<String> = HashSet::new();
+    let mut prowlarr_groups: HashMap<String, ProwlarrImportGroup> = HashMap::new();
+    let linked_prowlarr_base_url = input.prowlarr.as_ref().map(|conn| conn.base_url.as_str());
+
+    if let Some(conn) = &input.prowlarr {
+        let dedup_key = prowlarr_dedup_key(&conn.base_url);
+        if selected_idx_keys.contains(&dedup_key) {
+            merge_direct_prowlarr_group(&mut prowlarr_groups, &conn.base_url, &conn.api_key, &[]);
+        }
+    }
+
+    for session_id in input.source_warmup_session_ids {
+        let session_id_string = session_id.to_string();
+        let snapshot = app
+            .get_external_import_monitor_warmup_status(actor, &session_id_string)
+            .await?;
+        if snapshot.status != ExternalImportMonitorWarmupStatus::Completed {
+            return Err(AppError::validation_refused(
+                scryer_application::source_import::refusal::SOURCE_NOT_READY,
+                "source discovery must complete before importing configurations",
+            ));
+        }
+        let warmup = app
+            .external_import_arr_source_warmup_result(actor, &session_id_string)
+            .await?;
+
+        for dc in warmup.download_clients {
+            let mapped = map_download_client(&dc, &warmup.source_key);
+            if mapped.supported
+                && seen_dc_keys.insert(mapped.dedup_key.clone())
+                && selected_dc_keys.contains(&mapped.dedup_key)
+            {
+                all_download_clients.push((dc, warmup.source_key.clone()));
+            }
+        }
+
+        for idx in warmup.indexers {
+            if external_import::should_skip_imported_indexer(&idx) {
+                continue;
+            }
+
+            if let Some(detected) =
+                detect_imported_prowlarr_proxy_indexer(&idx, linked_prowlarr_base_url)
+            {
+                let dedup_key = prowlarr_dedup_key(&detected.base_url);
+                if selected_idx_keys.contains(&dedup_key) {
+                    merge_prowlarr_group(&mut prowlarr_groups, detected, &warmup.source_key);
+                }
+                continue;
+            }
+
+            let mapped = map_indexer(&idx, &warmup.source_key);
+            if mapped.supported
+                && seen_idx_keys.insert(mapped.dedup_key.clone())
+                && selected_idx_keys.contains(&mapped.dedup_key)
+            {
+                all_indexers.push((idx, warmup.source_key.clone()));
+            }
+        }
+    }
+
+    // ── Create download clients ───────────────────────────────────────
+    for (dc, _source) in &all_download_clients {
+        let Some(scryer_type) = external_import::map_download_client_type(&dc.implementation)
+        else {
+            continue;
         };
 
-        // ── Collect download clients + indexers from external apps ─────────
-        let mut all_download_clients: Vec<(ArrDownloadClient, String)> = Vec::new();
-        let mut all_indexers: Vec<(ArrIndexer, String)> = Vec::new();
-        let mut seen_dc_keys: HashSet<String> = HashSet::new();
-        let mut seen_idx_keys: HashSet<String> = HashSet::new();
-        let mut prowlarr_groups: HashMap<String, ProwlarrImportGroup> = HashMap::new();
-        let linked_prowlarr_base_url = input.prowlarr.as_ref().map(|conn| conn.base_url.as_str());
+        let host = external_import::field_str(&dc.fields, "host").unwrap_or_default();
+        let port = external_import::field_str_or_number(&dc.fields, "port").unwrap_or_default();
+        let use_ssl = external_import::field_bool(&dc.fields, "useSsl").unwrap_or(false);
+        let url_base = external_import::field_str(&dc.fields, "urlBase").unwrap_or_default();
 
-        if let Some(conn) = &input.prowlarr {
-            let dedup_key = prowlarr_dedup_key(&conn.base_url);
-            if selected_idx_keys.contains(&dedup_key) {
-                merge_direct_prowlarr_group(
-                    &mut prowlarr_groups,
-                    &conn.base_url,
-                    &conn.api_key,
-                    &[],
-                );
-            }
-        }
+        let mut config_obj = imported_download_client_connection_config(
+            scryer_type,
+            &host,
+            &port,
+            use_ssl,
+            &url_base,
+        );
 
-        for session_id in input.source_warmup_session_ids {
-            let session_id_string = session_id.to_string();
-            let snapshot = app
-                .get_external_import_monitor_warmup_status(&actor, &session_id_string)
-                .await?;
-            if snapshot.status != ExternalImportMonitorWarmupStatus::Completed {
-                result.errors.push(format!(
-                    "source warmup session {session_id_string} is not completed"
-                ));
-                continue;
-            }
-            let warmup = app
-                .external_import_arr_source_warmup_result(&actor, &session_id_string)
-                .await?;
-
-            for dc in warmup.download_clients {
-                let mapped = map_download_client(&dc, &warmup.source_key);
-                if mapped.supported
-                    && seen_dc_keys.insert(mapped.dedup_key.clone())
-                    && selected_dc_keys.contains(&mapped.dedup_key)
-                {
-                    all_download_clients.push((dc, warmup.source_key.clone()));
-                }
-            }
-
-            for idx in warmup.indexers {
-                if external_import::should_skip_imported_indexer(&idx) {
-                    continue;
-                }
-
-                if let Some(detected) =
-                    detect_imported_prowlarr_proxy_indexer(&idx, linked_prowlarr_base_url)
-                {
-                    let dedup_key = prowlarr_dedup_key(&detected.base_url);
-                    if selected_idx_keys.contains(&dedup_key) {
-                        merge_prowlarr_group(&mut prowlarr_groups, detected, &warmup.source_key);
-                    }
-                    continue;
-                }
-
-                let mapped = map_indexer(&idx, &warmup.source_key);
-                if mapped.supported
-                    && seen_idx_keys.insert(mapped.dedup_key.clone())
-                    && selected_idx_keys.contains(&mapped.dedup_key)
-                {
-                    all_indexers.push((idx, warmup.source_key.clone()));
-                }
-            }
-        }
-
-        // ── Create download clients ───────────────────────────────────────
-        for (dc, _source) in &all_download_clients {
-            let Some(scryer_type) = external_import::map_download_client_type(&dc.implementation)
-            else {
-                continue;
-            };
-
-            let host = external_import::field_str(&dc.fields, "host").unwrap_or_default();
-            let port = external_import::field_str_or_number(&dc.fields, "port").unwrap_or_default();
-            let use_ssl = external_import::field_bool(&dc.fields, "useSsl").unwrap_or(false);
-            let url_base = external_import::field_str(&dc.fields, "urlBase").unwrap_or_default();
-
-            let mut config_obj = imported_download_client_connection_config(
-                scryer_type,
-                &host,
-                &port,
-                use_ssl,
-                &url_base,
-            );
-
-            if scryer_type == "sabnzbd" || scryer_type == "weaver" {
-                // Prefer a user-supplied override (needed when Sonarr/Radarr masked
-                // the key), then fall back to the value fetched from the arr API.
-                let dedup_key = format!("{}:{}:{}", scryer_type, host, port);
-                let api_key = dc_api_key_overrides
-                    .get(&dedup_key)
-                    .cloned()
-                    .or_else(|| external_import::field_str_sensitive(&dc.fields, "apiKey"));
-                if let Some(api_key) = api_key {
-                    config_obj.insert("api_key".into(), serde_json::Value::String(api_key));
-                }
-            } else {
-                let dedup_key = format!("{}:{}:{}", scryer_type, host, port);
-                if let Some(username) = external_import::field_str(&dc.fields, "username") {
-                    config_obj.insert("username".into(), serde_json::Value::String(username));
-                }
-                let password = dc_password_overrides
-                    .get(&dedup_key)
-                    .cloned()
-                    .or_else(|| external_import::field_str_sensitive(&dc.fields, "password"));
-                if let Some(password) = password {
-                    config_obj.insert("password".into(), serde_json::Value::String(password));
-                }
-            }
-
-            let config_json = serde_json::Value::Object(config_obj).to_string();
-
-            match app
-                .create_download_client_config(
-                    &actor,
-                    NewDownloadClientConfig {
-                        name: dc.name.clone(),
-                        client_type: scryer_type.to_string(),
-                        config_json,
-                        client_priority: 0,
-                        is_enabled: true,
-                        proxy_config_id: None,
-                    },
-                )
-                .await
-            {
-                Ok(config) => {
-                    result.download_clients_created += 1;
-                    if scryer_type == "nzbget"
-                        || scryer_type == "sabnzbd"
-                        || scryer_type == "weaver"
-                    {
-                        let _ = app
-                            .ensure_download_client_routing_entry_for_client(&actor, &config.id)
-                            .await;
-                    }
-                }
-                Err(err) => {
-                    result.errors.push(format!(
-                        "failed to create download client '{}': {err}",
-                        dc.name
-                    ));
-                }
-            }
-        }
-
-        // ── Create native Prowlarr parents and sync managed children ───────
-        for group in prowlarr_groups.values() {
-            let dedup_key = group.dedup_key();
-            let override_api_key = idx_api_key_overrides
-                .get(&dedup_key)
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-            let api_key = override_api_key.or_else(|| {
-                if group.api_key_conflict {
-                    None
-                } else {
-                    group.api_key.clone()
-                }
-            });
-            let Some(api_key) = api_key else {
-                let help = prowlarr_api_key_help_url(&group.base_url)
-                    .map(|url| format!(" ({url})"))
-                    .unwrap_or_default();
-                let reason = if group.api_key_conflict {
-                    "visible API keys conflicted"
-                } else {
-                    "API key is missing or masked"
-                };
-                result.errors.push(format!(
-                    "failed to import {}: {reason}; enter the Prowlarr API key from Prowlarr -> Settings -> General{help}",
-                    prowlarr_display_name(&group.base_url)
-                ));
-                continue;
-            };
-
-            let name = prowlarr_display_name(&group.base_url);
-            let config_json = prowlarr_parent_config_json(&group.base_url, &api_key);
-            let existing_parents = match app
-                .list_indexer_configs(&actor, Some("prowlarr".to_string()))
-                .await
-            {
-                Ok(configs) => configs,
-                Err(err) => {
-                    result.errors.push(format!(
-                        "failed to inspect existing Prowlarr configs for '{name}': {err}"
-                    ));
-                    continue;
-                }
-            };
-
-            let existing_parent = existing_parents.into_iter().find(|config| {
-                indexer_config_base_url(config.config_json.as_deref()).is_some_and(
-                    |existing_base_url| same_base_url(&existing_base_url, &group.base_url),
-                )
-            });
-
-            if let Some(existing_config) = existing_parent {
-                match app
-                    .update_indexer_config(
-                        &actor,
-                        IndexerConfigUpdate {
-                            id: existing_config.id.clone(),
-                            name: None,
-                            provider_type: None,
-                            derived_base_url: None,
-                            rate_limit_seconds: None,
-                            rate_limit_burst: None,
-                            max_queries_per_minute: None,
-                            is_enabled: Some(true),
-                            enable_interactive_search: None,
-                            enable_auto_search: None,
-                            proxy_config_id: None,
-                            download_client_id: None,
-                            seeding_profile_id: None,
-                            managed_parent_config_id: None,
-                            managed_child_key: None,
-                            managed_metadata_json: None,
-                            caps_snapshot_json: None,
-                            config_json: Some(config_json.clone()),
-                        },
-                    )
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(err) => {
-                        result
-                            .errors
-                            .push(format!("failed to update Prowlarr config '{name}': {err}"));
-                        continue;
-                    }
-                }
-            } else {
-                match app
-                    .create_indexer_config(
-                        &actor,
-                        NewIndexerConfig {
-                            name: name.clone(),
-                            provider_type: "prowlarr".to_string(),
-                            rate_limit_seconds: None,
-                            rate_limit_burst: None,
-                            max_queries_per_minute: None,
-                            is_enabled: true,
-                            enable_interactive_search: false,
-                            enable_auto_search: false,
-                            proxy_config_id: None,
-                            download_client_id: None,
-                            config_json: Some(config_json.clone()),
-                        },
-                    )
-                    .await
-                {
-                    Ok(_config) => {
-                        result.indexers_created += 1;
-                    }
-                    Err(err) => {
-                        result
-                            .errors
-                            .push(format!("failed to create Prowlarr config '{name}': {err}"));
-                        continue;
-                    }
-                }
-            }
-        }
-
-        // ── Auto-install non-builtin plugins needed by selected indexers ──
-        let available_providers: HashSet<String> = app
-            .available_indexer_provider_types()
-            .iter()
-            .map(|(pt, _, _, _)| pt.clone())
-            .collect();
-
-        let mut auto_installed: HashSet<String> = HashSet::new();
-        for (idx, _) in &all_indexers {
-            let Some(scryer_type) =
-                external_import::map_indexer_provider_type(&idx.implementation, &idx.fields)
-            else {
-                continue;
-            };
-            if available_providers.contains(scryer_type) || auto_installed.contains(scryer_type) {
-                continue;
-            }
-            // Plugin not loaded — try to install from registry
-            let install_result = match app.install_plugin(&actor, scryer_type).await {
-                Ok(inst) => Ok(inst),
-                Err(_) => {
-                    // Catalog might not be cached yet — refresh and retry
-                    let _ = app.refresh_plugin_catalog_internal().await;
-                    app.install_plugin(&actor, scryer_type).await
-                }
-            };
-            match install_result {
-                Ok(inst) => {
-                    auto_installed.insert(scryer_type.to_string());
-                    result.plugins_installed.push(inst.name);
-                }
-                Err(err) => {
-                    result
-                        .errors
-                        .push(format!("failed to install {} plugin: {err}", scryer_type));
-                }
-            }
-        }
-
-        // ── Create indexers ───────────────────────────────────────────────
-        for (idx, _source) in &all_indexers {
-            let Some(scryer_type) =
-                external_import::map_indexer_provider_type(&idx.implementation, &idx.fields)
-            else {
-                continue;
-            };
-
-            let base_url = external_import::field_str(&idx.fields, "baseUrl").unwrap_or_default();
-            let api_path = external_import::field_str(&idx.fields, "apiPath");
-            let dedup_key = format!("{}:{}", scryer_type, base_url);
-            let api_key = idx_api_key_overrides
+        if scryer_type == "sabnzbd" || scryer_type == "weaver" {
+            // Prefer a user-supplied override (needed when Sonarr/Radarr masked
+            // the key), then fall back to the value fetched from the arr API.
+            let dedup_key = format!("{}:{}:{}", scryer_type, host, port);
+            let api_key = dc_api_key_overrides
                 .get(&dedup_key)
                 .cloned()
-                .or_else(|| external_import::field_str_sensitive(&idx.fields, "apiKey"));
-            let fields = match app.indexer_config_fields_for_provider_type(scryer_type) {
-                Ok(fields) => fields,
-                Err(_) => continue,
-            };
-            let config_json = imported_indexer_config_json(
-                &fields,
-                &base_url,
-                api_key.as_deref(),
-                api_path.as_deref(),
-            );
-
-            // If the plugin was just auto-installed, it may have auto-created a
-            // default IndexerConfig. Update that config instead of creating a
-            // duplicate. Once claimed, further indexers of the same type create
-            // new configs normally.
-            if auto_installed.remove(scryer_type) {
-                let existing = app
-                    .list_indexer_configs(&actor, Some(scryer_type.to_string()))
-                    .await
-                    .unwrap_or_default();
-                if let Some(existing_config) = existing.first() {
-                    if existing_config.config_json.as_deref() != Some(config_json.as_str()) {
-                        let _ = app
-                            .update_indexer_config(
-                                &actor,
-                                IndexerConfigUpdate {
-                                    id: existing_config.id.clone(),
-                                    name: Some(idx.name.clone()),
-                                    provider_type: None,
-                                    derived_base_url: None,
-                                    rate_limit_seconds: None,
-                                    rate_limit_burst: None,
-                                    max_queries_per_minute: None,
-                                    is_enabled: None,
-                                    enable_interactive_search: None,
-                                    enable_auto_search: None,
-                                    proxy_config_id: None,
-                                    download_client_id: None,
-                                    seeding_profile_id: None,
-                                    managed_parent_config_id: None,
-                                    managed_child_key: None,
-                                    managed_metadata_json: None,
-                                    caps_snapshot_json: None,
-                                    config_json: Some(config_json.clone()),
-                                },
-                            )
-                            .await;
-                    }
-                    result.indexers_created += 1;
-                    continue;
-                }
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| external_import::field_str_sensitive(&dc.fields, "apiKey"));
+            // A missing key does not refuse the batch: the item fails on its own
+            // with a credential reason and can be retried with a correction.
+            if let Some(api_key) = api_key {
+                config_obj.insert("api_key".into(), serde_json::Value::String(api_key));
             }
-
-            match app
-                .create_indexer_config(
-                    &actor,
-                    NewIndexerConfig {
-                        name: idx.name.clone(),
-                        provider_type: scryer_type.to_string(),
-                        rate_limit_seconds: None,
-                        rate_limit_burst: None,
-                        max_queries_per_minute: None,
-                        is_enabled: true,
-                        enable_interactive_search: true,
-                        enable_auto_search: true,
-                        proxy_config_id: None,
-                        download_client_id: None,
-                        config_json: Some(config_json),
-                    },
-                )
-                .await
-            {
-                Ok(_) => {
-                    result.indexers_created += 1;
-                }
-                Err(err) => {
-                    result
-                        .errors
-                        .push(format!("failed to create indexer '{}': {err}", idx.name));
-                }
+        } else {
+            let dedup_key = format!("{}:{}:{}", scryer_type, host, port);
+            if let Some(username) = external_import::field_str(&dc.fields, "username") {
+                config_obj.insert("username".into(), serde_json::Value::String(username));
+            }
+            let password = dc_password_overrides
+                .get(&dedup_key)
+                .cloned()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| external_import::field_str_sensitive(&dc.fields, "password"));
+            if let Some(password) = password {
+                config_obj.insert("password".into(), serde_json::Value::String(password));
             }
         }
 
-        Ok(result)
+        let config_json = serde_json::Value::Object(config_obj).to_string();
+
+        selections.push(scryer_application::source_import::SourceImportSelection {
+            key: format!("{}:{}:{}", scryer_type, host, port),
+            name: dc.name.clone(),
+            input: scryer_application::source_import::SourceImportInput::DownloadClient(
+                NewDownloadClientConfig {
+                    name: dc.name.clone(),
+                    client_type: scryer_type.to_string(),
+                    config_json,
+                    client_priority: 0,
+                    is_enabled: true,
+                    proxy_config_id: None,
+                },
+            ),
+        });
     }
+    for group in prowlarr_groups.values() {
+        let key = group.dedup_key();
+        let api_key = idx_api_key_overrides
+            .get(&key)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                (!group.api_key_conflict)
+                    .then(|| group.api_key.clone())
+                    .flatten()
+            });
+        let name = prowlarr_display_name(&group.base_url);
+        // Without a key the item is still accepted; the run fails it individually.
+        let input =
+            scryer_application::source_import::SourceImportInput::Indexer(NewIndexerConfig {
+                name: name.clone(),
+                provider_type: "prowlarr".into(),
+                config_json: Some(prowlarr_parent_config_json(
+                    &group.base_url,
+                    api_key.as_deref().unwrap_or_default(),
+                )),
+                rate_limit_seconds: None,
+                rate_limit_burst: None,
+                max_queries_per_minute: None,
+                is_enabled: true,
+                enable_interactive_search: false,
+                enable_auto_search: false,
+                proxy_config_id: None,
+                download_client_id: None,
+            });
+        selections.push(scryer_application::source_import::SourceImportSelection {
+            key,
+            name,
+            input,
+        });
+    }
+    for (idx, _) in all_indexers {
+        let Some(provider_type) =
+            external_import::map_indexer_provider_type(&idx.implementation, &idx.fields)
+        else {
+            continue;
+        };
+        let base_url = external_import::field_str(&idx.fields, "baseUrl").unwrap_or_default();
+        let key = format!("{}:{}", provider_type, base_url);
+        let api_key = idx_api_key_overrides
+            .get(&key)
+            .cloned()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| external_import::field_str_sensitive(&idx.fields, "apiKey"));
+        selections.push(scryer_application::source_import::SourceImportSelection {
+            key,
+            name: idx.name.clone(),
+            input: scryer_application::source_import::SourceImportInput::ImportedIndexer {
+                name: idx.name,
+                provider_type: provider_type.into(),
+                base_url,
+                api_key,
+                api_path: external_import::field_str(&idx.fields, "apiPath"),
+            },
+        });
+    }
+    selections.sort_by(|left, right| left.key.cmp(&right.key));
+    let resolved: HashSet<_> = selections.iter().map(|item| item.key.as_str()).collect();
+    if selected_dc_keys
+        .iter()
+        .chain(&selected_idx_keys)
+        .any(|key| !resolved.contains(key.as_str()))
+    {
+        return Err(AppError::validation_refused(
+            scryer_application::source_import::refusal::INVALID_REQUEST,
+            "a selected source is unavailable in the completed discovery snapshots",
+        ));
+    }
+    Ok(selections)
 }
 
 fn movie_scan_hint_from_arr(movie: &ArrMovie) -> Option<LibraryScanHint> {
@@ -3753,7 +3614,7 @@ async fn run_external_import_prowlarr_warmup_job(
                 ExternalImportProwlarrWarmupResult {
                     base_url,
                     api_key,
-                    version: version_from_validation_result(&validation),
+                    version: validation.server_version.clone(),
                     plan,
                 },
             )

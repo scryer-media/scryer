@@ -10,10 +10,10 @@ use scryer_interface_core::{
 use scryer_interface_media::mappers::{
     from_download_client_config_with_fields, from_download_client_routing_entry,
     from_indexer_config_with_fields, from_indexer_routing_entry, from_jellyfin_server_user,
-    from_library_paths_settings, from_media_server_connection, from_media_server_user_group,
-    from_media_settings, from_proxy_config, from_public_url_change_preview,
-    from_quality_profile_settings, from_seeding_profile, from_service_settings,
-    from_subtitle_provider_config, from_user_with_auth_factor_status,
+    from_library_paths_settings, from_media_server_connection, from_media_server_signal_sync_state,
+    from_media_server_user_group, from_media_settings, from_proxy_config,
+    from_public_url_change_preview, from_quality_profile_settings, from_seeding_profile,
+    from_service_settings, from_subtitle_provider_config, from_user_with_auth_factor_status,
 };
 use scryer_interface_media::types::*;
 
@@ -302,11 +302,12 @@ fn from_acquisition_settings(
         enabled: settings.enabled,
         // Deprecated no-op fields: nothing backs them, so they report 0.
         upgrade_cooldown_hours: 0,
-        same_tier_min_delta: settings.same_tier_min_delta,
+        same_tier_min_delta: 0,
         cross_tier_min_delta: 0,
         forced_upgrade_delta_bypass: 0,
         poll_interval_seconds: settings.poll_interval_seconds,
         walk_interval_seconds: settings.walk_interval_seconds,
+        walk_intensity: settings.walk_intensity.into(),
         long_tail_backfill_max_scopes_per_cycle: settings.long_tail_backfill_max_scopes_per_cycle,
         long_tail_reconverge_days: settings.long_tail_reconverge_days,
         // Deprecated: these report the Movie facet values they moved to.
@@ -528,6 +529,7 @@ fn from_ui_catalog_view_mode(
         scryer_application::UiCatalogViewMode::Compact => UiCatalogViewModeValue::Compact,
         scryer_application::UiCatalogViewMode::PosterTable => UiCatalogViewModeValue::PosterTable,
         scryer_application::UiCatalogViewMode::Poster => UiCatalogViewModeValue::Poster,
+        scryer_application::UiCatalogViewMode::Graph => UiCatalogViewModeValue::Graph,
     }
 }
 
@@ -538,6 +540,7 @@ fn to_app_ui_catalog_view_mode(
         UiCatalogViewModeValue::Compact => scryer_application::UiCatalogViewMode::Compact,
         UiCatalogViewModeValue::PosterTable => scryer_application::UiCatalogViewMode::PosterTable,
         UiCatalogViewModeValue::Poster => scryer_application::UiCatalogViewMode::Poster,
+        UiCatalogViewModeValue::Graph => scryer_application::UiCatalogViewMode::Graph,
     }
 }
 
@@ -579,6 +582,8 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
         high_contrast_mode: settings.high_contrast_mode,
         reduce_motion: settings.reduce_motion,
         hide_sponsor_button: settings.hide_sponsor_button,
+        discovery_grid_hide_owned: settings.discovery_grid_hide_owned,
+        discovery_grid_hide_requested: settings.discovery_grid_hide_requested,
         density: from_ui_density(settings.density),
         sidebar_mode: from_ui_sidebar_mode(settings.sidebar_mode),
         default_landing_view: from_ui_default_landing_view(settings.default_landing_view),
@@ -687,6 +692,12 @@ pub(crate) fn ui_settings_update_from_input(
         high_contrast_mode: input.high_contrast_mode,
         reduce_motion: input.reduce_motion,
         hide_sponsor_button: input.hide_sponsor_button,
+        discovery_grid_hide_owned: input
+            .discovery_grid_hide_owned
+            .unwrap_or(current.discovery_grid_hide_owned),
+        discovery_grid_hide_requested: input
+            .discovery_grid_hide_requested
+            .unwrap_or(current.discovery_grid_hide_requested),
         density: to_app_ui_density(input.density),
         sidebar_mode: to_app_ui_sidebar_mode(input.sidebar_mode),
         default_landing_view: to_app_ui_default_landing_view(input.default_landing_view),
@@ -778,6 +789,8 @@ fn from_auth_runtime_state(
     AuthRuntimeStatePayload {
         initial_authentication_stage: None,
         initial_authentication_code_required: false,
+        bind_editable: false,
+        bind_pinned_by: None,
         password_min_length: security_settings.password_min_length,
         effective_form_login_enabled: auth_runtime.effective_form_login_enabled,
         skip_login_for_local_ips: auth_runtime.skip_login_for_local_ips,
@@ -947,7 +960,7 @@ impl SettingsQueries {
         Ok(from_recycle_bin_settings(settings))
     }
 
-    /// Returns the verification depth applied to download-client completed-download copies. Location operations always verify in full and ignore it.
+    /// Returns the verification depth applied to download-client completed-download copies and to location operations (library moves, root changes, consolidations).
     async fn verification_settings(
         &self,
         ctx: &Context<'_>,
@@ -1099,18 +1112,31 @@ impl SettingsQueries {
     ) -> GqlResult<Vec<MediaServerConnectionPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        app.list_media_server_connections(
-            &actor,
-            provider.map(MediaServerProviderValue::into_domain),
-        )
-        .await
-        .map(|connections| {
-            connections
-                .into_iter()
-                .map(from_media_server_connection)
-                .collect()
-        })
-        .map_err(to_gql_error)
+        let connections = app
+            .list_media_server_connections(
+                &actor,
+                provider.map(MediaServerProviderValue::into_domain),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        // A store that cannot read the sweep state answers with none, so
+        // `watchSignalSync` is null rather than the whole listing failing.
+        let mut states = app
+            .list_media_server_signal_sync_states(&actor)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .map(|status| (status.state.connection_id.clone(), status))
+            .collect::<std::collections::HashMap<_, _>>();
+        Ok(connections
+            .into_iter()
+            .map(|connection| {
+                let state = states.remove(&connection.id);
+                let mut payload = from_media_server_connection(connection);
+                payload.watch_signal_sync = state.map(from_media_server_signal_sync_state);
+                payload
+            })
+            .collect())
     }
 
     /// Lists users from the media-server connection identified by `connection_id`.
@@ -1164,11 +1190,17 @@ impl SettingsQueries {
             default_persist_session_from_ctx(ctx),
         );
         payload.initial_authentication_stage = setup.as_ref().map(|state| state.stage().to_owned());
+        let choice_pending = matches!(
+            setup,
+            Some(scryer_application::initial_auth::SetupState::Choice)
+        );
         payload.initial_authentication_code_required =
-            matches!(
-                setup,
-                Some(scryer_application::initial_auth::SetupState::Choice)
-            ) && auth_runtime.initial_authentication.code_required();
+            choice_pending && auth_runtime.initial_authentication.code_required();
+        if choice_pending {
+            let bind = app.public_url_runtime().addressing().bind.clone();
+            payload.bind_editable = bind.editable();
+            payload.bind_pinned_by = bind.pinned_by.map(BindPinValue::from_application);
+        }
         Ok(payload)
     }
 
@@ -1503,9 +1535,10 @@ impl SettingsQueries {
         facet: MediaFacetValue,
     ) -> GqlResult<Vec<RootFolderPayload>> {
         let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
         let media_facet = facet.into_domain();
         let entries = app
-            .root_folders_for_facet(&media_facet)
+            .visible_root_folders_for_facet(&actor, &media_facet)
             .await
             .map_err(to_gql_error)?;
         Ok(entries

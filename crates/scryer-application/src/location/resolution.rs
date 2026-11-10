@@ -22,7 +22,7 @@ pub struct FileResolution {
     pub reason_code: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResolutionDisposition {
     Placed,
@@ -30,11 +30,16 @@ pub enum ResolutionDisposition {
     Preserved,
     Hardlink,
     Symlink,
+    Disposal(super::conflicts::DisposalProof),
 }
 
 impl FileResolution {
+    pub fn is_disposal(&self) -> bool {
+        matches!(self.disposition, ResolutionDisposition::Disposal(_))
+    }
+
     pub async fn proof_is_current(&self) -> bool {
-        if !self.completed {
+        if !self.completed || self.is_disposal() {
             return false;
         }
         let source = stored_path_to_path_buf(&self.source_path);
@@ -302,8 +307,9 @@ impl ConflictResolver {
                     })?;
                 }
             };
-            let stem = resolved.file_stem().unwrap_or_default().to_string_lossy();
-            return Ok(Some(resolved.with_file_name(format!("{stem}{relative}"))));
+            let mut name = resolved.file_stem().unwrap_or_default().to_os_string();
+            name.push(relative);
+            return Ok(Some(resolved.with_file_name(name)));
         }
         Ok(None)
     }
@@ -343,8 +349,8 @@ impl ConflictResolver {
                 .await?
                 .unwrap_or_else(|| original.clone()),
         };
-        let base = super::collisions::collision_rename_base(
-            &original.file_name().unwrap_or_default().to_string_lossy(),
+        let base = super::collisions::stored_collision_rename_base(
+            &path_to_stored_string(Path::new(original.file_name().unwrap_or_default())),
             &super::collisions::sanitize_suffix_label(&label),
         );
         let mut number = 1u32;
@@ -415,7 +421,7 @@ impl ConflictResolver {
                     } else {
                         numbered_name(&base, number)
                     };
-                    destination = original.with_file_name(name);
+                    destination = original.with_file_name(stored_path_to_path_buf(&name));
                     number = number.saturating_add(1);
                     continue;
                 }
@@ -493,6 +499,33 @@ impl ConflictResolver {
                 .hashes
                 .as_ref()
                 .map(|hashes| hashes.full_blake3.clone());
+            if record.identity_hash.is_none()
+                && record.disposition == ResolutionDisposition::Hardlink
+                && self
+                    .store
+                    .get_location_operation(request.operation_id)
+                    .await?
+                    .is_some_and(|operation| {
+                        matches!(
+                            operation.operation_type,
+                            super::model::LocationOperationType::FolderConsolidation
+                                | super::model::LocationOperationType::FolderKeepOne
+                        )
+                    })
+            {
+                let hashes = hash_existing_file_with_progress(&destination, CopyProgress::none())
+                    .await
+                    .map_err(|error| file_error(&destination, error))?;
+                if record.source_version != Some(file_version(source).await?)
+                    || record.destination_version != Some(file_version(&destination).await?)
+                {
+                    return Err(AppError::validation_refused(
+                        super::conflicts::refusal::FILE_CHANGED,
+                        "A retained hardlink changed while its content proof was recorded; source files were preserved",
+                    ));
+                }
+                record.identity_hash = Some(hashes.full_blake3);
+            }
             record.completed = true;
             if let Some(warning) = record.warning.clone() {
                 verified.detail = Some(warning);
@@ -558,19 +591,19 @@ async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -
     Ok(())
 }
 
-fn companion_suffix(companion: &Path, media: &Path) -> Option<String> {
-    let relative = companion.strip_prefix(media.parent()?).ok()?.to_str()?;
-    let suffix = relative.strip_prefix(media.file_stem()?.to_str()?)?;
-    (suffix.starts_with('.') || suffix.starts_with('-')).then(|| suffix.to_string())
+pub(super) fn companion_suffix(companion: &Path, media: &Path) -> Option<std::ffi::OsString> {
+    let relative = companion.strip_prefix(media.parent()?).ok()?;
+    let suffix =
+        crate::stored_paths::native_name_suffix(relative.as_os_str(), media.file_stem()?, false)?;
+    let first = suffix.as_encoded_bytes().first().copied();
+    matches!(first, Some(b'.' | b'-')).then_some(suffix)
 }
 
 fn numbered_name(base: &str, number: u32) -> String {
-    let path = Path::new(base);
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    match path.extension() {
-        Some(ext) => format!("{stem} ({number}).{}", ext.to_string_lossy()),
-        None => format!("{stem} ({number})"),
-    }
+    path_to_stored_string(crate::stored_paths::suffix_path_stem(
+        &stored_path_to_path_buf(base),
+        &format!(" ({number})"),
+    ))
 }
 
 fn file_error(path: &Path, error: impl std::fmt::Display) -> AppError {
@@ -657,11 +690,27 @@ pub async fn compare_existing(
                 "The source and destination are the same path.",
             ));
         }
-        return Ok(VerifiedFile::same_filesystem_rename(
-            source.to_path_buf(),
-            destination.to_path_buf(),
-            VerificationDepth::Full,
-        ));
+        match super::execution::shared_inode(
+            source,
+            destination,
+            &source_metadata,
+            &destination_metadata,
+        )
+        .await
+        {
+            super::execution::SharedInode::SecondLink => {
+                return Ok(VerifiedFile::same_filesystem_rename(
+                    source.to_path_buf(),
+                    destination.to_path_buf(),
+                    VerificationDepth::Full,
+                ));
+            }
+            super::execution::SharedInode::OneEntry => {
+                return Err(super::execution::one_entry_refusal());
+            }
+            // Synthesized inodes: prove the pair by content below.
+            super::execution::SharedInode::Distinct => {}
+        }
     }
     // The quick check first (FR-073): a size difference or a differing
     // head/tail sample proves different content without reading either file
@@ -776,5 +825,50 @@ fn different_content(source: &Path, destination: &Path) -> VerifiedFile {
             "{} contains different content. Both files were preserved.",
             destination.display()
         )),
+    }
+}
+
+#[cfg(test)]
+mod native_name_tests {
+    use super::*;
+
+    #[test]
+    fn literal_codec_prefix_survives_resolver_numbering() {
+        let name = "scryer-path-v1:u:movie.mkv";
+        let encoded = path_to_stored_string(name);
+        assert_eq!(
+            stored_path_to_path_buf(&numbered_name(&encoded, 2)),
+            Path::new("scryer-path-v1:u:movie (2).mkv")
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn native_companion_suffix_and_numbering_preserve_opaque_units() {
+        let (platform, marker) = if cfg!(windows) {
+            ("w", "%uD800")
+        } else {
+            ("u", "%FF")
+        };
+        let media = stored_path_to_path_buf(&format!(
+            "scryer-path-v1:{platform}:/library/movie{marker}.mkv"
+        ));
+        let companion = stored_path_to_path_buf(&format!(
+            "scryer-path-v1:{platform}:/library/movie{marker}.en{marker}.srt"
+        ));
+        assert_eq!(
+            companion_suffix(&companion, &media),
+            Some(
+                stored_path_to_path_buf(&format!("scryer-path-v1:{platform}:.en{marker}.srt"))
+                    .into_os_string()
+            )
+        );
+        let numbered = numbered_name(&path_to_stored_string(&media), 3);
+        assert_eq!(
+            stored_path_to_path_buf(&numbered),
+            stored_path_to_path_buf(&format!(
+                "scryer-path-v1:{platform}:/library/movie{marker} (3).mkv"
+            ))
+        );
     }
 }

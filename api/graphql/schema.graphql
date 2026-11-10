@@ -109,9 +109,11 @@ type AcquisitionSettingsPayload {
 	"""
 	upgradeCooldownHours: Int! @deprecated(reason: "Inert: the stored value is no longer read; removed in the next minor.")
 	"""
-	Minimum score delta for same-tier upgrades.
+	Deprecated and inert. The same-tier upgrade delta is set per quality
+	profile through `QualityProfileCriteria.minUpgradeScoreDelta`; this
+	always returns 0 and the value carries no meaning.
 	"""
-	sameTierMinDelta: Int!
+	sameTierMinDelta: Int! @deprecated(reason: "Moved to QualityProfileCriteria.minUpgradeScoreDelta; always returns 0. Removed in the next minor.")
 	"""
 	Deprecated and inert. Quality tier is compared before score, so no
 	cross-tier delta is consulted; this always returns 0 and the value
@@ -132,6 +134,10 @@ type AcquisitionSettingsPayload {
 	upgradable media. Changes that wake acquisition still walk at once.
 	"""
 	walkIntervalSeconds: Int!
+	"""
+	How much of the machine the walk may take.
+	"""
+	walkIntensity: AcquisitionWalkIntensityValue!
 	"""
 	Maximum long-tail scopes processed per cycle.
 	"""
@@ -155,6 +161,28 @@ type AcquisitionSettingsPayload {
 	`mediaSettings(scope: MOVIE)`. Removed in the next minor.
 	"""
 	movieAvailabilityDelayDays: Int! @deprecated(reason: "Moved to MediaSettings.movieAvailabilityDelayDays on the Movie facet; returns that value. Removed in the next minor.")
+}
+
+"""
+How much of the machine the background acquisition walk may take.
+"""
+enum AcquisitionWalkIntensityValue {
+	"""
+	About a tenth of the time, one title at a time, one indexer page per
+	long-tail scope.
+	"""
+	QUIET
+	"""
+	About a fifth of the time, two titles at a time, two pages per
+	long-tail scope. Walks as quiet once more than 10,000 scopes are
+	missing or below cutoff.
+	"""
+	NORMAL
+	"""
+	About half the time, four titles at a time, five pages per long-tail
+	scope, whatever the backlog.
+	"""
+	EAGER
 }
 
 """
@@ -963,6 +991,50 @@ input AssignTrackedDownloadTitleInput {
 }
 
 """
+Where the preferred audio language is compared in release ranking and
+upgrade decisions.
+"""
+enum AudioLanguagePriorityValue {
+	"""
+	Quality tier and revision first; the preferred language decides between
+	releases of equal quality.
+	"""
+	QUALITY_FIRST
+	"""
+	The preferred language first, even over a better quality tier.
+	"""
+	LANGUAGE_FIRST
+}
+
+"""
+How a release or file ranks against the title's audio language preferences.
+Every field is neutral when no preferences are configured.
+"""
+type AudioLanguageRankPayload {
+	"""
+	Position of the first preferred language present; 0 is best, and the
+	length of the preferred list means none is present.
+	"""
+	preferredRank: Int!
+	"""
+	Length of the preferred list; 0 when no preferred language is configured.
+	"""
+	preferredCount: Int!
+	"""
+	How many of the optional languages are present.
+	"""
+	optionalHits: Int!
+	"""
+	Whether the preferred language is compared before the quality tier.
+	"""
+	languageFirst: Boolean!
+	"""
+	Whether the preferences still want something this release lacks.
+	"""
+	wanted: Boolean!
+}
+
+"""
 Audio stream metadata for a media file.
 """
 type AudioStreamDetailPayload {
@@ -1009,6 +1081,16 @@ type AuthRuntimeStatePayload {
 	Whether the pending initial choice requires the operator's console code.
 	"""
 	initialAuthenticationCodeRequired: Boolean!
+	"""
+	Whether initial setup may choose who can reach this instance. False
+	outside the pending initial choice and while SCRYER_BIND sets the address.
+	"""
+	bindEditable: Boolean!
+	"""
+	What sets the listening address during the pending initial choice;
+	null when setup may choose it or setup is not pending.
+	"""
+	bindPinnedBy: BindPinValue
 	"""
 	Minimum length for the administrator's new password.
 	"""
@@ -1227,6 +1309,20 @@ input BindPendingImportInput {
 	Episode IDs to bind; empty means no explicit episode list.
 	"""
 	episodeIds: [ID!]!
+}
+
+"""
+What sets the listening address when it cannot be changed from Scryer.
+"""
+enum BindPinValue {
+	"""
+	The SCRYER_BIND environment variable.
+	"""
+	ENVIRONMENT
+	"""
+	SCRYER_BIND inside a container; its published ports decide who can reach Scryer.
+	"""
+	CONTAINER
 }
 
 """
@@ -1584,6 +1680,13 @@ type CatalogDiscoveryGroupPayload {
 	Optional label value, such as a genre or theme key.
 	"""
 	labelValue: String
+	"""
+	Rail-label key a genre or theme affinity group is named after, in
+	canonical hyphenated form such as `coming-of-age`; null for every other
+	group. Clients translate the key and fall back to `labelValue` for a key
+	they do not know.
+	"""
+	labelKey: String
 	"""
 	Total matching items before the returned item page is applied.
 	"""
@@ -1949,6 +2052,11 @@ input CompleteInitialAuthenticationInput {
 	One-time setup code authorizing the initial authentication decision.
 	"""
 	setupCode: String
+	"""
+	Who may reach this instance. Omission leaves the listening address
+	alone; ignored when SCRYER_BIND sets it.
+	"""
+	networkAccess: InitialNetworkAccess
 }
 
 """
@@ -3854,6 +3962,49 @@ input DiscoverEmbyConnectServersInput {
 }
 
 """
+Label family a browse card lists titles under.
+"""
+enum DiscoveryBrowseLabelFamilyValue {
+	"""
+	A canonical genre.
+	"""
+	GENRE
+	"""
+	A canonical theme.
+	"""
+	THEME
+}
+
+"""
+One "browse by" card: an allowlisted genre or theme the caller's
+personalized pool holds enough titles of to open as a section.
+"""
+type DiscoveryBrowseLabelPayload {
+	"""
+	Whether the card lists a genre or a theme.
+	"""
+	family: DiscoveryBrowseLabelFamilyValue!
+	"""
+	Canonical hyphenated label key, such as `coming-of-age`. Clients
+	translate the key and fall back to `title` for a key they do not know.
+	"""
+	labelKey: String!
+	"""
+	Section id to pass to `discoveryItems.sectionId`.
+	"""
+	sectionId: String!
+	"""
+	English card title.
+	"""
+	title: String!
+	"""
+	Titles under the label in the home's candidate pool. The section reads
+	a deeper pool, so it can list more than this.
+	"""
+	itemCount: Long!
+}
+
+"""
 Content certification for one country and release type.
 """
 type DiscoveryContentCertificationPayload {
@@ -4041,6 +4192,11 @@ type DiscoveryHomeCardsPayload {
 	Complete-collection card section, or null when none is available.
 	"""
 	completeCollection: DiscoveryHomeSectionPayload
+	"""
+	"Browse by" genre and theme cards, in allowlist order; empty when
+	personalized results are unavailable.
+	"""
+	browseLabels: [DiscoveryBrowseLabelPayload!]!
 	"""
 	Whether the caller may view personalized cards.
 	"""
@@ -4250,6 +4406,11 @@ type DiscoveryHomePayload {
 	"""
 	facets: [DiscoveryFacetPayload!]!
 	"""
+	"Browse by" genre and theme cards, in allowlist order; empty when
+	personalized results are unavailable.
+	"""
+	browseLabels: [DiscoveryBrowseLabelPayload!]!
+	"""
 	Whether the caller may view personalized results.
 	"""
 	canViewPersonalized: Boolean!
@@ -4276,6 +4437,13 @@ type DiscoveryHomeSectionPayload {
 	"""
 	surface: DiscoverySurfaceValue!
 	"""
+	Rail-label key a personalized "because you like" section is named after,
+	in canonical hyphenated form such as `coming-of-age`; null for every other
+	section. Clients translate the key and fall back to `title` for a key they
+	do not know.
+	"""
+	labelKey: String
+	"""
 	Total matching items before the returned item page is applied.
 	"""
 	totalCount: Long!
@@ -4283,6 +4451,12 @@ type DiscoveryHomeSectionPayload {
 	Items returned for this section, possibly fewer than the total.
 	"""
 	items: [DiscoveryHomeCardPayload!]!
+	"""
+	Discovery generations a section page was composed from. Empty on the
+	home. A client paging a section restarts from the first page when
+	these change between pages.
+	"""
+	generationIds: [String!]!
 }
 
 """
@@ -4463,6 +4637,10 @@ type DiscoveryItemPayload {
 	Context terms extracted from the source.
 	"""
 	contextTerms: [String!]!
+	"""
+	The `DiscoveryNeighborGroup` this related title belongs to; set only on `discoveryNeighbors` items, and null there when the related titles were not grouped.
+	"""
+	groupId: Int
 }
 
 """
@@ -4521,6 +4699,35 @@ input DiscoveryItemsInput {
 	Zero-based offset; defaults to 0 and negative values become 0.
 	"""
 	offset: Int
+	"""
+	Page one discovery home section in full instead of listing items.
+	With the same `sectionRailLimit`, home filters and `includeOwned` as
+	the home and the default sort, the first `sectionRailLimit` items are
+	the rail as the dashboard renders it, after titles earlier rails
+	showed. When set, only `includeOwned`, `includeUnresolved`, `limit`,
+	`offset` and the section fields below apply. A blank id is refused;
+	an unknown or empty section returns no items and no section.
+	"""
+	sectionId: String
+	"""
+	The home's `limitPerSection` the section was opened from; defaults to
+	25 and must be between 1 and 100. It must match the home for the
+	first page to match the rail.
+	"""
+	sectionRailLimit: Int
+	"""
+	Home filters applied to the section, validated as on the home.
+	"""
+	homeFilters: DiscoveryHomeFiltersInput
+	"""
+	Section ordering; defaults to `RELEVANCE`, the rail's own order.
+	"""
+	sort: DiscoverySectionSortValue
+	"""
+	Drop titles with a pending media request in a readable library;
+	defaults to false.
+	"""
+	hideRequested: Boolean
 }
 
 """
@@ -4539,6 +4746,69 @@ type DiscoveryItemsPayload {
 	Whether the caller may view personalized results.
 	"""
 	canViewPersonalized: Boolean!
+	"""
+	The paged section when `sectionId` was requested and found: its
+	identity, total and this page's items as cards. Null otherwise.
+	"""
+	section: DiscoveryHomeSectionPayload
+}
+
+"""
+One neighbourhood among an anchor's related titles, found by the metadata gateway from the semantic and relation links between them.
+"""
+type DiscoveryNeighborGroup {
+	"""
+	Group ID, matching `DiscoveryItemPayload.groupId`.
+	"""
+	id: Int!
+	"""
+	Label key of the genre or theme that names the group, or null when the group is named after its medoid.
+	"""
+	labelKey: String
+	"""
+	Display label of the group.
+	"""
+	label: String!
+	"""
+	Target key of the related title that best represents the group.
+	"""
+	medoid: String!
+	"""
+	Number of returned related titles in the group.
+	"""
+	size: Int!
+}
+
+"""
+One anchor whose related titles are returned, owned or not.
+"""
+input DiscoveryNeighborsInput {
+	"""
+	The discovery target key of the anchor, in the server's own vocabulary (tvdb:series:<id>, tmdb:movie:<id>, tmdb:series:<id>, imdb:title:<tt>, mal:anime:<id>, anidb:anime:<id>, anilist:anime:<id>).
+	"""
+	targetKey: String!
+	"""
+	Media facet of the anchor. A movie key fits MOVIE or ANIME, a series key SERIES or ANIME.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Maximum related titles to return; defaults to 24, which is also the most ever returned. Values outside 0 through 24 are clamped.
+	"""
+	limit: Int = 24
+}
+
+"""
+An anchor's related titles and the neighbourhoods they fall into.
+"""
+type DiscoveryNeighborsPayload {
+	"""
+	Related titles, best first.
+	"""
+	items: [DiscoveryItemPayload!]!
+	"""
+	Groups holding at least one returned item, in the order the metadata gateway ranked them (largest first before the returned items were chosen); empty when the related titles were not grouped.
+	"""
+	groups: [DiscoveryNeighborGroup!]!
 }
 
 """
@@ -4562,6 +4832,13 @@ type DiscoverySectionPayload {
 	"""
 	surface: String!
 	"""
+	Rail-label key a personalized "because you like" section is named after,
+	in canonical hyphenated form such as `coming-of-age`; null for every other
+	section. Clients translate the key and fall back to `title` for a key they
+	do not know.
+	"""
+	labelKey: String
+	"""
 	Total matching items before the returned item page is applied.
 	"""
 	totalCount: Long!
@@ -4569,6 +4846,33 @@ type DiscoverySectionPayload {
 	Items returned for this section.
 	"""
 	items: [DiscoveryItemPayload!]!
+}
+
+"""
+Ordering of a paged discovery section. Every order other than relevance
+falls back to relevance on ties.
+"""
+enum DiscoverySectionSortValue {
+	"""
+	The section's own order, as the home rail shows it.
+	"""
+	RELEVANCE
+	"""
+	Most popular first.
+	"""
+	POPULARITY
+	"""
+	Highest rated first.
+	"""
+	RATING
+	"""
+	Newest release year first; titles without a year last.
+	"""
+	RELEASE_DATE
+	"""
+	Alphabetical by sort title.
+	"""
+	TITLE
 }
 
 """
@@ -6314,6 +6618,20 @@ type EpisodeSetScopePayload {
 }
 
 """
+Selects episodes for a background automatic subtitle search.
+"""
+input EpisodeSubtitleSearchInput {
+	"""
+	Series or anime title containing every selected episode.
+	"""
+	titleId: ID!
+	"""
+	Between one and 1000 episode IDs; duplicates are searched once.
+	"""
+	episodeIds: [ID!]!
+}
+
+"""
 Episode classification.
 """
 enum EpisodeTypeValue {
@@ -7006,32 +7324,6 @@ type ExternalImportPreviewPayload {
 }
 
 """
-Counts and errors produced by external import execution.
-"""
-type ExternalImportResultPayload {
-	"""
-	Whether selected media paths were saved.
-	"""
-	mediaPathsSaved: Boolean!
-	"""
-	Number of download clients created.
-	"""
-	downloadClientsCreated: Int!
-	"""
-	Number of indexers created.
-	"""
-	indexersCreated: Int!
-	"""
-	Plugin identifiers installed as part of the import.
-	"""
-	pluginsInstalled: [String!]!
-	"""
-	Errors encountered during execution.
-	"""
-	errors: [String!]!
-}
-
-"""
 Root folder reported by an external Arr source.
 """
 type ExternalImportRootFolderPayload {
@@ -7159,6 +7451,66 @@ type ExternalImportSetupSecretDraftStatusPayload {
 	Draft update time in UTC, or null when no draft exists.
 	"""
 	updatedAt: DateTime
+}
+
+"""
+Durable receipt for one selected source configuration.
+"""
+type ExternalImportSourceItemPayload {
+	"""
+	Stable source identity used for retries and explicit skips.
+	"""
+	key: String!
+	"""
+	Source display name.
+	"""
+	name: String!
+	"""
+	Reserved configuration identity, retained across interruption and retry.
+	"""
+	configId: ID!
+	"""
+	Configuration kind: indexer or download_client.
+	"""
+	kind: String!
+	"""
+	Current phase: queued, installing, checking, saving, succeeded, failed, interrupted, or skipped.
+	"""
+	state: String!
+	"""
+	Stable failure reason code, or null for an item without a failure.
+	"""
+	reason: String
+	"""
+	The server's own failure sentence with URL credentials masked: the fallback for an unrecognized reason and the detail behind SOURCE_IMPORT_ITEM_FAILED.
+	"""
+	message: String
+}
+
+"""
+Authorized progress of an accepted background source import.
+"""
+type ExternalImportSourceJobPayload {
+	"""
+	Durable workflow run identity.
+	"""
+	runId: ID!
+	"""
+	Last persisted update time, used to reject stale progress responses.
+	"""
+	updatedAt: String!
+	"""
+	Whether the current attempt still has work scheduled.
+	"""
+	active: Boolean!
+	"""
+	Whether every selected source succeeded or was explicitly skipped.
+	"""
+	ready: Boolean!
+	"""
+	Receipts for the fixed submitted selections, without credentials.
+	"""
+	items: [ExternalImportSourceItemPayload!]!
 }
 
 """
@@ -7452,6 +7804,10 @@ input FileScoreSelectionInput @oneOf {
 	"""
 	fileIds: [ID!]
 	"""
+	Episode IDs whose live files should be evaluated, limited to 1000 selections.
+	"""
+	episodeIds: [ID!]
+	"""
 	Season IDs whose live files should be evaluated, limited to 1000 selections.
 	"""
 	seasonIds: [ID!]
@@ -7479,6 +7835,10 @@ enum FillerPolicyValue {
 Warmup sessions and root mappings to finalize as an external import.
 """
 input FinalizeExternalImportInput {
+	"""
+	Accepted source import to require resolved before applying library mappings.
+	"""
+	sourceImportRunId: ID
 	"""
 	Source warmup session IDs to finalize.
 	"""
@@ -9352,6 +9712,28 @@ type InitialAuthenticationPayload {
 	Login tokens for password authentication; null when authentication is disabled.
 	"""
 	login: LoginPayload
+	"""
+	Whether the saved network choice takes effect only after a restart.
+	"""
+	restartRequiredForBind: Boolean!
+	"""
+	Whether the network choice was not saved because SCRYER_BIND sets the address.
+	"""
+	bindIgnoredBecausePinned: Boolean!
+}
+
+"""
+Who may reach a newly set up instance.
+"""
+enum InitialNetworkAccess {
+	"""
+	Listen on loopback only.
+	"""
+	THIS_COMPUTER
+	"""
+	Listen on every IPv4 interface.
+	"""
+	OTHER_COMPUTERS
 }
 
 """
@@ -9418,6 +9800,12 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	failureReason: String
 	"""
+	Stable code for a failure the operator must act on, such as
+	`ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
+	not loaded; null for other failures and when the indexer did not fail.
+	"""
+	failureReasonCode: String
+	"""
 	How the capabilities used for this indexer were obtained, or null
 	before they were resolved.
 	"""
@@ -9445,6 +9833,12 @@ type InteractiveReleaseSearchIndexerPayload {
 	UTC time a skip that lifts on its own ends, when known.
 	"""
 	skippedUntil: DateTime
+	"""
+	Releases this indexer returned that a title search removed because no
+	enabled download client accepts them, one entry per missing client
+	family. They are not counted in `resultCount`.
+	"""
+	unroutableResults: [InteractiveReleaseSearchUnroutableResultsPayload!]!
 }
 
 """
@@ -9560,6 +9954,21 @@ enum InteractiveReleaseSearchStateValue {
 	Search was canceled before completion.
 	"""
 	CANCELLED
+}
+
+"""
+Releases one indexer returned that no enabled download client can take.
+"""
+type InteractiveReleaseSearchUnroutableResultsPayload {
+	"""
+	Stable reason code naming the missing download client family, such as
+	`RELEASE_SEARCH_NO_TORRENT_CLIENT`.
+	"""
+	reason: String!
+	"""
+	How many of the indexer's releases were removed for this reason.
+	"""
+	count: Int!
 }
 
 """
@@ -9831,6 +10240,10 @@ enum JobKeyValue {
 	"""
 	LOCATION_OPERATION
 	"""
+	Background import of selected indexers and download clients.
+	"""
+	SOURCE_IMPORT
+	"""
 	A user-defined scheduled script; each script is told apart by its
 	`customJobId`.
 	"""
@@ -10031,6 +10444,116 @@ enum JobTriggerSourceValue {
 }
 
 """
+A facet's library graph, limited to the titles the viewer can see. Layout coordinates are not included.
+"""
+type LibraryGraph {
+	"""
+	When the metadata gateway built the graph.
+	"""
+	generatedAt: String!
+	"""
+	Owned titles in the graph.
+	"""
+	nodes: [LibraryGraphNode!]!
+	"""
+	Similarity links between visible titles.
+	"""
+	edges: [LibraryGraphEdge!]!
+	"""
+	Clusters with at least one visible title.
+	"""
+	clusters: [LibraryGraphCluster!]!
+	"""
+	Owned titles of the facet in the covered libraries, counted by discovery subject.
+	"""
+	subjectCount: Int!
+	"""
+	True when the facet had more titles than one graph covers, so the newest were graphed and the rest left out.
+	"""
+	truncated: Boolean!
+}
+
+"""
+A cluster of related owned titles.
+"""
+type LibraryGraphCluster {
+	"""
+	Cluster ID, matching `LibraryGraphNode.clusterId`.
+	"""
+	id: Int!
+	"""
+	Label key of the genre or theme that names the cluster, or null when the cluster is named after its medoid.
+	"""
+	labelKey: String
+	"""
+	Display label of the cluster.
+	"""
+	label: String!
+	"""
+	Target key of the visible title that best represents the cluster.
+	"""
+	medoid: String!
+	"""
+	Number of visible titles in the cluster.
+	"""
+	size: Int!
+}
+
+"""
+An undirected similarity link between two owned titles, by target key.
+"""
+type LibraryGraphEdge {
+	"""
+	Target key of one endpoint; always sorts before `to`.
+	"""
+	from: String!
+	"""
+	Target key of the other endpoint.
+	"""
+	to: String!
+	"""
+	Link strength from 0 to 1.
+	"""
+	weight: Float!
+	"""
+	Evidence for the link: `semantic`, `relation:<type>`, or `affinity:<family>:<label>`.
+	"""
+	kinds: [String!]!
+}
+
+"""
+Selects one facet's library graph and, optionally, the libraries it covers.
+"""
+input LibraryGraphInput {
+	"""
+	Media facet whose library graph is returned.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Library IDs to cover; omitted or empty covers every library of the facet the viewer can see. IDs the viewer cannot see are ignored.
+	"""
+	libraryIds: [ID!]
+}
+
+"""
+One owned title in a library graph.
+"""
+type LibraryGraphNode {
+	"""
+	Discovery subject key of the owned title.
+	"""
+	subjectKey: String!
+	"""
+	Discovery target key the title resolved to; edges and medoids use this key.
+	"""
+	targetKey: String!
+	"""
+	Cluster the node belongs to, or -1 when it was not placed in a cluster.
+	"""
+	clusterId: Int!
+}
+
+"""
 Filesystem paths used by the three supported media facets.
 """
 type LibraryPathsPayload {
@@ -10080,6 +10603,10 @@ type LibraryPayload {
 	Root folders configured for the library.
 	"""
 	roots: [LibraryRootPayload!]!
+	"""
+	Titles removed from the catalog because the root under them was dropped by this mutation; zero everywhere else.
+	"""
+	removedTitleCount: Int!
 	"""
 	Initial monitoring choice for new titles, readable by authorized requesters.
 	"""
@@ -10167,6 +10694,10 @@ type LibraryRootPayload {
 	Whether this is the default root folder.
 	"""
 	isDefault: Boolean!
+	"""
+	Titles in this library whose root is this root; removing the root takes them out of the catalog.
+	"""
+	titleCount: Int!
 }
 
 """
@@ -10336,6 +10867,22 @@ input LibrarySettingsInput {
 	"""
 	requiredAudioLanguages: [String!]
 	"""
+	Ordered preferred audio-language codes; null or empty inherits the facet's.
+	"""
+	preferredAudioLanguages: [String!]
+	"""
+	Optional audio-language codes; null or empty inherits the facet's.
+	"""
+	optionalAudioLanguages: [String!]
+	"""
+	Audio language priority; null inherits the facet's.
+	"""
+	audioLanguagePriority: AudioLanguagePriorityValue
+	"""
+	Whether a file missing optional languages stays an upgrade target; null inherits the facet's.
+	"""
+	optionalAudioLanguagesKeepSearching: Boolean
+	"""
 	Metadata language override; null inherits the global default.
 	"""
 	metadataLanguage: String
@@ -10448,6 +10995,38 @@ type LibrarySettingsPayload {
 	Effective configured requirements after inheritance; `original` remains unchanged.
 	"""
 	requiredAudioLanguages: [String!]!
+	"""
+	Library override for the ordered preferred audio languages; null means inherit the facet setting.
+	"""
+	preferredAudioLanguagesOverride: [String!]
+	"""
+	Effective preferred audio languages after inheritance.
+	"""
+	preferredAudioLanguages: [String!]!
+	"""
+	Library override for the optional audio languages; null means inherit the facet setting.
+	"""
+	optionalAudioLanguagesOverride: [String!]
+	"""
+	Effective optional audio languages after inheritance.
+	"""
+	optionalAudioLanguages: [String!]!
+	"""
+	Library override for the audio language priority; null means inherit the facet setting.
+	"""
+	audioLanguagePriorityOverride: AudioLanguagePriorityValue
+	"""
+	Effective audio language priority after inheritance.
+	"""
+	audioLanguagePriority: AudioLanguagePriorityValue!
+	"""
+	Library override for keep-searching on optional languages; null means inherit the facet setting.
+	"""
+	optionalAudioLanguagesKeepSearchingOverride: Boolean
+	"""
+	Effective keep-searching setting after inheritance.
+	"""
+	optionalAudioLanguagesKeepSearching: Boolean!
 	"""
 	Library metadata-language override; null means inherit the global default.
 	"""
@@ -12372,7 +12951,13 @@ type LocationClassificationGroupPayload {
 	"""
 	count: Long!
 	"""
-	The titles in this class, in selection order.
+	Whether `titles` holds every title in this class.
+	"""
+	complete: Boolean!
+	"""
+	The titles in this class, sampled like plan sections: every title that
+	blocks the start or has a destination-title match comes first, then a
+	sample of the rest, each part in selection order.
 	"""
 	titles: [LocationClassifiedTitlePayload!]!
 }
@@ -13223,7 +13808,9 @@ A read-only preview of a location operation; nothing is changed.
 """
 type LocationOperationPreviewPayload {
 	"""
-	Source and destination folder per previewed title, in selection order.
+	Source and destination folder per previewed title that has a plan entry
+	or stays where it is, in selection order. Complete, not sampled: the
+	user-moved-files table lists every selected title.
 	"""
 	folders: [LocationTitleFoldersPayload!]!
 	"""
@@ -13448,6 +14035,14 @@ enum LocationOperationTypeValue {
 	Move titles into a different library, with or without a merge.
 	"""
 	CROSS_LIBRARY_TRANSFER
+	"""
+	Consolidate conflicting folders into the title's selected survivor.
+	"""
+	FOLDER_CONSOLIDATION
+	"""
+	Retain the best media and recycle inferior files in conflicting folders.
+	"""
+	FOLDER_KEEP_ONE
 }
 
 """
@@ -14271,7 +14866,7 @@ type LocationTransferFilePayload {
 	sizeBytes: Long!
 	"""
 	Lifecycle of this file: QUEUED, MOVING, VERIFYING, COMPARING,
-	WAITING_FOR_STORAGE, DONE, DUPLICATE, FAILED, BLOCKED, CANCELED, or
+	RECORDING, WAITING_FOR_STORAGE, DONE, DUPLICATE, FAILED, BLOCKED, CANCELED, or
 	NOT_PROCESSED.
 	"""
 	state: String!
@@ -14380,6 +14975,11 @@ type LocationTransferTitlePayload {
 	Files currently being verified.
 	"""
 	verifying: Int!
+	"""
+	Files whose verification has finished and that wait for the runner to
+	record the result.
+	"""
+	recording: Int!
 	"""
 	Path of the file the runner is working on, when one is in flight.
 	"""
@@ -15625,6 +16225,13 @@ type MaintenancePreviewTitle {
 	Why evaluation failed for this subject, or null when it succeeded.
 	"""
 	error: String
+	"""
+	The input document the rule evaluated for this subject: its `facts`
+	and their `observations`, with the subject and library. Null unless
+	the caller may manage permissions, because the document names who
+	watched and who requested the subject.
+	"""
+	facts: JSON
 }
 
 """
@@ -17582,6 +18189,11 @@ type MediaServerConnectionPayload {
 	"""
 	pathMappings: [MediaServerPathMappingPayload!]!
 	"""
+	Watch-history sweep state; null until the connection has been swept,
+	and on payloads returned by connection mutations.
+	"""
+	watchSignalSync: MediaServerWatchSignalSyncPayload
+	"""
 	Creation timestamp in RFC 3339 format.
 	"""
 	createdAt: DateTime!
@@ -17772,6 +18384,47 @@ type MediaServerUserPayload {
 }
 
 """
+Watch-history sweep state of one media-server connection. Lifecycle rules
+treat watch facts as unobserved until every enabled connection has swept
+cleanly, so this is where an operator sees why they still are.
+"""
+type MediaServerWatchSignalSyncPayload {
+	"""
+	When the latest sweep started.
+	"""
+	lastStartedAt: DateTime
+	"""
+	When a sweep last read every linked account in full.
+	"""
+	lastCleanSweepAt: DateTime
+	"""
+	Why the latest sweep was incomplete, as a sentence for people; null
+	after a clean sweep. Explain the condition from `lastErrorCode`.
+	"""
+	lastError: String
+	"""
+	Stable code for why the latest sweep was incomplete (`WATCH_SYNC_*`);
+	null after a clean sweep and on sweeps recorded before codes were
+	stored, which only have `lastError`.
+	"""
+	lastErrorCode: String
+	"""
+	A clean sweep is on record but no longer counts: it is older than the
+	window lifecycle rules accept, or the connection was disabled when it
+	was last swept. False when there is no clean sweep at all.
+	"""
+	cleanSweepStale: Boolean!
+	"""
+	Linked accounts the latest sweep considered.
+	"""
+	participantCount: Int!
+	"""
+	Watch signals stored for this connection by the latest sweep.
+	"""
+	signalCount: Int!
+}
+
+"""
 Effective media path, naming, import, permission, and monitoring settings for one content scope.
 """
 type MediaSettingsPayload {
@@ -17791,6 +18444,24 @@ type MediaSettingsPayload {
 	Effective configured requirements; `original` remains unchanged.
 	"""
 	requiredAudioLanguages: [String!]!
+	"""
+	Ordered preferred audio languages; the first one a release carries sets
+	its rank. Unlike required languages they never reject a release.
+	"""
+	preferredAudioLanguages: [String!]!
+	"""
+	Optional audio languages; among releases of equal quality, more of them
+	rank higher.
+	"""
+	optionalAudioLanguages: [String!]!
+	"""
+	Whether the preferred language is compared before or after quality.
+	"""
+	audioLanguagePriority: AudioLanguagePriorityValue!
+	"""
+	Whether a file missing optional languages stays an upgrade target.
+	"""
+	optionalAudioLanguagesKeepSearching: Boolean!
 	"""
 	Whether episodic titles use season folders.
 	"""
@@ -19354,7 +20025,7 @@ type MutationRoot {
 	"""
 	setMyUiSettings(
 		"""
-		Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value.
+		Complete UI settings to save; omitted or null date_time_format, discovery_grid_hide_owned, discovery_grid_hide_requested, language or table_columns keeps its current value.
 		"""
 		input: SetMyUiSettingsInput!
 	): UiSettingsPayload!
@@ -19426,7 +20097,7 @@ type MutationRoot {
 		input: UpdateRecycleBinSettingsInput!
 	): RecycleBinSettingsPayload!
 	"""
-	Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
+	Saves the verification depth applied to download-client completed-download copies and to location operations (library moves, root changes, consolidations), after checking the system-settings permission.
 	"""
 	updateVerificationSettings(
 		"""
@@ -19631,15 +20302,6 @@ type MutationRoot {
 		"""
 		input: UpdateMediaSettingsInput!
 	): MediaSettingsPayload!
-	"""
-	Replace nonblank default library roots for movie, series, and anime facets.
-	"""
-	updateLibraryPaths(
-		"""
-		Default facet root paths; blank movie or series values and a null or blank anime value leave that facet unchanged.
-		"""
-		input: UpdateLibraryPathsInput!
-	): LibraryPathsPayload!
 	"""
 	Saves service TLS paths after checking the system-settings permission.
 	"""
@@ -19882,6 +20544,10 @@ type MutationRoot {
 		input: CompleteInitialAuthenticationInput!
 	): InitialAuthenticationPayload!
 	"""
+	Restarts Scryer so a saved listening address takes effect.
+	"""
+	restartForNetworkChange: Boolean!
+	"""
 	Replaces an administrator-provided temporary password and issues the full session.
 	"""
 	completeRequiredPasswordChange(
@@ -19893,7 +20559,12 @@ type MutationRoot {
 	"""
 	Mark the setup wizard as complete.
 	"""
-	completeSetup: CompleteSetupPayload!
+	completeSetup(
+		"""
+		Accepted source import that must be owned and resolved before setup completes; omitted for manual setup.
+		"""
+		sourceImportRunId: ID
+	): CompleteSetupPayload!
 	"""
 	Creates a user with normalized app and library permissions after checking the manage-users permission.
 	"""
@@ -20179,7 +20850,7 @@ type MutationRoot {
 	"""
 	refreshFileScores(
 		"""
-		Exactly one bounded selection of file, season, or title IDs.
+		Exactly one bounded selection of file, episode, season, or title IDs.
 		"""
 		selection: FileScoreSelectionInput!
 	): JobRunPayload!
@@ -20256,6 +20927,24 @@ type MutationRoot {
 		"""
 		input: RehydrateAllMetadataInput!
 	): RehydrateAllMetadataPayload!
+	"""
+	Preview survivor selection and every file disposition before settling conflicts.
+	"""
+	previewPendingImportConflicts(
+		"""
+		Selected folder conflicts, media policy and leftover disposition.
+		"""
+		input: PendingImportConflictInput!
+	): PendingImportConflictPreviewPayload!
+	"""
+	Confirm a fresh preview and settle each conflict through its own location operation.
+	"""
+	resolvePendingImportConflicts(
+		"""
+		Previewed selection and fingerprint, with additional permanent-deletion consent when required.
+		"""
+		input: ResolvePendingImportConflictsInput!
+	): PendingImportConflictTaskPayload!
 	"""
 	Confirm a previewed location operation and start it in the background.
 	
@@ -20375,6 +21064,23 @@ type MutationRoot {
 		"""
 		requestId: ID!
 	): MediaRequestActionPayload!
+	"""
+	Queue a saved candidate as an operator override, confirming title-wide conflicts first.
+	"""
+	queueStandbyRelease(
+		"""
+		The saved standby candidate to queue.
+		"""
+		id: ID!,
+		"""
+		What to do about downloads of this title that are already running.
+		"""
+		choice: StandbyQueueChoiceValue! = CHECK,
+		"""
+		The conflicts the operator saw and confirmed; any other running download is listed again instead.
+		"""
+		confirmed: [StandbyConflictIdentityInput!]! = []
+	): QueueStandbyReleasePayload!
 	"""
 	Reopen title-mismatch scopes after a rematch so acquisition coverage can converge again.
 	"""
@@ -21161,14 +21867,53 @@ type MutationRoot {
 		input: FinalizeExternalImportInput!
 	): FinalizeExternalImportPayload!
 	"""
-	Re-connect to Sonarr/Radarr, fetch configs, and create selected items in Scryer.
+	Accept selected sources durably before starting connection checks.
 	"""
-	executeExternalImport(
+	startExternalImportSources(
 		"""
-		Selected imported clients and indexers plus any credentials needed to create them.
+		Stable caller-generated request identity reused when a response is lost.
+		"""
+		requestKey: String!,
+		"""
+		Fixed selected clients and indexers with the discovery snapshots and credentials required to import them.
 		"""
 		input: ExecuteExternalImportInput!
-	): ExternalImportResultPayload!
+	): ExternalImportSourceJobPayload!
+	"""
+	Read the caller-owned durable source import and its per-item receipts.
+	"""
+	externalImportSourceStatus(
+		"""
+		Accepted source import workflow run identity.
+		"""
+		runId: ID!
+	): ExternalImportSourceJobPayload!
+	"""
+	Retry only failed or interrupted sources, retaining successful configuration identities.
+	"""
+	retryExternalImportSources(
+		"""
+		Caller-owned terminal source import to retry.
+		"""
+		runId: ID!,
+		"""
+		Optional corrected credentials for unresolved sources, keyed by their stable source identities.
+		"""
+		corrections: [IndexerApiKeyOverrideInput!]!
+	): ExternalImportSourceJobPayload!
+	"""
+	Explicitly skip one unresolved terminal source so it no longer blocks finishing setup.
+	"""
+	skipExternalImportSource(
+		"""
+		Caller-owned terminal source import containing the item.
+		"""
+		runId: ID!,
+		"""
+		Stable identity of the failed or interrupted source to skip.
+		"""
+		key: String!
+	): ExternalImportSourceJobPayload!
 	"""
 	Create a post-processing script, enabled unless the input says otherwise, after validating its type, content, and schedule.
 	"""
@@ -21218,6 +21963,15 @@ type MutationRoot {
 		"""
 		input: ScriptInterpreterSettingsInput!
 	): ScriptInterpreterSettingsPayload!
+	"""
+	Queue automatic subtitle search and download for selected episodes.
+	"""
+	startEpisodeSubtitleSearch(
+		"""
+		The series or anime title and the episodes in it to search.
+		"""
+		input: EpisodeSubtitleSearchInput!
+	): JobRunPayload!
 	"""
 	Search configured providers for subtitles matching a media file, and
 	report why the search returned what it did.
@@ -22196,6 +22950,220 @@ type PendingImportBindingPreviewPayload {
 	Episodes eligible for binding under the selected title.
 	"""
 	availableEpisodes: [EpisodePayload!]!
+}
+
+"""
+A selected set of title-bound folder conflicts and the requested policy.
+"""
+input PendingImportConflictInput {
+	"""
+	Pending-import identities to preview.
+	"""
+	pendingImportIds: [ID!]!
+	"""
+	Media disposition applied independently to each conflict.
+	"""
+	policy: PendingImportConflictPolicy!
+	"""
+	Disposition of the remaining non-media files.
+	"""
+	leftovers: PendingImportConflictLeftovers!
+}
+
+"""
+Disposition of files remaining after the media is safe.
+"""
+enum PendingImportConflictLeftovers {
+	"""
+	Move every remaining file into the survivor folder.
+	"""
+	PRESERVE_ALL
+	"""
+	Recycle the previewed non-media remainder.
+	"""
+	MEDIA_ONLY
+}
+
+"""
+How conflicting movie folders are settled.
+"""
+enum PendingImportConflictPolicy {
+	"""
+	Keep every movie file in the survivor folder.
+	"""
+	ADOPT_ALL
+	"""
+	Keep the best movie file and recycle inferior media.
+	"""
+	KEEP_ONE
+}
+
+"""
+Complete conflict counts and a bounded sample of per-conflict plans.
+"""
+type PendingImportConflictPreviewPayload {
+	"""
+	Fingerprint covering every selected conflict and all file dispositions.
+	"""
+	planFingerprint: String!
+	"""
+	Complete number of selected conflicts.
+	"""
+	totalCount: Int!
+	"""
+	Selected conflicts with valid plans, including rows outside the sample.
+	"""
+	actionableCount: Int!
+	"""
+	Selected conflicts that could not be planned, including rows outside the sample.
+	"""
+	failedCount: Int!
+	"""
+	True when the rows are a sample of the complete selection.
+	"""
+	sampled: Boolean!
+	"""
+	Per-conflict survivor and disposition summary.
+	"""
+	rows: [PendingImportConflictRowPayload!]!
+	"""
+	Complete file count requiring permanent-deletion consent.
+	"""
+	permanentDeleteCount: Int!
+	"""
+	Complete bytes requiring permanent-deletion consent.
+	"""
+	permanentDeleteBytes: Long!
+	"""
+	Paths requiring permanent-deletion consent, bounded independently of rows.
+	"""
+	permanentDeletePaths: [String!]!
+	"""
+	True when permanent-deletion paths are a sample.
+	"""
+	permanentDeleteSampled: Boolean!
+	"""
+	True only when the preview requires the additional no-bin confirmation.
+	"""
+	requiresPermanentDeleteConfirmation: Boolean!
+}
+
+"""
+One collision rename, sampled alongside its conflict's complete count.
+"""
+type PendingImportConflictRenamePayload {
+	"""
+	File before consolidation.
+	"""
+	sourcePath: String!
+	"""
+	File's disambiguated destination in the survivor folder.
+	"""
+	destinationPath: String!
+}
+
+"""
+One conflict's survivor, file dispositions and any refusal.
+"""
+type PendingImportConflictRowPayload {
+	"""
+	Pending-import identity represented by this row.
+	"""
+	pendingImportId: ID!
+	"""
+	Title whose folders are being settled.
+	"""
+	titleId: ID!
+	"""
+	Display name of the title.
+	"""
+	titleName: String!
+	"""
+	Folder that survives, independently of which file becomes primary.
+	"""
+	survivorPath: String!
+	"""
+	Best movie file chosen by the quality ladder.
+	"""
+	primaryPath: String!
+	"""
+	Complete bytes that must move into the survivor.
+	"""
+	moveBytes: Long!
+	"""
+	Complete bytes selected for recycling or confirmed permanent deletion.
+	"""
+	recycleBytes: Long!
+	"""
+	Complete count selected for recycling or confirmed permanent deletion.
+	"""
+	recycleCount: Int!
+	"""
+	Count of collision renames needed in the survivor folder.
+	"""
+	collisionRenames: Int!
+	"""
+	Bounded sample of the source and destination of collision renames.
+	"""
+	collisionRenameSamples: [PendingImportConflictRenamePayload!]!
+	"""
+	Complete count of non-media files remaining after media handling.
+	"""
+	leftoverCount: Int!
+	"""
+	Complete bytes in the non-media remainder.
+	"""
+	leftoverBytes: Long!
+	"""
+	Sample of the non-media remainder's paths.
+	"""
+	leftoverPaths: [String!]!
+	"""
+	Sample of paths selected for recycling or permanent deletion.
+	"""
+	recyclePaths: [String!]!
+	"""
+	True when the path lists are samples rather than complete enumerations.
+	"""
+	filesSampled: Boolean!
+	"""
+	Stable refusal reason when this conflict cannot be settled.
+	"""
+	errorReason: String
+	"""
+	Operator-facing explanation of the refusal.
+	"""
+	errorMessage: String
+}
+
+"""
+Progress of the background task that starts one operation per conflict.
+"""
+type PendingImportConflictTaskPayload {
+	"""
+	Background job identity used to read progress.
+	"""
+	jobRunId: ID!
+	"""
+	Number of conflicts in the task.
+	"""
+	totalCount: Int!
+	"""
+	Number of conflicts whose individual operation has settled.
+	"""
+	settledCount: Int!
+	"""
+	Number of conflicts that failed without stopping the remaining walk.
+	"""
+	failedCount: Int!
+	"""
+	Individual location-operation identities, in selection order.
+	"""
+	operationIds: [ID!]!
+	"""
+	True once every selected conflict has settled.
+	"""
+	completed: Boolean!
 }
 
 """
@@ -23807,6 +24775,13 @@ input QualityProfileCriteriaInput {
 	set through the API before the editor exposes the field.
 	"""
 	cutoffScore: Int
+	"""
+	Optional score a same-tier candidate must beat the current file by to
+	count as an upgrade; must not be negative. Omitting it keeps the stored
+	value, and sending the default (120) stores the profile as using the
+	default.
+	"""
+	minUpgradeScoreDelta: Int
 }
 
 """
@@ -23891,6 +24866,11 @@ type QualityProfileCriteriaPayload {
 	null when upgrades never stop (Sonarr's `CutoffFormatScore`).
 	"""
 	cutoffScore: Int
+	"""
+	Score a same-tier candidate must beat the current file by to count as
+	an upgrade. Profiles that never set it report the default, 120.
+	"""
+	minUpgradeScoreDelta: Int!
 }
 
 """
@@ -23917,6 +24897,10 @@ type QualityProfileDecisionPayload {
 	Ordered scoring contributions used to compute the decision.
 	"""
 	scoringLog: [ScoringEntryPayload!]!
+	"""
+	Standing against the title's audio language preferences.
+	"""
+	audioLanguage: AudioLanguageRankPayload!
 }
 
 """
@@ -24059,7 +25043,7 @@ type QueryRoot {
 		"""
 		sort: TitleCatalogSortInput,
 		"""
-		Requested page size; defaults to 300 and is clamped to 1 through 300.
+		Requested page size; defaults to 300 and is clamped to 1 through 10000.
 		"""
 		limit: Int,
 		"""
@@ -24085,7 +25069,7 @@ type QueryRoot {
 		rootFolderIds: [ID!]
 	): TitleCatalogFilterOptionsPayload!
 	"""
-	List libraries visible to the caller that grant at least the requested permission.
+	List libraries visible to the caller that grant at least the requested permission; root folders are empty unless the caller has management access to the library.
 	"""
 	libraries(
 		"""
@@ -24098,7 +25082,7 @@ type QueryRoot {
 		permission: LibraryPermissionValue
 	): [LibraryPayload!]!
 	"""
-	List root folders of libraries the caller can view, with the disk usage of each backing filesystem.
+	List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem; refuses callers with no such library.
 	"""
 	storageRoots: [StorageRootUsagePayload!]!
 	"""
@@ -24352,6 +25336,15 @@ type QueryRoot {
 		"""
 		titleId: ID!
 	): String
+	"""
+	Read progress while a background task settles a selected set of folder conflicts.
+	"""
+	pendingImportConflictTask(
+		"""
+		Background job identity returned when conflicts were accepted.
+		"""
+		jobRunId: ID!
+	): PendingImportConflictTaskPayload
 	"""
 	Read one location operation with its per-title checkpoints.
 	"""
@@ -24763,6 +25756,27 @@ type QueryRoot {
 		input: CatalogDiscoveryInput!
 	): CatalogDiscoveryPayload!
 	"""
+	Titles related to one anchor, owned or not, and the neighbourhoods they fall into. Owned results carry resolvedTitleId; nothing is filtered out for being in the library.
+	"""
+	discoveryNeighbors(
+		"""
+		Anchor whose related titles are returned.
+		"""
+		input: DiscoveryNeighborsInput!
+	): DiscoveryNeighborsPayload!
+	"""
+	Return a facet's library graph: how the viewer's owned titles relate,
+	limited to titles the viewer can see. Null when personalized discovery
+	is off, the viewer can see none of the requested libraries, or no graph
+	has been built yet.
+	"""
+	libraryGraph(
+		"""
+		Facet and optional library scope of the graph.
+		"""
+		input: LibraryGraphInput!
+	): LibraryGraph
+	"""
 	Return a bounded download queue page with readiness, revision, staleness, filters, and stable sorting metadata.
 	"""
 	downloadQueuePage(
@@ -24895,7 +25909,7 @@ type QueryRoot {
 	"""
 	recycleBinSettings: RecycleBinSettingsPayload!
 	"""
-	Returns the verification depth applied to download-client completed-download copies. Location operations always verify in full and ignore it.
+	Returns the verification depth applied to download-client completed-download copies and to location operations (library moves, root changes, consolidations).
 	"""
 	verificationSettings: VerificationSettingsPayload!
 	"""
@@ -25176,8 +26190,21 @@ type QueryRoot {
 		"""
 		Library IDs to include; omitted or empty includes all permitted libraries.
 		"""
-		libraryIds: [ID!]
+		libraryIds: [ID!],
+		"""
+		Only files scheduled for automatic deletion within this many hours, including overdue files; clamped to 1 through 72 and sorted soonest first before pagination. Omit for all entries, newest first.
+		"""
+		deletionWithinHours: Int
 	): RecycledItemsPayload!
+	"""
+	Read the file-correlated grab, import, upgrade and deletion history for a recycle entry.
+	"""
+	recycledItemHistory(
+		"""
+		Recycle-bin entry whose history is requested; requires title-management access to its library.
+		"""
+		id: ID!
+	): RecycledItemHistoryPayload!
 	"""
 	Preview restoring recycled items by ID without changing their files.
 	"""
@@ -26137,6 +27164,30 @@ input QueueManualImportInput {
 }
 
 """
+The result of asking to queue a saved standby candidate.
+"""
+type QueueStandbyReleasePayload {
+	"""
+	Whether the release is now queued (or already was).
+	"""
+	grabbed: Boolean!
+	"""
+	Running downloads of this title that still need the operator's choice.
+	"""
+	conflicts: [QueueDownloadConflictPayload!]!
+	"""
+	Conflicts whose client accepted the cancel request. Scryer stops
+	tracking them; a client may still finish a job it was post-processing.
+	"""
+	cancelled: [QueueDownloadConflictPayload!]!
+	"""
+	Conflicts whose cancel request failed. They keep running and stay
+	tracked; the release is queued anyway.
+	"""
+	cancelFailed: [QueueDownloadConflictPayload!]!
+}
+
+"""
 Names one release of an interactive search to grab without assigning it a title.
 """
 input QueueUnlinkedReleaseInput {
@@ -26363,6 +27414,20 @@ type RecycleRestorePreviewPayload {
 }
 
 """
+Bounded history correlated to a recycle entry's retained file and acquisition identities.
+"""
+type RecycledItemHistoryPayload {
+	"""
+	Related events in chronological order, up to the latest 50 matches.
+	"""
+	items: [TitleHistoryEventPayload!]!
+	"""
+	The summary reached its 5000-candidate or 50-match bound.
+	"""
+	truncated: Boolean!
+}
+
+"""
 File moved to the recycle bin with its original library context.
 """
 type RecycledItemPayload {
@@ -26390,6 +27455,14 @@ type RecycledItemPayload {
 	Associated title name, or null when no title was matched.
 	"""
 	titleName: String
+	"""
+	Current local title facet, or null when the entry has no matching local title.
+	"""
+	titleFacet: String
+	"""
+	Single episode tied to the recycled file; null for movies or ambiguous history.
+	"""
+	episodeId: ID
 	"""
 	Reason the file entered the recycle bin.
 	"""
@@ -27221,6 +28294,32 @@ enum RequestVoteValue {
 }
 
 """
+Confirm a preview, including separate consent when no recycle bin exists.
+"""
+input ResolvePendingImportConflictsInput {
+	"""
+	Pending-import identities confirmed by the preview.
+	"""
+	pendingImportIds: [ID!]!
+	"""
+	Media disposition applied independently to each conflict.
+	"""
+	policy: PendingImportConflictPolicy!
+	"""
+	Disposition of the remaining non-media files.
+	"""
+	leftovers: PendingImportConflictLeftovers!
+	"""
+	Fingerprint of the complete preview being confirmed.
+	"""
+	planFingerprint: String!
+	"""
+	Explicit consent to the previewed permanent deletion when no bin exists.
+	"""
+	confirmPermanentDelete: Boolean! = false
+}
+
+"""
 Resolves one pending import to a title and requested title metadata.
 """
 input ResolvePendingImportInput {
@@ -27527,20 +28626,6 @@ type RevokeMyOauthAppPayload {
 	False when the grant was already revoked or was not owned by the caller.
 	"""
 	revoked: Boolean!
-}
-
-"""
-Library root path and default marker.
-"""
-input RootFolderInput {
-	"""
-	Absolute filesystem path for the library root.
-	"""
-	path: String!
-	"""
-	Whether this root is the library default.
-	"""
-	isDefault: Boolean!
 }
 
 """
@@ -28882,13 +29967,45 @@ type ServiceSettingsPayload {
 	"""
 	basePathSource: ConfigValueSourceValue!
 	"""
-	Listening address and port.
+	Address and port the server is listening on now.
 	"""
 	bindAddress: String!
 	"""
-	Where the listening address comes from; never the saved settings.
+	Where the listening address comes from.
 	"""
 	bindSource: ConfigValueSourceValue!
+	"""
+	Saved listening host, shown even while SCRYER_BIND overrides it.
+	"""
+	bindSavedHost: String
+	"""
+	False while SCRYER_BIND sets the listening address.
+	"""
+	bindEditable: Boolean!
+	"""
+	What pins the listening address; null when it can be changed here.
+	"""
+	bindPinnedBy: BindPinValue
+	"""
+	Address and port the next start listens on.
+	"""
+	bindPending: String!
+	"""
+	Whether a restart is needed for the saved listening address to apply.
+	"""
+	bindRestartRequired: Boolean!
+	"""
+	Stable reason the server is not listening where configured; null when it is.
+	"""
+	bindFallbackCode: String
+	"""
+	Address that could not be used, when there was one.
+	"""
+	bindFallbackAddress: String
+	"""
+	Operating-system or parse detail for the fallback, for display only.
+	"""
+	bindFallbackReason: String
 	"""
 	Passkey relying-party ID in effect since startup.
 	"""
@@ -29098,6 +30215,16 @@ input SetMyUiSettingsInput {
 	Whether the sponsor button should be hidden.
 	"""
 	hideSponsorButton: Boolean!
+	"""
+	Whether discovery section grids leave out titles already in a library;
+	omitted or null preserves the saved value.
+	"""
+	discoveryGridHideOwned: Boolean
+	"""
+	Whether discovery section grids leave out titles with a pending
+	request; omitted or null preserves the saved value.
+	"""
+	discoveryGridHideRequested: Boolean
 	"""
 	Selected density.
 	"""
@@ -29354,6 +30481,44 @@ enum SortDirectionValue {
 	Highest or latest values first.
 	"""
 	DESC
+}
+
+"""
+One conflicting download the operator confirmed, as the client names it.
+"""
+input StandbyConflictIdentityInput {
+	"""
+	The configured download client that holds the job, when known.
+	"""
+	clientId: ID
+	"""
+	The download client's type, such as `sabnzbd` or `weaver`.
+	"""
+	clientType: String!
+	"""
+	The client's own id for the job.
+	"""
+	itemId: String!
+}
+
+"""
+What to do about downloads of the same title that are already running.
+"""
+enum StandbyQueueChoiceValue {
+	"""
+	Queue only when nothing else is downloading; otherwise list the conflicts.
+	"""
+	CHECK
+	"""
+	Queue alongside the confirmed conflicts, leaving them running.
+	"""
+	QUEUE
+	"""
+	Ask the clients to cancel the confirmed conflicts, then queue without
+	waiting for them to act. Cancellation is best effort: a conflict that is
+	already post-processing may still finish.
+	"""
+	CANCEL_AND_QUEUE
 }
 
 """
@@ -30530,6 +31695,10 @@ input TitleCatalogFilterInput {
 	Keep titles holding a file whose scan failed or that needs review when true, and titles holding none when false; null keeps both.
 	"""
 	needsAttention: Boolean
+	"""
+	Restrict results to these title IDs; null or empty keeps every title. Lets a client refresh a few titles under its other filters without reloading the whole list.
+	"""
+	titleIds: [ID!]
 }
 
 """
@@ -31774,9 +32943,9 @@ type TitlePayload {
 		limit: Int! = 12
 	): [DiscoveryItemPayload!]!
 	"""
-	Absolute root-folder path for this title; requires view permission on its library.
+	Absolute root-folder path for this title, or null when the caller lacks management access to its library.
 	"""
-	rootFolderPath: String!
+	rootFolderPath: String
 	"""
 	Whether renaming is turned on for this title's media type. Rename preview
 	and rename requests for the title are refused while this is false.
@@ -32439,6 +33608,10 @@ enum UiCatalogViewModeValue {
 	Poster grid.
 	"""
 	POSTER
+	"""
+	Graph of how the library's titles relate.
+	"""
+	GRAPH
 }
 
 """
@@ -32732,6 +33905,14 @@ type UiSettingsPayload {
 	"""
 	hideSponsorButton: Boolean!
 	"""
+	Whether discovery section grids leave out titles already in a library.
+	"""
+	discoveryGridHideOwned: Boolean!
+	"""
+	Whether discovery section grids leave out titles with a pending request.
+	"""
+	discoveryGridHideRequested: Boolean!
+	"""
 	Selected density.
 	"""
 	density: UiDensityValue!
@@ -32905,9 +34086,11 @@ input UpdateAcquisitionSettingsInput {
 	"""
 	upgradeCooldownHours: Int @deprecated(reason: "Inert: the stored value is no longer read; removed in the next minor.")
 	"""
-	Minimum score improvement for a same-tier upgrade.
+	Deprecated and inert: accepted and ignored; nothing is read or stored.
+	Set `minUpgradeScoreDelta` on the quality profile instead. Removed in
+	the next minor.
 	"""
-	sameTierMinDelta: Int!
+	sameTierMinDelta: Int @deprecated(reason: "Ignored: set minUpgradeScoreDelta on the quality profile through saveQualityProfileSettings. Removed in the next minor.")
 	"""
 	Deprecated and inert: accepted and ignored; nothing is read or stored.
 	Removed in the next minor.
@@ -32928,6 +34111,11 @@ input UpdateAcquisitionSettingsInput {
 	value.
 	"""
 	walkIntervalSeconds: Int
+	"""
+	How much of the machine the walk may take. Omitted by older clients,
+	which keeps the stored value.
+	"""
+	walkIntensity: AcquisitionWalkIntensityValue
 	"""
 	Maximum long-tail scopes processed per cycle.
 	"""
@@ -33158,27 +34346,13 @@ input UpdateLibraryInput {
 	"""
 	roots: [UpdateLibraryRootInput!]
 	"""
+	Ids of the stored roots `roots` drops. Must name exactly the roots the edit removes; ignored when `roots` is omitted.
+	"""
+	removedRootIds: [ID!]
+	"""
 	Optional replacement library settings.
 	"""
 	settings: LibrarySettingsInput
-}
-
-"""
-Root paths for movie, series, and optional anime libraries.
-"""
-input UpdateLibraryPathsInput {
-	"""
-	Movie library path.
-	"""
-	moviePath: String!
-	"""
-	Series library path.
-	"""
-	seriesPath: String!
-	"""
-	Anime library path, when configured.
-	"""
-	animePath: String
 }
 
 """
@@ -33186,9 +34360,11 @@ Replacement library root path and default marker.
 """
 input UpdateLibraryRootInput {
 	"""
-	Id of the stored root this entry edits. A root keeps its identity, and the
-	titles under it keep their root, when its path changes under the same id.
-	Omit it for a new root; an entry without one is matched by path.
+	Id of the stored root this entry edits. Stored roots are identified by
+	this id and must carry it; a root keeps its identity, and the titles under
+	it keep their root, when its path changes under the same id. A root
+	without an id is a new root, and a root without an id at a stored root's
+	path is refused.
 	"""
 	id: ID
 	"""
@@ -33436,17 +34612,25 @@ input UpdateMediaSettingsInput {
 	"""
 	scope: ContentScopeValue!
 	"""
-	Optional library path override.
-	"""
-	libraryPath: String
-	"""
-	Optional replacement list of library roots; null leaves existing roots unchanged.
-	"""
-	rootFolders: [RootFolderInput!]
-	"""
 	Optional required audio-language codes; use `original` to resolve per title.
 	"""
 	requiredAudioLanguages: [String!]
+	"""
+	Optional ordered preferred audio-language codes; an empty list clears them.
+	"""
+	preferredAudioLanguages: [String!]
+	"""
+	Optional audio-language codes that rank higher when present; an empty list clears them.
+	"""
+	optionalAudioLanguages: [String!]
+	"""
+	Whether the preferred language is compared before or after quality.
+	"""
+	audioLanguagePriority: AudioLanguagePriorityValue
+	"""
+	Whether a file missing optional languages stays an upgrade target.
+	"""
+	optionalAudioLanguagesKeepSearching: Boolean
 	"""
 	Whether episodic titles use season folders.
 	"""
@@ -34031,6 +35215,15 @@ input UpdateServiceSettingsInput {
 	any are registered.
 	"""
 	acknowledgePasskeyImpact: Boolean
+	"""
+	Save the listening host (an IPv4 or IPv6 address, no port); applies on
+	the next start. Omission preserves the saved value.
+	"""
+	bindHost: String
+	"""
+	Clear the saved listening host so the next start listens on loopback.
+	"""
+	resetBindHost: Boolean
 }
 
 """
@@ -34184,10 +35377,8 @@ input UpdateTitleTagsInput {
 }
 
 """
-Verification depth applied to download-client completed-download copies.
-Location operations (library moves, root changes, consolidations) always
-verify in full and ignore this preference: they move the only copy of the
-content, so the stronger guarantee is a floor rather than a choice.
+Verification depth applied to download-client completed-download copies
+and to location operations (library moves, root changes, consolidations).
 """
 input UpdateVerificationSettingsInput {
 	"""
@@ -34363,10 +35554,8 @@ enum VerificationDepthValue {
 }
 
 """
-Verification depth applied to download-client completed-download copies.
-Location operations (library moves, root changes, consolidations) always
-verify in full and ignore this preference: they move the only copy of the
-content, so the stronger guarantee is a floor rather than a choice.
+Verification depth applied to download-client completed-download copies
+and to location operations (library moves, root changes, consolidations).
 """
 type VerificationSettingsPayload {
 	"""

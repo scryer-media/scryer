@@ -159,7 +159,11 @@ export const SystemContainer = memo(function SystemContainer({
   const systemTitle = t("system.title");
 
   return (
-    <SystemPageFrame breadcrumbLabel="Health" icon={Server} title={systemTitle}>
+    <SystemPageFrame
+      breadcrumbLabel={t("system.title")}
+      icon={Server}
+      title={systemTitle}
+    >
       <SystemView
         scryerVersion={scryerVersion}
         state={{

@@ -1045,7 +1045,7 @@ export function SettingsBackupsContainer() {
                 placeholder={savedBackupSettings.defaultBackupPath}
                 disabled={backupSettingsSaving}
                 onChange={(event) => setBackupPathDraft(event.target.value)}
-                className="min-w-0 flex-1 font-[var(--font-code)]"
+                className="min-w-0 flex-1 font-[family-name:var(--font-code)]"
               />
               <div className="flex shrink-0 flex-wrap gap-2">
                 <Button
@@ -1087,7 +1087,7 @@ export function SettingsBackupsContainer() {
               {t("settings.backupLocationEffectivePath")}{" "}
               <span
                 id="backup-location-effective-path"
-                className="font-[var(--font-code)] text-[var(--scry-ink2)]"
+                className="font-[family-name:var(--font-code)] text-[var(--scry-ink2)]"
               >
                 {savedBackupSettings.effectiveBackupPath ||
                   savedBackupSettings.defaultBackupPath}
@@ -1161,12 +1161,12 @@ export function SettingsBackupsContainer() {
                     <TableHead
                       className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
                     >
-                      Bundle
+                      {t("uiText.bundle")}
                     </TableHead>
                     <TableHead
                       className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
                     >
-                      Created
+                      {t("settings.externalAccountInviteCreatedAt")}
                     </TableHead>
                     <TableHead
                       className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
@@ -1176,7 +1176,7 @@ export function SettingsBackupsContainer() {
                     <TableHead
                       className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
                     >
-                      Size
+                      {t("title.table.size")}
                     </TableHead>
                     <TableHead
                       className={`text-right font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
@@ -1289,7 +1289,7 @@ export function SettingsBackupsContainer() {
                           />
                         </TableCell>
                         <TableCell
-                          className={`align-middle font-[var(--font-code)] text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}
+                          className={`align-middle font-[family-name:var(--font-code)] text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}
                         >
                           {formatBytes(backup.sizeBytes)}
                         </TableCell>

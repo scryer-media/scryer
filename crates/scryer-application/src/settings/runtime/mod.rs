@@ -4,7 +4,6 @@ use super::keys::{
     default_indexer_routing_categories_for_scope,
 };
 use super::*;
-use crate::acquisition_policy::AcquisitionThresholds;
 use crate::location::model::VerificationDepth;
 use crate::ports::ImportFilePermissions;
 use crate::scoring_weights::ScoringPersona;
@@ -46,6 +45,5 @@ include!("media.rs");
 include!("movie_availability.rs");
 include!("quality_profiles.rs");
 include!("routing.rs");
-include!("external_import_paths.rs");
 include!("title_image_cache.rs");
 include!("script_interpreters.rs");

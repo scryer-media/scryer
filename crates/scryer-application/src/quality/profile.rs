@@ -56,8 +56,21 @@ pub struct QualityProfileCriteria {
     /// trigger a full re-search. Omitted when unset, it does not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cutoff_score: Option<i32>,
+    /// The score a same-tier candidate must beat the incumbent by to count as
+    /// an upgrade, or `None` for [`DEFAULT_MIN_UPGRADE_SCORE_DELTA`]. Read
+    /// through [`QualityProfileCriteria::min_upgrade_score_delta_or_default`].
+    ///
+    /// Omitted when unset for the same reason as `cutoff_score`: an absent key
+    /// leaves `convergence::profile_criteria_version` unchanged, so adding the
+    /// field re-searches nothing. The default is stored as `None`, never as
+    /// `Some(DEFAULT_MIN_UPGRADE_SCORE_DELTA)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_upgrade_score_delta: Option<i32>,
     pub facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
+
+/// Same-tier upgrade delta for a profile that does not set one.
+pub const DEFAULT_MIN_UPGRADE_SCORE_DELTA: i32 = 120;
 
 /// The acceptance-deciding subset of [`QualityProfileCriteria`], hashed by
 /// `convergence::profile_criteria_version` to version a scope's search
@@ -105,6 +118,8 @@ pub(crate) struct AcceptanceCriteria<'a> {
     pub min_score_to_grab: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff_score: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_upgrade_score_delta: Option<i32>,
 }
 
 impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
@@ -128,6 +143,7 @@ impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
             cutoff_tier: criteria.cutoff_tier.as_ref(),
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
+            min_upgrade_score_delta: criteria.min_upgrade_score_delta,
         }
     }
 }
@@ -148,11 +164,19 @@ pub struct ScoringConfig {
     pub min_score_to_grab: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cutoff_score: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_upgrade_score_delta: Option<i32>,
     #[serde(default)]
     pub facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
 impl QualityProfileCriteria {
+    /// The same-tier upgrade delta this profile applies.
+    pub fn min_upgrade_score_delta_or_default(&self) -> i32 {
+        self.min_upgrade_score_delta
+            .unwrap_or(DEFAULT_MIN_UPGRADE_SCORE_DELTA)
+    }
+
     /// Returns the scoring persona for a given media category, falling back to the
     /// base `scoring_persona` if no facet-specific override exists.
     pub fn resolve_persona(&self, category: Option<&str>) -> &ScoringPersona {
@@ -239,6 +263,12 @@ pub struct QualityProfileDecision {
     pub size_fit_penalty: i32,
     /// Context-derived revision preference; zero without related incumbents.
     pub revision_preference: i32,
+    /// Standing against the title's preferred and optional audio languages.
+    ///
+    /// Carried here for the same reason as `tier_index`: every ordering reads
+    /// it off the decision. It never contributes to the score, so custom rules
+    /// cannot outweigh it and it cannot outweigh them within its own step.
+    pub language: crate::AudioLanguageRank,
 }
 
 impl QualityProfileDecision {
@@ -252,6 +282,7 @@ impl QualityProfileDecision {
             tier_index: None,
             size_fit_penalty: 0,
             revision_preference: 0,
+            language: crate::AudioLanguageRank::default(),
         }
     }
 
@@ -355,6 +386,8 @@ struct RawQualityProfileCriteria {
     #[serde(default)]
     cutoff_score: Option<i32>,
     #[serde(default)]
+    min_upgrade_score_delta: Option<i32>,
+    #[serde(default)]
     facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
@@ -422,6 +455,7 @@ pub fn builtin_4k_profile() -> QualityProfile {
             cutoff_tier: None,
             min_score_to_grab: None,
             cutoff_score: None,
+            min_upgrade_score_delta: None,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -460,6 +494,7 @@ pub fn builtin_8k_profile() -> QualityProfile {
             cutoff_tier: None,
             min_score_to_grab: None,
             cutoff_score: None,
+            min_upgrade_score_delta: None,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -493,6 +528,7 @@ pub fn builtin_1080p_profile() -> QualityProfile {
             cutoff_tier: None,
             min_score_to_grab: None,
             cutoff_score: None,
+            min_upgrade_score_delta: None,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -526,6 +562,7 @@ pub fn builtin_anime_profile() -> QualityProfile {
             cutoff_tier: None,
             min_score_to_grab: None,
             cutoff_score: None,
+            min_upgrade_score_delta: None,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -585,6 +622,7 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> Result<QualityProfile, se
             cutoff_tier: criteria.cutoff_tier,
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
+            min_upgrade_score_delta: criteria.min_upgrade_score_delta,
             facet_persona_overrides: criteria.facet_persona_overrides,
         },
     })
@@ -622,6 +660,7 @@ impl Default for QualityProfile {
                 cutoff_tier: None,
                 min_score_to_grab: None,
                 cutoff_score: None,
+                min_upgrade_score_delta: None,
                 facet_persona_overrides: HashMap::new(),
             },
         }
@@ -654,6 +693,7 @@ impl Default for QualityProfileCriteria {
             cutoff_tier: None,
             min_score_to_grab: None,
             cutoff_score: None,
+            min_upgrade_score_delta: None,
             facet_persona_overrides: HashMap::new(),
         }
     }

@@ -104,6 +104,8 @@ export type PostProcessingScriptDraft = {
   description: string;
   scriptType: string;
   scriptContent: string;
+  /** The other script type's text; only `scriptContent` is ever saved. */
+  parkedScriptContent: string;
   appliedFacets: string[];
   executionMode: string;
   timeoutSecs: number;

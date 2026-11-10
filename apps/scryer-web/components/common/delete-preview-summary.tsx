@@ -119,7 +119,7 @@ export function DeletePreviewSummary({
             {preview.samplePaths.map((path) => (
               <p
                 key={path}
-                className="break-all font-[var(--font-code)] text-[11px] text-muted-foreground"
+                className="break-all font-[family-name:var(--font-code)] text-[11px] text-muted-foreground"
               >
                 {path}
               </p>

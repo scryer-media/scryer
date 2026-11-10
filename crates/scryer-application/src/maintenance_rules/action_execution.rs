@@ -169,6 +169,11 @@ pub(crate) fn title_rule_action_not_executable(kind: MaintenanceActionKind) -> S
 
 /// Stable `hold_reason` / `state_reason` values the executor writes. Part of
 /// the operator-visible contract, like `candidate_reason` on the evaluator.
+///
+/// These are stored on candidate and action-run rows and read by the web
+/// client, and they shipped as lower snake case before the area-prefixed
+/// SCREAMING_SNAKE convention existed. A released code is never renamed, so
+/// this module keeps that one shape, and its test holds every code to it.
 pub mod execution_reason {
     /// The rule was disarmed, disabled, left observe mode, or its gate went
     /// down between selection and execution.
@@ -181,6 +186,21 @@ pub mod execution_reason {
     pub const PLAYBACK_HOLD: &str = "playback_hold";
     /// A configured media server could not be asked about playback.
     pub const PLAYBACK_UNKNOWN: &str = "playback_unknown";
+    /// A rule that reads a watch fact matched, and reading the subject's
+    /// items back from the media server found a play newer than the stored
+    /// facts, by an account the watch facts count.
+    pub const WATCH_RECHECK_NEWER_PLAY: &str = "watch_recheck_newer_play";
+    /// The media server's history names a play of the subject that the
+    /// stored facts credit to no account, such as one by an account that is
+    /// not linked to a Scryer user.
+    pub const WATCH_RECHECK_UNCREDITED_PLAY: &str = "watch_recheck_uncredited_play";
+    /// The subject's items could not be read back from the media server
+    /// before acting on a watch fact.
+    pub const WATCH_RECHECK_UNAVAILABLE: &str = "watch_recheck_unavailable";
+    /// A connected media server's library mapping has no item for the
+    /// subject (or one of its episodes with a file), so it could not be read
+    /// back there and no read was attempted.
+    pub const WATCH_RECHECK_UNMAPPED: &str = "watch_recheck_unmapped";
     /// The title has a grab, download, or import in flight.
     pub const ACTIVE_ACQUISITION: &str = "active_acquisition";
     /// Acquisition activity could not be ruled out.
@@ -225,6 +245,64 @@ pub mod execution_reason {
     /// operator asked for, and that is an authoring mistake to surface rather
     /// than a race to resolve.
     pub const TAG_PATCH_CONFLICT: &str = "tag_patch_conflict";
+    /// A high-risk action on a season or episode subject whose files cannot
+    /// all be placed on that subject's episodes.
+    pub const AMBIGUOUS_EPISODE_FILE_COVERAGE: &str = "ambiguous_episode_file_coverage";
+
+    /// Every code above.
+    pub const ALL: &[&str] = &[
+        RULE_NOT_ELIGIBLE,
+        NO_MATCH_AT_EXECUTION,
+        UNKNOWN_AT_EXECUTION,
+        PLAYBACK_HOLD,
+        PLAYBACK_UNKNOWN,
+        WATCH_RECHECK_NEWER_PLAY,
+        WATCH_RECHECK_UNCREDITED_PLAY,
+        WATCH_RECHECK_UNAVAILABLE,
+        WATCH_RECHECK_UNMAPPED,
+        ACTIVE_ACQUISITION,
+        ACQUISITION_UNKNOWN,
+        STORAGE_DELETION_IN_PROGRESS,
+        ACTION_NOT_FULLY_SUPPORTED,
+        TITLE_MISSING,
+        LOCATION_OPERATION_HOLD,
+        PASS_ACTION_STEP_BUDGET,
+        PASS_HIGH_RISK_STEP_BUDGET,
+        ACTION_SUCCEEDED,
+        ALREADY_SATISFIED,
+        RETRY_PENDING,
+        ACTION_FAILED,
+        LEASE_RECLAIMED,
+        TAG_NOT_DEFINED,
+        TAG_PATCH_CONFLICT,
+        AMBIGUOUS_EPISODE_FILE_COVERAGE,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        use super::ALL;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn reasons_are_distinct_and_keep_the_stored_snake_case_shape() {
+            let distinct = ALL.iter().collect::<BTreeSet<_>>();
+            assert_eq!(distinct.len(), ALL.len(), "a reason is listed twice");
+            for reason in ALL {
+                assert!(!reason.is_empty());
+                assert!(
+                    reason
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                    "{reason} is not lower snake case"
+                );
+                assert!(
+                    !reason.starts_with('_') && !reason.ends_with('_') && !reason.contains("__"),
+                    "{reason} has a stray underscore"
+                );
+            }
+            assert_eq!(ALL.len(), 25);
+        }
+    }
 }
 
 /// Job report for [`JobKey::LifecycleActionHandling`], serialized onto the run.
@@ -1486,7 +1564,7 @@ impl AppUseCase {
                     }) => {
                         run.status = LifecycleActionRunStatus::Held;
                         run.hold_reason = Some(reason.to_string());
-                        run.detail = evidence.to_string();
+                        super::scoped_deletion::record_hold_detail(&mut run, &evidence);
                         run.finished_at = Some(Utc::now());
                         candidates.finish_action_run(&run).await?;
                         if self
@@ -1506,7 +1584,7 @@ impl AppUseCase {
                         reason,
                         detail: evidence,
                     }) => {
-                        run.detail = evidence.to_string();
+                        super::scoped_deletion::record_hold_detail(&mut run, &evidence);
                         if self
                             .finish_candidate_hold_and_release_attempt(&mut run, attempt, reason)
                             .await?
@@ -1930,6 +2008,9 @@ impl AppUseCase {
             Ok(signals) => signals,
             Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
         };
+        let (watch_context, audience_by_title) = self
+            .maintenance_audience_plays_for_titles(&watch_context, std::slice::from_ref(&title))
+            .await;
         let people = MaintenanceTitlePeople {
             requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
             usernames: &usernames,
@@ -1937,6 +2018,7 @@ impl AppUseCase {
         let watch = MaintenanceTitleWatch {
             context: &watch_context,
             signals: signals_by_title.get(&title.id).map(Vec::as_slice),
+            audience: audience_by_title.get(&title.id).map(Vec::as_slice),
         };
         let claims = MaintenanceTitleClaims {
             claims: claims_by_title
@@ -1964,7 +2046,7 @@ impl AppUseCase {
             return SafetyDecision::Excluded;
         }
         if high_risk && candidate.subject_kind != "title" && subject.ambiguous_files {
-            return SafetyDecision::Hold("ambiguous_episode_file_coverage");
+            return SafetyDecision::Hold(execution_reason::AMBIGUOUS_EPISODE_FILE_COVERAGE);
         }
         let sequence_delete_files_step_id = sequence.and_then(|sequence| {
             sequence
@@ -2018,7 +2100,7 @@ impl AppUseCase {
                     Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
                 }
             } else if subject.ambiguous_files {
-                return SafetyDecision::Hold("ambiguous_episode_file_coverage");
+                return SafetyDecision::Hold(execution_reason::AMBIGUOUS_EPISODE_FILE_COVERAGE);
             } else {
                 subject.files.clone()
             };
@@ -2313,6 +2395,58 @@ impl AppUseCase {
             Some(MaintenanceOutcome::NoMatch) => {}
             Some(MaintenanceOutcome::Unknown) | None => {
                 return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+            }
+        }
+
+        // (3b) A match that rests on watch facts rests on the last sweep. Read
+        // the subject's watched items back from their servers first; a play
+        // since then, a play no stored fact credits, or a read that cannot be
+        // made holds. A clean read changes nothing it read.
+        if super::watch_recheck::rule_reads_watch_facts(
+            &detail.revision.rego_source,
+            &candidate.rule_set_id,
+        ) {
+            let episode_ids = (subject.kind != scryer_domain::MaintenanceRuleSubjectKind::Title)
+                .then(|| {
+                    subject
+                        .episodes
+                        .iter()
+                        .map(|episode| episode.id.clone())
+                        .collect::<HashSet<_>>()
+                });
+            let entities =
+                super::watch_recheck::recheck_entities(&title.facet, &title.id, &subject);
+            // The comparison baseline is what the sweep stored, whether or
+            // not the per-user gate lets those rows be used as facts: with
+            // the gate closed the rule ran on the anonymous facts alone, and
+            // an old play a swept account already had is not a new one.
+            let baseline = if watch_context.freshness == super::facts::WatchSignalFreshness::Fresh {
+                signals_by_title.get(&title.id).cloned().unwrap_or_default()
+            } else {
+                match self
+                    .maintenance_stored_watch_signals_for_titles(std::slice::from_ref(&title))
+                    .await
+                {
+                    Ok(mut stored) => stored.remove(&title.id).unwrap_or_default(),
+                    Err(_) => {
+                        return SafetyDecision::Hold(execution_reason::WATCH_RECHECK_UNAVAILABLE);
+                    }
+                }
+            };
+            let recheck = self
+                .maintenance_watch_recheck(
+                    &watch_context,
+                    &baseline,
+                    audience_by_title
+                        .get(&title.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                    episode_ids.as_ref(),
+                    entities.as_deref(),
+                )
+                .await;
+            if let Some(reason) = recheck.hold_reason() {
+                return SafetyDecision::Hold(reason);
             }
         }
 

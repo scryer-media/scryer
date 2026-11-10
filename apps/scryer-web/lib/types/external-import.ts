@@ -88,6 +88,30 @@ export type ExternalImportResult = {
   errors: string[];
 };
 
+export type ExternalImportSourceJob = {
+  runId: string;
+  active: boolean;
+  ready: boolean;
+  updatedAt: string;
+  items: {
+    key: string;
+    name: string;
+    configId: string;
+    kind: string;
+    state:
+      | "queued"
+      | "installing"
+      | "checking"
+      | "saving"
+      | "succeeded"
+      | "failed"
+      | "interrupted"
+      | "skipped";
+    reason: string | null;
+    message: string | null;
+  }[];
+};
+
 export type ExternalImportMonitorWarmupStatus =
   "QUEUED" | "RUNNING" | "COMPLETED" | "CANCELED" | "FAILED";
 

@@ -36,6 +36,7 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { DEFAULT_MIN_UPGRADE_SCORE_DELTA } from "@/lib/utils/quality-profiles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 
 const QUALITY_PANEL_CLASS =
@@ -95,6 +96,7 @@ type QualityProfileCriteriaPayload = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
+  min_upgrade_score_delta: number;
 };
 
 type QualityProfileDraft = {
@@ -118,6 +120,7 @@ type QualityProfileDraft = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
+  min_upgrade_score_delta: number;
 };
 
 type QualityProfileListField =
@@ -351,7 +354,9 @@ function ProfileListEditor({
         className={`${QUALITY_EDITOR_SECTION_BODY_CLASS} grid gap-3 md:grid-cols-2`}
       >
         <div>
-          <Label className="mb-2 block text-[var(--scry-ink2)]">Allowed</Label>
+          <Label className="mb-2 block text-[var(--scry-ink2)]">
+            {t("uiText.allowed")}
+          </Label>
           <div className={QUALITY_EDITOR_LIST_CLASS}>
             {sortedAllowed.length === 0 ? (
               <p className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}>
@@ -379,7 +384,9 @@ function ProfileListEditor({
           </div>
         </div>
         <div>
-          <Label className="mb-2 block text-[var(--scry-ink2)]">Denied</Label>
+          <Label className="mb-2 block text-[var(--scry-ink2)]">
+            {t("uiText.denied")}
+          </Label>
           <div className={QUALITY_EDITOR_LIST_CLASS}>
             {sortedDenied.length === 0 ? (
               <p className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}>
@@ -1587,6 +1594,40 @@ export function SettingsQualityProfilesSection({
                               updateQualityProfileDraft({
                                 min_score_to_grab:
                                   raw === "" ? null : Number(raw),
+                              });
+                            }}
+                          />
+                        </label>
+
+                        <label className="space-y-2">
+                          <Label className="inline-flex items-center gap-2">
+                            {t("qualityProfile.minUpgradeScoreDelta")}
+                            <InfoHelp
+                              ariaLabel={t(
+                                "qualityProfile.minUpgradeScoreDelta",
+                              )}
+                              text={t(
+                                "qualityProfile.minUpgradeScoreDeltaInfo",
+                              )}
+                            />
+                          </Label>
+                          <Input
+                            id={selectorId(
+                              "settings-quality-profile-min-upgrade-score-delta",
+                            )}
+                            {...signedIntegerInputProps}
+                            min={0}
+                            value={qualityProfileDraft.min_upgrade_score_delta}
+                            onChange={(event) => {
+                              const raw = event.target.value.trim();
+                              const parsed = Number(raw);
+                              updateQualityProfileDraft({
+                                min_upgrade_score_delta:
+                                  raw === "" ||
+                                  !Number.isInteger(parsed) ||
+                                  parsed < 0
+                                    ? DEFAULT_MIN_UPGRADE_SCORE_DELTA
+                                    : parsed,
                               });
                             }}
                           />

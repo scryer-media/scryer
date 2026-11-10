@@ -77,6 +77,10 @@ pub struct UpdateServiceSettings {
     pub reset_public_url: bool,
     /// The administrator confirmed that existing passkeys stop working.
     pub acknowledge_passkey_impact: bool,
+    /// Save the listening host, applied on the next start. Omission preserves it.
+    pub bind_host: Option<String>,
+    /// Clear the saved listening host so the next start listens on loopback.
+    pub reset_bind_host: bool,
 }
 impl AppUseCase {
     pub fn trusted_proxy_runtime(&self) -> crate::rate_limit_proxy_policy::TrustedProxyRuntime {
@@ -223,6 +227,103 @@ impl AppUseCase {
             .map_err(|error| rejected(error.code, error.message))
     }
 
+    /// `Some(Some(host))` saves, `Some(None)` clears, `None` leaves it alone.
+    fn validated_bind_host_change(
+        &self,
+        value: Option<&str>,
+        reset: bool,
+    ) -> AppResult<Option<Option<std::net::IpAddr>>> {
+        use crate::error_reasons::network;
+        if value.is_none() && !reset {
+            return Ok(None);
+        }
+        if value.is_some() && reset {
+            return Err(AppError::validation_refused(
+                network::BIND_SAVE_AND_RESET,
+                "cannot save and reset the listening address together",
+            ));
+        }
+        if !self.runtime.security.public_url.addressing().bind.editable() {
+            return Err(AppError::validation_refused(
+                network::BIND_ENV_PINNED,
+                format!(
+                    "the listening address is set by {} and cannot be changed here",
+                    crate::network_bind::BIND_ENV
+                ),
+            ));
+        }
+        match value {
+            Some(value) => Ok(Some(Some(crate::network_bind::parse_bind_host(value)?))),
+            None => Ok(Some(None)),
+        }
+    }
+
+    /// Save the listening host and report whether the next start changes the
+    /// address. The caller holds the service settings lock.
+    async fn save_bind_host(
+        &self,
+        host: Option<std::net::IpAddr>,
+        actor_id: Option<String>,
+    ) -> AppResult<bool> {
+        self.upsert_system_setting_json(
+            crate::network_bind::BIND_HOST_KEY,
+            &host.map(|host| host.to_string()),
+            actor_id,
+        )
+        .await?;
+        let runtime = &self.runtime.security.public_url;
+        runtime.set_saved_bind_host(host);
+        Ok(runtime.addressing().bind.restart_required())
+    }
+
+    /// Store the first-run network choice unless the environment pins the address.
+    pub(crate) async fn apply_initial_network_access(
+        &self,
+        access: crate::network_bind::InitialNetworkAccess,
+    ) -> AppResult<crate::network_bind::InitialBindOutcome> {
+        let _guard = self.runtime.security.service_settings_lock.lock().await;
+        if !self.runtime.security.public_url.addressing().bind.editable() {
+            return Ok(crate::network_bind::InitialBindOutcome {
+                ignored_because_pinned: true,
+                restart_required: false,
+            });
+        }
+        let restart_required = self.save_bind_host(Some(access.host()), None).await?;
+        Ok(crate::network_bind::InitialBindOutcome {
+            ignored_because_pinned: false,
+            restart_required,
+        })
+    }
+
+    /// Restart the process so a saved listening address takes effect.
+    pub async fn restart_for_bind_change(&self, actor: &User) -> AppResult<()> {
+        use crate::error_reasons::network;
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        if !self
+            .runtime
+            .security
+            .public_url
+            .addressing()
+            .bind
+            .restart_required()
+        {
+            return Err(AppError::validation_refused(
+                network::RESTART_NOT_REQUIRED,
+                "the listening address does not need a restart",
+            ));
+        }
+        let restart = self.application_upgrade_restart_handle().map_err(|_| {
+            AppError::validation_refused(
+                network::RESTART_UNAVAILABLE,
+                "this Scryer process cannot restart itself; restart it the way it was started",
+            )
+        })?;
+        tracing::info!("restarting to apply the saved listening address");
+        restart.schedule_restart();
+        Ok(())
+    }
+
     pub async fn initialize_trusted_proxy_policy(&self, environment: &str) -> AppResult<()> {
         use crate::rate_limit_proxy_policy::{IpMatcher, TRUSTED_PROXIES_KEY, TrustedProxyPolicy};
         let _guard = self.runtime.security.service_settings_lock.lock().await;
@@ -356,6 +457,13 @@ impl AppUseCase {
             .await?;
 
         Ok(true)
+    }
+
+    pub async fn complete_setup_for_source_import(&self, actor: &User, source_import_run_id: Option<&str>) -> AppResult<bool> {
+        if let Some(id) = source_import_run_id { self.require_source_import_resolved(actor, id).await?; }
+        let completed = self.complete_setup(actor).await?;
+        if let Some(id) = source_import_run_id { self.purge_resolved_source_import(id).await?; }
+        Ok(completed)
     }
 }
 impl AppUseCase {
@@ -597,6 +705,8 @@ impl AppUseCase {
             input.public_url.as_deref(),
             input.reset_public_url,
         )?;
+        let bind_host =
+            self.validated_bind_host_change(input.bind_host.as_deref(), input.reset_bind_host)?;
         if let Some(next) = &public_url {
             let addressing = self.runtime.security.public_url.addressing();
             let (impact, _) =
@@ -647,6 +757,10 @@ impl AppUseCase {
                 saved.as_deref(),
             ));
             saved_keys.push(PUBLIC_URL_KEY.to_string());
+        }
+        if let Some(host) = bind_host {
+            self.save_bind_host(host, Some(actor.id.clone())).await?;
+            saved_keys.push(crate::network_bind::BIND_HOST_KEY.to_string());
         }
         self.emit_settings_saved(actor, "service_settings", None, saved_keys)
             .await;

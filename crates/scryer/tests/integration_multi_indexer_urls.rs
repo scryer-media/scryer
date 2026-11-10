@@ -259,13 +259,25 @@ where
         ("series_default_library", "Series", "series", "/data/series"),
         ("anime_default_library", "Anime", "anime", "/data/anime"),
     ] {
+        // A default library may already hold this root; send its id back.
+        let stored_root_id =
+            scryer_application::LibraryRepository::get_by_id(&*library_store, library_id)
+                .await
+                .expect("look up default library")
+                .and_then(|library| {
+                    library
+                        .roots
+                        .into_iter()
+                        .find(|root| root.path == root_path)
+                        .map(|root| root.id)
+                });
         scryer_application::LibraryRepository::update(
             &*library_store,
             library_id,
             name.to_string(),
             slug.to_string(),
             vec![LibraryRootDraft {
-                id: None,
+                id: stored_root_id,
                 path: root_path.to_string(),
                 is_default: true,
             }],

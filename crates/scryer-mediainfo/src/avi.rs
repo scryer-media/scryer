@@ -735,7 +735,7 @@ fn backfill_track_bitrates(tracks: &mut [AviTrack]) {
 }
 
 /// Map a video FourCC to a canonical codec name.
-fn map_video_fourcc(fcc: &str) -> &'static str {
+pub(crate) fn map_video_fourcc(fcc: &str) -> &'static str {
     match fcc {
         "H264" | "h264" | "X264" | "x264" | "avc1" | "AVC1" => "h264",
         "HEVC" | "hevc" | "H265" | "h265" | "hvc1" | "HVC1" | "hev1" | "HEV1" => "hevc",

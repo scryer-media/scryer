@@ -1,8 +1,8 @@
 use super::{
-    ContentScopeValue, DelayProfilePreferredProtocolValue, FillerPolicyValue, ImportModeValue,
-    Long, MediaFacetValue, RecapPolicyValue, RenameCollisionPolicyValue,
-    RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
-    VerificationDepthValue,
+    AudioLanguagePriorityValue, ContentScopeValue, DelayProfilePreferredProtocolValue,
+    FillerPolicyValue, ImportModeValue, Long, MediaFacetValue, RecapPolicyValue,
+    RenameCollisionPolicyValue, RenameMissingMetadataPolicyValue, RootFolderPayload,
+    ScoringPersonaValue, VerificationDepthValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -85,10 +85,8 @@ pub struct RecycleBinRelocationFailurePayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Verification depth applied to download-client completed-download copies.
-/// Location operations (library moves, root changes, consolidations) always
-/// verify in full and ignore this preference: they move the only copy of the
-/// content, so the stronger guarantee is a floor rather than a choice.
+/// Verification depth applied to download-client completed-download copies
+/// and to location operations (library moves, root changes, consolidations).
 pub struct VerificationSettingsPayload {
     /// Depth applied when proving a copied file before its source is touched.
     pub depth: VerificationDepthValue,
@@ -112,7 +110,12 @@ pub struct AcquisitionSettingsPayload {
         deprecation = "Inert: the stored value is no longer read; removed in the next minor."
     )]
     pub upgrade_cooldown_hours: i32,
-    /// Minimum score delta for same-tier upgrades.
+    /// Deprecated and inert. The same-tier upgrade delta is set per quality
+    /// profile through `QualityProfileCriteria.minUpgradeScoreDelta`; this
+    /// always returns 0 and the value carries no meaning.
+    #[graphql(
+        deprecation = "Moved to QualityProfileCriteria.minUpgradeScoreDelta; always returns 0. Removed in the next minor."
+    )]
     pub same_tier_min_delta: i32,
     /// Deprecated and inert. Quality tier is compared before score, so no
     /// cross-tier delta is consulted; this always returns 0 and the value
@@ -132,6 +135,8 @@ pub struct AcquisitionSettingsPayload {
     /// How often, in seconds, the catalog is walked for missing and
     /// upgradable media. Changes that wake acquisition still walk at once.
     pub walk_interval_seconds: i32,
+    /// How much of the machine the walk may take.
+    pub walk_intensity: AcquisitionWalkIntensityValue,
     /// Maximum long-tail scopes processed per cycle.
     pub long_tail_backfill_max_scopes_per_cycle: i32,
     /// Number of days before long-tail scopes are reconverged.
@@ -253,6 +258,42 @@ pub struct SecuritySettingsPayload {
     pub env_override_active: bool,
     /// Description of the active override, or null when none is active.
     pub env_override_description: Option<String>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// How much of the machine the background acquisition walk may take.
+pub enum AcquisitionWalkIntensityValue {
+    /// About a tenth of the time, one title at a time, one indexer page per
+    /// long-tail scope.
+    Quiet,
+    /// About a fifth of the time, two titles at a time, two pages per
+    /// long-tail scope. Walks as quiet once more than 10,000 scopes are
+    /// missing or below cutoff.
+    Normal,
+    /// About half the time, four titles at a time, five pages per long-tail
+    /// scope, whatever the backlog.
+    Eager,
+}
+
+impl From<scryer_application::AcquisitionWalkIntensity> for AcquisitionWalkIntensityValue {
+    fn from(value: scryer_application::AcquisitionWalkIntensity) -> Self {
+        match value {
+            scryer_application::AcquisitionWalkIntensity::Quiet => Self::Quiet,
+            scryer_application::AcquisitionWalkIntensity::Normal => Self::Normal,
+            scryer_application::AcquisitionWalkIntensity::Eager => Self::Eager,
+        }
+    }
+}
+
+impl From<AcquisitionWalkIntensityValue> for scryer_application::AcquisitionWalkIntensity {
+    fn from(value: AcquisitionWalkIntensityValue) -> Self {
+        match value {
+            AcquisitionWalkIntensityValue::Quiet => Self::Quiet,
+            AcquisitionWalkIntensityValue::Normal => Self::Normal,
+            AcquisitionWalkIntensityValue::Eager => Self::Eager,
+        }
+    }
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -448,6 +489,8 @@ pub enum UiCatalogViewModeValue {
     PosterTable,
     /// Poster grid.
     Poster,
+    /// Graph of how the library's titles relate.
+    Graph,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -486,6 +529,10 @@ pub struct UiSettingsPayload {
     pub reduce_motion: bool,
     /// Whether the sponsor button is hidden.
     pub hide_sponsor_button: bool,
+    /// Whether discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Whether discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
@@ -589,6 +636,12 @@ pub struct SetMyUiSettingsInput {
     pub reduce_motion: bool,
     /// Whether the sponsor button should be hidden.
     pub hide_sponsor_button: bool,
+    /// Whether discovery section grids leave out titles already in a library;
+    /// omitted or null preserves the saved value.
+    pub discovery_grid_hide_owned: Option<bool>,
+    /// Whether discovery section grids leave out titles with a pending
+    /// request; omitted or null preserves the saved value.
+    pub discovery_grid_hide_requested: Option<bool>,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
@@ -660,6 +713,12 @@ pub struct AuthRuntimeStatePayload {
     pub initial_authentication_stage: Option<String>,
     /// Whether the pending initial choice requires the operator's console code.
     pub initial_authentication_code_required: bool,
+    /// Whether initial setup may choose who can reach this instance. False
+    /// outside the pending initial choice and while SCRYER_BIND sets the address.
+    pub bind_editable: bool,
+    /// What sets the listening address during the pending initial choice;
+    /// null when setup may choose it or setup is not pending.
+    pub bind_pinned_by: Option<BindPinValue>,
     /// Minimum length for the administrator's new password.
     pub password_min_length: i32,
     /// Effective form-login state.
@@ -866,6 +925,9 @@ pub struct QualityProfileCriteriaPayload {
     /// Score past which a file is good enough and same-tier upgrades stop, or
     /// null when upgrades never stop (Sonarr's `CutoffFormatScore`).
     pub cutoff_score: Option<i32>,
+    /// Score a same-tier candidate must beat the current file by to count as
+    /// an upgrade. Profiles that never set it report the default, 120.
+    pub min_upgrade_score_delta: i32,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -965,6 +1027,16 @@ pub struct MediaSettingsPayload {
     pub root_folders: Vec<RootFolderPayload>,
     /// Effective configured requirements; `original` remains unchanged.
     pub required_audio_languages: Vec<String>,
+    /// Ordered preferred audio languages; the first one a release carries sets
+    /// its rank. Unlike required languages they never reject a release.
+    pub preferred_audio_languages: Vec<String>,
+    /// Optional audio languages; among releases of equal quality, more of them
+    /// rank higher.
+    pub optional_audio_languages: Vec<String>,
+    /// Whether the preferred language is compared before or after quality.
+    pub audio_language_priority: AudioLanguagePriorityValue,
+    /// Whether a file missing optional languages stays an upgrade target.
+    pub optional_audio_languages_keep_searching: bool,
     /// Whether episodic titles use season folders.
     pub use_season_folders: bool,
     /// Folder naming template.
@@ -1056,10 +1128,26 @@ pub struct ServiceSettingsPayload {
     pub base_path: String,
     /// Where the base path comes from; never the saved settings.
     pub base_path_source: ConfigValueSourceValue,
-    /// Listening address and port.
+    /// Address and port the server is listening on now.
     pub bind_address: String,
-    /// Where the listening address comes from; never the saved settings.
+    /// Where the listening address comes from.
     pub bind_source: ConfigValueSourceValue,
+    /// Saved listening host, shown even while SCRYER_BIND overrides it.
+    pub bind_saved_host: Option<String>,
+    /// False while SCRYER_BIND sets the listening address.
+    pub bind_editable: bool,
+    /// What pins the listening address; null when it can be changed here.
+    pub bind_pinned_by: Option<BindPinValue>,
+    /// Address and port the next start listens on.
+    pub bind_pending: String,
+    /// Whether a restart is needed for the saved listening address to apply.
+    pub bind_restart_required: bool,
+    /// Stable reason the server is not listening where configured; null when it is.
+    pub bind_fallback_code: Option<String>,
+    /// Address that could not be used, when there was one.
+    pub bind_fallback_address: Option<String>,
+    /// Operating-system or parse detail for the fallback, for display only.
+    pub bind_fallback_reason: Option<String>,
     /// Passkey relying-party ID in effect since startup.
     pub passkey_rp_id: Option<String>,
     /// Passkey relying-party origin in effect since startup.
@@ -1093,6 +1181,25 @@ pub struct PublicUrlChangePreviewPayload {
     pub passkey_only_user_count: Option<i64>,
     /// Whether the save must set acknowledgePasskeyImpact.
     pub acknowledgement_required: bool,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What sets the listening address when it cannot be changed from Scryer.
+pub enum BindPinValue {
+    /// The SCRYER_BIND environment variable.
+    Environment,
+    /// SCRYER_BIND inside a container; its published ports decide who can reach Scryer.
+    Container,
+}
+
+impl BindPinValue {
+    pub fn from_application(pin: scryer_application::network_bind::BindPin) -> Self {
+        match pin {
+            scryer_application::network_bind::BindPin::Environment => Self::Environment,
+            scryer_application::network_bind::BindPin::Container => Self::Container,
+        }
+    }
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -1259,25 +1366,20 @@ pub struct DelayProfileInput {
 }
 
 #[derive(InputObject, Clone)]
-/// Library root path and default marker.
-pub struct RootFolderInput {
-    /// Absolute filesystem path for the library root.
-    pub path: String,
-    /// Whether this root is the library default.
-    pub is_default: bool,
-}
-
-#[derive(InputObject, Clone)]
 /// Optional media-settings values applied to a content scope.
 pub struct UpdateMediaSettingsInput {
     /// Content scope receiving the settings.
     pub scope: ContentScopeValue,
-    /// Optional library path override.
-    pub library_path: Option<String>,
-    /// Optional replacement list of library roots; null leaves existing roots unchanged.
-    pub root_folders: Option<Vec<RootFolderInput>>,
     /// Optional required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
+    /// Optional ordered preferred audio-language codes; an empty list clears them.
+    pub preferred_audio_languages: Option<Vec<String>>,
+    /// Optional audio-language codes that rank higher when present; an empty list clears them.
+    pub optional_audio_languages: Option<Vec<String>>,
+    /// Whether the preferred language is compared before or after quality.
+    pub audio_language_priority: Option<AudioLanguagePriorityValue>,
+    /// Whether a file missing optional languages stays an upgrade target.
+    pub optional_audio_languages_keep_searching: Option<bool>,
     /// Whether episodic titles use season folders.
     pub use_season_folders: Option<bool>,
     /// Optional title folder template.
@@ -1329,17 +1431,6 @@ pub struct UpdateMediaSettingsInput {
 }
 
 #[derive(InputObject, Clone)]
-/// Root paths for movie, series, and optional anime libraries.
-pub struct UpdateLibraryPathsInput {
-    /// Movie library path.
-    pub movie_path: String,
-    /// Series library path.
-    pub series_path: String,
-    /// Anime library path, when configured.
-    pub anime_path: Option<String>,
-}
-
-#[derive(InputObject, Clone)]
 /// TLS certificate and private-key filesystem paths.
 pub struct UpdateServiceSettingsInput {
     /// Absolute TLS certificate path. Omission preserves the saved path.
@@ -1358,6 +1449,11 @@ pub struct UpdateServiceSettingsInput {
     /// Required when the public URL change moves or disables passkeys while
     /// any are registered.
     pub acknowledge_passkey_impact: Option<bool>,
+    /// Save the listening host (an IPv4 or IPv6 address, no port); applies on
+    /// the next start. Omission preserves the saved value.
+    pub bind_host: Option<String>,
+    /// Clear the saved listening host so the next start listens on loopback.
+    pub reset_bind_host: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]
@@ -1493,10 +1589,8 @@ pub struct UpdateRecycleBinSettingsInput {
 }
 
 #[derive(InputObject, Clone)]
-/// Verification depth applied to download-client completed-download copies.
-/// Location operations (library moves, root changes, consolidations) always
-/// verify in full and ignore this preference: they move the only copy of the
-/// content, so the stronger guarantee is a floor rather than a choice.
+/// Verification depth applied to download-client completed-download copies
+/// and to location operations (library moves, root changes, consolidations).
 pub struct UpdateVerificationSettingsInput {
     /// Depth applied when proving a copied file before its source is touched.
     pub depth: VerificationDepthValue,
@@ -1520,8 +1614,13 @@ pub struct UpdateAcquisitionSettingsInput {
         deprecation = "Inert: the stored value is no longer read; removed in the next minor."
     )]
     pub upgrade_cooldown_hours: Option<i32>,
-    /// Minimum score improvement for a same-tier upgrade.
-    pub same_tier_min_delta: i32,
+    /// Deprecated and inert: accepted and ignored; nothing is read or stored.
+    /// Set `minUpgradeScoreDelta` on the quality profile instead. Removed in
+    /// the next minor.
+    #[graphql(
+        deprecation = "Ignored: set minUpgradeScoreDelta on the quality profile through saveQualityProfileSettings. Removed in the next minor."
+    )]
+    pub same_tier_min_delta: Option<i32>,
     /// Deprecated and inert: accepted and ignored; nothing is read or stored.
     /// Removed in the next minor.
     #[graphql(
@@ -1540,6 +1639,9 @@ pub struct UpdateAcquisitionSettingsInput {
     /// upgradable media. Omitted by older clients, which keeps the stored
     /// value.
     pub walk_interval_seconds: Option<i32>,
+    /// How much of the machine the walk may take. Omitted by older clients,
+    /// which keeps the stored value.
+    pub walk_intensity: Option<AcquisitionWalkIntensityValue>,
     /// Maximum long-tail scopes processed per cycle.
     pub long_tail_backfill_max_scopes_per_cycle: i32,
     /// Days between long-tail reconvergence passes.
@@ -1623,6 +1725,11 @@ pub struct QualityProfileCriteriaInput {
     /// stored value rather than clearing it, so a UI save cannot wipe a value
     /// set through the API before the editor exposes the field.
     pub cutoff_score: Option<i32>,
+    /// Optional score a same-tier candidate must beat the current file by to
+    /// count as an upgrade; must not be negative. Omitting it keeps the stored
+    /// value, and sending the default (120) stores the profile as using the
+    /// default.
+    pub min_upgrade_score_delta: Option<i32>,
 }
 
 #[derive(InputObject, Clone)]

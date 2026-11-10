@@ -113,6 +113,7 @@ const METADATA_LANGUAGE_CODES = new Set([
   "jpn",
   "nld",
   "ces",
+  "rus",
 ]);
 
 /** {@link AVAILABLE_LANGUAGES}, less the ones metadata cannot be fetched in. */
@@ -136,6 +137,36 @@ export function getLanguageLabel(code: string): string {
 }
 
 const FALLBACK: LocaleDictionary = en;
+const pluralRulesByLocale = new Map<LocaleCode, Intl.PluralRules>();
+
+function pluralRules(locale: LocaleCode): Intl.PluralRules {
+  let rules = pluralRulesByLocale.get(locale);
+  if (!rules) {
+    try {
+      rules = new Intl.PluralRules(locale);
+    } catch {
+      rules = new Intl.PluralRules("en");
+    }
+    pluralRulesByLocale.set(locale, rules);
+  }
+  return rules;
+}
+
+/**
+ * The `key.<plural category>` form for a numeric `count`, when the
+ * dictionary has one. Categories follow the locale's own plural rules.
+ */
+function pluralTemplate(
+  dictionary: LocaleDictionary,
+  locale: LocaleCode,
+  key: string,
+  count: unknown,
+): string | undefined {
+  if (typeof count !== "number" || !Number.isFinite(count)) {
+    return undefined;
+  }
+  return dictionary[`${key}.${pluralRules(locale).select(count)}`];
+}
 
 export function getLocaleDictionary(
   code: string | null | undefined,
@@ -216,7 +247,14 @@ export function t(
   code: string,
   values?: Record<string, string | number | boolean | null | undefined>,
 ): string {
-  const locale = getLocaleDictionary(code);
-  const template = locale[key] ?? FALLBACK[key] ?? key;
+  const localeCode = normalizeLocale(code);
+  const locale = getLocaleDictionary(localeCode);
+  const count = values?.count;
+  const template =
+    pluralTemplate(locale, localeCode, key, count) ??
+    locale[key] ??
+    pluralTemplate(FALLBACK, DEFAULT_LANGUAGE, key, count) ??
+    FALLBACK[key] ??
+    key;
   return interpolate(template, values);
 }

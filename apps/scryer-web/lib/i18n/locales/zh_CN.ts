@@ -1,6 +1,58 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_CN: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "不支持此 Prowlarr 版本。请将 Prowlarr 升级到 2.0 或更高版本。",
+  "error.reason.STANDBY_NOT_FOUND": "此已保存的候选版本已不存在。",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "此已保存的候选版本已不可用。请刷新列表后重试。",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "已保存的版本无法加入队列。仍可稍后重试。",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "此版本在该标题的屏蔽列表中。请先从屏蔽列表移除再加入队列。",
+  "error.reason.STANDBY_ALREADY_ACTIVE": "此版本已在下载队列中。",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "该标题正在进行另一项搜索或队列操作。请等其完成后重试。",
+  "wanted.standby": "候选 · {{count}}",
+  "wanted.standbyTooltip":
+    "如果当前抓取失败，将依次尝试 {{count}} 个已保存的候选版本。",
+  "wanted.standbyScopeNote":
+    "统计归属于此范围的行；季度合集计入该季的基准剧集。",
+  "wanted.loadingStandby": "正在加载已保存的候选版本…",
+  "wanted.standbyCandidates": "候选版本 · {{count}}",
+  "wanted.downloadStandby": "下载",
+  "wanted.downloadStandbyLabel": "下载 {{name}}",
+  "wanted.standbyConflictTitle": "已有下载正在进行",
+  "wanted.standbyConflictDescription":
+    "将 {{name}} 与这些下载一同加入队列，或取消它们并改为加入此版本。",
+  "wanted.standbyQueue": "加入队列",
+  "wanted.standbyQueuedRefreshFailed":
+    "该版本已加入队列，但列表无法刷新。请刷新页面以查看当前状态。",
+  "wanted.standbyCancelAndQueue": "取消并加入队列",
+  "wanted.standbyQueuedCancelFailed":
+    "该版本已加入队列，但有 {{count}} 个冲突下载无法取消，仍在运行。",
+  "wanted.standbyRank": "排名 {{rank}}",
+  "wanted.standbyIndexer": "索引器",
+  "wanted.standbySize": "大小",
+  "wanted.standbySeeders": "做种数",
+  "wanted.standbyScore": "评分",
+  "wanted.standbyAge": "发布时间",
+  "wanted.seasonPack": "季度合集",
+  "wanted.noStandbyCandidates": "无候选版本",
+  "settings.oauthJellyfinCallbackCopied": "已复制 Jellyfin 回调 URL。",
+  "settings.oauthClientIdCopied": "已复制 OAuth 客户端 ID。",
+  "status.copyFailedSelected": "无法复制。文本已选中，请按 Ctrl+C 或 ⌘C。",
+  "status.copyFailed": "无法复制：浏览器拒绝了剪贴板访问。",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "无法验证此媒体，因此不能替换媒体库中的现有文件。",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "此播放列表或附属文件可能依赖其他文件，需要检查。",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "无法读取媒体。请检查源文件的访问权限后重试。",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "媒体结构格式错误。请在导入前检查源文件。",
+  "error.reason.MEDIA_PROBE_ENCRYPTED": "媒体已加密，无法验证。",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "系统时钟偏差超过 5 分钟，Scryer 无法连接到元数据网关。请同步系统时钟并重启 Scryer。",
   "httpRelease.refusal.detailsUnavailable":
@@ -214,7 +266,8 @@ const zh_CN: LocaleDictionary = {
   "nav.logs": "日志",
   "nav.serviceLogs": "服务日志",
   "nav.auditLogs": "审计日志",
-  "nav.usersAccess": "用户与访问",
+  "nav.users": "用户",
+  "nav.securityAccess": "安全与访问",
   "nav.mobileTitle": "Scryer 导航",
   "nav.mobileDescription": "Scryer 主导航",
   "nav.mobileTrigger": "打开导航",
@@ -296,7 +349,6 @@ const zh_CN: LocaleDictionary = {
   "dashboard.queueCountOne": "1 个进行中",
   "settings.profile": "配置",
   "settings.general": "通用",
-  "settings.security": "Security",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",
@@ -458,7 +510,6 @@ const zh_CN: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "保活间隔是以秒为单位的整数，填 0 可关闭。",
   "status.proxyTunnelPublicKeyCopied": "已复制公钥。",
-  "status.proxyTunnelPublicKeyCopyFailed": "无法复制公钥。",
   "settings.qualityProfiles": "质量配置",
   "settings.downloadClients": "下载客户端",
   "settings.downloadClientRouting": "下载客户端路由",
@@ -598,6 +649,27 @@ const zh_CN: LocaleDictionary = {
   "settings.qualityProfileCatalogInvalid": "质量配置目录不是有效的 JSON。",
   "settings.qualityProfileUnknown": "未知的质量配置文件 ID“{{id}}”。",
   "settings.qualitySettingsSaved": "质量设置已保存。",
+  "settings.audioLanguagePreferences": "音频语言偏好",
+  "settings.audioLanguagePreferencesInfo":
+    "按音频语言对发布排序，但不拒绝任何发布。与必需语言不同，没有这些语言的发布在没有更好选择时仍会被获取，并在出现更好的发布时被替换。",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "此媒体库的单独设置。列表留空或选择继承时使用目录默认值。",
+  "settings.audioPreferredLanguages": "首选语言",
+  "settings.audioPreferredLanguagesHint":
+    "按偏好顺序排列。包含第一种语言的发布排在只包含第二种语言的发布之前，依此类推。不包含其中任何语言的文件仍是升级目标。",
+  "settings.audioPreferredMoveUp": "上移 {{language}}",
+  "settings.audioPreferredMoveDown": "下移 {{language}}",
+  "settings.audioOptionalLanguages": "可选语言",
+  "settings.audioOptionalLanguagesHint":
+    "有则更好。在质量相同的发布中，包含更多这些语言的发布胜出。",
+  "settings.audioLanguagePriority": "优先级",
+  "settings.audioLanguagePriorityHint":
+    "语言优先：即使质量等级较低，也会选择首选语言的发布。质量优先：语言只在质量相同的发布之间起决定作用。",
+  "settings.audioLanguagePriorityQualityFirst": "质量优先",
+  "settings.audioLanguagePriorityLanguageFirst": "语言优先",
+  "settings.audioOptionalKeepSearching": "继续搜索可选语言",
+  "settings.audioOptionalKeepSearchingHint":
+    "开启后，缺少可选语言的文件仍是升级目标。关闭后，找到此类发布时仍会替换，但不会主动搜索。",
   "settings.downloadClientRoutingSaved": "下载客户端路由已保存。",
   "settings.downloadClientRoutingSavedFor":
     "下载为“{{name}}”保存的客户端路由。",
@@ -609,9 +681,8 @@ const zh_CN: LocaleDictionary = {
   "settings.acquisitionEnabled": "启用自动获取",
   "settings.acquisitionEnabledHelp":
     "运行后台获取循环：收敛搜索扫描与 RSS 匹配。",
-  "settings.acquisitionThresholds": "升级阈值",
-  "settings.acquisitionSameTierMinDelta": "同级最小分数差",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "同级最小分数差",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一质量级别的资源必须比当前文件的分数至少高出此值。",
   "settings.acquisitionConvergence": "收敛与节奏",
   "settings.acquisitionPollIntervalSeconds": "轮询间隔（秒）",
@@ -823,11 +894,8 @@ const zh_CN: LocaleDictionary = {
     "{{total}} 项，{{renamable}} 可重命名，{{noop}} 无变化，{{conflicts}} 冲突，{{errors}} 错误",
   "settings.sectionTitle": "设置 • {{section}}",
   "settings.generalText": "通用应用程序设置。",
-  "settings.verificationDepthTitle": "导入副本校验",
   "settings.verificationDepthHelp":
     "Scryer 在动源文件之前，对复制出的文件核对得有多严格。",
-  "settings.verificationDepthScope":
-    "仅适用于下载客户端的导入副本。无论此处如何选择，媒体库和根目录的移动始终执行完整校验。",
   "settings.verificationDepthLabel": "校验深度",
   "settings.verificationDepthFull": "完整回读",
   "settings.verificationDepthFullHelp":
@@ -853,6 +921,56 @@ const zh_CN: LocaleDictionary = {
   "settings.srrdbFilenameRecoveryHelp":
     "当来自 SABnzbd 或 NZBGet 的自动导入包含名称被混淆的视频文件时，Scryer 会将每个文件的 CRC-32 校验和与大小发送到第三方服务 srrdb.com，以查询原始文件名。不会发送有关你的媒体库或该文件的其他任何信息。磁盘上的文件永远不会被重命名。",
   "discovery.personalizedDisabled": "此实例已关闭个性化发现。",
+  "discovery.section.fromYourWatchlist": "来自你的待看清单",
+  "discovery.rail.becauseYouLike.action": "因为你喜欢动作",
+  "discovery.rail.becauseYouLike.adventure": "因为你喜欢冒险",
+  "discovery.rail.becauseYouLike.comedy": "因为你喜欢喜剧",
+  "discovery.rail.becauseYouLike.crime": "因为你喜欢犯罪",
+  "discovery.rail.becauseYouLike.documentary": "因为你喜欢纪录片",
+  "discovery.rail.becauseYouLike.drama": "因为你喜欢剧情",
+  "discovery.rail.becauseYouLike.family": "因为你喜欢家庭作品",
+  "discovery.rail.becauseYouLike.fantasy": "因为你喜欢奇幻",
+  "discovery.rail.becauseYouLike.history": "因为你喜欢历史",
+  "discovery.rail.becauseYouLike.horror": "因为你喜欢恐怖",
+  "discovery.rail.becauseYouLike.mystery": "因为你喜欢悬疑",
+  "discovery.rail.becauseYouLike.romance": "因为你喜欢爱情",
+  "discovery.rail.becauseYouLike.science-fiction": "因为你喜欢科幻",
+  "discovery.rail.becauseYouLike.thriller": "因为你喜欢惊悚",
+  "discovery.rail.becauseYouLike.war": "因为你喜欢战争故事",
+  "discovery.rail.becauseYouLike.western": "因为你喜欢西部片",
+  "discovery.rail.becauseYouLike.sports": "因为你喜欢体育故事",
+  "discovery.rail.becauseYouLike.supernatural": "因为你喜欢超自然",
+  "discovery.rail.becauseYouLike.coming-of-age": "因为你喜欢成长故事",
+  "discovery.rail.becauseYouLike.found-family": "因为你喜欢拟家庭故事",
+  "discovery.rail.becauseYouLike.revenge": "因为你喜欢复仇故事",
+  "discovery.rail.becauseYouLike.heist": "因为你喜欢劫案",
+  "discovery.rail.becauseYouLike.time-travel": "因为你喜欢时间旅行",
+  "discovery.rail.becauseYouLike.dystopia": "因为你喜欢反乌托邦",
+  "discovery.rail.becauseYouLike.cyberpunk": "因为你喜欢赛博朋克",
+  "discovery.rail.becauseYouLike.superhero": "因为你喜欢超级英雄",
+  "discovery.rail.becauseYouLike.vampire": "因为你喜欢吸血鬼",
+  "discovery.rail.becauseYouLike.zombie": "因为你喜欢丧尸",
+  "discovery.rail.becauseYouLike.survival": "因为你喜欢生存故事",
+  "discovery.rail.becauseYouLike.space": "因为你喜欢太空冒险",
+  "discovery.rail.becauseYouLike.detective": "因为你喜欢侦探故事",
+  "discovery.rail.becauseYouLike.organized-crime": "因为你喜欢有组织犯罪",
+  "discovery.rail.becauseYouLike.period-drama": "因为你喜欢古装剧",
+  "discovery.rail.becauseYouLike.psychological": "因为你喜欢心理故事",
+  "discovery.rail.becauseYouLike.mythology": "因为你喜欢神话",
+  "discovery.rail.becauseYouLike.isekai": "因为你喜欢异世界",
+  "discovery.rail.becauseYouLike.mecha": "因为你喜欢机甲",
+  "discovery.rail.becauseYouLike.martial-arts": "因为你喜欢武术",
+  "discovery.rail.becauseYouLike.music": "因为你喜欢音乐故事",
+  "discovery.rail.becauseYouLike.workplace": "因为你喜欢职场故事",
+  "discovery.rail.becauseYouLike.medical": "因为你喜欢医疗剧",
+  "discovery.rail.becauseYouLike.military": "因为你喜欢军旅故事",
+  "discovery.rail.becauseYouLike.spy": "因为你喜欢间谍故事",
+  "discovery.rail.becauseYouLike.royal-politics": "因为你喜欢宫廷权谋",
+  "discovery.rail.becauseYouLike.first-love": "因为你喜欢初恋故事",
+  "discovery.rail.becauseYouLike.forbidden-love": "因为你喜欢禁忌之恋",
+  "discovery.rail.becauseYouLike.lgbtq": "因为你喜欢 LGBTQ+ 故事",
+  "discovery.rail.becauseYouLike.samurai": "因为你喜欢武士",
+  "discovery.rail.becauseYouLike.magical-girl": "因为你喜欢魔法少女",
   "settings.keepHistoryForever": "永久保留历史记录",
   "settings.historyRetentionDaysHeader": "历史记录保留时长",
   "settings.historyRetentionDaysSuffix": "天",
@@ -944,6 +1062,8 @@ const zh_CN: LocaleDictionary = {
   "toast.viewInCatalog": "在目录中查看",
 
   "label.back": "返回",
+  "label.copy": "复制",
+  "label.copied": "已复制",
   "label.dismiss": "关闭",
   "pwa.offline": "您处于离线状态。部分功能可能不可用。",
   "pwa.installApp": "安装 Scryer",
@@ -992,6 +1112,48 @@ const zh_CN: LocaleDictionary = {
   "title.viewModeCompact": "紧凑",
   "title.viewModePosterTable": "列表",
   "title.viewModePoster": "海报视图",
+  "title.viewModeGraph": "图谱视图",
+  "libraryGraph.regionLabel": "媒体库图谱",
+  "libraryGraph.sizeByLabel": "大小依据",
+  "libraryGraph.sizeBy.ratingEvidence": "评分依据",
+  "libraryGraph.sizeBy.rating": "评分",
+  "libraryGraph.sizeBy.popularity": "热度",
+  "libraryGraph.resetView": "适配图谱",
+  "libraryGraph.clustersLabel": "聚类",
+  "libraryGraph.clusterAroundTitle": "{{title}} 周边",
+  "libraryGraph.unplaced": "未归类的作品",
+  "libraryGraph.collapsedCluster": "{{name}}（{{count}} 部作品）",
+  "libraryGraph.collapseCluster": "折叠{{name}}",
+  "libraryGraph.linkedBy": "关联原因",
+  "libraryGraph.empty": "此视图中的作品尚未进入媒体库图谱。",
+  "libraryGraph.edgeKind.semantic": "相似",
+  "libraryGraph.edgeKind.sequel": "续集",
+  "libraryGraph.edgeKind.prequel": "前传",
+  "libraryGraph.edgeKind.coWatch": "常被一起观看",
+  "libraryGraph.edgeKind.relation": "相关",
+  "libraryGraph.edgeKind.affinity": "共同兴趣：{{label}}",
+  "libraryGraph.edgeKind.sharedTaste": "共同兴趣",
+  "libraryGraph.edgeKind.other": "已关联",
+  "libraryGraph.edgeKind.recommendation": "推荐",
+  "libraryGraph.notBuilt": "媒体库图谱尚未生成。",
+  "discovery.refusal.neighborTargetKeyUnsupported": "无法进一步探索此作品。",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "此作品与该媒体库的媒体类型不符，无法在此探索。",
+  "libraryGraph.moreLikeThisEmpty": "暂无类似作品。",
+  "libraryGraph.backToOverview": "返回概览",
+  "libraryGraph.findingMoreLikeThis": "正在查找相似作品…",
+  "libraryGraph.reason.recommendedBy": "{{sources}} 推荐",
+  "libraryGraph.reason.similarOn": "{{sources}} 相似",
+  "libraryGraph.reason.shares": "共同点：{{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "推荐分组",
+  "libraryGraph.notInLibrary": "不在你的媒体库中",
+  "libraryGraph.inLibrary": "在你的媒体库中",
+  "libraryGraph.openTitle": "打开作品",
+  "libraryGraph.exploredGroup": "已探索",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}，不在你的媒体库中",
+  "libraryGraph.trailLabel": "已探索",
+  "libraryGraph.canvasLabel":
+    "媒体库图谱。使用方向键在同一聚类的作品间移动，按 Enter 打开。",
   "title.seasonMonitored": "季度监控中",
   "title.episodeMonitored": "集监控中",
   "title.seriesMovieMonitored": "系列电影监控中",
@@ -1131,6 +1293,11 @@ const zh_CN: LocaleDictionary = {
   "tvdb.searchPrompt": "在上方输入标题以搜索 TVDB。",
   "tvdb.searchByTvdb": "搜索 TVDB",
   "nzb.searchResultsFor": "{{name}} 的 NZB 结果",
+  "nzb.audioLanguagePreferred": "首选语言",
+  "nzb.audioLanguagePreferredRank": "首选语言 #{{rank}}",
+  "nzb.audioLanguageNotPreferred": "无首选语言",
+  "nzb.audioLanguageOptionalHits": "可选 +{{count}}",
+  "nzb.audioLanguageHint": "此发布在音频语言偏好中的排名",
   "nzb.noResultsYet": "暂无版本匹配。",
   "nzb.searchFailed": "发布资源搜索失败。",
   "nzb.queue": "队列",
@@ -1336,7 +1503,6 @@ const zh_CN: LocaleDictionary = {
   "settings.rulePriority": "优先级",
   "settings.ruleAppliedFacets": "适用类型",
   "settings.ruleAppliedFacetsHelp": "留空则适用于所有媒体类型。",
-  "settings.ruleValidate": "验证",
   "settings.ruleValidating": "验证中…",
   "settings.ruleValid": "规则有效。",
   "settings.ruleValidationRequired": "名称和 Rego 源码为必填项。",
@@ -1783,6 +1949,7 @@ const zh_CN: LocaleDictionary = {
   "wanted.decision.eligible": "可接受",
   "wanted.decision.titleMismatch": "标题不匹配",
   "wanted.decision.qualityBlocked": "被质量规则阻止",
+  "wanted.decision.episodeAvailabilityBlocked": "等待播出日期",
   "wanted.decision.upgradeRejected": "升级被拒绝",
   "wanted.decision.pendingDelay": "等待延迟",
   "wanted.decision.alreadyActive": "已在活动中",
@@ -2313,7 +2480,6 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "排除",
   "settings.maintenanceExcluded": "已将 {{title}} 从维护中排除。",
   "move.dialogTitle": "移动标题",
-  "move.dialogDescription": "在移动之前，请检查所选 {{count}} 个标题的计划。",
   "move.destinationLibrary": "目标库",
   "move.destinationRoot": "目标根目录",
   "move.destinationRootPlaceholder": "选择根目录",
@@ -2321,12 +2487,8 @@ const zh_CN: LocaleDictionary = {
   "move.actionDescription":
     "将该标题的文件移动到另一个根目录，或移动到另一个库。",
   "move.actionButton": "移动到…",
-  "move.wizardKindDescription": "请选择该标题的去向。",
   "move.kindRootHeading": "移动到另一个根目录",
-  "move.kindRootHelp":
-    "标题仍留在当前库中，只把它的文件移动到该库的另一个根目录。",
   "move.kindLibraryHeading": "移动到另一个库",
-  "move.kindLibraryHelp": "将该标题转移到另一个库，放入该库的某个根目录。",
   "move.noOtherRoots":
     "当前库没有其他可作为目标的根目录。请为该库添加根目录，或把该标题移动到另一个库。",
   "move.back": "返回",
@@ -2367,7 +2529,6 @@ const zh_CN: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "这些文件在此处登记在两个剧集下，而在目标处它们是同一剧集。在那里每个文件只登记一次。",
   "move.mergeRoleUnnamedFile": "文件 {{id}}",
-  "move.operationTransferNote": "这些标题正在移动到其他库。",
   "move.modeHeading": "文件应如何到达那里？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移动",
   "move.mode.FILES_ALREADY_THERE": "文件已经在那里",
@@ -2405,9 +2566,6 @@ const zh_CN: LocaleDictionary = {
   "move.verificationStatementQuick":
     "全部 {{files}} 个文件（{{bytes}}）都会按头部、尾部和大小进行核对。",
   "move.verificationNotApplicable": "没有文件移动，因此无需校验。",
-  "move.verificationStampFull": "已校验（完整）",
-  "move.verificationStampQuick": "已校验（快速）",
-  "move.verificationFallbackCount": "{{count}} 个文件回退到快速校验",
   "move.typedConfirmationPrompt": "输入短语以确认",
   "move.confirm": "开始移动",
   "move.startFailed": "无法开始移动。",
@@ -2489,7 +2647,6 @@ const zh_CN: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "根目录合并",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "跨库转移",
   "move.toastPreparing": "正在准备…",
-  "move.toastTransferred": "已传输",
   "move.toastTitlesProgress": "{{current}} / {{total}} 个标题",
   "move.toastDoneSubtitle": "移动完成 · {{count}} 个标题",
   "move.toastWarningsSubtitle": "已完成（有警告）· {{count}} 个标题",
@@ -3301,6 +3458,54 @@ const zh_CN: LocaleDictionary = {
   "episodeAssign.refusal.renameFailed":
     "将文件移动到新名称失败。文件及其剧集保持原样。",
   "pendingImports.reason.anime_numbering_ambiguous": "剧集编号不明确",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "已暂缓：媒体服务器上正在播放内容。",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "已暂缓：无法向媒体服务器确认是否正在播放。",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "已暂缓：媒体服务器显示有比已存观看记录更新的播放。",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "已暂缓：媒体服务器的历史记录显示有观看记录未计入的账户播放。",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "已暂缓：执行前媒体服务器无法确认观看记录。",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "已暂缓：已连接的媒体服务器没有匹配的项目，执行前无法确认观看记录。",
+  "settings.refMaintFactsWatchedByAnyone":
+    "已连接媒体服务器上的任何账户是否播放过该项目,无论是否关联 Scryer;不指明具体是谁",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "已连接媒体服务器上的任何账户最后一次播放该项目的时间",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "当已启用媒体服务器上的任何账户播放过它时为 true,无论该账户是否关联到 Scryer 用户;对于季和剧集,任何已播出的单集都算。在过去 48 小时内的同步读取每个已启用连接上的所有账户之前,以原因 audience_not_read 视为未知;观看事实未知时,以常规原因视为未知。",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "任何账户最近一次播放的 RFC3339 时间戳;无人播放时以原因 never_watched 缺失,播放没有记录时间时以原因 play_time_missing(季和剧集为 episode_play_time_missing)未知,尚未读取所有账户时以 audience_not_read 未知",
+  "settings.maintenancePreviewFacts": "规则读取的事实",
+  "setup.sourceImportProgress": "正在导入来源",
+  "setup.sourceImportInvalidRequest":
+    "所选来源不可用。请刷新来源发现后重新选择。",
+  "setup.sourceImportSelectionChanged":
+    "已提交的来源选择无法更改。请在摘要中重试失败的来源。",
+  "setup.sourceImportNotOwned": "此来源导入对你的账户不可用。",
+  "setup.sourceImportQueueFull": "来源导入容量已满。请在其他导入完成后重试。",
+  "setup.sourceImportActive": "此来源导入仍在进行中。",
+  "setup.sourceImportNotRetryable": "只有失败或中断的来源才能重试或跳过。",
+  "setup.sourceImportUnresolved": "完成设置前，请重试或明确跳过未解决的来源。",
+  "setup.sourceImportCredentialRequired": "继续之前请输入来源凭据。",
+  "setup.sourceImportConfigConflict": "预留的配置已更改。重试前请检查该来源。",
+  "setup.sourceImportSourceNotReady": "继续之前请等待来源发现完成。",
+  "setup.sourceImportResume": "重新连接进度",
+  "setup.sourceImportLoading": "正在加载来源导入进度",
+  "setup.sourceImportCredential": "{{name}} 的更正凭据",
+  "setup.sourceImportRetry": "重试失败的来源",
+  "setup.sourceImportSkip": "跳过此来源",
+  "setup.sourceImportItemFailed": "请检查连接和凭据，然后重试或跳过。",
+  "setup.sourceImportState.queued": "排队中",
+  "setup.sourceImportState.installing": "正在安装提供程序",
+  "setup.sourceImportState.checking": "正在检查连接",
+  "setup.sourceImportState.saving": "正在保存配置",
+  "setup.sourceImportState.succeeded": "已导入",
+  "setup.sourceImportState.failed": "失败",
+  "setup.sourceImportState.interrupted": "已中断",
+  "setup.sourceImportState.skipped": "已跳过",
 };
 
 export default zh_CN;

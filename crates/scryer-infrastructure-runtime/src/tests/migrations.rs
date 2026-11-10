@@ -6979,6 +6979,135 @@ async fn migration_0317_drops_saved_glow_preferences_and_keeps_the_rest() {
 }
 
 #[tokio::test]
+async fn migration_0318_adds_favourites_without_marking_existing_signals() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("signal-favorites-0318.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("favourite column connection");
+
+    let columns: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM pragma_table_info('media_server_user_media_signals')")
+            .fetch_all(&mut *conn)
+            .await
+            .expect("read migrated columns");
+    assert!(
+        columns.iter().any(|(name,)| name == "is_favorite"),
+        "a fully migrated schema stores favourites"
+    );
+
+    // Return the table to its pre-0318 shape, keep a played observation in
+    // it, and replay the migration over that row.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded row");
+    sqlx::query("ALTER TABLE media_server_user_media_signals DROP COLUMN is_favorite")
+        .execute(&mut *conn)
+        .await
+        .expect("restore the pre-0318 shape");
+    sqlx::query(
+        "INSERT INTO media_server_user_media_signals
+         (id, connection_id, provider, external_user_id, provider_item_id, kind, played,
+          play_count)
+         VALUES ('signal-synthetic', 'connection-synthetic', 'jellyfin', 'user-synthetic',
+                 'item-synthetic', 'movie', 1, 2)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a stored signal");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0318_media_server_signal_favorites.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0318 should apply");
+
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, played, play_count, is_favorite FROM media_server_user_media_signals",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("read signals after 0318");
+    assert_eq!(rows, vec![("signal-synthetic".to_string(), 1, 2, 0)]);
+}
+
+#[tokio::test]
+async fn migration_0319_adds_a_sync_error_code_and_keeps_existing_state_rows() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("signal-sync-error-code-0319.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("sync state connection");
+
+    let columns: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM pragma_table_info('media_server_signal_sync_state')")
+            .fetch_all(&mut *conn)
+            .await
+            .expect("read migrated columns");
+    assert!(
+        columns.iter().any(|(name,)| name == "last_error_code"),
+        "a fully migrated schema stores the sweep's reason code"
+    );
+
+    // Return the table to its pre-0319 shape, keep a failed sweep's row in
+    // it, and replay the migration over that row.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded row");
+    sqlx::query("ALTER TABLE media_server_signal_sync_state DROP COLUMN last_error_code")
+        .execute(&mut *conn)
+        .await
+        .expect("restore the pre-0319 shape");
+    sqlx::query(
+        "INSERT INTO media_server_signal_sync_state
+         (connection_id, provider, enabled, last_error, participant_count, signal_count,
+          updated_at)
+         VALUES ('connection-synthetic', 'jellyfin', 1, 'status 401', 1, 0,
+                 '2026-01-01T00:00:00Z')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a sync state row");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0319_media_server_signal_sync_error_code.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0319 should apply");
+
+    let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT connection_id, last_error, last_error_code FROM media_server_signal_sync_state",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("read sync state after 0319");
+    assert_eq!(
+        rows,
+        vec![(
+            "connection-synthetic".to_string(),
+            Some("status 401".to_string()),
+            None
+        )]
+    );
+}
+
+#[tokio::test]
 async fn migration_0307_removes_operator_keeps_and_nothing_else() {
     let directory = tempfile::tempdir().expect("synthetic schema fixture");
     let services = SqliteServices::new(directory.path().join("keeps-0307.db").to_string_lossy())
@@ -7097,6 +7226,472 @@ async fn migration_0308_keeps_only_claims_with_a_time_to_delete() {
             ("lease-dormant".to_string(), "dormant".to_string()),
             ("lease-expired".to_string(), "expired".to_string()),
             ("zero-day-extended".to_string(), "active".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn migration_0320_adds_discovery_grid_preferences_with_their_defaults() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("discovery-grid-0320.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("discovery grid connection");
+
+    // Replay the migration over a stored preference row written before it.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded rows");
+    for statement in [
+        "ALTER TABLE user_ui_settings DROP COLUMN discovery_grid_hide_owned",
+        "ALTER TABLE user_ui_settings DROP COLUMN discovery_grid_hide_requested",
+    ] {
+        sqlx::query(statement)
+            .execute(&mut *conn)
+            .await
+            .expect("drop the 0320 column");
+    }
+    sqlx::query(
+        "INSERT INTO user_ui_settings (user_id, hide_sponsor_button, reduce_motion)
+         VALUES ('user-grid-existing', 1, 0)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a saved preference row");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0320_user_ui_discovery_grid.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0320 should apply");
+
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT user_id, hide_sponsor_button, discovery_grid_hide_owned,
+                discovery_grid_hide_requested
+           FROM user_ui_settings ORDER BY user_id",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("read preferences");
+    assert_eq!(rows, vec![("user-grid-existing".to_string(), 1, 1, 0)]);
+}
+
+#[tokio::test]
+async fn migration_0325_adds_an_empty_signal_roster_beside_existing_signals() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("signal-roster-0325.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("signal roster connection");
+
+    // Return the schema to its pre-0325 shape with a clean sweep and a stored
+    // signal on record, then replay the migration over them.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded rows");
+    sqlx::raw_sql(
+        "DROP TABLE media_server_signal_roster;
+         DROP TABLE media_server_audience_plays;
+         DROP TABLE media_server_audience_reads;",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("restore the pre-0325 shape");
+    sqlx::query(
+        "INSERT INTO media_server_signal_sync_state
+         (connection_id, provider, enabled, last_started_at, last_success_at,
+          participant_count, signal_count, updated_at)
+         VALUES ('connection-synthetic', 'jellyfin', 1, '2026-01-01T00:00:00Z',
+                 '2026-01-01T00:05:00Z', 1, 1, '2026-01-01T00:05:00Z')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a clean sweep");
+    sqlx::query(
+        "INSERT INTO media_server_user_media_signals
+         (id, connection_id, provider, external_user_id, scryer_user_id, provider_item_id,
+          kind, played, play_count)
+         VALUES ('signal-synthetic', 'connection-synthetic', 'jellyfin', 'jf-user-synthetic',
+                 'user-synthetic', 'jf-movie-synthetic', 'movie', 1, 1)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a stored signal");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0325_media_server_signal_roster.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0325 should apply");
+
+    // Nothing is backfilled: no link counts as read until a sweep reads it.
+    let (roster,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM media_server_signal_roster")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("count roster rows");
+    assert_eq!(roster, 0);
+    let (signals,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM media_server_user_media_signals")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("count signal rows");
+    assert_eq!(signals, 1, "existing signals are untouched");
+    // Nor is any audience: the anonymous facts stay unknown until a sweep
+    // reads every account.
+    let (plays,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM media_server_audience_plays")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("count audience plays");
+    let (reads,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM media_server_audience_reads")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("count audience reads");
+    assert_eq!((plays, reads), (0, 0), "the audience starts empty");
+    sqlx::query(
+        "INSERT INTO media_server_audience_plays
+         (connection_id, external_account_id, provider_item_id, kind, play_count)
+         VALUES ('connection-synthetic', 'account-synthetic', 'jf-movie-synthetic', 'show', 1)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect_err("an audience play is a movie or an episode");
+    sqlx::query(
+        "INSERT INTO media_server_signal_roster
+         (connection_id, link_id, external_user_id, scryer_user_id, sweep_started_at, read_at)
+         VALUES ('connection-synthetic', '', 'jf-user-synthetic', 'user-synthetic',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect_err("a roster row must name the link it read through");
+}
+
+#[tokio::test]
+async fn migration_0326_drops_stored_graphs_and_keeps_failed_runs_for_their_retry_wait() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("library-graph-0326.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("library graph connection");
+
+    // Return the schema to its pre-0326 shape with one complete graph and one
+    // failed run on record, then replay the migration over them.
+    sqlx::raw_sql(
+        "DROP TABLE discovery_library_graph_payloads;
+         CREATE TABLE discovery_library_graph_nodes (
+             run_id TEXT NOT NULL REFERENCES discovery_library_graph_runs(id) ON DELETE CASCADE,
+             subject_key TEXT NOT NULL,
+             target_key TEXT NOT NULL,
+             cluster_id INTEGER NOT NULL,
+             title_ids_json TEXT NOT NULL DEFAULT '[]',
+             PRIMARY KEY (run_id, subject_key)
+         );
+         CREATE TABLE discovery_library_graph_edges (
+             run_id TEXT NOT NULL REFERENCES discovery_library_graph_runs(id) ON DELETE CASCADE,
+             from_key TEXT NOT NULL,
+             to_key TEXT NOT NULL,
+             weight REAL NOT NULL,
+             kinds_json TEXT NOT NULL DEFAULT '[]',
+             PRIMARY KEY (run_id, from_key, to_key)
+         );
+         CREATE TABLE discovery_library_graph_clusters (
+             run_id TEXT NOT NULL REFERENCES discovery_library_graph_runs(id) ON DELETE CASCADE,
+             cluster_id INTEGER NOT NULL,
+             label_key TEXT,
+             label TEXT NOT NULL,
+             medoid TEXT NOT NULL,
+             size INTEGER NOT NULL,
+             PRIMARY KEY (run_id, cluster_id)
+         );
+         INSERT INTO discovery_library_graph_runs
+             (id, facet, axis, status, started_at, completed_at)
+         VALUES ('graph-complete', 'movie', 'SEMANTIC', 'complete',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z');
+         INSERT INTO discovery_library_graph_runs
+             (id, facet, axis, status, error_code, retry_after_seconds, started_at, completed_at)
+         VALUES ('graph-failed', 'movie', 'SEMANTIC', 'failed', 'LIBRARY_GRAPH_GATEWAY_QUEUE_FULL',
+                 21600, '2026-01-02T00:00:00Z', '2026-01-02T00:01:00Z');
+         INSERT INTO discovery_library_graph_nodes (run_id, subject_key, target_key, cluster_id)
+         VALUES ('graph-complete', 'tmdb:movie:1', 'tmdb:movie:1', 0);
+         INSERT INTO discovery_library_graph_edges (run_id, from_key, to_key, weight)
+         VALUES ('graph-complete', 'tmdb:movie:1', 'tmdb:movie:2', 0.9);
+         INSERT INTO discovery_library_graph_clusters (run_id, cluster_id, label, medoid, size)
+         VALUES ('graph-complete', 0, 'Synthetic Cluster', 'tmdb:movie:1', 1);",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("restore the pre-0326 shape");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0326_discovery_library_graph_payload.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0326 should apply");
+
+    // The complete run went with its graph, so the next sync builds the
+    // facet; the failure still carries the gateway's wait.
+    let runs: Vec<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT id, retry_after_seconds FROM discovery_library_graph_runs ORDER BY id",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("read runs");
+    assert_eq!(runs, vec![("graph-failed".to_string(), Some(21600))]);
+    let (old_tables,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
+         ('discovery_library_graph_nodes', 'discovery_library_graph_edges',
+          'discovery_library_graph_clusters')",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .expect("list tables");
+    assert_eq!(old_tables, 0);
+    let (payloads,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM discovery_library_graph_payloads")
+            .fetch_one(&mut *conn)
+            .await
+            .expect("count payloads");
+    assert_eq!(payloads, 0);
+    sqlx::query(
+        "INSERT INTO discovery_library_graph_payloads (run_id, payload)
+         VALUES ('graph-missing', x'00')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect_err("a payload belongs to a stored run");
+}
+
+/// Migration 0330: the same-tier upgrade delta moves from the global
+/// `acquisition.same_tier_min_delta` setting into each quality profile.
+///
+/// An instance on the default leaves every profile without the key, so no
+/// profile's convergence fingerprint moves. An instance that had changed the
+/// setting carries that value into every profile that has none of its own.
+#[tokio::test]
+async fn migration_0330_carries_only_a_changed_global_delta_into_profiles() {
+    const SCHEMA: &str = r#"CREATE TABLE quality_profiles (
+               id TEXT PRIMARY KEY,
+               scoring_config TEXT NOT NULL DEFAULT '{}'
+           );
+           CREATE TABLE settings_definitions (
+               id TEXT PRIMARY KEY,
+               key_name TEXT NOT NULL
+           );
+           CREATE TABLE settings_values (
+               id TEXT PRIMARY KEY,
+               setting_definition_id TEXT NOT NULL,
+               scope TEXT NOT NULL,
+               scope_id TEXT,
+               value_json TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           );
+           INSERT INTO settings_definitions (id, key_name) VALUES
+             ('def-delta', 'acquisition.same_tier_min_delta');
+           INSERT INTO quality_profiles (id, scoring_config) VALUES
+             ('plain', '{"scoring_persona":"balanced","cutoff_tier":"1080P"}'),
+             ('own-value', '{"min_upgrade_score_delta":40}'),
+             ('empty', '{}');"#;
+    const MIGRATION: &str = include_str!(
+        "../../../scryer/src/db/migrations/0330_quality_profile_min_upgrade_score_delta.sql"
+    );
+
+    async fn run(global: Option<&str>) -> Vec<(String, Option<i64>)> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("migration test database should open");
+        sqlx::raw_sql(SCHEMA)
+            .execute(&pool)
+            .await
+            .expect("fixture should initialize");
+        if let Some(value) = global {
+            sqlx::query(
+                "INSERT INTO settings_values
+                     (id, setting_definition_id, scope, scope_id, value_json, updated_at)
+                 VALUES ('val-delta', 'def-delta', 'system', NULL, ?1, '2026-01-01T00:00:00Z')",
+            )
+            .bind(value)
+            .execute(&pool)
+            .await
+            .expect("seed the global delta");
+        }
+        for _ in 0..2 {
+            sqlx::raw_sql(MIGRATION)
+                .execute(&pool)
+                .await
+                .expect("migration 0330 should apply and re-apply");
+        }
+        // The old row stays where it was.
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings_values")
+            .fetch_one(&pool)
+            .await
+            .expect("count setting rows");
+        assert_eq!(rows, i64::from(global.is_some()));
+        let persona: Option<String> = sqlx::query_scalar(
+            "SELECT json_extract(scoring_config, '$.scoring_persona')
+               FROM quality_profiles WHERE id = 'plain'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("persona should load");
+        assert_eq!(persona.as_deref(), Some("balanced"));
+        sqlx::query_as(
+            "SELECT id, json_extract(scoring_config, '$.min_upgrade_score_delta')
+               FROM quality_profiles ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("deltas should load")
+    }
+
+    let untouched = vec![
+        ("empty".to_string(), None),
+        ("own-value".to_string(), Some(40)),
+        ("plain".to_string(), None),
+    ];
+    assert_eq!(
+        run(None).await,
+        untouched,
+        "no stored setting changes nothing"
+    );
+    assert_eq!(
+        run(Some("120")).await,
+        untouched,
+        "the default stays absent so no fingerprint moves"
+    );
+    assert_eq!(
+        run(Some("-5")).await,
+        untouched,
+        "a negative value is not carried"
+    );
+    assert_eq!(
+        run(Some("\"5\"")).await,
+        untouched,
+        "only a stored number is carried"
+    );
+    assert_eq!(
+        run(Some("5")).await,
+        vec![
+            ("empty".to_string(), Some(5)),
+            ("own-value".to_string(), Some(40)),
+            ("plain".to_string(), Some(5)),
+        ],
+        "a changed global delta reaches every profile without its own"
+    );
+}
+
+/// Migration 0331: a title keeps one SMG id. A facet-kinded copy of the
+/// `smg:title` id is dropped, a lone facet-kinded one becomes `title`, and the
+/// rest of the stored ids keep their order.
+#[tokio::test]
+async fn migration_0331_folds_facet_kinded_smg_ids_onto_title() {
+    const SCHEMA: &str = r#"CREATE TABLE titles (
+               id TEXT PRIMARY KEY,
+               external_ids TEXT NOT NULL DEFAULT '[]'
+           );
+           CREATE TABLE title_external_ids (
+               id TEXT PRIMARY KEY,
+               title_id TEXT NOT NULL,
+               source TEXT NOT NULL,
+               external_id TEXT NOT NULL,
+               library_id TEXT,
+               external_kind TEXT NOT NULL DEFAULT '',
+               external_key TEXT
+           );
+           CREATE UNIQUE INDEX idx_title_external_ids_library_kind_lookup
+               ON title_external_ids(library_id, source, external_kind, external_id);
+           INSERT INTO titles (id, external_ids) VALUES
+             ('both', '[{"source":"tmdb","kind":"movie","value":"1"},{"source":"smg","kind":"movie","value":"11"},{"source":"smg","kind":"title","value":"11"}]'),
+             ('lone', '[{"source":"smg","kind":"series","value":"22"},{"source":"tvdb","kind":"series","value":"2"}]'),
+             ('kindless', '[{"source":"smg","value":"33"}]');
+           INSERT INTO title_external_ids VALUES
+             ('r1', 'both', 'tmdb', '1', 'lib', 'movie', 'tmdb:movie:1'),
+             ('r2', 'both', 'smg', '11', 'lib', 'movie', 'smg:movie:11'),
+             ('r3', 'both', 'smg', '11', 'lib', 'title', 'smg:title:11'),
+             ('r4', 'lone', 'smg', '22', 'lib', 'series', 'smg:series:22'),
+             ('r5', 'lone', 'tvdb', '2', 'lib', 'series', 'tvdb:series:2'),
+             ('r6', 'kindless', 'smg', '33', 'lib', '', 'smg:33');"#;
+    const MIGRATION: &str =
+        include_str!("../../../scryer/src/db/migrations/0331_smg_title_external_id_kind.sql");
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
+        .await
+        .expect("fixture should initialize");
+    for _ in 0..2 {
+        sqlx::raw_sql(MIGRATION)
+            .execute(&pool)
+            .await
+            .expect("migration 0331 should apply and re-apply");
+    }
+
+    let stored: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, external_ids FROM titles ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("titles should load");
+    assert_eq!(
+        stored,
+        vec![
+            (
+                "both".to_string(),
+                r#"[{"source":"tmdb","kind":"movie","value":"1"},{"source":"smg","kind":"title","value":"11"}]"#
+                    .to_string()
+            ),
+            (
+                "kindless".to_string(),
+                r#"[{"source":"smg","value":"33"}]"#.to_string()
+            ),
+            (
+                "lone".to_string(),
+                r#"[{"source":"smg","kind":"title","value":"22"},{"source":"tvdb","kind":"series","value":"2"}]"#
+                    .to_string()
+            ),
+        ]
+    );
+
+    let projection: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, external_kind, external_key FROM title_external_ids ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("projection should load");
+    assert_eq!(
+        projection,
+        vec![
+            ("r1".into(), "movie".into(), "tmdb:movie:1".into()),
+            ("r3".into(), "title".into(), "smg:title:11".into()),
+            ("r4".into(), "title".into(), "smg:title:22".into()),
+            ("r5".into(), "series".into(), "tvdb:series:2".into()),
+            ("r6".into(), String::new(), "smg:33".into()),
         ]
     );
 }

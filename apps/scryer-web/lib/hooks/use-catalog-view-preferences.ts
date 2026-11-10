@@ -61,16 +61,20 @@ export function useCatalogViewPreferences(
     [view],
   );
 
-  const viewMode: ContentViewMode = React.useMemo(() => {
-    const local = localViewModes[scopeKey];
-    if (local) {
-      return local;
-    }
+  const { viewMode, viewModePending } = React.useMemo((): {
+    viewMode: ContentViewMode;
+    viewModePending: boolean;
+  } => {
     const saved =
       uiSettingsLoaded && facet
         ? savedCatalogViewMode(uiSettings, deviceClass, facet)
         : null;
-    return saved ?? readStoredContentViewMode(view);
+    const chosen =
+      localViewModes[scopeKey] ?? saved ?? readStoredContentViewMode(view);
+    return {
+      viewMode: chosen,
+      viewModePending: false,
+    };
   }, [
     deviceClass,
     facet,
@@ -172,5 +176,11 @@ export function useCatalogViewPreferences(
     [deviceClass, facet, isSupported, saveToProfile, scopeKey, visibleColumns],
   );
 
-  return { viewMode, setViewMode, visibleColumns, setColumnVisible };
+  return {
+    viewMode,
+    viewModePending,
+    setViewMode,
+    visibleColumns,
+    setColumnVisible,
+  };
 }

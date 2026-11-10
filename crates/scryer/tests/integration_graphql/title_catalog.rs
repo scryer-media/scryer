@@ -1,6 +1,123 @@
 use super::*;
 
 #[tokio::test]
+async fn graphql_catalog_projection_skips_unselected_row_decoding() {
+    let ctx = TestContext::new().await;
+    let id = add_test_title(&ctx, "Projection Fixture", "MOVIE").await;
+    // A malformed optional value detects accidental eager JSON decoding.
+    sqlx::query("UPDATE titles SET aliases = 'invalid-json' WHERE id = ?")
+        .bind(&id)
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    let body = gql(&ctx, "{ titles { items { id name } hasMore } }", json!({})).await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["titles"]["items"][0]["id"], id);
+    assert_eq!(
+        body["data"]["titles"]["items"][0]["name"],
+        "Projection Fixture"
+    );
+    let body = gql(&ctx, "{ titles { items { aliases } } }", json!({})).await;
+    assert!(
+        body.get("errors").is_some(),
+        "selected values must still be decoded strictly"
+    );
+}
+
+#[tokio::test]
+async fn graphql_catalog_projection_matches_full_title_fields_and_dependencies() {
+    let ctx = TestContext::new().await;
+    let id = add_test_title(&ctx, "Projection Series", "SERIES").await;
+    sqlx::query("UPDATE titles SET tags = ?, aliases = ?, tagged_aliases_json = ?, overview = 'Synopsis', poster_url = 'https://image.tmdb.org/t/p/original/poster.jpg', background_url = 'https://image.tmdb.org/t/p/original/background.jpg' WHERE id = ?")
+        .bind(r#"["scryer:season-folder:disabled","scryer:quality-profile:fixture","scryer:monitor-specials:true"]"#)
+        .bind(r#"["Alternate"]"#)
+        .bind(r#"[{"name":"Alternative","language":"eng","country":null}]"#)
+        .bind(&id).execute(ctx.db.pool()).await.unwrap();
+    let fields = "id libraryId name facet monitored tags externalIds { source value } createdAt year overview posterUrl posterSourceUrl backgroundUrl backgroundSourceUrl sortTitle slug imdbId runtimeMinutes popularity contentStatus language firstAired network studio country aliases taggedAliases { name language country } metadataLanguage metadataFetchedAt minAvailability qualityProfileId rootFolderId monitorType useSeasonFolders monitorSpecials interSeasonMovies fillerPolicy recapPolicy releaseNumbering useSeasonFoldersOverride effectiveUseSeasonFolders inheritsUseSeasonFolders";
+    let query = format!(
+        "query($id: ID!) {{ full: title(id: $id) {{ {fields} }} catalog: titles {{ items {{ {fields} }} }} }}"
+    );
+    let body = gql(&ctx, &query, json!({"id": id})).await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["catalog"]["items"][0], body["data"]["full"]);
+    // Dependencies must survive aliases and fragments without explicitly
+    // selecting the backing tags or useSeasonFolders fields.
+    let typed = gql(&ctx, "{ titles { items { __typename } } }", json!({})).await;
+    let type_name = typed["data"]["titles"]["items"][0]["__typename"]
+        .as_str()
+        .unwrap();
+    let query = format!(
+        "{{ titles {{ items {{ ...Settings }} }} }} fragment Settings on {type_name} {{ inherited: inheritsUseSeasonFolders effective: effectiveUseSeasonFolders }}"
+    );
+    let body = gql(&ctx, &query, json!({})).await;
+    assert_no_errors(&body);
+    assert_eq!(
+        body["data"]["titles"]["items"][0],
+        json!({"inherited": false, "effective": false})
+    );
+}
+
+#[tokio::test]
+async fn graphql_catalog_projection_registers_only_selected_artwork() {
+    let ctx = TestContext::new().await;
+    let id = add_test_title(&ctx, "Artwork Projection", "MOVIE").await;
+    let poster = "https://image.tmdb.org/t/p/original/projected-poster.jpg";
+    let background = "https://image.tmdb.org/t/p/original/projected-background.jpg";
+    sqlx::query("UPDATE titles SET poster_url = ?, background_url = ? WHERE id = ?")
+        .bind(poster)
+        .bind(background)
+        .bind(&id)
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    let body = gql(&ctx, "{ titles { items { id name } } }", json!({})).await;
+    assert_no_errors(&body);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM image_proxy_sources WHERE upstream_url IN (?, ?)")
+            .bind(poster)
+            .bind(background)
+            .fetch_one(ctx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        count, 0,
+        "unselected artwork must not enqueue source writes"
+    );
+    let body = gql(&ctx, "{ titles { items { posterUrl } } }", json!({})).await;
+    assert_no_errors(&body);
+    assert!(
+        body["data"]["titles"]["items"][0]["posterUrl"]
+            .as_str()
+            .unwrap()
+            .contains("/images/media/")
+    );
+    let sources: Vec<String> = sqlx::query_scalar(
+        "SELECT upstream_url FROM image_proxy_sources WHERE upstream_url IN (?, ?)",
+    )
+    .bind(poster)
+    .bind(background)
+    .fetch_all(ctx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(sources, vec![poster.to_owned()]);
+    let body = gql(
+        &ctx,
+        "{ titles { items { backgroundSourceUrl } } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM image_proxy_sources WHERE upstream_url IN (?, ?)")
+            .bind(poster)
+            .bind(background)
+            .fetch_one(ctx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
 async fn graphql_catalog_skips_unrequested_canonical_tag_hydration() {
     let ctx = TestContext::new().await;
     let id = add_test_title(&ctx, "Poster Series", "SERIES").await;
@@ -2026,12 +2143,10 @@ async fn graphql_reused_add_preserves_metadata_language_tri_state() {
         "jpn"
     );
 
-    let rejected = gql(&ctx, query, input(json!({ "metadataLanguage": "rus" }))).await;
-    assert!(
-        rejected.to_string().contains(
-            "metadataLanguage must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn"
-        ),
-        "invalid metadata language should be rejected: {rejected}"
+    let rejected = gql(&ctx, query, input(json!({ "metadataLanguage": "pol" }))).await;
+    assert_eq!(
+        rejected["errors"][0]["extensions"]["reason"], "INTERFACE_METADATA_LANGUAGE_UNSUPPORTED",
+        "unsupported metadata language should be rejected: {rejected}"
     );
 }
 
@@ -3102,6 +3217,86 @@ async fn graphql_titles_expose_matched_size_bytes_only_for_movies() {
 }
 
 #[tokio::test]
+async fn graphql_titles_managed_bytes_follow_query_and_filter() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let movies = [
+        ("Harbor Lights", true, 1_000),
+        ("Harbor Storm", false, 200),
+        ("Desert Road", false, 30),
+    ];
+    for (name, monitored, size_bytes) in movies {
+        let title =
+            create_catalog_title(&ctx, name, MediaFacet::Movie, vec![], vec![], monitored).await;
+        let path = media_root.path().join(format!("{name}.mkv"));
+        ctx.shows
+            .create_collection(Collection {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_type: CollectionType::Movie,
+                collection_index: "1".to_string(),
+                label: Some(name.to_string()),
+                ordered_path: Some(path.to_string_lossy().to_string()),
+                narrative_order: None,
+                first_episode_number: None,
+                last_episode_number: None,
+                monitored: true,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .expect("create movie collection");
+        ctx.media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.to_string_lossy().to_string(),
+                size_bytes,
+                ..Default::default()
+            })
+            .await
+            .expect("insert movie file");
+    }
+
+    let managed_bytes = async |variables: serde_json::Value| {
+        let body = gql(
+            &ctx,
+            r#"query($facet: MediaFacetValue, $query: String, $filter: TitleCatalogFilterInput) {
+                titles(facet: $facet, query: $query, filter: $filter) { totalCount managedBytes }
+            }"#,
+            variables,
+        )
+        .await;
+        assert_no_errors(&body);
+        (
+            body["data"]["titles"]["totalCount"].clone(),
+            body["data"]["titles"]["managedBytes"].clone(),
+        )
+    };
+
+    assert_eq!(
+        managed_bytes(json!({ "facet": "MOVIE" })).await,
+        (json!(3), json!(1_230))
+    );
+    assert_eq!(
+        managed_bytes(json!({ "facet": "MOVIE", "filter": { "monitored": false } })).await,
+        (json!(2), json!(230))
+    );
+    assert_eq!(
+        managed_bytes(json!({ "facet": "MOVIE", "query": "Harbor" })).await,
+        (json!(2), json!(1_200))
+    );
+    assert_eq!(
+        managed_bytes(json!({
+            "facet": "MOVIE",
+            "query": "Harbor",
+            "filter": { "monitored": false },
+        }))
+        .await,
+        (json!(1), json!(200))
+    );
+}
+
+#[tokio::test]
 async fn graphql_get_title_by_id() {
     let ctx = TestContext::new().await;
     let expected_name = "Specific Movie";
@@ -4030,6 +4225,7 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
     )
     .await;
     let library_id = library_id(&library);
+    let default_root_id = library_root_id(&library, "/library/root-lifecycle-default");
     let custom_root_id = library_root_id(&library, "/library/root-lifecycle-custom");
 
     let add_body = gql(
@@ -4063,53 +4259,6 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         custom_root_id
     );
 
-    let referenced_path_edit = gql(
-        &ctx,
-        r#"mutation($input: UpdateLibraryInput!) {
-            updateLibrary(input: $input) {
-                roots { id path isDefault }
-            }
-        }"#,
-        json!({
-            "input": {
-                "libraryId": library_id,
-                "roots": [
-                    {
-                        "path": "/library/root-lifecycle-default",
-                        "isDefault": true
-                    },
-                    {
-                        "path": "/library/root-lifecycle-renamed",
-                        "isDefault": false
-                    }
-                ]
-            }
-        }),
-    )
-    .await;
-    assert!(
-        referenced_path_edit.get("errors").is_some(),
-        "referenced root path edit should be rejected: {referenced_path_edit}"
-    );
-
-    let after_rejected_edit = gql(
-        &ctx,
-        r#"query($id: ID!) {
-            title(id: $id) { rootFolderId rootFolderPath }
-        }"#,
-        json!({ "id": title_id }),
-    )
-    .await;
-    assert_no_errors(&after_rejected_edit);
-    assert_eq!(
-        after_rejected_edit["data"]["title"]["rootFolderId"],
-        custom_root_id
-    );
-    assert_eq!(
-        after_rejected_edit["data"]["title"]["rootFolderPath"],
-        "/library/root-lifecycle-custom"
-    );
-
     let added_unreferenced_root = gql(
         &ctx,
         r#"mutation($input: UpdateLibraryInput!) {
@@ -4122,10 +4271,12 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                 "libraryId": library_id,
                 "roots": [
                     {
+                        "id": default_root_id,
                         "path": "/library/root-lifecycle-default",
                         "isDefault": true
                     },
                     {
+                        "id": custom_root_id,
                         "path": "/library/root-lifecycle-custom",
                         "isDefault": false
                     },
@@ -4165,14 +4316,17 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                 "libraryId": library_id,
                 "roots": [
                     {
+                        "id": default_root_id,
                         "path": "/library/root-lifecycle-default",
                         "isDefault": true
                     },
                     {
+                        "id": custom_root_id,
                         "path": "/library/root-lifecycle-custom",
                         "isDefault": false
                     },
                     {
+                        "id": unreferenced_root_id,
                         "path": "/library/root-lifecycle-unreferenced-renamed",
                         "isDefault": false
                     }
@@ -4186,15 +4340,9 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         &renamed_unreferenced_root["data"]["updateLibrary"],
         "/library/root-lifecycle-unreferenced-renamed",
     );
-    // The bulk root replace still cannot express "this root moved", so an
-    // unreferenced root swapped for another path reads as a removal plus an
-    // addition and the addition is allocated a fresh id. Identity across a
-    // deliberate path change is the move workflow's job, not this mutation's.
-    assert_ne!(renamed_unreferenced_root_id, unreferenced_root_id);
-    assert!(
-        renamed_unreferenced_root_id.starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
-        "a newly configured root should carry an allocated id, got {renamed_unreferenced_root_id}"
-    );
+    // A root is identified by its id, so a path change under the same id
+    // keeps the root's identity.
+    assert_eq!(renamed_unreferenced_root_id, unreferenced_root_id);
 
     let removed_unreferenced_root = gql(
         &ctx,
@@ -4208,14 +4356,17 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
                 "libraryId": library_id,
                 "roots": [
                     {
+                        "id": default_root_id,
                         "path": "/library/root-lifecycle-default",
                         "isDefault": true
                     },
                     {
+                        "id": custom_root_id,
                         "path": "/library/root-lifecycle-custom",
                         "isDefault": false
                     }
-                ]
+                ],
+                "removedRootIds": [unreferenced_root_id]
             }
         }),
     )
@@ -4243,6 +4394,213 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         stored_title_root_folder_id(&ctx, &title_id).await,
         custom_root_id
     );
+
+    // A title on the default root, which every edit below keeps.
+    let kept_body = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                title { id rootFolderId }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "Root Lifecycle Anime Kept",
+                "facet": "ANIME",
+                "libraryId": library_id,
+                "monitored": true,
+                "tags": [],
+                "options": {
+                    "rootFolderId": library_root_id(&library, "/library/root-lifecycle-default")
+                }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&kept_body);
+    let kept_title_id = kept_body["data"]["addTitle"]["title"]["id"]
+        .as_str()
+        .expect("kept title id")
+        .to_string();
+
+    // Each root reports how many of the library's titles sit on it, so a
+    // removal can say what it takes out before it is confirmed.
+    let counted = gql(
+        &ctx,
+        r#"query {
+            libraries(facet: ANIME, permission: MANAGE_LIBRARY) {
+                id roots { id titleCount }
+            }
+        }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&counted);
+    let counted_roots = counted["data"]["libraries"]
+        .as_array()
+        .expect("libraries list")
+        .iter()
+        .find(|library| library["id"] == library_id)
+        .map(|library| library["roots"].clone())
+        .expect("the lifecycle library is listed");
+    let title_count = |root_id: &str| {
+        counted_roots
+            .as_array()
+            .expect("library roots")
+            .iter()
+            .find(|root| root["id"] == root_id)
+            .map(|root| root["titleCount"].clone())
+            .unwrap_or_else(|| panic!("root {root_id} listed: {counted_roots}"))
+    };
+    assert_eq!(title_count(&default_root_id), 1);
+    assert_eq!(title_count(&custom_root_id), 1);
+
+    // A stored root resubmitted by path without its id is refused, never
+    // matched by path, and nothing leaves the catalog.
+    let path_only_rename = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) {
+                roots { id path isDefault }
+                removedTitleCount
+            }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "roots": [
+                    {
+                        "id": default_root_id,
+                        "path": "/library/root-lifecycle-default",
+                        "isDefault": true
+                    },
+                    {
+                        "path": "/library/root-lifecycle-custom",
+                        "isDefault": false
+                    }
+                ]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        path_only_rename["errors"][0]["extensions"]["reason"], "LIBRARY_ROOT_ID_REQUIRED",
+        "{path_only_rename}"
+    );
+    let after_refusal = gql(
+        &ctx,
+        r#"query($id: ID!) {
+            title(id: $id) { id rootFolderId }
+        }"#,
+        json!({ "id": title_id }),
+    )
+    .await;
+    assert_no_errors(&after_refusal);
+    assert_eq!(
+        after_refusal["data"]["title"]["rootFolderId"],
+        custom_root_id
+    );
+
+    // Leaving the custom root out without naming it as removed is refused,
+    // and the refusal names the root it would have dropped.
+    let unacknowledged_drop = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) { removedTitleCount }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "roots": [
+                    {
+                        "id": default_root_id,
+                        "path": "/library/root-lifecycle-default",
+                        "isDefault": true
+                    }
+                ]
+            }
+        }),
+    )
+    .await;
+    let extensions = &unacknowledged_drop["errors"][0]["extensions"];
+    assert_eq!(
+        extensions["reason"], "LIBRARY_ROOT_REMOVAL_NOT_ACKNOWLEDGED",
+        "{unacknowledged_drop}"
+    );
+    assert_eq!(extensions["unacknowledgedRootIds"], json!([custom_root_id]));
+    assert_eq!(
+        extensions["unacknowledgedRootPaths"],
+        json!(["/library/root-lifecycle-custom"])
+    );
+    assert_eq!(
+        stored_title_root_folder_id(&ctx, &title_id).await,
+        custom_root_id
+    );
+
+    // Leaving the custom root out and naming it as removed drops it: the
+    // titles under it leave the catalog, and the mutation says how many.
+    let dropped_custom_root = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) {
+                roots { id path isDefault }
+                removedTitleCount
+            }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "roots": [
+                    {
+                        "id": default_root_id,
+                        "path": "/library/root-lifecycle-default",
+                        "isDefault": true
+                    }
+                ],
+                "removedRootIds": [custom_root_id]
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&dropped_custom_root);
+    let dropped = &dropped_custom_root["data"]["updateLibrary"];
+    assert_eq!(dropped["removedTitleCount"], 1);
+    assert_eq!(dropped["roots"].as_array().map(Vec::len), Some(1));
+
+    let after_drop = gql(
+        &ctx,
+        r#"query($dropped: ID!, $kept: ID!) {
+            dropped: title(id: $dropped) { id }
+            kept: title(id: $kept) { id rootFolderPath }
+        }"#,
+        json!({ "dropped": title_id, "kept": kept_title_id }),
+    )
+    .await;
+    assert_no_errors(&after_drop);
+    assert!(after_drop["data"]["dropped"].is_null(), "{after_drop}");
+    assert_eq!(
+        after_drop["data"]["kept"]["rootFolderPath"],
+        "/library/root-lifecycle-default"
+    );
+
+    // A save that keeps every root removes nothing.
+    let resaved = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) {
+                removedTitleCount
+            }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "name": "Root Lifecycle Anime Library"
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&resaved);
+    assert_eq!(resaved["data"]["updateLibrary"]["removedTitleCount"], 0);
 }
 
 #[tokio::test]
@@ -5704,6 +6062,94 @@ async fn graphql_library_search_languages_round_trip_in_order() {
         read["data"]["librarySettings"]["searchLanguages"],
         json!(["swe", "deu"])
     );
+}
+
+/// A library's audio language preferences override its facet's one value at a
+/// time; an omitted value inherits again.
+#[tokio::test]
+async fn graphql_library_audio_language_preferences_inherit_per_value() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    seed_library_settings_definitions(&ctx).await;
+    let facet = gql(
+        &ctx,
+        r#"mutation($input: UpdateMediaSettingsInput!) {
+            updateMediaSettings(input: $input) { scope }
+        }"#,
+        json!({"input": {
+            "scope": "SERIES",
+            "preferredAudioLanguages": ["ger"],
+            "audioLanguagePriority": "LANGUAGE_FIRST"
+        }}),
+    )
+    .await;
+    assert_no_errors(&facet);
+    let library_id =
+        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Series);
+    let read = r#"query($libraryId: ID!) {
+        librarySettings(libraryId: $libraryId) {
+            preferredAudioLanguagesOverride
+            preferredAudioLanguages
+            optionalAudioLanguagesOverride
+            optionalAudioLanguages
+            audioLanguagePriorityOverride
+            audioLanguagePriority
+            optionalAudioLanguagesKeepSearchingOverride
+            optionalAudioLanguagesKeepSearching
+        }
+    }"#;
+    let save = |settings: serde_json::Value| {
+        gql(
+            &ctx,
+            r#"mutation($input: UpdateLibraryInput!) {
+                updateLibrary(input: $input) { id }
+            }"#,
+            json!({"input": {"libraryId": library_id, "settings": settings}}),
+        )
+    };
+
+    let update = save(json!({
+        "optionalAudioLanguages": ["en"],
+        "audioLanguagePriority": "QUALITY_FIRST"
+    }))
+    .await;
+    assert_no_errors(&update);
+    let settings = gql(&ctx, read, json!({ "libraryId": library_id })).await;
+    assert_no_errors(&settings);
+    let settings = &settings["data"]["librarySettings"];
+    assert!(settings["preferredAudioLanguagesOverride"].is_null());
+    assert_eq!(settings["optionalAudioLanguagesOverride"], json!(["eng"]));
+    assert_eq!(settings["audioLanguagePriorityOverride"], "QUALITY_FIRST");
+    assert!(settings["optionalAudioLanguagesKeepSearchingOverride"].is_null());
+    assert_eq!(
+        (
+            &settings["preferredAudioLanguages"],
+            &settings["optionalAudioLanguages"],
+            &settings["audioLanguagePriority"],
+            &settings["optionalAudioLanguagesKeepSearching"],
+        ),
+        (
+            &json!(["deu"]),
+            &json!(["eng"]),
+            &json!("QUALITY_FIRST"),
+            &json!(false),
+        ),
+        "unset values come from the series facet"
+    );
+
+    let rejected = save(json!({ "preferredAudioLanguages": ["@@"] })).await;
+    assert!(
+        rejected.get("errors").is_some(),
+        "an unknown code is refused: {rejected}"
+    );
+
+    let cleared = save(json!({})).await;
+    assert_no_errors(&cleared);
+    let settings = gql(&ctx, read, json!({ "libraryId": library_id })).await;
+    let settings = &settings["data"]["librarySettings"];
+    assert!(settings["optionalAudioLanguagesOverride"].is_null());
+    assert!(settings["audioLanguagePriorityOverride"].is_null());
+    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
 }
 
 /// The per-title override validates against the same picker set as the

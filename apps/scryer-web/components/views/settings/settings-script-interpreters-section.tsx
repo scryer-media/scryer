@@ -82,7 +82,7 @@ export function SettingsScriptInterpretersSection({
                           [key]: event.target.value,
                         }))
                       }
-                      className="font-[var(--font-code)]"
+                      className="font-[family-name:var(--font-code)]"
                       placeholder={placeholder}
                       autoComplete="off"
                       spellCheck={false}

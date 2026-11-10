@@ -108,6 +108,70 @@ pub struct DiscoveryItemsInput {
     pub limit: Option<i32>,
     /// Zero-based offset; defaults to 0 and negative values become 0.
     pub offset: Option<i32>,
+    /// Page one discovery home section in full instead of listing items.
+    /// With the same `sectionRailLimit`, home filters and `includeOwned` as
+    /// the home and the default sort, the first `sectionRailLimit` items are
+    /// the rail as the dashboard renders it, after titles earlier rails
+    /// showed. When set, only `includeOwned`, `includeUnresolved`, `limit`,
+    /// `offset` and the section fields below apply. A blank id is refused;
+    /// an unknown or empty section returns no items and no section.
+    pub section_id: Option<String>,
+    /// The home's `limitPerSection` the section was opened from; defaults to
+    /// 25 and must be between 1 and 100. It must match the home for the
+    /// first page to match the rail.
+    pub section_rail_limit: Option<i32>,
+    /// Home filters applied to the section, validated as on the home.
+    pub home_filters: Option<DiscoveryHomeFiltersInput>,
+    /// Section ordering; defaults to `RELEVANCE`, the rail's own order.
+    pub sort: Option<DiscoverySectionSortValue>,
+    /// Drop titles with a pending media request in a readable library;
+    /// defaults to false.
+    pub hide_requested: Option<bool>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Ordering of a paged discovery section. Every order other than relevance
+/// falls back to relevance on ties.
+pub enum DiscoverySectionSortValue {
+    /// The section's own order, as the home rail shows it.
+    Relevance,
+    /// Most popular first.
+    Popularity,
+    /// Highest rated first.
+    Rating,
+    /// Newest release year first; titles without a year last.
+    ReleaseDate,
+    /// Alphabetical by sort title.
+    Title,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Label family a browse card lists titles under.
+pub enum DiscoveryBrowseLabelFamilyValue {
+    /// A canonical genre.
+    Genre,
+    /// A canonical theme.
+    Theme,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One "browse by" card: an allowlisted genre or theme the caller's
+/// personalized pool holds enough titles of to open as a section.
+pub struct DiscoveryBrowseLabelPayload {
+    /// Whether the card lists a genre or a theme.
+    pub family: DiscoveryBrowseLabelFamilyValue,
+    /// Canonical hyphenated label key, such as `coming-of-age`. Clients
+    /// translate the key and fall back to `title` for a key they do not know.
+    pub label_key: String,
+    /// Section id to pass to `discoveryItems.sectionId`.
+    pub section_id: String,
+    /// English card title.
+    pub title: String,
+    /// Titles under the label in the home's candidate pool. The section reads
+    /// a deeper pool, so it can list more than this.
+    pub item_count: Long,
 }
 
 #[derive(InputObject, Clone)]
@@ -134,6 +198,9 @@ pub struct DiscoveryHomePayload {
     pub complete_collection: Option<DiscoverySectionPayload>,
     /// Facet summaries returned for the selected discovery scope.
     pub facets: Vec<DiscoveryFacetPayload>,
+    /// "Browse by" genre and theme cards, in allowlist order; empty when
+    /// personalized results are unavailable.
+    pub browse_labels: Vec<DiscoveryBrowseLabelPayload>,
     /// Whether the caller may view personalized results.
     pub can_view_personalized: bool,
 }
@@ -151,6 +218,9 @@ pub struct DiscoveryHomeCardsPayload {
     pub personalized_sections: Vec<DiscoveryHomeSectionPayload>,
     /// Complete-collection card section, or null when none is available.
     pub complete_collection: Option<DiscoveryHomeSectionPayload>,
+    /// "Browse by" genre and theme cards, in allowlist order; empty when
+    /// personalized results are unavailable.
+    pub browse_labels: Vec<DiscoveryBrowseLabelPayload>,
     /// Whether the caller may view personalized cards.
     pub can_view_personalized: bool,
 }
@@ -166,10 +236,19 @@ pub struct DiscoveryHomeSectionPayload {
     pub title: String,
     /// Whether this section is public, personalized, or mixed.
     pub surface: DiscoverySurfaceValue,
+    /// Rail-label key a personalized "because you like" section is named after,
+    /// in canonical hyphenated form such as `coming-of-age`; null for every other
+    /// section. Clients translate the key and fall back to `title` for a key they
+    /// do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this section, possibly fewer than the total.
     pub items: Vec<DiscoveryHomeCardPayload>,
+    /// Discovery generations a section page was composed from. Empty on the
+    /// home. A client paging a section restarts from the first page when
+    /// these change between pages.
+    pub generation_ids: Vec<String>,
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -281,6 +360,9 @@ pub struct DiscoveryItemsPayload {
     pub total_count: Long,
     /// Whether the caller may view personalized results.
     pub can_view_personalized: bool,
+    /// The paged section when `sectionId` was requested and found: its
+    /// identity, total and this page's items as cards. Null otherwise.
+    pub section: Option<DiscoveryHomeSectionPayload>,
 }
 
 #[derive(InputObject, Clone)]
@@ -318,6 +400,11 @@ pub struct CatalogDiscoveryGroupPayload {
     pub surface: CatalogDiscoverySurfaceValue,
     /// Optional label value, such as a genre or theme key.
     pub label_value: Option<String>,
+    /// Rail-label key a genre or theme affinity group is named after, in
+    /// canonical hyphenated form such as `coming-of-age`; null for every other
+    /// group. Clients translate the key and fall back to `labelValue` for a key
+    /// they do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this group.
@@ -365,6 +452,11 @@ pub struct DiscoverySectionPayload {
     pub title: String,
     /// Surface label for this section.
     pub surface: String,
+    /// Rail-label key a personalized "because you like" section is named after,
+    /// in canonical hyphenated form such as `coming-of-age`; null for every other
+    /// section. Clients translate the key and fall back to `title` for a key they
+    /// do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this section.
@@ -529,6 +621,8 @@ pub struct DiscoveryItemPayload {
     pub facet_terms: Vec<String>,
     /// Context terms extracted from the source.
     pub context_terms: Vec<String>,
+    /// The `DiscoveryNeighborGroup` this related title belongs to; set only on `discoveryNeighbors` items, and null there when the related titles were not grouped.
+    pub group_id: Option<i32>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -542,4 +636,105 @@ pub struct DiscoveryFacetPayload {
     pub smg_count: Option<Long>,
     /// Local owned-title count, or null when unavailable.
     pub local_count: Option<Long>,
+}
+
+#[derive(InputObject, Clone)]
+/// One anchor whose related titles are returned, owned or not.
+pub struct DiscoveryNeighborsInput {
+    /// The discovery target key of the anchor, in the server's own vocabulary (tvdb:series:<id>, tmdb:movie:<id>, tmdb:series:<id>, imdb:title:<tt>, mal:anime:<id>, anidb:anime:<id>, anilist:anime:<id>).
+    pub target_key: String,
+    /// Media facet of the anchor. A movie key fits MOVIE or ANIME, a series key SERIES or ANIME.
+    pub facet: MediaFacetValue,
+    /// Maximum related titles to return; defaults to 24, which is also the most ever returned. Values outside 0 through 24 are clamped.
+    #[graphql(default = 24)]
+    pub limit: Option<i32>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One neighbourhood among an anchor's related titles, found by the metadata gateway from the semantic and relation links between them.
+pub struct DiscoveryNeighborGroup {
+    /// Group ID, matching `DiscoveryItemPayload.groupId`.
+    pub id: i32,
+    /// Label key of the genre or theme that names the group, or null when the group is named after its medoid.
+    pub label_key: Option<String>,
+    /// Display label of the group.
+    pub label: String,
+    /// Target key of the related title that best represents the group.
+    pub medoid: String,
+    /// Number of returned related titles in the group.
+    pub size: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// An anchor's related titles and the neighbourhoods they fall into.
+pub struct DiscoveryNeighborsPayload {
+    /// Related titles, best first.
+    pub items: Vec<DiscoveryItemPayload>,
+    /// Groups holding at least one returned item, in the order the metadata gateway ranked them (largest first before the returned items were chosen); empty when the related titles were not grouped.
+    pub groups: Vec<DiscoveryNeighborGroup>,
+}
+
+#[derive(InputObject, Clone)]
+/// Selects one facet's library graph and, optionally, the libraries it covers.
+pub struct LibraryGraphInput {
+    /// Media facet whose library graph is returned.
+    pub facet: MediaFacetValue,
+    /// Library IDs to cover; omitted or empty covers every library of the facet the viewer can see. IDs the viewer cannot see are ignored.
+    pub library_ids: Option<Vec<ID>>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One owned title in a library graph.
+pub struct LibraryGraphNode {
+    /// Discovery subject key of the owned title.
+    pub subject_key: String,
+    /// Discovery target key the title resolved to; edges and medoids use this key.
+    pub target_key: String,
+    /// Cluster the node belongs to, or -1 when it was not placed in a cluster.
+    pub cluster_id: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// An undirected similarity link between two owned titles, by target key.
+pub struct LibraryGraphEdge {
+    /// Target key of one endpoint; always sorts before `to`.
+    pub from: String,
+    /// Target key of the other endpoint.
+    pub to: String,
+    /// Link strength from 0 to 1.
+    pub weight: f64,
+    /// Evidence for the link: `semantic`, `relation:<type>`, or `affinity:<family>:<label>`.
+    pub kinds: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A cluster of related owned titles.
+pub struct LibraryGraphCluster {
+    /// Cluster ID, matching `LibraryGraphNode.clusterId`.
+    pub id: i32,
+    /// Label key of the genre or theme that names the cluster, or null when the cluster is named after its medoid.
+    pub label_key: Option<String>,
+    /// Display label of the cluster.
+    pub label: String,
+    /// Target key of the visible title that best represents the cluster.
+    pub medoid: String,
+    /// Number of visible titles in the cluster.
+    pub size: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A facet's library graph, limited to the titles the viewer can see. Layout coordinates are not included.
+pub struct LibraryGraph {
+    /// When the metadata gateway built the graph.
+    pub generated_at: String,
+    /// Owned titles in the graph.
+    pub nodes: Vec<LibraryGraphNode>,
+    /// Similarity links between visible titles.
+    pub edges: Vec<LibraryGraphEdge>,
+    /// Clusters with at least one visible title.
+    pub clusters: Vec<LibraryGraphCluster>,
+    /// Owned titles of the facet in the covered libraries, counted by discovery subject.
+    pub subject_count: i32,
+    /// True when the facet had more titles than one graph covers, so the newest were graphed and the rest left out.
+    pub truncated: bool,
 }

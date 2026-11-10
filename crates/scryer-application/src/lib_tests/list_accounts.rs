@@ -2008,6 +2008,8 @@ async fn provider_app_secret_is_optional_only_for_trakt_and_mal() {
 }
 
 #[tokio::test]
+// Recomputes the OAuth PKCE S256 challenge the way RFC 7636 fixes it.
+#[allow(clippy::disallowed_methods)]
 async fn byo_trakt_link_without_a_secret_proves_a_fresh_s256_verifier() {
     let auth = Arc::new(Auth::default());
     let harness = harness(auth.clone()).await;

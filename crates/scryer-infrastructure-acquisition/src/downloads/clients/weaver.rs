@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use reqwest::multipart;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
-    NullStagedNzbStore, RateLimitCooldownAction, StagedNzbStore,
+    NullStagedNzbStore, PluginFailureReason, RateLimitCooldownAction, StagedNzbStore, plugin_codes,
 };
 use scryer_domain::{
     CompletedDownload, DownloadClientConfig, DownloadQueueItem, DownloadQueueState, PostedFileName,
@@ -14,6 +14,7 @@ use scryer_outbound_http::{
     OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
     generic_reqwest_client,
 };
+use scryer_plugin_sdk::PluginErrorCode;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -83,6 +84,26 @@ impl WeaverErrorCode {
             _ => Self::Other,
         }
     }
+}
+
+/// Codes Weaver sends in the JSON body of an HTTP refusal, `{"code", "error"}`,
+/// when it turns a request away before GraphQL runs. They are distinct from
+/// the GraphQL `extensions.code` above and from the schema features below.
+mod weaver_http_refusal {
+    /// 401: an API key was sent and refused.
+    pub const INVALID_API_KEY: &str = "INVALID_API_KEY";
+    /// 401: no API key was sent.
+    pub const AUTHENTICATION_REQUIRED: &str = "AUTHENTICATION_REQUIRED";
+    /// 403: a browser session failed its origin or CSRF binding.
+    pub const BROWSER_VERIFICATION_REQUIRED: &str = "BROWSER_VERIFICATION_REQUIRED";
+}
+
+/// The body Weaver sends with an HTTP refusal. Older Weavers send no body;
+/// routes without a code send `{"error"}` alone.
+#[derive(serde::Deserialize)]
+struct WeaverHttpRefusal {
+    code: Option<String>,
+    error: Option<String>,
 }
 
 /// Compatibility features recognized from async-graphql's schema validator.
@@ -296,12 +317,23 @@ impl From<WeaverRequestError> for AppError {
         match error {
             WeaverRequestError::Refused(refusal) => {
                 let message = format!("weaver GraphQL error: {}", refusal.message);
-                match refusal.schema_feature {
-                    Some(feature) => AppError::RepositoryFailed {
+                match (refusal.schema_feature, refusal.code) {
+                    (Some(feature), _) => AppError::RepositoryFailed {
                         message,
                         reason: feature.reason(),
                     },
-                    None => AppError::Repository(message),
+                    // Weaver named the condition, so it travels typed. A
+                    // refusal without a code Scryer knows stays unclassified.
+                    (None, WeaverErrorCode::NotFound) => AppError::native_client_failed(
+                        PluginFailureReason::from_code(&PluginErrorCode::from(
+                            plugin_codes::ITEM_NOT_FOUND,
+                        )),
+                        message,
+                    ),
+                    (None, WeaverErrorCode::Conflict) => {
+                        AppError::native_client_failed(PluginFailureReason::Permanent, message)
+                    }
+                    (None, WeaverErrorCode::Other) => AppError::Repository(message),
                 }
             }
             WeaverRequestError::Failed(error) => error,
@@ -799,7 +831,7 @@ impl WeaverDownloadClient {
         let body = response
             .text()
             .await
-            .map_err(|err| AppError::Repository(format!("weaver response read failed: {err}")))?;
+            .map_err(|err| weaver_transport_failure("weaver response read", &err))?;
 
         Self::parse_graphql_response_typed(status, &body)
     }
@@ -879,9 +911,10 @@ impl WeaverDownloadClient {
             stage = "response_headers_received",
             "weaver submit stage"
         );
-        let body = response.text().await.map_err(|err| {
-            AppError::Repository(format!("weaver multipart response read failed: {err}"))
-        })?;
+        let body = response
+            .text()
+            .await
+            .map_err(|err| weaver_transport_failure("weaver multipart response read", &err))?;
         debug!(
             request_label,
             stage = "response_body_read",
@@ -906,11 +939,7 @@ impl WeaverDownloadClient {
         T: DeserializeOwned,
     {
         if !status.is_success() {
-            let preview: String = body.chars().take(500).collect();
-            return Err(AppError::Repository(format!(
-                "weaver returned status {status}: {preview}"
-            ))
-            .into());
+            return Err(weaver_http_failure(status, body).into());
         }
 
         let json: GraphqlResponse<T> = serde_json::from_str(body).map_err(|err| {
@@ -1591,10 +1620,56 @@ fn map_weaver_outbound_error(operation: &str, error: OutboundHttpError) -> AppEr
             )
         }
         OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch is closed"),
-        OutboundHttpError::Transport { source, .. } => {
-            AppError::Repository(format!("{operation} failed: {source}"))
-        }
+        OutboundHttpError::Transport { source, .. } => weaver_transport_failure(operation, &source),
     }
+}
+
+/// A request that never produced a usable answer from Weaver: it could not
+/// connect, timed out, or lost the connection mid-response.
+fn weaver_transport_failure(operation: &str, error: &reqwest::Error) -> AppError {
+    AppError::native_client_failed(
+        PluginFailureReason::UpstreamUnavailable,
+        format!("{operation} failed: {error}"),
+    )
+}
+
+/// The one place a non-success HTTP answer from Weaver is classified. A coded
+/// body decides first; the status decides when Weaver sent no code, which an
+/// older Weaver does for a bad bearer key (a bare 401 and no body), so the
+/// sentences here are Scryer's own.
+fn weaver_http_failure(status: reqwest::StatusCode, body: &str) -> AppError {
+    let refusal: Option<WeaverHttpRefusal> = serde_json::from_str(body.trim()).ok();
+    let coded = match refusal.as_ref().and_then(|refusal| refusal.code.as_deref()) {
+        Some(weaver_http_refusal::INVALID_API_KEY) => Some((
+            PluginFailureReason::AuthFailed,
+            "weaver rejected the API key",
+        )),
+        Some(weaver_http_refusal::AUTHENTICATION_REQUIRED) => Some((
+            PluginFailureReason::AuthFailed,
+            "weaver requires an API key and none was sent",
+        )),
+        Some(weaver_http_refusal::BROWSER_VERIFICATION_REQUIRED) => Some((
+            PluginFailureReason::AuthFailed,
+            "weaver refused the request as an unverified browser session",
+        )),
+        _ => None,
+    };
+    if let Some((reason, message)) = coded {
+        return AppError::native_client_failed(reason, message.to_string());
+    }
+    let reason = PluginFailureReason::for_http_status(status);
+    let preview: String = refusal
+        .and_then(|refusal| refusal.error)
+        .unwrap_or_else(|| body.trim().chars().take(500).collect());
+    let message = match (&reason, preview.is_empty()) {
+        (PluginFailureReason::AuthFailed, true) => "weaver rejected the API key".to_string(),
+        (PluginFailureReason::AuthFailed, false) => {
+            format!("weaver rejected the API key: {preview}")
+        }
+        (_, true) => format!("weaver returned status {status}"),
+        (_, false) => format!("weaver returned status {status}: {preview}"),
+    };
+    AppError::native_client_failed(reason, message)
 }
 
 #[async_trait]
@@ -2481,7 +2556,8 @@ mod tests {
 
     use super::{
         QueueItemsPayload, SubmissionPayload, WeaverDownloadClient, WeaverQueueItem,
-        WeaverQueueState, map_weaver_outbound_error, map_weaver_status, weaver_item_to_queue_item,
+        WeaverQueueState, map_weaver_outbound_error, map_weaver_status, weaver_http_failure,
+        weaver_item_to_queue_item,
     };
     use scryer_application::{
         AppError, DownloadClient, DownloadClientAddRequest, DownloadSubmissionPurpose,
@@ -4655,5 +4731,129 @@ mod tests {
                 None => assert!(result.is_err()),
             }
         }
+    }
+
+    fn failure_reason(error: &AppError) -> scryer_application::PluginFailureReason {
+        error
+            .plugin_failure()
+            .unwrap_or_else(|| panic!("expected a typed failure, got {error:?}"))
+            .reason
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn a_bare_401_names_the_rejected_api_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), Some("synthetic-wrong-key".into()));
+
+        let error = client.test_connection().await.expect_err("401");
+
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::AuthFailed
+        );
+        match error {
+            AppError::PluginFailed { message, .. } => {
+                assert_eq!(message, "weaver rejected the API key")
+            }
+            other => panic!("expected PluginFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_coded_invalid_api_key_body_is_matched_by_its_code() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "code": "INVALID_API_KEY",
+                "error": "invalid API key"
+            })))
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), Some("synthetic-wrong-key".into()));
+
+        let error = client.test_connection().await.expect_err("401");
+
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::AuthFailed
+        );
+        match error {
+            AppError::PluginFailed { message, .. } => {
+                assert_eq!(message, "weaver rejected the API key")
+            }
+            other => panic!("expected PluginFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_coded_body_decides_ahead_of_the_status() {
+        // A 503 carrying an auth code is still an auth failure: the code is
+        // Weaver's verdict, the status is only the fallback.
+        let error = weaver_http_failure(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"code":"AUTHENTICATION_REQUIRED","error":"authentication required"}"#,
+        );
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::AuthFailed
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_code_falls_back_to_the_status_and_keeps_weavers_sentence() {
+        let error = weaver_http_failure(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"code":"SOMETHING_NEW","error":"draining"}"#,
+        );
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::UpstreamUnavailable
+        );
+        match error {
+            AppError::PluginFailed { message, .. } => {
+                assert_eq!(
+                    message,
+                    "weaver returned status 503 Service Unavailable: draining"
+                )
+            }
+            other => panic!("expected PluginFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failing_weaver_status_names_an_unavailable_upstream() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("maintenance"))
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let error = client.test_connection().await.expect_err("503");
+
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::UpstreamUnavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_weaver_is_an_unavailable_upstream() {
+        let error = map_weaver_outbound_error(
+            "weaver graphql request",
+            crate::downloads::clients::tests::refused_transport_error("weaver").await,
+        );
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::UpstreamUnavailable
+        );
     }
 }

@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use scryer_domain::MediaFacet;
 
 use crate::location::identity::DestinationIdentityOutcome;
+use crate::location::merge::DestinationIdentityMatch;
+use crate::location::preview::SampledPlanItems;
 use crate::location::transfer_effects::{
     FacetConversion, TitleAssociationFacts, plan_facet_conversion,
 };
@@ -503,6 +505,19 @@ impl TitleClassification {
     pub fn blocks_start(&self) -> bool {
         self.class.blocks_start()
     }
+
+    /// Whether the preview must list this title however large its group is: it
+    /// blocks the start, or detection found a destination title the user has to
+    /// see (a merge target, a same-named title, or ambiguous candidates). Every
+    /// other title is one of many alike and may be sampled.
+    pub fn needs_attention(&self) -> bool {
+        self.blocks_start()
+            || self.same_named_destination_title_id().is_some()
+            || self
+                .destination_identity
+                .as_ref()
+                .is_some_and(|outcome| outcome.match_kind != DestinationIdentityMatch::None)
+    }
 }
 
 /// The complete result of classifying a selection: one entry per selected
@@ -531,6 +546,30 @@ impl SelectionClassification {
             .filter(|title| title.class == class)
             .map(|title| title.title_id.clone())
             .collect()
+    }
+
+    /// One class as a complete count plus a bounded window, the way plan
+    /// sections are sampled. Titles that [need attention] are always listed,
+    /// first and in selection order; at most `sample_limit` of the rest follow.
+    ///
+    /// [need attention]: TitleClassification::needs_attention
+    pub fn sampled_titles_in(
+        &self,
+        class: TitleLocationClass,
+        sample_limit: usize,
+    ) -> SampledPlanItems<&TitleClassification> {
+        let in_class = || self.titles.iter().filter(move |title| title.class == class);
+        let mut items: Vec<&TitleClassification> =
+            in_class().filter(|title| title.needs_attention()).collect();
+        items.extend(
+            in_class()
+                .filter(|title| !title.needs_attention())
+                .take(sample_limit),
+        );
+        SampledPlanItems {
+            total: in_class().count() as i64,
+            items,
+        }
     }
 
     pub fn classification_of(&self, title_id: &str) -> Option<&TitleClassification> {
@@ -1579,5 +1618,132 @@ mod tests {
         assert_eq!(result.counts.catalog_only, 1);
         assert!(result.blocks_start());
         assert_eq!(result.to_classified_titles().len(), 3);
+    }
+
+    fn classified_row(id: &str, class: TitleLocationClass) -> TitleClassification {
+        TitleClassification {
+            title_id: id.to_string(),
+            class,
+            source_library_id: "lib-src".to_string(),
+            source_root_id: "root-src".to_string(),
+            source_folder_path: Some(format!("/src/{id}")),
+            destination_library_id: "lib-dst".to_string(),
+            destination_root_id: "root-dst".to_string(),
+            reason_code: None,
+            reason: None,
+            destination_identity: Some(DestinationIdentityOutcome::transfer()),
+            facet_conversion: None,
+            associations: TitleAssociationFacts::default(),
+        }
+    }
+
+    fn with_identity(
+        mut row: TitleClassification,
+        match_kind: DestinationIdentityMatch,
+    ) -> TitleClassification {
+        let outcome = row
+            .destination_identity
+            .get_or_insert_with(DestinationIdentityOutcome::transfer);
+        outcome.match_kind = match_kind;
+        if match_kind == DestinationIdentityMatch::SameNameNoIdentity {
+            outcome.same_name_title_id = Some(format!("dst-{}", row.title_id));
+            outcome.same_name_title_name = Some("Synthetic Same Name".to_string());
+        }
+        row
+    }
+
+    fn selection_of(titles: Vec<TitleClassification>) -> SelectionClassification {
+        SelectionClassification {
+            titles,
+            counts: ClassificationCounts::default(),
+        }
+    }
+
+    #[test]
+    fn a_large_plain_group_keeps_its_count_and_returns_a_bounded_sample() {
+        let titles = (0..40)
+            .map(|index| {
+                classified_row(
+                    &format!("title-{index:02}"),
+                    TitleLocationClass::CrossLibraryTransfer,
+                )
+            })
+            .collect();
+        let selection = selection_of(titles);
+
+        let sampled = selection.sampled_titles_in(TitleLocationClass::CrossLibraryTransfer, 25);
+
+        assert_eq!(sampled.total, 40);
+        assert_eq!(sampled.items.len(), 25);
+        assert!(!sampled.is_complete());
+        let ids: Vec<&str> = sampled.items.iter().map(|t| t.title_id.as_str()).collect();
+        assert_eq!(ids.first(), Some(&"title-00"));
+        assert_eq!(ids.last(), Some(&"title-24"));
+
+        let small = selection.sampled_titles_in(TitleLocationClass::CrossLibraryTransfer, 40);
+        assert!(small.is_complete());
+        let empty = selection.sampled_titles_in(TitleLocationClass::RootMove, 25);
+        assert_eq!(empty.total, 0);
+        assert!(empty.is_complete());
+    }
+
+    #[test]
+    fn rows_that_need_attention_are_always_listed_first_past_the_limit() {
+        let mut titles: Vec<TitleClassification> = (0..30)
+            .map(|index| {
+                classified_row(
+                    &format!("plain-{index:02}"),
+                    TitleLocationClass::CrossLibraryTransfer,
+                )
+            })
+            .collect();
+        // Placed after the window would close, so only the attention rule can
+        // put them in the sample.
+        titles.push(with_identity(
+            classified_row("merge-a", TitleLocationClass::CrossLibraryTransfer),
+            DestinationIdentityMatch::Unique,
+        ));
+        titles.push(with_identity(
+            classified_row("same-name-a", TitleLocationClass::CrossLibraryTransfer),
+            DestinationIdentityMatch::SameNameNoIdentity,
+        ));
+        let mut blocked: Vec<TitleClassification> = (0..30)
+            .map(|index| {
+                let mut row = classified_row(
+                    &format!("blocked-{index:02}"),
+                    TitleLocationClass::NeedsResolution,
+                );
+                row.reason_code = Some(reason_codes::ACTIVE_DOWNLOAD_OR_IMPORT.to_string());
+                row.reason = Some("synthetic active import".to_string());
+                row
+            })
+            .collect();
+        blocked.push(with_identity(
+            classified_row("ambiguous-a", TitleLocationClass::NeedsResolution),
+            DestinationIdentityMatch::Ambiguous,
+        ));
+        titles.extend(blocked);
+        let mut incompatible = classified_row("incompatible-a", TitleLocationClass::Incompatible);
+        incompatible.reason_code = Some(reason_codes::INCOMPATIBLE_FACET.to_string());
+        titles.push(incompatible);
+        let selection = selection_of(titles);
+
+        let transfers = selection.sampled_titles_in(TitleLocationClass::CrossLibraryTransfer, 25);
+        assert_eq!(transfers.total, 32);
+        assert_eq!(transfers.items.len(), 27);
+        assert_eq!(transfers.items[0].title_id, "merge-a");
+        assert_eq!(transfers.items[1].title_id, "same-name-a");
+        assert_eq!(transfers.items[2].title_id, "plain-00");
+        assert!(!transfers.is_complete());
+
+        let unresolved = selection.sampled_titles_in(TitleLocationClass::NeedsResolution, 25);
+        assert_eq!(unresolved.total, 31);
+        assert_eq!(unresolved.items.len(), 31);
+        assert!(unresolved.is_complete());
+        assert!(unresolved.items.iter().any(|t| t.title_id == "ambiguous-a"));
+
+        let refused = selection.sampled_titles_in(TitleLocationClass::Incompatible, 0);
+        assert_eq!(refused.items.len(), 1);
+        assert!(refused.is_complete());
     }
 }

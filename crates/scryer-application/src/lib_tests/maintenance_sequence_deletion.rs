@@ -12,7 +12,7 @@ use crate::maintenance_rules::storage::{
 };
 use crate::maintenance_rules::{
     MaintenanceActionSequence, MaintenanceActionStep, MaintenanceActionStepKind,
-    MaintenanceActionStepParameters,
+    MaintenanceActionStepParameters, execution_reason,
 };
 use crate::ports::{
     LifecycleActionRunRepository, MaintenanceActionStepRepository, MaintenanceCandidateRepository,
@@ -461,18 +461,14 @@ async fn episode_sequence_unmonitor_then_delete_files_preserves_other_season_rec
 async fn a_fresh_re_monitor_cancels_the_sequence_delete_files_step_and_preserves_files() {
     let fixture = execution_app(None);
     let tempdir = tempfile::tempdir().expect("tempdir");
-    fixture
-        .app
-        .update_media_settings(
-            &fixture.user,
-            MediaFacet::Movie,
-            empty_update_media_settings_with_roots(vec![build_root_folder_entry(
-                tempdir.path(),
-                true,
-            )]),
-        )
-        .await
-        .expect("configure isolated movie root");
+    update_default_library_roots(
+        &fixture.app,
+        &fixture.user,
+        MediaFacet::Movie,
+        vec![build_root_folder_entry(tempdir.path(), true)],
+    )
+    .await
+    .expect("configure isolated movie root");
     let target = seed_title(&fixture.app, &fixture.user, "Re-monitored target", true).await;
     let target_path = tempdir.path().join("target/movie.mkv");
     let target_file_id = add_movie_file(&fixture.app, &target.id, &target_path).await;
@@ -536,7 +532,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     let _probe = install_maintenance_storage_capacity_probe_for_test(probe).await;
     let root_id = selected_root_id(&fixture).await;
     let mut draft = sequence_draft(deletion_steps());
-    draft.storage_root_id = Some(root_id);
+    draft.storage_root_id = Some(root_id.clone());
     let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
     super::maintenance_rules::arm_rule(
         &fixture.execution.app,
@@ -590,33 +586,44 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     let added_target = fixture.root.join("Sequence/external-after-journal.mkv");
     let added_target_id =
         add_movie_file(&fixture.execution.app, &fixture.title.id, &added_target).await;
+    // The selected root keeps its id and moves to another directory between
+    // retries, so the title stays catalogued while the root's physical
+    // identity changes. No evaluation refresh runs first: the subject's files
+    // now sit outside the moved root, so evaluation would retire the
+    // candidate. Handling must hold on the journal's recorded root identity.
     let replacement_root = fixture
         .root
         .parent()
         .expect("fixture root parent")
         .join("replacement-root");
     std::fs::create_dir_all(&replacement_root).expect("create replacement root");
+    let library = fixture
+        .execution
+        .app
+        .services
+        .catalog
+        .libraries
+        .default_for_facet(MediaFacet::Movie)
+        .await
+        .expect("list movie libraries")
+        .expect("default movie library");
     fixture
         .execution
         .app
-        .update_media_settings(
+        .update_library(
             &fixture.execution.user,
-            MediaFacet::Movie,
-            empty_update_media_settings_with_roots(vec![build_root_folder_entry(
-                &replacement_root,
-                true,
-            )]),
+            &library.id,
+            None,
+            Some(vec![LibraryRootDraft {
+                id: Some(root_id.clone()),
+                path: replacement_root.to_string_lossy().into_owned(),
+                is_default: true,
+            }]),
+            None,
         )
         .await
-        .expect("replace selected storage root");
+        .expect("move the selected storage root");
     capacity_recovered.store(true, Ordering::SeqCst);
-    fixture
-        .execution
-        .app
-        .run_maintenance_rule_evaluation_job()
-        .await
-        .expect("refresh matching candidate");
-
     let resumed = fixture
         .execution
         .app
@@ -624,6 +631,46 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
         .await
         .expect("hold an invalidated storage journal");
     assert_eq!(resumed.held, 1, "{resumed:?}");
+    let held_run = fixture
+        .execution
+        .evaluation
+        .latest_scoped_deletion_action_run(
+            &candidate.id,
+            candidate.match_generation,
+            &candidate.action_kind,
+        )
+        .await
+        .expect("read held scoped deletion run")
+        .expect("held DeleteFiles run persists");
+    assert_eq!(
+        held_run.id, deletion_run.id,
+        "the journal's own run is kept"
+    );
+    assert_eq!(held_run.status, LifecycleActionRunStatus::Held);
+    assert_eq!(
+        held_run.hold_reason.as_deref(),
+        Some(execution_reason::UNKNOWN_AT_EXECUTION)
+    );
+    assert_eq!(
+        held_run.finished_at, deletion_run.finished_at,
+        "the identity recheck holds before DeleteFiles re-enters its journal"
+    );
+    assert_eq!(
+        held_run.detail, deletion_run.detail,
+        "the held journal is preserved unchanged"
+    );
+    let current_root_identity = fixture
+        .execution
+        .app
+        .maintenance_storage_root_identity(Some(root_id.as_str()))
+        .await
+        .expect("read current root identity")
+        .expect("moved root has a physical identity");
+    assert_ne!(
+        journal["storage_root_identity"].as_str(),
+        Some(current_root_identity.as_str()),
+        "the journal recorded the root's previous physical identity"
+    );
     assert!(
         !first_path.exists(),
         "the completed policy target stays deleted after drift"
@@ -681,6 +728,193 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
             .expect("persisted DeleteFiles step")
             .state,
         MaintenanceActionStepState::Held
+    );
+    assert_eq!(
+        steps
+            .iter()
+            .find(|step| step.key.step_id == "delete-files")
+            .and_then(|step| step.hold_reason.as_deref()),
+        Some(execution_reason::UNKNOWN_AT_EXECUTION)
+    );
+}
+
+#[tokio::test]
+async fn storage_sequence_holds_in_action_when_its_root_moves_over_the_subjects_files() {
+    let fixture = title_fixture("Sequence root widened", MediaFacet::Movie).await;
+    let first_path = fixture.root.join("Sequence/first.mkv");
+    let first_file_id =
+        add_movie_file(&fixture.execution.app, &fixture.title.id, &first_path).await;
+    let second_path = fixture.root.join("Sequence/second.mkv");
+    let second_file_id =
+        add_movie_file(&fixture.execution.app, &fixture.title.id, &second_path).await;
+    let mut ordered_targets = [(first_file_id, first_path), (second_file_id, second_path)];
+    ordered_targets.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let [(first_file_id, first_path), (second_file_id, second_path)] = ordered_targets;
+    let (probe, capacity_recovered) = capacity_holds_after_file_removal(first_path.clone());
+    let _probe = install_maintenance_storage_capacity_probe_for_test(probe).await;
+    let root_id = selected_root_id(&fixture).await;
+    let mut draft = sequence_draft(deletion_steps());
+    draft.storage_root_id = Some(root_id.clone());
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
+    super::maintenance_rules::arm_rule(
+        &fixture.execution.app,
+        &fixture.execution.user,
+        &rule_set_id,
+        MaintenanceEffectArming::Destructive,
+        Some(1),
+    )
+    .await;
+
+    let first = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("persist storage sequence journal before capacity hold");
+    assert_eq!(first.held, 1, "{first:?}");
+    let deletion_run = fixture
+        .execution
+        .evaluation
+        .latest_scoped_deletion_action_run(
+            &candidate.id,
+            candidate.match_generation,
+            &candidate.action_kind,
+        )
+        .await
+        .expect("read exact scoped deletion journal")
+        .expect("DeleteFiles hold persists its scoped journal");
+    let journal: serde_json::Value =
+        serde_json::from_str(&deletion_run.detail).expect("parse storage journal");
+
+    // The selected root keeps its id and moves up to the directory holding
+    // the fixture root, so the subject's remaining file still sits under it
+    // and handling gets past the pre-dispatch membership check. The root's
+    // physical identity has changed, so DeleteFiles itself must hold before
+    // touching the journaled target.
+    let widened_root = fixture
+        .root
+        .parent()
+        .expect("fixture root parent")
+        .to_path_buf();
+    let library = fixture
+        .execution
+        .app
+        .services
+        .catalog
+        .libraries
+        .default_for_facet(MediaFacet::Movie)
+        .await
+        .expect("list movie libraries")
+        .expect("default movie library");
+    fixture
+        .execution
+        .app
+        .update_library(
+            &fixture.execution.user,
+            &library.id,
+            None,
+            Some(vec![LibraryRootDraft {
+                id: Some(root_id.clone()),
+                path: widened_root.to_string_lossy().into_owned(),
+                is_default: true,
+            }]),
+            None,
+        )
+        .await
+        .expect("move the selected storage root over the subject's files");
+    capacity_recovered.store(true, Ordering::SeqCst);
+    let current_root_identity = fixture
+        .execution
+        .app
+        .maintenance_storage_root_identity(Some(root_id.as_str()))
+        .await
+        .expect("read current root identity")
+        .expect("moved root has a physical identity");
+    assert_ne!(
+        journal["storage_root_identity"].as_str(),
+        Some(current_root_identity.as_str()),
+        "the journal recorded the root's previous physical identity"
+    );
+
+    // The pass right after the move holds in action, and so does the next
+    // one: the hold keeps the journal, so the later pass still sees that its
+    // root moved instead of starting over without a checkpoint.
+    for pass in ["first pass after the move", "second pass after the move"] {
+        let report = fixture
+            .execution
+            .app
+            .run_lifecycle_action_handling_job()
+            .await
+            .expect("hold a storage journal whose root identity changed");
+        assert_eq!(report.held, 1, "{pass}: {report:?}");
+        assert_eq!(report.executed, 0, "{pass}: {report:?}");
+        let held_run = fixture
+            .execution
+            .evaluation
+            .latest_scoped_deletion_action_run(
+                &candidate.id,
+                candidate.match_generation,
+                &candidate.action_kind,
+            )
+            .await
+            .expect("read held scoped deletion run")
+            .unwrap_or_else(|| panic!("{pass}: the held run still carries its journal"));
+        assert_eq!(held_run.id, deletion_run.id, "{pass}");
+        assert_eq!(held_run.status, LifecycleActionRunStatus::Held, "{pass}");
+        assert_eq!(
+            held_run.hold_reason.as_deref(),
+            Some(execution_reason::UNKNOWN_AT_EXECUTION),
+            "{pass}"
+        );
+        assert_ne!(held_run.finished_at, deletion_run.finished_at, "{pass}");
+        let held_journal: serde_json::Value =
+            serde_json::from_str(&held_run.detail).expect("parse held journal");
+        assert_eq!(held_journal["scoped_deletion"], 1, "{pass}");
+        assert_eq!(
+            held_journal["storage_root_identity"], journal["storage_root_identity"],
+            "{pass}"
+        );
+        assert_eq!(held_journal["files"], journal["files"], "{pass}");
+        // The in-action identity check is what held it; the pre-dispatch
+        // hold neither re-enters the run nor records a hold detail.
+        assert_eq!(
+            held_journal["hold"]["reason"].as_str(),
+            Some("storage_root_identity_changed"),
+            "{pass}: {held_journal}"
+        );
+        assert!(
+            !first_path.exists(),
+            "{pass}: the completed target stays deleted"
+        );
+        assert!(
+            second_path.exists(),
+            "{pass}: the journaled target is preserved"
+        );
+        assert!(
+            fixture
+                .execution
+                .app
+                .services
+                .library
+                .media_files
+                .get_media_file_by_id(&second_file_id)
+                .await
+                .expect("read preserved storage row")
+                .is_some(),
+            "{pass}"
+        );
+    }
+    assert!(
+        fixture
+            .execution
+            .app
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(&first_file_id)
+            .await
+            .expect("read completed storage row")
+            .is_none()
     );
 }
 

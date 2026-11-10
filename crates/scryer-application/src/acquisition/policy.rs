@@ -1,16 +1,18 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 
-use crate::scoring_weights::ScoringPersona;
+use crate::quality_profile::{DEFAULT_MIN_UPGRADE_SCORE_DELTA, QualityProfileCriteria};
 
-/// Episodes become searchable six hours before air time.
-pub(crate) const EPISODE_PRE_AIR_WINDOW_HOURS: i64 = 6;
+/// Episodes become searchable twelve hours before air time, for active search
+/// and for automatic RSS grabs alike.
+pub(crate) const EPISODE_PRE_AIR_WINDOW_HOURS: i64 = 12;
 
-/// Configurable thresholds for the acquisition upgrade policy.
+/// Thresholds for the acquisition upgrade policy.
 ///
-/// Only a same-tier score delta is configurable. Tier is compared before score,
-/// in [`crate::admission`], so a better tier admits outright and a delta only
-/// ever describes a same-tier comparison. There is no upgrade cooldown, and so
-/// no large-delta bypass of one; [`crate::admission`] explains why.
+/// Only a same-tier score delta is configurable, and it belongs to the title's
+/// quality profile. Tier is compared before score, in [`crate::admission`], so a
+/// better tier admits outright and a delta only ever describes a same-tier
+/// comparison. There is no upgrade cooldown, and so no large-delta bypass of
+/// one; [`crate::admission`] explains why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcquisitionThresholds {
     pub same_tier_min_delta: i32,
@@ -18,23 +20,17 @@ pub struct AcquisitionThresholds {
 
 impl Default for AcquisitionThresholds {
     fn default() -> Self {
-        Self::for_persona(&ScoringPersona::Balanced)
+        Self {
+            same_tier_min_delta: DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+        }
     }
 }
 
 impl AcquisitionThresholds {
-    /// Build thresholds tuned to the given scoring persona.
-    pub fn for_persona(persona: &ScoringPersona) -> Self {
-        match persona {
-            ScoringPersona::Audiophile => Self {
-                same_tier_min_delta: 50,
-            },
-            ScoringPersona::Balanced | ScoringPersona::Compatible => Self {
-                same_tier_min_delta: 200,
-            },
-            ScoringPersona::Efficient => Self {
-                same_tier_min_delta: 150,
-            },
+    /// The thresholds a title's quality profile asks for.
+    pub fn for_profile(criteria: &QualityProfileCriteria) -> Self {
+        Self {
+            same_tier_min_delta: criteria.min_upgrade_score_delta_or_default(),
         }
     }
 }
@@ -58,8 +54,12 @@ pub(crate) fn episode_search_window_is_open(
     baseline_date: Option<&str>,
     now: &DateTime<Utc>,
 ) -> bool {
+    episode_search_not_before(baseline_date).is_some_and(|opens_at| *now >= opens_at)
+}
+
+pub(crate) fn episode_search_not_before(baseline_date: Option<&str>) -> Option<DateTime<Utc>> {
     parse_schedule_baseline_date(baseline_date)
-        .is_some_and(|baseline| *now >= baseline - Duration::hours(EPISODE_PRE_AIR_WINDOW_HOURS))
+        .map(|baseline| baseline - Duration::hours(EPISODE_PRE_AIR_WINDOW_HOURS))
 }
 
 /// How old a file has to be before Scryer stops chasing PROPERs for it.
@@ -137,28 +137,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_audiophile_thresholds_are_aggressive() {
-        let t = AcquisitionThresholds::for_persona(&ScoringPersona::Audiophile);
-        assert_eq!(t.same_tier_min_delta, 50);
+    fn a_profile_without_a_delta_uses_the_default() {
+        let criteria = QualityProfileCriteria::default();
+        assert_eq!(criteria.min_upgrade_score_delta, None);
+        assert_eq!(
+            AcquisitionThresholds::for_profile(&criteria).same_tier_min_delta,
+            DEFAULT_MIN_UPGRADE_SCORE_DELTA
+        );
+        assert_eq!(
+            AcquisitionThresholds::for_profile(&criteria),
+            AcquisitionThresholds::default()
+        );
     }
 
     #[test]
-    fn test_balanced_thresholds_are_conservative() {
-        let t = AcquisitionThresholds::for_persona(&ScoringPersona::Balanced);
-        assert_eq!(t.same_tier_min_delta, 200);
-    }
-
-    #[test]
-    fn test_efficient_thresholds_moderate() {
-        let t = AcquisitionThresholds::for_persona(&ScoringPersona::Efficient);
-        assert_eq!(t.same_tier_min_delta, 150);
-    }
-
-    #[test]
-    fn test_compatible_matches_balanced() {
-        let balanced = AcquisitionThresholds::for_persona(&ScoringPersona::Balanced);
-        let compatible = AcquisitionThresholds::for_persona(&ScoringPersona::Compatible);
-        assert_eq!(balanced, compatible);
+    fn a_profile_delta_replaces_the_default() {
+        let criteria = QualityProfileCriteria {
+            min_upgrade_score_delta: Some(5),
+            ..QualityProfileCriteria::default()
+        };
+        assert_eq!(
+            AcquisitionThresholds::for_profile(&criteria).same_tier_min_delta,
+            5
+        );
+        let zero = QualityProfileCriteria {
+            min_upgrade_score_delta: Some(0),
+            ..QualityProfileCriteria::default()
+        };
+        assert_eq!(
+            AcquisitionThresholds::for_profile(&zero).same_tier_min_delta,
+            0
+        );
     }
 }
 

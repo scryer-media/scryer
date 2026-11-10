@@ -15,12 +15,13 @@ use scryer_application::{
     DiscoveryContextSnapshotPageResult, DiscoveryContextSnapshotStatusResult,
     DiscoveryContextSnapshotSubmitInput, DiscoveryContextSnapshotSubmitResult,
     DiscoveryDashboardResult, DiscoveryPublicFeedInput, DiscoveryRelatedResult, EpisodeArtworkUrls,
-    EpisodeMetadata, MdblistSummary, MetadataGateway, MetadataSearchItem, MetadataSearchQuery,
-    MovieMetadata, MovieTitleBulkResult, MovieTitleRef, MultiMetadataSearchResult,
-    RateLimitCooldownAction, RichMetadataSearchItem, SeasonMetadata, SeriesArtworkUrls,
-    SeriesMetadata, SeriesTitleBulkResult, SeriesTitleRef, SettingsRepository,
-    SmgScryerUpdateNotice, TitleArtworkUrls, TitleAward, TitleCredit, TitleExternalRating,
-    TitleExternalRef, TitleRatingSummary, TitleRecommendationsInput, TitleResolution,
+    EpisodeMetadata, LibraryGraphGatewayInput, LibraryGraphGatewayResult, MdblistSummary,
+    MetadataGateway, MetadataSearchItem, MetadataSearchQuery, MovieMetadata, MovieTitleBulkResult,
+    MovieTitleRef, MultiMetadataSearchResult, RateLimitCooldownAction, RichMetadataSearchItem,
+    SeasonMetadata, SeriesArtworkUrls, SeriesMetadata, SeriesTitleBulkResult, SeriesTitleRef,
+    SettingsRepository, SmgScryerUpdateNotice, TitleArtworkUrls, TitleAward, TitleCredit,
+    TitleExternalRating, TitleExternalRef, TitleRatingSummary, TitleRecommendationsInput,
+    TitleResolution,
 };
 use scryer_domain::{
     AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, CanonicalMediaTag,
@@ -91,6 +92,8 @@ pub use list_accounts::HttpListAccountAuthGateway;
 /// Do not reuse it for anything else. First-party hashing goes through
 /// `scryer_application::blake3_identity_hex` — see `blake3_digest` just below,
 /// which is what the *local* half of the APQ cache key uses.
+// GraphQL APQ keys the gateway registry on SHA-256 of the query text.
+#[allow(clippy::disallowed_methods)]
 fn sha256_hex(input: &str) -> String {
     let hash = digest::digest(&digest::SHA256, input.as_bytes());
     hash.as_ref()
@@ -130,6 +133,7 @@ const OP_TITLE_RECOMMENDATIONS: &str = "TitleRecommendations";
 const OP_DISCOVER_PUBLIC_FEED: &str = "DiscoverPublicFeed";
 const OP_COLLECTION_COMPLETIONS: &str = "CollectionCompletions";
 const OP_SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT: &str = "SubmitDiscoveryContextSnapshot";
+const OP_LIBRARY_GRAPH: &str = "LibraryGraph";
 const OP_DISCOVERY_CONTEXT_SNAPSHOT_STATUS: &str = "DiscoveryContextSnapshotStatus";
 const OP_DISCOVERY_CONTEXT_SNAPSHOT_PAGE: &str = "DiscoveryContextSnapshotPage";
 const OP_DISCOVERY_CONTEXT_CHANGES: &str = "DiscoveryContextChanges";
@@ -162,6 +166,8 @@ enum MtlsState {
 }
 
 /// SHA-256 hex digest of a byte slice (for request body hashing).
+// SMG request signing fixes the body digest as SHA-256.
+#[allow(clippy::disallowed_methods)]
 fn sha256_hex_bytes(data: &[u8]) -> String {
     let hash = digest::digest(&digest::SHA256, data);
     hash.as_ref()
@@ -447,11 +453,12 @@ fn is_version_incompatible_response(body: &[u8]) -> bool {
 }
 
 fn compatibility_poll_phase(instance_id: &str) -> Duration {
-    let digest = digest::digest(&digest::SHA256, instance_id.as_bytes());
-    let mut raw = [0_u8; 8];
-    raw.copy_from_slice(&digest.as_ref()[..8]);
-    let offset_secs =
-        u64::from_be_bytes(raw) % METADATA_GATEWAY_COMPATIBILITY_POLL_INTERVAL.as_secs();
+    let digest = scryer_application::blake3_identity_hex(
+        scryer_application::HashDomain::GatewayCompatibilityPollPhase,
+        instance_id,
+    );
+    let offset_secs = u64::from_str_radix(&digest[..16], 16).unwrap_or_default()
+        % METADATA_GATEWAY_COMPATIBILITY_POLL_INTERVAL.as_secs();
     Duration::from_secs(offset_secs)
 }
 
@@ -507,6 +514,7 @@ pub struct MetadataGatewayClient {
     title_recommendations_hash: String,
     collection_completions_hash: String,
     submit_discovery_context_snapshot_hash: String,
+    library_graph_hash: String,
     discovery_context_snapshot_status_hash: String,
     discovery_context_snapshot_page_hash: String,
     discovery_context_changes_hash: String,
@@ -533,6 +541,7 @@ impl MetadataGatewayClient {
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
         let submit_discovery_context_snapshot_hash =
             apq_hash(graphql_docs::SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT_QUERY);
+        let library_graph_hash = apq_hash(graphql_docs::LIBRARY_GRAPH_QUERY);
         let discovery_context_snapshot_status_hash =
             apq_hash(graphql_docs::DISCOVERY_CONTEXT_SNAPSHOT_STATUS_QUERY);
         let discovery_context_snapshot_page_hash =
@@ -562,6 +571,7 @@ impl MetadataGatewayClient {
             %title_recommendations_hash,
             %collection_completions_hash,
             %submit_discovery_context_snapshot_hash,
+            %library_graph_hash,
             %discovery_context_snapshot_status_hash,
             %discovery_context_snapshot_page_hash,
             %discovery_context_changes_hash,
@@ -596,6 +606,7 @@ impl MetadataGatewayClient {
             title_recommendations_hash,
             collection_completions_hash,
             submit_discovery_context_snapshot_hash,
+            library_graph_hash,
             discovery_context_snapshot_status_hash,
             discovery_context_snapshot_page_hash,
             discovery_context_changes_hash,
@@ -627,6 +638,7 @@ impl MetadataGatewayClient {
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
         let submit_discovery_context_snapshot_hash =
             apq_hash(graphql_docs::SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT_QUERY);
+        let library_graph_hash = apq_hash(graphql_docs::LIBRARY_GRAPH_QUERY);
         let discovery_context_snapshot_status_hash =
             apq_hash(graphql_docs::DISCOVERY_CONTEXT_SNAPSHOT_STATUS_QUERY);
         let discovery_context_snapshot_page_hash =
@@ -670,6 +682,7 @@ impl MetadataGatewayClient {
             title_recommendations_hash,
             collection_completions_hash,
             submit_discovery_context_snapshot_hash,
+            library_graph_hash,
             discovery_context_snapshot_status_hash,
             discovery_context_snapshot_page_hash,
             discovery_context_changes_hash,
@@ -1726,6 +1739,10 @@ impl MetadataGatewayClient {
         })?;
 
         if let Some(errors) = parsed.errors {
+            if let Some(error) = errors.iter().find_map(classify_graphql_error) {
+                warn!(error = %error, "metadata gateway refused the request");
+                return Err(error);
+            }
             let message = errors
                 .first()
                 .map(|error| error.message.as_str())
@@ -2618,6 +2635,8 @@ mod tests {
             {"source": "tvdb", "kind": "Series", "id": "307111", "key": "tvdb:series:307111"},
             {"source": "anidb", "kind": "anime", "id": "11851", "key": "anidb:anime:11851"},
             {"source": "smg", "kind": "title", "id": "3036496", "key": "smg:title:3036496"},
+            // Search results kind SMG's own id by facet; it is still a title id.
+            {"source": "smg", "kind": "movie", "id": "2788780", "key": "smg:title:2788780"},
             // Blank source or id is dropped as before.
             {"source": "  ", "kind": "movie", "id": "1"},
             {"source": "imdb", "kind": "movie", "id": "   "}
@@ -2635,6 +2654,7 @@ mod tests {
                 "tvdb:series:307111".to_string(),
                 "anidb:anime:11851".to_string(),
                 "smg:title:3036496".to_string(),
+                "smg:title:2788780".to_string(),
             ]
         );
     }
@@ -2697,6 +2717,9 @@ mod tests {
             }
             "submit_discovery_context_snapshot" => {
                 json!({ "input": { "subjects": (1..=30_000).map(|id| json!({ "key": format!("tvdb:series:{id}"), "kind": "series" })).collect::<Vec<_>>(), "region": "US", "language": "eng", "maxItems": 50, "includeOwned": true, "includeUnresolved": false } })
+            }
+            "library_graph" => {
+                json!({ "input": { "subjects": (1..=10_000).map(|id| json!({ "key": format!("tvdb:series:{id}"), "kind": "series" })).collect::<Vec<_>>(), "axis": "SEMANTIC", "neighborsPerNode": 8, "minCosine": 0.55 } })
             }
             "discovery_context_snapshot_status" | "acknowledge_discovery_context_snapshot" => {
                 json!({ "requestId": "fixture-request" })
@@ -2800,6 +2823,11 @@ mod tests {
                 super::OP_ACKNOWLEDGE_DISCOVERY_CONTEXT_SNAPSHOT,
                 graphql_docs::ACKNOWLEDGE_DISCOVERY_CONTEXT_SNAPSHOT_QUERY,
             ),
+            (
+                "library_graph",
+                super::OP_LIBRARY_GRAPH,
+                graphql_docs::LIBRARY_GRAPH_QUERY,
+            ),
         ];
         let mut cases = documents.into_iter().map(|(name, operation_name, query)| json!({ "name": name, "query": query, "operationName": operation_name, "variables": smg_fixture_variables(name) })).collect::<Vec<_>>();
         let movie_ids = (1..=100).collect::<Vec<_>>();
@@ -2819,7 +2847,7 @@ mod tests {
             let encoded = serde_json::to_vec_pretty(&corpus).expect("serialize fixture corpus");
             std::fs::write(path, encoded).expect("write fixture corpus");
         }
-        assert_eq!(corpus.len(), 22);
+        assert_eq!(corpus.len(), 23);
         assert_eq!(
             corpus[5]["variables"]["movieTvdbIds"]
                 .as_array()
@@ -2833,7 +2861,7 @@ mod tests {
             Some(50)
         );
         assert_eq!(
-            corpus[19]["query"]
+            corpus[20]["query"]
                 .as_str()
                 .expect("movie query")
                 .matches(": movie(")
@@ -2841,7 +2869,7 @@ mod tests {
             100
         );
         assert_eq!(
-            corpus[20]["query"]
+            corpus[21]["query"]
                 .as_str()
                 .expect("series query")
                 .matches(": series(")
@@ -2849,18 +2877,46 @@ mod tests {
             100
         );
         assert_eq!(
-            corpus[21]["query"]
+            corpus[22]["query"]
                 .as_str()
                 .expect("combined query")
                 .matches(": movie(")
                 .count()
-                + corpus[21]["query"]
+                + corpus[22]["query"]
                     .as_str()
                     .expect("combined query")
                     .matches(": series(")
                     .count(),
             100
         );
+    }
+
+    #[test]
+    fn queue_full_graphql_error_is_classified_from_its_code() {
+        let error: super::GraphqlError = serde_json::from_value(json!({
+            "message": "libraryGraph is at capacity; retry shortly",
+            "extensions": { "code": "QUEUE_FULL", "retry_after_seconds": 5 }
+        }))
+        .expect("graphql error");
+        let classified = super::classify_graphql_error(&error).expect("queue full is classified");
+        assert_eq!(
+            classified.reason(),
+            Some(scryer_application::error_reasons::metadata_gateway::QUEUE_FULL)
+        );
+        match classified {
+            AppError::TemporaryUnavailable { retry_after, .. } => {
+                assert_eq!(retry_after, Some(Duration::from_secs(5)));
+            }
+            other => panic!("expected temporary unavailable, got {other:?}"),
+        }
+
+        // The same words without the code stay a generic error.
+        let uncoded: super::GraphqlError = serde_json::from_value(json!({
+            "message": "QUEUE_FULL: libraryGraph is at capacity",
+            "extensions": { "code": "INTERNAL" }
+        }))
+        .expect("graphql error");
+        assert!(super::classify_graphql_error(&uncoded).is_none());
     }
 
     #[test]
@@ -3262,10 +3318,14 @@ mod tests {
 
         assert!(graphql_docs::METADATA_BULK_QUERY.contains("metadataBulk"));
         assert!(graphql_docs::METADATA_BULK_QUERY.contains("external_ratings"));
-        assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases"));
-        assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases { name language country }"));
-        assert!(graphql_docs::METADATA_BULK_QUERY.contains("tagged_aliases"));
-        assert!(graphql_docs::METADATA_BULK_QUERY.contains("    country\n  }"));
+        // SMG's TvdbAlias has no country field yet; selecting it would fail validation.
+        assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases { name language }"));
+        assert!(
+            graphql_docs::METADATA_BULK_QUERY
+                .contains("  tagged_aliases {\n    name\n    language\n  }\n")
+        );
+        assert!(!graphql_docs::TITLES_QUERY.contains("tagged_aliases { name language country"));
+        assert!(!graphql_docs::METADATA_BULK_QUERY.contains("    language\n    country\n"));
         assert!(
             queries
                 .iter()
@@ -4434,6 +4494,81 @@ mod tests {
     }
 
     #[test]
+    fn title_recommendations_response_maps_groups_and_group_ids() {
+        assert!(graphql_docs::TITLE_RECOMMENDATIONS_QUERY.contains("group_id"));
+        assert!(graphql_docs::TITLE_RECOMMENDATIONS_QUERY.contains("groups {"));
+        let title = |target_key: &str, group_id: serde_json::Value| {
+            json!({
+                "target_key": target_key,
+                "target_kind": "movie",
+                "resolved": true,
+                "resolved_title_id": "",
+                "display_title": format!("Fixture {target_key}"),
+                "original_title": "",
+                "poster_path": "",
+                "poster_url": "",
+                "overview": "",
+                "content_type": "movie",
+                "rating": null,
+                "background_url": "",
+                "source_count": 1,
+                "edge_count": 1,
+                "relation_count": 1,
+                "source_subject_count": 1,
+                "rank_score": 0.5,
+                "best_source": "tmdb",
+                "tmdb_collection_id": null,
+                "group_id": group_id,
+            })
+        };
+        let response: super::TitleRecommendationsResponse = serde_json::from_value(json!({
+            "titleRecommendations": {
+                "subject_key": "tmdb:movie:1",
+                "query": "",
+                "generated_at": "2026-01-02T00:00:00Z",
+                "results": [
+                    title("tmdb:movie:2", json!(0)),
+                    title("tmdb:movie:3", json!(1)),
+                    title("tmdb:movie:4", serde_json::Value::Null),
+                ],
+                "groups": [
+                    { "id": 0, "label_key": "canonical:theme:heist", "label": "Heist", "medoid": "tmdb:movie:2", "size": 1 },
+                    { "id": 1, "label_key": null, "label": "Fixture tmdb:movie:3", "medoid": "tmdb:movie:3", "size": 1 }
+                ]
+            }
+        }))
+        .expect("grouped recommendations should decode");
+        let result = response.title_recommendations;
+        assert_eq!(
+            result
+                .results
+                .iter()
+                .map(|title| title.group_id)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), None]
+        );
+        assert_eq!(
+            result.groups,
+            vec![
+                scryer_application::DiscoveryRelatedGroup {
+                    id: 0,
+                    label_key: Some("canonical:theme:heist".to_string()),
+                    label: "Heist".to_string(),
+                    medoid: "tmdb:movie:2".to_string(),
+                    size: 1,
+                },
+                scryer_application::DiscoveryRelatedGroup {
+                    id: 1,
+                    label_key: None,
+                    label: "Fixture tmdb:movie:3".to_string(),
+                    medoid: "tmdb:movie:3".to_string(),
+                    size: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn discovery_queries_use_discovery_rating_provenance_shape() {
         let queries = [
             graphql_docs::DISCOVER_PUBLIC_FEED_QUERY,
@@ -4493,6 +4628,43 @@ mod tests {
                 selections,
                 "every affinity_signals selection must request rail_eligible"
             );
+        }
+    }
+
+    /// The gateway serves `rail_label_eligible` only from a release that is not
+    /// deployed yet, and Scryer never probes for an older gateway, so no
+    /// document may select it until that release is live. Rail labels are gated
+    /// by Scryer's own allowlist mirror meanwhile.
+    #[test]
+    fn current_smg_queries_omit_rail_label_eligible() {
+        let documents_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/metadata/gateway/metadata_gateway");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&documents_dir).expect("gateway documents directory") {
+            let path = entry.expect("gateway document entry").path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("graphql") {
+                continue;
+            }
+            let document = std::fs::read_to_string(&path).expect("gateway document");
+            assert!(
+                !document.contains("rail_label_eligible"),
+                "{} selects rail_label_eligible before the gateway serves it",
+                path.display()
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "no gateway documents were checked");
+        for query in [
+            graphql_docs::DISCOVER_PUBLIC_FEED_QUERY,
+            graphql_docs::DISCOVERY_CONTEXT_SNAPSHOT_PAGE_QUERY,
+            graphql_docs::DISCOVERY_CONTEXT_CHANGES_QUERY,
+            graphql_docs::COLLECTION_COMPLETIONS_QUERY,
+            graphql_docs::TITLE_RECOMMENDATIONS_QUERY,
+            graphql_docs::GET_MOVIE_QUERY,
+            graphql_docs::METADATA_BULK_QUERY,
+            graphql_docs::TITLES_QUERY,
+        ] {
+            assert!(!query.contains("rail_label_eligible"));
         }
     }
 
@@ -5745,6 +5917,33 @@ struct GraphqlError {
     extensions: Option<serde_json::Value>,
 }
 
+/// `extensions.code` the gateway serves when every slot for an operation is
+/// busy, next to `extensions.retry_after_seconds`.
+const GRAPHQL_ERROR_CODE_QUEUE_FULL: &str = "QUEUE_FULL";
+
+/// Maps a GraphQL error the gateway tags with a known `extensions.code` to a
+/// typed error. Errors without a known code stay with the caller's generic
+/// handling.
+fn classify_graphql_error(error: &GraphqlError) -> Option<AppError> {
+    let extensions = error.extensions.as_ref()?;
+    let code = extensions.get("code")?.as_str()?;
+    match code {
+        GRAPHQL_ERROR_CODE_QUEUE_FULL => {
+            let retry_after = extensions
+                .get("retry_after_seconds")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|seconds| *seconds > 0)
+                .map(Duration::from_secs);
+            Some(AppError::temporary_unavailable_reason(
+                scryer_application::error_reasons::metadata_gateway::QUEUE_FULL,
+                error.message.clone(),
+                retry_after,
+            ))
+        }
+        _ => None,
+    }
+}
+
 // --- Discovery types ---
 
 #[derive(Deserialize)]
@@ -5763,6 +5962,12 @@ struct TitleRecommendationsResponse {
 struct CollectionCompletionsResponse {
     #[serde(rename = "collectionCompletions")]
     collection_completions: DiscoveryCollectionCompletionResult,
+}
+
+#[derive(Deserialize)]
+struct LibraryGraphResponse {
+    #[serde(rename = "libraryGraph")]
+    library_graph: LibraryGraphGatewayResult,
 }
 
 #[derive(Deserialize)]
@@ -6347,12 +6552,20 @@ fn external_ids_from_gateway(items: Vec<MetadataExternalIdItem>) -> Vec<External
     items
         .into_iter()
         .filter_map(|item| {
-            let kind = scryer_domain::normalize_external_id_kind(&item.kind);
             let source = item.source.trim();
             let value = item.id.trim();
             if source.is_empty() || value.is_empty() {
                 return None;
             }
+            // SMG's own id always names one of its titles (its key is
+            // `smg:title:N`), but search results kind it by facet. Hydration
+            // stores it as `title`, so a facet kind here kept a second copy of
+            // the same id on every title.
+            let kind = if source.eq_ignore_ascii_case("smg") {
+                Some("title".to_string())
+            } else {
+                scryer_domain::normalize_external_id_kind(&item.kind)
+            };
             Some(match kind {
                 Some(kind) => ExternalId::with_kind(source, kind, value),
                 None => ExternalId::new(source, value),
@@ -7751,6 +7964,21 @@ impl MetadataGateway for MetadataGatewayClient {
             item.apply_rating_provenance();
         }
         Ok(result)
+    }
+
+    async fn library_graph(
+        &self,
+        input: &LibraryGraphGatewayInput,
+    ) -> AppResult<LibraryGraphGatewayResult> {
+        let data: LibraryGraphResponse = self
+            .execute_graphql_apq_post(
+                OP_LIBRARY_GRAPH,
+                graphql_docs::LIBRARY_GRAPH_QUERY,
+                &self.library_graph_hash,
+                json!({ "input": input }),
+            )
+            .await?;
+        Ok(data.library_graph)
     }
 
     async fn submit_discovery_context_snapshot(

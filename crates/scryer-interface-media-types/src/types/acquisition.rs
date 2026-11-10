@@ -305,6 +305,25 @@ pub struct QualityProfileDecisionPayload {
     pub preference_score: i32,
     /// Ordered scoring contributions used to compute the decision.
     pub scoring_log: Vec<ScoringEntryPayload>,
+    /// Standing against the title's audio language preferences.
+    pub audio_language: AudioLanguageRankPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+/// How a release or file ranks against the title's audio language preferences.
+/// Every field is neutral when no preferences are configured.
+pub struct AudioLanguageRankPayload {
+    /// Position of the first preferred language present; 0 is best, and the
+    /// length of the preferred list means none is present.
+    pub preferred_rank: i32,
+    /// Length of the preferred list; 0 when no preferred language is configured.
+    pub preferred_count: i32,
+    /// How many of the optional languages are present.
+    pub optional_hits: i32,
+    /// Whether the preferred language is compared before the quality tier.
+    pub language_first: bool,
+    /// Whether the preferences still want something this release lacks.
+    pub wanted: bool,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1779,6 +1798,10 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     pub elapsed_ms: Option<i32>,
     /// Failure reason, or null when the indexer did not fail.
     pub failure_reason: Option<String>,
+    /// Stable code for a failure the operator must act on, such as
+    /// `ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
+    /// not loaded; null for other failures and when the indexer did not fail.
+    pub failure_reason_code: Option<String>,
     /// How the capabilities used for this indexer were obtained, or null
     /// before they were resolved.
     pub caps_source: Option<IndexerCapsSourceValue>,
@@ -1795,6 +1818,20 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     pub skip_reason: Option<InteractiveReleaseSearchSkipReasonValue>,
     /// UTC time a skip that lifts on its own ends, when known.
     pub skipped_until: Option<DateTime<Utc>>,
+    /// Releases this indexer returned that a title search removed because no
+    /// enabled download client accepts them, one entry per missing client
+    /// family. They are not counted in `resultCount`.
+    pub unroutable_results: Vec<InteractiveReleaseSearchUnroutableResultsPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Releases one indexer returned that no enabled download client can take.
+pub struct InteractiveReleaseSearchUnroutableResultsPayload {
+    /// Stable reason code naming the missing download client family, such as
+    /// `RELEASE_SEARCH_NO_TORRENT_CLIENT`.
+    pub reason: String,
+    /// How many of the indexer's releases were removed for this reason.
+    pub count: i32,
 }
 
 #[derive(SimpleObject, Clone)]

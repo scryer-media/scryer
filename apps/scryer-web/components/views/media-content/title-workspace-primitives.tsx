@@ -11,12 +11,15 @@ export function TitleWorkspaceHero({
   backgroundUrl,
   closeLabel,
   onClose,
+  leadingAction,
   headerActions,
   children,
 }: {
   backgroundUrl?: string | null;
   closeLabel: string;
   onClose: () => void;
+  /** Sits in the top left corner, opposite the close button. */
+  leadingAction?: React.ReactNode;
   headerActions?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -42,21 +45,26 @@ export function TitleWorkspaceHero({
         />
       ) : null}
       <div className="absolute inset-0 bg-[linear-gradient(105deg,color-mix(in_srgb,var(--scry-bg)_96%,transparent)_30%,color-mix(in_srgb,var(--scry-bg)_55%,transparent)_70%,color-mix(in_srgb,var(--scry-bg)_20%,transparent))]" />
-      <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
-      <div className="absolute right-2.5 top-2.5 z-10 flex items-center gap-1.5">
-        {headerActions}
-        <ActionTooltip content={closeLabel}>
-          <button
-            type="button"
-            aria-label={closeLabel}
-            className="flex size-8 items-center justify-center rounded-[9px] border border-[var(--scry-border2)] bg-background/90 text-foreground backdrop-blur-md transition hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={onClose}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </ActionTooltip>
+      <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
+      <div className="pointer-events-none absolute inset-x-2.5 top-2.5 z-10 flex items-center justify-between gap-1.5">
+        {leadingAction ? (
+          <div className="pointer-events-auto">{leadingAction}</div>
+        ) : null}
+        <div className="pointer-events-auto ml-auto flex items-center gap-1.5">
+          {headerActions}
+          <ActionTooltip content={closeLabel}>
+            <button
+              type="button"
+              aria-label={closeLabel}
+              className="flex size-8 items-center justify-center rounded-[9px] border border-[var(--scry-border2)] bg-background/90 text-foreground backdrop-blur-md transition hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </ActionTooltip>
+        </div>
       </div>
-      <div className="relative flex flex-col gap-4 p-[18px] sm:flex-row sm:pr-16">
+      <div className="relative flex flex-col gap-4 p-[18px] sm:flex-row">
         {children}
       </div>
     </section>
@@ -64,12 +72,20 @@ export function TitleWorkspaceHero({
 }
 
 export function TitleWorkspacePosterFrame({
+  belowLeadingAction = false,
   children,
 }: {
+  /** Drops the poster clear of the hero's leading action once they share a column. */
+  belowLeadingAction?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="relative mx-auto h-[300px] w-[200px] shrink-0 overflow-hidden rounded-[9px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] shadow-[0_4px_14px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_22px_rgba(0,0,0,0.5)] sm:mx-0">
+    <div
+      className={cn(
+        "relative mx-auto h-[300px] w-[200px] shrink-0 overflow-hidden rounded-[9px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] shadow-[0_4px_14px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_22px_rgba(0,0,0,0.5)] sm:mx-0",
+        belowLeadingAction && "sm:mt-7",
+      )}
+    >
       {children}
     </div>
   );

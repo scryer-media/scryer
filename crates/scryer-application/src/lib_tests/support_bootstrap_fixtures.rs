@@ -1816,42 +1816,41 @@ where
     }
 }
 
-pub(super) fn empty_update_media_settings_with_roots(
+/// Replaces a facet default library's roots the way an operator saves them,
+/// carrying the stored id of any root kept at the same path and acknowledging
+/// every root dropped, and returns the facet's media settings afterwards.
+pub(super) async fn update_default_library_roots(
+    app: &AppUseCase,
+    actor: &User,
+    facet: MediaFacet,
     root_folders: Vec<RootFolderEntry>,
-) -> UpdateMediaSettings {
-    UpdateMediaSettings {
-        library_path: None,
-        root_folders: Some(root_folders),
-        required_audio_languages: None,
-        use_season_folders: None,
-        folder_template: None,
-        season_folder_template: None,
-        specials_folder_template: None,
-        rename_enabled: None,
-        rename_template: None,
-        rename_collision_policy: None,
-        rename_missing_metadata_policy: None,
-        filler_policy: None,
-        recap_policy: None,
-        monitor_specials: None,
-        inter_season_movies: None,
-        monitor_filler_movies: None,
-        nfo_write_on_import: None,
-        plexmatch_write_on_import: None,
-        import_mode: None,
-        set_permissions_linux: None,
-        file_chmod: None,
-        folder_chmod: None,
-        chown_group: None,
-        movie_availability: Default::default(),
-    }
+) -> AppResult<MediaSettings> {
+    let library = app
+        .services
+        .catalog
+        .libraries
+        .default_for_facet(facet.clone())
+        .await?
+        .expect("the facet has a default library");
+    let drafts = root_folders
+        .into_iter()
+        .map(|entry| LibraryRootDraft {
+            id: None,
+            path: entry.path,
+            is_default: entry.is_default,
+        })
+        .collect();
+    crate::lib_tests::replace_library_roots(app, actor, &library.id, drafts).await?;
+    app.get_media_settings(actor, facet).await
 }
 
 pub(super) fn empty_update_media_settings() -> UpdateMediaSettings {
     UpdateMediaSettings {
-        library_path: None,
-        root_folders: None,
         required_audio_languages: None,
+        preferred_audio_languages: None,
+        optional_audio_languages: None,
+        audio_language_priority: None,
+        optional_audio_languages_keep_searching: None,
         use_season_folders: None,
         folder_template: None,
         season_folder_template: None,
@@ -1880,6 +1879,10 @@ pub(super) fn empty_library_settings_override() -> LibrarySettingsOverrideDraft 
     LibrarySettingsOverrideDraft {
         search_languages: None,
         required_audio_languages: None,
+        preferred_audio_languages: None,
+        optional_audio_languages: None,
+        audio_language_priority: None,
+        optional_audio_languages_keep_searching: None,
         metadata_language: None,
         use_season_folders: None,
         default_monitor_type: None,
@@ -1988,6 +1991,7 @@ pub(super) fn cutoff_projection_test_profile(id: &str, cutoff_tier: &str) -> Qua
             cutoff_tier: Some(cutoff_tier.to_string()),
             min_score_to_grab: None,
             cutoff_score: None,
+            min_upgrade_score_delta: None,
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -2482,6 +2486,8 @@ pub(super) enum TestPermissionPreset {
 }
 
 /// Derive a per-user JWT signing key (mirrors `AppUseCase::derive_jwt_key`).
+// Mirrors the HMAC-SHA256 JWT key derivation the fixture signs tokens with.
+#[allow(clippy::disallowed_methods)]
 pub(super) fn test_derive_jwt_key(
     salt: &str,
     password_hash: &str,

@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use futures_util::stream;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
-    NullStagedNzbStore, RateLimitCooldownAction, StagedNzbRef, StagedNzbStore,
+    NullStagedNzbStore, PluginFailureReason, RateLimitCooldownAction, StagedNzbRef, StagedNzbStore,
 };
 use scryer_domain::{DownloadQueueItem, DownloadQueueState};
 use scryer_outbound_http::{
@@ -162,15 +162,17 @@ impl NzbgetDownloadClient {
             })?;
 
         let status = response.status();
-        let response_text = response.text().await.map_err(|err| {
-            AppError::Repository(format!("nzbget rpc call response read failed: {err}"))
-        })?;
+        let response_text = response
+            .text()
+            .await
+            .map_err(|err| nzbget_transport_failure("nzbget rpc call response read", &err))?;
 
         if !status.is_success() {
             let preview = response_text.chars().take(600).collect::<String>();
-            return Err(AppError::Repository(format!(
-                "nzbget rpc call {method} returned status {status}: {preview}"
-            )));
+            return Err(nzbget_http_failure(
+                status,
+                format!("nzbget rpc call {method} returned status {status}: {preview}"),
+            ));
         }
 
         let response_json: Value = serde_json::from_str(&response_text).map_err(|err| {
@@ -228,20 +230,17 @@ impl NzbgetDownloadClient {
             .map_err(|error| map_nzbget_outbound_error("nzbget test call", error))?;
         let status = response.status();
 
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(AppError::Repository(
-                "nzbget authentication failed: check username and password".into(),
+        if !status.is_success() {
+            return Err(nzbget_http_failure(
+                status,
+                format!("nzbget test call returned status {status}"),
             ));
         }
-        if !status.is_success() {
-            return Err(AppError::Repository(format!(
-                "nzbget test call returned status {status}"
-            )));
-        }
 
-        let response_text = response.text().await.map_err(|err| {
-            AppError::Repository(format!("nzbget test call response read failed: {err}"))
-        })?;
+        let response_text = response
+            .text()
+            .await
+            .map_err(|err| nzbget_transport_failure("nzbget test call response read", &err))?;
 
         let response_json: Value = serde_json::from_str(&response_text).map_err(|err| {
             AppError::Repository(format!(
@@ -282,9 +281,10 @@ impl NzbgetDownloadClient {
         if let Some(major) = parse_nzbget_major_version(&version)
             && major < 12
         {
-            return Err(AppError::Repository(format!(
-                "nzbget {version} is not supported; version 12.0+ is required"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_NZBGET_VERSION_UNSUPPORTED,
+                format!("nzbget {version} is not supported; version 12.0+ is required"),
+            ));
         }
 
         // Check KeepHistory config — if 0, completed downloads are immediately
@@ -307,11 +307,11 @@ impl NzbgetDownloadClient {
                         && let Ok(kh_val) = kh.parse::<i64>()
                         && kh_val == 0
                     {
-                        return Err(AppError::Repository(
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::ACQUISITION_NZBGET_KEEP_HISTORY_DISABLED,
                             "nzbget KeepHistory is set to 0 — completed downloads are \
                                      immediately purged and cannot be auto-imported. Set \
-                                     KeepHistory to at least 1 in NZBGet settings."
-                                .into(),
+                                     KeepHistory to at least 1 in NZBGet settings.",
                         ));
                     }
                 }
@@ -416,7 +416,7 @@ impl NzbgetDownloadClient {
         let body_text = response
             .text()
             .await
-            .map_err(|err| AppError::Repository(format!("nzbget response read failed: {err}")))?;
+            .map_err(|err| nzbget_transport_failure("nzbget response read", &err))?;
 
         if !status.is_success() {
             let preview = body_text.chars().take(800).collect::<String>();
@@ -428,9 +428,10 @@ impl NzbgetDownloadClient {
                 auto_category = append_request.use_auto_category,
                 "nzbget request failed"
             );
-            return Err(AppError::Repository(format!(
-                "nzbget rejected request with status {status}"
-            )));
+            return Err(nzbget_http_failure(
+                status,
+                format!("nzbget rejected request with status {status}"),
+            ));
         }
 
         let response_json: Value = serde_json::from_str(&body_text).map_err(|err| {
@@ -1249,10 +1250,30 @@ fn map_nzbget_outbound_error(operation: &str, error: OutboundHttpError) -> AppEr
             )
         }
         OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch is closed"),
-        OutboundHttpError::Transport { source, .. } => {
-            AppError::Repository(format!("{operation} failed: {source}"))
-        }
+        OutboundHttpError::Transport { source, .. } => nzbget_transport_failure(operation, &source),
     }
+}
+
+/// A request that never produced a usable answer from NZBGet: it could not
+/// connect, timed out, or lost the connection mid-response.
+fn nzbget_transport_failure(operation: &str, error: &reqwest::Error) -> AppError {
+    AppError::native_client_failed(
+        PluginFailureReason::UpstreamUnavailable,
+        format!("{operation} failed: {error}"),
+    )
+}
+
+/// The one place a non-success HTTP answer from NZBGet is classified, by its
+/// status alone. NZBGet answers wrong credentials with a 401, so that keeps
+/// the sentence telling the operator what to check.
+fn nzbget_http_failure(status: reqwest::StatusCode, message: String) -> AppError {
+    let reason = PluginFailureReason::for_http_status(status);
+    let message = if reason == PluginFailureReason::AuthFailed {
+        "nzbget authentication failed: check username and password".to_string()
+    } else {
+        message
+    };
+    AppError::native_client_failed(reason, message)
 }
 
 fn map_nzbget_append_outbound_error(
@@ -3532,5 +3553,54 @@ mod tests {
                 None => assert!(result.is_err()),
             }
         }
+    }
+
+    fn failure_reason(error: &AppError) -> scryer_application::PluginFailureReason {
+        error
+            .plugin_failure()
+            .unwrap_or_else(|| panic!("expected a typed failure, got {error:?}"))
+            .reason
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn rejected_credentials_are_an_auth_failure_on_test_and_live_calls() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let client = NzbgetDownloadClient::new(
+            server.uri(),
+            Some("synthetic-user".into()),
+            Some("synthetic-wrong".into()),
+            "SCORE".into(),
+        );
+
+        let test = client.test_connection().await.expect_err("401");
+        assert_eq!(
+            failure_reason(&test),
+            scryer_application::PluginFailureReason::AuthFailed
+        );
+        let live = client
+            .get_cleanup_payload_for_source("client", "nzbget", "42")
+            .await
+            .expect_err("401");
+        assert_eq!(
+            failure_reason(&live),
+            scryer_application::PluginFailureReason::AuthFailed
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_nzbget_is_an_unavailable_upstream() {
+        let error = map_nzbget_outbound_error(
+            "nzbget rpc call",
+            crate::downloads::clients::tests::refused_transport_error("nzbget").await,
+        );
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::UpstreamUnavailable
+        );
     }
 }

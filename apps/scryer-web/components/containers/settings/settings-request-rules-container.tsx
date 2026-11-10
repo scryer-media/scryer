@@ -633,7 +633,6 @@ export function SettingsRequestRulesContainer() {
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         deleteRuleSet={setPendingDeleteRuleSet}
-        validateDraft={validateDraft}
         validating={validating}
         validationResult={validationResult}
         applyRequesters={applyRequesters}

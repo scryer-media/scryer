@@ -8,12 +8,12 @@
  * Activity panel; this file stays testable with `node --test`.
  */
 
-import type { Translate } from "@/components/root/types";
-
 /** GraphQL `Long` arrives as a number or a string depending on magnitude. */
 export type LongValue = number | string;
 
 export type LocationOperationType =
+  | "FOLDER_CONSOLIDATION"
+  | "FOLDER_KEEP_ONE"
   | "FOLDER_REASSIGNMENT"
   | "TITLE_FOLDER_RECOVERY"
   | "ROOT_MOVE"
@@ -142,7 +142,14 @@ export type LocationAmbiguousDestinationCandidate = {
 
 export type LocationClassificationGroup = {
   class: TitleLocationClass;
+  /** Every title in the class, whether or not `titles` lists it. */
   count: LongValue;
+  /**
+   * Whether `titles` lists the whole class. The server samples large groups:
+   * titles that block the start or match a destination title are always
+   * listed, the rest only up to a sample. Selected by the move preview only.
+   */
+  complete?: boolean;
   titles: LocationClassifiedTitle[];
 };
 
@@ -1228,7 +1235,12 @@ export function canPlanAgainOperation(
   operation: LocationOperation | null | undefined,
   selection: LocationRetrySelection | null | undefined,
 ): boolean {
-  return canRetryOperation(operation) && (selection?.titles.length ?? 0) > 0;
+  return (
+    canRetryOperation(operation) &&
+    operation?.operationType !== "FOLDER_CONSOLIDATION" &&
+    operation?.operationType !== "FOLDER_KEEP_ONE" &&
+    (selection?.titles.length ?? 0) > 0
+  );
 }
 
 /**
@@ -1587,26 +1599,6 @@ export function checkpointStateLabelKey(
   value: LocationTitleCheckpointState,
 ): string {
   return `move.checkpointState.${value}`;
-}
-
-/**
- * The depth stamp Activity and the preview both show: "verified (full)" or
- * "verified (quick)", with the fallback count when full dropped to the quick
- * floor for some files (FR-043).
- */
-export function verificationStampText(
-  depth: VerificationDepth,
-  fallbackCount: number,
-  t: Translate,
-): string {
-  const stamp =
-    depth === "FULL"
-      ? t("move.verificationStampFull")
-      : t("move.verificationStampQuick");
-  if (fallbackCount > 0) {
-    return `${stamp} · ${t("move.verificationFallbackCount", { count: fallbackCount })}`;
-  }
-  return stamp;
 }
 
 /**

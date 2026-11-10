@@ -40,6 +40,7 @@ import {
   titleOverviewInteractiveSearchButtonId,
   titleOverviewInteractiveSearchPanelId,
   titleOverviewOpenButtonId,
+  titleOverviewLibraryId,
   titleOverviewRowId,
   titleOverviewSearchButtonId,
   titleOverviewSelectId,
@@ -686,21 +687,24 @@ export const TitleTable = React.memo(function TitleTable({
             </div>
           </TableCell>
           {showYearColumn ? (
-            <TableCell className="whitespace-nowrap text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {item.year ?? "—"}
             </TableCell>
           ) : null}
           {showRatingColumns.map((columnKey) => (
             <TableCell
               key={columnKey}
-              className="whitespace-nowrap text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]"
+              className="whitespace-nowrap text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]"
             >
               {titleTableRatingColumnValue(item, columnKey)}
             </TableCell>
           ))}
           {showLibraryColumn ? (
             <TableCell className="overflow-hidden text-center align-middle text-[12.5px] text-[var(--scry-muted)]">
-              <span className="block truncate">
+              <span
+                id={titleOverviewLibraryId(item.id)}
+                className="block truncate"
+              >
                 {item.libraryName ?? item.libraryId}
               </span>
             </TableCell>
@@ -740,7 +744,7 @@ export const TitleTable = React.memo(function TitleTable({
             </TableCell>
           ) : null}
           {showRuntimeColumn ? (
-            <TableCell className="whitespace-nowrap text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {formatRuntimeMinutes(item.runtimeMinutes)}
             </TableCell>
           ) : null}
@@ -754,12 +758,12 @@ export const TitleTable = React.memo(function TitleTable({
             </TableCell>
           ) : null}
           {showSizeColumn ? (
-            <TableCell className="whitespace-nowrap text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {bytesToReadable(item.sizeBytes)}
             </TableCell>
           ) : null}
           {showResolutionColumn ? (
-            <TableCell className="whitespace-nowrap text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {formatResolutionLabel(item.mediaResolution)}
             </TableCell>
           ) : null}
@@ -774,7 +778,7 @@ export const TitleTable = React.memo(function TitleTable({
             </TableCell>
           ) : null}
           {showPopularityColumn ? (
-            <TableCell className="whitespace-nowrap text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {formatCatalogPopularity(item.popularity)}
             </TableCell>
           ) : null}

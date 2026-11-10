@@ -1681,10 +1681,11 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Verify account security</DialogTitle>
+            <DialogTitle>{t("uiText.verifyAccountSecurity")}</DialogTitle>
             <DialogDescription>
-              Verify a current factor before managing passkeys, TOTP, or
-              recovery codes.
+              {t(
+                "uiText.verifyACurrentFactorBeforeManagingPasskeysTOTPOrRecoveryCodes",
+              )}
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-wrap gap-2">
@@ -1699,7 +1700,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
                 onClick={() => setSecurityReauthenticationMethod("password")}
                 disabled={securityReauthenticationBusy}
               >
-                Password
+                {t("settings.securityConfirmPassword")}
               </Button>
             ) : null}
             {passkeys.length > 0 ? (
@@ -1713,7 +1714,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
                 onClick={() => setSecurityReauthenticationMethod("passkey")}
                 disabled={securityReauthenticationBusy}
               >
-                Passkey
+                {t("settings.passkey")}
               </Button>
             ) : null}
             {totpStatus?.enabled ? (
@@ -1727,7 +1728,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
                 onClick={() => setSecurityReauthenticationMethod("totp")}
                 disabled={securityReauthenticationBusy}
               >
-                TOTP or recovery code
+                {t("uiText.tOTPOrRecoveryCode")}
               </Button>
             ) : null}
           </div>
@@ -1741,7 +1742,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
                 }
                 autoComplete="current-password"
                 ignorePasswordManagers
-                placeholder="Current password"
+                placeholder={t("uiAttr.Current_password")}
                 disabled={securityReauthenticationBusy}
               />
               <Button
@@ -1752,7 +1753,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
                   !securityReauthenticationPassword
                 }
               >
-                Verify password
+                {t("uiText.verifyPassword")}
               </Button>
             </>
           ) : null}
@@ -1763,7 +1764,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
               onClick={handlePasskeySecurityReauthentication}
               disabled={securityReauthenticationBusy}
             >
-              Verify with passkey
+              {t("uiText.verifyWithPasskey")}
             </Button>
           ) : null}
           {securityReauthenticationMethod === "totp" && totpStatus?.enabled ? (
@@ -1774,7 +1775,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
                   setSecurityReauthenticationCode(event.target.value)
                 }
                 autoComplete="one-time-code"
-                placeholder="TOTP or recovery code"
+                placeholder={t("uiAttr.TOTP_or_recovery_code")}
                 disabled={securityReauthenticationBusy}
               />
               <Button
@@ -1785,14 +1786,15 @@ export function SettingsProfileContainer({ userId, username }: Props) {
                   !securityReauthenticationCode.trim()
                 }
               >
-                Verify code
+                {t("uiText.verifyCode")}
               </Button>
             </>
           ) : null}
           {!hasPassword && passkeys.length === 0 && !totpStatus?.enabled ? (
             <p className="text-sm text-[var(--scry-muted3)]">
-              This account has no available reauthentication factor. Sign out
-              and sign in again, then retry the account-security change.
+              {t(
+                "uiText.thisAccountHasNoAvailableReauthenticationFactorSignOutAndSignInAgainThenRetryTheAccountSecurityChange",
+              )}
             </p>
           ) : null}
         </DialogContent>

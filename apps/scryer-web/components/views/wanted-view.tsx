@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { StandbyDownloadButton } from "@/components/common/standby-download-button";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
 import type {
@@ -109,6 +110,7 @@ type WantedViewState = {
   decisionsLoading: boolean;
   standbyReleases: PendingReleaseItem[];
   standbyLoading: boolean;
+  refreshStandby: () => Promise<void>;
   loadItemDetails: (id: string, standbyCount: number) => Promise<void>;
   triggerSearch: (id: string) => Promise<void>;
   pauseItem: (id: string) => Promise<void>;
@@ -145,6 +147,7 @@ function formatWantedDecisionCode(code: string, t: Translate) {
     category_mismatch: "wanted.decision.categoryMismatch",
     ambiguous_identity: "wanted.decision.ambiguousIdentity",
     quality_blocked: "wanted.decision.qualityBlocked",
+    episode_availability_blocked: "wanted.decision.episodeAvailabilityBlocked",
     minimum_seeders: "wanted.decision.minimumSeeders",
     pack_below_missing_threshold: "wanted.decision.packBelowMissingThreshold",
     pack_for_single_episode: "wanted.decision.packForSingleEpisode",
@@ -311,9 +314,11 @@ function isSeasonPackRelease(title: string) {
 function StandbyReleasesList({
   items,
   loading,
+  onQueued,
 }: {
   items: PendingReleaseItem[];
   loading: boolean;
+  onQueued: () => Promise<void>;
 }) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
@@ -352,6 +357,7 @@ function StandbyReleasesList({
               <p className="min-w-0 flex-1 break-words text-xs font-medium text-foreground">
                 {release.releaseTitle}
               </p>
+              <StandbyDownloadButton release={release} onQueued={onQueued} />
             </div>
             <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground sm:grid-cols-3">
               <span>
@@ -591,6 +597,7 @@ function WantedItemsCard({
     decisionsLoading,
     standbyReleases,
     standbyLoading,
+    refreshStandby,
     loadItemDetails,
     triggerSearch,
     pauseItem,
@@ -826,6 +833,7 @@ function WantedItemsCard({
                       <StandbyReleasesList
                         items={standbyReleases}
                         loading={standbyLoading}
+                        onQueued={refreshStandby}
                       />
                       {decisionsLoading ? (
                         <p className="text-sm text-muted-foreground">
@@ -935,7 +943,7 @@ function WantedItemsCard({
                     {t("wanted.colTitle")}
                   </TableHead>
                   <TableHead className="min-w-[112px] text-center">
-                    Library
+                    {t("nav.library")}
                   </TableHead>
                   <TableHead className="min-w-[80px] text-center">
                     {t("wanted.colType")}
@@ -1121,6 +1129,7 @@ function WantedItemsCard({
                           <StandbyReleasesList
                             items={standbyReleases}
                             loading={standbyLoading}
+                            onQueued={refreshStandby}
                           />
                           {decisionsLoading ? (
                             <p className="text-sm text-muted-foreground">
@@ -1464,7 +1473,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                         </div>
                         <div>
                           <span className="block">{t("pending.colSize")}</span>
-                          <span className="font-[var(--font-code)] text-foreground">
+                          <span className="font-[family-name:var(--font-code)] text-foreground">
                             {item.releaseSizeBytes == null
                               ? "—"
                               : formatBytes(item.releaseSizeBytes)}
@@ -1513,7 +1522,9 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                         <div className="mt-3 grid gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-bg)] p-3 text-xs">
                           <div>
                             <span className="block text-muted-foreground">
-                              Title ID
+                              {t(
+                                "settings.notificationScopeIdPlaceholderTitle",
+                              )}
                             </span>
                             <span className="break-all text-foreground">
                               {item.titleId}
@@ -1521,7 +1532,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                           </div>
                           <div>
                             <span className="block text-muted-foreground">
-                              Wanted Item
+                              {t("uiText.wantedItem")}
                             </span>
                             <span className="break-all text-foreground">
                               {item.wantedItemId}
@@ -1719,7 +1730,9 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                               <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
                                 <div>
                                   <span className="block text-muted-foreground">
-                                    Title ID
+                                    {t(
+                                      "settings.notificationScopeIdPlaceholderTitle",
+                                    )}
                                   </span>
                                   <span className="break-all text-foreground">
                                     {item.titleId}
@@ -1727,7 +1740,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                                 </div>
                                 <div>
                                   <span className="block text-muted-foreground">
-                                    Wanted Item
+                                    {t("uiText.wantedItem")}
                                   </span>
                                   <span className="break-all text-foreground">
                                     {item.wantedItemId}

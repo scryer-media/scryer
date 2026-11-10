@@ -26,6 +26,7 @@ use scryer_rules::maintenance::{
     MaintenanceSubjectKind, Observation,
 };
 
+use crate::ports::AudiencePlay;
 use crate::types::TitleMediaFile;
 
 /// Structured tag prefix carrying a title's quality profile. Kept in sync with
@@ -78,6 +79,11 @@ pub mod unknown_reason {
     /// never a synthetic completion timestamp, and therefore stays unknown.
     pub const EPISODE_PLAY_TIME_MISSING: &str = "episode_play_time_missing";
 
+    /// A played movie row lacks a timestamp. The title was watched, so
+    /// `last_watched_at` cannot be absent ("never watched"), and with one play
+    /// time missing the newest one is not known either.
+    pub const PLAY_TIME_MISSING: &str = "play_time_missing";
+
     /// A requested episode/season rank cannot be proven from current eligible
     /// downloaded coverage. This includes missing, unreadable, shared, future,
     /// special, and unresolved-air-date episodes. Unknown keeps a negated rank
@@ -129,6 +135,19 @@ pub mod unknown_reason {
     /// deletes on.
     pub const NO_LINKED_PARTICIPANTS: &str = "no_linked_participants";
 
+    /// Every enabled signal-sync connection swept cleanly and someone holds a
+    /// verified linked account, but no sweep has yet read any of those links:
+    /// they were all made after the last sweep listed its participants (or
+    /// before the first sweep after an upgrade). Scryer has read nobody's
+    /// plays, so it reports no watch picture until a sweep reads them.
+    pub const PARTICIPANTS_NOT_YET_SWEPT: &str = "participants_not_yet_swept";
+
+    /// A requester holds a verified linked account that no sweep has read
+    /// yet, so their plays on it have never been seen. Distinct from
+    /// [`REQUESTER_NOT_LINKED`]: the requester is linked, and the next sweep
+    /// makes them observable.
+    pub const REQUESTER_NOT_YET_SWEPT: &str = "requester_not_yet_swept";
+
     /// The lifecycle-claim store could not be read for this pass, so nothing is
     /// known about the title's leases. Every claim fact is
     /// unknown together, for the whole chunk, exactly like the watch gate: a
@@ -175,6 +194,50 @@ pub mod unknown_reason {
     /// holds, so there is no list name to report. An *absence* reason;
     /// personal list names are never reported.
     pub const NO_PUBLIC_REQUEST_LIST: &str = "no_public_request_list";
+
+    /// The anonymous "anyone watched it" facts need every account's plays,
+    /// and at least one enabled connection has no recent complete read of
+    /// them: none has run yet, the last one failed, or it is older than the
+    /// freshness window.
+    pub const AUDIENCE_NOT_READ: &str = "audience_not_read";
+
+    /// Every code above. A released code is part of the rule-authoring
+    /// contract, so none may be renamed, reused or repurposed.
+    pub const ALL: &[&str] = &[
+        NOT_YET_COLLECTED,
+        FILE_TIMESTAMPS_UNAVAILABLE,
+        TITLE_ADDED_BY_SYSTEM,
+        USER_NOT_FOUND,
+        SHOW_WATCH_ROLLUP_UNAVAILABLE,
+        EPISODE_AIR_DATE_UNRESOLVED,
+        EPISODE_WATCH_HISTORY_MISSING,
+        EPISODE_PLAY_TIME_MISSING,
+        PLAY_TIME_MISSING,
+        RETENTION_RANK_UNAVAILABLE,
+        EPISODE_FILE_COVERAGE_UNRESOLVED,
+        NO_MEDIA_SERVER_CONNECTION,
+        SIGNAL_SYNC_NEVER_SUCCEEDED,
+        SIGNAL_SYNC_INCOMPLETE,
+        SIGNALS_STALE,
+        SIGNAL_IDENTITY_MISSING,
+        NEVER_WATCHED,
+        TITLE_NOT_REQUESTED,
+        REQUESTER_NOT_LINKED,
+        NO_LINKED_PARTICIPANTS,
+        PARTICIPANTS_NOT_YET_SWEPT,
+        REQUESTER_NOT_YET_SWEPT,
+        CLAIM_STORE_UNREADABLE,
+        NO_LIVE_LEASE,
+        LIST_STORE_UNREADABLE,
+        NOT_LEFT_EVERY_LIST,
+        NO_PUBLIC_LIST_LEFT,
+        NOT_ON_A_LIST,
+        NO_LIST_RANK,
+        NO_LIST_LEFT,
+        REQUEST_STORE_UNREADABLE,
+        NO_PUBLIC_REQUEST_LIST,
+        AUDIENCE_NOT_READ,
+    ];
 }
 
 /// The four values `request_lease_state` can take. Part of the authoring
@@ -203,6 +266,13 @@ pub mod request_lease_state {
 /// date. The signal sync job runs every six hours, so 48 hours tolerates seven
 /// consecutive missed sweeps before rules stop deciding.
 pub const WATCH_SIGNAL_FRESHNESS_HOURS: i64 = 48;
+
+/// Whether a clean sweep finished at `last_success_at` is still inside
+/// [`WATCH_SIGNAL_FRESHNESS_HOURS`] at `now`. The one definition the watch
+/// gate and the settings surface both answer from.
+pub fn watch_signal_sweep_is_fresh(last_success_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    last_success_at >= now - chrono::Duration::hours(WATCH_SIGNAL_FRESHNESS_HOURS)
+}
 
 /// Whether media-server watch signals may be reported for this run at all.
 ///
@@ -239,6 +309,10 @@ pub struct MaintenanceWatchContext {
     /// signal-sync connection. A requester outside this set is a participant
     /// Scryer cannot observe.
     pub linked_user_ids: HashSet<String>,
+    /// Scryer users holding a verified link that no sweep has read yet. They
+    /// are left out of `linked_user_ids`, and a requester among them is held
+    /// with [`unknown_reason::REQUESTER_NOT_YET_SWEPT`].
+    pub unswept_user_ids: HashSet<String>,
     /// The enabled signal-sync connections this run observes.
     ///
     /// The gate and the roster are both built from exactly these connections, so
@@ -247,6 +321,10 @@ pub struct MaintenanceWatchContext {
     /// waited for, and the two halves of the watch picture would disagree about
     /// which servers count.
     pub enabled_connection_ids: HashSet<String>,
+    /// Whether every enabled connection's full audience (every account's
+    /// plays, linked or not) was read recently. Only the anonymous facts
+    /// answer from it, and only once [`Self::freshness`] has passed too.
+    pub audience: WatchSignalFreshness,
 }
 
 impl MaintenanceWatchContext {
@@ -263,6 +341,25 @@ impl MaintenanceWatchContext {
             WatchSignalFreshness::Unavailable(reason) => Some(reason),
         }
     }
+
+    /// The anonymous facts' gate: the watch gate first, then the audience
+    /// read.
+    ///
+    /// A watch gate closed only because no linked user's plays have been
+    /// read does not close this one: the audience read is every account's,
+    /// linked or not, so "anyone watched it" stands without a linked user.
+    pub(crate) fn audience_unavailable_reason(&self) -> Option<&'static str> {
+        let watch_gate = match self.unavailable_reason() {
+            Some(
+                unknown_reason::NO_LINKED_PARTICIPANTS | unknown_reason::PARTICIPANTS_NOT_YET_SWEPT,
+            ) => None,
+            other => other,
+        };
+        watch_gate.or(match self.audience {
+            WatchSignalFreshness::Fresh => None,
+            WatchSignalFreshness::Unavailable(reason) => Some(reason),
+        })
+    }
 }
 
 /// The watch signals for one title, resolved by the caller in batch.
@@ -273,6 +370,9 @@ pub struct MaintenanceTitleWatch<'a> {
     /// for it, which — once the gate has passed — is a confirmed "nobody
     /// watched it", not a gap.
     pub signals: Option<&'a [UserMediaSignal]>,
+    /// Every account's plays of this title (movie and episode rows), linked
+    /// or not. `None` is "no plays recorded" once the audience gate passes.
+    pub audience: Option<&'a [AudiencePlay]>,
 }
 
 /// Everything the builder needs about one library, resolved once per run.
@@ -442,6 +542,8 @@ fn build_facts(
         last_watched_at: watched.last_watched_at,
         watched_by_any_requester: watched.watched_by_any_requester,
         watched_by_all_requesters: watched.watched_by_all_requesters,
+        watched_by_anyone: watched.watched_by_anyone,
+        last_watched_by_anyone_at: watched.last_watched_by_anyone_at,
         request_lease_state: claim_facts.request_lease_state,
         request_lease_expires_at: claim_facts.request_lease_expires_at,
         active_retention_claims: claim_facts.active_retention_claims,
@@ -679,12 +781,14 @@ fn requested_observations(
     )
 }
 
-/// The four watch facts for one subject.
+/// The watch facts for one subject.
 struct WatchObservations {
     watched_by_user_ids: Observation<Vec<String>>,
     last_watched_at: Observation<String>,
     watched_by_any_requester: Observation<bool>,
     watched_by_all_requesters: Observation<bool>,
+    watched_by_anyone: Observation<bool>,
+    last_watched_by_anyone_at: Observation<String>,
 }
 
 impl WatchObservations {
@@ -696,8 +800,96 @@ impl WatchObservations {
             last_watched_at: Observation::unknown(reason),
             watched_by_any_requester: Observation::unknown(reason),
             watched_by_all_requesters: Observation::unknown(reason),
+            watched_by_anyone: Observation::unknown(reason),
+            last_watched_by_anyone_at: Observation::unknown(reason),
         }
     }
+
+    /// Replace the anonymous pair, keeping the rest.
+    fn with_audience(mut self, (anyone, last): (Observation<bool>, Observation<String>)) -> Self {
+        self.watched_by_anyone = anyone;
+        self.last_watched_by_anyone_at = last;
+        self
+    }
+}
+
+/// `watched_by_anyone` and `last_watched_by_anyone_at` over a set of plays.
+///
+/// `linked` and `audience` are the subject's plays from the two stores,
+/// already narrowed to the subject and to observed connections. Both count:
+/// a linked user's play is a play by someone. A play with no time keeps
+/// `last_watched_by_anyone_at` unknown for the same reason as
+/// `last_watched_at`: the newest time among the rest may be older than it.
+fn anyone_observations<'a>(
+    linked: impl Iterator<Item = &'a UserMediaSignal>,
+    audience: impl Iterator<Item = &'a AudiencePlay>,
+    untimed_reason: &'static str,
+) -> (Observation<bool>, Observation<String>) {
+    let times: Vec<Option<DateTime<Utc>>> = linked
+        .filter(|signal| signal.played)
+        .map(|signal| signal.last_played_at)
+        .chain(audience.map(|play| play.last_played_at))
+        .collect();
+    let last = if times.iter().any(Option::is_none) {
+        Observation::unknown(untimed_reason)
+    } else {
+        times.iter().flatten().max().map_or_else(
+            || Observation::absent_because(unknown_reason::NEVER_WATCHED),
+            |latest| Observation::known(latest.to_rfc3339()),
+        )
+    };
+    (Observation::known(!times.is_empty()), last)
+}
+
+/// The anonymous pair for a movie subject.
+fn movie_anyone_observations(
+    watch: MaintenanceTitleWatch<'_>,
+) -> (Observation<bool>, Observation<String>) {
+    if let Some(reason) = watch.context.audience_unavailable_reason() {
+        return (Observation::unknown(reason), Observation::unknown(reason));
+    }
+    anyone_observations(
+        watch
+            .signals
+            .unwrap_or_default()
+            .iter()
+            .filter(|signal| watch.context.observes(&signal.connection_id))
+            .filter(|signal| signal.kind == scryer_domain::MediaServerSignalKind::Movie),
+        watch
+            .audience
+            .unwrap_or_default()
+            .iter()
+            .filter(|play| watch.context.observes(&play.connection_id))
+            .filter(|play| play.kind == scryer_domain::MediaServerSignalKind::Movie),
+        unknown_reason::PLAY_TIME_MISSING,
+    )
+}
+
+/// The anonymous pair for an episode, season, or show subject: any play of
+/// any of `episode_ids`.
+fn scoped_anyone_observations(
+    watch: MaintenanceTitleWatch<'_>,
+    episode_ids: &HashSet<&str>,
+) -> (Observation<bool>, Observation<String>) {
+    if let Some(reason) = watch.context.audience_unavailable_reason() {
+        return (Observation::unknown(reason), Observation::unknown(reason));
+    }
+    let in_scope = |episode_id: Option<&str>| episode_id.is_some_and(|id| episode_ids.contains(id));
+    anyone_observations(
+        watch
+            .signals
+            .unwrap_or_default()
+            .iter()
+            .filter(|signal| watch.context.observes(&signal.connection_id))
+            .filter(|signal| in_scope(signal.scryer_episode_id.as_deref())),
+        watch
+            .audience
+            .unwrap_or_default()
+            .iter()
+            .filter(|play| watch.context.observes(&play.connection_id))
+            .filter(|play| in_scope(play.scryer_episode_id.as_deref())),
+        unknown_reason::EPISODE_PLAY_TIME_MISSING,
+    )
 }
 
 /// Who watched the subject, when it was last watched, and whether its
@@ -729,7 +921,10 @@ fn watch_observations(
         return WatchObservations::all_unknown(unknown_reason::SHOW_WATCH_ROLLUP_UNAVAILABLE);
     }
     if let Some(reason) = watch.context.unavailable_reason() {
-        return WatchObservations::all_unknown(reason);
+        // The anonymous pair has its own gate: the audience read is every
+        // account's, so it can stand while the per-user facts cannot.
+        return WatchObservations::all_unknown(reason)
+            .with_audience(movie_anyone_observations(watch));
     }
 
     // Before anything is read off a row: only the connections this run actually
@@ -766,23 +961,33 @@ fn watch_observations(
         Observation::known(watchers.iter().map(|id| (*id).to_string()).collect())
     };
 
-    let last_watched_at = played
-        .iter()
-        .filter_map(|signal| signal.last_played_at)
-        .max()
-        .map_or_else(
-            || Observation::absent_because(unknown_reason::NEVER_WATCHED),
-            |latest| Observation::known(latest.to_rfc3339()),
-        );
+    // A play with no time is still a play: "never watched" would let a
+    // `not last_watched_at` rule act on a title someone has seen, and the
+    // newest time among the rest may be older than the untimed one.
+    let last_watched_at = if played.iter().any(|signal| signal.last_played_at.is_none()) {
+        Observation::unknown(unknown_reason::PLAY_TIME_MISSING)
+    } else {
+        played
+            .iter()
+            .filter_map(|signal| signal.last_played_at)
+            .max()
+            .map_or_else(
+                || Observation::absent_because(unknown_reason::NEVER_WATCHED),
+                |latest| Observation::known(latest.to_rfc3339()),
+            )
+    };
 
     let (watched_by_any_requester, watched_by_all_requesters) =
         requester_watch_observations(requester_user_ids, &watchers, unattributed, watch.context);
+    let (watched_by_anyone, last_watched_by_anyone_at) = movie_anyone_observations(watch);
 
     WatchObservations {
         watched_by_user_ids,
         last_watched_at,
         watched_by_any_requester,
         watched_by_all_requesters,
+        watched_by_anyone,
+        last_watched_by_anyone_at,
     }
 }
 
@@ -818,13 +1023,24 @@ fn requester_watch_observations(
             Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING),
         );
     }
-    if requesters
-        .iter()
-        .any(|requester| !context.linked_user_ids.contains(requester.as_str()))
-    {
+    if requesters.iter().any(|requester| {
+        !context.linked_user_ids.contains(requester.as_str())
+            && !context.unswept_user_ids.contains(requester.as_str())
+    }) {
         return (
             Observation::unknown(unknown_reason::REQUESTER_NOT_LINKED),
             Observation::unknown(unknown_reason::REQUESTER_NOT_LINKED),
+        );
+    }
+    // Linked, but through a link no sweep has read: their plays there have
+    // never been seen, so "did not watch" would be a guess.
+    if requesters
+        .iter()
+        .any(|requester| context.unswept_user_ids.contains(requester.as_str()))
+    {
+        return (
+            Observation::unknown(unknown_reason::REQUESTER_NOT_YET_SWEPT),
+            Observation::unknown(unknown_reason::REQUESTER_NOT_YET_SWEPT),
         );
     }
 
@@ -1018,6 +1234,8 @@ pub(crate) fn build_subject_input_with_completed_retention_episodes(
         input.facts.last_watched_at = watched.last_watched_at;
         input.facts.watched_by_any_requester = watched.watched_by_any_requester;
         input.facts.watched_by_all_requesters = watched.watched_by_all_requesters;
+        input.facts.watched_by_anyone = watched.watched_by_anyone;
+        input.facts.last_watched_by_anyone_at = watched.last_watched_by_anyone_at;
     }
     let (episode_position_by_air_date, season_position_by_air_date) =
         retention_rank_observations(evaluation_time, subject, completed_retention_episode_ids);
@@ -1069,9 +1287,6 @@ fn scoped_watch_observations(
     requesters: Option<&[String]>,
     watch: MaintenanceTitleWatch<'_>,
 ) -> WatchObservations {
-    if let Some(reason) = watch.context.unavailable_reason() {
-        return WatchObservations::all_unknown(reason);
-    }
     let mut episodes = Vec::new();
     for episode in &subject.episodes {
         if matches!(
@@ -1095,6 +1310,17 @@ fn scoped_watch_observations(
         }
         episodes.push(episode);
     }
+    // The anonymous pair covers every aired episode in scope, whatever the
+    // per-person rollup below concludes about them.
+    let episode_ids: HashSet<&str> = episodes
+        .iter()
+        .map(|&episode| episode.id.as_str())
+        .collect();
+    let anyone = scoped_anyone_observations(watch, &episode_ids);
+    // The per-user facts need the watch gate; the anonymous pair has its own.
+    if let Some(reason) = watch.context.unavailable_reason() {
+        return WatchObservations::all_unknown(reason).with_audience(anyone);
+    }
     // Empty seasons are never vacuously completed.
     if episodes.is_empty() {
         return WatchObservations {
@@ -1102,6 +1328,8 @@ fn scoped_watch_observations(
             last_watched_at: Observation::absent_because("no_aired_episodes"),
             watched_by_any_requester: Observation::known(false),
             watched_by_all_requesters: Observation::known(false),
+            watched_by_anyone: anyone.0,
+            last_watched_by_anyone_at: anyone.1,
         };
     }
     let mut complete: Option<BTreeSet<String>> = None;
@@ -1119,7 +1347,8 @@ fn scoped_watch_observations(
         // A catalog episode missing from the server's snapshot has no known
         // history. Explicit unplayed signals are confirmed absence instead.
         if signals.is_empty() {
-            return WatchObservations::all_unknown(unknown_reason::EPISODE_WATCH_HISTORY_MISSING);
+            return WatchObservations::all_unknown(unknown_reason::EPISODE_WATCH_HISTORY_MISSING)
+                .with_audience(anyone);
         }
         let observed = watch_observations(
             &MediaFacet::Movie,
@@ -1127,13 +1356,15 @@ fn scoped_watch_observations(
             MaintenanceTitleWatch {
                 context: watch.context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         let Observation::Known {
             value: watchers, ..
         } = observed.watched_by_user_ids
         else {
-            return WatchObservations::all_unknown(unknown_reason::SIGNAL_IDENTITY_MISSING);
+            return WatchObservations::all_unknown(unknown_reason::SIGNAL_IDENTITY_MISSING)
+                .with_audience(anyone);
         };
         let watchers: BTreeSet<String> = watchers.into_iter().collect();
         complete = Some(match complete {
@@ -1162,6 +1393,8 @@ fn scoped_watch_observations(
         },
         watched_by_any_requester: any,
         watched_by_all_requesters: all,
+        watched_by_anyone: anyone.0,
+        last_watched_by_anyone_at: anyone.1,
     }
 }
 
@@ -1263,7 +1496,11 @@ pub(crate) mod tests {
                 requester_user_ids,
                 usernames,
             },
-            MaintenanceTitleWatch { context, signals },
+            MaintenanceTitleWatch {
+                context,
+                signals,
+                audience: None,
+            },
             MaintenanceTitleClaims::none(),
             &[],
         );
@@ -1291,6 +1528,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &MaintenanceWatchContext::default(),
                 signals: None,
+                audience: None,
             },
             MaintenanceTitleClaims {
                 claims: (!claims.is_empty()).then_some(claims),
@@ -1301,11 +1539,13 @@ pub(crate) mod tests {
         serde_json::to_value(input).expect("input serializes")
     }
 
-    const WATCH_FACTS: [&str; 4] = [
+    const WATCH_FACTS: [&str; 6] = [
         "watched_by_user_ids",
         "last_watched_at",
         "watched_by_any_requester",
         "watched_by_all_requesters",
+        "watched_by_anyone",
+        "last_watched_by_anyone_at",
     ];
 
     /// The one connection the fixtures' signals are written by.
@@ -1315,7 +1555,9 @@ pub(crate) mod tests {
         MaintenanceWatchContext {
             freshness: WatchSignalFreshness::Fresh,
             linked_user_ids: linked.iter().map(|id| (*id).to_string()).collect(),
+            unswept_user_ids: HashSet::new(),
             enabled_connection_ids: [ENABLED_CONNECTION.to_string()].into_iter().collect(),
+            audience: WatchSignalFreshness::Fresh,
         }
     }
 
@@ -1346,6 +1588,7 @@ pub(crate) mod tests {
                     .expect("fixture timestamp parses")
                     .with_timezone(&Utc),
             ),
+            is_favorite: false,
             observed_at: Utc::now(),
             sync_generation: 1,
             created_at: Utc::now(),
@@ -1751,6 +1994,113 @@ pub(crate) mod tests {
         );
     }
 
+    /// A requester whose link no sweep has read yet is linked, so
+    /// `requester_not_linked` would misdescribe them; their plays are simply
+    /// not read yet, and both rollups hold under their own reason.
+    #[test]
+    fn a_requester_whose_link_is_not_yet_swept_holds_both_rollups() {
+        let mut context = fresh_context(&["user-1"]);
+        context.unswept_user_ids.insert("user-2".to_string());
+        let doc = watch_document(
+            &title(Some("user-1")),
+            Some(&["user-1".to_string(), "user-2".to_string()]),
+            &usernames(&[("user-1", "operator-one"), ("user-2", "viewer-two")]),
+            &context,
+            Some(&[signal(Some("user-1"), true, "2024-05-01T00:00:00Z")]),
+        );
+
+        for fact in ["watched_by_any_requester", "watched_by_all_requesters"] {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(doc["observations"][fact]["status"], "unknown", "{fact}");
+            assert_eq!(
+                doc["observations"][fact]["reason"],
+                unknown_reason::REQUESTER_NOT_YET_SWEPT,
+                "{fact}"
+            );
+        }
+    }
+
+    /// Not being linked at all is the more fundamental gap, so it wins over a
+    /// second requester who is merely waiting for a sweep.
+    #[test]
+    fn an_unlinked_requester_outranks_one_not_yet_swept() {
+        let mut context = fresh_context(&["user-1"]);
+        context.unswept_user_ids.insert("user-2".to_string());
+        let doc = watch_document(
+            &title(Some("user-1")),
+            Some(&["user-2".to_string(), "user-3".to_string()]),
+            &usernames(&[("user-2", "viewer-two"), ("user-3", "viewer-three")]),
+            &context,
+            None,
+        );
+
+        assert_eq!(
+            doc["observations"]["watched_by_any_requester"]["reason"],
+            unknown_reason::REQUESTER_NOT_LINKED
+        );
+    }
+
+    /// A played movie whose play carries no time was watched: the last-watched
+    /// fact must hold, never read as "never watched".
+    #[test]
+    fn a_played_movie_without_a_play_time_holds_last_watched_at() {
+        let mut untimed = signal(Some("user-1"), true, "2024-05-01T00:00:00Z");
+        untimed.last_played_at = None;
+        for signals in [
+            vec![untimed.clone()],
+            vec![
+                untimed.clone(),
+                signal(Some("user-2"), true, "2024-04-01T00:00:00Z"),
+            ],
+        ] {
+            let doc = watch_document(
+                &title(Some("user-1")),
+                None,
+                &usernames(&[("user-1", "operator-one"), ("user-2", "viewer-two")]),
+                &fresh_context(&["user-1", "user-2"]),
+                Some(&signals),
+            );
+            assert!(doc["facts"].get("last_watched_at").is_none());
+            assert_eq!(doc["observations"]["last_watched_at"]["status"], "unknown");
+            assert_eq!(
+                doc["observations"]["last_watched_at"]["reason"],
+                unknown_reason::PLAY_TIME_MISSING
+            );
+            // Who watched it is still known.
+            assert!(
+                doc["facts"]["watched_by_user_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id == "user-1"))
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_reason_codes_are_distinct_lowercase_and_complete() {
+        let mut seen = HashSet::new();
+        for code in unknown_reason::ALL {
+            assert!(seen.insert(*code), "duplicate unknown reason {code}");
+            assert!(
+                !code.is_empty()
+                    && code
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "unknown reason {code} is not lowercase snake case"
+            );
+        }
+        for code in [
+            unknown_reason::PARTICIPANTS_NOT_YET_SWEPT,
+            unknown_reason::REQUESTER_NOT_YET_SWEPT,
+            unknown_reason::NO_LINKED_PARTICIPANTS,
+            unknown_reason::REQUESTER_NOT_LINKED,
+        ] {
+            assert!(
+                unknown_reason::ALL.contains(&code),
+                "{code} missing from ALL"
+            );
+        }
+    }
+
     #[test]
     fn one_of_two_linked_requesters_watching_is_any_but_not_all() {
         let doc = watch_document(
@@ -2087,6 +2437,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&[retired]),
+                audience: None,
             },
         );
         assert!(
@@ -2121,6 +2472,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(matches!(
@@ -2140,6 +2492,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(matches!(
@@ -2165,6 +2518,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
             MaintenanceTitleClaims::none(),
             &[],
@@ -2200,6 +2554,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(matches!(
@@ -2225,6 +2580,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(
@@ -2242,6 +2598,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(
@@ -2264,6 +2621,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: None,
+                audience: None,
             },
         );
         assert!(matches!(
@@ -2278,6 +2636,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(
@@ -2291,6 +2650,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(matches!(
@@ -2305,6 +2665,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &context,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(matches!(
@@ -2326,6 +2687,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &fresh,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(matches!(
@@ -2341,6 +2703,7 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &stale,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(matches!(
@@ -2354,10 +2717,228 @@ pub(crate) mod tests {
             MaintenanceTitleWatch {
                 context: &fresh,
                 signals: Some(&signals),
+                audience: None,
             },
         );
         assert!(
             matches!(known.watched_by_user_ids, Observation::Known { value, .. } if value == vec!["alice"])
         );
+    }
+
+    fn audience_row(
+        connection_id: &str,
+        account: &str,
+        episode: Option<usize>,
+        watched_at: Option<&str>,
+    ) -> AudiencePlay {
+        AudiencePlay {
+            connection_id: connection_id.to_string(),
+            external_account_id: account.to_string(),
+            provider_item_id: format!("item-{account}-{episode:?}"),
+            kind: if episode.is_some() {
+                scryer_domain::MediaServerSignalKind::Episode
+            } else {
+                scryer_domain::MediaServerSignalKind::Movie
+            },
+            scryer_title_id: Some("title-1".to_string()),
+            scryer_episode_id: episode.map(|index| format!("episode-{index}")),
+            play_count: 1,
+            last_played_at: watched_at.map(|at| {
+                DateTime::parse_from_rfc3339(at)
+                    .expect("fixture timestamp parses")
+                    .with_timezone(&Utc)
+            }),
+        }
+    }
+
+    fn audience_document(
+        context: &MaintenanceWatchContext,
+        signals: Option<&[UserMediaSignal]>,
+        audience: Option<&[AudiencePlay]>,
+    ) -> serde_json::Value {
+        let usernames = HashMap::new();
+        let input = build_title_input(
+            Utc::now(),
+            &title(None),
+            &library(),
+            &[],
+            MaintenanceTitlePeople {
+                requester_user_ids: None,
+                usernames: &usernames,
+            },
+            MaintenanceTitleWatch {
+                context,
+                signals,
+                audience,
+            },
+            MaintenanceTitleClaims::none(),
+            &[],
+        );
+        serde_json::to_value(input).expect("input serializes")
+    }
+
+    #[test]
+    fn a_play_by_an_unlinked_account_counts_for_anyone_but_names_nobody() {
+        let context = fresh_context(&["alice"]);
+        let linked = [signal(Some("alice"), true, "2024-05-01T00:00:00Z")];
+        let audience = [audience_row(
+            ENABLED_CONNECTION,
+            "account-unlinked",
+            None,
+            Some("2024-06-01T00:00:00Z"),
+        )];
+
+        let doc = audience_document(&context, Some(&linked), Some(&audience));
+
+        assert_eq!(doc["facts"]["watched_by_anyone"], true);
+        assert_eq!(
+            doc["facts"]["last_watched_by_anyone_at"],
+            "2024-06-01T00:00:00+00:00"
+        );
+        // The person-targeted facts still answer from linked plays alone.
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!(["alice"])
+        );
+        assert_eq!(doc["facts"]["last_watched_at"], "2024-05-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn nobody_having_played_it_is_a_known_false_and_an_absent_time() {
+        let doc = audience_document(&fresh_context(&["alice"]), None, None);
+
+        assert_eq!(doc["facts"]["watched_by_anyone"], false);
+        assert!(doc["facts"].get("last_watched_by_anyone_at").is_none());
+        assert_eq!(
+            doc["observations"]["last_watched_by_anyone_at"]["status"],
+            "absent"
+        );
+        assert_eq!(
+            doc["observations"]["last_watched_by_anyone_at"]["reason"],
+            unknown_reason::NEVER_WATCHED
+        );
+    }
+
+    #[test]
+    fn an_unread_audience_makes_only_the_anonymous_pair_unknown() {
+        let context = MaintenanceWatchContext {
+            audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
+            ..fresh_context(&["alice"])
+        };
+        let linked = [signal(Some("alice"), true, "2024-05-01T00:00:00Z")];
+
+        let doc = audience_document(&context, Some(&linked), None);
+
+        for fact in ["watched_by_anyone", "last_watched_by_anyone_at"] {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(doc["observations"][fact]["status"], "unknown", "{fact}");
+            assert_eq!(
+                doc["observations"][fact]["reason"],
+                unknown_reason::AUDIENCE_NOT_READ,
+                "{fact}"
+            );
+        }
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!(["alice"])
+        );
+    }
+
+    #[test]
+    fn a_closed_watch_gate_reports_its_own_reason_for_the_anonymous_pair() {
+        let context = MaintenanceWatchContext {
+            freshness: WatchSignalFreshness::Unavailable(unknown_reason::SIGNALS_STALE),
+            ..fresh_context(&["alice"])
+        };
+        let doc = audience_document(&context, None, None);
+        assert_watch_facts_unknown(&doc, unknown_reason::SIGNALS_STALE);
+    }
+
+    #[test]
+    fn an_untimed_audience_play_still_counts_but_hides_the_latest_time() {
+        let audience = [audience_row(
+            ENABLED_CONNECTION,
+            "account-unlinked",
+            None,
+            None,
+        )];
+
+        let doc = audience_document(&fresh_context(&["alice"]), None, Some(&audience));
+
+        assert_eq!(doc["facts"]["watched_by_anyone"], true);
+        assert_eq!(
+            doc["observations"]["last_watched_by_anyone_at"]["reason"],
+            unknown_reason::PLAY_TIME_MISSING
+        );
+    }
+
+    #[test]
+    fn an_audience_play_from_a_disabled_connection_is_not_evidence() {
+        let audience = [audience_row(
+            "connection-retired",
+            "account-unlinked",
+            None,
+            Some("2024-06-01T00:00:00Z"),
+        )];
+
+        let doc = audience_document(&fresh_context(&["alice"]), None, Some(&audience));
+
+        assert_eq!(doc["facts"]["watched_by_anyone"], false);
+    }
+
+    #[test]
+    fn a_season_was_watched_by_anyone_when_any_aired_episode_was_played() {
+        let subject = scoped_season(&[Some("2024-01-01"), Some("2024-01-02"), Some("2099-01-01")]);
+        let context = fresh_context(&["alice"]);
+        // Episode 0 has only an unplayed linked row; episode 1 an unlinked
+        // play; episode 2 has not aired, so a play recorded for it is not in
+        // the rollup.
+        let signals = [episode_signal(0, Some("alice"), false)];
+        let aired_play = audience_row(
+            ENABLED_CONNECTION,
+            "account-unlinked",
+            Some(1),
+            Some("2024-02-01T00:00:00Z"),
+        );
+        let unaired_play = audience_row(
+            ENABLED_CONNECTION,
+            "account-unlinked",
+            Some(2),
+            Some("2024-03-01T00:00:00Z"),
+        );
+
+        let observed = scoped_watch_observations(
+            Utc::now(),
+            &subject,
+            None,
+            MaintenanceTitleWatch {
+                context: &context,
+                signals: Some(&signals),
+                audience: Some(&[aired_play, unaired_play.clone()]),
+            },
+        );
+        assert!(matches!(
+            observed.watched_by_anyone,
+            Observation::Known { value: true, .. }
+        ));
+        assert!(matches!(
+            observed.last_watched_by_anyone_at,
+            Observation::Known { ref value, .. } if value == "2024-02-01T00:00:00+00:00"
+        ));
+
+        let only_unaired = scoped_watch_observations(
+            Utc::now(),
+            &subject,
+            None,
+            MaintenanceTitleWatch {
+                context: &context,
+                signals: Some(&signals),
+                audience: Some(&[unaired_play]),
+            },
+        );
+        assert!(matches!(
+            only_unaired.watched_by_anyone,
+            Observation::Known { value: false, .. }
+        ));
     }
 }

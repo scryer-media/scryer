@@ -280,6 +280,12 @@ async fn graphql_media_settings_rejects_invalid_rename_template_tokens() {
 async fn graphql_typed_media_settings_round_trip() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
+    set_default_library_roots(
+        &ctx,
+        "ANIME",
+        &["/library/anime-main", "/library/anime-archive"],
+    )
+    .await;
     let update = gql(
         &ctx,
         r#"
@@ -309,10 +315,6 @@ async fn graphql_typed_media_settings_round_trip() {
         json!({
           "input": {
             "scope": "ANIME",
-            "rootFolders": [
-              { "path": "/library/anime-main", "isDefault": true },
-              { "path": "/library/anime-archive", "isDefault": false }
-            ],
             "requiredAudioLanguages": ["eng", "jpn"],
             "folderTemplate": "{title|truncate:64|space:_} ({year})",
             "seasonFolderTemplate": "{title|space:.}.S{season:2}",
@@ -541,31 +543,13 @@ async fn graphql_movie_settings_expose_null_and_reject_season_folder_templates()
 async fn graphql_typed_library_paths_round_trip() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
-    let update = gql(
+    set_default_library_root_paths(
         &ctx,
-        r#"
-        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-          updateLibraryPaths(input: $input) {
-            moviePath
-            seriesPath
-            animePath
-          }
-        }
-        "#,
-        json!({
-          "input": {
-            "moviePath": "/mnt/storage/movies",
-            "seriesPath": "/mnt/storage/series",
-            "animePath": "/mnt/storage/anime"
-          }
-        }),
+        "/mnt/storage/movies",
+        "/mnt/storage/series",
+        "/mnt/storage/anime",
     )
     .await;
-    assert_no_errors(&update);
-    assert_eq!(
-        update["data"]["updateLibraryPaths"]["moviePath"],
-        "/mnt/storage/movies"
-    );
 
     let read = gql(
         &ctx,
@@ -791,7 +775,6 @@ async fn graphql_typed_acquisition_settings_round_trip() {
         mutation UpdateAcquisitionSettings($input: UpdateAcquisitionSettingsInput!) {
           updateAcquisitionSettings(input: $input) {
             enabled
-            sameTierMinDelta
             pollIntervalSeconds
             walkIntervalSeconds
             longTailBackfillMaxScopesPerCycle
@@ -802,7 +785,6 @@ async fn graphql_typed_acquisition_settings_round_trip() {
         json!({
           "input": {
             "enabled": true,
-            "sameTierMinDelta": 140,
             "pollIntervalSeconds": 45,
             "walkIntervalSeconds": 240,
             "longTailBackfillMaxScopesPerCycle": 750,
@@ -819,7 +801,6 @@ async fn graphql_typed_acquisition_settings_round_trip() {
         query AcquisitionSettings {
           acquisitionSettings {
             enabled
-            sameTierMinDelta
             pollIntervalSeconds
             walkIntervalSeconds
             longTailBackfillMaxScopesPerCycle
@@ -834,7 +815,6 @@ async fn graphql_typed_acquisition_settings_round_trip() {
 
     let settings = &read["data"]["acquisitionSettings"];
     assert_eq!(settings["enabled"], true);
-    assert_eq!(settings["sameTierMinDelta"], 140);
     assert_eq!(settings["pollIntervalSeconds"], 45);
     assert_eq!(settings["walkIntervalSeconds"], 240);
     assert_eq!(settings["longTailBackfillMaxScopesPerCycle"], 750);
@@ -879,7 +859,6 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
         json!({
           "input": {
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 30,
             "walkIntervalSeconds": 90,
             "longTailBackfillMaxScopesPerCycle": 500,
@@ -900,7 +879,6 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
         json!({
           "input": {
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 30,
             "longTailBackfillMaxScopesPerCycle": 500,
             "longTailReconvergeDays": 0
@@ -920,7 +898,6 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
         json!({
           "input": {
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 30,
             "walkIntervalSeconds": 0,
             "longTailBackfillMaxScopesPerCycle": 500,
@@ -932,6 +909,66 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
     assert!(
         rejected["errors"].is_array(),
         "a walk interval below one second is rejected: {rejected}"
+    );
+}
+
+/// The walk intensity defaults to normal, round-trips each value, and a
+/// client that predates it (so never sends it) keeps whatever is stored.
+#[tokio::test]
+async fn graphql_acquisition_walk_intensity_defaults_and_survives_older_clients() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let defaults = gql(
+        &ctx,
+        "query { acquisitionSettings { walkIntensity } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&defaults);
+    assert_eq!(
+        defaults["data"]["acquisitionSettings"]["walkIntensity"],
+        "NORMAL"
+    );
+
+    let mutation = r#"
+        mutation UpdateAcquisitionSettings($input: UpdateAcquisitionSettingsInput!) {
+          updateAcquisitionSettings(input: $input) {
+            walkIntensity
+          }
+        }
+        "#;
+    let input = |intensity: Option<&str>| {
+        let mut input = json!({
+            "enabled": true,
+            "pollIntervalSeconds": 60,
+            "longTailBackfillMaxScopesPerCycle": 500,
+            "longTailReconvergeDays": 0
+        });
+        if let Some(intensity) = intensity {
+            input["walkIntensity"] = json!(intensity);
+        }
+        json!({ "input": input })
+    };
+    for intensity in ["QUIET", "EAGER", "NORMAL", "QUIET"] {
+        let set = gql(&ctx, mutation, input(Some(intensity))).await;
+        assert_no_errors(&set);
+        assert_eq!(
+            set["data"]["updateAcquisitionSettings"]["walkIntensity"],
+            intensity
+        );
+    }
+
+    let older_client = gql(&ctx, mutation, input(None)).await;
+    assert_no_errors(&older_client);
+    assert_eq!(
+        older_client["data"]["updateAcquisitionSettings"]["walkIntensity"],
+        "QUIET"
+    );
+
+    let rejected = gql(&ctx, mutation, input(Some("LOUD"))).await;
+    assert!(
+        rejected["errors"].is_array(),
+        "an unknown intensity is rejected: {rejected}"
     );
 }
 
@@ -1021,7 +1058,6 @@ async fn graphql_movie_availability_settings_live_on_the_movie_facet() {
         }"#,
         json!({"input": {
             "enabled": true,
-            "sameTierMinDelta": 120,
             "pollIntervalSeconds": 60,
             "longTailBackfillMaxScopesPerCycle": 500,
             "longTailReconvergeDays": 0,
@@ -1157,7 +1193,9 @@ async fn graphql_movie_library_overrides_movie_availability_settings() {
 
 /// Clients built before the dead upgrade knobs were retired still send them.
 /// The fields stay in the schema as deprecated no-ops: accepted, never stored,
-/// and always reported as 0.
+/// and always reported as 0. `sameTierMinDelta` joined them when the same-tier
+/// delta moved into the quality profile, so it must not reach any profile
+/// either.
 #[tokio::test]
 async fn graphql_retired_acquisition_fields_are_accepted_and_ignored() {
     let ctx = TestContext::new().await;
@@ -1191,10 +1229,28 @@ async fn graphql_retired_acquisition_fields_are_accepted_and_ignored() {
     assert_no_errors(&update);
 
     let settings = &update["data"]["updateAcquisitionSettings"];
-    assert_eq!(settings["sameTierMinDelta"], 140);
+    assert_eq!(settings["sameTierMinDelta"], 0);
     assert_eq!(settings["upgradeCooldownHours"], 0);
     assert_eq!(settings["crossTierMinDelta"], 0);
     assert_eq!(settings["forcedUpgradeDeltaBypass"], 0);
+
+    let profiles = gql(
+        &ctx,
+        "{ qualityProfileSettings { profiles { id criteria { minUpgradeScoreDelta } } } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&profiles);
+    let profiles = profiles["data"]["qualityProfileSettings"]["profiles"]
+        .as_array()
+        .expect("profiles list");
+    assert!(!profiles.is_empty());
+    for profile in profiles {
+        assert_eq!(
+            profile["criteria"]["minUpgradeScoreDelta"], 120,
+            "the retired acquisition field never reaches a profile: {profile}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1828,5 +1884,110 @@ async fn graphql_typed_general_settings_rejects_invalid_image_cache_size() {
             })
         }),
         "expected image cache validation error: {body}"
+    );
+}
+
+#[tokio::test]
+async fn graphql_audio_language_preferences_round_trip() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let mutation = r#"
+        mutation Update($input: UpdateMediaSettingsInput!) {
+          updateMediaSettings(input: $input) {
+            preferredAudioLanguages
+            optionalAudioLanguages
+            audioLanguagePriority
+            optionalAudioLanguagesKeepSearching
+          }
+        }
+    "#;
+    let read = |scope: &'static str| {
+        gql(
+            &ctx,
+            r#"query($scope: ContentScopeValue!) { mediaSettings(scope: $scope) {
+                preferredAudioLanguages optionalAudioLanguages audioLanguagePriority
+                optionalAudioLanguagesKeepSearching } }"#,
+            json!({ "scope": scope }),
+        )
+    };
+
+    let defaults = read("MOVIE").await;
+    assert_no_errors(&defaults);
+    let settings = &defaults["data"]["mediaSettings"];
+    assert_eq!(settings["preferredAudioLanguages"], json!([]));
+    assert_eq!(settings["audioLanguagePriority"], "QUALITY_FIRST");
+    assert_eq!(settings["optionalAudioLanguagesKeepSearching"], false);
+
+    let update = gql(
+        &ctx,
+        mutation,
+        json!({"input": {
+            "scope": "MOVIE",
+            "preferredAudioLanguages": ["ger", "en"],
+            "optionalAudioLanguages": ["original"],
+            "audioLanguagePriority": "LANGUAGE_FIRST",
+            "optionalAudioLanguagesKeepSearching": true
+        }}),
+    )
+    .await;
+    assert_no_errors(&update);
+    let settings = &update["data"]["updateMediaSettings"];
+    assert_eq!(settings["preferredAudioLanguages"], json!(["deu", "eng"]));
+    assert_eq!(settings["optionalAudioLanguages"], json!(["original"]));
+    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
+    assert_eq!(settings["optionalAudioLanguagesKeepSearching"], true);
+
+    // A partial update leaves the other values alone; an empty list clears.
+    let partial = gql(
+        &ctx,
+        mutation,
+        json!({"input": {"scope": "MOVIE", "optionalAudioLanguages": []}}),
+    )
+    .await;
+    assert_no_errors(&partial);
+    let settings = &partial["data"]["updateMediaSettings"];
+    assert_eq!(settings["preferredAudioLanguages"], json!(["deu", "eng"]));
+    assert_eq!(settings["optionalAudioLanguages"], json!([]));
+    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
+
+    // Preferences are per scope.
+    let series = read("SERIES").await;
+    assert_no_errors(&series);
+    assert_eq!(
+        series["data"]["mediaSettings"]["preferredAudioLanguages"],
+        json!([])
+    );
+
+    let unknown = gql(
+        &ctx,
+        mutation,
+        json!({"input": {"scope": "MOVIE", "preferredAudioLanguages": ["@@"]}}),
+    )
+    .await;
+    let message = unknown["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("unknown preferred audio language \"@@\""),
+        "an unknown language code is rejected by name: {unknown}"
+    );
+
+    // A rejected update writes nothing, not even its valid half.
+    let mixed = gql(
+        &ctx,
+        mutation,
+        json!({"input": {
+            "scope": "MOVIE",
+            "preferredAudioLanguages": ["fra"],
+            "optionalAudioLanguages": ["@@"]
+        }}),
+    )
+    .await;
+    assert!(
+        mixed.get("errors").is_some(),
+        "the invalid half is rejected: {mixed}"
+    );
+    let unchanged = read("MOVIE").await;
+    assert_eq!(
+        unchanged["data"]["mediaSettings"]["preferredAudioLanguages"],
+        json!(["deu", "eng"])
     );
 }

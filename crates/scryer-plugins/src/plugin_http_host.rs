@@ -890,11 +890,9 @@ impl PluginHttpHost {
             response_bytes,
             "plugin HTTP request completed"
         );
-        if status.is_success() {
-            Ok(direct_body)
-        } else {
-            Ok(Vec::new())
-        }
+        // Every status keeps its body: a plugin reads the status separately,
+        // and an error body is often the only account of what went wrong.
+        Ok(direct_body)
     }
 
     pub(crate) fn status_code(&self, plugin_id: &str) -> HostResult<u16> {
@@ -2976,6 +2974,57 @@ mod tests {
         assert_eq!(
             errors[1].classification,
             scryer_application::IndexerErrorClassification::Unknown
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn non_success_response_body_reaches_the_plugin() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let host = PluginHttpHost::new(
+            vec!["127.0.0.1".to_string()],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            None,
+            Some(64 * 1024),
+        );
+        let error_body = br#"{"message":"Invalid Form Body","code":50035}"#;
+
+        Mock::given(method("POST"))
+            .and(path("/webhook"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .insert_header("content-type", "application/json")
+                    .set_body_bytes(error_body.to_vec()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let body = host
+            .request(
+                "notifier",
+                PluginHttpRequest {
+                    url: format!("{}/webhook", server.uri()),
+                    method: Some("POST".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                Some(b"{}".to_vec()),
+                Duration::from_secs(30),
+            )
+            .expect("a 400 is a response, not a host failure");
+
+        assert_eq!(body, error_body.to_vec());
+        assert_eq!(host.status_code("notifier").expect("status code"), 400);
+        let headers = host
+            .headers("notifier")
+            .expect("headers")
+            .expect("headers stored for the response");
+        assert_eq!(
+            headers.get("content-type").map(String::as_str),
+            Some("application/json")
         );
     }
 

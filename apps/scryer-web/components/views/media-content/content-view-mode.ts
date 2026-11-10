@@ -1,4 +1,4 @@
-export type ContentViewMode = "compact" | "poster-table" | "poster";
+export type ContentViewMode = "compact" | "poster-table" | "poster" | "graph";
 
 export const CONTENT_VIEW_MODE_STORAGE_KEY = "scryer:content-view-mode";
 
@@ -17,6 +17,8 @@ function parseStoredContentViewMode(
       return "compact";
     case "poster":
       return "poster";
+    case "graph":
+      return "graph";
     case "poster-table":
     case "table":
     case "list":

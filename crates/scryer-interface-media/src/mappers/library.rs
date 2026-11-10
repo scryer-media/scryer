@@ -89,6 +89,14 @@ fn import_source_title_from_payload(
 }
 
 pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
+    from_title_projected(app, title, scryer_application::TitleRowProjection::ALL)
+}
+
+pub fn from_title_projected(
+    app: &AppUseCase,
+    title: Title,
+    projection: scryer_application::TitleRowProjection,
+) -> TitlePayload {
     let quality_profile_id = extract_tag_string(&title.tags, "scryer:quality-profile:");
     let monitor_type = extract_tag_string(&title.tags, "scryer:monitor-type:")
         .as_deref()
@@ -119,20 +127,30 @@ pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
         .background_url
         .as_deref()
         .filter(|url| url.starts_with("http")));
-    let poster_url = app.media_image_url(
-        poster_upstream,
-        Some("title"),
-        Some(&title.id),
-        ImageProxyKind::Poster,
-        "w250",
-    );
-    let background_url = app.media_image_url(
-        background_upstream,
-        Some("title"),
-        Some(&title.id),
-        ImageProxyKind::Fanart,
-        "w1280",
-    );
+    let poster_url = projection
+        .poster
+        .then(|| {
+            app.media_image_url(
+                poster_upstream,
+                Some("title"),
+                Some(&title.id),
+                ImageProxyKind::Poster,
+                "w250",
+            )
+        })
+        .flatten();
+    let background_url = projection
+        .background
+        .then(|| {
+            app.media_image_url(
+                background_upstream,
+                Some("title"),
+                Some(&title.id),
+                ImageProxyKind::Fanart,
+                "w1280",
+            )
+        })
+        .flatten();
 
     TitlePayload {
         id: title.id.into(),
@@ -407,7 +425,12 @@ pub fn from_media_request(
     }
 }
 
-pub fn from_library(library: Library) -> LibraryPayload {
+/// Map a library, reading each root's title count from `root_title_counts`
+/// (keyed by root id, as `AppUseCase::library_root_title_counts` returns it).
+pub fn from_library(
+    library: Library,
+    root_title_counts: &std::collections::HashMap<String, i64>,
+) -> LibraryPayload {
     let is_bootstrap_default_root_set =
         scryer_application::is_bootstrap_default_library_root_set(&library);
     LibraryPayload {
@@ -421,11 +444,15 @@ pub fn from_library(library: Library) -> LibraryPayload {
             .roots
             .into_iter()
             .map(|root| LibraryRootPayload {
+                title_count: root_title_counts
+                    .get(&root.id)
+                    .map_or(0, |count| i32::try_from(*count).unwrap_or(i32::MAX)),
                 id: root.id.into(),
                 path: root.path,
                 is_default: root.is_default,
             })
             .collect(),
+        removed_title_count: 0,
     }
 }
 

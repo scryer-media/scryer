@@ -377,12 +377,16 @@ pub(crate) fn parse_key_material(raw_key: &str, prefix: &str) -> Option<(String,
         .then(|| (lookup_id.to_string(), secret.to_string()))
 }
 
+// HMAC-SHA256 API-key material is a documented signing contract; see helpers.rs.
+#[allow(clippy::disallowed_methods)]
 pub(crate) fn hash_key_material(salt: &str, domain: &str, lookup_id: &str, secret: &str) -> String {
     let key = hmac::Key::new(hmac::HMAC_SHA256, salt.as_bytes());
     URL_SAFE_NO_PAD
         .encode(hmac::sign(&key, format!("{domain}:{lookup_id}:{secret}").as_bytes()).as_ref())
 }
 
+// HMAC-SHA256 API-key material is a documented signing contract; see helpers.rs.
+#[allow(clippy::disallowed_methods)]
 pub(crate) fn verify_key_material(
     salt: &str,
     domain: &str,

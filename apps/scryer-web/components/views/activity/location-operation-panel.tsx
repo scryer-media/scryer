@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useClient, useQuery } from "urql";
+import { Link } from "react-router";
 import { ChevronDown, ChevronRight, TriangleAlert, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -103,7 +104,10 @@ function OperationPanel({ operationId, onDismiss }: Props) {
   // Plan again needs the stored plan joined with the checkpoints, which is a
   // read of its own rather than part of every progress snapshot. It is only
   // worth asking for once the operation has stopped.
-  const retryable = canRetryOperation(operation);
+  const conflictOperation =
+    operation?.operationType === "FOLDER_CONSOLIDATION" ||
+    operation?.operationType === "FOLDER_KEEP_ONE";
+  const retryable = canRetryOperation(operation) && !conflictOperation;
   const [retrySelection, setRetrySelection] =
     React.useState<LocationRetrySelection | null>(null);
   React.useEffect(() => {
@@ -157,6 +161,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
   // destination it had, and the titles it did not finish (or the one whose
   // row the action was taken from). The preview does the rest.
   async function openPlanAgain(titleId: string | null = null) {
+    if (conflictOperation) return;
     const titles = retrySelectionTitleRefs(retrySelection, titleId);
     if (!titles.length) return;
     setBusy(true);
@@ -296,6 +301,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
   return (
     <Card
       id="location-operation-panel"
+      data-operation-state={operation.state}
       className="overflow-hidden rounded-[14px] border-[var(--scry-border2)] bg-[var(--scry-surfC)] shadow-none"
     >
       <CardContent className="space-y-4 p-4 sm:p-5">
@@ -307,18 +313,22 @@ function OperationPanel({ operationId, onDismiss }: Props) {
             >
               {t(`move.operationType.${operation.operationType}`)}
             </span>
-            <Badge
-              id="location-operation-state"
-              tone={
-                operation.state === "FAILED"
-                  ? "negative"
-                  : operation.state === "COMPLETED"
-                    ? "positive"
-                    : "neutral"
-              }
-            >
-              {t(operationStateLabelKey(operation.state))}
-            </Badge>
+            {/* A running operation's state flips with every title it finishes,
+                so only the outcome is shown. */}
+            {terminal && (
+              <Badge
+                id="location-operation-state"
+                tone={
+                  operation.state === "FAILED"
+                    ? "negative"
+                    : operation.state === "COMPLETED"
+                      ? "positive"
+                      : "neutral"
+                }
+              >
+                {t(operationStateLabelKey(operation.state))}
+              </Badge>
+            )}
             {operation.cancelRequested && !terminal && (
               <Badge tone="warning">{t("move.cancelDraining")}</Badge>
             )}
@@ -385,6 +395,16 @@ function OperationPanel({ operationId, onDismiss }: Props) {
                 {t("move.retryAction")}
               </Button>
             )}
+            {conflictOperation && canRetryOperation(operation) && (
+              <Button asChild variant="outline" size="sm">
+                <Link
+                  id="location-operation-return-conflicts"
+                  to="/movies/import"
+                >
+                  {t("pendingImports.conflict.returnToConflicts")}
+                </Link>
+              </Button>
+            )}
             {canPlanAgainOperation(operation, retrySelection) && (
               <Button
                 id="location-operation-plan-again"
@@ -433,6 +453,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
           <Button
             variant="ghost"
             size="sm"
+            id="location-operation-titles-toggle"
             className="px-0"
             aria-expanded={open}
             aria-controls="location-transfer-titles"
@@ -491,7 +512,9 @@ function OperationPanel({ operationId, onDismiss }: Props) {
                       posterUrl={posters.get(row.titleId)}
                       guidanceKey={titleGuidanceKeys.get(row.titleId) ?? null}
                       onPlanAgain={
-                        !busy && planAgainTitleIds.has(row.titleId)
+                        !conflictOperation &&
+                        !busy &&
+                        planAgainTitleIds.has(row.titleId)
                           ? () => void openPlanAgain(row.titleId)
                           : null
                       }
@@ -640,11 +663,15 @@ function TitleFiles({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {files.map((file) => (
+              {files.map((file, index) => (
                 <React.Fragment key={file.destinationPath || file.sourcePath}>
-                  <TableRow data-ui="activity-row">
+                  <TableRow
+                    id={`location-operation-file-row-${titleId}-${index}`}
+                    data-ui="activity-row"
+                  >
                     <TableCell>
                       <FilePath
+                        id={`location-operation-file-path-${titleId}-${index}`}
                         path={file.destinationPath || file.sourcePath}
                       />
                       <span className="text-muted-foreground">
@@ -655,6 +682,7 @@ function TitleFiles({
                     </TableCell>
                     <TableCell>
                       <Badge
+                        id={`location-operation-file-state-${titleId}-${index}`}
                         tone={
                           file.state === "FAILED" || file.state === "BLOCKED"
                             ? "warning"
@@ -702,6 +730,7 @@ function TitleFiles({
                   {file.detail && (
                     <TableRow>
                       <TableCell
+                        id={`location-operation-file-detail-${titleId}-${index}`}
                         colSpan={4}
                         className="break-words text-muted-foreground"
                       >
@@ -784,15 +813,16 @@ function FileBytes({
   );
 }
 
-function FilePath({ path }: { path: string }) {
+function FilePath({ id, path }: { id?: string; path: string }) {
   const parts = splitTransferPath(path);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span
+          id={id}
           tabIndex={0}
           aria-label={path}
-          className="flex min-w-0 font-[var(--font-code)]"
+          className="flex min-w-0 font-[family-name:var(--font-code)]"
         >
           <span
             aria-hidden="true"
@@ -858,6 +888,7 @@ function TitleRow({
     };
   }, [client, expanded, operationId, row.titleId, row.state, showsDetail]);
   const path = row.currentFile ? splitTransferPath(row.currentFile) : null;
+  const recording = row.recording ?? 0;
   return (
     <React.Fragment>
       <TableRow
@@ -873,6 +904,7 @@ function TitleRow({
                 })}
                 className="shrink-0 rounded p-1 hover:bg-muted"
                 aria-expanded={expanded}
+                id={`location-operation-title-toggle-${row.titleId}`}
                 aria-controls={`transfer-detail-${row.titleId}`}
                 onClick={() => setExpanded(!expanded)}
               >
@@ -903,18 +935,26 @@ function TitleRow({
         </TableCell>
         <TableCell>
           <Badge tone={row.hasException ? "warning" : "neutral"}>
-            {t(
-              checkpointStateLabelKey(
-                row.verifying > 0 ? "VERIFYING" : row.state,
-              ),
-            )}
+            {row.verifying === 0 && recording > 0
+              ? t("move.transferTitleRecording")
+              : t(
+                  checkpointStateLabelKey(
+                    row.verifying > 0 ? "VERIFYING" : row.state,
+                  ),
+                )}
           </Badge>
-          {(row.copying > 0 || row.verifying > 0) && (
+          {(row.copying > 0 || row.verifying > 0 || recording > 0) && (
             <p className="mt-1 text-muted-foreground">
-              {t("move.transferActive", {
-                copying: row.copying,
-                verifying: row.verifying,
-              })}
+              {recording > 0
+                ? t("move.transferActiveRecording", {
+                    copying: row.copying,
+                    verifying: row.verifying,
+                    recording,
+                  })
+                : t("move.transferActive", {
+                    copying: row.copying,
+                    verifying: row.verifying,
+                  })}
             </p>
           )}
         </TableCell>
@@ -928,7 +968,7 @@ function TitleRow({
                 <span
                   tabIndex={0}
                   aria-label={row.currentFile}
-                  className="flex min-w-0 font-[var(--font-code)]"
+                  className="flex min-w-0 font-[family-name:var(--font-code)]"
                 >
                   <span
                     aria-hidden="true"

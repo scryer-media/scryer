@@ -59,6 +59,8 @@ pub struct AppRuntimeCatalogState {
     /// the tracked-download sweep, which re-resolves an unmatched download
     /// when the answer is yes.
     pub(crate) catalog_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Library affinity profiles, keyed by the datastore's affinity revision.
+    pub(crate) discovery_affinity_cache: crate::discovery::DiscoveryAffinityCache,
     pub poster_wake: Arc<tokio::sync::Notify>,
     pub fanart_wake: Arc<tokio::sync::Notify>,
     pub(crate) title_hydration_wake: Arc<tokio::sync::Notify>,
@@ -1162,6 +1164,13 @@ pub struct AppRuntimeAcquisitionState {
     /// Landed bars the background cutoff pass already derived, keyed by every
     /// input of the derivation. See [`crate::quality::landed_bar_memo`].
     pub(crate) landed_bar_memo: Arc<crate::quality::landed_bar_memo::LandedBarMemo>,
+    /// The background walk's target set, kept between walks and patched on
+    /// change. See [`crate::acquisition::target_cache`].
+    pub(crate) target_cache: Arc<crate::acquisition::target_cache::AcquisitionTargetCache>,
+    /// The intensity the latest background walk runs at, after auto-quiet,
+    /// as [`crate::acquisition::walk_intensity::AcquisitionWalkIntensity::to_index`].
+    /// Only background searches read it; one walk runs at a time.
+    pub(crate) walk_intensity: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl AppRuntimeAcquisitionState {
@@ -2290,6 +2299,7 @@ pub struct AppRuntimeImportState {
     pub active_streams: ActiveImportStreamTracker,
     pub external_import_warmup_orchestrator: ExternalImportMonitorWarmupOrchestrator,
     pub external_import_apply_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) source_import: Arc<crate::source_import::SourceImportRuntime>,
     pub external_import_source_chunk_cleanup_done: Arc<tokio::sync::Mutex<bool>>,
     pub(crate) same_path_upgrade_guard_lock: Arc<tokio::sync::Mutex<()>>,
 }
@@ -2307,6 +2317,15 @@ pub struct AppRuntimeLibraryState {
     /// Which location operations have a runner alive in this process, so a
     /// resume can never start a second one over live checkpoints (FR-033).
     pub location_runners: crate::location::ownership_guard::LocationRunnerRegistry,
+    /// Composed discovery section lists for paging past the first page.
+    pub(crate) discovery_section_cache: Arc<crate::discovery::DiscoverySectionCache>,
+    /// Previewed root-move plans a confirmation may reuse instead of walking
+    /// every title folder again.
+    pub(crate) location_plan_cache: Arc<
+        crate::location::plan_cache::LocationPlanCache<
+            crate::location::operations::CachedRootMovePlan,
+        >,
+    >,
 }
 
 #[derive(Clone)]
@@ -2470,6 +2489,7 @@ where
 
 #[derive(Clone)]
 pub struct AppRuntimeIntegrationState {
+    pub(crate) routing_settings_write_lock: Arc<tokio::sync::Mutex<()>>,
     pub managed_indexer_sync_lock: Arc<tokio::sync::Mutex<()>>,
     /// Managed children whose caps a pass asked for and did not get, so the
     /// next passes wait before asking again. In memory on purpose: a restart
@@ -2617,6 +2637,7 @@ impl AppRuntimeState {
             catalog: AppRuntimeCatalogState {
                 quality_profile_reference_lock: Arc::new(tokio::sync::Mutex::new(())),
                 catalog_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                discovery_affinity_cache: Default::default(),
                 poster_wake: Arc::new(tokio::sync::Notify::new()),
                 fanart_wake: Arc::new(tokio::sync::Notify::new()),
                 title_hydration_wake: Arc::new(tokio::sync::Notify::new()),
@@ -2676,6 +2697,11 @@ impl AppRuntimeState {
                 interactive_release_searches: Arc::new(Mutex::new(HashMap::new())),
                 raw_search_budget: Arc::default(),
                 landed_bar_memo: Arc::default(),
+                target_cache: Arc::default(),
+                walk_intensity: Arc::new(std::sync::atomic::AtomicU8::new(
+                    crate::acquisition::walk_intensity::AcquisitionWalkIntensity::default()
+                        .to_index(),
+                )),
             },
             imports: AppRuntimeImportState {
                 execution_coordinator: ImportExecutionCoordinator::default(),
@@ -2683,6 +2709,7 @@ impl AppRuntimeState {
                 external_import_warmup_orchestrator:
                     ExternalImportMonitorWarmupOrchestrator::default(),
                 external_import_apply_lock: Arc::new(tokio::sync::Mutex::new(())),
+                source_import: Default::default(),
                 external_import_source_chunk_cleanup_done: Arc::new(tokio::sync::Mutex::new(false)),
                 same_path_upgrade_guard_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
@@ -2699,6 +2726,8 @@ impl AppRuntimeState {
                 location_ownership:
                     crate::location::ownership_guard::LocationOwnershipRegistry::new(),
                 location_runners: crate::location::ownership_guard::LocationRunnerRegistry::new(),
+                discovery_section_cache: Arc::default(),
+                location_plan_cache: Arc::default(),
             },
             jobs: AppRuntimeJobState {
                 job_run_tracker: JobRunTracker::new(),
@@ -2734,6 +2763,7 @@ impl AppRuntimeState {
                 subtitle_providers_on_probation: Arc::default(),
             },
             integrations: AppRuntimeIntegrationState {
+                routing_settings_write_lock: Default::default(),
                 managed_indexer_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
                 managed_caps_unanswered: Arc::default(),
                 navigation_badge_facts: NavigationBadgeFactsCache::default(),

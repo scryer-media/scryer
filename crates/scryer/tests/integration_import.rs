@@ -8,6 +8,9 @@ mod persistence_tests;
 #[path = "import/submission_race_tests.rs"]
 mod submission_race_tests;
 
+#[path = "import/extended_media_tests.rs"]
+mod extended_media_tests;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -197,6 +200,14 @@ async fn configure_default_library_root(
         .await
         .expect("default library should load")
         .expect("default library should exist");
+    // A stored root is identified by its id alone, so a root that is already
+    // configured at this path keeps its id; a new path is allocated one.
+    let comparable = |path: &str| path.trim_end_matches(['/', '\\']).to_string();
+    let stored_id = library
+        .roots
+        .iter()
+        .find(|root| comparable(&root.path) == comparable(media_root))
+        .map(|root| root.id.clone());
     let updated = ctx
         .libraries
         .update(
@@ -204,7 +215,7 @@ async fn configure_default_library_root(
             library.name,
             library.slug,
             vec![LibraryRootDraft {
-                id: None,
+                id: stored_id,
                 path: media_root.to_string(),
                 is_default: true,
             }],
@@ -356,9 +367,11 @@ async fn set_folder_template(ctx: &TestContext, facet: MediaFacet, template: &st
             &actor,
             facet,
             scryer_application::UpdateMediaSettings {
-                library_path: None,
-                root_folders: None,
                 required_audio_languages: None,
+                preferred_audio_languages: None,
+                optional_audio_languages: None,
+                audio_language_priority: None,
+                optional_audio_languages_keep_searching: None,
                 folder_template: Some(template.to_string()),
                 season_folder_template: None,
                 specials_folder_template: None,
@@ -908,6 +921,209 @@ async fn import_fails_when_no_video_files_in_dest_dir() {
 
     assert_eq!(result.decision, ImportDecision::Skipped);
     assert_eq!(result.skip_reason, Some(ImportSkipReason::NoVideoFiles));
+}
+
+#[tokio::test]
+async fn import_movie_ogm_from_direct_file_persists_native_analysis() {
+    let ctx = TestContext::new().await;
+    let app = app_with_real_imports(&ctx).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source = copy_fixture(
+        source_dir.path(),
+        "ogm_video_audio_text.ogm",
+        "Native.Movie.2024.720p.WEB-DL.XviD.ogm",
+    );
+    let source_bytes = std::fs::read(&source).expect("read OGM fixture");
+    let unrelated = source_dir.path().join("unrelated.txt");
+    std::fs::write(&unrelated, b"preserve unrelated source").expect("write unrelated source");
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_movie_title(
+        &ctx,
+        "title-native-ogm-movie",
+        "Native Movie",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let completed = scryer_completed(
+        "dl-native-ogm-movie",
+        source.to_str().unwrap(),
+        &title.id,
+        "movie",
+    );
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        import_completed_download(&app, &user, &completed),
+    )
+    .await
+    .expect("OGM movie import should finish")
+    .expect("OGM movie import");
+
+    assert_eq!(result.decision, ImportDecision::Imported, "{result:?}");
+    let dest_path = result.dest_path.expect("imported movie destination");
+    assert_eq!(Path::new(&dest_path).extension().unwrap(), "ogm");
+    assert_eq!(std::fs::read(&dest_path).unwrap(), source_bytes);
+    assert_eq!(
+        std::fs::read(&unrelated).unwrap(),
+        b"preserve unrelated source"
+    );
+    let media_files = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list imported OGM movie");
+    assert_eq!(media_files.len(), 1);
+    assert_eq!(media_files[0].scan_status, "scanned");
+    assert_eq!(media_files[0].container_format.as_deref(), Some("ogm"));
+    assert_eq!(
+        media_files[0].video_codec,
+        Some(scryer_application::VideoCodec::Mpeg4)
+    );
+    assert_eq!(media_files[0].video_width, Some(1280));
+    assert_eq!(media_files[0].video_height, Some(720));
+    assert_eq!(media_files[0].episode_id, None);
+}
+
+#[tokio::test]
+async fn import_series_ogm_from_directory_links_episode_with_native_analysis() {
+    let ctx = TestContext::new().await;
+    let app = app_with_real_imports(&ctx).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source = copy_fixture(
+        source_dir.path(),
+        "ogm_video_audio_text.ogm",
+        "Native.Series.S01E01.720p.WEB-DL.XviD.ogm",
+    );
+    let source_bytes = std::fs::read(&source).expect("read OGM episode fixture");
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_short_form_series_title(
+        &ctx,
+        "title-native-ogm-series",
+        "Native Series",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let episode = seed_series_episode_with_duration(&ctx, &title, Some(3)).await;
+    let completed = scryer_completed(
+        "dl-native-ogm-series",
+        source_dir.path().to_str().unwrap(),
+        &title.id,
+        "series",
+    );
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        import_completed_download(&app, &user, &completed),
+    )
+    .await
+    .expect("OGM episode import should finish")
+    .expect("OGM episode import");
+
+    assert_eq!(result.decision, ImportDecision::Imported, "{result:?}");
+    let media_files = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list imported OGM episode");
+    assert_eq!(media_files.len(), 1);
+    let imported_path = Path::new(&media_files[0].file_path);
+    assert_eq!(imported_path.extension().unwrap(), "ogm");
+    assert_eq!(std::fs::read(imported_path).unwrap(), source_bytes);
+    assert_eq!(
+        media_files[0].episode_id.as_deref(),
+        Some(episode.id.as_str())
+    );
+    assert_eq!(media_files[0].scan_status, "scanned");
+    assert_eq!(media_files[0].container_format.as_deref(), Some("ogm"));
+    assert_eq!(
+        media_files[0].video_codec,
+        Some(scryer_application::VideoCodec::Mpeg4)
+    );
+    assert_eq!(media_files[0].video_width, Some(1280));
+    assert_eq!(media_files[0].video_height, Some(720));
+}
+
+async fn assert_nonvideo_ogm_preserves_sources(fixture_name: Option<&str>) {
+    let ctx = TestContext::new().await;
+    let app = app_with_real_imports(&ctx).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source = source_dir
+        .path()
+        .join("Native.Movie.2024.720p.WEB-DL.XviD.ogm");
+    if let Some(fixture_name) = fixture_name {
+        std::fs::copy(mediainfo_fixture(fixture_name), &source).expect("copy nonvideo OGM");
+    } else {
+        std::fs::write(&source, b"OggS\0truncated page").expect("write malformed OGM");
+    }
+    let source_bytes = std::fs::read(&source).expect("read nonvideo source");
+    let unrelated = source_dir.path().join("unrelated.txt");
+    std::fs::write(&unrelated, b"preserve unrelated source").expect("write unrelated source");
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_movie_title(
+        &ctx,
+        "title-nonvideo-ogm",
+        "Native Movie",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let completed = scryer_completed(
+        "dl-nonvideo-ogm",
+        if fixture_name.is_some() {
+            source_dir.path()
+        } else {
+            &source
+        }
+        .to_str()
+        .unwrap(),
+        &title.id,
+        "movie",
+    );
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        import_completed_download(&app, &user, &completed),
+    )
+    .await
+    .expect("nonvideo OGM import should finish")
+    .expect("nonvideo OGM import");
+
+    assert_ne!(result.decision, ImportDecision::Imported, "{result:?}");
+    assert_ne!(
+        result.skip_reason,
+        Some(ImportSkipReason::NoVideoFiles),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(
+        std::fs::read(&unrelated).unwrap(),
+        b"preserve unrelated source"
+    );
+    assert!(
+        ctx.media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        std::fs::read_dir(dest_root.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn import_audio_only_ogm_preserves_source_and_unrelated_files() {
+    assert_nonvideo_ogm_preserves_sources(Some("ogm_audio_only.ogm")).await;
+}
+
+#[tokio::test]
+async fn import_malformed_ogm_preserves_source_and_unrelated_files() {
+    assert_nonvideo_ogm_preserves_sources(None).await;
 }
 
 #[tokio::test]

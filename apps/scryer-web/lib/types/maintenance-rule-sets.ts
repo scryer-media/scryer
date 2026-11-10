@@ -208,6 +208,10 @@ export type MaintenancePreviewTitle = {
   outcome: MaintenancePreviewOutcome | null;
   reasonCodes: string[];
   error: string | null;
+  /// The input document the rule evaluated for this subject. Null unless the
+  /// caller may manage permissions, because it names who watched and who
+  /// requested the subject.
+  facts?: Record<string, unknown> | null;
 };
 
 export type MaintenancePreviewResult = {

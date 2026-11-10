@@ -9,10 +9,14 @@ import { useJobRunToasts } from "@/components/root/job-run-provider";
 import { JOB_RUN_FIELDS } from "@/lib/graphql/queries";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { cn } from "@/lib/utils";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
 
 type Selection =
-  { fileIds: string[] } | { seasonIds: string[] } | { titleIds: string[] };
+  | { fileIds: string[] }
+  | { episodeIds: string[] }
+  | { seasonIds: string[] }
+  | { titleIds: string[] };
 const refresh = `mutation RefreshFileScores($selection: FileScoreSelectionInput!) {
   refreshFileScores(selection: $selection) { ${JOB_RUN_FIELDS} }
 }`;
@@ -20,7 +24,8 @@ const cancel = `mutation CancelFileScoreRefresh($id: ID!) { cancelFileScoreRefre
 
 /**
  * `text` is the bulk-selection button, `icon` sits among a header's icon
- * actions, and `action` sits among a file row's actions.
+ * actions, `action` sits among a file row's actions, and `menu` is a row in an
+ * actions menu.
  */
 export function RefreshScoresButton({
   selection,
@@ -34,7 +39,7 @@ export function RefreshScoresButton({
   selection: Selection;
   disabled?: boolean;
   single?: boolean;
-  appearance?: "text" | "icon" | "action";
+  appearance?: "text" | "icon" | "action" | "menu";
   size?: "sm" | "default";
   id?: string;
   className?: string;
@@ -72,7 +77,10 @@ export function RefreshScoresButton({
     );
   return (
     <span
-      className="inline-flex items-center gap-1"
+      className={cn(
+        "items-center gap-1",
+        appearance === "menu" ? "flex w-full" : "inline-flex",
+      )}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
     >
@@ -110,9 +118,12 @@ export function RefreshScoresButton({
       ) : (
         <Button
           size={size}
-          variant="outline"
+          variant={appearance === "menu" ? "ghost" : "outline"}
           id={id}
-          className={className}
+          className={cn(
+            appearance === "menu" && "flex-1 flex-row-reverse justify-start",
+            className,
+          )}
           disabled={blocked}
           onClick={() => void submit()}
         >

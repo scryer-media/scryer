@@ -46,6 +46,7 @@ pub(super) fn section_items_record_to_result(
         surface: record.section.surface,
         total_count: record.total_count,
         items: record.items,
+        label_key: None,
     })
 }
 
@@ -104,6 +105,23 @@ pub(super) fn selected_discovery_home_item_ids(result: &DiscoveryHomeResult) -> 
         item_ids.insert(item.id.clone());
     }
     item_ids
+}
+
+/// Every matched subject key carried by an item that subject resolution
+/// rewrites.
+pub(super) fn discovery_home_subject_keys(result: &DiscoveryHomeResult) -> BTreeSet<String> {
+    result
+        .personalized_sections
+        .iter()
+        .flat_map(|section| section.items.iter())
+        .chain(
+            result
+                .complete_collection
+                .iter()
+                .flat_map(|section| section.items.iter()),
+        )
+        .flat_map(|item| item.matched_subject_keys.iter().cloned())
+        .collect()
 }
 
 pub(super) fn discovery_home_subject_resolution_item_ids(
@@ -296,21 +314,16 @@ pub(super) fn top_rated_discovery_home_section_with_candidates(
     include_unresolved: bool,
     limit: usize,
 ) -> Option<DiscoverySectionResult> {
-    let mut candidates = top_rated_items
-        .iter()
-        .chain(
+    let candidates = ranked_top_rated_discovery_items(
+        top_rated_items.iter().chain(
             live_public_sections
                 .iter()
                 .flat_map(|section| section.items.iter()),
-        )
-        .filter(|item| !item.owned_in_input && home_item_visible(item, include_unresolved))
-        .cloned()
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| {
-        compare_top_rated_discovery_home_items(left, right, candidates_by_id)
-    });
-    let mut seen = HashSet::new();
-    candidates.retain(|item| seen.insert(discovery_item_identity_key(item).to_string()));
+        ),
+        candidates_by_id,
+        include_unresolved,
+        false,
+    );
     section_result(
         "top_rated".to_string(),
         "TOP_RATED".to_string(),
@@ -319,6 +332,28 @@ pub(super) fn top_rated_discovery_home_section_with_candidates(
         candidates,
         limit,
     )
+}
+
+/// Top-rated order over `items`, distinct by identity. Owned titles take part
+/// only when `include_owned` is set.
+pub(super) fn ranked_top_rated_discovery_items<'a>(
+    items: impl Iterator<Item = &'a DiscoveryItemRecord>,
+    candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
+    include_unresolved: bool,
+    include_owned: bool,
+) -> Vec<DiscoveryItemRecord> {
+    let mut candidates = items
+        .filter(|item| {
+            (include_owned || !item.owned_in_input) && (include_unresolved || item.resolved)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        compare_top_rated_discovery_home_items(left, right, candidates_by_id)
+    });
+    let mut seen = HashSet::new();
+    candidates.retain(|item| seen.insert(discovery_item_identity_key(item).to_string()));
+    candidates
 }
 
 pub(super) fn discovery_home_item_is_personalized(item: &DiscoveryItemRecord) -> bool {
@@ -613,43 +648,70 @@ pub(super) fn compare_optional_f64_desc(left: Option<f64>, right: Option<f64>) -
     comparable_finite_f64(right).total_cmp(&comparable_finite_f64(left))
 }
 
+#[cfg(test)]
 pub(super) fn personalized_section_results(
     items: &[DiscoveryItemRecord],
     library_profile: &DiscoveryLibraryAffinityProfile,
     candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
+    claimed_item_keys: &HashSet<String>,
     settings: DiscoveryRailCompositionSettings,
     include_unresolved: bool,
     limit: usize,
 ) -> Vec<DiscoverySectionResult> {
-    let visible_items = items
+    let visible_items = discovery_home_visible_items(items, include_unresolved);
+    let context = DiscoveryRailContext::new(
+        candidates_by_id,
+        settings,
+        library_profile,
+        &visible_items,
+        limit,
+    );
+    personalized_section_results_in_context(
+        visible_items,
+        library_profile,
+        &context,
+        claimed_item_keys,
+    )
+}
+
+pub(super) fn discovery_home_visible_items(
+    items: &[DiscoveryItemRecord],
+    include_unresolved: bool,
+) -> Vec<DiscoveryItemRecord> {
+    items
         .iter()
         .filter(|item| home_item_visible(item, include_unresolved))
         .cloned()
-        .collect::<Vec<_>>();
-    let context = DiscoveryRailContext {
-        candidates_by_id,
-        settings,
-        medium_mix: library_profile.medium_mix,
-        // The evidence floor's popularity arm is relative to the pool it is
-        // filtering, so the median is taken once over everything visible, not
-        // per rail: a rail must not lower its own bar by being thin.
-        median_base_rank: discovery_pool_median_base_rank(&visible_items),
-        limit,
-    };
+        .collect()
+}
+
+/// Composes the personalized shelf over an already visibility-filtered pool.
+///
+/// `claimed_item_keys` are titles another rail has already claimed before the
+/// shelf composes; no personalized rail repeats them.
+pub(super) fn personalized_section_results_in_context(
+    visible_items: Vec<DiscoveryItemRecord>,
+    library_profile: &DiscoveryLibraryAffinityProfile,
+    context: &DiscoveryRailContext<'_>,
+    claimed_item_keys: &HashSet<String>,
+) -> Vec<DiscoverySectionResult> {
     let mut sections = Vec::new();
-    let mut emitted_item_keys = HashSet::new();
+    // Titles a more personal section already holds (the viewer's watchlist)
+    // count as emitted before the first rail composes, so no reason rail and
+    // not FOR_YOU can show them again.
+    let mut emitted_item_keys = claimed_item_keys.clone();
 
     // A library too small to have said anything gets the one honest rail.
-    // Composing a "Because You Like Crime" out of four titles is the failure
+    // Composing a "Because you like crime" out of four titles is the failure
     // this budget exists to prevent, so the ladder widens only as the library
     // earns it.
     let label_budget = discovery_rail_label_budget(library_profile.owned_title_count);
 
     // Composition order is dedupe priority: `emitted_item_keys` lets an earlier
     // section claim a title outright, so the most specific reason must compose
-    // first. Tag/theme rails lead the ladder - a title that earns "Because You
-    // Like Isekai" must not be eaten first by the far broader "Because You Like
-    // Animation" genre rail.
+    // first. Tag/theme rails lead the ladder - a title that earns "Because you
+    // like isekai" must not be eaten first by the far broader "Because you like
+    // fantasy" genre rail.
     sections.extend(label_affinity_sections(
         &visible_items,
         &library_profile.theme_labels,
@@ -657,7 +719,7 @@ pub(super) fn personalized_section_results(
         "BECAUSE_YOU_LIKE_TAG",
         "because_you_like_tag",
         label_budget,
-        &context,
+        context,
         &mut emitted_item_keys,
     ));
     sections.extend(label_affinity_sections(
@@ -667,7 +729,7 @@ pub(super) fn personalized_section_results(
         "BECAUSE_YOU_LIKE_GENRE",
         "because_you_like_genre",
         label_budget,
-        &context,
+        context,
         &mut emitted_item_keys,
     ));
 
@@ -677,12 +739,11 @@ pub(super) fn personalized_section_results(
     // MOVIES_FOR_YOU / SERIES_FOR_YOU / ANIME_FOR_YOU variants are retired. So is
     // BECAUSE_YOU_HAVE, which duplicated the title page's More Like This shelf.
     sections.extend(compose_personalized_section(
-        "for_you".to_string(),
+        DISCOVERY_FOR_YOU_SECTION_ID.to_string(),
         "FOR_YOU".to_string(),
         "For You".to_string(),
         visible_items,
-        None,
-        &context,
+        context,
         &mut emitted_item_keys,
     ));
 
@@ -696,6 +757,28 @@ pub(super) struct DiscoveryRailContext<'a> {
     pub(super) medium_mix: DiscoveryLibraryMediumMix,
     pub(super) median_base_rank: Option<f64>,
     pub(super) limit: usize,
+}
+
+impl<'a> DiscoveryRailContext<'a> {
+    pub(super) fn new(
+        candidates_by_id: &'a HashMap<String, DiscoveryHomeCandidate>,
+        settings: DiscoveryRailCompositionSettings,
+        library_profile: &DiscoveryLibraryAffinityProfile,
+        visible_items: &[DiscoveryItemRecord],
+        limit: usize,
+    ) -> Self {
+        Self {
+            candidates_by_id,
+            settings,
+            medium_mix: library_profile.medium_mix,
+            // The evidence floor's popularity arm is relative to the pool it
+            // is filtering, so the median is taken once over everything
+            // visible, not per rail: a rail must not lower its own bar by
+            // being thin.
+            median_base_rank: discovery_pool_median_base_rank(visible_items),
+            limit,
+        }
+    }
 }
 
 /// Rollback levers for the rail-quality rules. Each one is a named setting so a
@@ -780,25 +863,65 @@ impl DiscoveryRailStats {
 /// order, per-medium cap with refill, and the never-pad / drop-below-minimum
 /// rule.
 ///
-/// `uncapped_medium` names the rail's own medium when the rail *is* about that
-/// medium (the Anime and Animation label rails). Those are exempt from the
-/// proportional cap — an anime rail made of 40% live action is nonsense — but
-/// never from the zero rule.
+/// A rail is the first window of `context.limit` items; a section page
+/// continues past it with `compose_discovery_browse_items`.
 pub(super) fn compose_personalized_section(
     section_id: String,
     section_type: String,
     title: String,
     items: Vec<DiscoveryItemRecord>,
-    uncapped_medium: Option<DiscoveryMedium>,
     context: &DiscoveryRailContext<'_>,
     emitted_item_keys: &mut HashSet<String>,
 ) -> Option<DiscoverySectionResult> {
     let mut stats = DiscoveryRailStats::default();
+    let eligible = eligible_discovery_rail_items(items, context, emitted_item_keys, &mut stats);
+
+    let total_count = eligible.len() as i64;
+    let (first_window, _) = take_discovery_rail_window(eligible, context, Some(&mut stats));
+    let rail_len = first_window.len();
+    let mut emitted = Vec::with_capacity(rail_len);
+    for (key, item) in first_window {
+        stats.record_emitted(&item, context);
+        emitted_item_keys.insert(key);
+        emitted.push(item);
+    }
+
+    log_discovery_rail_stats(&section_id, &section_type, &stats, context);
+
+    // Never pad. A rail ships with whatever passed, and if that is too little to
+    // be a rail it does not ship at all — an eight-item floor, or the caller's
+    // own limit when that is smaller.
+    if rail_len < DISCOVERY_RAIL_MIN_ITEMS.min(context.limit) {
+        for item in &emitted {
+            emitted_item_keys.remove(discovery_item_identity_key(item));
+        }
+        return None;
+    }
+
+    Some(DiscoverySectionResult {
+        section_id,
+        section_type,
+        title,
+        surface: "personalized".to_string(),
+        total_count,
+        items: emitted,
+        label_key: None,
+    })
+}
+
+/// The items a rail may hold, in rail order: unclaimed, distinct, through the
+/// medium gate and the evidence floor.
+fn eligible_discovery_rail_items(
+    items: Vec<DiscoveryItemRecord>,
+    context: &DiscoveryRailContext<'_>,
+    claimed_item_keys: &HashSet<String>,
+    stats: &mut DiscoveryRailStats,
+) -> Vec<(String, DiscoveryItemRecord)> {
     let mut eligible = Vec::new();
     let mut seen = HashSet::new();
     for item in items {
         let key = discovery_item_identity_key(&item).to_string();
-        if emitted_item_keys.contains(&key) || !seen.insert(key.clone()) {
+        if claimed_item_keys.contains(&key) || !seen.insert(key.clone()) {
             continue;
         }
         if context.settings.medium_affinity_gate
@@ -819,52 +942,69 @@ pub(super) fn compose_personalized_section(
         }
         eligible.push((key, item));
     }
-
     sort_personalized_discovery_items(&mut eligible, context);
+    eligible
+}
 
-    let total_count = eligible.len() as i64;
-    let mut taken_per_medium = DiscoveryLibraryMediumMix::default();
-    let mut emitted = Vec::new();
-    for (key, item) in eligible {
-        if emitted.len() >= context.limit {
+/// Every eligible item not in `claimed_item_keys`, in rail windows: the
+/// order a rail continues in past its first window. Nothing is claimed and
+/// nothing is dropped for being short: this is a browse list, not a rail
+/// that has to earn its place.
+pub(super) fn compose_discovery_browse_items(
+    items: Vec<DiscoveryItemRecord>,
+    context: &DiscoveryRailContext<'_>,
+    claimed_item_keys: &HashSet<String>,
+) -> Vec<DiscoveryItemRecord> {
+    let mut stats = DiscoveryRailStats::default();
+    let mut pending = eligible_discovery_rail_items(items, context, claimed_item_keys, &mut stats);
+    let mut emitted = Vec::with_capacity(pending.len());
+    while !pending.is_empty() {
+        let (window, rest) = take_discovery_rail_window(pending, context, None);
+        if window.is_empty() {
             break;
+        }
+        emitted.extend(window.into_iter().map(|(_, item)| item));
+        pending = rest;
+    }
+    emitted
+}
+
+/// One rail window: up to `context.limit` items in order, each medium held to
+/// its slot cap. Items the window could not take keep their order and are
+/// returned for the next window.
+#[allow(clippy::type_complexity)]
+fn take_discovery_rail_window(
+    eligible: Vec<(String, DiscoveryItemRecord)>,
+    context: &DiscoveryRailContext<'_>,
+    mut stats: Option<&mut DiscoveryRailStats>,
+) -> (
+    Vec<(String, DiscoveryItemRecord)>,
+    Vec<(String, DiscoveryItemRecord)>,
+) {
+    let mut taken_per_medium = DiscoveryLibraryMediumMix::default();
+    let mut window = Vec::new();
+    let mut deferred = Vec::new();
+    for (key, item) in eligible {
+        if window.len() >= context.limit {
+            deferred.push((key, item));
+            continue;
         }
         let medium = discovery_item_medium(&item);
         if context.settings.medium_affinity_gate
-            && uncapped_medium != Some(medium)
             && taken_per_medium.count(medium) >= context.medium_mix.slot_cap(medium, context.limit)
         {
             // Refill rather than truncate: the rail keeps looking down the list
             // for something it is allowed to show.
-            stats.medium_cap_dropped += 1;
+            if let Some(stats) = stats.as_deref_mut() {
+                stats.medium_cap_dropped += 1;
+            }
+            deferred.push((key, item));
             continue;
         }
         taken_per_medium.add(medium);
-        stats.record_emitted(&item, context);
-        emitted_item_keys.insert(key);
-        emitted.push(item);
+        window.push((key, item));
     }
-
-    log_discovery_rail_stats(&section_id, &section_type, &stats, context);
-
-    // Never pad. A rail ships with whatever passed, and if that is too little to
-    // be a rail it does not ship at all — an eight-item floor, or the caller's
-    // own limit when that is smaller.
-    if emitted.len() < DISCOVERY_RAIL_MIN_ITEMS.min(context.limit) {
-        for item in &emitted {
-            emitted_item_keys.remove(discovery_item_identity_key(item));
-        }
-        return None;
-    }
-
-    Some(DiscoverySectionResult {
-        section_id,
-        section_type,
-        title,
-        surface: "personalized".to_string(),
-        total_count,
-        items: emitted,
-    })
+    (window, deferred)
 }
 
 fn sort_personalized_discovery_items(
@@ -1073,8 +1213,15 @@ pub(super) fn label_affinity_sections(
             "discovery candidate admission"
         );
     }
-    for label in canonical_affinity_labels_for_profile(items, labels, canonical_kind)
+    let Some(family) = DiscoveryRailLabelFamily::from_canonical_kind(canonical_kind) else {
+        return sections;
+    };
+    // The profile only holds allowlisted labels; this is the floor that keeps
+    // any other path from naming a rail after a raw tag. It runs before the
+    // budget so a label that can never name a rail never spends a slot.
+    for (label, rail_label) in canonical_affinity_labels_for_profile(items, labels, canonical_kind)
         .into_iter()
+        .filter_map(|label| discovery_rail_label(family, &label).map(|entry| (label, entry)))
         .take(label_budget)
     {
         let section_items = items
@@ -1087,66 +1234,27 @@ pub(super) fn label_affinity_sections(
                         canonical_kind,
                         context.settings.genre_rail_corroboration,
                     )
-                    && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
             .collect::<Vec<_>>();
-        if let Some(section) = compose_personalized_section(
-            format!(
-                "{}_{}",
-                section_id_prefix,
-                slugify_discovery_section_part(&label)
-            ),
+        let section_id = format!(
+            "{}_{}",
+            section_id_prefix,
+            slugify_discovery_section_part(&label)
+        );
+        if let Some(mut section) = compose_personalized_section(
+            section_id,
             section_type.to_string(),
-            format!("Because You Like {}", label),
+            rail_label.title.to_string(),
             section_items,
-            affinity_label_own_medium(&label),
             context,
             emitted_item_keys,
         ) {
+            section.label_key = Some(rail_label.key.to_string());
             sections.push(section);
         }
     }
     sections
-}
-
-/// The medium a rail is *about*, when its label names one. Such a rail is
-/// exempt from the proportional medium cap: "Because You Like Anime" made of
-/// 40% live action would be absurd. It is not exempt from the zero rule — a
-/// library with no anime never gets the rail at all, because the label could
-/// not have entered the profile.
-pub(super) fn affinity_label_own_medium(label: &str) -> Option<DiscoveryMedium> {
-    match normalize_discovery_affinity_key(label).as_str() {
-        "animation" => Some(DiscoveryMedium::Animation),
-        "anime" => Some(DiscoveryMedium::Anime),
-        _ => None,
-    }
-}
-
-/// Animation is a medium; anime is a tradition. Metadata sources tag anime with
-/// the same canonical `animation` genre facet as Western animation, so an
-/// unguarded "Because You Like Animation" rail comingles Paperman with Silver Horizon.
-/// This is a deliberate two-label special case at the point where items are
-/// matched to a label, not a general taxonomy: the animation rail drops anime
-/// items, an anime rail keeps only anime items, and every other label is
-/// untouched.
-///
-/// The guard is keyed on the label name and is **kind-agnostic by design**: a
-/// theme/tag rail named "Anime" or "Animation" carries exactly the same meaning
-/// its genre namesake does, so it has to split the same way.
-///
-/// Both arms are decided by the medium classifier, so "Animation" means
-/// animation — not "anything that is not anime". The old negation let live
-/// action into the animation rail whenever a stray `animation` facet term
-/// appeared on a live-action title.
-pub(super) fn affinity_label_keeps_item_across_anime_boundary(
-    item: &DiscoveryItemRecord,
-    label: &str,
-) -> bool {
-    match affinity_label_own_medium(label) {
-        Some(medium) => discovery_item_medium(item) == medium,
-        None => true,
-    }
 }
 
 /// Media kind is the primary anime signal, but `discovery_item_media_kind` falls

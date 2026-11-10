@@ -125,13 +125,13 @@ pub fn hardlink_fact_optional(path: &Path) -> AppResult<Option<HardlinkFact>> {
 }
 
 #[cfg(unix)]
-fn link_count_from_metadata(metadata: &std::fs::Metadata) -> LinkCount {
+pub(crate) fn link_count_from_metadata(metadata: &std::fs::Metadata) -> LinkCount {
     use std::os::unix::fs::MetadataExt;
     LinkCount::Known(metadata.nlink())
 }
 
 #[cfg(not(unix))]
-fn link_count_from_metadata(_metadata: &std::fs::Metadata) -> LinkCount {
+pub(crate) fn link_count_from_metadata(_metadata: &std::fs::Metadata) -> LinkCount {
     LinkCount::Unsupported
 }
 

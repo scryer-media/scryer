@@ -644,6 +644,62 @@ async fn add_title_and_queue_download_records_accepted_torrent_hash_fingerprint(
     assert_eq!(identities.len(), 1);
     let identity = identities.values().next().expect("submission identity");
     assert_eq!(identity.download_id.as_deref(), Some(info_hash));
+    drop(identities);
+    // The indexer gave no hash, so the submission keeps the one the client
+    // accepted: terminal cleanup proves the client entry against it.
+    let store = download_submissions.store.lock().await;
+    let accepted = store
+        .iter()
+        .find(|submission| !submission.download_client_item_id.is_empty())
+        .expect("accepted submission");
+    assert_eq!(accepted.info_hash.as_deref(), Some(info_hash));
+}
+
+#[tokio::test]
+async fn queued_torrent_submission_prefers_the_client_accepted_hash_over_the_indexer_hint() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    download_client
+        .set_grab_info_hash(Some("ABCDEF0123456789ABCDEF0123456789ABCDEF01"))
+        .await;
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let request = NewTitle {
+        name: "Hinted Torrent".into(),
+        facet: MediaFacet::Movie,
+        monitored: true,
+        tags: vec![],
+        external_ids: vec![ExternalId::new("tmdb".to_string(), "987655".to_string())],
+        min_availability: None,
+        ..Default::default()
+    };
+    let queued_release = QueuedReleaseSelection {
+        indexer_id: None,
+        source_hint: Some("https://example.invalid/releases/hinted-torrent.torrent".to_string()),
+        source_kind: Some(DownloadSourceKind::TorrentFile),
+        source_title: Some("Hinted.Torrent.2026.1080p.WEB-DL".to_string()),
+        source_password: None,
+        info_hash_hint: Some("1111111111111111111111111111111111111111".to_string()),
+        size_bytes: None,
+        seeders: None,
+    };
+
+    app.add_title_and_queue_download_with_outcome(&user, request, queued_release)
+        .await
+        .expect("queued torrent add should succeed");
+
+    let store = download_submissions.store.lock().await;
+    let accepted = store
+        .iter()
+        .find(|submission| !submission.download_client_item_id.is_empty())
+        .expect("accepted submission");
+    assert_eq!(
+        accepted.info_hash.as_deref(),
+        Some("abcdef0123456789abcdef0123456789abcdef01")
+    );
 }
 
 #[tokio::test]
@@ -4769,7 +4825,7 @@ impl SwitchableCapsPluginProvider {
 
 impl IndexerPluginProvider for SwitchableCapsPluginProvider {
     fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
-        None
+        Some(Arc::new(MockIndexerClient))
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -5394,6 +5450,7 @@ async fn convergence_fingerprint_matches_the_full_upgrade_context_resolution() {
             &context.profile.id,
             &crate::acquisition::convergence::profile_criteria_version(&context.profile.criteria),
             &audio,
+            &crate::media::language_preference::NO_LANGUAGE_PREFERENCES,
             &crate::acquisition::convergence::scope_match_identity(&subject),
         );
 
@@ -5557,13 +5614,12 @@ async fn covered_background_walk_reads_no_persona_or_acquisition_thresholds() {
             .any(|key| key == INDEXER_ROUTING_SETTINGS_KEY),
         "the stage reached the convergence gate: {walk_reads:?}"
     );
-    // The acquisition thresholds are the only reader of the last key.
-    for key in [SCORING_PERSONA_KEY, "acquisition.same_tier_min_delta"] {
-        assert!(
-            !walk_reads.iter().any(|read| read == key),
-            "a covered stage never resolves the persona or the acquisition thresholds ({key}): {walk_reads:?}"
-        );
-    }
+    // The thresholds now come from the profile, so the persona is the only
+    // candidate-evaluation setting left to watch for.
+    assert!(
+        !walk_reads.iter().any(|read| read == SCORING_PERSONA_KEY),
+        "a covered stage never resolves the persona: {walk_reads:?}"
+    );
 }
 
 /// The rotation cursors are written only when they move. A cycle that ends
@@ -5824,12 +5880,25 @@ async fn background_acquisition_within_budget_walks_the_whole_batch() {
     assert_eq!(indexer_client.requested_indexer_id_sets().await.len(), 1);
 }
 
+/// Walks at the eager intensity, whose top-up and concurrency are the ones
+/// these tests count on.
+async fn walk_eagerly(app: &AppUseCase) {
+    app.upsert_system_setting_json(
+        crate::settings::runtime::ACQUISITION_WALK_INTENSITY_KEY,
+        &crate::acquisition::walk_intensity::AcquisitionWalkIntensity::Eager.as_str(),
+        None,
+    )
+    .await
+    .expect("set the walk intensity");
+}
+
 /// A scope whose walk had nothing to do does not use up the batch: the cycle
 /// carries on along the rotation until it has spent the batch on a scope that
 /// needed it.
 #[tokio::test]
 async fn covered_scopes_do_not_use_up_the_batch() {
     let (app, indexer_client) = covered_movies_ahead_of_an_open_movie(2).await;
+    walk_eagerly(&app).await;
 
     let outcome = app.run_background_acquisition_cycle_once().await;
 
@@ -5849,6 +5918,8 @@ async fn covered_scopes_do_not_use_up_the_batch() {
 #[tokio::test]
 async fn a_cycle_stops_following_covered_scopes_at_its_bound() {
     let (app, indexer_client) = covered_movies_ahead_of_an_open_movie(5).await;
+    // An eager walk follows four times its batch; normal follows two.
+    walk_eagerly(&app).await;
 
     let first = app.run_background_acquisition_cycle_once().await;
     assert_eq!(first.titles_walked, 4, "a batch of one follows four scopes");
@@ -5860,6 +5931,17 @@ async fn a_cycle_stops_following_covered_scopes_at_its_bound() {
         "the last covered movie, then the open one"
     );
     assert_eq!(indexer_client.requested_indexer_id_sets().await.len(), 1);
+}
+
+/// The default walk follows covered scopes for twice its batch, and a large
+/// backlog would lower that further; eager keeps four times.
+#[tokio::test]
+async fn a_normal_walk_follows_covered_scopes_for_twice_its_batch() {
+    let (app, indexer_client) = covered_movies_ahead_of_an_open_movie(5).await;
+
+    let first = app.run_background_acquisition_cycle_once().await;
+    assert_eq!(first.titles_walked, 2, "a batch of one follows two scopes");
+    assert!(indexer_client.requested_indexer_id_sets().await.is_empty());
 }
 
 /// The failure loop never costs an indexer query. A grab that fails is
@@ -6645,6 +6727,56 @@ async fn routed_indexers_exclude_indexers_without_automatic_search() {
     assert!(
         scope_is_converged(&app, &title, &subject).await,
         "covering the auto-search indexer converges the scope"
+    );
+}
+
+/// Builds clients only for the loaded `newznab` plugin.
+struct PartlyLoadedPluginProvider;
+
+impl IndexerPluginProvider for PartlyLoadedPluginProvider {
+    fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+        (config.provider_type == "newznab").then(|| Arc::new(MockIndexerClient) as _)
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        vec!["newznab".to_string()]
+    }
+
+    fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+        Vec::new()
+    }
+}
+
+#[tokio::test]
+async fn routed_indexers_exclude_indexers_whose_client_cannot_be_built() {
+    // Every search reports such an indexer as unavailable without asking it,
+    // so it never earns a receipt; routing a scope to it would search that
+    // scope again on every walk.
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let mut missing_proxy = synthetic_direct_nab_indexer_config("indexer-c", "newznab");
+    missing_proxy.proxy_config_id = Some("synthetic-missing-proxy".into());
+    let configs = vec![
+        synthetic_direct_nab_indexer_config("indexer-a", "newznab"),
+        synthetic_direct_nab_indexer_config("indexer-b", "unloaded-plugin"),
+        missing_proxy,
+    ];
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings,
+        Arc::new(MockIndexerClient),
+        configs,
+    );
+    let app = app.with_test_overrides(|builder| {
+        builder.with_plugin_provider(Arc::new(PartlyLoadedPluginProvider))
+    });
+    let (title, subject) = convergence_test_title_and_subject(&app, &user).await;
+    let convergence = app
+        .resolve_scope_convergence(&title, &subject)
+        .await
+        .expect("routed convergence coordinates");
+    assert_eq!(
+        convergence.routed_indexer_ids,
+        vec!["indexer-a".to_string()],
+        "an unloaded plugin and a missing proxy both leave the indexer unsearchable"
     );
 }
 

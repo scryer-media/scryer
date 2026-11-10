@@ -2,6 +2,7 @@ pub mod assembly;
 pub mod backup_import_normalization;
 pub mod postgres_backup;
 pub mod sqlite_backup;
+pub mod startup_bind;
 
 #[cfg(test)]
 mod tests;
@@ -159,5 +160,6 @@ pub use assembly::{
     restore_backup_bundle_to_datastore_path, restore_prepared_backup_directory_to_datastore,
     validate_datastore,
 };
+pub use startup_bind::read_saved_bind_host;
 
 mod error_reasons;

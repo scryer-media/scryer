@@ -2527,7 +2527,8 @@ impl PostImportTracking {
 pub struct SeedingProfile {
     pub id: String,
     pub name: String,
-    /// Share ratio goal, or null to defer to the client's own limits.
+    /// Share ratio goal. Zero discharges the ratio obligation immediately;
+    /// null defers to the client's own limits.
     pub ratio: Option<f64>,
     /// Seed time goal in minutes, or null to defer to the client's own limits.
     pub seed_time_minutes: Option<i64>,
@@ -2597,8 +2598,7 @@ impl SeedingProfile {
         validate_seed_time_minutes("seed time", self.seed_time_minutes)?;
         validate_seed_ratio("season pack ratio", self.season_pack_ratio)?;
         validate_seed_time_minutes("season pack seed time", self.season_pack_seed_time_minutes)?;
-        // Zero is legal here and means "do not check", unlike the goal fields
-        // above where zero would be indistinguishable from unset.
+        // Zero disables admission filtering; unset inherits the system floor.
         if self.minimum_seeders.is_some_and(|value| value < 0) {
             return Err("seeding profile minimum seeders cannot be negative".to_string());
         }
@@ -2608,9 +2608,9 @@ impl SeedingProfile {
 
 fn validate_seed_ratio(label: &str, value: Option<f64>) -> Result<(), String> {
     match value {
-        Some(value) if !value.is_finite() || value <= 0.0 => {
-            Err(format!("seeding profile {label} must be greater than 0"))
-        }
+        Some(value) if !value.is_finite() || value < 0.0 => Err(format!(
+            "seeding profile {label} must be finite and at least 0"
+        )),
         _ => Ok(()),
     }
 }
@@ -3106,40 +3106,27 @@ impl DownloadQueueDeleteStatus {
     }
 }
 
-pub const VIDEO_EXTENSIONS: &[&str] = &[
-    "mkv", "mp4", "avi", "wmv", "mov", "m4v", "ts", "m2ts", "webm", "flv", "ogv", "strm", "mpg",
-    "mpeg", "vob", "iso",
-];
+pub use scryer_media_types::formats::{
+    VIDEO_EXTENSIONS, canonical_video_extension, preferred_video_extension_for_container,
+};
 
 pub const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "ass", "ssa", "sub", "vtt", "idx"];
 
 pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif"];
 
-pub fn canonical_video_extension(path: &std::path::Path) -> Option<&'static str> {
-    let normalized = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| {
-            name.trim()
-                .trim_end_matches(|ch: char| {
-                    ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | '`' | '_' | '.')
-                })
-                .to_ascii_lowercase()
-        })?;
-
-    VIDEO_EXTENSIONS.iter().copied().find(|known| {
-        normalized
-            .strip_suffix(*known)
-            .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
-    })
-}
-
 pub fn is_video_file(path: &std::path::Path) -> bool {
     canonical_video_extension(path).is_some()
 }
 
+/// A recognized video that can represent its own library item, rather than a companion.
+pub fn is_standalone_video_file(path: &std::path::Path) -> bool {
+    scryer_media_types::formats::is_standalone_video_path(path)
+}
+
 pub fn is_disc_image(path: &std::path::Path) -> bool {
-    canonical_video_extension(path) == Some("iso")
+    scryer_media_types::formats::media_format_for_path(path).is_some_and(|entry| {
+        entry.handling == scryer_media_types::formats::MediaHandling::DiscImage
+    })
 }
 
 pub fn is_subtitle_file(path: &std::path::Path) -> bool {
@@ -7140,6 +7127,10 @@ pub struct NewUserMediaSignal {
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
+    /// The person marked the item as a favourite on the server. An intent
+    /// signal beside the played state; always `false` for Plex, which has no
+    /// favourite.
+    pub is_favorite: bool,
     pub observed_at: DateTime<Utc>,
 }
 
@@ -7158,6 +7149,7 @@ pub struct UserMediaSignal {
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
+    pub is_favorite: bool,
     pub observed_at: DateTime<Utc>,
     /// Sweep that wrote this row. Rows from older generations for the same
     /// participant are deleted by the next successful sweep, which is how an
@@ -7180,6 +7172,10 @@ pub struct MediaServerSignalSyncState {
     pub last_started_at: Option<DateTime<Utc>>,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    /// Stable reason code for `last_error`, from
+    /// `scryer_application::media_server_signals::reasons`. `None` on rows
+    /// written before codes were stored, and whenever `last_error` is `None`.
+    pub last_error_code: Option<String>,
     pub participant_count: i64,
     pub signal_count: i64,
     pub updated_at: DateTime<Utc>,

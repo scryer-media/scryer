@@ -1,10 +1,13 @@
 import * as React from "react";
 import type { CSSProperties } from "react";
 import type { LucideIcon } from "lucide-react";
+import { Link } from "react-router";
 import {
+  ArrowLeft,
   Building2,
   CalendarDays,
   Check,
+  ChevronRight,
   Disc3,
   Eye,
   Film,
@@ -24,6 +27,14 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useInstanceFeatures } from "@/lib/context/instance-features-context";
 import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
 import { TitleCard } from "@/components/title-card";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
@@ -34,9 +45,15 @@ import {
 } from "@/lib/utils/discovery-display";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
 import {
+  ANIME_EXCLUDING_PUBLIC_SECTION_TYPES,
+  ANIME_ONLY_PUBLIC_SECTION_TYPES,
+  FROM_YOUR_WATCHLIST_SECTION_TYPE,
   HERO_RAIL_PREFERRED_SECTION_TYPE,
   NEW_ON_PHYSICAL_SECTION_TYPE,
   NEW_ON_STREAMING_SECTION_TYPE,
+  discoveryBrowseLabelTitle,
+  discoveryRailLabelTitle,
+  discoverySectionIsBrowse,
   discoverySectionType,
   orderDiscoveryHomeSectionsDetailed,
   sectionIsPublicPromotion,
@@ -46,7 +63,10 @@ import {
   selectPosterVariantUrl,
 } from "@/lib/utils/poster-images";
 import { cn } from "@/lib/utils";
+import { buildDiscoverySectionPath } from "@/lib/utils/routing";
 import type {
+  DiscoveryBrowseLabel,
+  DiscoveryBrowseLabelFamily,
   DiscoveryHomePayload,
   DiscoveryHomeCard,
   DiscoveryHomeFilterOptions,
@@ -54,12 +74,36 @@ import type {
   DiscoveryHomeHero,
   DiscoveryHomeSection,
   DiscoveryHomeStatus,
+  DiscoverySectionSort,
   Facet,
 } from "@/lib/types";
 import { LoadingMark } from "@/components/common/loading-mark";
 
+/** One section opened as a full grid, paged by the container. */
+export type DiscoverySectionGridModel = {
+  sectionId: string;
+  /** The section's identity from its latest page; null before the first. */
+  section: DiscoveryHomeSection | null;
+  items: DiscoveryHomeCard[];
+  /** Section total under the current query; null before the first page. */
+  totalCount: number | null;
+  loadingPage: boolean;
+  exhausted: boolean;
+  /** The last page request failed; paging waits for "load more". */
+  pageFailed: boolean;
+  sort: DiscoverySectionSort;
+  hideOwned: boolean;
+  hideRequested: boolean;
+  onSortChange: (sort: DiscoverySectionSort) => void;
+  onHideOwnedChange: (hideOwned: boolean) => void;
+  onHideRequestedChange: (hideRequested: boolean) => void;
+  onLoadMore: () => void;
+};
+
 type DiscoveryViewProps = {
   home: DiscoveryHomePayload | null;
+  /** Set when a section is open as a grid; the home rails are not shown. */
+  sectionGrid?: DiscoverySectionGridModel | null;
   loading: boolean;
   error: string | null;
   manageableFacets: Facet[];
@@ -163,23 +207,10 @@ function itemMatchScore(item: DiscoveryHomeHero) {
     : null;
 }
 
-// Animation is a medium, anime is a tradition, and the two must not comingle
-// inside one reason-based rail. SMG's feed does not enforce that, so the anime
-// rail is narrowed to anime and the general rails drop anime. Section identity is
-// deliberately left intact - the display name is owned by
+// SMG's feed does not keep anime out of the general rails, so the dashboard
+// narrows them (ANIME_ONLY_PUBLIC_SECTION_TYPES / ANIME_EXCLUDING_...). Section
+// identity is deliberately left intact - the display name is owned by
 // SECTION_DISPLAY_NAME_KEYS, so there is no need to rewrite the sectionType here.
-const ANIME_ONLY_PUBLIC_SECTION_TYPES = new Set([
-  "ANIME_THIS_WEEK",
-  "POPULAR_WITH_ANIME_FANS",
-]);
-// TRENDING_NOW and POPULAR_RIGHT_NOW merge into one "Right Now" rail, so both
-// halves must anime-exclude identically - otherwise the merged rail leaks anime
-// that the anime band already owns.
-const ANIME_EXCLUDING_PUBLIC_SECTION_TYPES = new Set([
-  "TRENDING_NOW",
-  "POPULAR_RIGHT_NOW",
-  "POPULAR_SERIES",
-]);
 
 function normalizedPublicHomeSections(home: DiscoveryHomePayload | null) {
   const publicSections = home?.publicSections ?? [];
@@ -220,7 +251,9 @@ const SECTION_DISPLAY_NAME_KEYS: Record<string, string> = {
   // one the gateway sent.
   POPULAR_RIGHT_NOW: "discovery.section.rightNow",
   TRENDING_NOW: "discovery.section.rightNow",
+  BROWSE_ALL: "nav.discovery",
   FOR_YOU: "discovery.section.fromYourTaste",
+  [FROM_YOUR_WATCHLIST_SECTION_TYPE]: "discovery.section.fromYourWatchlist",
   COMPLETE_THE_COLLECTION: "discovery.section.almostComplete",
   // Sourced from MAL/AniList, so the generic SMG title lies about the content.
   UPCOMING_NEXT_SEASON: "discovery.section.nextAnimeSeason",
@@ -246,6 +279,23 @@ function sectionDisplayTitle(
   section: DiscoveryHomeSection,
   t: ReturnType<typeof useTranslate>,
 ) {
+  // A browse section names its label with the bare noun its card showed.
+  if (discoverySectionIsBrowse(section)) {
+    return (
+      discoveryBrowseLabelTitle(section.labelKey, t) ||
+      section.title ||
+      t("discovery.section.recommended")
+    );
+  }
+  // A "because you like" rail names its label by key; a key this client does
+  // not know yet falls back to the server's English title.
+  if (section.labelKey) {
+    return (
+      discoveryRailLabelTitle(section.labelKey, t) ||
+      section.title ||
+      t("discovery.section.recommended")
+    );
+  }
   const key = SECTION_DISPLAY_NAME_KEYS[discoverySectionType(section)];
   if (key) {
     const label = t(key);
@@ -480,15 +530,28 @@ function DiscoverySectionRail({
       )}
     >
       <div className="mb-3.5 flex items-center justify-between gap-3">
-        <h3 className="m-0 inline-flex items-center gap-2 font-[var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
-          {HeaderIcon ? (
-            <HeaderIcon
-              className="h-4 w-4 text-[var(--scry-accent-text)]"
-              aria-hidden="true"
-            />
-          ) : null}
-          {heading}
+        <h3 className="m-0 min-w-0 font-[family-name:var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
+          <Link
+            to={buildDiscoverySectionPath(section.sectionId)}
+            className="inline-flex items-center gap-2 rounded-[6px] text-inherit no-underline hover:text-[var(--scry-accent-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)]"
+          >
+            {HeaderIcon ? (
+              <HeaderIcon
+                className="h-4 w-4 text-[var(--scry-accent-text)]"
+                aria-hidden="true"
+              />
+            ) : null}
+            {heading}
+          </Link>
         </h3>
+        <Link
+          to={buildDiscoverySectionPath(section.sectionId)}
+          aria-label={t("discovery.section.seeAllLabel", { section: heading })}
+          className="inline-flex shrink-0 items-center gap-1 rounded-[6px] text-[12.5px] font-semibold text-[var(--scry-accent-text)] no-underline hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)]"
+        >
+          {t("discovery.section.seeAll")}
+          <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+        </Link>
       </div>
       <HorizontalRail
         className={cn(
@@ -518,6 +581,240 @@ function DiscoverySectionRail({
           );
         })}
       </HorizontalRail>
+    </section>
+  );
+}
+
+const BROWSE_RAIL_HEADING_KEYS: Record<DiscoveryBrowseLabelFamily, string> = {
+  GENRE: "discovery.browseBy.genreHeading",
+  THEME: "discovery.browseBy.themeHeading",
+};
+
+function DiscoveryBrowseRail({
+  family,
+  labels,
+}: {
+  family: DiscoveryBrowseLabelFamily;
+  labels: DiscoveryBrowseLabel[];
+}) {
+  const t = useTranslate();
+  if (labels.length === 0) {
+    return null;
+  }
+  const heading = t(BROWSE_RAIL_HEADING_KEYS[family]);
+  return (
+    <section className="mb-7" data-discovery-browse-rail={family}>
+      <div className="mb-3.5 flex items-center justify-between gap-3">
+        <h3 className="m-0 inline-flex items-center gap-2 font-[family-name:var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
+          <Tag
+            className="h-4 w-4 text-[var(--scry-accent-text)]"
+            aria-hidden="true"
+          />
+          {heading}
+        </h3>
+      </div>
+      <HorizontalRail
+        className="flex gap-3 overflow-x-auto pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        fadeClassName="to-[var(--scry-bg)]"
+        scrollControlLabel={t("discovery.railScroll.right", {
+          heading,
+        })}
+        scrollBackControlLabel={t("discovery.railScroll.left", {
+          heading,
+        })}
+      >
+        {labels.map((label) => {
+          const title =
+            discoveryBrowseLabelTitle(label.labelKey, t) || label.title;
+          return (
+            <Link
+              key={label.sectionId}
+              to={buildDiscoverySectionPath(label.sectionId)}
+              className="flex h-[84px] w-[168px] flex-none flex-col justify-between rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surf)] px-4 py-3 text-[var(--scry-ink2)] no-underline transition hover:border-[rgba(var(--scry-accent-rgb),0.55)] hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)]"
+            >
+              <span className="line-clamp-2 font-[family-name:var(--font-space-grotesk)] text-[15px] font-semibold leading-tight">
+                {title}
+              </span>
+              <span className="text-[11.5px] text-[var(--scry-muted3)]">
+                {t("discovery.browseBy.titleCount", {
+                  count: label.itemCount,
+                })}
+              </span>
+            </Link>
+          );
+        })}
+      </HorizontalRail>
+    </section>
+  );
+}
+
+const DISCOVERY_SECTION_SORTS: Array<{
+  value: DiscoverySectionSort;
+  labelKey: string;
+}> = [
+  { value: "RELEVANCE", labelKey: "discovery.section.sort.relevance" },
+  { value: "POPULARITY", labelKey: "discovery.section.sort.popularity" },
+  { value: "RATING", labelKey: "discovery.section.sort.rating" },
+  { value: "RELEASE_DATE", labelKey: "discovery.section.sort.releaseDate" },
+  { value: "TITLE", labelKey: "discovery.section.sort.title" },
+];
+
+function DiscoverySectionGrid({
+  grid,
+  items,
+  manageableFacets,
+  requestableFacets,
+  onAction,
+  onDismissItem,
+  onBack,
+}: {
+  grid: DiscoverySectionGridModel;
+  /** The grid's titles after the local facet and "not interested" filters. */
+  items: DiscoveryHomeCard[];
+  manageableFacets: ReadonlySet<Facet>;
+  requestableFacets: ReadonlySet<Facet>;
+  onAction: (item: DiscoveryHomeCard) => void;
+  onDismissItem: (item: DiscoveryHomeCard) => void;
+  onBack: () => void;
+}) {
+  const t = useTranslate();
+  const heading = grid.section
+    ? sectionDisplayTitle(grid.section, t)
+    : t("discovery.section.recommended");
+  const HeaderIcon = grid.section ? sectionIcon(grid.section) : null;
+  const dismissLabel = t("discovery.notInterested");
+  const sentinelRef = React.useRef<HTMLDivElement | null>(null);
+  const { exhausted, loadingPage, onLoadMore, pageFailed } = grid;
+  const canLoadMore = !exhausted && !loadingPage && !pageFailed;
+
+  React.useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (
+      !sentinel ||
+      !canLoadMore ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onLoadMore();
+        }
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [canLoadMore, onLoadMore]);
+
+  return (
+    <section id="discovery-section-grid" data-ui="discovery-section-grid">
+      <Link
+        to="/discovery"
+        onClick={onBack}
+        className="mb-3 inline-flex items-center gap-1.5 rounded-[6px] text-[12.5px] font-semibold text-[var(--scry-muted3)] no-underline hover:text-[var(--scry-accent-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent)]"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+        {t("discovery.section.backToDiscovery")}
+      </Link>
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="m-0 inline-flex items-center gap-2 font-[family-name:var(--font-space-grotesk)] text-2xl font-semibold text-[var(--scry-ink2)]">
+            {HeaderIcon ? (
+              <HeaderIcon
+                className="h-5 w-5 text-[var(--scry-accent-text)]"
+                aria-hidden="true"
+              />
+            ) : null}
+            {heading}
+          </h2>
+          {/* The server's section total. A title a later page repeats is
+              shown once, so the grid can end a little short of it. */}
+          {grid.totalCount !== null ? (
+            <p
+              className="mt-1 text-[12.5px] text-[var(--scry-muted3)]"
+              data-discovery-section-total={grid.totalCount}
+            >
+              {t("discovery.section.titleCount", { count: grid.totalCount })}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="inline-flex items-center gap-2 text-[12.5px] font-medium text-[var(--scry-ink2)]">
+            <Checkbox
+              checked={grid.hideOwned}
+              onCheckedChange={(checked) =>
+                grid.onHideOwnedChange(checked === true)
+              }
+            />
+            {t("discovery.section.hideOwned")}
+          </label>
+          <label className="inline-flex items-center gap-2 text-[12.5px] font-medium text-[var(--scry-ink2)]">
+            <Checkbox
+              checked={grid.hideRequested}
+              onCheckedChange={(checked) =>
+                grid.onHideRequestedChange(checked === true)
+              }
+            />
+            {t("discovery.section.hideRequested")}
+          </label>
+          <Select
+            value={grid.sort}
+            onValueChange={(value) =>
+              grid.onSortChange(value as DiscoverySectionSort)
+            }
+          >
+            <SelectTrigger
+              aria-label={t("discovery.section.sortLabel")}
+              className="h-9 w-[160px] rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] text-[12.5px] text-[var(--scry-body)] shadow-none"
+            >
+              <SelectValue placeholder={t("discovery.section.sortLabel")} />
+            </SelectTrigger>
+            <SelectContent>
+              {DISCOVERY_SECTION_SORTS.map((sort) => (
+                <SelectItem key={sort.value} value={sort.value}>
+                  {t(sort.labelKey)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      {items.length > 0 ? (
+        <div className="grid grid-cols-[repeat(auto-fill,152px)] justify-between gap-x-3.5 gap-y-5 max-sm:justify-around">
+          {items.map((item) => {
+            const facet = discoveryItemFacet(item);
+            return (
+              <DiscoveryRailCard
+                key={itemStableKey(item)}
+                item={item}
+                canManageTitle={facet !== null && manageableFacets.has(facet)}
+                canRequestMedia={facet !== null && requestableFacets.has(facet)}
+                onAction={onAction}
+                onDismiss={onDismissItem}
+                dismissLabel={dismissLabel}
+              />
+            );
+          })}
+        </div>
+      ) : !loadingPage && exhausted ? (
+        <div className="rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] px-5 py-8 text-center text-sm text-[var(--scry-muted3)]">
+          {t("discovery.section.empty")}
+        </div>
+      ) : null}
+      <div ref={sentinelRef} aria-hidden="true" className="h-px" />
+      {loadingPage ? (
+        <div className="flex justify-center py-6">
+          <LoadingMark className="h-6 w-6 text-[var(--scry-accent)]" />
+        </div>
+      ) : !exhausted ? (
+        <div className="flex justify-center py-6">
+          <Button type="button" variant="outline" onClick={onLoadMore}>
+            {t("discovery.section.loadMore")}
+          </Button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -623,7 +920,7 @@ function DiscoveryHero({
           </div>
           <h2
             id="discovery-hero-title"
-            className="m-0 mb-3 font-[var(--font-space-grotesk)] text-[clamp(2rem,3vw,46px)] font-bold leading-[0.96] text-white drop-shadow"
+            className="m-0 mb-3 font-[family-name:var(--font-space-grotesk)] text-[clamp(2rem,3vw,46px)] font-bold leading-[0.96] text-white drop-shadow"
           >
             {titleLabel}
           </h2>
@@ -1242,6 +1539,7 @@ function DiscoveryPendingUpdateChip({
 
 export function DiscoveryView({
   home,
+  sectionGrid = null,
   loading,
   error,
   manageableFacets,
@@ -1317,14 +1615,32 @@ export function DiscoveryView({
     () => sectionsWithoutHiddenItems(capabilitySections, hiddenKeys),
     [capabilitySections, hiddenKeys],
   );
+  const gridCapabilityItems = React.useMemo(
+    () =>
+      (sectionGrid?.items ?? []).filter((item) => {
+        const facet = discoveryItemFacet(item);
+        return facet !== null && discoverableFacetSet.has(facet);
+      }),
+    [discoverableFacetSet, sectionGrid?.items],
+  );
+  const gridItems = React.useMemo(
+    () =>
+      hiddenKeys.size === 0
+        ? gridCapabilityItems
+        : gridCapabilityItems.filter(
+            (item) => !hiddenKeys.has(itemStableKey(item)),
+          ),
+    [gridCapabilityItems, hiddenKeys],
+  );
   const hiddenItemCount = React.useMemo(() => {
     if (hiddenKeys.size === 0) {
       return 0;
     }
     const visibleFeedKeys = new Set(
-      capabilitySections
-        .flatMap((section) => section.items)
-        .map((item) => itemStableKey(item)),
+      (sectionGrid
+        ? gridCapabilityItems
+        : capabilitySections.flatMap((section) => section.items)
+      ).map((item) => itemStableKey(item)),
     );
     let count = 0;
     for (const key of hiddenKeys) {
@@ -1333,7 +1649,7 @@ export function DiscoveryView({
       }
     }
     return count;
-  }, [capabilitySections, hiddenKeys]);
+  }, [capabilitySections, gridCapabilityItems, hiddenKeys, sectionGrid]);
   const yearBounds = React.useMemo(
     () => ({
       minimum: DEFAULT_MINIMUM_YEAR,
@@ -1569,7 +1885,15 @@ export function DiscoveryView({
     onShowHidden: resetHidden,
   };
 
-  if (loading && !home) {
+  const browseLabels = home?.browseLabels ?? [];
+  const genreBrowseLabels = browseLabels.filter(
+    (label) => label.family === "GENRE",
+  );
+  const themeBrowseLabels = browseLabels.filter(
+    (label) => label.family === "THEME",
+  );
+
+  if (!sectionGrid && loading && !home) {
     return (
       <div className="flex min-h-[360px] items-center justify-center">
         <LoadingMark className="h-6 w-6 text-[var(--scry-accent)]" />
@@ -1638,7 +1962,27 @@ export function DiscoveryView({
           </p>
         )}
 
-        {heroItem ? (
+        {sectionGrid ? (
+          <DiscoverySectionGrid
+            grid={sectionGrid}
+            items={gridItems}
+            manageableFacets={manageableFacetSet}
+            requestableFacets={requestableFacetSet}
+            onAction={onAction}
+            onDismissItem={hideItem}
+            onBack={() => {
+              setSelectedGenres([]);
+              setSelectedThemes([]);
+              onFiltersChange({
+                ...serverFilters,
+                genreTagKeys: [],
+                themeTagKeys: [],
+              });
+            }}
+          />
+        ) : null}
+
+        {!sectionGrid && heroItem ? (
           <div className="mb-7 grid grid-cols-1 items-stretch gap-5 lg:grid-cols-[minmax(0,clamp(30rem,42vw,50rem))_minmax(0,1fr)] lg:min-h-[clamp(440px,46vh,520px)]">
             <DiscoveryHero
               item={heroItem}
@@ -1663,7 +2007,7 @@ export function DiscoveryView({
           </div>
         ) : null}
 
-        {primaryRailSections.length > 0 ? (
+        {sectionGrid ? null : primaryRailSections.length > 0 ? (
           primaryRailSections.map((section) => (
             <DiscoverySectionRail
               key={section.sectionId}
@@ -1677,7 +2021,7 @@ export function DiscoveryView({
         ) : !loading && !hasRenderableContent ? (
           <div className="rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] px-5 py-8 text-center">
             <Sparkles className="mx-auto mb-3 h-6 w-6 text-[var(--scry-accent-text)]" />
-            <h2 className="mb-2 font-[var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
+            <h2 className="mb-2 font-[family-name:var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
               {t("discovery.emptyTitle")}
             </h2>
             <p className="mx-auto max-w-md text-sm leading-6 text-[var(--scry-muted3)]">
@@ -1686,17 +2030,26 @@ export function DiscoveryView({
           </div>
         ) : null}
 
-        {upcomingRailSections.map((section) => (
-          <DiscoverySectionRail
-            key={section.sectionId}
-            section={section}
-            variant="upcoming"
-            manageableFacets={manageableFacetSet}
-            requestableFacets={requestableFacetSet}
-            onAction={onAction}
-            onDismissItem={hideItem}
-          />
-        ))}
+        {sectionGrid ? null : (
+          <>
+            <DiscoveryBrowseRail family="THEME" labels={themeBrowseLabels} />
+            <DiscoveryBrowseRail family="GENRE" labels={genreBrowseLabels} />
+          </>
+        )}
+
+        {sectionGrid
+          ? null
+          : upcomingRailSections.map((section) => (
+              <DiscoverySectionRail
+                key={section.sectionId}
+                section={section}
+                variant="upcoming"
+                manageableFacets={manageableFacetSet}
+                requestableFacets={requestableFacetSet}
+                onAction={onAction}
+                onDismissItem={hideItem}
+              />
+            ))}
       </main>
       {filtersOpen ? (
         <div className="fixed inset-0 z-50 xl:hidden">

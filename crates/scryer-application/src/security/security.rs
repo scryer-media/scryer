@@ -561,6 +561,8 @@ impl AppUseCase {
     ///
     /// The salt is the registration secret baked into the binary, so an offline
     /// DB dump alone cannot forge tokens.
+    // HMAC-SHA256 JWT and session key derivation is a documented signing contract; see helpers.rs.
+    #[allow(clippy::disallowed_methods)]
     pub(crate) fn derive_jwt_key(
         &self,
         password_hash: &str,
@@ -1038,6 +1040,8 @@ impl AppUseCase {
         Ok(token)
     }
 
+    // HMAC-SHA256 JWT and session key derivation is a documented signing contract; see helpers.rs.
+    #[allow(clippy::disallowed_methods)]
     fn derive_scoped_signing_key(&self, jwt_signing_key: &[u8], token_kind: &str) -> Vec<u8> {
         let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, jwt_signing_key);
         hmac::sign(&hmac_key, token_kind.as_bytes())

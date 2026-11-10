@@ -24,12 +24,6 @@ pub struct LibraryPathsSettings {
     pub series_path: String,
     pub anime_path: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpdateLibraryPaths {
-    pub movie_path: String,
-    pub series_path: String,
-    pub anime_path: Option<String>,
-}
 fn library_path_key(facet: &MediaFacet) -> &'static str {
     match facet {
         MediaFacet::Movie => MOVIES_PATH_KEY,
@@ -310,17 +304,15 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    /// `refuse_recycle_bin_conflicts` is set for an operator's save, which
-    /// must not add a root that conflicts with the custom recycle bin; startup
-    /// reconciliation leaves it unset so a stored configuration never stops
-    /// the server from starting.
+    /// Startup reconciliation's bridge from the path-keyed legacy facet root
+    /// settings to the default library. It skips the recycle-bin conflict
+    /// check so a stored configuration never stops the server from starting.
     async fn update_default_library_roots_from_entries(
         &self,
         facet: &MediaFacet,
         root_folders: &[RootFolderEntry],
         source: &str,
         actor_id: Option<String>,
-        refuse_recycle_bin_conflicts: bool,
     ) -> AppResult<Vec<String>> {
         let Some(library) = self
             .services
@@ -335,13 +327,27 @@ impl AppUseCase {
             )));
         };
 
-        let roots = root_folder_entries_to_library_root_drafts(root_folders)?;
+        let mut roots = root_folder_entries_to_library_root_drafts(root_folders)?;
+        // The legacy facet root setting stores paths only. Carry each stored
+        // root's id onto the entry at its path, since the store identifies a
+        // stored root by id alone.
+        let stored_ids_by_path = library
+            .roots
+            .iter()
+            .map(|root| {
+                (
+                    scryer_domain::normalize_library_root_path(&root.path),
+                    root.id.clone(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        for root in &mut roots {
+            root.id = stored_ids_by_path
+                .get(&scryer_domain::normalize_library_root_path(&root.path))
+                .cloned();
+        }
         self.validate_library_root_conflicts(Some(&library.id), &roots)
             .await?;
-        if refuse_recycle_bin_conflicts {
-            self.validate_library_roots_against_recycle_bin(&library.roots, &roots)
-                .await?;
-        }
 
         let library = self
             .services
@@ -438,7 +444,6 @@ impl AppUseCase {
                     &legacy_roots,
                     "startup_reconciliation",
                     None,
-                    false,
                 )
                 .await?;
                 info!(
@@ -461,7 +466,6 @@ impl AppUseCase {
                     &roots_to_mirror,
                     "startup_reconciliation",
                     None,
-                    false,
                 )
                 .await?;
                 info!(
@@ -808,6 +812,12 @@ impl AppUseCase {
         let required_audio_languages = self
             .resolve_required_audio_languages(None, Some(&library.id), Some(scope_id))
             .await?;
+        let audio_language_overrides = self
+            .load_audio_language_preference_overrides(&library.id)
+            .await?;
+        let audio_language_preferences = audio_language_overrides
+            .clone()
+            .over(self.load_audio_language_preference_settings(scope_id).await?);
         let metadata_language_override = self
             .read_setting_string_value_explicit(METADATA_LANGUAGE_KEY, Some(&library.id))
             .await?
@@ -1053,6 +1063,16 @@ impl AppUseCase {
                 .unwrap_or_default(),
             required_audio_languages_override,
             required_audio_languages,
+            preferred_audio_languages_override: audio_language_overrides.preferred,
+            preferred_audio_languages: audio_language_preferences.preferred,
+            optional_audio_languages_override: audio_language_overrides.optional,
+            optional_audio_languages: audio_language_preferences.optional,
+            audio_language_priority_override: audio_language_overrides.priority,
+            audio_language_priority: audio_language_preferences.priority,
+            optional_audio_languages_keep_searching_override: audio_language_overrides
+                .optional_keep_searching,
+            optional_audio_languages_keep_searching: audio_language_preferences
+                .optional_keep_searching,
             metadata_language_override,
             metadata_language,
             use_season_folders_override,
@@ -1519,7 +1539,7 @@ impl AppUseCase {
         let metadata_language_override = normalize_optional_string(settings.metadata_language.clone())
             .map(|value| {
                 crate::normalize_metadata_language_code(&value).ok_or_else(|| {
-                    AppError::validation_refused(crate::error_reasons::settings::METADATA_LANGUAGE_INVALID, "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn"
+                    AppError::validation_refused(crate::error_reasons::settings::METADATA_LANGUAGE_INVALID, "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus"
                             .to_string())
                 })
             })
@@ -1530,6 +1550,16 @@ impl AppUseCase {
             .and_then(|value| normalize_optional_string(Some(value)))
             .and_then(|value| crate::normalize_metadata_language_code(&value))
             != metadata_language_override;
+        let preferred_audio_languages = settings
+            .preferred_audio_languages
+            .clone()
+            .map(|languages| validated_preference_languages("preferred audio language", languages))
+            .transpose()?;
+        let optional_audio_languages = settings
+            .optional_audio_languages
+            .clone()
+            .map(|languages| validated_preference_languages("optional audio language", languages))
+            .transpose()?;
         if !is_anime_library
             && (settings.filler_policy.is_some()
                 || settings.recap_policy.is_some()
@@ -1594,6 +1624,61 @@ impl AppUseCase {
         } else {
             self.delete_scoped_system_setting(REQUIRED_AUDIO_LANGUAGES_KEY, &library.id)
                 .await?;
+        }
+
+        if let Some(languages) = preferred_audio_languages.filter(|languages| !languages.is_empty()) {
+            self.upsert_scoped_system_setting_json(
+                crate::PREFERRED_AUDIO_LANGUAGES_KEY,
+                &library.id,
+                &languages,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting(crate::PREFERRED_AUDIO_LANGUAGES_KEY, &library.id)
+                .await?;
+        }
+
+        if let Some(languages) = optional_audio_languages.filter(|languages| !languages.is_empty()) {
+            self.upsert_scoped_system_setting_json(
+                crate::OPTIONAL_AUDIO_LANGUAGES_KEY,
+                &library.id,
+                &languages,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting(crate::OPTIONAL_AUDIO_LANGUAGES_KEY, &library.id)
+                .await?;
+        }
+
+        if let Some(priority) = settings.audio_language_priority {
+            self.upsert_scoped_system_setting_json(
+                crate::AUDIO_LANGUAGE_PRIORITY_KEY,
+                &library.id,
+                &priority.as_str(),
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting(crate::AUDIO_LANGUAGE_PRIORITY_KEY, &library.id)
+                .await?;
+        }
+
+        if let Some(keep_searching) = settings.optional_audio_languages_keep_searching {
+            self.upsert_scoped_system_setting_json(
+                crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
+                &library.id,
+                &keep_searching,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting(
+                crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
+                &library.id,
+            )
+            .await?;
         }
 
         if let Some(language) = metadata_language_override {
@@ -1906,6 +1991,10 @@ impl AppUseCase {
 
         let mut changed_keys = vec![
             REQUIRED_AUDIO_LANGUAGES_KEY.to_string(),
+            crate::PREFERRED_AUDIO_LANGUAGES_KEY.to_string(),
+            crate::OPTIONAL_AUDIO_LANGUAGES_KEY.to_string(),
+            crate::AUDIO_LANGUAGE_PRIORITY_KEY.to_string(),
+            crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY.to_string(),
             METADATA_LANGUAGE_KEY.to_string(),
             USE_SEASON_FOLDERS_KEY.to_string(),
             "catalog.default_monitor_type".to_string(),
@@ -1997,100 +2086,5 @@ impl AppUseCase {
             series_path: default_path_from_root_folders(&MediaFacet::Series, &series_roots),
             anime_path: default_path_from_root_folders(&MediaFacet::Anime, &anime_roots),
         })
-    }
-}
-impl AppUseCase {
-    pub async fn update_library_paths(
-        &self,
-        actor: &User,
-        input: UpdateLibraryPaths,
-    ) -> AppResult<LibraryPathsSettings> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
-            .await?;
-        self.ensure_default_facet_libraries().await?;
-        let previous_roots = [
-            (
-                MediaFacet::Movie,
-                self.effective_scan_roots_for_facet(&MediaFacet::Movie)
-                    .await?,
-            ),
-            (
-                MediaFacet::Series,
-                self.effective_scan_roots_for_facet(&MediaFacet::Series)
-                    .await?,
-            ),
-            (
-                MediaFacet::Anime,
-                self.effective_scan_roots_for_facet(&MediaFacet::Anime)
-                    .await?,
-            ),
-        ];
-
-        let mut changed_keys = Vec::new();
-        if let Some(movie_path) = normalize_optional_string(Some(input.movie_path)) {
-            let root_folders = normalize_root_folders(vec![RootFolderEntry {
-                path: movie_path,
-                is_default: true,
-            }])?;
-            changed_keys.extend(
-                self.update_default_library_roots_from_entries(
-                    &MediaFacet::Movie,
-                    &root_folders,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                    true,
-                )
-                .await?,
-            );
-        }
-
-        if let Some(series_path) = normalize_optional_string(Some(input.series_path)) {
-            let root_folders = normalize_root_folders(vec![RootFolderEntry {
-                path: series_path,
-                is_default: true,
-            }])?;
-            changed_keys.extend(
-                self.update_default_library_roots_from_entries(
-                    &MediaFacet::Series,
-                    &root_folders,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                    true,
-                )
-                .await?,
-            );
-        }
-
-        if let Some(anime_path) = normalize_optional_string(input.anime_path) {
-            let root_folders = normalize_root_folders(vec![RootFolderEntry {
-                path: anime_path,
-                is_default: true,
-            }])?;
-            changed_keys.extend(
-                self.update_default_library_roots_from_entries(
-                    &MediaFacet::Anime,
-                    &root_folders,
-                    SETTINGS_SOURCE_TYPED_GRAPHQL,
-                    Some(actor.id.clone()),
-                    true,
-                )
-                .await?,
-            );
-        }
-
-        if changed_keys.is_empty() {
-            return self.get_library_paths(actor).await;
-        }
-        warn!("updateLibraryPaths is deprecated; updated default library roots instead");
-
-        for (facet, previous) in previous_roots {
-            let current = self.effective_scan_roots_for_facet(&facet).await?;
-            self.clear_pending_imports_for_removed_roots(&facet, &previous, &current)
-                .await?;
-        }
-
-        self.emit_settings_saved(actor, "library_paths", None, changed_keys)
-            .await;
-        self.get_library_paths(actor).await
     }
 }

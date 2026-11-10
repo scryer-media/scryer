@@ -87,6 +87,20 @@ fn configure_environment(
     Ok(())
 }
 
+/// The arguments the wrapper starts the server with. It hands over only the
+/// port; the host comes from the server's own setting, so the operator can
+/// let other computers reach the desktop server from Settings.
+fn server_arguments(profile: &Path, log_file: &Path, port: u16) -> Vec<std::ffi::OsString> {
+    vec![
+        "--data-dir".into(),
+        profile.as_os_str().to_owned(),
+        "--log-file".into(),
+        log_file.as_os_str().to_owned(),
+        "--port".into(),
+        port.to_string().into(),
+    ]
+}
+
 /// The origin the app window is allowed to stay inside.
 ///
 /// The wrapper owns the loopback listener and root base path.
@@ -768,7 +782,7 @@ impl ServerSupervisor {
             // user would be told Scryer timed out rather than what is wrong.
             PortProbe::Foreign => {
                 return Err(format!(
-                    "port {} is already in use by a program that is not Scryer; stop it, or run Scryer yourself with SCRYER_BIND set to another port",
+                    "port {} is already in use by a program that is not Scryer; stop it, or run the Scryer server yourself with --port set to another port",
                     self.port
                 ));
             }
@@ -790,11 +804,7 @@ impl ServerSupervisor {
         let mut command = Command::new(&server_executable);
         configure_environment(&mut command, &self.profile_dir, std::env::vars_os())?;
         command
-            .arg("--data-dir")
-            .arg(&self.profile_dir)
-            .arg("--log-file")
-            .arg(&log_file)
-            .env("SCRYER_BIND", format!("127.0.0.1:{}", self.port))
+            .args(server_arguments(&self.profile_dir, &log_file, self.port))
             // The wrapper owns the window the user is about to look at; the
             // server must not also open a browser tab.
             .env("SCRYER_OPEN_BROWSER", "false")
@@ -1385,7 +1395,7 @@ mod tests {
         SMOKE_BODY, SMOKE_RESPONSE, app_origin, app_url, configure_environment, decode_chunked,
         desktop_profile_dir_from, http_origin, is_scryer_document, last_logged_error,
         logged_error_message, opens_in_external_browser, parse_http_response,
-        popover_content_from_health, remove_desktop_profile, row_detail,
+        popover_content_from_health, remove_desktop_profile, row_detail, server_arguments,
     };
 
     #[test]
@@ -1728,6 +1738,36 @@ mod tests {
         assert!(!error.contains("private-value"));
         std::fs::write(dir.path().join(".env"), "SCRYER_BIND=0.0.0.0:8080").unwrap();
         assert!(configure_environment(&mut command, dir.path(), vec![]).is_err());
+    }
+
+    /// The wrapper hands over the port only, so the server's saved host
+    /// decides who can reach it; a full address in the environment would pin
+    /// it and make the setting read-only.
+    #[test]
+    fn desktop_server_is_started_with_the_port_not_an_address() {
+        let profile = Path::new("profile-dir");
+        let log_file = Path::new("profile-dir/logs/scryer.log");
+        let arguments = server_arguments(profile, log_file, 18_080);
+        let arguments: Vec<_> = arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            arguments,
+            [
+                "--data-dir",
+                "profile-dir",
+                "--log-file",
+                "profile-dir/logs/scryer.log",
+                "--port",
+                "18080",
+            ]
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("SCRYER_BIND"))
+        );
     }
 
     // -- the desktop profile --------------------------------------------------

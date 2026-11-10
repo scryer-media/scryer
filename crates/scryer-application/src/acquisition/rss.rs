@@ -3111,10 +3111,11 @@ impl AppUseCase {
                     false,
                     None,
                     *now,
+                    crate::catalog::release_search::ScoringLane::Full,
                 )
                 .await
             {
-                Ok(scored) => scored,
+                Ok(scored) => scored.results,
                 Err(error) => {
                     // A scoring failure is not an empty result set: continuing
                     // with none would report the link as searched-and-nothing-
@@ -3197,8 +3198,10 @@ impl AppUseCase {
             false,
             None,
             now,
+            crate::catalog::release_search::ScoringLane::Full,
         )
         .await
+        .map(|batch| batch.results)
     }
 
     /// Try to grab the best candidate from scored RSS releases.
@@ -5632,6 +5635,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trailing_group_word_matches_the_feed_only_on_external_id_agreement() {
+        let mut base = make_series_title("hoshikage", "Hoshikage Kiroku", Some(2014));
+        base.external_ids = vec![scryer_domain::ExternalId::new(
+            "tvdb".to_string(),
+            "900010".to_string(),
+        )];
+        let bank = build_title_context_bank(&[base]);
+        let release = "Hoshikage.Kiroku.TQX.S01E21.1080p.WEB-DL";
+        let asserted = |tvdb_id: &str| IndexerResponseAttributes {
+            tvdb_id: Some(tvdb_id.to_string()),
+            ..Default::default()
+        };
+
+        let agreeing = match_release_to_title_context(release, &asserted("900010"), &bank)
+            .await
+            .expect("match release");
+        assert_eq!(
+            agreeing.map(|info| info.title_id).as_deref(),
+            Some("hoshikage")
+        );
+        assert!(match_release(release, &bank).await.is_none());
+        assert!(
+            match_release_to_title_context(
+                "Hoshikage.Kiroku.Shippuden.S01E21.1080p.WEB-DL",
+                &asserted("900011"),
+                &bank,
+            )
+            .await
+            .expect("match release")
+            .is_none(),
+            "a spin-off carrying its own id never resolves to the base show"
+        );
+    }
+
+    #[tokio::test]
     async fn shared_bare_key_collision_assigns_when_year_disambiguates() {
         let bank = tide_chart_rss_bank();
         let result = match_release("Tide.Chart.2023.S02E01.1080p.WEB-DL.x264-GRP", &bank).await;
@@ -6056,6 +6094,7 @@ mod tests {
             ReleaseAutoDecisionCode::MinimumAge,
             ReleaseAutoDecisionCode::ReleaseAgeUnknown,
             ReleaseAutoDecisionCode::DownloadClientUnavailable,
+            ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked,
         ] {
             assert!(!rss_is_permanent_rejection(code));
         }

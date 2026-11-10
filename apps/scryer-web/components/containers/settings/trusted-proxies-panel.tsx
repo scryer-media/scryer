@@ -102,10 +102,14 @@ export function TrustedProxiesPanel() {
   if (!allowed) return null;
   return (
     <section
-      className="mt-6 space-y-4 rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5"
+      className="space-y-4 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4"
       aria-busy={busy}
     >
-      <h3 className="font-semibold">{t("settings.trustedProxiesTitle")}</h3>
+      <div className="-mx-4 -mt-4 mb-4 border-b border-[var(--scry-line2)] px-4 py-3">
+        <h4 className="text-sm font-semibold text-[var(--scry-ink)]">
+          {t("settings.trustedProxiesTitle")}
+        </h4>
+      </div>
       <p className="text-sm text-[var(--scry-muted)]">
         {t("settings.trustedProxiesHelp")}
       </p>

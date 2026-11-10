@@ -531,6 +531,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "discovery_presentation_selection",
         classification: BackupTableClassification::ResetOnRestore,
     },
+    // A cache-validity token. A restore clears it, and the restored rows it
+    // covers create a fresh one; an exported token could repeat one in use.
+    BackupTableCatalogEntry {
+        table: "discovery_affinity_revision",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "title_search_terms",
         classification: BackupTableClassification::Rebuild,
@@ -636,6 +642,18 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "discovery_items",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_library_graph_payloads",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_library_graph_runs",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "discovery_neighbor_cache",
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
@@ -1108,6 +1126,23 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "media_server_signal_sync_state",
         classification: BackupTableClassification::ResetOnRestore,
     },
+    // Which links a sweep read is sweep bookkeeping like the sync state: a
+    // restored instance observes nobody until its next sweep reads them again.
+    BackupTableCatalogEntry {
+        table: "media_server_signal_roster",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    // Audience plays are re-read from the server every sweep, and their read
+    // marker says when; a restored instance answers "anyone watched it" only
+    // after its own next read.
+    BackupTableCatalogEntry {
+        table: "media_server_audience_plays",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "media_server_audience_reads",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "media_request_external_ids",
         classification: BackupTableClassification::Export,
@@ -1355,6 +1390,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     BackupTableCatalogEntry {
         table: "workflow_operations",
         classification: BackupTableClassification::Export,
+    },
+    // Short-lived encrypted source credentials; the configurations an import
+    // saved carry their own copies, so a backup never needs these.
+    BackupTableCatalogEntry {
+        table: "workflow_private_inputs",
+        classification: BackupTableClassification::Ignore,
     },
 ];
 
@@ -2439,6 +2480,15 @@ mod tests {
 
             assert_eq!(classification, Some(expected), "{table}");
         }
+    }
+
+    #[test]
+    fn backup_table_catalog_never_exports_source_import_credentials() {
+        let classification = BACKUP_TABLE_CATALOG
+            .iter()
+            .find(|entry| entry.table == "workflow_private_inputs")
+            .map(|entry| entry.classification);
+        assert_eq!(classification, Some(BackupTableClassification::Ignore));
     }
 
     #[test]

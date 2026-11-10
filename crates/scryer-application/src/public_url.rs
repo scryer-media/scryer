@@ -313,8 +313,9 @@ pub struct InstanceAddressing {
     /// Normalized base path, empty at the root.
     pub base_path: String,
     pub base_path_source: ConfigValueSource,
-    pub bind_address: String,
-    pub bind_source: ConfigValueSource,
+    /// Listening address facts; the saved host is the one part that changes
+    /// while running.
+    pub bind: crate::network_bind::BindState,
     pub passkey_rp_id: Option<String>,
     pub passkey_rp_origin: Option<String>,
     pub passkey_rp_source: PasskeyRelyingPartySource,
@@ -362,6 +363,17 @@ impl PublicUrlRuntime {
             .addressing
             .write()
             .unwrap_or_else(|error| error.into_inner()) = Arc::new(addressing);
+    }
+
+    /// Record a newly saved listening host; it applies on the next start.
+    pub(crate) fn set_saved_bind_host(&self, host: Option<std::net::IpAddr>) {
+        let mut addressing = self
+            .addressing
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut next = (**addressing).clone();
+        next.bind.saved_host = host;
+        *addressing = Arc::new(next);
     }
 }
 

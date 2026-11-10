@@ -1025,7 +1025,7 @@ pub async fn reconcile_interrupted_job_runs(
         format!(
             "UPDATE workflow_operations
              SET status = '{}',
-                 progress_json = NULL,
+                 progress_json = CASE WHEN job_key = 'source_import' THEN progress_json ELSE NULL END,
                  error_text = 'interrupted by restart',
                  completed_at = {{}},
                  updated_at = {{}}

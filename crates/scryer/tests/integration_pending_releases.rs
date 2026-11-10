@@ -610,6 +610,79 @@ async fn standby_listing_returns_only_standby_rows() {
 }
 
 #[tokio::test]
+async fn standby_pruning_reads_only_ids_and_statuses() {
+    let ctx = TestContext::new().await;
+    // One scope per title: a title-level scope is unique per title.
+    for title_id in ["title-1", "title-2", "title-3"] {
+        seed_title(&ctx, title_id).await;
+    }
+    let wanted = seed_wanted_item(
+        &ctx,
+        "title-1",
+        scryer_application::AcquisitionScopeStatus::Wanted,
+    )
+    .await;
+    let completed = seed_wanted_item(
+        &ctx,
+        "title-2",
+        scryer_application::AcquisitionScopeStatus::Completed,
+    )
+    .await;
+    let waiting_only = seed_wanted_item(
+        &ctx,
+        "title-3",
+        scryer_application::AcquisitionScopeStatus::Wanted,
+    )
+    .await;
+    for (wanted_item, score, status) in [
+        (&wanted, 500, PendingReleaseStatus::Standby),
+        (&wanted, 400, PendingReleaseStatus::Standby),
+        (&completed, 300, PendingReleaseStatus::Standby),
+        (&waiting_only, 200, PendingReleaseStatus::Waiting),
+    ] {
+        seed_pending_release(
+            &ctx,
+            &wanted_item.id,
+            &wanted_item.title_id,
+            score,
+            0,
+            status,
+        )
+        .await;
+    }
+
+    let mut expected = vec![wanted.id.clone(), completed.id.clone()];
+    expected.sort();
+    assert_eq!(
+        ctx.library_state
+            .list_standby_wanted_item_ids()
+            .await
+            .expect("standby ids"),
+        expected,
+        "each scope holding saved results appears once; waiting rows do not count"
+    );
+
+    let statuses = ctx
+        .library_state
+        .list_acquisition_scope_statuses_by_ids(&[
+            wanted.id.clone(),
+            completed.id.clone(),
+            "synthetic-missing-scope".to_string(),
+        ])
+        .await
+        .expect("scope statuses");
+    assert_eq!(statuses.len(), 2, "a missing scope is absent");
+    assert_eq!(
+        statuses.get(&wanted.id),
+        Some(&scryer_application::AcquisitionScopeStatus::Wanted)
+    );
+    assert_eq!(
+        statuses.get(&completed.id),
+        Some(&scryer_application::AcquisitionScopeStatus::Completed)
+    );
+}
+
+#[tokio::test]
 async fn pending_release_page_uses_explicit_standby_status_or_the_open_review_default() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-page-statuses").await;

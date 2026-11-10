@@ -3,7 +3,10 @@
 pub mod metadata_gateway {
     /// The system clock is outside the metadata gateway's request-signing window.
     pub const CLOCK_SKEW: &str = "METADATA_GATEWAY_CLOCK_SKEW";
-    pub const ALL: &[&str] = &[CLOCK_SKEW];
+    /// The gateway refused the request because every slot for that work is
+    /// busy; it is transient and carries a retry hint when the gateway sends one.
+    pub const QUEUE_FULL: &str = "METADATA_GATEWAY_QUEUE_FULL";
+    pub const ALL: &[&str] = &[CLOCK_SKEW, QUEUE_FULL];
 }
 
 pub mod indexer_clients {
@@ -143,6 +146,21 @@ pub mod library {
     pub const NAME_REQUIRED: &str = "LIBRARY_NAME_REQUIRED";
     /// Libraries require at least one root folder.
     pub const ROOT_REQUIRED: &str = "LIBRARY_ROOT_REQUIRED";
+    /// A title under a root being removed is held by a location operation or an in-flight deletion.
+    pub const ROOT_TITLES_BUSY: &str = "LIBRARY_ROOT_TITLES_BUSY";
+    /// A stored library root was resubmitted by path without its id.
+    pub const ROOT_ID_REQUIRED: &str = "LIBRARY_ROOT_ID_REQUIRED";
+    /// An edit drops stored roots it did not list as removed. Carries
+    /// [`ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT`] and
+    /// [`ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT`].
+    pub const ROOT_REMOVAL_NOT_ACKNOWLEDGED: &str = "LIBRARY_ROOT_REMOVAL_NOT_ACKNOWLEDGED";
+    /// An edit lists as removed a root it keeps or the library does not have.
+    /// Carries [`ROOT_REMOVAL_MISMATCHED_IDS_FACT`].
+    pub const ROOT_REMOVAL_MISMATCH: &str = "LIBRARY_ROOT_REMOVAL_MISMATCH";
+    /// One edit names the same stored root id more than once.
+    pub const ROOT_ID_DUPLICATED: &str = "LIBRARY_ROOT_ID_DUPLICATED";
+    /// Another library of the same facet already has this name.
+    pub const NAME_TAKEN: &str = "LIBRARY_NAME_TAKEN";
     /// Default libraries cannot be deleted.
     pub const DEFAULT_LIBRARIES_CANNOT_DELETED: &str = "LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED";
     /// Library scan session was not found.
@@ -334,6 +352,9 @@ pub mod library {
     pub const RENAME_PATH_OUTSIDE_ROOT: &str = "LIBRARY_RENAME_PATH_OUTSIDE_ROOT";
     /// The selected title folders overlap.
     pub const RENAME_FOLDERS_OVERLAP: &str = "LIBRARY_RENAME_FOLDERS_OVERLAP";
+    /// An Additional movie or its companion cannot safely follow a folder rename.
+    pub const RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED: &str =
+        "LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED";
     /// The template optional group is invalid.
     pub const TEMPLATE_OPTIONAL_GROUP_INVALID: &str = "LIBRARY_TEMPLATE_OPTIONAL_GROUP_INVALID";
     /// The folder is not a valid title boundary for scanning.
@@ -347,6 +368,12 @@ pub mod library {
         RESOURCE_NOT_FOUND,
         NAME_REQUIRED,
         ROOT_REQUIRED,
+        ROOT_TITLES_BUSY,
+        ROOT_ID_REQUIRED,
+        ROOT_REMOVAL_NOT_ACKNOWLEDGED,
+        ROOT_REMOVAL_MISMATCH,
+        ROOT_ID_DUPLICATED,
+        NAME_TAKEN,
         DEFAULT_LIBRARIES_CANNOT_DELETED,
         SCAN_SESSION_NOT_FOUND,
         SCAN_CANCEL_UNAVAILABLE,
@@ -429,9 +456,48 @@ pub mod library {
         DELETE_TARGET_NOT_FILE,
         RENAME_PATH_OUTSIDE_ROOT,
         RENAME_FOLDERS_OVERLAP,
+        RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED,
         TEMPLATE_OPTIONAL_GROUP_INVALID,
         SCAN_FOLDER_BOUNDARY_INVALID,
     ];
+
+    /// Ids of the stored roots an edit drops without listing them as removed.
+    pub const ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT: &str = "unacknowledgedRootIds";
+    /// Paths of those roots, in the same order as their ids.
+    pub const ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT: &str = "unacknowledgedRootPaths";
+    /// Ids listed as removed that the edit keeps or the library does not have.
+    pub const ROOT_REMOVAL_MISMATCHED_IDS_FACT: &str = "mismatchedRootIds";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[
+        ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT,
+        ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT,
+        ROOT_REMOVAL_MISMATCHED_IDS_FACT,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod external_import {
@@ -565,7 +631,7 @@ pub mod catalog {
     pub const SERIES_MOVIE_LINK_NOT_FOUND: &str = "CATALOG_SERIES_MOVIE_LINK_NOT_FOUND";
     /// Invalid snapshot JSON.
     pub const SNAPSHOT_JSON_COLUMN_INVALID: &str = "CATALOG_SNAPSHOT_JSON_COLUMN_INVALID";
-    /// Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn.
+    /// Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus.
     pub const METADATA_LANGUAGE_INVALID: &str = "CATALOG_METADATA_LANGUAGE_INVALID";
     /// At least one title field must be provided.
     pub const TITLE_FIELD_REQUIRED: &str = "CATALOG_TITLE_FIELD_REQUIRED";
@@ -2095,6 +2161,31 @@ pub mod acquisition {
         SCOPE_NOT_FOUND,
         PAUSED_WHILE_SEARCH_WAITING,
         DOWNLOAD_CLIENT_DELETE_IN_PROGRESS,
+    ];
+}
+
+/// Refusals of an operator's "queue now" on a saved standby candidate.
+pub mod standby {
+    /// The saved candidate no longer exists.
+    pub const NOT_FOUND: &str = "STANDBY_NOT_FOUND";
+    /// Another workflow owns or has retired this candidate.
+    pub const NOT_AVAILABLE: &str = "STANDBY_NOT_AVAILABLE";
+    /// Current coverage cannot safely identify what to queue.
+    pub const NOT_QUEUEABLE: &str = "STANDBY_NOT_QUEUEABLE";
+    /// The release is on this title's blocklist.
+    pub const RELEASE_BLOCKLISTED: &str = "STANDBY_RELEASE_BLOCKLISTED";
+    /// The same release is already active in a download client.
+    pub const ALREADY_ACTIVE: &str = "STANDBY_ALREADY_ACTIVE";
+    /// An operator search or another queue action holds this title; try again once it finishes.
+    pub const TITLE_BUSY: &str = "STANDBY_TITLE_BUSY";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        NOT_FOUND,
+        NOT_AVAILABLE,
+        NOT_QUEUEABLE,
+        RELEASE_BLOCKLISTED,
+        ALREADY_ACTIVE,
+        TITLE_BUSY,
     ];
 }
 
@@ -3653,7 +3744,7 @@ pub mod settings {
     /// Plexmatch_write_on_import is only valid for series and anime libraries.
     pub const PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME_LIBRARIES: &str =
         "SETTINGS_PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME_LIBRARIES";
-    /// Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn.
+    /// Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus.
     pub const METADATA_LANGUAGE_INVALID: &str = "SETTINGS_METADATA_LANGUAGE_INVALID";
     /// Anime-specific settings require an anime library.
     pub const ANIME_SPECIFIC_SETTINGS_REQUIRE_ANIME_LIBRARY: &str =
@@ -4150,6 +4241,58 @@ pub mod indexer_caps {
     }
 }
 
+/// Why a title search removed an indexer's releases before scoring them.
+pub mod release_search {
+    /// No enabled download client accepts Usenet releases (NZB files or links).
+    pub const NO_USENET_CLIENT: &str = "RELEASE_SEARCH_NO_USENET_CLIENT";
+    /// No enabled download client accepts torrent releases (torrent files or magnets).
+    pub const NO_TORRENT_CLIENT: &str = "RELEASE_SEARCH_NO_TORRENT_CLIENT";
+    /// No enabled download client accepts direct HTTP downloads.
+    pub const NO_HTTP_CLIENT: &str = "RELEASE_SEARCH_NO_HTTP_CLIENT";
+    /// No loaded download client accepts Usenet releases, and an enabled
+    /// client's plugin is blocked or uninstalled.
+    pub const USENET_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_USENET_CLIENT_PLUGIN_UNAVAILABLE";
+    /// No loaded download client accepts torrent releases, and an enabled
+    /// client's plugin is blocked or uninstalled.
+    pub const TORRENT_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_TORRENT_CLIENT_PLUGIN_UNAVAILABLE";
+    /// No loaded download client accepts direct HTTP downloads, and an
+    /// enabled client's plugin is blocked or uninstalled.
+    pub const HTTP_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_HTTP_CLIENT_PLUGIN_UNAVAILABLE";
+    /// An automatic search set a release aside because its indexer has used
+    /// its whole grab allowance.
+    pub const INDEXER_GRAB_QUOTA_EXHAUSTED: &str = "RELEASE_SEARCH_INDEXER_GRAB_QUOTA_EXHAUSTED";
+    /// Every reason a title search reports for removed releases.
+    pub const ALL: &[&str] = &[
+        NO_USENET_CLIENT,
+        NO_TORRENT_CLIENT,
+        NO_HTTP_CLIENT,
+        USENET_CLIENT_PLUGIN_UNAVAILABLE,
+        TORRENT_CLIENT_PLUGIN_UNAVAILABLE,
+        HTTP_CLIENT_PLUGIN_UNAVAILABLE,
+        INDEXER_GRAB_QUOTA_EXHAUSTED,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("RELEASE_SEARCH_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
 pub mod integration {
     /// Indexer provider is unavailable.
     pub const INDEXER_PROVIDER_UNAVAILABLE: &str = "INTEGRATION_INDEXER_PROVIDER_UNAVAILABLE";
@@ -4183,6 +4326,9 @@ pub mod integration {
         "INTEGRATION_PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC";
     /// Indexer connection test failed.
     pub const INDEXER_CONNECTION_TEST_FAILED: &str = "INTEGRATION_INDEXER_CONNECTION_TEST_FAILED";
+    /// A built-in download client's connection test failed in a way the client did not classify.
+    pub const DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED: &str =
+        "INTEGRATION_DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED";
     /// Base URL must use http or https.
     pub const BASE_URL_INVALID: &str = "INTEGRATION_BASE_URL_INVALID";
     /// Base URL must include a host.
@@ -4495,6 +4641,7 @@ pub mod integration {
         PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS,
         PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC,
         INDEXER_CONNECTION_TEST_FAILED,
+        DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED,
         BASE_URL_INVALID,
         BASE_URL_HOST_REQUIRED,
         BASE_URL_CREDENTIALS_FORBIDDEN,
@@ -4643,6 +4790,12 @@ pub mod discovery {
     /// Discovery incremental reload resolves to the selected value changed subjects, above SMG limit the selected value.
     pub const INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT: &str =
         "DISCOVERY_INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT";
+    /// A neighbours anchor is not a discovery target key the server knows.
+    pub const NEIGHBOR_TARGET_KEY_UNSUPPORTED: &str = "DISCOVERY_NEIGHBOR_TARGET_KEY_UNSUPPORTED";
+    /// A neighbours anchor names a movie for a series facet, or a series for
+    /// the movie facet.
+    pub const NEIGHBOR_TARGET_KEY_FACET_MISMATCH: &str =
+        "DISCOVERY_NEIGHBOR_TARGET_KEY_FACET_MISMATCH";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         PENDING_DISCOVERY_REMOVAL_MISSING_SUBJECT_KEY,
@@ -4654,6 +4807,31 @@ pub mod discovery {
         CONTEXT_CHANGE_TYPE_UNSUPPORTED,
         HOME_HERO_NOT_FOUND,
         INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT,
+        NEIGHBOR_TARGET_KEY_UNSUPPORTED,
+        NEIGHBOR_TARGET_KEY_FACET_MISMATCH,
+    ];
+}
+
+pub mod library_graph {
+    /// The gateway was at capacity for library graphs; a later sync run
+    /// retries once the backoff, or the wait the gateway asked for, has passed.
+    pub const GATEWAY_QUEUE_FULL: &str = "LIBRARY_GRAPH_GATEWAY_QUEUE_FULL";
+    /// The gateway was temporarily unreachable or unavailable; retried like
+    /// [`GATEWAY_QUEUE_FULL`].
+    pub const GATEWAY_UNAVAILABLE: &str = "LIBRARY_GRAPH_GATEWAY_UNAVAILABLE";
+    /// The gateway answered the library graph request with an error.
+    pub const GATEWAY_FAILED: &str = "LIBRARY_GRAPH_GATEWAY_FAILED";
+    /// The graph came back but could not be stored.
+    pub const STORE_FAILED: &str = "LIBRARY_GRAPH_STORE_FAILED";
+    /// A newer graph replaced the stored one twice while it was being read.
+    pub const READ_SUPERSEDED: &str = "LIBRARY_GRAPH_READ_SUPERSEDED";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        GATEWAY_QUEUE_FULL,
+        GATEWAY_UNAVAILABLE,
+        GATEWAY_FAILED,
+        STORE_FAILED,
+        READ_SUPERSEDED,
     ];
 }
 
@@ -4726,6 +4904,15 @@ pub mod application_upgrade {
 }
 
 pub mod subtitles {
+    /// Select between one and 1000 episodes from the same series.
+    pub const BATCH_SELECTION_INVALID: &str = "SUBTITLES_BATCH_SELECTION_INVALID";
+    /// Subtitle handling is disabled.
+    pub const BATCH_DISABLED: &str = "SUBTITLES_BATCH_DISABLED";
+    /// No wanted subtitle languages are configured.
+    pub const BATCH_LANGUAGES_REQUIRED: &str = "SUBTITLES_BATCH_LANGUAGES_REQUIRED";
+    /// An episode subtitle batch is already running.
+    pub const BATCH_ALREADY_RUNNING: &str = "SUBTITLES_BATCH_ALREADY_RUNNING";
+
     /// Invalid subtitle language code.
     pub const SUBTITLE_LANGUAGE_CODE_INVALID: &str = "SUBTITLES_SUBTITLE_LANGUAGE_CODE_INVALID";
     /// Unsupported subtitle format.
@@ -4797,6 +4984,10 @@ pub mod subtitles {
         "SUBTITLES_SUBTITLE_ARTIFACT_EXPANDS_BEYOND_BYTE_LIMIT";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        BATCH_SELECTION_INVALID,
+        BATCH_DISABLED,
+        BATCH_LANGUAGES_REQUIRED,
+        BATCH_ALREADY_RUNNING,
         SUBTITLE_LANGUAGE_CODE_INVALID,
         SUBTITLE_FORMAT_UNSUPPORTED,
         SUBTITLE_PROVIDER_CONFIG_NAME_REQUIRED,
@@ -5751,6 +5942,16 @@ pub mod services {
 }
 
 pub mod media {
+    /// Unavailable media analysis cannot authorize replacement of an existing file.
+    pub const UNVERIFIED_REPLACEMENT: &str = "MEDIA_UNVERIFIED_REPLACEMENT";
+    /// References or companion files cannot safely survive relocation.
+    pub const REFERENCES_REQUIRE_REVIEW: &str = "MEDIA_REFERENCES_REQUIRE_REVIEW";
+    /// The source could not be read during media analysis.
+    pub const PROBE_IO_FAILED: &str = "MEDIA_PROBE_IO_FAILED";
+    /// The source has malformed media structure.
+    pub const PROBE_MALFORMED: &str = "MEDIA_PROBE_MALFORMED";
+    /// Encrypted media requires manual review.
+    pub const PROBE_ENCRYPTED: &str = "MEDIA_PROBE_ENCRYPTED";
     /// Media file was not found.
     pub const FILE_NOT_FOUND: &str = "MEDIA_FILE_NOT_FOUND";
     /// Registered media path changed before inspection.
@@ -5823,6 +6024,11 @@ pub mod media {
     pub const ANALYSIS_INVALID: &str = "MEDIA_ANALYSIS_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        UNVERIFIED_REPLACEMENT,
+        REFERENCES_REQUIRE_REVIEW,
+        PROBE_IO_FAILED,
+        PROBE_MALFORMED,
+        PROBE_ENCRYPTED,
         FILE_NOT_FOUND,
         REGISTERED_MEDIA_PATH_CHANGED_BEFORE_INSPECTION,
         SOURCE_CHANGED_DURING_INSPECTION,
@@ -5852,6 +6058,36 @@ pub mod media {
     ];
 }
 
+pub mod network {
+    /// The listening address is not an IPv4 or IPv6 address.
+    pub const BIND_HOST_INVALID: &str = "NETWORK_BIND_HOST_INVALID";
+    /// `SCRYER_BIND` sets the listening address, so the saved one cannot change it.
+    pub const BIND_ENV_PINNED: &str = "NETWORK_BIND_ENV_PINNED";
+    /// A request asked to save and to clear the listening address together.
+    pub const BIND_SAVE_AND_RESET: &str = "NETWORK_BIND_SAVE_AND_RESET";
+    /// The configured address could not be listened on, so loopback is used.
+    pub const BIND_FALLBACK_UNBINDABLE: &str = "NETWORK_BIND_FALLBACK_UNBINDABLE";
+    /// The saved listening address is not a valid address, so the default is used.
+    pub const BIND_STORED_HOST_INVALID: &str = "NETWORK_BIND_STORED_HOST_INVALID";
+    /// The saved listening address could not be read at startup, so the default is used.
+    pub const BIND_STORED_HOST_UNREADABLE: &str = "NETWORK_BIND_STORED_HOST_UNREADABLE";
+    /// Nothing about the listening address waits for a restart.
+    pub const RESTART_NOT_REQUIRED: &str = "NETWORK_RESTART_NOT_REQUIRED";
+    /// This process cannot restart itself.
+    pub const RESTART_UNAVAILABLE: &str = "NETWORK_RESTART_UNAVAILABLE";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        BIND_HOST_INVALID,
+        BIND_ENV_PINNED,
+        BIND_SAVE_AND_RESET,
+        BIND_FALLBACK_UNBINDABLE,
+        BIND_STORED_HOST_INVALID,
+        BIND_STORED_HOST_UNREADABLE,
+        RESTART_NOT_REQUIRED,
+        RESTART_UNAVAILABLE,
+    ];
+}
+
 pub mod scripts {
     /// The script schedule is invalid.
     pub const SCHEDULE_INVALID: &str = "SCRIPTS_SCHEDULE_INVALID";
@@ -5867,6 +6103,7 @@ mod tests {
         let areas: &[(&str, &[&str])] = &[
             ("METADATA_GATEWAY_", metadata_gateway::ALL),
             ("SCRIPTS_", scripts::ALL),
+            ("NETWORK_", network::ALL),
             ("LIBRARY_", library::ALL),
             ("EXTERNAL_IMPORT_", external_import::ALL),
             ("CATALOG_", catalog::ALL),
@@ -5875,6 +6112,7 @@ mod tests {
             ("OAUTH_", oauth::ALL),
             ("MAINTENANCE_", maintenance::ALL),
             ("ACQUISITION_", acquisition::ALL),
+            ("STANDBY_", standby::ALL),
             ("LOCATION_", location::ALL),
             ("PLUGIN_", plugins::ALL),
             ("PORTS_", ports::ALL),
@@ -5893,6 +6131,7 @@ mod tests {
             ("MEDIA_SERVER_", media_servers::ALL),
             ("INTEGRATION_", integration::ALL),
             ("DISCOVERY_", discovery::ALL),
+            ("LIBRARY_GRAPH_", library_graph::ALL),
             ("APPLICATION_UPGRADE_", application_upgrade::ALL),
             ("SUBTITLES_", subtitles::ALL),
             ("JOB_", jobs::ALL),

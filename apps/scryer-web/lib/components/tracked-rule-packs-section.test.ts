@@ -44,17 +44,24 @@ test("non-customizable packs hide Copy as custom while omitted metadata preserve
     logLevel: "silent",
   });
   try {
-    const [module, uiSettingsModule] = await Promise.all([
-      server.ssrLoadModule(
-        "/components/views/settings/tracked-rule-packs-section.tsx",
-      ),
-      server.ssrLoadModule("/lib/context/ui-settings-context.tsx"),
-    ]);
+    const [module, uiSettingsModule, translateModule, i18nModule] =
+      await Promise.all([
+        server.ssrLoadModule(
+          "/components/views/settings/tracked-rule-packs-section.tsx",
+        ),
+        server.ssrLoadModule("/lib/context/ui-settings-context.tsx"),
+        server.ssrLoadModule("/lib/context/translate-context.tsx"),
+        server.ssrLoadModule("/lib/i18n/index.ts"),
+      ]);
     const Component = module.TrackedRulePacksSection as ComponentType<
       Record<string, unknown>
     >;
     const UiSettingsContext =
       uiSettingsModule.UiSettingsContext as React.Context<unknown>;
+    const TranslateContext =
+      translateModule.TranslateContext as React.Context<unknown>;
+    let language = "eng";
+    const translate = (key: string) => i18nModule.t(key, language);
     const uiSettingsValue = {
       uiSettings: uiSettingsModule.DEFAULT_UI_SETTINGS,
       uiSettingsLoading: false,
@@ -81,7 +88,11 @@ test("non-customizable packs hide Copy as custom while omitted metadata preserve
         createElement(
           UiSettingsContext.Provider,
           { value: uiSettingsValue },
-          createElement(Component, props),
+          createElement(
+            TranslateContext.Provider,
+            { value: translate },
+            createElement(Component, props),
+          ),
         ),
       );
 
@@ -90,6 +101,11 @@ test("non-customizable packs hide Copy as custom while omitted metadata preserve
 
     props.packs = [pack(undefined)];
     assert.match(render(), /settings-tracked-rule-pack-copy-rule/);
+    await i18nModule.loadLocaleDictionary("rus");
+    language = "rus";
+    props.packs = [pack(false)];
+    assert.doesNotMatch(render(), /Managed by the pack author/);
+    assert.doesNotMatch(render(), /settings-tracked-rule-pack-copy-rule/);
   } finally {
     await server.close();
   }

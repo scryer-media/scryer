@@ -25,7 +25,6 @@ use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationState, LocationOperationType,
     TitleCheckpointState, VerificationDepth,
 };
-use crate::location::operations::LOCATION_OPERATION_VERIFICATION_DEPTH;
 use crate::location::preview::{
     LOCATION_TYPED_CONFIRMATION_PHRASE, PlanConfirmationRequest, PlanItemKind,
 };
@@ -89,18 +88,27 @@ impl ConsolidationFixture {
                 &library_id,
                 "Movies".to_string(),
                 "movies".to_string(),
-                vec![
-                    LibraryRootDraft {
-                        id: None,
-                        path: source.to_string_lossy().to_string(),
-                        is_default: source_is_default,
-                    },
-                    LibraryRootDraft {
-                        id: None,
-                        path: destination.to_string_lossy().to_string(),
-                        is_default: !source_is_default,
-                    },
-                ],
+                crate::lib_tests::with_stored_root_ids(
+                    &app.services
+                        .catalog
+                        .libraries
+                        .get_by_id(&library_id)
+                        .await
+                        .expect("library lookup")
+                        .expect("library exists"),
+                    vec![
+                        LibraryRootDraft {
+                            id: None,
+                            path: source.to_string_lossy().to_string(),
+                            is_default: source_is_default,
+                        },
+                        LibraryRootDraft {
+                            id: None,
+                            path: destination.to_string_lossy().to_string(),
+                            is_default: !source_is_default,
+                        },
+                    ],
+                ),
             )
             .await
             .expect("configure two roots");
@@ -1685,22 +1693,11 @@ async fn a_consolidation_requires_the_stronger_typed_confirmation() {
     fixture.settle(&accepted.operation.id).await;
 }
 
-/// The verification-depth preference is an import preference. A consolidation
-/// moves the user's only copy and recycles the source once the destination
-/// verifies, so it plans full depth whatever the setting says.
+/// A consolidation plans the configured verification depth: quick by default,
+/// and full end to end once the operator opts into it.
 #[tokio::test]
-async fn a_consolidation_verifies_at_full_depth_whatever_the_import_preference_says() {
+async fn a_consolidation_verifies_at_the_configured_depth() {
     let fixture = ConsolidationFixture::new(false).await;
-    fixture
-        .app
-        .update_verification_settings(
-            &fixture.user,
-            UpdateVerificationSettings {
-                depth: VerificationDepth::Quick,
-            },
-        )
-        .await
-        .expect("choose quick verification");
     fixture
         .seed_source_title(
             "Depth",
@@ -1714,8 +1711,22 @@ async fn a_consolidation_verifies_at_full_depth_whatever_the_import_preference_s
     let preview = fixture.preview().await;
     assert_eq!(
         preview.plan.verification.depth,
-        LOCATION_OPERATION_VERIFICATION_DEPTH
+        VerificationDepth::Quick,
+        "with no preference set a consolidation plans quick verification"
     );
+
+    fixture
+        .app
+        .update_verification_settings(
+            &fixture.user,
+            UpdateVerificationSettings {
+                depth: VerificationDepth::Full,
+            },
+        )
+        .await
+        .expect("choose full verification");
+
+    let preview = fixture.preview().await;
     assert_eq!(preview.plan.verification.depth, VerificationDepth::Full);
 
     let operation = fixture.start_and_settle().await;

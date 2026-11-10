@@ -41,7 +41,7 @@ function TextareaFallback({
       onChange={(e) => onChange(e.target.value)}
       readOnly={readOnly}
       className={cn(
-        "w-full rounded-lg border border-border bg-background p-3 font-[var(--font-code)] text-sm text-foreground",
+        "w-full rounded-lg border border-border bg-background p-3 font-[family-name:var(--font-code)] text-sm text-foreground",
         "disabled:cursor-not-allowed disabled:opacity-60",
       )}
       style={{ height: autoHeight, minHeight: "120px", resize: "vertical" }}

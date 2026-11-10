@@ -7,6 +7,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -62,6 +63,7 @@ import {
 } from "@/lib/root-location-operations";
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import { cn } from "@/lib/utils";
+import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 /** A configured root of the library the dialog was opened from. */
@@ -275,7 +277,12 @@ export function ChangeRootDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent id="root-change-dialog" className="sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{t("rootChange.dialogTitle")}</DialogTitle>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            {t("rootChange.dialogTitle")}
+            <Badge id="root-change-beta" tone="warning" className="text-[11px]">
+              {t("settings.pluginBeta")}
+            </Badge>
+          </DialogTitle>
           <DialogDescription>
             {t("rootChange.dialogDescription", { path: root.path })}
           </DialogDescription>
@@ -372,7 +379,14 @@ export function ChangeRootDialog({
                   </SelectTrigger>
                   <SelectContent>
                     {otherRoots.map((candidate) => (
-                      <SelectItem key={candidate.id} value={candidate.id}>
+                      <SelectItem
+                        key={candidate.id}
+                        id={selectorId(
+                          "root-change-destination-root-option",
+                          candidate.path,
+                        )}
+                        value={candidate.id}
+                      >
                         {candidate.path}
                       </SelectItem>
                     ))}
@@ -435,7 +449,7 @@ export function ChangeRootDialog({
                     {t("rootChange.identityLosesDefault")}
                   </p>
                 ) : null}
-                <p className="flex flex-wrap items-center gap-1 font-[var(--font-code)] text-xs break-all text-muted-foreground">
+                <p className="flex flex-wrap items-center gap-1 font-[family-name:var(--font-code)] text-xs break-all text-muted-foreground">
                   <span>{root.path}</span>
                   <ArrowRight className="h-3 w-3 shrink-0" />
                   <span>{destinationPath.trim()}</span>
@@ -459,7 +473,7 @@ export function ChangeRootDialog({
                     })}
                   </span>
                 </p>
-                <p className="flex flex-wrap items-center gap-1 font-[var(--font-code)] text-xs break-all text-muted-foreground">
+                <p className="flex flex-wrap items-center gap-1 font-[family-name:var(--font-code)] text-xs break-all text-muted-foreground">
                   <span>{root.path}</span>
                   <ArrowRight className="h-3 w-3 shrink-0" />
                   <span>{destinationRoot?.path ?? destinationRootId}</span>
@@ -529,11 +543,11 @@ export function ChangeRootDialog({
                       id={`root-consolidation-renamed-folder-${index}`}
                       className="min-w-0"
                     >
-                      <span className="font-[var(--font-code)] break-all text-foreground">
+                      <span className="font-[family-name:var(--font-code)] break-all text-foreground">
                         {line.from}
                       </span>
                       <span className="mx-1 text-muted-foreground">{"→"}</span>
-                      <span className="font-[var(--font-code)] break-all text-foreground">
+                      <span className="font-[family-name:var(--font-code)] break-all text-foreground">
                         {line.to}
                       </span>
                       {line.detail ? (
@@ -825,7 +839,7 @@ function ContentBuckets({
             {content.unknown.entries.map((entry) => (
               <li
                 key={entry.path}
-                className="font-[var(--font-code)] break-all"
+                className="font-[family-name:var(--font-code)] break-all"
               >
                 {entry.path}
               </li>
@@ -962,7 +976,10 @@ function SampledPathList({
       <p>{heading}</p>
       <ul className="ml-4 list-disc space-y-0.5">
         {paths.paths.map((path) => (
-          <li key={path} className="font-[var(--font-code)] break-all">
+          <li
+            key={path}
+            className="font-[family-name:var(--font-code)] break-all"
+          >
             {path}
           </li>
         ))}

@@ -195,7 +195,7 @@ export function SetupIndexerView({
             id="setup-indexer-name"
             value={name}
             onChange={(e) => onNameChange(e.target.value)}
-            placeholder="My Indexer"
+            placeholder={t("uiAttr.My_Indexer")}
           />
         </div>
         <div className="space-y-2">
@@ -204,7 +204,7 @@ export function SetupIndexerView({
           </Label>
           <Select value={providerType} onValueChange={onProviderTypeChange}>
             <SelectTrigger id="setup-indexer-provider">
-              <SelectValue placeholder="Select provider">
+              <SelectValue placeholder={t("uiAttr.Select_provider")}>
                 {selectedProvider ? (
                   <PluginVisualLabel
                     providerType={selectedProvider.value}

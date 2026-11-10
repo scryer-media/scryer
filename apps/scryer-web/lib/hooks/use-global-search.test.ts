@@ -10,8 +10,8 @@ import type * as GlobalSearch from "./use-global-search.ts";
 const require = createRequire(import.meta.url);
 const webRoot = path.resolve(import.meta.dirname, "../..");
 
-// Load the real module without a browser: transpile local files on demand and
-// allow narrow context, UI, and hook overrides for input and dispatch tests.
+// Load the real module without a browser: transpile each local file on demand
+// and stub the React-context and UI modules the pure input builder never uses.
 function loadGlobalSearch(
   extraOverrides: Record<string, unknown> = {},
 ): typeof GlobalSearch {
@@ -72,6 +72,49 @@ function loadGlobalSearch(
     path.join(webRoot, "lib/hooks/use-global-search.ts"),
   ) as unknown as typeof GlobalSearch;
 }
+
+test("search hook only requests media settings for catalog-settings administrators", async () => {
+  for (const canManageSettings of [false, true]) {
+    const calls: Array<{ query: string; variables: Record<string, unknown> }> =
+      [];
+    const { useGlobalSearch: renderSearch } = loadGlobalSearch({
+      react: {
+        useState: (initial: unknown) => [
+          typeof initial === "function" ? initial() : initial,
+          () => {},
+        ],
+        useRef: (current: unknown) => ({ current }),
+        useEffect: () => {},
+        useMemo: (compute: () => unknown) => compute(),
+        useCallback: (callback: unknown) => callback,
+      },
+      urql: {
+        useClient: () => ({
+          query: (query: string, variables: Record<string, unknown>) => {
+            calls.push({ query, variables });
+            return { toPromise: async () => ({ data: {} }) };
+          },
+        }),
+      },
+    });
+    const search = renderSearch({
+      authenticatedUser: {
+        id: "manager",
+        username: "manager",
+        appPermissions: canManageSettings ? ["MANAGE_CATALOG_SETTINGS"] : [],
+        libraryPermissions: [
+          { libraryId: "library-a", permissions: ["VIEW", "MANAGE_TITLES"] },
+        ],
+      },
+      queueFacet: "SERIES",
+      uiLanguage: "eng",
+    });
+    await search.ensureCatalogConfigReady("SERIES");
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].query.includes("manageableLibraries:"));
+    assert.equal(calls[0].variables.includeMediaSettings, canManageSettings);
+  }
+});
 
 const RATING_KEYS = ["normalized", "score", "source", "url", "value", "votes"];
 

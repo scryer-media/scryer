@@ -15,7 +15,7 @@ impl AppUseCase {
         {
             return Err(AppError::validation_refused(
                 crate::error_reasons::quality::SELECT_BETWEEN_1_1000_FILES_SEASONS_TITLES,
-                "select between 1 and 1000 files, seasons, or titles",
+                "select between 1 and 1000 files, episodes, seasons, or titles",
             ));
         }
         let ids: Vec<_> = selection
@@ -27,6 +27,7 @@ impl AppUseCase {
             .collect();
         let selection = match selection {
             ScoreRefreshSelection::Files(_) => ScoreRefreshSelection::Files(ids),
+            ScoreRefreshSelection::Episodes(_) => ScoreRefreshSelection::Episodes(ids),
             ScoreRefreshSelection::Seasons(_) => ScoreRefreshSelection::Seasons(ids),
             ScoreRefreshSelection::Titles(_) => ScoreRefreshSelection::Titles(ids),
         };
@@ -43,6 +44,20 @@ impl AppUseCase {
                             AppError::not_found_reason(
                                 crate::error_reasons::quality::FILE_NOT_FOUND,
                                 "selected file",
+                            )
+                        })?
+                        .title_id
+                }
+                ScoreRefreshSelection::Episodes(_) => {
+                    self.services
+                        .catalog
+                        .shows
+                        .get_episode_by_id(id)
+                        .await?
+                        .ok_or_else(|| {
+                            AppError::not_found_reason(
+                                crate::error_reasons::catalog::EPISODE_NOT_FOUND,
+                                "selected episode",
                             )
                         })?
                         .title_id

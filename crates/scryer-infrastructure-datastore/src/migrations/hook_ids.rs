@@ -3,6 +3,7 @@ pub fn is_known_migration_hook_id(hook_id: &str) -> bool {
         "migrate_jellyfin_notification_channels_to_media_server_targets" => true,
         "migrate_title_root_folder_ids" => true,
         "migrate_title_catalog_sort_keys" => true,
+        "migrate_title_catalog_order_keys" => true,
         "migrate_title_folder_ownership" => true,
         "migrate_title_folder_ownership_safe" => true,
         "repair_root_title_folders" => true,

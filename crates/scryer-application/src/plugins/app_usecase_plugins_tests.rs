@@ -556,6 +556,9 @@ struct MockPluginProvider {
     builtin_settings:
         StdMutex<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
     removed_provider_types: StdArc<StdMutex<Vec<String>>>,
+    /// Plugin ids and settings handed to the latest full runtime reload.
+    reloaded_runtime_plugins:
+        StdMutex<Vec<(String, std::collections::BTreeMap<String, String>)>>,
     reload_count: AtomicUsize,
     upsert_count: AtomicUsize,
     remove_count: AtomicUsize,
@@ -579,6 +582,7 @@ impl MockPluginProvider {
             builtin_descriptors: HashMap::new(),
             builtin_settings: StdMutex::new(Default::default()),
             removed_provider_types: StdArc::new(StdMutex::new(vec![])),
+            reloaded_runtime_plugins: StdMutex::new(vec![]),
             reload_count: AtomicUsize::new(0),
             upsert_count: AtomicUsize::new(0),
             remove_count: AtomicUsize::new(0),
@@ -755,9 +759,16 @@ impl IndexerPluginProvider for MockPluginProvider {
 
     fn reload_runtime_plugins(
         &self,
-        _runtime_plugins: &[RuntimePluginLoad],
+        runtime_plugins: &[RuntimePluginLoad],
         disabled_builtins: &[String],
     ) -> Result<(), String> {
+        *self
+            .reloaded_runtime_plugins
+            .lock()
+            .expect("reloaded runtime plugins lock") = runtime_plugins
+            .iter()
+            .map(|plugin| (plugin.descriptor.id.clone(), plugin.settings.clone()))
+            .collect();
         *self
             .disabled_builtin_types
             .lock()
@@ -4644,6 +4655,260 @@ async fn builtin_settings_failure_isolates_only_the_misconfigured_plugin() {
     assert_eq!(
         provider.builtin_settings.lock().unwrap()["synthetic-invalid"]["required_value"],
         "recovered-fixture"
+    );
+}
+
+/// Seeds two bundled and two downloaded indexer plugins; one of each declares
+/// a required setting with no default and no saved value.
+async fn seed_settings_parity_fixture() -> TestHarness {
+    let required_setting = |default_value: Option<&str>| {
+        serde_json::json!([
+            {"key":"required_value", "label":"Value", "field_type":"string", "required":true, "default_value":default_value}
+        ])
+    };
+    let mut provider = MockPluginProvider::new()
+        .with_builtin_provider("synthetic-bundled-invalid", "Invalid bundled fixture", None)
+        .with_builtin_provider("synthetic-bundled-valid", "Valid bundled fixture", None);
+    for (id, default_value) in [
+        ("synthetic-bundled-invalid", None),
+        ("synthetic-bundled-valid", Some("bundled-value")),
+    ] {
+        let mut descriptor = make_runtime_plugin_load(id, "indexer", id).descriptor;
+        descriptor.settings = serde_json::from_value(required_setting(default_value)).unwrap();
+        provider.builtin_descriptors.insert(id.into(), descriptor);
+    }
+    let h = bootstrap_plugins_with_settings(
+        Some(provider),
+        MockSettingsStore::with_plugin_auto_update(false),
+    );
+    for id in ["synthetic-bundled-invalid", "synthetic-bundled-valid"] {
+        let mut installation = make_installation(id, "0.1.0", true, true);
+        installation.descriptor_json = Some(
+            serde_json::to_string(&h.plugin_provider.as_ref().unwrap().builtin_descriptors[id])
+                .unwrap(),
+        );
+        h.plugin_repo.installations.lock().await.push(installation);
+    }
+    for (id, default_value) in [
+        ("synthetic-external-invalid", None),
+        ("synthetic-external-valid", Some("external-value")),
+    ] {
+        let mut installation = official_catalog_installation(id, "0.1.0");
+        let mut descriptor = make_runtime_plugin_load(id, "indexer", id).descriptor;
+        descriptor.version = "0.1.0".into();
+        descriptor.settings = serde_json::from_value(required_setting(default_value)).unwrap();
+        installation.descriptor_json = Some(serde_json::to_string(&descriptor).unwrap());
+        seed_auto_update_installation(&h, installation).await;
+    }
+    h
+}
+
+type LoadOutcome = (
+    std::collections::HashMap<String, String>,
+    Vec<(String, std::collections::BTreeMap<String, String>)>,
+    Vec<String>,
+);
+
+async fn load_outcome(h: &TestHarness) -> LoadOutcome {
+    let provider = h.plugin_provider.as_ref().unwrap();
+    let mut runtime_plugins = provider.reloaded_runtime_plugins.lock().unwrap().clone();
+    runtime_plugins.sort();
+    let mut builtins = provider.builtin_provider_types();
+    builtins.sort();
+    (
+        h.app.runtime.plugins.compatibility_blockers.read().await.clone(),
+        runtime_plugins,
+        builtins,
+    )
+}
+
+#[tokio::test]
+async fn boot_load_reloads_once_with_settings_bound_and_blockers_recorded() {
+    let h = seed_settings_parity_fixture().await;
+    let provider = h.plugin_provider.clone().unwrap();
+    let reloads_before = provider.reload_count.load(Ordering::Relaxed);
+
+    let report = h.app.load_runtime_plugins_at_boot().await.unwrap();
+
+    assert_eq!(
+        provider.reload_count.load(Ordering::Relaxed),
+        reloads_before + 1,
+        "the boot load reloads the providers exactly once"
+    );
+    let (blockers, runtime_plugins, builtins) = load_outcome(&h).await;
+    assert_eq!(
+        blockers,
+        std::collections::HashMap::from([
+            (
+                "synthetic-bundled-invalid".to_string(),
+                "plugin settings require configuration".to_string(),
+            ),
+            (
+                "synthetic-external-invalid".to_string(),
+                "plugin settings require configuration".to_string(),
+            ),
+        ])
+    );
+    assert_eq!(
+        runtime_plugins,
+        vec![(
+            "synthetic-external-valid".to_string(),
+            std::collections::BTreeMap::from([(
+                "required_value".to_string(),
+                "external-value".to_string(),
+            )]),
+        )],
+        "only the configured downloaded plugin loads, with its resolved settings"
+    );
+    assert_eq!(builtins, ["synthetic-bundled-valid"]);
+    assert_eq!(
+        provider.builtin_settings.lock().unwrap()["synthetic-bundled-valid"]["required_value"],
+        "bundled-value"
+    );
+
+    let loaded = report
+        .loaded
+        .iter()
+        .map(|plugin| plugin.descriptor.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        loaded,
+        ["synthetic-external-valid"],
+        "the report carries the set rehydration is scheduled from"
+    );
+    assert_eq!(
+        report.settings_blocked,
+        ["synthetic-bundled-invalid", "synthetic-external-invalid"]
+    );
+    assert!(
+        report
+            .disabled_builtins
+            .contains(&"synthetic-bundled-invalid".to_string())
+    );
+    assert!(report.compatibility_blocked.is_empty());
+    assert!(report.sdk_incompatible.is_empty());
+    assert!(report.failed.is_empty());
+
+    // The boot load is the runtime reload: running it again changes nothing.
+    h.app.reload_plugin_providers().await.unwrap();
+    assert_eq!(
+        load_outcome(&h).await,
+        (blockers, runtime_plugins, builtins)
+    );
+}
+
+#[tokio::test]
+async fn boot_load_reports_plugins_with_incompatible_sdk_contracts() {
+    let h = bootstrap_plugins_with_settings(
+        Some(MockPluginProvider::new()),
+        MockSettingsStore::with_plugin_auto_update(false),
+    );
+    let mut legacy = official_catalog_installation("synthetic-legacy-sdk", "0.1.0");
+    legacy.sdk_version = "1.6.0".into();
+    legacy.sdk_constraint = ">=1.6.0, <1.7.0".into();
+    seed_auto_update_installation(&h, legacy).await;
+    let current = official_catalog_installation("synthetic-current-sdk", "0.1.0");
+    seed_auto_update_installation(&h, current).await;
+
+    let report = h.app.load_runtime_plugins_at_boot().await.unwrap();
+
+    assert_eq!(report.sdk_incompatible, ["synthetic-legacy-sdk"]);
+    assert!(
+        !report
+            .loaded
+            .iter()
+            .any(|plugin| plugin.descriptor.id == "synthetic-legacy-sdk")
+    );
+    assert!(
+        h.plugin_repo
+            .get_plugin_installation("synthetic-legacy-sdk")
+            .await
+            .unwrap()
+            .is_some(),
+        "the incompatible row is kept for the compatibility repair"
+    );
+}
+
+#[tokio::test]
+async fn clearing_a_component_blocker_loads_the_recovered_plugin() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let provider = h.plugin_provider.clone().unwrap();
+    let original = official_catalog_installation("synthetic-recovering", "0.1.0");
+    seed_auto_update_installation(&h, original.clone()).await;
+    let replacement = make_runtime_plugin_load(
+        "synthetic-recovering",
+        "indexer",
+        "synthetic-recovering",
+    );
+    h.plugin_descriptor_loader
+        .register(&replacement.wasm_bytes, replacement.descriptor.clone());
+    h.app
+        .repair_plugin_component_installation(original, Some(replacement))
+        .await
+        .unwrap();
+    let mut installation = stored_installation(&h, "synthetic-recovering").await;
+    installation.scryer_constraint = Some(">=999.0.0".into());
+    h.plugin_repo
+        .update_plugin_installation(&installation, None)
+        .await
+        .unwrap();
+    h.app
+        .set_plugin_component_blocker(&installation, Some("incompatible contract".into()))
+        .await
+        .unwrap();
+    let reloads_before = provider.reload_count.load(Ordering::Relaxed);
+
+    h.app
+        .finalize_runtime_plugin_mutation("notification", false)
+        .await
+        .unwrap();
+    assert!(
+        h.app
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .contains_key("synthetic-recovering"),
+        "an unrelated mutation keeps a blocker whose cause remains"
+    );
+    assert_eq!(
+        provider.reload_count.load(Ordering::Relaxed),
+        reloads_before,
+        "nothing recovered, so nothing reloads"
+    );
+
+    installation.scryer_constraint = None;
+    h.plugin_repo
+        .update_plugin_installation(&installation, None)
+        .await
+        .unwrap();
+    h.app
+        .finalize_runtime_plugin_mutation("notification", false)
+        .await
+        .unwrap();
+    assert!(
+        !h.app
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .contains_key("synthetic-recovering")
+    );
+    assert_eq!(
+        provider.reload_count.load(Ordering::Relaxed),
+        reloads_before + 1,
+        "clearing the blocker reloads the providers once"
+    );
+    assert!(
+        provider
+            .reloaded_runtime_plugins
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(plugin_id, _)| plugin_id == "synthetic-recovering"),
+        "the recovered plugin is handed to its provider"
     );
 }
 

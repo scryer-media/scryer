@@ -1,5 +1,14 @@
 import * as React from "react";
-import { CalendarDays, Clock3, Eye, EyeOff, Search, Zap } from "lucide-react";
+import {
+  CalendarDays,
+  CircleX,
+  Clock3,
+  Eye,
+  EyeOff,
+  Search,
+  TriangleAlert,
+  Zap,
+} from "lucide-react";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,7 +32,7 @@ import {
   seriesOverviewEpisodeRowId,
   seriesOverviewEpisodeSelectId,
 } from "@/lib/utils/dom-ids";
-import { episodeAvailabilityPill } from "@/lib/utils/episode-media-availability";
+import { episodeRowAvailabilityPill } from "@/lib/utils/episode-media-availability";
 import type {
   CollectionEpisode,
   EpisodeMediaFile,
@@ -82,16 +91,21 @@ function renderEpisodeTypeBadges(episode: CollectionEpisode, t: TranslateFn) {
 }
 
 function renderEpisodeQualityBadge(episode: CollectionEpisode, t: TranslateFn) {
-  const pill = episodeAvailabilityPill(episode.mediaAvailability, t);
-  return pill ? (
+  const pill = episodeRowAvailabilityPill(episode.mediaAvailability, t);
+  const Icon = pill.tone === "negative" ? CircleX : TriangleAlert;
+  return (
     <Badge
       id={selectorId("series-overview-episode-availability", episode.id)}
       tone={pill.tone}
-      className="px-1.5 text-[10px]"
+      className={cn(
+        "rounded-full px-2.5 [&>svg]:size-3.5",
+        pill.muted && "opacity-75",
+      )}
     >
+      {pill.muted ? null : <Icon aria-hidden="true" />}
       {pill.label}
     </Badge>
-  ) : null;
+  );
 }
 
 function renderEpisodeQualityCell(
@@ -99,15 +113,9 @@ function renderEpisodeQualityCell(
   queueItem: DownloadQueueItem | undefined,
   t: TranslateFn,
 ) {
-  const qualityBadge = renderEpisodeQualityBadge(episode, t);
-
-  if (!qualityBadge && !queueItem) {
-    return null;
-  }
-
   return (
     <div className="flex flex-col items-center gap-1">
-      {qualityBadge}
+      {renderEpisodeQualityBadge(episode, t)}
       {queueItem ? <EpisodeQueueIndicator item={queueItem} /> : null}
     </div>
   );
@@ -358,6 +366,12 @@ export const EpisodeRow = React.memo(function EpisodeRow({
 
   const episodeTypeBadges = renderEpisodeTypeBadges(episode, t);
   const qualityCell = renderEpisodeQualityCell(episode, queueItem, t);
+  // Dims a row's parts rather than the whole row, so the availability pill looks
+  // the same on an unmonitored episode.
+  const cardDimClass =
+    !episode.monitored && "opacity-[var(--scry-unmonitored-opacity,0.6)]";
+  const tableDimClass =
+    !episode.monitored && "opacity-[var(--scry-unmonitored-opacity,0.5)]";
 
   const episodeSelectLabel = t("seriesOverview.selectEpisodeForDelete", {
     name: episodeDisplayTitle(episode, t),
@@ -384,14 +398,13 @@ export const EpisodeRow = React.memo(function EpisodeRow({
           episode.absoluteNumber,
         )}
         data-episode-id={episode.id}
-        className={cn(
-          "@container rounded-lg border border-border bg-card/50 p-3",
-          !episode.monitored && "opacity-[var(--scry-unmonitored-opacity,0.6)]",
-        )}
+        className="@container rounded-lg border border-border bg-card/50 p-3"
       >
         <div className="flex items-start gap-3">
           {selectionCheckbox ? (
-            <div className="mt-1 shrink-0">{selectionCheckbox}</div>
+            <div className={cn("mt-1 shrink-0", cardDimClass)}>
+              {selectionCheckbox}
+            </div>
           ) : null}
           <button
             id={selectorId("series-overview-episode-monitor", episode.id)}
@@ -400,6 +413,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
             aria-label={t("title.episodeMonitored")}
             className={cn(
               "mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors",
+              cardDimClass,
               episodeToggling && "opacity-50",
               episode.monitored
                 ? "text-[var(--scry-success-text-soft)]"
@@ -413,35 +427,45 @@ export const EpisodeRow = React.memo(function EpisodeRow({
               <EyeOff className="size-5" />
             )}
           </button>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-start justify-between gap-3">
-              <button
-                id={selectorId(
-                  "series-overview-episode-details-toggle",
-                  episode.id,
-                )}
-                type="button"
-                className="min-w-0 flex-1 text-left"
-                onClick={handleToggleEpisodeDetails}
-              >
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span className="rounded bg-accent px-2 py-0.5 font-[var(--font-code)] text-card-foreground">
-                    {episode.episodeNumber ?? episode.episodeLabel ?? "—"}
-                  </span>
-                  {episode.absoluteNumber && facet === "anime" ? (
-                    <span>#{episode.absoluteNumber}</span>
-                  ) : null}
-                </div>
-                <p className="mt-1 text-sm font-medium text-card-foreground">
-                  {episodeDisplayTitle(episode, t)}
-                </p>
-              </button>
-              <div className="flex shrink-0 items-center gap-1">
-                {qualityCell}
+          <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] gap-x-3 @md:grid-rows-[auto_auto_1fr] @lg:grid-cols-[minmax(0,1fr)_auto_auto] @lg:grid-rows-none @lg:gap-x-4">
+            <button
+              id={selectorId(
+                "series-overview-episode-details-toggle",
+                episode.id,
+              )}
+              type="button"
+              className={cn("min-w-0 text-left", cardDimClass)}
+              onClick={handleToggleEpisodeDetails}
+            >
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span className="rounded bg-accent px-2 py-0.5 font-[family-name:var(--font-code)] text-card-foreground">
+                  {episode.episodeNumber ?? episode.episodeLabel ?? "—"}
+                </span>
+                {episode.absoluteNumber && facet === "anime" ? (
+                  <span>#{episode.absoluteNumber}</span>
+                ) : null}
               </div>
+              <p className="mt-1 text-sm font-medium text-card-foreground">
+                {episodeDisplayTitle(episode, t)}
+              </p>
+            </button>
+            <div className="flex shrink-0 items-start gap-1 @md:justify-end @lg:col-start-2 @lg:row-span-3 @lg:row-start-1 @lg:items-center @lg:justify-start">
+              {qualityCell}
             </div>
-            <div className="mt-2 flex flex-wrap gap-2">{episodeTypeBadges}</div>
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <div
+              className={cn(
+                "col-span-2 mt-2 flex flex-wrap gap-2 @md:col-span-1",
+                cardDimClass,
+              )}
+            >
+              {episodeTypeBadges}
+            </div>
+            <div
+              className={cn(
+                "col-span-2 mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground @md:col-span-1 @md:self-start @lg:self-auto",
+                cardDimClass,
+              )}
+            >
               <span className="inline-flex items-center gap-1">
                 <CalendarDays className="h-3.5 w-3.5" />
                 {formattedAirDate}
@@ -454,7 +478,12 @@ export const EpisodeRow = React.memo(function EpisodeRow({
               ) : null}
               {episodeSizeLabel ? <span>{episodeSizeLabel}</span> : null}
             </div>
-            <div className="mt-3 flex flex-col gap-2 @md:flex-row">
+            <div
+              className={cn(
+                "col-span-2 mt-3 flex flex-col gap-2 empty:hidden @md:col-span-1 @md:col-start-2 @md:row-span-2 @md:row-start-2 @md:mt-2 @md:w-44 @lg:col-start-3 @lg:row-span-3 @lg:row-start-1 @lg:mt-0 @lg:w-48 @lg:self-center",
+                cardDimClass,
+              )}
+            >
               {onAutoSearchEpisode ? (
                 <TextActionButton
                   id={seriesOverviewEpisodeAutoSearchId(
@@ -466,7 +495,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                   type="button"
                   size="sm"
                   tone="auto"
-                  className="w-full @md:w-auto @md:min-w-0 @md:flex-1"
+                  className="w-full"
                   onClick={handleAutoSearchClick}
                   disabled={autoSearching}
                   leadingIcon={
@@ -491,7 +520,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                   type="button"
                   size="sm"
                   tone="search"
-                  className="w-full @md:w-auto @md:min-w-0 @md:flex-1"
+                  className="w-full"
                   onClick={handleOpenEpisodeSearch}
                   leadingIcon={<Search className="h-4 w-4" />}
                 >
@@ -502,7 +531,9 @@ export const EpisodeRow = React.memo(function EpisodeRow({
           </div>
         </div>
         {isPanelOpen ? (
-          <div className="mt-3 border-t border-border pt-3">{panelContent}</div>
+          <div className={cn("mt-3 border-t border-border pt-3", cardDimClass)}>
+            {panelContent}
+          </div>
         ) : null}
         {searchDialog}
       </div>
@@ -520,19 +551,20 @@ export const EpisodeRow = React.memo(function EpisodeRow({
         )}
         data-episode-id={episode.id}
         data-ui="episode-row"
-        className={cn(
-          "cv-auto-row-sm",
-          !episode.monitored && "opacity-[var(--scry-unmonitored-opacity,0.5)]",
-        )}
+        className="cv-auto-row-sm"
       >
         {selectionCheckbox ? (
-          <TableCell className="px-2 text-center align-middle">
+          <TableCell
+            className={cn("px-2 text-center align-middle", tableDimClass)}
+          >
             <div className="flex items-center justify-center">
               {selectionCheckbox}
             </div>
           </TableCell>
         ) : null}
-        <TableCell className="px-2 text-center align-middle">
+        <TableCell
+          className={cn("px-2 text-center align-middle", tableDimClass)}
+        >
           <div className="flex items-center justify-center">
             <button
               id={selectorId("series-overview-episode-monitor", episode.id)}
@@ -556,7 +588,12 @@ export const EpisodeRow = React.memo(function EpisodeRow({
             </button>
           </div>
         </TableCell>
-        <TableCodeCell className="text-center align-middle text-sm text-card-foreground">
+        <TableCodeCell
+          className={cn(
+            "text-center align-middle text-sm text-card-foreground",
+            tableDimClass,
+          )}
+        >
           <div className="flex flex-col items-center gap-0.5">
             <span>{episode.episodeNumber ?? episode.episodeLabel ?? "—"}</span>
             {episode.absoluteNumber && facet === "anime" ? (
@@ -568,7 +605,10 @@ export const EpisodeRow = React.memo(function EpisodeRow({
         </TableCodeCell>
         <TableCell
           id={selectorId("series-overview-episode-details-toggle", episode.id)}
-          className="cursor-pointer align-middle text-sm text-card-foreground hover:text-foreground"
+          className={cn(
+            "cursor-pointer align-middle text-sm text-card-foreground hover:text-foreground",
+            tableDimClass,
+          )}
           onClick={handleToggleEpisodeDetails}
         >
           <div className="flex min-w-0 items-center gap-1.5">
@@ -585,7 +625,9 @@ export const EpisodeRow = React.memo(function EpisodeRow({
             </span>
           ) : null}
         </TableCell>
-        <TableCell className="text-center text-muted-foreground">
+        <TableCell
+          className={cn("text-center text-muted-foreground", tableDimClass)}
+        >
           <span className="inline-flex items-center justify-center gap-1">
             <CalendarDays className="h-3.5 w-3.5" />
             {formattedAirDate}
@@ -593,7 +635,10 @@ export const EpisodeRow = React.memo(function EpisodeRow({
         </TableCell>
         <TableCell
           id={selectorId("series-overview-episode-size", episode.id)}
-          className="text-center text-xs tabular-nums text-muted-foreground"
+          className={cn(
+            "text-center text-xs tabular-nums text-muted-foreground",
+            tableDimClass,
+          )}
         >
           {episodeSizeLabel ?? null}
         </TableCell>
@@ -602,7 +647,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
             {qualityCell}
           </div>
         </TableCell>
-        <TableActionsCell className="w-28">
+        <TableActionsCell className={cn("w-28", tableDimClass)}>
           <div className="inline-flex items-center justify-center gap-2">
             {onAutoSearchEpisode ? (
               <EpisodeTableActionButton

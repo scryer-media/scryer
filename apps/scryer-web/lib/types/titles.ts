@@ -5,7 +5,7 @@ import type {
   MediaRequestLeaseRecord,
   RequestRuleDecisionRecord,
 } from "./request-rule-sets";
-import type { ImportMode } from "./settings";
+import type { AudioLanguagePriority, ImportMode } from "./settings";
 
 export type { CanonicalMediaTag };
 
@@ -257,7 +257,7 @@ export type TitleRecord = {
   movieAvailability?: MovieAvailabilityRecord | null;
   qualityProfileId?: string | null;
   rootFolderId?: string;
-  rootFolderPath?: string;
+  rootFolderPath?: string | null;
   /** Whether renaming is turned on for this title's media type. */
   renameEnabled?: boolean;
   monitorType?: string | null;
@@ -297,6 +297,8 @@ export type LibraryRootRecord = {
   id: string;
   path: string;
   isDefault: boolean;
+  /** Titles currently under this root; read only where a query selects it. */
+  titleCount?: number;
 };
 
 export type LibraryRecord = {
@@ -308,6 +310,8 @@ export type LibraryRecord = {
   isBootstrapDefaultRootSet?: boolean;
   roots: LibraryRootRecord[];
   defaultMonitorType?: string | null;
+  /** Titles the last `updateLibrary` took out of the catalog with a dropped root. */
+  removedTitleCount?: number;
   qualityProfileId?: string | null;
   requestQualityProfileIds?: string[];
   requestQualityProfileDefaultId?: string | null;
@@ -380,6 +384,14 @@ export type LibrarySettingsRecord = {
   searchLanguages: string[];
   requiredAudioLanguagesOverride: string[] | null;
   requiredAudioLanguages: string[];
+  preferredAudioLanguagesOverride: string[] | null;
+  preferredAudioLanguages: string[];
+  optionalAudioLanguagesOverride: string[] | null;
+  optionalAudioLanguages: string[];
+  audioLanguagePriorityOverride: AudioLanguagePriority | null;
+  audioLanguagePriority: AudioLanguagePriority;
+  optionalAudioLanguagesKeepSearchingOverride: boolean | null;
+  optionalAudioLanguagesKeepSearching: boolean;
   metadataLanguageOverride: string | null;
   metadataLanguage: string;
   useSeasonFoldersOverride: boolean | null;
@@ -431,6 +443,10 @@ export type LibrarySettingsDraft = {
   defaultMonitorType?: string | null;
   searchLanguages?: string[] | null;
   requiredAudioLanguages: string[] | null;
+  preferredAudioLanguages: string[] | null;
+  optionalAudioLanguages: string[] | null;
+  audioLanguagePriority: AudioLanguagePriority | null;
+  optionalAudioLanguagesKeepSearching: boolean | null;
   metadataLanguage: string | null;
   useSeasonFolders: boolean | null;
   qualityProfileId: string | null;

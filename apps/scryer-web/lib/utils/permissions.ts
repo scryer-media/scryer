@@ -214,6 +214,56 @@ export function canManageLibrarySubtitles(
   );
 }
 
+/**
+ * Mirror the server's privileged-library predicate
+ * (`privileged_library_access`): where a library's media lives on disk, how it
+ * was acquired, and its acquisition and download history are visible only to
+ * an actor who manages its titles or the library itself, or who holds the
+ * system-settings or catalog-settings app permission. A View-only grant sees
+ * the catalog but none of that.
+ */
+export function hasPrivilegedLibraryAccess(
+  user: PermissionUser | null | undefined,
+  libraryId: string | null | undefined,
+): boolean {
+  return (
+    hasAnyAppPermission(user, [
+      APP_PERMISSIONS.manageSystemSettings,
+      APP_PERMISSIONS.manageCatalogSettings,
+    ]) ||
+    hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.manageTitles) ||
+    hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.manageLibrary)
+  );
+}
+
+/** Whether the actor holds privileged access to at least one library. */
+export function hasAnyPrivilegedLibraryAccess(
+  user: PermissionUser | null | undefined,
+): boolean {
+  return (
+    hasAnyAppPermission(user, [
+      APP_PERMISSIONS.manageSystemSettings,
+      APP_PERMISSIONS.manageCatalogSettings,
+    ]) ||
+    hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageTitles) ||
+    hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageLibrary)
+  );
+}
+
+/**
+ * Privileged access for data scoped to one title. Before the title's library
+ * is known, any privileged grant is enough to ask; the server still decides
+ * per library.
+ */
+export function hasPrivilegedTitleAccess(
+  user: PermissionUser | null | undefined,
+  libraryId: string | null | undefined,
+): boolean {
+  return libraryId
+    ? hasPrivilegedLibraryAccess(user, libraryId)
+    : hasAnyPrivilegedLibraryAccess(user);
+}
+
 export function hasAnyLibraryPermission(
   user: PermissionUser | null | undefined,
   permission: LibraryPermission,

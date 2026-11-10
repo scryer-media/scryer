@@ -139,7 +139,7 @@ fn files_have_identical_contents(source_path: &Path, dest_path: &Path) -> bool {
 /// Reject files with extensions outside the known video set, unless a content
 /// probe qualified the source as video.
 pub fn check_valid_extension(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
-    if ctx.content_qualified_video || scryer_domain::is_video_file(ctx.source_path) {
+    if ctx.content_qualified_video || scryer_domain::is_standalone_video_file(ctx.source_path) {
         ImportVerdict::Accept
     } else {
         let ext = ctx

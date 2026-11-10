@@ -3152,11 +3152,16 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                             format!("download submission failed: {error}"),
                         ));
                     }
+                    // A built-in client names what went wrong as a typed
+                    // failure (a rejected key, an unreachable host); the next
+                    // client may still take the release, as it did when those
+                    // failures were untyped.
                     let should_failover = matches!(
                         error,
                         AppError::Repository(_)
                             | AppError::RepositoryFailure { .. }
                             | AppError::DownloadSubmitUnavailable(_)
+                            | AppError::PluginFailed { .. }
                     );
                     warn!(
                         client_id = config.id.as_str(),
@@ -7873,6 +7878,41 @@ mod tests {
             is_recent: None,
             season_pack: None,
             pinned_download_client_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_download_preserves_explicit_zero_ratio_for_the_client_and_frozen_goals() {
+        for season_pack in [false, true] {
+            let primary = Arc::new(MockDownloadClient::default());
+            let router = seeding_router(
+                primary.clone(),
+                "qbittorrent",
+                vec!["torrent_file".to_string()],
+                r#"{"primary": {"enabled": true}}"#,
+            )
+            .with_seed_goal_resolution(Arc::new(MockSeedingProfileRepository {
+                profiles: vec![scryer_domain::SeedingProfile {
+                    ratio: Some(0.0),
+                    seed_time_minutes: None,
+                    season_pack_mode: scryer_domain::SeasonPackSeedMode::Override,
+                    season_pack_ratio: Some(0.0),
+                    season_pack_seed_time_minutes: None,
+                    ..test_seeding_profile("indexer-profile")
+                }],
+            }));
+            let mut request = torrent_add_request(Some("indexer-1"));
+            request.season_pack = Some(season_pack);
+            let grab = router
+                .submit_download(&request)
+                .await
+                .expect("zero goal routes");
+            let sent = primary.submissions.lock().unwrap();
+            assert_eq!(sent[0].seed_goal_ratio, Some(0.0));
+            assert_eq!(sent[0].seed_goal_seconds, None);
+            let frozen = grab.seed_goals.expect("zero goal is resolved");
+            assert_eq!(frozen.seed_goal_ratio, Some(0.0));
+            assert!(frozen.has_goals());
         }
     }
 

@@ -903,20 +903,10 @@ pub(crate) struct ContentQualifiedVideo {
 
 impl ContentQualifiedVideo {
     pub(crate) fn from_video_facts(facts: &ManualImportVideoFacts) -> Self {
-        // Container names the probe reports, onto `VIDEO_EXTENSIONS`.
-        let container_extension = match facts.container_format.as_deref() {
-            Some("matroska") => Some("mkv"),
-            Some("webm") => Some("webm"),
-            Some("mp4") => Some("mp4"),
-            Some("mov") => Some("mov"),
-            Some("avi") => Some("avi"),
-            Some("mpegts") => Some("ts"),
-            Some("mpeg") => Some("mpg"),
-            Some("asf") => Some("wmv"),
-            Some("ogg") => Some("ogv"),
-            Some("flv") => Some("flv"),
-            _ => None,
-        };
+        let container_extension = facts
+            .container_format
+            .as_deref()
+            .and_then(scryer_media_types::formats::preferred_video_extension_for_container);
         Self {
             container_extension,
         }
@@ -932,6 +922,45 @@ pub(crate) fn import_video_destination_extension(
     scryer_domain::canonical_video_extension(source_video)
         .or_else(|| content_qualified.and_then(|video| video.container_extension))
         .unwrap_or("mkv")
+}
+
+#[cfg(test)]
+mod media_registry_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn every_standalone_extension_survives_discovery_and_destination_naming() {
+        let dir = tempfile::tempdir().unwrap();
+        for entry in scryer_media_types::formats::MEDIA_FORMATS {
+            let name = format!("Fixture.Payload.{}_", entry.extension.to_ascii_uppercase());
+            std::fs::write(dir.path().join(name), b"fixture").unwrap();
+        }
+        std::fs::write(dir.path().join("Fixture.Payload.wtv.exe"), b"MZfixture").unwrap();
+        let files = discover_video_files(dir.path(), false).unwrap();
+        assert_eq!(
+            files.len(),
+            scryer_media_types::formats::standalone_video_extensions().count()
+        );
+        for entry in scryer_media_types::formats::MEDIA_FORMATS {
+            let path = dir.path().join(format!(
+                "Fixture.Payload.{}_",
+                entry.extension.to_ascii_uppercase()
+            ));
+            // Probe-only suffixes and disc companions are never import candidates.
+            assert_eq!(
+                files.iter().any(|file| file.path() == path),
+                entry.is_standalone_video(),
+                "{}",
+                entry.extension
+            );
+            if entry.is_standalone_video() {
+                assert_eq!(
+                    import_video_destination_extension(&path, None),
+                    entry.extension
+                );
+            }
+        }
+    }
 }
 
 /// A video file an import is about to process, plus the name parsing should

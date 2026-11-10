@@ -51,13 +51,13 @@ impl AppUseCase {
                 .map(|title| title.library_id)
                 .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?,
         };
-        self.require_library_permission(actor, &library_id, scryer_domain::LibraryPermission::View)
+        self.require_privileged_library_access(actor, &library_id)
             .await?;
         Ok(Some(item))
     }
 
     /// Batch variant of [`Self::get_wanted_item`]: loads wanted items by id and
-    /// silently drops those the actor cannot `View`.
+    /// silently drops those outside the actor's privileged libraries.
     pub async fn get_wanted_items_by_ids(
         &self,
         actor: &User,
@@ -69,12 +69,8 @@ impl AppUseCase {
             .acquisition_scope_states
             .list_acquisition_scope_states_by_ids(ids)
             .await?;
-        self.filter_wanted_items_for_permission(
-            actor,
-            items,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await
+        self.filter_wanted_items_for_privileged_access(actor, items)
+            .await
     }
 }
 impl AppUseCase {
@@ -84,9 +80,7 @@ impl AppUseCase {
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<(Vec<AcquisitionScopeState>, i64)> {
         let requested_library_ids = query.library_ids.clone();
-        let mut library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+        let mut library_ids = self.require_privileged_library_ids(actor, None).await?;
         if !requested_library_ids.is_empty() {
             let authorized = library_ids.into_iter().collect::<HashSet<_>>();
             library_ids = requested_library_ids
@@ -128,7 +122,11 @@ impl AppUseCase {
         &self,
         scopes: &[LandedBarScope],
     ) -> Vec<Option<i32>> {
-        self.landed_bars_for_scopes_with_memo(scopes, None).await
+        self.landed_bars_for_scopes_with_memo(scopes, None)
+            .await
+            .into_iter()
+            .map(|bar| bar.map(|bar| bar.score))
+            .collect()
     }
 
     /// [`Self::landed_bars_for_scopes`] for the background cutoff pass, reusing
@@ -137,7 +135,7 @@ impl AppUseCase {
     pub(crate) async fn landed_bars_for_scopes_memoized(
         &self,
         scopes: &[LandedBarScope],
-    ) -> Vec<Option<i32>> {
+    ) -> Vec<Option<crate::quality::landed_bar_memo::LandedBar>> {
         // Taken before any scoring context (and so before the rules engine) is
         // read: a swap that lands after this point refuses what we fill.
         let ticket = self.runtime.acquisition.landed_bar_memo.ticket();
@@ -148,7 +146,7 @@ impl AppUseCase {
         &self,
         scopes: &[LandedBarScope],
         memo_ticket: Option<crate::quality::landed_bar_memo::LandedBarMemoTicket>,
-    ) -> Vec<Option<i32>> {
+    ) -> Vec<Option<crate::quality::landed_bar_memo::LandedBar>> {
         let mut bars = vec![None; scopes.len()];
         if scopes.is_empty() {
             return bars;
@@ -270,7 +268,10 @@ impl AppUseCase {
             .unwrap_or_default();
 
         // One scoring context per title, reused by every scope that title owns.
-        let mut bars_by_scope: HashMap<(usize, Vec<String>), i32> = HashMap::new();
+        let mut bars_by_scope: HashMap<
+            (usize, Vec<String>),
+            crate::quality::landed_bar_memo::LandedBar,
+        > = HashMap::new();
         for title in &titles {
             let title_indices: Vec<usize> = scored_indices
                 .iter()
@@ -327,7 +328,7 @@ impl AppUseCase {
                         episode_ids.sort();
                         episode_ids.dedup();
                     }
-                    let score = *bars_by_scope
+                    let landed = *bars_by_scope
                         .entry((index, episode_ids.clone()))
                         .or_insert_with(|| {
                             // Ordinary multi-episode files retain their whole-span
@@ -354,21 +355,25 @@ impl AppUseCase {
                             {
                                 return bar;
                             }
-                            let bar = self
-                                .incumbent_bar_for_episodes(
-                                    &file.file,
-                                    &context,
-                                    basis,
-                                    &episode_ids,
-                                )
-                                .score;
+                            let facts = self.incumbent_bar_for_episodes(
+                                &file.file,
+                                &context,
+                                basis,
+                                &episode_ids,
+                            );
+                            let bar = crate::quality::landed_bar_memo::LandedBar {
+                                score: facts.score,
+                                tier_index: facts.tier_index,
+                                language: facts.language,
+                            };
                             if let Some((ticket, key)) = memo {
                                 memo_store.fill(ticket, key, bar);
                             }
                             bar
                         });
-                    bars[scope_index] =
-                        Some(bars[scope_index].map_or(score, |current| current.max(score)));
+                    bars[scope_index] = Some(
+                        bars[scope_index].map_or(landed, |current| current.with_file(landed)),
+                    );
                 }
             }
         }
@@ -646,6 +651,10 @@ impl AppUseCase {
                 item.grabbed_release.as_deref(),
             )
             .await?;
+        self.runtime
+            .acquisition
+            .target_cache
+            .mark_title(&item.title_id);
         self.runtime.acquisition.acquisition_wake.notify_one();
         Ok(())
     }
@@ -745,14 +754,24 @@ impl AppUseCase {
     /// Operator queue replacement: the blocking download is gone, so every
     /// scope it covered re-opens from scratch — score baseline cleared (the
     /// replacement decides on its own merits), all coverage pruned, loop woken.
+    ///
+    /// Rows `kept` covers stay as they are: a release already queued in the
+    /// blocking download's place holds them.
     pub(crate) async fn reset_wanted_items_for_submission_scope(
         &self,
         title_id: &str,
         scope: &SubmissionScope,
+        kept: Option<&SubmissionScope>,
     ) -> AppResult<()> {
-        let wanted_item_ids = self
+        let mut wanted_item_ids = self
             .covered_wanted_item_ids_for_submission_scope(title_id, scope, "")
             .await?;
+        if let Some(kept) = kept {
+            let held = self
+                .covered_wanted_item_ids_for_submission_scope(title_id, kept, "")
+                .await?;
+            wanted_item_ids.retain(|id| !held.contains(id));
+        }
         for wanted_item_id in wanted_item_ids {
             if let Some(item) = self
                 .services

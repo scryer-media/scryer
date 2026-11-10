@@ -69,18 +69,27 @@ impl RootMoveFixture {
                 &library_id,
                 "Movies".to_string(),
                 "movies".to_string(),
-                vec![
-                    LibraryRootDraft {
-                        id: None,
-                        path: root_a.to_string_lossy().to_string(),
-                        is_default: true,
-                    },
-                    LibraryRootDraft {
-                        id: None,
-                        path: root_b.to_string_lossy().to_string(),
-                        is_default: false,
-                    },
-                ],
+                crate::lib_tests::with_stored_root_ids(
+                    &app.services
+                        .catalog
+                        .libraries
+                        .get_by_id(&library_id)
+                        .await
+                        .expect("library lookup")
+                        .expect("library exists"),
+                    vec![
+                        LibraryRootDraft {
+                            id: None,
+                            path: root_a.to_string_lossy().to_string(),
+                            is_default: true,
+                        },
+                        LibraryRootDraft {
+                            id: None,
+                            path: root_b.to_string_lossy().to_string(),
+                            is_default: false,
+                        },
+                    ],
+                ),
             )
             .await
             .expect("configure two roots");
@@ -113,8 +122,8 @@ impl RootMoveFixture {
     }
 
     /// A third configured root, so a selection can genuinely span more than one
-    /// source root. `update` re-keys root identity by normalized path, so the
-    /// two existing roots keep their ids (FR-078).
+    /// source root. The two existing roots are sent back with their ids, so
+    /// they keep them (FR-078).
     async fn add_third_root(&self) -> String {
         let root_c = self.root_c();
         std::fs::create_dir_all(&root_c).expect("create root c");
@@ -129,12 +138,12 @@ impl RootMoveFixture {
                 "movies".to_string(),
                 vec![
                     LibraryRootDraft {
-                        id: None,
+                        id: Some(self.root_a_id.clone()),
                         path: self.root_a().to_string_lossy().to_string(),
                         is_default: true,
                     },
                     LibraryRootDraft {
-                        id: None,
+                        id: Some(self.root_b_id.clone()),
                         path: self.root_b().to_string_lossy().to_string(),
                         is_default: false,
                     },
@@ -2332,7 +2341,7 @@ async fn a_finished_operations_leftover_ownership_claims_are_released_at_boot() 
 // ── US9.1–9.2 end-to-end, and SC-007 against a live operation ───────────────
 
 /// US9.1: with no preference set, the plan, the persisted operation, and every
-/// per-file record all say full depth. The default has to survive the whole
+/// per-file record all say quick depth. The default has to survive the whole
 /// path, not just the settings reader.
 #[tokio::test]
 async fn the_default_verification_depth_reaches_the_operation_and_every_record() {
@@ -2349,42 +2358,33 @@ async fn the_default_verification_depth_reaches_the_operation_and_every_record()
         .await;
 
     let preview = fixture.preview(&[&title.id]).await;
-    assert_eq!(preview.plan.verification.depth, VerificationDepth::Full);
+    assert_eq!(preview.plan.verification.depth, VerificationDepth::Quick);
 
     let operation = fixture.start_and_settle(&[&title.id]).await;
-    assert_eq!(operation.verification_depth, VerificationDepth::Full);
+    assert_eq!(operation.verification_depth, VerificationDepth::Quick);
     assert_eq!(operation.verification_fallback_count, 0);
 
     let records = fixture.verifications();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].depth.applied, VerificationDepth::Full);
+    assert_eq!(records[0].depth.applied, VerificationDepth::Quick);
     assert!(!records[0].depth.fell_back);
 }
 
-/// US9.2, as the operator settled it: the verification-depth preference is an
-/// **import** preference, and a location operation ignores it.
-///
-/// The preference governs the copy that lands a freshly downloaded file, which
-/// still exists at the download client if the copy was wrong. A move is the
-/// other case — it is the user's only copy, and the source is recycled once the
-/// destination verifies — so every location operation plans full depth however
-/// the preference is set. What stays is the *fallback*: when a full read-back
-/// cannot run, verification still drops to the quick floor and says so
-/// (FR-043), because a capability limit the user is told about is a different
-/// thing from a preference that quietly asked for less.
+/// US9.2: opting into full verification reaches planning, persistence and the
+/// file's achieved-depth stamp without changing the quick default.
 #[tokio::test]
-async fn a_quick_verification_preference_is_ignored_by_a_location_operation() {
+async fn a_full_verification_preference_reaches_a_location_operation() {
     let fixture = RootMoveFixture::new().await;
     fixture
         .app
         .update_verification_settings(
             &fixture.user,
             UpdateVerificationSettings {
-                depth: VerificationDepth::Quick,
+                depth: VerificationDepth::Full,
             },
         )
         .await
-        .expect("choose quick verification");
+        .expect("choose full verification");
 
     let title = fixture
         .seed_title(
@@ -2401,7 +2401,7 @@ async fn a_quick_verification_preference_is_ignored_by_a_location_operation() {
     assert_eq!(
         preview.plan.verification.depth,
         VerificationDepth::Full,
-        "a move promises full verification whatever the import preference says"
+        "the preview must name the configured verification depth"
     );
 
     let operation = fixture.start_and_settle(&[&title.id]).await;
@@ -2418,11 +2418,11 @@ async fn a_quick_verification_preference_is_ignored_by_a_location_operation() {
     );
     assert!(!records[0].depth.fell_back);
 
-    // The preference is still stored and still means something — to imports.
+    // The operation uses the setting without modifying it.
     assert_eq!(
         fixture.app.resolve_verification_depth().await,
-        VerificationDepth::Quick,
-        "the setting is untouched; only the location path stopped reading it"
+        VerificationDepth::Full,
+        "the setting remains available to subsequent imports and moves"
     );
 
     // And the quick floor is still expressible as a *fallback*, which is what
@@ -2851,12 +2851,119 @@ async fn a_resumed_operation_reports_through_a_fresh_activity_run() {
 
     let closed = fixture.settled_job_run(&second_run_id).await;
     assert_eq!(closed.status, crate::JobRunStatus::Completed);
+    let earlier = fixture.job_run(&first_run_id).await;
     assert_eq!(
-        fixture.job_run(&first_run_id).await.status,
-        crate::JobRunStatus::Failed,
+        (earlier.status, earlier.error_text, earlier.completed_at),
+        (
+            crashed_run.status,
+            crashed_run.error_text.clone(),
+            crashed_run.completed_at
+        ),
         "the earlier attempt's row is left exactly as it settled"
     );
     assert_eq!(fixture.recorded_job_runs().await.len(), 2);
+}
+
+/// A killed process leaves its run open, and boot reconciliation spares it for
+/// the resume. The resume opens a fresh run, so it must settle the one it
+/// replaces; otherwise that row reads as running forever.
+#[tokio::test]
+async fn a_resume_closes_the_run_a_killed_process_left_open() {
+    let fixture = RootMoveFixture::new().await;
+    let first = fixture
+        .seed_title(
+            "Killed First",
+            2005,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Killed First (2005)",
+            &[("Killed.First.2005.mkv", 512)],
+        )
+        .await;
+    let second = fixture
+        .seed_title(
+            "Killed Second",
+            2006,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Killed Second (2006)",
+            &[("Killed.Second.2006.mkv", 512)],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&first.id, &second.id]).await;
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(2, 1));
+    let accepted = fixture
+        .app
+        .start_root_move(
+            &fixture.user,
+            StartRootMoveRequest {
+                title_ids: vec![first.id.clone(), second.id.clone()],
+                destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                confirmation: PlanConfirmationRequest {
+                    fingerprint: preview.plan.fingerprint.clone(),
+                    typed_confirmation: None,
+                },
+            },
+        )
+        .await
+        .expect("start root move");
+    let operation_id = accepted.operation.id.clone();
+    let first_run_id = accepted
+        .operation
+        .job_run_id
+        .clone()
+        .expect("an accepted operation names its Activity run");
+    fixture.settled_job_run(&first_run_id).await;
+
+    // A killed process never gets to close its run: put the row back the way
+    // it would be left.
+    {
+        let mut runs = fixture.job_runs.runs.lock().await;
+        let run = runs
+            .iter_mut()
+            .find(|run| run.id == first_run_id)
+            .expect("first run");
+        run.status = crate::JobRunStatus::Running;
+        run.completed_at = None;
+        run.error_text = None;
+        run.summary_text = None;
+    }
+
+    fixture
+        .app
+        .resume_location_operation(&operation_id)
+        .await
+        .expect("resume")
+        .plan()
+        .expect("an interrupted root move is resumable");
+
+    let second_run_id = fixture
+        .app
+        .location_operation(&operation_id)
+        .await
+        .expect("read operation")
+        .expect("operation row")
+        .job_run_id
+        .expect("a resumed operation names a run");
+    assert_ne!(second_run_id, first_run_id);
+
+    let replaced = fixture.job_run(&first_run_id).await;
+    assert_eq!(replaced.status, crate::JobRunStatus::Failed);
+    assert!(
+        replaced.completed_at.is_some(),
+        "the replaced run is settled"
+    );
+    assert!(
+        replaced.error_text.is_some(),
+        "the replaced run says why it stopped"
+    );
+    assert_eq!(
+        fixture.job_run(&second_run_id).await.status,
+        crate::JobRunStatus::Running
+    );
 }
 
 /// T036: the generic job trigger still refuses to start a location operation.
@@ -3311,4 +3418,151 @@ mod name_collisions {
         assert_eq!(files[0].sampled_proof, None);
         assert_eq!(entries[0].content.sampled_proof, None);
     }
+}
+
+impl RootMoveFixture {
+    async fn start_with(
+        &self,
+        title_ids: &[&str],
+        fingerprint: &crate::location::preview::PlanFingerprint,
+    ) -> AppResult<crate::location::operations::LocationOperationAccepted> {
+        self.app
+            .start_root_move(
+                &self.user,
+                StartRootMoveRequest {
+                    title_ids: title_ids.iter().map(|id| (*id).to_string()).collect(),
+                    destination: DestinationRequest::to_root(self.root_b_id.clone()),
+                    confirmation: PlanConfirmationRequest {
+                        fingerprint: fingerprint.clone(),
+                        typed_confirmation: None,
+                    },
+                },
+            )
+            .await
+    }
+}
+
+#[tokio::test]
+async fn confirming_a_preview_reuses_its_plan_instead_of_walking_the_folders_again() {
+    let fixture = RootMoveFixture::new().await;
+    fixture
+        .app
+        .services
+        .identity
+        .users
+        .create(fixture.user.clone())
+        .await
+        .unwrap();
+    let title = fixture
+        .seed_title(
+            "Synthetic Fixture 0001",
+            2001,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Synthetic Fixture 0001 (2001)",
+            &[("Synthetic.Fixture.0001.2001.1080p.mkv", 2048)],
+        )
+        .await;
+    let previewed = fixture.preview(&[&title.id]).await;
+
+    // A file the catalog does not track appears after the preview. Only a
+    // folder walk can see it, so a fresh preview states a different plan…
+    let source_folder = fixture.root_a().join("Synthetic Fixture 0001 (2001)");
+    std::fs::write(
+        source_folder.join("Synthetic.Fixture.0001.2001.nfo"),
+        b"nfo",
+    )
+    .expect("write untracked file");
+    let fresh = fixture.preview(&[&title.id]).await;
+    assert_ne!(fresh.plan.fingerprint, previewed.plan.fingerprint);
+
+    // …but confirming the first preview reuses the plan it was built from,
+    // because no catalog or configuration fact behind it changed.
+    let accepted = fixture
+        .start_with(&[&title.id], &previewed.plan.fingerprint)
+        .await
+        .expect("the previewed plan is reused");
+    // The source folder still holds a file the plan never named, so the move
+    // finishes with a warning rather than removing that folder.
+    let operation = fixture.settle(&accepted.operation.id).await;
+    assert_eq!(
+        operation.state,
+        LocationOperationState::CompletedWithWarnings
+    );
+
+    let destination_folder = fixture.root_b().join("Synthetic Fixture 0001 (2001)");
+    assert!(
+        destination_folder
+            .join("Synthetic.Fixture.0001.2001.1080p.mkv")
+            .exists()
+    );
+    // The file the plan never named is kept where it was.
+    assert!(
+        source_folder
+            .join("Synthetic.Fixture.0001.2001.nfo")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn a_catalog_change_after_the_preview_refuses_the_confirmation_as_stale() {
+    let fixture = RootMoveFixture::new().await;
+    fixture
+        .app
+        .services
+        .identity
+        .users
+        .create(fixture.user.clone())
+        .await
+        .unwrap();
+    let title = fixture
+        .seed_title(
+            "Synthetic Fixture 0002",
+            2002,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Synthetic Fixture 0002 (2002)",
+            &[("Synthetic.Fixture.0002.2002.1080p.mkv", 2048)],
+        )
+        .await;
+    let previewed = fixture.preview(&[&title.id]).await;
+
+    // A second tracked file joins the title after the preview.
+    let source_folder = fixture.root_a().join("Synthetic Fixture 0002 (2002)");
+    let added = source_folder.join("Synthetic.Fixture.0002.2002.2160p.mkv");
+    std::fs::write(&added, vec![b'x'; 1024]).expect("write added file");
+    fixture
+        .app
+        .services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: added.to_string_lossy().to_string(),
+            size_bytes: 1024,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("seed added media file row");
+
+    let refused = fixture
+        .start_with(&[&title.id], &previewed.plan.fingerprint)
+        .await
+        .expect_err("a plan whose facts changed is never executed");
+    assert!(
+        matches!(
+            refused,
+            AppError::LocationPlanRefused {
+                code: crate::location::preview::PlanConfirmationError::Stale,
+                ..
+            }
+        ),
+        "expected a stale-plan refusal, got {refused:?}"
+    );
+    assert!(
+        source_folder
+            .join("Synthetic.Fixture.0002.2002.1080p.mkv")
+            .exists()
+    );
 }

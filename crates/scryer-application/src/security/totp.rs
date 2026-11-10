@@ -576,6 +576,8 @@ fn matching_totp_step(
     Ok(None)
 }
 
+// TOTP (RFC 6238) fixes HMAC-SHA1/256/512 per stored profile.
+#[allow(clippy::disallowed_methods)]
 fn hotp(secret: &[u8], counter: u64, profile: TotpProfile) -> AppResult<String> {
     let profile = TotpProfile::new(profile.algorithm, profile.digits, profile.period_seconds)?;
     let key = hmac::Key::new(profile.algorithm.hmac_algorithm(), secret);

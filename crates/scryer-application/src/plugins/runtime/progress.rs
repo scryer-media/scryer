@@ -1,8 +1,68 @@
+/// Wall-clock durations of one install or upgrade, logged once when it ends.
+///
+/// Phases are the user-visible states. The first one, `resolving`, is the
+/// catalog lookup that runs while the row already reads "Downloading". Steps
+/// split the "Installing" phase, which bundles component compilation, the
+/// database write, runtime publication and provider finalization.
+struct PluginInstallTimings {
+    started_at: std::time::Instant,
+    phase_started_at: std::time::Instant,
+    phase: &'static str,
+    phases: Vec<(&'static str, Duration)>,
+    step_started_at: std::time::Instant,
+    steps: Vec<(&'static str, Duration)>,
+}
+
+impl PluginInstallTimings {
+    fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            started_at: now,
+            phase_started_at: now,
+            phase: "resolving",
+            phases: Vec::new(),
+            step_started_at: now,
+            steps: Vec::new(),
+        }
+    }
+
+    fn enter_phase(&mut self, phase: &'static str) {
+        let now = std::time::Instant::now();
+        self.phases.push((
+            self.phase,
+            now.saturating_duration_since(self.phase_started_at),
+        ));
+        self.phase = phase;
+        self.phase_started_at = now;
+        self.step_started_at = now;
+    }
+
+    fn end_step(&mut self, step: &'static str) {
+        let now = std::time::Instant::now();
+        self.steps
+            .push((step, now.saturating_duration_since(self.step_started_at)));
+        self.step_started_at = now;
+    }
+
+    fn record_step(&mut self, step: &'static str, duration: Duration) {
+        self.steps.push((step, duration));
+    }
+
+    fn format(entries: &[(&'static str, Duration)]) -> String {
+        entries
+            .iter()
+            .map(|(name, duration)| format!("{name}={}ms", duration.as_millis()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 #[derive(Clone)]
 struct PluginInstallProgressReporter {
     orchestrator: crate::services::PluginInstallOrchestrator,
     actor_user_id: String,
     plugin_id: String,
+    timings: std::sync::Arc<std::sync::Mutex<PluginInstallTimings>>,
 }
 impl PluginInstallProgressReporter {
     fn new(app: &AppUseCase, actor_user_id: &str, plugin_id: &str) -> Self {
@@ -10,30 +70,73 @@ impl PluginInstallProgressReporter {
             orchestrator: app.runtime.plugins.plugin_install_orchestrator.clone(),
             actor_user_id: actor_user_id.to_string(),
             plugin_id: plugin_id.to_string(),
+            timings: std::sync::Arc::new(std::sync::Mutex::new(PluginInstallTimings::new())),
         }
     }
 
+    fn with_timings<T>(&self, f: impl FnOnce(&mut PluginInstallTimings) -> T) -> T {
+        let mut timings = self
+            .timings
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        f(&mut timings)
+    }
+
+    /// Closes the current step of the "Installing" phase.
+    fn end_step(&self, step: &'static str) {
+        self.with_timings(|timings| timings.end_step(step));
+    }
+
+    /// Records a measured sub-interval, such as a lock wait, as its own step.
+    fn record_step(&self, step: &'static str, duration: Duration) {
+        self.with_timings(|timings| timings.record_step(step, duration));
+    }
+
+    fn log_timings(&self, outcome: &'static str) {
+        let (total, phases, steps) = self.with_timings(|timings| {
+            timings.enter_phase("done");
+            (
+                timings.started_at.elapsed(),
+                PluginInstallTimings::format(&timings.phases),
+                PluginInstallTimings::format(&timings.steps),
+            )
+        });
+        tracing::info!(
+            plugin_id = self.plugin_id.as_str(),
+            outcome,
+            total_ms = total.as_millis() as u64,
+            phases = phases.as_str(),
+            installing_steps = steps.as_str(),
+            "plugin install timings"
+        );
+    }
+
     async fn downloading(&self) {
+        self.with_timings(|timings| timings.enter_phase("downloading"));
         self.transition(PluginInstallState::Downloading, None, None)
             .await;
     }
 
     async fn verifying(&self) {
+        self.with_timings(|timings| timings.enter_phase("verifying"));
         self.transition(PluginInstallState::Verifying, None, None)
             .await;
     }
 
     async fn installing(&self) {
+        self.with_timings(|timings| timings.enter_phase("installing"));
         self.transition(PluginInstallState::Installing, None, None)
             .await;
     }
 
     async fn succeeded(&self) {
+        self.log_timings("succeeded");
         self.transition(PluginInstallState::Succeeded, None, None)
             .await;
     }
 
     async fn failed(&self, error: &AppError) {
+        self.log_timings("failed");
         self.transition(PluginInstallState::Failed, None, Some(error.to_string()))
             .await;
     }
@@ -301,6 +404,7 @@ impl AppUseCase {
         let prepared = self
             .validate_prepared_catalog_plugin_install(prepared)
             .await?;
+        reporter.end_step("descriptor_compile");
         let persisted_wasm_bytes = prepared.persisted_wasm_bytes.clone();
         let (installation, runtime_plugin) =
             prepared.into_new_installation(resolved.catalog_entry.id.clone())?;
@@ -311,11 +415,16 @@ impl AppUseCase {
             .plugin_installations
             .create_plugin_installation(&installation, Some(persisted_wasm_bytes.as_slice()))
             .await?;
+        reporter.end_step("persist");
 
-        self.publish_runtime_plugin(None, &result, runtime_plugin)
+        let lock_wait = self
+            .publish_runtime_plugin(None, &result, runtime_plugin)
             .await?;
+        reporter.record_step("publish_lock_wait", lock_wait);
+        reporter.end_step("publish");
         self.finalize_runtime_plugin_mutation(&result.plugin_type, true)
             .await?;
+        reporter.end_step("finalize");
         Ok(result)
     }
 }
@@ -365,6 +474,7 @@ impl AppUseCase {
         let prepared = self
             .validate_prepared_catalog_plugin_install(prepared)
             .await?;
+        reporter.end_step("descriptor_compile");
         let persisted_wasm_bytes = prepared.persisted_wasm_bytes.clone();
         let (updated, runtime_plugin) = prepared.into_updated_installation(installation)?;
 
@@ -374,24 +484,29 @@ impl AppUseCase {
             .plugin_installations
             .update_plugin_installation(&updated, Some(persisted_wasm_bytes.as_slice()))
             .await?;
+        reporter.end_step("persist");
 
         let runtime_touched = result.is_enabled;
         if runtime_touched {
             let mut previous_runtime_installation = result.clone();
             previous_runtime_installation.plugin_type = previous_plugin_type.clone();
             previous_runtime_installation.provider_type = previous_provider_type.clone();
-            self.publish_runtime_plugin(
-                Some(&previous_runtime_installation),
-                &result,
-                runtime_plugin,
-            )
-            .await?;
+            let lock_wait = self
+                .publish_runtime_plugin(
+                    Some(&previous_runtime_installation),
+                    &result,
+                    runtime_plugin,
+                )
+                .await?;
+            reporter.record_step("publish_lock_wait", lock_wait);
+            reporter.end_step("publish");
         }
         self.finalize_runtime_plugin_mutation_for_types(
             [previous_plugin_type.as_str(), result.plugin_type.as_str()],
             runtime_touched,
         )
         .await?;
+        reporter.end_step("finalize");
         Ok(result)
     }
 }

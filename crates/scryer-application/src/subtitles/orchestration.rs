@@ -695,6 +695,9 @@ async fn search_all_subtitle_providers(
         )
         .await?
         else {
+            first_error.get_or_insert_with(|| {
+                AppError::temporary_unavailable("Subtitle providers deferred by scheduler", None)
+            });
             continue;
         };
         let permit = Arc::clone(&semaphore)
@@ -923,6 +926,11 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::View,
         )
         .await?;
+        // The listing stays on View so Manage Subtitles holders can act on
+        // it, but where the sidecar lives on disk is privileged.
+        let privileged = self
+            .has_privileged_library_access(actor, &title.library_id)
+            .await?;
         let score_kind = subtitle_score_kind(subtitle_media_kind(&title));
         let downloads = self
             .services
@@ -932,11 +940,17 @@ impl AppUseCase {
             .await?;
         Ok(downloads
             .into_iter()
-            .map(|download| ExternalSubtitleListing {
-                score_percent: download
-                    .score
-                    .map(|score| normalized_score_percent(score_kind, score)),
-                download,
+            .map(|mut download| {
+                if !privileged {
+                    download.file_path =
+                        crate::types::file_name_only(&download.file_path).to_string();
+                }
+                ExternalSubtitleListing {
+                    score_percent: download
+                        .score
+                        .map(|score| normalized_score_percent(score_kind, score)),
+                    download,
+                }
             })
             .collect())
     }
@@ -2183,9 +2197,6 @@ async fn run_subtitle_search_for_file(
         return Ok(());
     }
 
-    let include_ai = settings.include_ai_translated;
-    let include_machine = settings.include_machine_translated;
-
     let title = app
         .services
         .catalog
@@ -2211,106 +2222,263 @@ async fn run_subtitle_search_for_file(
             )
         })?;
 
-    let is_series = is_series_title(&title);
-    let media_kind = if is_series {
-        SubtitleMediaKind::Episode
-    } else {
-        SubtitleMediaKind::Movie
-    };
-    let min_score = subtitle_minimum_raw_score(
-        media_kind,
-        settings.minimum_score_series,
-        settings.minimum_score_movie,
-    );
-    let sync_settings = read_subtitle_sync_settings(&settings);
+    let mut search = AutomaticSubtitleSearch::default();
+    search_automatic_subtitles_for_file(app, &title, &mf, None, &mut search).await?;
+    Ok(())
+}
 
-    let providers = match configured_runtime_subtitle_providers(app, &settings).await {
-        Ok(providers) => providers,
-        Err(err) => {
-            warn!(error = %err, title_id, media_file_id, "skipping on-import subtitle search");
-            return Ok(());
+#[path = "batch.rs"]
+mod batch;
+
+#[derive(Default)]
+struct AutomaticSubtitleSearch {
+    providers: Option<Vec<PluginSubtitleProviderAdapter>>,
+    circuit: SubtitleProviderCircuit,
+    unusable_files: HashSet<(String, String)>,
+}
+
+fn subtitle_sync_warning(result: Option<&sync::SyncResult>) -> Option<&'static str> {
+    match result {
+        None => Some("sync_failed"),
+        Some(result) => match result.skipped_reason {
+            None
+            | Some(
+                sync::SyncSkipReason::Disabled
+                | sync::SyncSkipReason::ForcedSubtitle
+                | sync::SyncSkipReason::ScoreAboveThreshold
+                | sync::SyncSkipReason::OffsetTooSmall,
+            ) => None,
+            Some(reason) => Some(reason.label()),
+        },
+    }
+}
+
+#[derive(Default, serde::Serialize)]
+struct AutomaticSubtitleOutcome {
+    searched: u32,
+    downloaded: u32,
+    no_match: u32,
+    deferred: u32,
+    failed: u32,
+    sync_warnings: u32,
+    sync_reasons: Vec<&'static str>,
+}
+
+impl AutomaticSubtitleOutcome {
+    fn record_error(&mut self, error: &AppError) {
+        if matches!(error, AppError::TemporaryUnavailable { .. }) {
+            self.deferred += 1;
+        } else {
+            self.failed += 1;
         }
+    }
+}
+
+async fn search_automatic_subtitles_for_file(
+    app: &AppUseCase,
+    title: &Title,
+    mf: &TitleMediaFile,
+    actor: Option<&User>,
+    search: &mut AutomaticSubtitleSearch,
+) -> AppResult<AutomaticSubtitleOutcome> {
+    let mut outcome = AutomaticSubtitleOutcome::default();
+    let guard_key = format!("subtitle-file:{}", mf.id);
+    let _guard = tokio::select! {
+        biased;
+        _ = app.restore_coordinator().shutdown_workers.cancelled() => {
+            return Err(AppError::temporary_unavailable("Subtitle search interrupted by shutdown", None));
+        }
+        guard = app.runtime.jobs.interactive_operation_guards.acquire(&guard_key) => guard,
     };
+    let current_file = app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&mf.id)
+        .await?
+        .filter(|file| file.title_id == title.id)
+        .ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::subtitles::MEDIA_FILE_NOT_FOUND,
+                "Media file no longer exists in this title",
+            )
+        })?;
+    let mf = &current_file;
+    let current_title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&mf.title_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::subtitles::TITLE_NOT_FOUND,
+                "Title no longer exists",
+            )
+        })?;
+    let title = &current_title;
+    if let Some(actor) = actor {
+        let actor = app.attach_user_authorization(actor.clone()).await?;
+        app.require_library_permission(
+            &actor,
+            &title.library_id,
+            scryer_domain::LibraryPermission::ManageSubtitles,
+        )
+        .await?;
+    }
+    if actor.is_some()
+        && !tokio::fs::try_exists(stored_path_to_path_buf(&mf.file_path))
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?
+    {
+        return Err(AppError::not_found_reason(
+            crate::error_reasons::subtitles::MEDIA_FILE_NOT_FOUND,
+            "Media file no longer exists",
+        ));
+    }
+    let settings = app.subtitle_settings().await?;
+    if !settings.enabled || settings.languages.is_empty() {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::BATCH_DISABLED,
+            "Subtitle search is disabled or no languages are configured",
+        ));
+    }
+    let include_ai = settings.include_ai_translated;
+    let include_machine = settings.include_machine_translated;
+    let min_score_series = settings.minimum_score_series;
+    let min_score_movie = settings.minimum_score_movie;
+    let wanted_languages = &settings.languages;
+    let sync_settings = read_subtitle_sync_settings(&settings);
 
     let existing = app
         .services
         .workflow
         .subtitle_downloads
         .list_for_media_file(&mf.id)
-        .await
-        .unwrap_or_default();
-    let embedded = embedded_subtitle_streams(&mf);
-    let missing = compute_missing_subtitles_from_streams(&wanted_languages, &existing, &embedded);
+        .await?;
 
-    let episode_context = media_file_episode_context(app, &title, &mf).await;
+    let embedded = embedded_subtitle_streams(mf);
+
+    let missing = compute_missing_subtitles_from_streams(wanted_languages, &existing, &embedded);
+    if missing.is_empty() {
+        return Ok(outcome);
+    }
+
+    if actor.is_some() || search.providers.is_none() {
+        search.providers = Some(configured_runtime_subtitle_providers(app, &settings).await?);
+    }
+    let providers = search.providers.as_deref().expect("providers initialized");
+    let circuit = &mut search.circuit;
+    let unusable_files = &mut search.unusable_files;
+    let media_kind = subtitle_media_kind(title);
+    let min_score = subtitle_minimum_raw_score(media_kind, min_score_series, min_score_movie);
+
     let file_path = stored_path_to_path_buf(&mf.file_path);
+    let episode_context = media_file_episode_context(app, title, mf).await;
 
     for lang_pref in &missing {
+        if app.restore_coordinator().shutdown_workers.is_cancelled() {
+            break;
+        }
+        outcome.searched += 1;
         let query = build_subtitle_query(
-            &title,
-            &mf,
+            title,
+            mf,
             &episode_context,
             std::slice::from_ref(&lang_pref.code),
             Some(lang_pref.hearing_impaired),
             include_ai,
             include_machine,
         );
+
+        if providers
+            .iter()
+            .all(|provider| circuit.is_open(&provider.config_id))
+        {
+            outcome.failed += 1;
+            break;
+        }
         let results = match search_all_subtitle_providers(
             app,
-            &providers,
+            providers,
             file_path.as_path(),
             &query,
             min_score,
-            None,
+            Some(&mut *circuit),
         )
         .await
         {
             Ok(r) => r,
             Err(err) => {
-                warn!(error = %err, language = %lang_pref.code, "on-import subtitle search failed");
+                warn!(
+                    error = %err,
+                    title = %title.name,
+                    language = %lang_pref.code,
+                    "subtitle search failed"
+                );
+                outcome.record_error(&err);
                 continue;
             }
         };
 
+        // Filter blocklisted results
         let mut filtered_results = Vec::new();
-        for result in &results {
+        for r in &results {
             let blocklisted = app
                 .services
                 .workflow
                 .subtitle_downloads
-                .is_blocklisted(&mf.id, &result.provider, &result.provider_file_id)
-                .await
-                .unwrap_or(false);
-            if !blocklisted {
-                filtered_results.push(result);
+                .is_blocklisted(&mf.id, &r.provider, &r.provider_file_id)
+                .await?;
+            let unusable =
+                unusable_files.contains(&(r.provider.clone(), r.provider_file_id.clone()));
+            if !blocklisted && !unusable {
+                filtered_results.push(r);
             }
         }
 
+        // Pick the best result above min_score
         let best = filtered_results
             .iter()
             .filter(|r| r.score >= min_score)
             .filter(|r| r.hearing_impaired == lang_pref.hearing_impaired)
             .filter(|r| r.forced == lang_pref.forced)
-            .max_by_key(|r| r.score);
+            .max_by_key(|r| r.score)
+            .copied();
 
         let best = match best {
             Some(b) => b,
-            None => continue,
+            None => {
+                debug!(
+                    title = %title.name,
+                    language = %lang_pref.code,
+                    results = results.len(),
+                    "no subtitle above min_score"
+                );
+                outcome.no_match += 1;
+                continue;
+            }
         };
 
+        // Download and save
         let download_provider =
             match runtime_subtitle_provider_for_download(app, &settings, &best.provider).await {
                 Ok(provider) => provider,
                 Err(err) => {
                     warn!(
                         error = %err,
+                        title = %title.name,
                         provider = %best.provider,
-                        language = %lang_pref.code,
-                        "on-import subtitle provider unavailable for download"
+                        "subtitle provider unavailable for download"
                     );
+                    outcome.record_error(&err);
                     continue;
                 }
             };
+        if circuit.is_open(&download_provider.config_id) {
+            outcome.failed += 1;
+            continue;
+        }
         let Some(scheduler_lease) = admit_subtitle_provider(
             app,
             &download_provider,
@@ -2320,10 +2488,11 @@ async fn run_subtitle_search_for_file(
         )
         .await?
         else {
+            outcome.deferred += 1;
             continue;
         };
 
-        let download_result = crate::subtitles::download::download_and_save_with_selection(
+        let download_result = crate::subtitles::download::download_and_save_staged(
             &download_provider,
             &best.provider_file_id,
             file_path.as_path(),
@@ -2343,6 +2512,28 @@ async fn run_subtitle_search_for_file(
             },
         )
         .await;
+        match &download_result {
+            Ok(_) => circuit.record_download_success(&download_provider.config_id),
+            Err(failure) => match classify_cycle_download_failure(failure) {
+                CycleDownloadFailure::FileUnusable => {
+                    unusable_files.insert((best.provider.clone(), best.provider_file_id.clone()));
+                }
+                CycleDownloadFailure::Provider => {
+                    if let Some(failures) =
+                        circuit.record_download_failure(&download_provider.config_id)
+                    {
+                        warn!(
+                            subtitle_provider = download_provider.name(),
+                            failures,
+                            reason = subtitle_failure_reason_code(&failure.error),
+                            "subtitle provider downloads keep failing; skipping it for the rest of this cycle"
+                        );
+                    }
+                }
+                CycleDownloadFailure::Other => {}
+            },
+        }
+        let download_result = download_result.map_err(|failure| failure.error);
         let scheduler_outcome = match &download_result {
             Ok(_) => SchedulerFeedbackOutcome::Success,
             Err(error) => subtitle_scheduler_outcome_for_error(error),
@@ -2364,7 +2555,8 @@ async fn run_subtitle_search_for_file(
         )
         .await;
         match download_result {
-            Ok((dest_path, _)) => {
+            Ok((dest_path, _file)) => {
+                // Record in database
                 let record = SubtitleDownload {
                     id: scryer_domain::Id::new().0,
                     media_file_id: mf.id.clone(),
@@ -2385,7 +2577,7 @@ async fn run_subtitle_search_for_file(
                     synced: false,
                     downloaded_at: Utc::now().to_rfc3339(),
                 };
-                let record_id = record.id.clone();
+
                 let record_inserted = match app
                     .services
                     .workflow
@@ -2395,10 +2587,12 @@ async fn run_subtitle_search_for_file(
                 {
                     Ok(()) => true,
                     Err(err) => {
-                        warn!(error = %err, "failed to persist on-import subtitle download record");
+                        warn!(error = %err, "failed to persist subtitle download record");
+                        outcome.record_error(&err);
                         false
                     }
                 };
+
                 let sync_result = maybe_sync_downloaded_subtitle(
                     app,
                     sync_settings,
@@ -2406,69 +2600,98 @@ async fn run_subtitle_search_for_file(
                     file_path.as_path(),
                     &mf.id,
                     &dest_path,
-                    record_inserted.then_some(record_id.as_str()),
+                    record_inserted.then_some(record.id.as_str()),
                     Some(best.score),
                     best.forced,
                 )
                 .await;
+
+                outcome.downloaded += 1;
+                if sync_settings.enabled
+                    && let Some(reason) = subtitle_sync_warning(sync_result.as_ref())
+                {
+                    outcome.sync_warnings += 1;
+                    outcome.sync_reasons.push(reason);
+                }
+                let event_msg = format!(
+                    "{} subtitle downloaded for {} (score: {}, provider: {}){}",
+                    lang_pref.code,
+                    title.name,
+                    best.score,
+                    best.provider,
+                    sync_summary_suffix(sync_result.as_ref()),
+                );
                 info!(
                     title = %title.name,
                     language = %lang_pref.code,
+                    provider = %best.provider,
+                    score = best.score,
+                    path = %dest_path.display(),
                     sync = sync_summary_suffix(sync_result.as_ref()),
-                    "on-import subtitle downloaded"
+                    "subtitle downloaded"
                 );
+                let _ = event_msg;
+                app.emit_subtitle_downloaded_event(
+                    title,
+                    Some(dest_path.display().to_string()),
+                    Some(lang_pref.code.clone()),
+                    Some(best.provider.clone()),
+                )
+                .await;
             }
             Err(err) => {
-                warn!(error = %err, "on-import subtitle download failed");
+                outcome.record_error(&err);
+                let event_msg = format!(
+                    "{} subtitle download failed for {}: {}",
+                    lang_pref.code, title.name, err,
+                );
+                warn!(
+                    error = %err,
+                    title = %title.name,
+                    language = %lang_pref.code,
+                    "subtitle download failed"
+                );
+                let _ = event_msg;
+                app.emit_subtitle_search_failed_event(
+                    title,
+                    Some(lang_pref.code.clone()),
+                    Some(err.to_string()),
+                )
+                .await;
             }
         }
 
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        // Rate limiting: small delay between provider requests
+        tokio::select! {
+            _ = app.restore_coordinator().shutdown_workers.cancelled() => break,
+            _ = tokio::time::sleep(std::time::Duration::from_millis(1500)) => {}
+        }
     }
-
-    Ok(())
+    Ok(outcome)
 }
 
 /// Run a single subtitle search cycle across all monitored titles.
 async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
     let settings = app.subtitle_settings().await?;
-    if !settings.enabled {
-        debug!("subtitle management disabled, skipping subtitle search");
+    if !settings.enabled || settings.languages.is_empty() {
         return Ok(());
     }
-
-    let include_ai = settings.include_ai_translated;
-    let include_machine = settings.include_machine_translated;
-    let min_score_series: i32 = settings.minimum_score_series;
-    let min_score_movie: i32 = settings.minimum_score_movie;
-
-    let wanted_languages: Vec<SubtitleLanguagePref> = settings.languages.clone();
-
-    if wanted_languages.is_empty() {
-        debug!("no subtitle languages configured, skipping");
-        return Ok(());
-    }
-
-    let sync_settings = read_subtitle_sync_settings(&settings);
-
+    // Resolve once before walking the library. An unavailable provider must not
+    // repeat initialization for every file in a periodic cycle.
     let providers = match configured_runtime_subtitle_providers(app, &settings).await {
         Ok(providers) => providers,
-        Err(err) => {
-            warn!(error = %err, "skipping subtitle search cycle");
+        Err(error) => {
+            warn!(%error, "skipping subtitle cycle: providers unavailable");
             return Ok(());
         }
     };
-
-    // Get all monitored titles with media files
     let titles = app
         .services
         .catalog
         .titles
         .list_for_matching(None, None)
         .await?;
-    let mut searched = 0u32;
-    let mut downloaded = 0u32;
-    let mut circuit = SubtitleProviderCircuit::with_probation(std::mem::take(
+    let circuit = SubtitleProviderCircuit::with_probation(std::mem::take(
         &mut *app
             .runtime
             .plugins
@@ -2476,339 +2699,41 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     ));
-    // Provider files this cycle found gone or unusable, by (provider, file id).
-    // An archive pack is offered once per episode, so without this the cycle
-    // would fetch the same dead file again for every episode it covers.
-    let mut unusable_files = HashSet::<(String, String)>::new();
-
-    'titles: for title in &titles {
-        if !title.monitored {
-            continue;
-        }
-
+    let mut search = AutomaticSubtitleSearch {
+        providers: Some(providers),
+        circuit,
+        ..Default::default()
+    };
+    'titles: for title in titles.iter().filter(|title| title.monitored) {
         let media_files = app
             .services
             .library
             .media_files
             .list_media_files_for_title(&title.id)
             .await?;
-
         for mf in &media_files {
-            let existing = app
-                .services
-                .workflow
-                .subtitle_downloads
-                .list_for_media_file(&mf.id)
-                .await
-                .unwrap_or_default();
-
-            let embedded = embedded_subtitle_streams(mf);
-
-            let missing =
-                compute_missing_subtitles_from_streams(&wanted_languages, &existing, &embedded);
-            if missing.is_empty() {
-                continue;
+            if app.restore_coordinator().shutdown_workers.is_cancelled() {
+                return Ok(());
             }
-
-            let media_kind = subtitle_media_kind(title);
-            let min_score =
-                subtitle_minimum_raw_score(media_kind, min_score_series, min_score_movie);
-
-            let file_path = stored_path_to_path_buf(&mf.file_path);
-            let episode_context = media_file_episode_context(app, title, mf).await;
-
-            for lang_pref in &missing {
-                searched += 1;
-                let query = build_subtitle_query(
-                    title,
-                    mf,
-                    &episode_context,
-                    std::slice::from_ref(&lang_pref.code),
-                    Some(lang_pref.hearing_impaired),
-                    include_ai,
-                    include_machine,
-                );
-
-                if providers
+            if search.providers.as_ref().is_some_and(|providers| {
+                providers
                     .iter()
-                    .all(|provider| circuit.is_open(&provider.config_id))
-                {
-                    info!(
-                        searched,
-                        downloaded,
-                        "every subtitle provider is failing; ending this subtitle search cycle early"
-                    );
-                    break 'titles;
-                }
-                let results = match search_all_subtitle_providers(
-                    app,
-                    &providers,
-                    file_path.as_path(),
-                    &query,
-                    min_score,
-                    Some(&mut circuit),
-                )
-                .await
-                {
-                    Ok(r) => r,
-                    Err(err) => {
-                        warn!(
-                            error = %err,
-                            title = %title.name,
-                            language = %lang_pref.code,
-                            "subtitle search failed"
-                        );
-                        continue;
-                    }
-                };
-
-                // Filter blocklisted results
-                let mut filtered_results = Vec::new();
-                for r in &results {
-                    let blocklisted = app
-                        .services
-                        .workflow
-                        .subtitle_downloads
-                        .is_blocklisted(&mf.id, &r.provider, &r.provider_file_id)
-                        .await
-                        .unwrap_or(false);
-                    let unusable =
-                        unusable_files.contains(&(r.provider.clone(), r.provider_file_id.clone()));
-                    if !blocklisted && !unusable {
-                        filtered_results.push(r);
-                    }
-                }
-
-                // Pick the best result above min_score
-                let best = filtered_results
-                    .iter()
-                    .filter(|r| r.score >= min_score)
-                    .filter(|r| r.hearing_impaired == lang_pref.hearing_impaired)
-                    .filter(|r| r.forced == lang_pref.forced)
-                    .max_by_key(|r| r.score)
-                    .copied();
-
-                let best = match best {
-                    Some(b) => b,
-                    None => {
-                        debug!(
-                            title = %title.name,
-                            language = %lang_pref.code,
-                            results = results.len(),
-                            "no subtitle above min_score"
-                        );
-                        continue;
-                    }
-                };
-
-                // Download and save
-                let download_provider =
-                    match runtime_subtitle_provider_for_download(app, &settings, &best.provider)
-                        .await
-                    {
-                        Ok(provider) => provider,
-                        Err(err) => {
-                            warn!(
-                                error = %err,
-                                title = %title.name,
-                                provider = %best.provider,
-                                "subtitle provider unavailable for download"
-                            );
-                            continue;
-                        }
-                    };
-                if circuit.is_open(&download_provider.config_id) {
-                    continue;
-                }
-                let Some(scheduler_lease) = admit_subtitle_provider(
-                    app,
-                    &download_provider,
-                    SchedulerIntent::SubtitleDownload,
-                    SchedulerOperation::Download,
-                    SubtitleAdmissionFailureMode::OmitProvider,
-                )
-                .await?
-                else {
-                    continue;
-                };
-
-                let download_result = crate::subtitles::download::download_and_save_staged(
-                    &download_provider,
-                    &best.provider_file_id,
-                    file_path.as_path(),
-                    &best.language,
-                    best.forced,
-                    best.hearing_impaired,
-                    crate::subtitles::download::SubtitleDownloadSelection {
-                        episode: query.episode,
-                        absolute_episode: query.absolute_episode,
-                        community_episode: query
-                            .community_entry
-                            .as_ref()
-                            .map(|entry| entry.episode),
-                        archive_provider: app
-                            .services
-                            .integrations
-                            .archive_extractor_plugin_provider
-                            .available()
-                            .cloned(),
-                    },
-                )
-                .await;
-                match &download_result {
-                    Ok(_) => circuit.record_download_success(&download_provider.config_id),
-                    Err(failure) => match classify_cycle_download_failure(failure) {
-                        CycleDownloadFailure::FileUnusable => {
-                            unusable_files
-                                .insert((best.provider.clone(), best.provider_file_id.clone()));
-                        }
-                        CycleDownloadFailure::Provider => {
-                            if let Some(failures) =
-                                circuit.record_download_failure(&download_provider.config_id)
-                            {
-                                warn!(
-                                    subtitle_provider = download_provider.name(),
-                                    failures,
-                                    reason = subtitle_failure_reason_code(&failure.error),
-                                    "subtitle provider downloads keep failing; skipping it for the rest of this cycle"
-                                );
-                            }
-                        }
-                        CycleDownloadFailure::Other => {}
-                    },
-                }
-                let download_result = download_result.map_err(|failure| failure.error);
-                let scheduler_outcome = match &download_result {
-                    Ok(_) => SchedulerFeedbackOutcome::Success,
-                    Err(error) => subtitle_scheduler_outcome_for_error(error),
-                };
-                let scheduler_retry_after = match &download_result {
-                    Ok(_) => None,
-                    Err(error) => subtitle_retry_after_from_error(error),
-                };
-                record_subtitle_scheduler_feedback(
-                    app,
-                    &download_provider,
-                    Some(scheduler_lease),
-                    scheduler_outcome,
-                    scheduler_retry_after,
-                    match &download_result {
-                        Ok(_) => RateLimitCooldownAction::None,
-                        Err(error) => subtitle_cooldown_action_from_error(error),
-                    },
-                )
-                .await;
-                match download_result {
-                    Ok((dest_path, _file)) => {
-                        // Record in database
-                        let record = SubtitleDownload {
-                            id: scryer_domain::Id::new().0,
-                            media_file_id: mf.id.clone(),
-                            title_id: title.id.clone(),
-                            episode_id: mf.episode_id.clone(),
-                            source_kind: ExternalSubtitleSourceKind::Downloaded,
-                            language: best.language.clone(),
-                            provider: Some(best.provider.clone()),
-                            provider_file_id: Some(best.provider_file_id.clone()),
-                            file_path: path_to_stored_string(&dest_path),
-                            score: Some(best.score),
-                            hearing_impaired: best.hearing_impaired,
-                            forced: best.forced,
-                            ai_translated: best.ai_translated,
-                            machine_translated: best.machine_translated,
-                            uploader: best.uploader.clone(),
-                            release_info: best.release_info.clone(),
-                            synced: false,
-                            downloaded_at: Utc::now().to_rfc3339(),
-                        };
-
-                        let record_inserted = match app
-                            .services
-                            .workflow
-                            .subtitle_downloads
-                            .insert(&record)
-                            .await
-                        {
-                            Ok(()) => true,
-                            Err(err) => {
-                                warn!(error = %err, "failed to persist subtitle download record");
-                                false
-                            }
-                        };
-
-                        let sync_result = maybe_sync_downloaded_subtitle(
-                            app,
-                            sync_settings,
-                            query.media_kind,
-                            file_path.as_path(),
-                            &mf.id,
-                            &dest_path,
-                            record_inserted.then_some(record.id.as_str()),
-                            Some(best.score),
-                            best.forced,
-                        )
-                        .await;
-
-                        downloaded += 1;
-                        let event_msg = format!(
-                            "{} subtitle downloaded for {} (score: {}, provider: {}){}",
-                            lang_pref.code,
-                            title.name,
-                            best.score,
-                            best.provider,
-                            sync_summary_suffix(sync_result.as_ref()),
-                        );
-                        info!(
-                            title = %title.name,
-                            language = %lang_pref.code,
-                            provider = %best.provider,
-                            score = best.score,
-                            path = %dest_path.display(),
-                            sync = sync_summary_suffix(sync_result.as_ref()),
-                            "subtitle downloaded"
-                        );
-                        let _ = event_msg;
-                        app.emit_subtitle_downloaded_event(
-                            title,
-                            Some(dest_path.display().to_string()),
-                            Some(lang_pref.code.clone()),
-                            Some(best.provider.clone()),
-                        )
-                        .await;
-                    }
-                    Err(err) => {
-                        let event_msg = format!(
-                            "{} subtitle download failed for {}: {}",
-                            lang_pref.code, title.name, err,
-                        );
-                        warn!(
-                            error = %err,
-                            title = %title.name,
-                            language = %lang_pref.code,
-                            "subtitle download failed"
-                        );
-                        let _ = event_msg;
-                        app.emit_subtitle_search_failed_event(
-                            title,
-                            Some(lang_pref.code.clone()),
-                            Some(err.to_string()),
-                        )
-                        .await;
-                    }
-                }
-
-                // Rate limiting: small delay between provider requests
-                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    .all(|provider| search.circuit.is_open(&provider.config_id))
+            }) {
+                break 'titles;
+            }
+            if let Err(error) =
+                search_automatic_subtitles_for_file(app, title, mf, None, &mut search).await
+            {
+                warn!(%error, media_file_id = %mf.id, "automatic subtitle search failed");
             }
         }
     }
-
     *app.runtime
         .plugins
         .subtitle_providers_on_probation
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = circuit.into_probation();
-    debug!(searched, downloaded, "subtitle search cycle completed");
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = search.circuit.into_probation();
     Ok(())
 }
 

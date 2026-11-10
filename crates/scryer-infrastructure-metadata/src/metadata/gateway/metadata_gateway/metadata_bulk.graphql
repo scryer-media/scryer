@@ -155,7 +155,6 @@ fragment SeriesFields on TvdbSeries {
   tagged_aliases {
     name
     language
-    country
   }
   artworks {
     kind

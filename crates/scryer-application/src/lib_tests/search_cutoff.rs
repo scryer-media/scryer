@@ -2051,6 +2051,7 @@ async fn a_queued_releases_announced_size_affects_fit_without_creating_score_upg
             tier_index: queued_facts.tier_index,
             revision: queued_facts.revision,
             score: queued_facts.score,
+            language: Default::default(),
             release_key: None,
         }]);
     let grab_policy = AdmissionPolicy {
@@ -2169,6 +2170,7 @@ async fn a_queued_release_the_profile_now_vetoes_still_holds_its_scope() {
             tier_index: facts.tier_index,
             revision: facts.revision,
             score: facts.score,
+            language: Default::default(),
             release_key: None,
         }]);
     let policy = AdmissionPolicy {
@@ -2968,4 +2970,66 @@ async fn another_years_film_sharing_the_name_is_refused_as_a_year_mismatch() {
             .as_deref(),
         Some("eligible")
     );
+}
+
+/// The same-tier upgrade delta comes from the title's quality profile: a
+/// profile that sets one is judged by it, and one that does not gets the
+/// default. The old global setting is never consulted, whatever it holds.
+#[tokio::test]
+async fn the_upgrade_context_takes_its_same_tier_delta_from_the_profile() {
+    for (profile_delta, expected) in [
+        (None, crate::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
+        (Some(5), 5),
+        (Some(0), 0),
+    ] {
+        let settings = Arc::new(StoredSettingsRepo::default());
+        settings
+            .set_value(
+                SETTINGS_SCOPE_SYSTEM,
+                QUALITY_PROFILE_ID_KEY,
+                r#""delta-profile""#,
+            )
+            .await;
+        // A stale row from before the delta moved into profiles.
+        settings
+            .set_value(
+                SETTINGS_SCOPE_SYSTEM,
+                "acquisition.same_tier_min_delta",
+                "777",
+            )
+            .await;
+        let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+        let mut profile = cutoff_projection_test_profile("delta-profile", "1080P");
+        profile.criteria.min_upgrade_score_delta = profile_delta;
+        quality_profiles.set_profiles(vec![profile]).await;
+        let media_files = Arc::new(MockMediaFileRepo::default());
+        let (app, user, _) =
+            bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files);
+
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Delta Fixture".into(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let context = app
+            .resolve_upgrade_context_for_title_with_category_and_quality(&title, None, None)
+            .await
+            .expect("resolve upgrade context");
+        assert_eq!(context.profile.id, "delta-profile");
+        assert_eq!(
+            context.thresholds.same_tier_min_delta, expected,
+            "profile delta {profile_delta:?}"
+        );
+    }
 }

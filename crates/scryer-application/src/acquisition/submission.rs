@@ -70,13 +70,27 @@ fn submission_for_grab(
         source_provider_name: intent.source_provider_name.clone(),
         source_kind: intent.request.source_kind,
         source_title: request.source_title_without_password(),
-        info_hash: request.info_hash_hint.clone(),
+        info_hash: submission_info_hash(request, grab),
         release_size_bytes: intent.release_size_bytes,
         release_listing_json: intent.release_listing_json.clone(),
         request_signature: intent.request_signature.clone(),
         purpose: request.purpose,
         scope: intent.scope.clone(),
     }
+}
+
+/// The content hash a grab's submission records.
+///
+/// The hash the client accepted is the torrent's true identity, so it wins
+/// over the indexer's hint. Many indexers publish no hash, and a hint can be
+/// stale or wrong; the client's answer is what terminal cleanup later proves
+/// the entry against. The hint stands only when the client reported none.
+fn submission_info_hash(
+    request: &DownloadClientAddRequest,
+    grab: &DownloadGrabResult,
+) -> Option<String> {
+    crate::normalize_torrent_info_hash(grab.info_hash.as_deref())
+        .or_else(|| request.info_hash_hint.clone())
 }
 
 fn accepted_identity_for_grab(
@@ -348,6 +362,22 @@ impl AppUseCase {
         &self,
         intent: CanonicalDownloadSubmissionIntent,
     ) -> AppResult<CanonicalDownloadSubmissionOutcome> {
+        let _title_guard = self
+            .runtime
+            .acquisition
+            .download_submission_guards
+            .acquire_title(&intent.request.title.id)
+            .await;
+        self.submit_canonical_download_locked(intent, false).await
+    }
+
+    /// The caller holds the title submission guard. Standby operator grabs
+    /// resolve title-wide conflicts under that same guard before entering here.
+    pub(crate) async fn submit_canonical_download_locked(
+        &self,
+        intent: CanonicalDownloadSubmissionIntent,
+        allow_concurrent: bool,
+    ) -> AppResult<CanonicalDownloadSubmissionOutcome> {
         super::http_grab::require_http_release_for_http_source(
             intent.request.source_kind,
             intent.http_release.as_ref(),
@@ -356,12 +386,6 @@ impl AppUseCase {
             super::http_grab::refuse_unavailable_http_release(listed)?;
         }
         let title_id = intent.request.title.id.clone();
-        let _title_guard = self
-            .runtime
-            .acquisition
-            .download_submission_guards
-            .acquire_title(&title_id)
-            .await;
 
         if intent.automatic
             && let Err(error) = self.require_recent_missing_grab_admission(&intent).await
@@ -535,7 +559,13 @@ impl AppUseCase {
             .and_then(|signature| {
                 state.submissions.iter().find(|submission| {
                     submission.request_signature.as_deref() == Some(signature)
-                        && submission.purpose == intent.request.purpose
+                        && (submission.purpose == intent.request.purpose
+                            || (allow_concurrent
+                                && matches!(
+                                    submission.purpose,
+                                    DownloadSubmissionPurpose::Standard
+                                        | DownloadSubmissionPurpose::OperatorQueued
+                                )))
                         && submission.scope == intent.scope
                 })
             })
@@ -600,6 +630,14 @@ impl AppUseCase {
                 .items
                 .iter()
                 .find(|item| queue_item_matches_submission(item, &existing));
+            // A brief absence can be client visibility lag, but an explicit
+            // failure overrides the recent-acceptance cache and allows retry.
+            if allow_concurrent
+                && item.is_none()
+                && state.accepted_download_ids.contains(&existing.download_id)
+            {
+                return Ok(accepted_existing(existing));
+            }
             if let Some(item) = item
                 && item.state != DownloadQueueState::Failed
             {
@@ -632,7 +670,7 @@ impl AppUseCase {
                 .store_title_state(&title_id, state.clone());
         }
 
-        let conflicts = if intent.request.purpose.is_additional_file() {
+        let conflicts = if allow_concurrent || intent.request.purpose.is_additional_file() {
             Vec::new()
         } else if let Some(snapshot) = snapshot.as_ref() {
             Self::find_blocking_download_submissions_in_state(
@@ -851,7 +889,7 @@ impl AppUseCase {
                 source_provider_name: intent.source_provider_name.clone(),
                 source_kind,
                 source_title: request.source_title_without_password(),
-                info_hash: request.info_hash_hint.clone(),
+                info_hash: submission_info_hash(&request, &grab),
                 release_size_bytes: intent.release_size_bytes,
                 release_listing_json: intent.release_listing_json.clone(),
                 request_signature: intent.request_signature.clone(),
@@ -1311,6 +1349,8 @@ pub fn describe_acquisition_metrics() {
         "scryer_background_acquisition_scan_owned_yields_total",
         "Times background acquisition yielded because a library scan owned the facet it wanted to work on."
     );
+
+    crate::acquisition::walk_metrics::describe_walk_metrics();
 
     metrics::describe_counter!(
         "scryer_wanted_projection_cache_total",

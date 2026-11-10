@@ -788,8 +788,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"restoreStatus"));
     // Indexer clients add `indexerClients`, the administration list: 196->197.
     assert!(query_field_names.contains(&"indexerClients"));
+    // Recycle-bin item history adds `recycledItemHistory`: 197->198.
+    assert!(query_field_names.contains(&"recycledItemHistory"));
+    // Folder-conflict resolution adds `pendingImportConflictTask`: 198->199.
+    assert!(query_field_names.contains(&"pendingImportConflictTask"));
+    // The library graph adds `libraryGraph`, a facet's stored similarity graph
+    // pruned to what the viewer can see, and `discoveryNeighbors`, which
+    // expands any graph node, owned or not: 199->201.
+    assert!(query_field_names.contains(&"libraryGraph"));
+    assert!(query_field_names.contains(&"discoveryNeighbors"));
     assert_eq!(
-        query_field_count, 197,
+        query_field_count, 201,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -867,8 +876,39 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"createFolder"));
     // The first-run authentication decision adds one mutation: 284->285.
     assert!(mutation_field_names.contains(&"completeInitialAuthentication"));
+    // Restarting so a saved listening address takes effect adds one
+    // mutation: 285->286.
+    assert!(mutation_field_names.contains(&"restartForNetworkChange"));
+    // Folder-conflict resolution adds `previewPendingImportConflicts` and
+    // `resolvePendingImportConflicts`: 286->288.
+    for name in [
+        "previewPendingImportConflicts",
+        "resolvePendingImportConflicts",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
+    // Durable source imports add acceptance, status, retry, and explicit skip,
+    // and drop the compatibility `executeExternalImport`: 288->291.
+    for name in [
+        "startExternalImportSources",
+        "externalImportSourceStatus",
+        "retryExternalImportSources",
+        "skipExternalImportSource",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
+    assert!(!mutation_field_names.contains(&"executeExternalImport"));
+    // Queueing a saved standby release with conflict confirmation adds
+    // `queueStandbyRelease`: 291->292.
+    assert!(mutation_field_names.contains(&"queueStandbyRelease"));
     assert_eq!(
-        mutation_field_count, 285,
+        mutation_field_count, 292,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1267,14 +1307,101 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Tagged alias metadata adds TitleAliasPayload: public types 990->991,
     // OBJECT 534->535.
     assert!(public_type_names.contains(&"TitleAliasPayload"));
+    // Unroutable search results add InteractiveReleaseSearchUnroutableResultsPayload:
+    // public types 991->992, OBJECT 535->536.
+    assert!(public_type_names.contains(&"InteractiveReleaseSearchUnroutableResultsPayload"));
+    // The listening address adds what pins it and the first-run network
+    // choice: public types 992->994, ENUM 201->203. The stated baseline was
+    // also one OBJECT behind the schema it ran against, so the totals absorb
+    // that drift: public types 994->995, OBJECT 536->537.
+    for name in ["BindPinValue", "InitialNetworkAccess"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Watch-history sweep state on media-server connections adds
+    // MediaServerWatchSignalSyncPayload: public types 995->996, OBJECT 537->538.
+    assert!(public_type_names.contains(&"MediaServerWatchSignalSyncPayload"));
+    // Paged discovery sections and the "browse by" cards add the browse card
+    // payload and two enums (section sort and browse label family): public
+    // types 996->999, OBJECT 538->539, ENUM 203->205. The section input fields,
+    // the section on the items payload and the grid preferences are additive
+    // fields on types that already existed.
+    for name in [
+        "DiscoveryBrowseLabelPayload",
+        "DiscoveryBrowseLabelFamilyValue",
+        "DiscoverySectionSortValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Folder-conflict resolution adds the pending-conflict task, preview, row
+    // and rename payloads, two inputs and two enums: public types 999->1007,
+    // OBJECT 539->543, INPUT_OBJECT 243->245, ENUM 205->207.
+    for name in [
+        "PendingImportConflictTaskPayload",
+        "PendingImportConflictPreviewPayload",
+        "PendingImportConflictInput",
+        "PendingImportConflictPolicy",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Durable source imports add a job progress object and per-item receipt
+    // object, and dropping `executeExternalImport` removes its result payload:
+    // public types 1007->1008, OBJECT 543->544.
+    for name in [
+        "ExternalImportSourceJobPayload",
+        "ExternalImportSourceItemPayload",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert!(!public_type_names.contains(&"ExternalImportResultPayload"));
+    // Standby queueing adds its payload, the conflict identity input and the
+    // choice enum: public types 1008->1011, OBJECT 544->545,
+    // INPUT_OBJECT 245->246, ENUM 207->208.
+    for name in [
+        "QueueStandbyReleasePayload",
+        "StandbyConflictIdentityInput",
+        "StandbyQueueChoiceValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // The library graph catalog view is a GRAPH value on the existing catalog
+    // view mode enum, so every count below is unchanged.
+    // The library graph read adds the graph, node, edge and cluster objects
+    // and its input, and expanding a node adds the neighbours input: public
+    // types 1007->1013, OBJECT 543->547, INPUT_OBJECT 245->247.
+    for name in [
+        "LibraryGraph",
+        "LibraryGraphNode",
+        "LibraryGraphEdge",
+        "LibraryGraphCluster",
+        "LibraryGraphInput",
+        "DiscoveryNeighborsInput",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Neighbour groups wrap the expansion in a payload that carries the
+    // gateway's neighbourhoods: public types 1017->1019, OBJECT 549->551.
+    for name in ["DiscoveryNeighborsPayload", "DiscoveryNeighborGroup"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Ranking-only audio language preferences add the per-release rank on a
+    // decision and the priority enum: public types 1019->1021, OBJECT 551->552,
+    // ENUM 209->210.
+    for name in ["AudioLanguageRankPayload", "AudioLanguagePriorityValue"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        991,
+        1021,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 535);
-    assert_eq!(kind_count("INPUT_OBJECT"), 243);
-    assert_eq!(kind_count("ENUM"), 201);
+    assert_eq!(kind_count("OBJECT"), 552);
+    // Library roots are no longer sent by path: UpdateLibraryPathsInput and
+    // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
+    // without a census update (+1).
+    assert_eq!(kind_count("INPUT_OBJECT"), 247);
+    // The search walk intensity setting adds AcquisitionWalkIntensityValue:
+    // ENUM 208->209.
+    assert_eq!(kind_count("ENUM"), 210);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
@@ -6451,7 +6578,7 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
     assert!(mutation_names.contains(&"updateAcquisitionSettings"));
     assert!(mutation_names.contains(&"updateGeneralSettings"));
     assert!(mutation_names.contains(&"updateMediaSettings"));
-    assert!(mutation_names.contains(&"updateLibraryPaths"));
+    assert!(!mutation_names.contains(&"updateLibraryPaths"));
     assert!(mutation_names.contains(&"updateServiceSettings"));
     assert!(mutation_names.contains(&"saveQualityProfileSettings"));
     assert!(mutation_names.contains(&"updateDownloadClientRouting"));

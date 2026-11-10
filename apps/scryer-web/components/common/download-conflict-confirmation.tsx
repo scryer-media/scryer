@@ -1,3 +1,4 @@
+import { useTranslate } from "@/lib/context/translate-context";
 import * as React from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import type { DownloadConflictLike } from "@/lib/utils/download-conflicts";
@@ -8,6 +9,7 @@ type PendingConfirmation = {
 };
 
 export function useDownloadConflictConfirmation() {
+  const t = useTranslate();
   const [pending, setPending] = React.useState<PendingConfirmation | null>(
     null,
   );
@@ -33,16 +35,24 @@ export function useDownloadConflictConfirmation() {
   const dialog = (
     <ConfirmDialog
       open={pending !== null}
-      title="Replace in-progress download?"
+      title={t("uiAttr.Replace_in_progress_download")}
       description={pending?.message ?? ""}
-      confirmLabel="Replace download"
-      cancelLabel="Keep current"
+      confirmLabel={t("uiAttr.Replace_download")}
+      cancelLabel={t("uiAttr.Keep_current")}
       onConfirm={() => close(true)}
       onCancel={() => close(false)}
     >
       <div className="space-y-1 text-xs text-muted-foreground">
-        {current ? <p>Current download: {current}</p> : null}
-        {state ? <p>State: {state}</p> : null}
+        {current ? (
+          <p>
+            {t("uiText.currentDownload")} {current}
+          </p>
+        ) : null}
+        {state ? (
+          <p>
+            {t("uiText.state")} {state}
+          </p>
+        ) : null}
       </div>
     </ConfirmDialog>
   );

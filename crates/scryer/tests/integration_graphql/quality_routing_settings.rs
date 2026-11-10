@@ -704,3 +704,114 @@ async fn graphql_typed_routing_round_trip() {
     assert_eq!(read["data"]["indexerRouting"][0]["indexerId"], "indexer-a");
     assert_eq!(read["data"]["indexerRouting"][0]["priority"], 3);
 }
+
+/// The same-tier upgrade delta is a quality-profile field: it defaults to 120,
+/// round-trips a set value, survives a save that omits it, returns to the
+/// default when the default is sent, and refuses a negative value with a code.
+#[tokio::test]
+async fn graphql_quality_profile_min_upgrade_score_delta_round_trip() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let save = r#"
+        mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
+          saveQualityProfileSettings(input: $input) {
+            profiles { id criteria { minUpgradeScoreDelta } }
+          }
+        }
+        "#;
+    let input = |delta: Option<i64>| {
+        let mut criteria = json!({
+            "qualityTiers": ["1080P"],
+            "archivalQuality": "1080P",
+            "allowUnknownQuality": false,
+            "sourceAllowlist": [],
+            "sourceBlocklist": [],
+            "videoCodecAllowlist": [],
+            "videoCodecBlocklist": [],
+            "audioCodecAllowlist": [],
+            "audioCodecBlocklist": [],
+            "dolbyVisionAllowed": true,
+            "detectedHdrAllowed": true,
+            "preferRemux": false,
+            "allowBdDisk": true,
+            "allowUpgrades": true,
+            "scoringOverrides": {},
+            "cutoffTier": null,
+            "minScoreToGrab": null
+        });
+        if let Some(delta) = delta {
+            criteria["minUpgradeScoreDelta"] = json!(delta);
+        }
+        json!({
+            "input": {
+                "profiles": [{ "id": "delta-fixture", "name": "Delta Fixture", "criteria": criteria }],
+                "categorySelections": [],
+                "categoryPersonaSelections": [],
+                "replaceExisting": false
+            }
+        })
+    };
+    let delta_of = |response: &serde_json::Value| {
+        response["data"]["saveQualityProfileSettings"]["profiles"]
+            .as_array()
+            .expect("profiles list")
+            .iter()
+            .find(|profile| profile["id"] == "delta-fixture")
+            .expect("saved profile")["criteria"]["minUpgradeScoreDelta"]
+            .clone()
+    };
+
+    let unset = gql(&ctx, save, input(None)).await;
+    assert_no_errors(&unset);
+    assert_eq!(delta_of(&unset), 120, "an unset delta reads as the default");
+
+    let set = gql(&ctx, save, input(Some(5))).await;
+    assert_no_errors(&set);
+    assert_eq!(delta_of(&set), 5);
+
+    let omitted = gql(&ctx, save, input(None)).await;
+    assert_no_errors(&omitted);
+    assert_eq!(
+        delta_of(&omitted),
+        5,
+        "omitting the field keeps the stored value"
+    );
+
+    let read = gql(
+        &ctx,
+        "{ qualityProfileSettings { profiles { id criteria { minUpgradeScoreDelta } } } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&read);
+    let stored = read["data"]["qualityProfileSettings"]["profiles"]
+        .as_array()
+        .expect("profiles list")
+        .iter()
+        .find(|profile| profile["id"] == "delta-fixture")
+        .expect("stored profile")["criteria"]["minUpgradeScoreDelta"]
+        .clone();
+    assert_eq!(stored, 5);
+
+    let reset = gql(&ctx, save, input(Some(120))).await;
+    assert_no_errors(&reset);
+    assert_eq!(delta_of(&reset), 120);
+    let scoring_config: String =
+        sqlx::query_scalar("SELECT scoring_config FROM quality_profiles WHERE id = ?")
+            .bind("delta-fixture")
+            .fetch_one(ctx.db.pool())
+            .await
+            .expect("stored scoring config");
+    let scoring_config: serde_json::Value =
+        serde_json::from_str(&scoring_config).expect("scoring config is JSON");
+    assert!(
+        scoring_config.get("min_upgrade_score_delta").is_none(),
+        "sending the default stores the profile as using the default: {scoring_config}"
+    );
+
+    let negative = gql(&ctx, save, input(Some(-1))).await;
+    assert_eq!(
+        negative["errors"][0]["extensions"]["reason"], "INTERFACE_QUALITY_PROFILE_VALUE_INVALID",
+        "a negative delta is refused with a code: {negative}"
+    );
+}

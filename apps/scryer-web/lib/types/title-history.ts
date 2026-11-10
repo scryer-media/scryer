@@ -18,6 +18,8 @@ export type TitleHistoryEvent = {
   titleId: string | null;
   titleName: string | null;
   facet: string | null;
+  /** The title's live poster, hydrated by the API; null once the title is gone. */
+  posterUrl?: string | null;
   episodeId: string | null;
   episodeIds: string[];
   collectionId: string | null;

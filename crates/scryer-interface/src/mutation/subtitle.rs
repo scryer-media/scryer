@@ -35,6 +35,15 @@ type GqlResult<T> = async_graphql::Result<T>;
 pub struct SubtitleMutations;
 
 #[derive(InputObject)]
+/// Selects episodes for a background automatic subtitle search.
+pub struct EpisodeSubtitleSearchInput {
+    /// Series or anime title containing every selected episode.
+    pub title_id: ID,
+    /// Between one and 1000 episode IDs; duplicates are searched once.
+    pub episode_ids: Vec<ID>,
+}
+
+#[derive(InputObject)]
 /// Selects a media file and language for subtitle provider searches.
 pub struct SearchSubtitlesInput {
     /// Media file ID whose release metadata is used for matching.
@@ -196,6 +205,26 @@ fn from_subtitle_match(
 
 #[Object]
 impl SubtitleMutations {
+    /// Queue automatic subtitle search and download for selected episodes.
+    async fn start_episode_subtitle_search(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "The series or anime title and the episodes in it to search.")]
+        input: EpisodeSubtitleSearchInput,
+    ) -> GqlResult<crate::types::JobRunPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let run = app
+            .start_episode_subtitle_search(
+                &actor,
+                input.title_id.as_str(),
+                input.episode_ids.into_iter().map(String::from).collect(),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_job_run(run))
+    }
+
     /// Search configured providers for subtitles matching a media file, and
     /// report why the search returned what it did.
     async fn search_subtitles(

@@ -94,6 +94,20 @@ impl AppUseCase {
         password: Option<String>,
         acknowledge_no_auth: bool,
     ) -> AppResult<User> {
+        self.complete_initial_authentication_with_network(password, acknowledge_no_auth, None)
+            .await
+            .map(|(user, _)| user)
+    }
+
+    /// Completes the authentication decision and, when given, stores who may
+    /// reach this instance. The network choice is saved after the decision is
+    /// validated and before it commits, so a refused decision saves nothing.
+    pub async fn complete_initial_authentication_with_network(
+        &self,
+        password: Option<String>,
+        acknowledge_no_auth: bool,
+        network_access: Option<crate::network_bind::InitialNetworkAccess>,
+    ) -> AppResult<(User, crate::network_bind::InitialBindOutcome)> {
         match self.initial_authentication_state().await? {
             Some(SetupState::Choice) => {}
             Some(SetupState::PasswordReplacement { .. }) => {
@@ -129,6 +143,10 @@ impl AppUseCase {
             account_kind: Default::default(),
             authorization: UserAuthorization::full_admin(),
         };
+        let bind_outcome = match network_access {
+            Some(access) => self.apply_initial_network_access(access).await?,
+            None => Default::default(),
+        };
         let user = self
             .services
             .identity
@@ -144,7 +162,7 @@ impl AppUseCase {
             ConfigurationChangeAction::Saved,
         )
         .await;
-        Ok(user)
+        Ok((user, bind_outcome))
     }
 }
 

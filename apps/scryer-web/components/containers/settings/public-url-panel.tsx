@@ -238,6 +238,15 @@ export function PublicUrlPanel() {
           settings.bindAddress,
           t(SOURCE_KEYS[settings.bindSource]),
         ],
+        ...(settings.bindRestartRequired
+          ? ([
+              [
+                t("settings.publicUrlBindPending"),
+                settings.bindPending,
+                t("settings.networkPendingSource"),
+              ],
+            ] as Array<[string, string, string]>)
+          : []),
         [
           t("settings.publicUrlTrustedProxies"),
           settings.trustedProxyIps.length > 0
@@ -264,10 +273,14 @@ export function PublicUrlPanel() {
 
   return (
     <section
-      className="mt-6 space-y-4 rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5"
+      className="space-y-4 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4"
       aria-busy={busy}
     >
-      <h3 className="font-semibold">{t("settings.publicUrlTitle")}</h3>
+      <div className="-mx-4 -mt-4 mb-4 border-b border-[var(--scry-line2)] px-4 py-3">
+        <h4 className="text-sm font-semibold text-[var(--scry-ink)]">
+          {t("settings.publicUrlTitle")}
+        </h4>
+      </div>
       <p className="text-sm text-[var(--scry-muted)]">
         {t("settings.publicUrlHelp")}
       </p>

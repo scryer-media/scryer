@@ -162,11 +162,9 @@ pub(crate) async fn run_pass(
         .await?;
         outcomes.push((installation, reason, replaced));
     }
-    // Rebuild once after durable repairs, before consumers can start. Reload
-    // excludes blockers and suppresses their bundled fallbacks.
-    app.reload_plugin_providers()
-        .await
-        .map_err(|error| error.to_string())?;
+    // No provider reload here: boot loads the runtime plugins once, right
+    // after this pass, and that load excludes these blockers and suppresses
+    // their bundled fallbacks.
     let mut counts = ComponentPassCounts {
         replaced: 0,
         blocked: 0,

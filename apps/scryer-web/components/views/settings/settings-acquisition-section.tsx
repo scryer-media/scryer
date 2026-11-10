@@ -3,14 +3,32 @@ import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { LoadingMark } from "@/components/common/loading-mark";
+import type { AcquisitionWalkIntensity } from "@/lib/types/settings";
+import {
+  settingsAcquisitionWalkIntensityId,
+  settingsAcquisitionWalkIntensityOptionId,
+} from "@/lib/utils/dom-ids";
+
+const WALK_INTENSITIES: AcquisitionWalkIntensity[] = [
+  "QUIET",
+  "NORMAL",
+  "EAGER",
+];
 
 export type AcquisitionSettings = {
   enabled: boolean;
-  sameTierMinDelta: number;
   pollIntervalSeconds: number;
   walkIntervalSeconds: number;
+  walkIntensity: AcquisitionWalkIntensity;
   longTailBackfillMaxScopesPerCycle: number;
   longTailReconvergeDays: number;
 };
@@ -112,20 +130,6 @@ export function SettingsAcquisitionSection({
 
       <div className="space-y-4">
         <h2 className="text-sm font-semibold text-foreground">
-          {t("settings.acquisitionThresholds")}
-        </h2>
-        <NumberField
-          id="settings-acquisition-same-tier-delta"
-          label={t("settings.acquisitionSameTierMinDelta")}
-          help={t("settings.acquisitionSameTierMinDeltaHelp")}
-          value={draft.sameTierMinDelta}
-          disabled={disabled}
-          onChange={(sameTierMinDelta) => update({ sameTierMinDelta })}
-        />
-      </div>
-
-      <div className="space-y-4">
-        <h2 className="text-sm font-semibold text-foreground">
           {t("settings.acquisitionConvergence")}
         </h2>
         <NumberField
@@ -144,6 +148,39 @@ export function SettingsAcquisitionSection({
           disabled={disabled}
           onChange={(walkIntervalSeconds) => update({ walkIntervalSeconds })}
         />
+        <div className="space-y-1.5">
+          <Label htmlFor={settingsAcquisitionWalkIntensityId()}>
+            {t("settings.acquisitionWalkIntensity")}
+          </Label>
+          <Select
+            value={draft.walkIntensity}
+            disabled={disabled}
+            onValueChange={(value) =>
+              update({ walkIntensity: value as AcquisitionWalkIntensity })
+            }
+          >
+            <SelectTrigger
+              id={settingsAcquisitionWalkIntensityId()}
+              className="max-w-[420px]"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {WALK_INTENSITIES.map((intensity) => (
+                <SelectItem
+                  key={intensity}
+                  id={settingsAcquisitionWalkIntensityOptionId(intensity)}
+                  value={intensity}
+                >
+                  {t(`settings.acquisitionWalkIntensity.${intensity}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="max-w-[560px] text-xs text-muted-foreground">
+            {t("settings.acquisitionWalkIntensityHelp")}
+          </p>
+        </div>
         <NumberField
           id="settings-acquisition-max-scopes"
           label={t("settings.acquisitionMaxScopesPerCycle")}

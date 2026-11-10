@@ -18,14 +18,16 @@ use scryer_application::location::root_scope_execution::{RootScopeCall, StartRoo
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::mappers::{
     from_abandoned_location_operation, from_canceled_location_operation,
+    from_pending_import_conflict_preview, from_pending_import_conflict_task,
     from_resumed_location_operation, from_started_location_operation,
     location_destination_into_application, location_execution_mode_into_application,
-    root_scope_destination,
+    pending_import_conflict_request, root_scope_destination,
 };
 use crate::types::{
     AbandonLocationOperationPayload, CancelLocationOperationPayload, LocationDestinationInput,
-    LocationRootScopeTargetInput, ResumeLocationOperationPayload, StartLocationOperationInput,
-    StartLocationOperationPayload,
+    LocationRootScopeTargetInput, PendingImportConflictInput, PendingImportConflictPreviewPayload,
+    PendingImportConflictTaskPayload, ResolvePendingImportConflictsInput,
+    ResumeLocationOperationPayload, StartLocationOperationInput, StartLocationOperationPayload,
 };
 
 /// The one destination form a start confirms.
@@ -77,6 +79,51 @@ pub(crate) struct LocationMutations;
 
 #[Object]
 impl LocationMutations {
+    /// Preview survivor selection and every file disposition before settling conflicts.
+    async fn preview_pending_import_conflicts(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Selected folder conflicts, media policy and leftover disposition.")]
+        input: PendingImportConflictInput,
+    ) -> GqlResult<PendingImportConflictPreviewPayload> {
+        let preview = app_from_ctx(ctx)?
+            .preview_pending_import_conflicts(
+                &actor_from_ctx(ctx)?,
+                pending_import_conflict_request(input),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_pending_import_conflict_preview(preview))
+    }
+
+    /// Confirm a fresh preview and settle each conflict through its own location operation.
+    async fn resolve_pending_import_conflicts(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Previewed selection and fingerprint, with additional permanent-deletion consent when required."
+        )]
+        input: ResolvePendingImportConflictsInput,
+    ) -> GqlResult<PendingImportConflictTaskPayload> {
+        let request = pending_import_conflict_request(PendingImportConflictInput {
+            pending_import_ids: input.pending_import_ids,
+            policy: input.policy,
+            leftovers: input.leftovers,
+        });
+        let task = app_from_ctx(ctx)?
+            .resolve_pending_import_conflicts(
+                &actor_from_ctx(ctx)?,
+                scryer_application::location::conflicts::ResolveConflictRequest {
+                    request,
+                    plan_fingerprint: input.plan_fingerprint,
+                    confirm_permanent_delete: input.confirm_permanent_delete,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_pending_import_conflict_task(task))
+    }
+
     /// Confirm a previewed location operation and start it in the background.
     ///
     /// The plan is rebuilt server side and compared against the fingerprint the

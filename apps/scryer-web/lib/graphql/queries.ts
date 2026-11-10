@@ -108,6 +108,7 @@ export const DISCOVERY_SECTION_FIELDS = `
     sectionId
     sectionType
     title
+    labelKey
     surface
     totalCount
     items {
@@ -118,6 +119,7 @@ const DISCOVERY_HOME_SECTION_FIELDS = `
     sectionId
     sectionType
     title
+    labelKey
     surface
     totalCount
     items {
@@ -142,6 +144,13 @@ ${DISCOVERY_HOME_SECTION_FIELDS}
     completeCollection {
 ${DISCOVERY_HOME_SECTION_FIELDS}
     }
+    browseLabels {
+      family
+      labelKey
+      sectionId
+      title
+      itemCount
+    }
   }
 }`;
 
@@ -159,6 +168,17 @@ export const discoveryItemsQuery = `query DiscoveryItems($input: DiscoveryItemsI
     canViewPersonalized
     items {
 ${DISCOVERY_ITEM_FIELDS}
+    }
+  }
+}`;
+
+export const discoverySectionPageQuery = `query DiscoverySectionPage($input: DiscoveryItemsInput) {
+  discoveryItems(input: $input) {
+    totalCount
+    canViewPersonalized
+    section {
+${DISCOVERY_HOME_SECTION_FIELDS}
+      generationIds
     }
   }
 }`;
@@ -212,6 +232,7 @@ export const catalogDiscoveryQuery = `query CatalogDiscovery($input: CatalogDisc
       kind
       surface
       labelValue
+      labelKey
       totalCount
       items {
 ${CATALOG_DISCOVERY_ITEM_FIELDS}
@@ -1030,10 +1051,10 @@ export const movieAvailabilityQuery = `query MovieAvailability($id: ID!) {
   }
 }`;
 
-export const movieSidePanelOverviewQuery = `query MovieSidePanelOverview($id: ID!, $blocklistLimit: Int) {
+export const movieSidePanelOverviewQuery = `query MovieSidePanelOverview($id: ID!, $blocklistLimit: Int, $includePrivileged: Boolean! = true) {
   title(id: $id) {${MOVIE_SIDE_PANEL_TITLE_FIELDS}
   }
-  titleAcquisitionDiagnostics(titleId: $id) {
+  titleAcquisitionDiagnostics(titleId: $id) @include(if: $includePrivileged) {
     recentDecisions {
       id
       wantedItemId
@@ -1064,11 +1085,11 @@ export const movieSidePanelOverviewQuery = `query MovieSidePanelOverview($id: ID
     latestDecisionAt
     latestWantedSearchAt
   }
-  titleHistory: titleHistory(filter: { titleIds: [$id], limit: 50, offset: 0 }) {
+  titleHistory: titleHistory(filter: { titleIds: [$id], limit: 50, offset: 0 }) @include(if: $includePrivileged) {
     items {${TITLE_EVENT_FIELDS}
     }
   }
-  titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) {${TITLE_RELEASE_BLOCKLIST_FIELDS}
+  titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) @include(if: $includePrivileged) {${TITLE_RELEASE_BLOCKLIST_FIELDS}
   }
   externalSubtitles(titleId: $id) {${EXTERNAL_SUBTITLE_FIELDS}
   }
@@ -1077,10 +1098,10 @@ export const movieSidePanelOverviewQuery = `query MovieSidePanelOverview($id: ID
   }
 }`;
 
-export const seriesSidePanelOverviewQuery = `query SeriesSidePanelOverview($id: ID!, $blocklistLimit: Int) {
+export const seriesSidePanelOverviewQuery = `query SeriesSidePanelOverview($id: ID!, $blocklistLimit: Int, $includePrivileged: Boolean! = true) {
   title(id: $id) {${SERIES_SIDE_PANEL_TITLE_FIELDS}
   }
-  titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) {${TITLE_RELEASE_BLOCKLIST_FIELDS}
+  titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) @include(if: $includePrivileged) {${TITLE_RELEASE_BLOCKLIST_FIELDS}
   }
   externalSubtitles(titleId: $id) {${EXTERNAL_SUBTITLE_FIELDS}
   }
@@ -1354,6 +1375,11 @@ export const RELEASE_SEARCH_RESULT_FIELDS = `
       blockCodes
       releaseScore
       preferenceScore
+      audioLanguage {
+        preferredRank
+        preferredCount
+        optionalHits
+      }
       scoringLog {
         code
         delta
@@ -1424,12 +1450,17 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       rateLimited
       skipReason
       skippedUntil
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt
@@ -1466,6 +1497,7 @@ export const TITLE_LIST_FIELDS = `
     createdAt`;
 
 export type TitleCatalogTitleProjection = {
+  graph?: boolean;
   includeSettings?: boolean;
   library?: boolean;
   quality?: boolean;
@@ -1477,6 +1509,8 @@ export type TitleCatalogTitleProjection = {
   ratings?: boolean;
   movieMedia?: boolean;
   popularity?: boolean;
+  /** The title's provider ids, which the library graph joins on. */
+  externalIds?: boolean;
 };
 
 export type TitleCatalogQueryBuildOptions = {
@@ -1511,6 +1545,11 @@ const TITLE_CATALOG_BASE_FIELDS = `
     createdAt`;
 
 function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
+  if (projection.graph) {
+    return `id name facet libraryId monitored slug year posterUrl popularity imdbId
+      externalIds { source value }
+      ratings { rating ratingSources externalRatings { source normalized votes } }`;
+  }
   const fields = [TITLE_CATALOG_BASE_FIELDS];
   if (projection.includeSettings !== false) {
     fields.push(`
@@ -1556,6 +1595,14 @@ function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
   if (projection.popularity) {
     fields.push(`
     popularity`);
+  }
+  if (projection.externalIds) {
+    fields.push(`
+    imdbId
+    externalIds {
+      source
+      value
+    }`);
   }
   if (projection.movieMedia) {
     fields.push(`
@@ -1650,6 +1697,34 @@ export const librariesQuery = `query Libraries($facet: MediaFacetValue, $permiss
   }
 }`;
 
+/** Every library's stored roots plus the server path style, read before an import updates a library. */
+export const externalImportLibraryRootsQuery = `query ExternalImportLibraryRoots {
+  libraries {
+    id
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
+  runtimeInfo {
+    runtimePathStyle
+  }
+}`;
+
+/** Fresh roots with their title counts, read before a save that drops roots. */
+export const libraryRootTitleCountsQuery = `query LibraryRootTitleCounts($facet: MediaFacetValue, $permission: LibraryPermissionValue) {
+  libraries(facet: $facet, permission: $permission) {
+    id
+    roots {
+      id
+      path
+      isDefault
+      titleCount
+    }
+  }
+}`;
+
 export const mediaRequestAdminLibrariesQuery = `query MediaRequestAdminLibraries($facet: MediaFacetValue) {
   libraries(facet: $facet, permission: MANAGE_TITLES) {
     id
@@ -1692,6 +1767,14 @@ export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
     searchLanguages
     requiredAudioLanguagesOverride
     requiredAudioLanguages
+    preferredAudioLanguagesOverride
+    preferredAudioLanguages
+    optionalAudioLanguagesOverride
+    optionalAudioLanguages
+    audioLanguagePriorityOverride
+    audioLanguagePriority
+    optionalAudioLanguagesKeepSearchingOverride
+    optionalAudioLanguagesKeepSearching
     metadataLanguageOverride
     metadataLanguage
     useSeasonFoldersOverride
@@ -1845,9 +1928,12 @@ export const titleCatalogCountsQuery = `query TitleCatalogCounts(
 }`;
 
 export const titleCatalogManagedBytesQuery = `query TitleCatalogManagedBytes(
-  $facet: MediaFacetValue, $libraryIds: [ID!]
+  $facet: MediaFacetValue, $libraryIds: [ID!], $query: String,
+  $filter: TitleCatalogFilterInput
 ) {
-  titles(facet: $facet, libraryIds: $libraryIds) { managedBytes }
+  titles(facet: $facet, libraryIds: $libraryIds, query: $query, filter: $filter) {
+    managedBytes
+  }
 }`;
 
 export const titlesQuery = buildTitlesQuery();
@@ -1899,6 +1985,58 @@ ${DISCOVERY_ITEM_DETAIL_FIELDS}
   }
 }`;
 
+export const discoveryNeighborsQuery = `query DiscoveryNeighbors($input: DiscoveryNeighborsInput!) {
+  discoveryNeighbors(input: $input) {
+    items {
+${DISCOVERY_ITEM_DETAIL_FIELDS}
+      groupId
+    }
+    groups {
+      id
+      labelKey
+      label
+      medoid
+      size
+    }
+  }
+}`;
+
+export const libraryGraphTitleDetailsQuery = `query LibraryGraphTitleDetails($id: ID!) {
+  title(id: $id) {
+    id
+    overview
+    backgroundUrl
+    canonicalTags {${TITLE_CANONICAL_TAG_FIELDS}
+    }
+  }
+}`;
+
+export const libraryGraphQuery = `query LibraryGraph($input: LibraryGraphInput!) {
+  libraryGraph(input: $input) {
+    generatedAt
+    nodes {
+      subjectKey
+      targetKey
+      clusterId
+    }
+    edges {
+      from
+      to
+      weight
+      kinds
+    }
+    clusters {
+      id
+      labelKey
+      label
+      medoid
+      size
+    }
+    subjectCount
+    truncated
+  }
+}`;
+
 type ReactiveRefreshVariableValue = string | number | null;
 
 export type TitleSidePanelOverviewProjection = "MOVIE" | "SERIES";
@@ -1921,6 +2059,12 @@ export type ReactiveRefreshQueryActionInput =
       titleId: string;
       blocklistLimit: number;
       projection: TitleSidePanelOverviewProjection;
+      /**
+       * Whether to ask for the title's history and release blocklist, which
+       * the server refuses to callers without privileged library access.
+       * Omitted means yes.
+       */
+      includePrivileged?: boolean;
     }
   | {
       key: string;
@@ -1949,7 +2093,7 @@ export type ReactiveRefreshQueryActionPlan =
       kind: "titleSidePanelOverview";
       titleAlias: string;
       titleHistoryAlias?: string;
-      titleReleaseBlocklistAlias: string;
+      titleReleaseBlocklistAlias?: string;
       externalSubtitlesAlias: string;
       setupStatusAlias: string;
     }
@@ -2002,16 +2146,21 @@ export function buildReactiveRefreshQuery(
         const titleIdVariableName = `titleSidePanelOverviewId${index}`;
         const blocklistLimitVariableName = `titleSidePanelOverviewBlocklistLimit${index}`;
         const titleAlias = `titleSidePanelOverviewTitleAction${index}`;
+        const includePrivileged = action.includePrivileged !== false;
         const titleHistoryAlias =
-          action.projection === "MOVIE"
+          includePrivileged && action.projection === "MOVIE"
             ? `titleSidePanelOverviewHistoryAction${index}`
             : undefined;
-        const titleReleaseBlocklistAlias = `titleSidePanelOverviewBlocklistAction${index}`;
+        const titleReleaseBlocklistAlias = includePrivileged
+          ? `titleSidePanelOverviewBlocklistAction${index}`
+          : undefined;
         const externalSubtitlesAlias = `titleSidePanelOverviewExternalSubtitlesAction${index}`;
         const setupStatusAlias = `titleSidePanelOverviewSetupStatusAction${index}`;
 
         variableDefinitions.push(`$${titleIdVariableName}: ID!`);
-        variableDefinitions.push(`$${blocklistLimitVariableName}: Int`);
+        if (titleReleaseBlocklistAlias) {
+          variableDefinitions.push(`$${blocklistLimitVariableName}: Int`);
+        }
         const titleFields =
           action.projection === "SERIES"
             ? SERIES_SIDE_PANEL_TITLE_FIELDS
@@ -2024,9 +2173,11 @@ export function buildReactiveRefreshQuery(
             `  ${titleHistoryAlias}: titleHistory(filter: { titleIds: [$${titleIdVariableName}], limit: 50, offset: 0 }) {\n    items {\n${TITLE_EVENT_FIELDS}\n    }\n  }`,
           );
         }
-        fields.push(
-          `  ${titleReleaseBlocklistAlias}: titleReleaseBlocklist(titleId: $${titleIdVariableName}, limit: $${blocklistLimitVariableName}) {\n${TITLE_RELEASE_BLOCKLIST_FIELDS}\n  }`,
-        );
+        if (titleReleaseBlocklistAlias) {
+          fields.push(
+            `  ${titleReleaseBlocklistAlias}: titleReleaseBlocklist(titleId: $${titleIdVariableName}, limit: $${blocklistLimitVariableName}) {\n${TITLE_RELEASE_BLOCKLIST_FIELDS}\n  }`,
+          );
+        }
         fields.push(
           `  ${externalSubtitlesAlias}: externalSubtitles(titleId: $${titleIdVariableName}) {\n${EXTERNAL_SUBTITLE_FIELDS}\n  }`,
         );
@@ -2034,7 +2185,9 @@ export function buildReactiveRefreshQuery(
           `  ${setupStatusAlias}: setupStatus {\n    hasDownloadClients\n  }`,
         );
         variables[titleIdVariableName] = action.titleId;
-        variables[blocklistLimitVariableName] = action.blocklistLimit;
+        if (titleReleaseBlocklistAlias) {
+          variables[blocklistLimitVariableName] = action.blocklistLimit;
+        }
         actionPlans.push({
           key: action.key,
           kind: action.kind,
@@ -2490,6 +2643,15 @@ export const downloadClientsQuery = `query DownloadClients {
 
 export const mediaServerConnectionsQuery = `query MediaServerConnections($provider: MediaServerProviderValue) {
   mediaServerConnections(provider: $provider) {${MEDIA_SERVER_CONNECTION_FIELDS}
+    watchSignalSync {
+      lastStartedAt
+      lastCleanSweepAt
+      lastError
+      lastErrorCode
+      cleanSweepStale
+      participantCount
+      signalCount
+    }
   }
   runtimeInfo {
     runtimePathStyle
@@ -2672,7 +2834,8 @@ const qualityProfileCriteriaFields = `
         blockUpscaled
       }
       cutoffTier
-      minScoreToGrab`;
+      minScoreToGrab
+      minUpgradeScoreDelta`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
@@ -2720,6 +2883,10 @@ const mediaSettingsFieldSelection = `
       isDefault
     }
     requiredAudioLanguages
+    preferredAudioLanguages
+    optionalAudioLanguages
+    audioLanguagePriority
+    optionalAudioLanguagesKeepSearching
     useSeasonFolders
     folderTemplate
     seasonFolderTemplate
@@ -2762,6 +2929,14 @@ const serviceSettingsFieldSelection = `
     basePathSource
     bindAddress
     bindSource
+    bindSavedHost
+    bindEditable
+    bindPinnedBy
+    bindPending
+    bindRestartRequired
+    bindFallbackCode
+    bindFallbackAddress
+    bindFallbackReason
     passkeyRpId
     passkeyRpOrigin
     passkeyRpSource
@@ -2886,7 +3061,7 @@ export const mediaSettingsInitQuery = `query MediaSettingsInit($scope: ContentSc
   }
 }`;
 
-export const globalSearchInitQuery = `query GlobalSearchInit {
+export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettings: Boolean! = false) {
   qualityProfileSettings {${qualityProfileSettingsFieldSelection}
   }
   manageableLibraries: libraries(permission: MANAGE_TITLES) {
@@ -2917,11 +3092,11 @@ export const globalSearchInitQuery = `query GlobalSearchInit {
       isDefault
     }
   }
-  movieSettings: mediaSettings(scope: MOVIE) {${mediaSettingsFieldSelection}
+  movieSettings: mediaSettings(scope: MOVIE) @include(if: $includeMediaSettings) {${mediaSettingsFieldSelection}
   }
-  seriesSettings: mediaSettings(scope: SERIES) {${mediaSettingsFieldSelection}
+  seriesSettings: mediaSettings(scope: SERIES) @include(if: $includeMediaSettings) {${mediaSettingsFieldSelection}
   }
-  animeSettings: mediaSettings(scope: ANIME) {${mediaSettingsFieldSelection}
+  animeSettings: mediaSettings(scope: ANIME) @include(if: $includeMediaSettings) {${mediaSettingsFieldSelection}
   }
 }`;
 
@@ -3000,9 +3175,9 @@ export const publicUrlChangePreviewQuery = `query PublicUrlChangePreview($public
 export const acquisitionSettingsQuery = `query AcquisitionSettings {
   acquisitionSettings {
     enabled
-    sameTierMinDelta
     pollIntervalSeconds
     walkIntervalSeconds
+    walkIntensity
     longTailBackfillMaxScopesPerCycle
     longTailReconvergeDays
   }
@@ -3055,6 +3230,8 @@ export const myUiSettingsQuery = `query MyUiSettings {
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -3341,6 +3518,8 @@ export const authRuntimeStateQuery = `query AuthRuntimeState {
     mfaRequirePasswordLogin
     mfaRequireConfigStepUp
     mfaRequireJellyfinLogin
+    bindEditable
+    bindPinnedBy
   }
 }`;
 
@@ -3785,6 +3964,35 @@ export const pluginAutoUpdateSettingsQuery = `query PluginAutoUpdateSettings {
   }
 }`;
 
+export const dashboardRecycleBinQuery = `query DashboardRecycleBin {
+  recycledItems(limit: 15, deletionWithinHours: 72) {
+    items {
+      id
+      fileName
+      sizeBytes
+      titleName
+      libraryName
+      scheduledDeletionAt
+    }
+    totalCount
+  }
+}`;
+
+export const recycledItemHistoryQuery = `query RecycledItemHistory($id: ID!) {
+  recycledItemHistory(id: $id) {
+    items {
+      ${HISTORY_SCORING_FIELDS}
+      id titleId titleName facet posterUrl episodeId episodeIds collectionId
+      eventType actorKind actorUserId actorDisplayName
+      sourceTitle displayTitle sourceSystem sourceRef sourceProvider sourceHint
+      quality downloadId clientId clientName importId skipReason
+      retryRequiresPassword failureReasonCode failureReason blocklistReason
+      sourcePath destPath dataJson occurredAt createdAt
+    }
+    truncated
+  }
+}`;
+
 export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
   recycledItems(libraryIds: $libraryIds) {
     items {
@@ -3794,6 +4002,8 @@ export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
       sizeBytes
       titleId
       titleName
+      titleFacet
+      episodeId
       reason
       recycledAt
       scheduledDeletionAt
@@ -4793,6 +5003,7 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
       titleId
       titleName
       facet
+      posterUrl
       episodeId
       episodeIds
       collectionId
@@ -5156,6 +5367,7 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
       groups {
         class
         count
+        complete
         titles {
           titleId
           class
@@ -5307,7 +5519,7 @@ export const locationOperationQuery = `query LocationOperation($id: ID!) {
 const LOCATION_TRANSFER_FIELDS = `
   generation revision progressBasisPoints etaSeconds totalCount hasMore
   operation {${LOCATION_OPERATION_FIELDS}}
-  titles { titleId name state filesTotal filesDone bytesTotal copyBytes verificationBytes copying verifying currentFile hasException }
+  titles { titleId name state filesTotal filesDone bytesTotal copyBytes verificationBytes copying verifying recording currentFile hasException }
 `;
 export const locationOperationRetrySelectionQuery = `query LocationOperationRetrySelection($id: ID!) {
   locationOperationRetrySelection(id: $id) {

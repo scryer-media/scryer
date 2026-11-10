@@ -10,12 +10,12 @@ use quick_xml::events::{BytesStart, Event};
 use reqwest::StatusCode;
 use scryer_application::{
     AppError, AppResult, CapturedIndexerHttpHeader, CapturedIndexerHttpResponse,
-    ExternalPluginWasm, IndexerClient, IndexerErrorOperation, IndexerErrorRepository,
-    IndexerManagementClient, IndexerPluginProvider, IndexerRequestResult, IndexerRequestTally,
-    IndexerRoutingPlan, IndexerSearchResponse, IndexerStatsTracker, IndexerSyncPlan,
-    IndexerValidationResult, ManagedIndexerChildPlan, ManagedIndexerRoutingScope, NewIndexerError,
-    NullIndexerErrorRepository, NullIndexerStatsTracker, RateLimitCooldownAction,
-    RuntimePluginLoad, SearchMode, classify_indexer_http_response,
+    IndexerAccountingContext, IndexerClient, IndexerErrorOperation, IndexerErrorRepository,
+    IndexerManagementClient, IndexerRequestResult, IndexerRequestTally, IndexerRoutingPlan,
+    IndexerSearchResponse, IndexerStatsTracker, IndexerSyncPlan, IndexerValidationResult,
+    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, NativeIndexerProvider, NewIndexerError,
+    NullIndexerErrorRepository, NullIndexerStatsTracker, RateLimitCooldownAction, SearchMode,
+    classify_indexer_http_response,
     external_import::{EXTERNAL_IMPORT_HOST_RPS_LANE, EXTERNAL_IMPORT_HOST_RPS_PROFILE},
     indexer_error_history_is_persistable, indexer_response_content_type, unknown_indexer_error,
 };
@@ -43,43 +43,273 @@ const PROWLARR_CHILD_CAPS_FETCH_CONCURRENCY: usize = 8;
 /// Keep Prowlarr diagnostics aligned with the plugin host's accepted-response limit.
 const PROWLARR_RESPONSE_MAX_BYTES: usize = 50 * 1024 * 1024;
 
+/// One generation of Prowlarr's management API.
+///
+/// A generation owns every request shape and response decoder that could
+/// change between API generations, so the sync planner only ever talks to a
+/// generation and never to a route or wire struct directly. Prowlarr 2.x and
+/// 3.x both serve the `/api/v1` generation; a release that moves to a new
+/// namespace adds a variant here, its own wire structs, and a mapping into the
+/// internal models below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProwlarrApiBucket {
-    V2,
+enum ProwlarrApiGeneration {
+    ApiV1,
 }
 
-impl ProwlarrApiBucket {
+/// The pieces of a child's Newznab/Torznab `t=caps` request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProwlarrChildCapsRequest {
+    url: String,
+    /// The request path without credentials, for policies and error messages.
+    request_path: String,
+    accept: &'static str,
+}
+
+impl ProwlarrApiGeneration {
+    /// Every generation, oldest first.
+    const ALL: &'static [Self] = &[Self::ApiV1];
+
+    /// The generation used to read `system/status` before the product version
+    /// is known, and to label requests made before a status read resolved one.
+    const DISCOVERY: Self = Self::ApiV1;
+
     const fn system_status_path(self) -> &'static str {
         match self {
-            Self::V2 => "/api/v1/system/status",
+            Self::ApiV1 => "/api/v1/system/status",
         }
     }
 
     const fn indexer_path(self) -> &'static str {
         match self {
-            Self::V2 => "/api/v1/indexer",
+            Self::ApiV1 => "/api/v1/indexer",
         }
     }
 
     const fn app_profile_path(self) -> &'static str {
         match self {
-            Self::V2 => "/api/v1/appprofile",
-        }
-    }
-
-    const fn supported_major(self) -> u64 {
-        match self {
-            Self::V2 => 2,
+            Self::ApiV1 => "/api/v1/appprofile",
         }
     }
 
     const fn request_namespace(self) -> &'static str {
         match self {
-            Self::V2 => "prowlarr_v2",
+            Self::ApiV1 => "prowlarr_api_v1",
         }
     }
 
-    fn validate_status(self, status: &ProwlarrSystemStatus) -> Result<(), ProwlarrRequestError> {
+    /// The path a managed child's Newznab/Torznab passthrough lives under,
+    /// relative to [`Self::child_base_url`].
+    const fn child_api_path(self) -> &'static str {
+        match self {
+            Self::ApiV1 => "/api",
+        }
+    }
+
+    fn child_base_url(self, base_url: &str, indexer_id: i64) -> String {
+        match self {
+            Self::ApiV1 => format!("{}/{}", base_url.trim_end_matches('/'), indexer_id),
+        }
+    }
+
+    fn child_caps_request(
+        self,
+        config: &ProwlarrConfig,
+        indexer_id: i64,
+    ) -> ProwlarrChildCapsRequest {
+        match self {
+            Self::ApiV1 => ProwlarrChildCapsRequest {
+                url: format!(
+                    "{}{}?t=caps&apikey={}",
+                    self.child_base_url(&config.base_url, indexer_id),
+                    self.child_api_path(),
+                    config.api_key
+                ),
+                request_path: format!("/{indexer_id}{}?t=caps", self.child_api_path()),
+                accept: "application/xml, text/xml, application/rss+xml",
+            },
+        }
+    }
+
+    fn decode_system_status(self, body: &[u8]) -> serde_json::Result<ProwlarrSystemStatus> {
+        match self {
+            // The internal models are the `/api/v1` wire shape.
+            Self::ApiV1 => serde_json::from_slice(body),
+        }
+    }
+
+    fn decode_indexers(self, body: &[u8]) -> serde_json::Result<Vec<ProwlarrIndexerResource>> {
+        match self {
+            Self::ApiV1 => serde_json::from_slice(body),
+        }
+    }
+
+    fn decode_app_profiles(self, body: &[u8]) -> serde_json::Result<Vec<ProwlarrAppProfile>> {
+        match self {
+            Self::ApiV1 => serde_json::from_slice(body),
+        }
+    }
+
+    fn is_system_status_path(path: &str) -> bool {
+        Self::ALL
+            .iter()
+            .any(|generation| generation.system_status_path() == path)
+    }
+
+    fn is_sync_path(path: &str) -> bool {
+        Self::ALL.iter().any(|generation| {
+            generation.indexer_path() == path || generation.app_profile_path() == path
+        })
+    }
+}
+
+/// A Prowlarr product version as `system/status` reports it, for example
+/// `2.7.0.5723`. Prowlarr reports four parts; three are accepted as well.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ProwlarrProductVersion {
+    major: u64,
+    minor: u64,
+    patch: u64,
+    build: Option<u64>,
+}
+
+impl ProwlarrProductVersion {
+    const fn new(major: u64, minor: u64, patch: u64) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+            build: None,
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, ProwlarrRequestError> {
+        let trimmed = raw.trim();
+        let unreadable = || {
+            ProwlarrRequestError::Unsupported(format!(
+                "could not determine Prowlarr version from '{trimmed}'"
+            ))
+        };
+        let parts = trimmed
+            .split('.')
+            .map(|part| {
+                (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+                    .then(|| part.parse::<u64>().ok())
+                    .flatten()
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(unreadable)?;
+        match parts.as_slice() {
+            [major, minor, patch] => Ok(Self::new(*major, *minor, *patch)),
+            [major, minor, patch, build] => Ok(Self {
+                build: Some(*build),
+                ..Self::new(*major, *minor, *patch)
+            }),
+            _ => Err(unreadable()),
+        }
+    }
+
+    /// The release a version belongs to; the build number never decides
+    /// support.
+    const fn release(self) -> (u64, u64, u64) {
+        (self.major, self.minor, self.patch)
+    }
+}
+
+impl std::fmt::Display for ProwlarrProductVersion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)?;
+        if let Some(build) = self.build {
+            write!(formatter, ".{build}")?;
+        }
+        Ok(())
+    }
+}
+
+/// How far a connected Prowlarr is from the releases Scryer is tested against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProwlarrSupportTier {
+    /// A major Scryer is tested against.
+    Tested,
+    /// A major newer than any tested one. Prowlarr keeps its API generation
+    /// across majors, so Scryer connects through the newest generation it knows
+    /// rather than refusing.
+    Newer,
+}
+
+/// Which Prowlarr releases Scryer supports and which API generation each one
+/// speaks.
+struct ProwlarrSupportPolicy {
+    minimum: ProwlarrProductVersion,
+    /// Tested majors, ascending, with the generation each one serves.
+    tested_majors: &'static [(u64, ProwlarrApiGeneration)],
+    /// The generation a major newer than every tested one is spoken to with.
+    newest_generation: ProwlarrApiGeneration,
+}
+
+const PROWLARR_SUPPORT_POLICY: ProwlarrSupportPolicy = ProwlarrSupportPolicy {
+    minimum: ProwlarrProductVersion::new(2, 0, 0),
+    tested_majors: &[
+        (2, ProwlarrApiGeneration::ApiV1),
+        (3, ProwlarrApiGeneration::ApiV1),
+    ],
+    newest_generation: ProwlarrApiGeneration::ApiV1,
+};
+
+/// The generation and tier a supported Prowlarr version resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProwlarrSupport {
+    generation: ProwlarrApiGeneration,
+    tier: ProwlarrSupportTier,
+}
+
+impl ProwlarrSupportPolicy {
+    fn highest_tested_major(&self) -> u64 {
+        self.tested_majors
+            .iter()
+            .map(|(major, _)| *major)
+            .max()
+            .unwrap_or(self.minimum.major)
+    }
+
+    fn resolve(
+        &self,
+        version: &ProwlarrProductVersion,
+    ) -> Result<ProwlarrSupport, ProwlarrRequestError> {
+        if version.release() < self.minimum.release() {
+            return Err(ProwlarrRequestError::VersionUnsupported {
+                version: version.to_string(),
+                minimum: self.minimum.to_string(),
+            });
+        }
+        if let Some((_, generation)) = self
+            .tested_majors
+            .iter()
+            .find(|(major, _)| *major == version.major)
+        {
+            return Ok(ProwlarrSupport {
+                generation: *generation,
+                tier: ProwlarrSupportTier::Tested,
+            });
+        }
+        if version.major > self.highest_tested_major() {
+            return Ok(ProwlarrSupport {
+                generation: self.newest_generation,
+                tier: ProwlarrSupportTier::Newer,
+            });
+        }
+        // At or above the minimum but on an untested major below the newest
+        // tested one: no such major exists today, so treat it as below support.
+        Err(ProwlarrRequestError::VersionUnsupported {
+            version: version.to_string(),
+            minimum: self.minimum.to_string(),
+        })
+    }
+
+    /// Identify the server and resolve the API generation its version speaks.
+    fn resolve_status(
+        &self,
+        status: ProwlarrSystemStatus,
+    ) -> Result<ResolvedProwlarrApi, ProwlarrRequestError> {
         let app_name = status.app_name.trim();
         if !app_name.eq_ignore_ascii_case("Prowlarr") {
             let message = if app_name.is_empty() {
@@ -90,32 +320,26 @@ impl ProwlarrApiBucket {
             return Err(ProwlarrRequestError::InvalidConfig(message));
         }
 
-        let version = status.version.trim();
-        let Some(version_major) = prowlarr_version_major(version) else {
-            return Err(ProwlarrRequestError::Unsupported(format!(
-                "could not determine Prowlarr version from '{}'",
-                version
-            )));
-        };
-
-        if version_major != self.supported_major() {
-            return Err(ProwlarrRequestError::Unsupported(format!(
-                "unsupported Prowlarr version '{}'; expected major {}",
-                version,
-                self.supported_major()
-            )));
-        }
-
-        Ok(())
+        let version = ProwlarrProductVersion::parse(&status.version)?;
+        let support = self.resolve(&version)?;
+        Ok(ResolvedProwlarrApi {
+            generation: support.generation,
+            version,
+            tier: support.tier,
+            status,
+        })
     }
-}
 
-const SYSTEM_STATUS_PATH: &str = ProwlarrApiBucket::V2.system_status_path();
-const INDEXER_PATH: &str = ProwlarrApiBucket::V2.indexer_path();
-const APP_PROFILE_PATH: &str = ProwlarrApiBucket::V2.app_profile_path();
-
-fn prowlarr_version_major(version: &str) -> Option<u64> {
-    version.trim().split('.').next()?.parse().ok()
+    fn connected_message(&self, api: &ResolvedProwlarrApi) -> String {
+        match api.tier {
+            ProwlarrSupportTier::Tested => format!("Connected to Prowlarr {}", api.version),
+            ProwlarrSupportTier::Newer => format!(
+                "Connected to Prowlarr {} (newer than the tested {}.x line)",
+                api.version,
+                self.highest_tested_major()
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -170,37 +394,59 @@ enum ProwlarrRequestError {
     RateLimited(String, Option<i64>, RateLimitCooldownAction),
     Unreachable(String),
     Unsupported(String),
+    /// The server is older than [`ProwlarrSupportPolicy::minimum`].
+    VersionUnsupported {
+        version: String,
+        minimum: String,
+    },
 }
 
 impl ProwlarrRequestError {
-    fn to_validation_result(&self) -> IndexerValidationResult {
+    /// The stable reason a client can act on, for the refusals that have one.
+    fn reason(&self) -> Option<&'static str> {
         match self {
-            Self::InvalidConfig(message) => {
-                validation_result("invalid_config", Some(message), None)
+            Self::InvalidConfig(_) => {
+                Some(crate::error_reasons::ACQUISITION_PROWLARR_CONFIG_INVALID)
             }
-            Self::AuthFailed(message) => validation_result("auth_failed", Some(message), None),
-            Self::RateLimited(message, retry_after_seconds, _) => {
-                validation_result("rate_limited", Some(message), *retry_after_seconds)
+            Self::AuthFailed(_) => Some(crate::error_reasons::ACQUISITION_PROWLARR_AUTH_FAILED),
+            Self::VersionUnsupported { .. } => {
+                Some(crate::error_reasons::ACQUISITION_PROWLARR_VERSION_UNSUPPORTED)
             }
-            Self::Unreachable(message) => validation_result("unreachable", Some(message), None),
-            Self::Unsupported(message) => validation_result("unsupported", Some(message), None),
+            Self::RateLimited(..) | Self::Unreachable(_) | Self::Unsupported(_) => None,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::InvalidConfig(message)
+            | Self::AuthFailed(message)
+            | Self::RateLimited(message, _, _)
+            | Self::Unreachable(message)
+            | Self::Unsupported(message) => message.clone(),
+            Self::VersionUnsupported { version, minimum } => {
+                format!("Prowlarr {version} is not supported; upgrade to {minimum} or newer")
+            }
+        }
+    }
+
+    fn to_validation_result(&self) -> IndexerValidationResult {
+        let (status, retry_after_seconds) = match self {
+            Self::InvalidConfig(_) => ("invalid_config", None),
+            Self::AuthFailed(_) => ("auth_failed", None),
+            Self::RateLimited(_, retry_after_seconds, _) => ("rate_limited", *retry_after_seconds),
+            Self::Unreachable(_) => ("unreachable", None),
+            Self::Unsupported(_) | Self::VersionUnsupported { .. } => ("unsupported", None),
+        };
+        IndexerValidationResult {
+            reason: self.reason(),
+            ..validation_result(status, Some(&self.message()), retry_after_seconds)
         }
     }
 
     fn into_app_error(self) -> AppError {
-        match self {
-            Self::InvalidConfig(message) => AppError::validation_refused(
-                crate::error_reasons::ACQUISITION_PROWLARR_CONFIG_INVALID,
-                message,
-            ),
-            Self::AuthFailed(message) => AppError::validation_refused(
-                crate::error_reasons::ACQUISITION_PROWLARR_AUTH_FAILED,
-                message,
-            ),
-            Self::Unreachable(message) | Self::Unsupported(message) => {
-                AppError::Repository(message)
-            }
-            Self::RateLimited(message, Some(retry_after_seconds), cooldown_action) => {
+        match (self.reason(), self) {
+            (Some(reason), error) => AppError::validation_refused(reason, error.message()),
+            (None, Self::RateLimited(message, Some(retry_after_seconds), cooldown_action)) => {
                 AppError::rate_limited_temporary_unavailable(
                     message,
                     Some(std::time::Duration::from_secs(
@@ -209,9 +455,10 @@ impl ProwlarrRequestError {
                     cooldown_action,
                 )
             }
-            Self::RateLimited(message, None, cooldown_action) => {
+            (None, Self::RateLimited(message, None, cooldown_action)) => {
                 AppError::rate_limited_temporary_unavailable(message, None, cooldown_action)
             }
+            (None, error) => AppError::Repository(error.message()),
         }
     }
 }
@@ -223,9 +470,13 @@ struct ProwlarrSystemStatus {
     version: String,
 }
 
+/// The API generation a connected Prowlarr was resolved to, with what it
+/// reported about itself.
 #[derive(Debug, Clone)]
 struct ResolvedProwlarrApi {
-    bucket: ProwlarrApiBucket,
+    generation: ProwlarrApiGeneration,
+    version: ProwlarrProductVersion,
+    tier: ProwlarrSupportTier,
     status: ProwlarrSystemStatus,
 }
 
@@ -374,23 +625,28 @@ impl RoutingScope {
     }
 }
 
+/// Prowlarr as a host-native indexer provider: a management-only parent
+/// that syncs child Newznab and Torznab indexers.
 pub struct NativeProwlarrIndexerProvider {
-    delegate: Arc<dyn IndexerPluginProvider>,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
     indexer_stats: Arc<dyn IndexerStatsTracker>,
 }
 
+impl Default for NativeProwlarrIndexerProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NativeProwlarrIndexerProvider {
-    pub fn new(delegate: Arc<dyn IndexerPluginProvider>) -> Self {
-        Self::new_with_indexer_error_repository(delegate, Arc::new(NullIndexerErrorRepository))
+    pub fn new() -> Self {
+        Self::new_with_indexer_error_repository(Arc::new(NullIndexerErrorRepository))
     }
 
     pub fn new_with_indexer_error_repository(
-        delegate: Arc<dyn IndexerPluginProvider>,
         indexer_errors: Arc<dyn IndexerErrorRepository>,
     ) -> Self {
         Self {
-            delegate,
             indexer_errors,
             indexer_stats: Arc::new(NullIndexerStatsTracker),
         }
@@ -675,24 +931,27 @@ impl ProwlarrManagementClient {
         }
     }
 
+    #[cfg(test)]
     async fn fetch_system_status(&self) -> Result<ProwlarrSystemStatus, ProwlarrRequestError> {
         Ok(self
-            .ensure_supported_api_bucket(IndexerErrorOperation::ConnectionTest)
+            .resolve_api(IndexerErrorOperation::ConnectionTest)
             .await?
             .status)
     }
 
-    async fn get_json<T>(&self, path: &str, operation: IndexerErrorOperation) -> AppResult<T>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        self.get_json_with_response(path, operation)
-            .await
-            .map(|(value, _)| value)
-            .map_err(ProwlarrRequestError::into_app_error)
+    /// The generation requests are labelled and shaped with: the resolved one
+    /// once a status read has run, otherwise the discovery generation.
+    fn current_generation(&self) -> ProwlarrApiGeneration {
+        self.api_state
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|api| api.generation))
+            .unwrap_or(ProwlarrApiGeneration::DISCOVERY)
     }
 
-    async fn ensure_supported_api_bucket(
+    /// Read `system/status` once per client and resolve the API generation the
+    /// reported version speaks through [`PROWLARR_SUPPORT_POLICY`].
+    async fn resolve_api(
         &self,
         operation: IndexerErrorOperation,
     ) -> Result<ResolvedProwlarrApi, ProwlarrRequestError> {
@@ -705,29 +964,77 @@ impl ProwlarrManagementClient {
             return Ok(api);
         }
 
-        let (status, response): (ProwlarrSystemStatus, CapturedIndexerHttpResponse) = self
-            .get_json_with_response(SYSTEM_STATUS_PATH, operation)
+        let discovery = ProwlarrApiGeneration::DISCOVERY;
+        let (status, response) = self
+            .get_decoded_with_response(discovery.system_status_path(), operation, |body| {
+                discovery.decode_system_status(body)
+            })
             .await?;
-        let api = ResolvedProwlarrApi {
-            bucket: ProwlarrApiBucket::V2,
-            status,
+        let api = match PROWLARR_SUPPORT_POLICY.resolve_status(status) {
+            Ok(api) => api,
+            Err(error) => {
+                self.error_capture().record(operation, response).await;
+                return Err(error);
+            }
         };
-        if let Err(error) = api.bucket.validate_status(&api.status) {
-            self.error_capture().record(operation, response).await;
-            return Err(error);
+        debug!(
+            app_name = api.status.app_name.as_str(),
+            version = %api.version,
+            generation = api.generation.request_namespace(),
+            tier = ?api.tier,
+            "resolved Prowlarr API generation"
+        );
+        if api.tier == ProwlarrSupportTier::Newer {
+            warn!(
+                version = %api.version,
+                highest_tested_major = PROWLARR_SUPPORT_POLICY.highest_tested_major(),
+                generation = api.generation.request_namespace(),
+                "connected to a Prowlarr newer than the tested releases"
+            );
         }
         *guard = Some(api.clone());
         Ok(api)
     }
 
-    async fn get_json_with_response<T>(
+    async fn get_decoded<T>(
         &self,
         path: &str,
         operation: IndexerErrorOperation,
-    ) -> Result<(T, CapturedIndexerHttpResponse), ProwlarrRequestError>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
+        decode: impl FnOnce(&[u8]) -> serde_json::Result<T>,
+    ) -> AppResult<T> {
+        self.get_decoded_with_response(path, operation, decode)
+            .await
+            .map(|(value, _)| value)
+            .map_err(ProwlarrRequestError::into_app_error)
+    }
+
+    /// Fetch `path` and decode a successful body with `decode`; a body that
+    /// does not decode is recorded as an indexer error.
+    async fn get_decoded_with_response<T>(
+        &self,
+        path: &str,
+        operation: IndexerErrorOperation,
+        decode: impl FnOnce(&[u8]) -> serde_json::Result<T>,
+    ) -> Result<(T, CapturedIndexerHttpResponse), ProwlarrRequestError> {
+        let captured = self.get_success_response(path, operation).await?;
+        match decode(&captured.body) {
+            Ok(value) => Ok((value, captured)),
+            Err(error) => {
+                self.error_capture().record(operation, captured).await;
+                Err(ProwlarrRequestError::Unsupported(format!(
+                    "Prowlarr returned invalid JSON: {error}"
+                )))
+            }
+        }
+    }
+
+    /// Fetch `path` as JSON and return the captured body of a successful
+    /// response; any other status is recorded and mapped to an error.
+    async fn get_success_response(
+        &self,
+        path: &str,
+        operation: IndexerErrorOperation,
+    ) -> Result<CapturedIndexerHttpResponse, ProwlarrRequestError> {
         let config = self
             .config
             .as_ref()
@@ -816,15 +1123,7 @@ impl ProwlarrManagementClient {
         let status = StatusCode::from_u16(captured.status).expect("reqwest status is valid");
 
         if status.is_success() {
-            return match serde_json::from_slice(&captured.body) {
-                Ok(value) => Ok((value, captured)),
-                Err(error) => {
-                    self.error_capture().record(operation, captured).await;
-                    Err(ProwlarrRequestError::Unsupported(format!(
-                        "Prowlarr returned invalid JSON: {error}"
-                    )))
-                }
-            };
+            return Ok(captured);
         }
 
         self.error_capture()
@@ -843,14 +1142,13 @@ impl ProwlarrManagementClient {
         config: &ProwlarrConfig,
         indexer_id: i64,
     ) -> Result<ProwlarrCapsSnapshot, ProwlarrRequestError> {
-        let base_url = format!("{}/{}", config.base_url.trim_end_matches('/'), indexer_id);
-        let url = format!(
-            "{}{}?t=caps&apikey={}",
-            base_url.trim_end_matches('/'),
-            "/api",
-            config.api_key
-        );
-        let request_path = format!("/{indexer_id}/api?t=caps");
+        let ProwlarrChildCapsRequest {
+            url,
+            request_path,
+            accept,
+        } = self
+            .current_generation()
+            .child_caps_request(config, indexer_id);
         let child_key = indexer_id.to_string();
         let error_capture = self.error_capture();
         // This is an observed call made during parent management. We cannot
@@ -869,7 +1167,7 @@ impl ProwlarrManagementClient {
                     self.outbound_http
                         .client()
                         .get(&url)
-                        .header("Accept", "application/xml, text/xml, application/rss+xml")
+                        .header("Accept", accept)
                         .header("User-Agent", USER_AGENT)
                 },
                 move |response| {
@@ -967,20 +1265,23 @@ impl ProwlarrManagementClient {
         caps_due: Option<&HashSet<String>>,
     ) -> AppResult<IndexerSyncPlan> {
         let config = self.config()?.clone();
-        let api = self
-            .ensure_supported_api_bucket(IndexerErrorOperation::ManagementSync)
+        let generation = self
+            .resolve_api(IndexerErrorOperation::ManagementSync)
             .await
-            .map_err(ProwlarrRequestError::into_app_error)?;
-        let indexers: Vec<ProwlarrIndexerResource> = self
-            .get_json(
-                api.bucket.indexer_path(),
+            .map_err(ProwlarrRequestError::into_app_error)?
+            .generation;
+        let indexers = self
+            .get_decoded(
+                generation.indexer_path(),
                 IndexerErrorOperation::ManagementSync,
+                |body| generation.decode_indexers(body),
             )
             .await?;
-        let app_profiles: Vec<ProwlarrAppProfile> = self
-            .get_json(
-                api.bucket.app_profile_path(),
+        let app_profiles = self
+            .get_decoded(
+                generation.app_profile_path(),
                 IndexerErrorOperation::ManagementSync,
+                |body| generation.decode_app_profiles(body),
             )
             .await?;
         let app_profiles_by_id = app_profiles
@@ -992,7 +1293,13 @@ impl ProwlarrManagementClient {
             let children = indexers
                 .into_iter()
                 .filter_map(|indexer| {
-                    build_managed_child_plan(&config, indexer, &app_profiles_by_id, None)
+                    build_managed_child_plan(
+                        generation,
+                        &config,
+                        indexer,
+                        &app_profiles_by_id,
+                        None,
+                    )
                 })
                 .collect();
             return Ok(IndexerSyncPlan { children });
@@ -1055,7 +1362,13 @@ impl ProwlarrManagementClient {
         let children = planned_children
             .into_iter()
             .filter_map(|(_, indexer, caps_snapshot)| {
-                build_managed_child_plan(&config, indexer, &app_profiles_by_id, caps_snapshot)
+                build_managed_child_plan(
+                    generation,
+                    &config,
+                    indexer,
+                    &app_profiles_by_id,
+                    caps_snapshot,
+                )
             })
             .collect();
 
@@ -1076,12 +1389,7 @@ impl ProwlarrManagementClient {
             .as_ref()
             .map(|config| config.base_url.as_str())
             .unwrap_or("invalid-config");
-        let request_namespace = self
-            .api_state
-            .try_read()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|api| api.bucket.request_namespace()))
-            .unwrap_or(ProwlarrApiBucket::V2.request_namespace());
+        let request_namespace = self.current_generation().request_namespace();
         let scope = child_key.map_or_else(
             || format!("prowlarr:{request_namespace}:{base_url}"),
             |child_key| format!("prowlarr:{request_namespace}:{base_url}:child:{child_key}"),
@@ -1136,26 +1444,18 @@ impl IndexerClient for ProwlarrSearchStub {
 #[async_trait]
 impl IndexerManagementClient for ProwlarrManagementClient {
     async fn validate_connection(&self) -> AppResult<IndexerValidationResult> {
-        match self.fetch_system_status().await {
-            Ok(status) => {
-                if !status.app_name.trim().eq_ignore_ascii_case("Prowlarr") {
-                    let message = if status.app_name.trim().is_empty() {
-                        "base_url responded but did not identify itself as Prowlarr".to_string()
-                    } else {
-                        format!(
-                            "base_url responded as '{}', not Prowlarr",
-                            status.app_name.trim()
-                        )
-                    };
-                    return Ok(ProwlarrRequestError::InvalidConfig(message).to_validation_result());
-                }
-
-                Ok(validation_result(
+        match self
+            .resolve_api(IndexerErrorOperation::ConnectionTest)
+            .await
+        {
+            Ok(api) => Ok(IndexerValidationResult {
+                server_version: Some(api.version.to_string()),
+                ..validation_result(
                     "valid",
-                    Some(&format!("Connected to Prowlarr {}", status.version)),
+                    Some(&PROWLARR_SUPPORT_POLICY.connected_message(&api)),
                     None,
-                ))
-            }
+                )
+            }),
             Err(error) => Ok(error.to_validation_result()),
         }
     }
@@ -1181,253 +1481,58 @@ impl IndexerManagementClient for ProwlarrManagementClient {
     }
 }
 
-impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
-    fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
-        if is_prowlarr_provider(&config.provider_type) {
-            return Some(Arc::new(ProwlarrSearchStub));
-        }
-        self.delegate.client_for_provider(config)
+impl NativeIndexerProvider for NativeProwlarrIndexerProvider {
+    fn provider_type(&self) -> &str {
+        PROWLARR_PROVIDER_TYPE
     }
 
-    fn client_for_provider_with_proxy(
+    fn display_name(&self) -> String {
+        "Prowlarr".to_string()
+    }
+
+    fn description(&self) -> String {
+        "First-party Prowlarr provider that syncs managed Newznab and Torznab indexers".to_string()
+    }
+
+    fn config_fields(&self) -> Vec<ConfigFieldDef> {
+        prowlarr_config_fields()
+    }
+
+    fn management_capabilities(&self) -> scryer_domain::IndexerManagementCapabilities {
+        scryer_domain::IndexerManagementCapabilities {
+            supports_validate_config: true,
+            supports_managed_children_sync: true,
+        }
+    }
+
+    fn capabilities(&self) -> scryer_domain::IndexerProviderCapabilities {
+        scryer_domain::IndexerProviderCapabilities::default()
+    }
+
+    fn client(
         &self,
-        config: &IndexerConfig,
-        proxy_config: Option<&scryer_domain::ProxyConfig>,
+        _config: &IndexerConfig,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
+        _accounting: Option<&IndexerAccountingContext>,
     ) -> Option<Arc<dyn IndexerClient>> {
-        if is_prowlarr_provider(&config.provider_type) {
-            return Some(Arc::new(ProwlarrSearchStub));
-        }
-        self.delegate
-            .client_for_provider_with_proxy(config, proxy_config)
+        // The parent never searches; its synced children do.
+        Some(Arc::new(ProwlarrSearchStub))
     }
 
-    fn management_client_for_provider(
+    fn management_client(
         &self,
         config: &IndexerConfig,
+        accounting: Option<&IndexerAccountingContext>,
     ) -> Option<Arc<dyn IndexerManagementClient>> {
-        self.management_client_for_provider_with_accounting(
-            config,
-            scryer_application::IndexerAccountingContext::for_config(config).as_ref(),
-        )
+        Some(Arc::new(
+            ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+                config,
+                Arc::clone(&self.indexer_errors),
+                Arc::clone(&self.indexer_stats),
+            )
+            .with_accounting(accounting),
+        ))
     }
-
-    fn client_for_provider_with_accounting(
-        &self,
-        config: &IndexerConfig,
-        proxy_config: Option<&scryer_domain::ProxyConfig>,
-        accounting: Option<&scryer_application::IndexerAccountingContext>,
-    ) -> Option<Arc<dyn IndexerClient>> {
-        if is_prowlarr_provider(&config.provider_type) {
-            return Some(Arc::new(ProwlarrSearchStub));
-        }
-        self.delegate
-            .client_for_provider_with_accounting(config, proxy_config, accounting)
-    }
-
-    fn management_client_for_provider_with_accounting(
-        &self,
-        config: &IndexerConfig,
-        accounting: Option<&scryer_application::IndexerAccountingContext>,
-    ) -> Option<Arc<dyn IndexerManagementClient>> {
-        if is_prowlarr_provider(&config.provider_type) {
-            return Some(Arc::new(
-                ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
-                    config,
-                    Arc::clone(&self.indexer_errors),
-                    Arc::clone(&self.indexer_stats),
-                )
-                .with_accounting(accounting),
-            ));
-        }
-        self.delegate
-            .management_client_for_provider_with_accounting(config, accounting)
-    }
-
-    fn available_provider_types(&self) -> Vec<String> {
-        let mut providers = self
-            .delegate
-            .available_provider_types()
-            .into_iter()
-            .filter(|provider| !is_prowlarr_provider(provider))
-            .collect::<Vec<_>>();
-        providers.push(PROWLARR_PROVIDER_TYPE.to_string());
-        providers.sort();
-        providers.dedup();
-        providers
-    }
-
-    fn builtin_provider_types(&self) -> Vec<String> {
-        self.delegate
-            .builtin_provider_types()
-            .into_iter()
-            .filter(|provider| !is_prowlarr_provider(provider))
-            .collect()
-    }
-
-    fn plugin_version_for_provider(&self, provider_type: &str) -> Option<String> {
-        (!is_prowlarr_provider(provider_type))
-            .then(|| self.delegate.plugin_version_for_provider(provider_type))
-            .flatten()
-    }
-
-    fn plugin_sdk_version_for_provider(&self, provider_type: &str) -> Option<String> {
-        (!is_prowlarr_provider(provider_type))
-            .then(|| self.delegate.plugin_sdk_version_for_provider(provider_type))
-            .flatten()
-    }
-
-    fn plugin_sdk_constraint_for_provider(&self, provider_type: &str) -> Option<String> {
-        (!is_prowlarr_provider(provider_type))
-            .then(|| {
-                self.delegate
-                    .plugin_sdk_constraint_for_provider(provider_type)
-            })
-            .flatten()
-    }
-
-    fn plugin_type_for_provider(&self, provider_type: &str) -> Option<String> {
-        if is_prowlarr_provider(provider_type) {
-            return Some("indexer".to_string());
-        }
-        self.delegate.plugin_type_for_provider(provider_type)
-    }
-
-    fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
-        self.delegate.scoring_policies()
-    }
-
-    fn upsert_runtime_plugin(&self, plugin: RuntimePluginLoad) -> Result<(), String> {
-        if is_prowlarr_provider(plugin.descriptor.provider_type()) {
-            tracing::warn!(
-                "ignoring runtime plugin that tried to claim reserved provider 'prowlarr'"
-            );
-            return Ok(());
-        }
-        self.delegate.upsert_runtime_plugin(plugin)
-    }
-
-    fn remove_runtime_plugin(&self, provider_type: &str) -> Result<(), String> {
-        if is_prowlarr_provider(provider_type) {
-            return Ok(());
-        }
-        self.delegate.remove_runtime_plugin(provider_type)
-    }
-
-    fn restore_builtin_plugin(&self, provider_type: &str) -> Result<(), String> {
-        if is_prowlarr_provider(provider_type) {
-            return Ok(());
-        }
-        self.delegate.restore_builtin_plugin(provider_type)
-    }
-
-    fn reload_plugins(
-        &self,
-        external_wasm_bytes: &[ExternalPluginWasm<'_>],
-        disabled_builtins: &[String],
-    ) -> Result<(), String> {
-        let disabled_builtins = filter_reserved_prowlarr(disabled_builtins);
-        self.delegate
-            .reload_plugins(external_wasm_bytes, &disabled_builtins)
-    }
-
-    fn reload_runtime_plugins(
-        &self,
-        runtime_plugins: &[RuntimePluginLoad],
-        disabled_builtins: &[String],
-    ) -> Result<(), String> {
-        let runtime_plugins = runtime_plugins
-            .iter()
-            .filter(|plugin| !is_prowlarr_provider(plugin.descriptor.provider_type()))
-            .cloned()
-            .collect::<Vec<_>>();
-        let disabled_builtins = filter_reserved_prowlarr(disabled_builtins);
-        self.delegate
-            .reload_runtime_plugins(&runtime_plugins, &disabled_builtins)
-    }
-
-    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<ConfigFieldDef> {
-        if is_prowlarr_provider(provider_type) {
-            return prowlarr_config_fields();
-        }
-        self.delegate.config_fields_for_provider(provider_type)
-    }
-
-    fn dynamic_config_trigger_keys_for_provider(&self, provider_type: &str) -> Vec<String> {
-        if is_prowlarr_provider(provider_type) {
-            return Vec::new();
-        }
-        self.delegate
-            .dynamic_config_trigger_keys_for_provider(provider_type)
-    }
-
-    fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
-        if is_prowlarr_provider(provider_type) {
-            return Some("Prowlarr".to_string());
-        }
-        self.delegate.plugin_name_for_provider(provider_type)
-    }
-
-    fn plugin_description_for_provider(&self, provider_type: &str) -> Option<String> {
-        if is_prowlarr_provider(provider_type) {
-            return Some(
-                "First-party Prowlarr provider that syncs managed Newznab and Torznab indexers"
-                    .to_string(),
-            );
-        }
-        self.delegate.plugin_description_for_provider(provider_type)
-    }
-
-    fn default_base_url_for_provider(&self, provider_type: &str) -> Option<String> {
-        if is_prowlarr_provider(provider_type) {
-            return None;
-        }
-        self.delegate.default_base_url_for_provider(provider_type)
-    }
-
-    fn rate_limit_seconds_for_provider(&self, provider_type: &str) -> Option<i64> {
-        if is_prowlarr_provider(provider_type) {
-            return None;
-        }
-        self.delegate.rate_limit_seconds_for_provider(provider_type)
-    }
-
-    fn management_capabilities_for_provider(
-        &self,
-        provider_type: &str,
-    ) -> scryer_domain::IndexerManagementCapabilities {
-        if is_prowlarr_provider(provider_type) {
-            return scryer_domain::IndexerManagementCapabilities {
-                supports_validate_config: true,
-                supports_managed_children_sync: true,
-            };
-        }
-        self.delegate
-            .management_capabilities_for_provider(provider_type)
-    }
-
-    fn capabilities_for_provider(
-        &self,
-        provider_type: &str,
-    ) -> scryer_domain::IndexerProviderCapabilities {
-        if is_prowlarr_provider(provider_type) {
-            return scryer_domain::IndexerProviderCapabilities::default();
-        }
-        self.delegate.capabilities_for_provider(provider_type)
-    }
-}
-
-fn is_prowlarr_provider(provider_type: &str) -> bool {
-    provider_type
-        .trim()
-        .eq_ignore_ascii_case(PROWLARR_PROVIDER_TYPE)
-}
-
-fn filter_reserved_prowlarr(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .filter(|value| !is_prowlarr_provider(value))
-        .cloned()
-        .collect()
 }
 
 fn prowlarr_config_fields() -> Vec<ConfigFieldDef> {
@@ -1470,10 +1575,12 @@ fn validation_result(
         status: status.to_string(),
         message: message.map(str::to_string),
         retry_after_seconds,
+        ..IndexerValidationResult::default()
     }
 }
 
 fn build_managed_child_plan(
+    generation: ProwlarrApiGeneration,
     config: &ProwlarrConfig,
     indexer: ProwlarrIndexerResource,
     app_profiles_by_id: &HashMap<i64, ProwlarrAppProfile>,
@@ -1515,9 +1622,9 @@ fn build_managed_child_plan(
     .collect::<Vec<_>>();
 
     let config_json = serde_json::json!({
-        "base_url": format!("{}/{}", config.base_url.trim_end_matches('/'), indexer.id),
+        "base_url": generation.child_base_url(&config.base_url, indexer.id),
         "api_key": config.api_key,
-        "api_path": "/api",
+        "api_path": generation.child_api_path(),
         "imdb_id_format": "canonical",
     });
     let caps_snapshot_json =
@@ -1714,13 +1821,15 @@ fn map_http_error(
             body_text,
             "Prowlarr rejected the API key",
         )),
-        404 => ProwlarrRequestError::InvalidConfig(match path {
-            SYSTEM_STATUS_PATH => "base_url does not appear to point at a Prowlarr API".to_string(),
-            INDEXER_PATH | APP_PROFILE_PATH => {
+        404 => ProwlarrRequestError::InvalidConfig(
+            if ProwlarrApiGeneration::is_system_status_path(path) {
+                "base_url does not appear to point at a Prowlarr API".to_string()
+            } else if ProwlarrApiGeneration::is_sync_path(path) {
                 format!("Prowlarr sync endpoint '{path}' was not found")
-            }
-            _ => format!("Prowlarr endpoint '{path}' was not found"),
-        }),
+            } else {
+                format!("Prowlarr endpoint '{path}' was not found")
+            },
+        ),
         429 => ProwlarrRequestError::RateLimited(
             non_empty_or(body_text, "Prowlarr rate limited the request"),
             retry_after_seconds,
@@ -1937,10 +2046,9 @@ mod tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-    #[derive(Default)]
-    struct ProxyRecordingProvider {
-        observed_proxy_id: Arc<std::sync::Mutex<Option<String>>>,
-    }
+    const SYSTEM_STATUS_PATH: &str = ProwlarrApiGeneration::ApiV1.system_status_path();
+    const INDEXER_PATH: &str = ProwlarrApiGeneration::ApiV1.indexer_path();
+    const APP_PROFILE_PATH: &str = ProwlarrApiGeneration::ApiV1.app_profile_path();
 
     #[derive(Default)]
     struct RecordingIndexerErrorRepository {
@@ -2004,79 +2112,20 @@ mod tests {
         }
     }
 
-    impl IndexerPluginProvider for ProxyRecordingProvider {
-        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
-            None
-        }
-
-        fn client_for_provider_with_proxy(
-            &self,
-            _config: &IndexerConfig,
-            proxy_config: Option<&scryer_domain::ProxyConfig>,
-        ) -> Option<Arc<dyn IndexerClient>> {
-            *self.observed_proxy_id.lock().expect("proxy observation") =
-                proxy_config.map(|config| config.id.clone());
-            None
-        }
-
-        fn available_provider_types(&self) -> Vec<String> {
-            vec!["newznab".to_string()]
-        }
-
-        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
-            Vec::new()
-        }
-    }
-
     #[test]
-    fn non_prowlarr_clients_preserve_proxy_configuration() {
-        let delegate = Arc::new(ProxyRecordingProvider::default());
-        let observed_proxy_id = Arc::clone(&delegate.observed_proxy_id);
-        let provider = NativeProwlarrIndexerProvider::new(delegate);
-        let mut config = test_indexer_config("http://newznab:8088");
-        config.provider_type = "newznab".to_string();
-        let now = Utc::now();
-        let proxy_config = scryer_domain::ProxyConfig {
-            id: "proxy-1".to_string(),
-            name: "Byparr".to_string(),
-            provider_type: scryer_domain::ProxyProviderType::Byparr,
-            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
-            username_encrypted: None,
-            password_encrypted: None,
-            remote_dns: false,
-            base_url: "http://byparr:8191".to_string(),
-            request_timeout_seconds: 60,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-            host_key_fingerprint: None,
-            host_key_pinned_at: None,
-            private_key_encrypted: None,
-            private_key_passphrase_encrypted: None,
-            peer_public_key: None,
-            preshared_key_encrypted: None,
-            tunnel_public_key: None,
-            tunnel_addresses: Vec::new(),
-            tunnel_dns_servers: Vec::new(),
-            tunnel_mtu: None,
-            tunnel_keepalive_seconds: None,
-        };
+    fn native_prowlarr_provider_returns_the_search_stub_and_a_prowlarr_management_client() {
+        let provider = NativeProwlarrIndexerProvider::new();
+        let config = test_indexer_config("http://127.0.0.1:9696");
 
+        assert_eq!(provider.provider_type(), PROWLARR_PROVIDER_TYPE);
         assert!(
-            provider
-                .client_for_provider_with_proxy(&config, Some(&proxy_config))
-                .is_none()
+            provider.client(&config, None, None).is_some(),
+            "a Prowlarr parent gets the management-only search stub"
         );
-        assert_eq!(
-            observed_proxy_id
-                .lock()
-                .expect("proxy observation")
-                .as_deref(),
-            Some("proxy-1")
-        );
+        let management = provider
+            .management_client(&config, None)
+            .expect("Prowlarr management client");
+        assert_eq!(management.name(), PROWLARR_PROVIDER_TYPE);
     }
 
     #[test]
@@ -2248,19 +2297,22 @@ mod tests {
             api_key: "secret".to_string(),
         };
         let app_profiles = HashMap::from([(profile.id, profile)]);
-        let child =
-            build_managed_child_plan(&config, indexer, &app_profiles, None).expect("child plan");
+        let child = build_managed_child_plan(
+            ProwlarrApiGeneration::ApiV1,
+            &config,
+            indexer,
+            &app_profiles,
+            None,
+        )
+        .expect("child plan");
         serde_json::from_str(child.managed_metadata_json.as_deref().unwrap()).unwrap()
     }
 
-    /// Verbatim `/api/v1/indexer` payload from a real Prowlarr container
+    /// Verbatim `/api/v1/indexer` entry from a real Prowlarr container
     /// (linuxserver/prowlarr, Torznab indexer). Pins the field names and the
     /// JSON shapes Prowlarr actually emits — including the advanced fields,
     /// which it does return, and the null it sends for an unset one.
-    #[test]
-    fn a_real_prowlarr_payload_imports_its_seed_criteria() {
-        let indexer: ProwlarrIndexerResource = serde_json::from_str(
-            r#"{
+    const REAL_PROWLARR_INDEXER_JSON: &str = r#"{
               "enable": true,
               "appProfileId": 1,
               "protocol": "torrent",
@@ -2275,24 +2327,27 @@ mod tests {
                 { "name": "torrentBaseSettings.packSeedTime", "value": 10080 },
                 { "name": "torrentBaseSettings.preferMagnetUrl", "value": false }
               ]
-            }"#,
-        )
-        .expect("real Prowlarr payload should deserialize");
+            }"#;
 
-        // Verbatim `/api/v1/appprofile` entry from the same container. Prowlarr
-        // declares `MinimumSeeders` as a plain int, so a real deployment always
-        // sends one — the default profile's 1.
-        let profile: ProwlarrAppProfile = serde_json::from_str(
-            r#"{
+    /// Verbatim `/api/v1/appprofile` entry from the same container. Prowlarr
+    /// declares `MinimumSeeders` as a plain int, so a real deployment always
+    /// sends one — the default profile's 1.
+    const REAL_PROWLARR_APP_PROFILE_JSON: &str = r#"{
               "name": "Standard",
               "enableRss": true,
               "enableAutomaticSearch": true,
               "enableInteractiveSearch": true,
               "minimumSeeders": 1,
               "id": 1
-            }"#,
-        )
-        .expect("real Prowlarr app profile should deserialize");
+            }"#;
+
+    #[test]
+    fn a_real_prowlarr_payload_imports_its_seed_criteria() {
+        let indexer: ProwlarrIndexerResource = serde_json::from_str(REAL_PROWLARR_INDEXER_JSON)
+            .expect("real Prowlarr payload should deserialize");
+
+        let profile: ProwlarrAppProfile = serde_json::from_str(REAL_PROWLARR_APP_PROFILE_JSON)
+            .expect("real Prowlarr app profile should deserialize");
         assert_eq!(profile.minimum_seeders, Some(1));
 
         let metadata = child_metadata_with_app_profile(indexer, profile);
@@ -2381,6 +2436,7 @@ mod tests {
             api_key: "secret".to_string(),
         };
         let child = build_managed_child_plan(
+            ProwlarrApiGeneration::ApiV1,
             &config,
             indexer_with_fields("torrent", Vec::new()),
             &HashMap::from([(99, app_profile(99, Some(5)))]),
@@ -2545,9 +2601,14 @@ mod tests {
             },
         )]);
 
-        let child =
-            build_managed_child_plan(&config, indexer, &app_profiles, Some(caps_snapshot.clone()))
-                .expect("child plan");
+        let child = build_managed_child_plan(
+            ProwlarrApiGeneration::ApiV1,
+            &config,
+            indexer,
+            &app_profiles,
+            Some(caps_snapshot.clone()),
+        )
+        .expect("child plan");
         let config_json: Value = serde_json::from_str(&child.config_json).unwrap();
         let metadata: ManagedChildMetadata =
             serde_json::from_str(child.managed_metadata_json.as_deref().unwrap()).unwrap();
@@ -2611,8 +2672,14 @@ mod tests {
             },
         )]);
 
-        let child =
-            build_managed_child_plan(&config, indexer, &app_profiles, None).expect("child plan");
+        let child = build_managed_child_plan(
+            ProwlarrApiGeneration::ApiV1,
+            &config,
+            indexer,
+            &app_profiles,
+            None,
+        )
+        .expect("child plan");
         let metadata: ManagedChildMetadata =
             serde_json::from_str(child.managed_metadata_json.as_deref().unwrap()).unwrap();
 
@@ -2873,28 +2940,281 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn validate_connection_rejects_unsupported_major_version() {
-        let server = MockServer::start().await;
+    async fn mount_status(server: &MockServer, version: &str) {
         Mock::given(method("GET"))
             .and(path(SYSTEM_STATUS_PATH))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "appName": "Prowlarr",
-                "version": "3.0.0"
+                "version": version
             })))
-            .mount(&server)
+            .mount(server)
             .await;
+    }
 
+    async fn validate_against_status(version: &str) -> IndexerValidationResult {
+        let server = MockServer::start().await;
+        mount_status(&server, version).await;
         let client = ProwlarrManagementClient::new(&test_indexer_config(&server.uri()));
-        let result = client
+        client
             .validate_connection()
             .await
-            .expect("validation result");
+            .expect("validation result")
+    }
+
+    #[test]
+    fn product_versions_parse_three_and_four_part_forms() {
+        assert_eq!(
+            ProwlarrProductVersion::parse("2.7.0.5723").unwrap(),
+            ProwlarrProductVersion {
+                major: 2,
+                minor: 7,
+                patch: 0,
+                build: Some(5723),
+            }
+        );
+        assert_eq!(
+            ProwlarrProductVersion::parse("3.0.0.5737").unwrap(),
+            ProwlarrProductVersion {
+                major: 3,
+                minor: 0,
+                patch: 0,
+                build: Some(5737),
+            }
+        );
+        assert_eq!(
+            ProwlarrProductVersion::parse("3.0.0").unwrap(),
+            ProwlarrProductVersion::new(3, 0, 0)
+        );
+        let padded = ProwlarrProductVersion::parse(" 3.0.0.5737 ").unwrap();
+        assert_eq!(padded, ProwlarrProductVersion::parse("3.0.0.5737").unwrap());
+
+        assert_eq!(
+            ProwlarrProductVersion::parse("2.7.0.5723")
+                .unwrap()
+                .to_string(),
+            "2.7.0.5723"
+        );
+        assert_eq!(
+            ProwlarrProductVersion::parse("3.0.0").unwrap().to_string(),
+            "3.0.0"
+        );
+        assert_eq!(padded.to_string(), "3.0.0.5737");
+    }
+
+    #[test]
+    fn product_versions_reject_empty_and_non_numeric_input() {
+        for raw in ["", "three", "3.x"] {
+            match ProwlarrProductVersion::parse(raw) {
+                Err(ProwlarrRequestError::Unsupported(message)) => assert_eq!(
+                    message,
+                    format!("could not determine Prowlarr version from '{raw}'")
+                ),
+                other => panic!("'{raw}' should be refused, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn support_policy_maps_versions_to_generations_and_tiers() {
+        let resolve = |raw: &str| {
+            PROWLARR_SUPPORT_POLICY.resolve(&ProwlarrProductVersion::parse(raw).unwrap())
+        };
+
+        match resolve("1.37.0.5076") {
+            Err(ProwlarrRequestError::VersionUnsupported { version, minimum }) => {
+                assert_eq!(version, "1.37.0.5076");
+                assert_eq!(minimum, "2.0.0");
+            }
+            other => panic!("1.37.0.5076 should be below the minimum, got {other:?}"),
+        }
+        for tested in ["2.0.0", "2.7.0.5723", "3.0.0.5737"] {
+            assert_eq!(
+                resolve(tested).unwrap(),
+                ProwlarrSupport {
+                    generation: ProwlarrApiGeneration::ApiV1,
+                    tier: ProwlarrSupportTier::Tested,
+                },
+                "{tested}"
+            );
+        }
+        assert_eq!(
+            resolve("4.0.0.1").unwrap(),
+            ProwlarrSupport {
+                generation: ProwlarrApiGeneration::ApiV1,
+                tier: ProwlarrSupportTier::Newer,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_connection_accepts_tested_prowlarr_releases() {
+        for version in ["2.7.0.5723", "3.0.0.5737"] {
+            let result = validate_against_status(version).await;
+            assert_eq!(result.status, "valid", "{version}");
+            assert_eq!(
+                result.message.as_deref(),
+                Some(format!("Connected to Prowlarr {version}").as_str())
+            );
+            assert_eq!(result.server_version.as_deref(), Some(version));
+            assert_eq!(result.reason, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_connection_accepts_a_newer_major_through_the_newest_generation() {
+        let result = validate_against_status("4.0.0.1").await;
+
+        assert_eq!(result.status, "valid");
+        assert_eq!(
+            result.message.as_deref(),
+            Some("Connected to Prowlarr 4.0.0.1 (newer than the tested 3.x line)")
+        );
+        assert_eq!(result.server_version.as_deref(), Some("4.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn validate_connection_refuses_a_release_below_the_minimum() {
+        let result = validate_against_status("1.37.0.5076").await;
 
         assert_eq!(result.status, "unsupported");
         assert_eq!(
             result.message.as_deref(),
-            Some("unsupported Prowlarr version '3.0.0'; expected major 2")
+            Some("Prowlarr 1.37.0.5076 is not supported; upgrade to 2.0.0 or newer")
+        );
+        assert_eq!(
+            result.reason,
+            Some(crate::error_reasons::ACQUISITION_PROWLARR_VERSION_UNSUPPORTED)
+        );
+        assert_eq!(result.server_version, None);
+
+        let error = ProwlarrRequestError::VersionUnsupported {
+            version: "1.37.0.5076".to_string(),
+            minimum: "2.0.0".to_string(),
+        }
+        .into_app_error();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::ACQUISITION_PROWLARR_VERSION_UNSUPPORTED)
+        );
+        assert_eq!(
+            error.to_string(),
+            "validation: Prowlarr 1.37.0.5076 is not supported; upgrade to 2.0.0 or newer"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_refuses_a_release_below_the_minimum_with_its_reason() {
+        let server = MockServer::start().await;
+        mount_status(&server, "1.37.0.5076").await;
+        let client = ProwlarrManagementClient::new(&test_indexer_config(&server.uri()));
+
+        let error = client.plan_sync("parent").await.expect_err("refused");
+
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::ACQUISITION_PROWLARR_VERSION_UNSUPPORTED)
+        );
+        let requests = server.received_requests().await.expect("recorded requests");
+        assert_eq!(
+            requests.len(),
+            1,
+            "an unsupported release must not be asked for its indexers"
+        );
+    }
+
+    /// Plans the verbatim `/api/v1` payloads, with a due caps fetch, against a
+    /// Prowlarr reporting `version`.
+    async fn plan_real_payloads_against(version: &str) -> IndexerSyncPlan {
+        let server = MockServer::start().await;
+        mount_status(&server, version).await;
+        let indexer: Value = serde_json::from_str(REAL_PROWLARR_INDEXER_JSON).unwrap();
+        let profile: Value = serde_json::from_str(REAL_PROWLARR_APP_PROFILE_JSON).unwrap();
+        let mut categorized = indexer.clone();
+        categorized["id"] = json!(2);
+        categorized["name"] = json!("probe-newznab");
+        categorized["protocol"] = json!("usenet");
+        categorized["capabilities"] = json!({
+            "categories": [
+                { "id": 2000, "name": "Movies", "subCategories": [
+                    { "id": 2040, "name": "Movies/HD", "subCategories": [] }
+                ] },
+                { "id": 5000, "name": "TV", "subCategories": [
+                    { "id": 5070, "name": "TV/Anime", "subCategories": [] }
+                ] }
+            ]
+        });
+        Mock::given(method("GET"))
+            .and(path(INDEXER_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([indexer, categorized])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(APP_PROFILE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([profile])))
+            .mount(&server)
+            .await;
+        for indexer_id in [1, 2] {
+            Mock::given(method("GET"))
+                .and(path(format!("/{indexer_id}/api")))
+                .and(query_param("t", "caps"))
+                .and(query_param("apikey", "secret"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(MINIMAL_CAPS_BODY))
+                .mount(&server)
+                .await;
+        }
+
+        let client = ProwlarrManagementClient::new(&test_indexer_config(&server.uri()));
+        let plan = client
+            .enrichment_sync_plan("parent", &HashSet::from(["1".into(), "2".into()]))
+            .await
+            .expect("enrichment plan")
+            .expect("supported enrichment plan");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(caps_request_count(&requests, 1), 1, "{version}");
+        assert_eq!(caps_request_count(&requests, 2), 1, "{version}");
+
+        // Each run's mock listens on its own port, which the child configs
+        // embed; normalise it so two runs compare on everything else.
+        let uri = server.uri();
+        IndexerSyncPlan {
+            children: plan
+                .children
+                .into_iter()
+                .map(|mut child| {
+                    child.config_json = child.config_json.replace(&uri, "http://prowlarr");
+                    child
+                })
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn prowlarr_two_and_three_produce_the_same_sync_plan() {
+        let v2 = plan_real_payloads_against("2.7.0.5723").await;
+        let v3 = plan_real_payloads_against("3.0.0.5737").await;
+
+        assert_eq!(v2.children.len(), 2);
+        assert!(
+            v2.children
+                .iter()
+                .all(|child| child.caps_snapshot_json.is_some())
+        );
+        assert!(!v2.children[1].routing_scopes.is_empty());
+        let metadata: ManagedChildMetadata =
+            serde_json::from_str(v2.children[0].managed_metadata_json.as_deref().unwrap()).unwrap();
+        assert_eq!(metadata.seed_ratio, Some(1.5));
+        assert_eq!(metadata.minimum_seeders, Some(1));
+        assert_eq!(v2, v3);
+    }
+
+    #[test]
+    fn request_scopes_carry_the_generation_namespace() {
+        let client = ProwlarrManagementClient::new(&test_indexer_config("http://127.0.0.1:9696"));
+        let policy = client.request_policy(INDEXER_PATH);
+
+        assert_eq!(
+            policy.scope.to_string(),
+            "prowlarr:prowlarr_api_v1:http://127.0.0.1:9696"
         );
     }
 

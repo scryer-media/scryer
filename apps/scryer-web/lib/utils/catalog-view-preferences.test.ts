@@ -5,6 +5,7 @@ import {
   catalogColumnsInput,
   catalogDeviceClass,
   catalogFacetForView,
+  catalogViewModeOptions,
   catalogViewModeToProfile,
   savedCatalogViewMode,
   savedCatalogVisibleColumns,
@@ -191,5 +192,24 @@ test("the saved slice lists every supported column for both table layouts", () =
       columnOrder: 1,
       visible: true,
     },
+  ]);
+});
+
+test("the graph view mode is saved and read back", () => {
+  assert.equal(catalogViewModeToProfile("graph"), "GRAPH");
+  const settings: Pick<UiSettings, "catalogViews"> = {
+    catalogViews: [
+      { deviceClass: "DESKTOP", facet: "ANIME", viewMode: "GRAPH" },
+    ],
+  };
+  assert.equal(savedCatalogViewMode(settings, "DESKTOP", "ANIME"), "graph");
+});
+
+test("the graph is always offered alongside the other catalog views", () => {
+  assert.deepEqual(catalogViewModeOptions(), [
+    "compact",
+    "poster-table",
+    "poster",
+    "graph",
   ]);
 });

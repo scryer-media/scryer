@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Translate } from "@/components/root/types";
 import {
   ambiguousCandidates,
   assetLineTextKey,
@@ -66,7 +65,6 @@ import {
   toCount,
   transferStatement,
   typedConfirmationSatisfied,
-  verificationStampText,
   destinationLibraryDisabledReasonKey,
   type LocationClassificationGroup,
   type LocationClassifiedTitle,
@@ -79,9 +77,6 @@ import {
   type LocationTitleAssets,
   type LocationTitleCheckpoint,
 } from "./location-operations.ts";
-
-const translate: Translate = (key, values) =>
-  values ? `${key}:${JSON.stringify(values)}` : key;
 
 function classification(
   groups: Partial<LocationClassificationGroup>[],
@@ -606,6 +601,15 @@ test("plan again is offered for a stopped run with titles a fresh plan can selec
     false,
   );
 
+  for (const operationType of [
+    "FOLDER_CONSOLIDATION",
+    "FOLDER_KEEP_ONE",
+  ] as const) {
+    const stopped = operation({ state: "FAILED", operationType });
+    assert.equal(canPlanAgainOperation(stopped, selection), false);
+    assert.equal(canRetryOperation(stopped), true);
+  }
+
   // The dialog gets the titles as refs, whole or scoped to one row.
   assert.deepEqual(retrySelectionTitleRefs(selection), [
     { id: "t-2", name: "Second", libraryId: "lib-a", rootFolderId: "root-a" },
@@ -791,21 +795,6 @@ test("blocked, failed, and warned checkpoints are the ones to read", () => {
   assert.equal(
     checkpointNeedsAttention(checkpoint({ state: "SKIPPED" })),
     false,
-  );
-});
-
-test("the verification stamp names the depth and any quick-check fallback", () => {
-  assert.equal(
-    verificationStampText("FULL", 0, translate),
-    "move.verificationStampFull",
-  );
-  assert.equal(
-    verificationStampText("QUICK", 0, translate),
-    "move.verificationStampQuick",
-  );
-  assert.equal(
-    verificationStampText("FULL", 3, translate),
-    'move.verificationStampFull · move.verificationFallbackCount:{"count":3}',
   );
 });
 

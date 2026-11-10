@@ -55,6 +55,9 @@ pub(crate) struct PostDownloadAcquisitionDecision {
     /// From the same scoring pass as `score`, so the import side cannot read a
     /// different revision than the grab side did for the same release.
     pub revision: i32,
+    /// Standing against the title's audio language preferences, from the same
+    /// pass as `score`: the probed tracks when the file was measured.
+    pub language: crate::AudioLanguageRank,
     /// Whether the analyzed evidence contradicted the announcement.
     ///
     /// Acted on before admission by [`resolve_truth_verdict_action`], which is
@@ -87,6 +90,11 @@ impl ImportedFileRejection {
                 | DISC_REVIEW_REQUIRED_CODE
                 | MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
                 | POST_DOWNLOAD_RULE_ERROR_CODE
+                | crate::error_reasons::media::UNVERIFIED_REPLACEMENT
+                | crate::error_reasons::media::REFERENCES_REQUIRE_REVIEW
+                | crate::error_reasons::media::PROBE_IO_FAILED
+                | crate::error_reasons::media::PROBE_MALFORMED
+                | crate::error_reasons::media::PROBE_ENCRYPTED
         ) || self
             .blocking_rule_codes
             .iter()
@@ -199,14 +207,11 @@ fn only_source_modification_time_changed(
 }
 
 /// Longest engine error text quoted per failing rule in the operator message.
-#[cfg(any(feature = "runtime-media-analysis", test))]
 const RULE_ERROR_DETAIL_MAX_CHARS: usize = 240;
 /// Failing rules named individually before the rest are summarised as a count.
-#[cfg(any(feature = "runtime-media-analysis", test))]
 const RULE_ERROR_MAX_LISTED: usize = 3;
 
 /// Collapse every run of whitespace, newlines included, to one space.
-#[cfg(any(feature = "runtime-media-analysis", test))]
 fn single_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -217,7 +222,6 @@ fn single_line(text: &str) -> String {
 /// line, a caret padded to the column) followed by a final `error: <message>`
 /// line. The excerpt is noise in an Activity status and would push the real
 /// error past the cap, so only that last line is kept.
-#[cfg(any(feature = "runtime-media-analysis", test))]
 fn truncate_rule_error_detail(detail: &str) -> String {
     let last_line = detail
         .lines()
@@ -235,7 +239,6 @@ fn truncate_rule_error_detail(detail: &str) -> String {
     }
 }
 
-#[cfg(any(feature = "runtime-media-analysis", test))]
 fn post_download_rule_error_rejection(message: String) -> ImportedFileRejection {
     ImportedFileRejection {
         message,
@@ -258,7 +261,6 @@ fn post_download_rule_error_rejection(message: String) -> ImportedFileRejection 
 /// skipped instead: the operator cannot edit it, so holding every import on it
 /// would leave nothing to act on. An errored rule contributes no entries, so the
 /// remaining rules' entries are scored without it.
-#[cfg(any(feature = "runtime-media-analysis", test))]
 pub(crate) fn post_download_rule_entries(
     outcome: Result<scryer_rules::EvalResult, scryer_rules::RulesError>,
 ) -> Result<Vec<scryer_rules::UserRuleEntry>, ImportedFileRejection> {
@@ -613,7 +615,6 @@ pub(crate) fn replace_runtime_band_block(
 /// on both sides of every comparison. This exists only because
 /// `build_rule_input` wants a `QualityProfileDecision` to expose to rules, and
 /// it is built from the same terms the canonical pass uses.
-#[cfg(feature = "runtime-media-analysis")]
 fn resolved_import_profile(
     profile: &crate::QualityProfile,
     required_audio_languages: &[String],
@@ -626,7 +627,6 @@ fn resolved_import_profile(
     resolved_profile
 }
 
-#[cfg(feature = "runtime-media-analysis")]
 pub(crate) fn build_import_profile_decision(
     profile: &crate::QualityProfile,
     parsed: &crate::ParsedReleaseMetadata,
@@ -652,7 +652,6 @@ pub(crate) fn build_import_profile_decision(
     decision
 }
 
-#[cfg(feature = "runtime-media-analysis")]
 fn finalize_post_download_rule_scores(
     profile: &crate::QualityProfile,
     decision: &mut crate::QualityProfileDecision,
@@ -876,11 +875,22 @@ fn inferred_container_format_for_path(path: &Path) -> Option<String> {
         .map(|ext| ext.to_ascii_lowercase())
 }
 
+/// Mount backends (nzbdav, decypharr, altmount) expose payloads as symlinks
+/// whose targets the native probe often cannot read.
 #[cfg(feature = "runtime-media-analysis")]
 fn path_is_symlink(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .map(|metadata| metadata.file_type().is_symlink())
         .unwrap_or(false)
+}
+
+fn media_review_hold(code: &'static str, message: impl Into<String>) -> ImportedFileGateDecision {
+    ImportedFileGateDecision::Rejected(ImportedFileRejection {
+        message: message.into(),
+        recycle_reason: code,
+        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        blocking_rule_codes: vec![code.to_string()],
+    })
 }
 
 /// Probe a file at the given path and validate it against the quality profile and user rules.
@@ -912,11 +922,7 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         return ImportedFileGateDecision::Accepted(Box::new(acceptance));
     }
 
-    if path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("strm"))
-    {
+    if scryer_domain::canonical_video_extension(path) == Some("strm") {
         return ImportedFileGateDecision::Accepted(Box::new(ImportedFileAcceptance {
             analysis: Some(build_stream_pointer_media_file_analysis_from_parsed(parsed)),
             scan_error: None,
@@ -925,6 +931,15 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }));
     }
 
+    use crate::error_reasons::media as reasons;
+    use scryer_media_types::formats::{MediaHandling, media_format_for_path};
+    let handling = media_format_for_path(path).map(|entry| entry.handling);
+    if handling == Some(MediaHandling::Companion) {
+        return media_review_hold(
+            reasons::REFERENCES_REQUIRE_REVIEW,
+            "disc companion files require review with their referenced media",
+        );
+    }
     let probe = match crate::media::analyzer::probe_native_catalog(
         path.to_path_buf(),
         disc_selection.cloned().unwrap_or_default(),
@@ -933,16 +948,25 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
     .await
     {
         Ok(probe) => probe,
-        Err(
-            error @ (crate::AppError::Validation(_)
-            | crate::AppError::ValidationRefused { .. }
-            | crate::AppError::ValidationRefusedWithCount { .. }),
-        ) => {
+        Err(error)
+            if error.validation_reason() == Some(reasons::SOURCE_CHANGED_DURING_INSPECTION) =>
+        {
             return ImportedFileGateDecision::Rejected(import_source_changed_rejection(
                 path, error,
             ));
         }
-        Err(error) => Err(error.to_string()),
+        // Another coded refusal is held under its own reason.
+        Err(error) if let Some(reason) = error.validation_reason() => {
+            return ImportedFileGateDecision::Rejected(ImportedFileRejection {
+                message: error.to_string(),
+                recycle_reason: MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE,
+                skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                blocking_rule_codes: vec![reason.to_string()],
+            });
+        }
+        // An uncoded failure (a metadata read through a mount symlink, a probe
+        // worker that died) is an I/O failure of the probe, handled below.
+        Err(error) => Err(scryer_mediainfo::MediaInfoError::Io(error.to_string())),
     };
     let mut analysis = match probe {
         Ok(analysis) => analysis,
@@ -953,9 +977,28 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                     "disc inspection could not complete: {error}; the source image has been preserved"
                 )));
             }
-            if let Some(rejection) = runtime_sample_rejection(runtime_sample_validation, None) {
-                return ImportedFileGateDecision::Rejected(rejection);
+            if handling == Some(MediaHandling::Playlist)
+                && matches!(
+                    error,
+                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)
+                )
+            {
+                return media_review_hold(reasons::REFERENCES_REQUIRE_REVIEW, error.to_string());
             }
+            if runtime_sample_validation.mode == RuntimeSampleValidationMode::EnforceAutomatic {
+                let code = match &error {
+                    scryer_mediainfo::MediaInfoError::Io(_) => reasons::PROBE_IO_FAILED,
+                    scryer_mediainfo::MediaInfoError::Parse(_) => reasons::PROBE_MALFORMED,
+                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_) => {
+                        MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
+                    }
+                };
+                return media_review_hold(code, error.to_string());
+            }
+            // An operator override imports what the probe could not read, as
+            // before the typed holds. A symlinked payload from a mount backend
+            // keeps an analysis derived from the release name so the library
+            // entry still carries its quality.
             let synthetic_analysis = path_is_symlink(path).then(|| {
                 build_synthetic_media_file_analysis(
                     parsed,
@@ -970,6 +1013,34 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
             }));
         }
     };
+    use scryer_media_types::ProbeStatus;
+    match analysis.details.report.status {
+        ProbeStatus::Encrypted => {
+            return media_review_hold(reasons::PROBE_ENCRYPTED, "encrypted media requires review");
+        }
+        ProbeStatus::Malformed => {
+            return media_review_hold(reasons::PROBE_MALFORMED, "malformed media requires review");
+        }
+        _ => {}
+    }
+    let unavailable = analysis.details.report.status == ProbeStatus::Unsupported;
+    // A replacement needs the facts the probe actually resolved, not a complete
+    // inventory: an MKV prefix inventory stops at its coverage limit
+    // (`budget_exhausted`) on every real file while still resolving duration and
+    // codec. Sonarr's UpgradeSpecification compares quality only and never
+    // blocks on partial media info. An operator override skips the runtime
+    // check, so it needs only the codec, as release-0.22.0 allowed.
+    let operator_override =
+        runtime_sample_validation.mode == RuntimeSampleValidationMode::BypassRuntimeSampleCheck;
+    let unverified = unavailable
+        || analysis.video_codec.is_none()
+        || (analysis.duration_seconds.is_none() && !operator_override);
+    if unverified && has_existing_file {
+        return media_review_hold(
+            reasons::UNVERIFIED_REPLACEMENT,
+            "unavailable media analysis cannot authorize replacing an existing file",
+        );
+    }
 
     if analysis.container_format.as_deref() == Some("iso") {
         if analysis.details.report.status != scryer_media_types::ProbeStatus::Complete
@@ -998,7 +1069,9 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }
     }
 
-    if analysis.video_codec.is_none() {
+    if analysis.video_codec.is_none() && !unavailable {
+        // A video stream whose codec the probe could not resolve is held, not
+        // imported as if it were verified.
         if analysis.details.selected_video_id.is_some()
             || analysis.details.report.budget_exhausted
             || matches!(
@@ -1045,6 +1118,39 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         return ImportedFileGateDecision::Rejected(rejection);
     }
 
+    evaluate_import_analysis(
+        app,
+        title,
+        parsed,
+        quality_profile,
+        size_bytes,
+        has_existing_file,
+        existing_score,
+        is_filler,
+        runtime_sample_validation,
+        release_listing_json,
+        accepted_analysis,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "import policy shares the same context with or without native probing"
+)]
+async fn evaluate_import_analysis(
+    app: &AppUseCase,
+    title: &Title,
+    parsed: &crate::ParsedReleaseMetadata,
+    quality_profile: &crate::QualityProfile,
+    size_bytes: i64,
+    has_existing_file: bool,
+    existing_score: Option<i32>,
+    is_filler: bool,
+    runtime_sample_validation: RuntimeSampleValidation,
+    release_listing_json: Option<&str>,
+    accepted_analysis: crate::MediaFileAnalysis,
+) -> ImportedFileGateDecision {
     let category_hint = facet_to_category_hint(&title.facet);
     let required_audio_resolution = app.resolve_required_audio_languages_for_title(title).await;
     let required_audio_resolution_failed = required_audio_resolution.is_err();
@@ -1312,15 +1418,55 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         return ImportedFileGateDecision::Accepted(Box::new(acceptance));
     }
 
-    ImportedFileGateDecision::Accepted(Box::new(ImportedFileAcceptance {
-        analysis: Some(build_synthetic_media_file_analysis(
-            parsed,
-            inferred_container_format_for_path(path),
-        )),
-        scan_error: Some("native media analysis is not compiled into this target".to_string()),
-        rule_file_doc: None,
-        audio_language_warning: None,
-    }))
+    use crate::error_reasons::media as reasons;
+    use scryer_media_types::formats::{MediaHandling, media_format_for_path};
+    let handling = media_format_for_path(path).map(|entry| entry.handling);
+    if handling == Some(MediaHandling::Companion) {
+        return media_review_hold(
+            reasons::REFERENCES_REQUIRE_REVIEW,
+            "disc companion files require review with their referenced media",
+        );
+    }
+    if handling == Some(MediaHandling::Playlist) {
+        match crate::media_references::playlist_is_relocatable(path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return media_review_hold(
+                    reasons::REFERENCES_REQUIRE_REVIEW,
+                    "playlist references cannot safely survive relocation",
+                );
+            }
+            Err(error) => return media_review_hold(reasons::PROBE_IO_FAILED, error.to_string()),
+        }
+    }
+    if _has_existing_file && handling != Some(MediaHandling::StreamLink) {
+        return media_review_hold(
+            reasons::UNVERIFIED_REPLACEMENT,
+            "unavailable media analysis cannot authorize replacing an existing file",
+        );
+    }
+    let mut analysis = if handling == Some(MediaHandling::StreamLink) {
+        build_synthetic_media_file_analysis(parsed, inferred_container_format_for_path(path))
+    } else {
+        let mut analysis = build_stream_pointer_media_file_analysis();
+        analysis.container_format = inferred_container_format_for_path(path);
+        analysis
+    };
+    analysis.details.report.status = scryer_media_types::ProbeStatus::Unsupported;
+    evaluate_import_analysis(
+        _app,
+        _title,
+        parsed,
+        _quality_profile,
+        _size_bytes,
+        _has_existing_file,
+        _existing_score,
+        _is_filler,
+        _runtime_sample_validation,
+        _release_listing_json,
+        analysis,
+    )
+    .await
 }
 
 /// Test hook: what the probe reports for the next file.
@@ -1656,7 +1802,22 @@ pub(crate) fn rescore_parsed_from_analysis(
         }
     }
 
-    // Override audio: iterate all streams to find best codec and max channels.
+    // Explicit track evidence must not borrow missing fields from release-name audio.
+    if !analysis.audio_streams.is_empty() {
+        if resolved
+            .audio_codec
+            .as_deref()
+            .and_then(AudioCodec::parse)
+            .is_none()
+            && merged.audio.take().is_some()
+        {
+            changes.push("audio: primary track codec unknown".to_string());
+        }
+        if resolved.audio_channels.is_none() && merged.audio_channels.take().is_some() {
+            changes.push("audio_channels: primary track channel count unknown".to_string());
+        }
+    }
+
     if let Some(ref normalized) = resolved.audio_codec
         && let Some(codec) = AudioCodec::parse(normalized)
         && merged.audio.as_ref() != Some(&codec)
@@ -2087,6 +2248,7 @@ pub(crate) fn compute_post_download_acquisition_decision(
         score,
         tier_index,
         revision: scored.revision,
+        language: scored.language,
         truth_verdict: scored.truth_verdict,
         scoring_log,
     }
@@ -2471,6 +2633,277 @@ async fn reopen_series_movie_link_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn missing_probe_source_holds_with_io_reason_and_preserves_incumbent() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                crate::NewTitle {
+                    name: "Probe Failure".into(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let incumbent = directory.path().join("existing.mkv");
+        std::fs::write(&incumbent, b"preserve incumbent").unwrap();
+        let missing = directory.path().join("missing.wtv");
+        let parsed = crate::parse_release_metadata("Probe.Failure.2024.2160p.WEB-DL");
+        let profile = crate::QualityProfile::default();
+        let decision = tokio::time::timeout(
+            crate::test_wait::TEST_WAIT_DEADLINE,
+            probe_and_validate_with_disc_selection(
+                &app,
+                &title,
+                &parsed,
+                &profile,
+                &missing,
+                100,
+                true,
+                Some(0),
+                false,
+                automatic(Some(7200)),
+                None,
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        let ImportedFileGateDecision::Rejected(rejection) = decision else {
+            panic!("missing source must never be accepted");
+        };
+        assert_eq!(
+            rejection.recycle_reason,
+            crate::error_reasons::media::PROBE_IO_FAILED
+        );
+        assert_eq!(
+            rejection.blocking_rule_codes,
+            vec![crate::error_reasons::media::PROBE_IO_FAILED]
+        );
+        assert_eq!(std::fs::read(&incumbent).unwrap(), b"preserve incumbent");
+        assert!(!missing.exists());
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    async fn gate_movie_title(app: &AppUseCase, user: &crate::User, name: &str) -> Title {
+        app.add_title(
+            user,
+            crate::NewTitle {
+                name: name.into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    async fn gate_decision(
+        app: &AppUseCase,
+        title: &Title,
+        release: &str,
+        path: &Path,
+        has_existing_file: bool,
+        validation: RuntimeSampleValidation,
+    ) -> ImportedFileGateDecision {
+        let parsed = crate::parse_release_metadata(release);
+        let profile = crate::QualityProfile::default();
+        let size = std::fs::metadata(path).map_or(0, |metadata| metadata.len() as i64);
+        tokio::time::timeout(
+            crate::test_wait::TEST_WAIT_DEADLINE,
+            probe_and_validate_with_disc_selection(
+                app,
+                title,
+                &parsed,
+                &profile,
+                path,
+                size,
+                has_existing_file,
+                has_existing_file.then_some(0),
+                false,
+                validation,
+                None,
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// An MKV whose segment carries more top-level elements than the prefix
+    /// inventory walks, as every real-size MKV does.
+    #[cfg(feature = "runtime-media-analysis")]
+    fn coverage_limited_mkv(path: &Path) {
+        let mut bytes =
+            include_bytes!("../../../scryer-mediainfo/tests/media/h264_aac.mkv").to_vec();
+        // Segment header at 0x28: ID 18 53 80 67, then an 8-byte size vint.
+        assert_eq!(&bytes[0x28..0x2c], &[0x18, 0x53, 0x80, 0x67]);
+        assert_eq!(bytes[0x2c], 0x01);
+        let size =
+            u64::from_be_bytes(bytes[0x2c..0x34].try_into().unwrap()) & 0x00ff_ffff_ffff_ffff;
+        assert_eq!(0x34 + size, bytes.len() as u64);
+        const VOIDS: u64 = 200;
+        let grown = (size + 2 * VOIDS) | 0x0100_0000_0000_0000;
+        bytes[0x2c..0x34].copy_from_slice(&grown.to_be_bytes());
+        for _ in 0..VOIDS {
+            bytes.extend([0xec, 0x80]);
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn coverage_limited_mkv_upgrade_is_not_an_unverified_replacement() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = gate_movie_title(&app, &user, "Coverage Limit").await;
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("Coverage.Limit.2024.mkv");
+        coverage_limited_mkv(&candidate);
+        let probed = scryer_mediainfo::analyze_catalog_file(&candidate).unwrap();
+        assert!(
+            probed.details.report.budget_exhausted,
+            "{:?}",
+            probed.details.report
+        );
+        assert!(probed.video_codec.is_some());
+        let duration = probed.duration_seconds.expect("fixture duration resolves");
+
+        let decision = gate_decision(
+            &app,
+            &title,
+            "Coverage.Limit.2024",
+            &candidate,
+            true,
+            automatic(Some(duration)),
+        )
+        .await;
+        match decision {
+            ImportedFileGateDecision::Accepted(acceptance) => {
+                let analysis = acceptance.analysis.expect("probed analysis");
+                assert_eq!(analysis.duration_seconds, Some(duration));
+                assert!(analysis.video_codec.is_some());
+            }
+            ImportedFileGateDecision::Rejected(rejection) => {
+                panic!("a coverage-limited probe must not block the upgrade: {rejection:?}")
+            }
+        }
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn unreadable_runtime_rejects_automatic_import_and_imports_on_override() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = gate_movie_title(&app, &user, "Unreadable Runtime").await;
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("Unreadable.Runtime.2024.wtv");
+        std::fs::write(&candidate, b"unsupported recorder container").unwrap();
+
+        let ImportedFileGateDecision::Rejected(rejection) = gate_decision(
+            &app,
+            &title,
+            "Unreadable.Runtime.2024",
+            &candidate,
+            false,
+            automatic(Some(7200)),
+        )
+        .await
+        else {
+            panic!("an automatic import with no readable runtime must be rejected");
+        };
+        assert_eq!(rejection.recycle_reason, SAMPLE_RUNTIME_INDETERMINATE_CODE);
+
+        let decision = gate_decision(
+            &app,
+            &title,
+            "Unreadable.Runtime.2024",
+            &candidate,
+            false,
+            manual(Some(7200)),
+        )
+        .await;
+        if let ImportedFileGateDecision::Rejected(rejection) = decision {
+            panic!("an operator override imports the file: {rejection:?}");
+        }
+        assert_eq!(
+            std::fs::read(&candidate).unwrap(),
+            b"unsupported recorder container"
+        );
+    }
+
+    #[cfg(all(unix, feature = "runtime-media-analysis"))]
+    #[tokio::test]
+    async fn unreadable_symlinked_payload_imports_on_override_with_release_analysis() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = gate_movie_title(&app, &user, "Mount Backend").await;
+        let directory = tempfile::tempdir().unwrap();
+        // A mount backend's link whose target the probe cannot reach.
+        let link = directory.path().join("Mount.Backend.2024.1080p.WEB-DL.mkv");
+        std::os::unix::fs::symlink(directory.path().join("unmounted-target"), &link).unwrap();
+        let release = "Mount.Backend.2024.1080p.WEB-DL";
+
+        let ImportedFileGateDecision::Rejected(rejection) =
+            gate_decision(&app, &title, release, &link, false, automatic(Some(7200))).await
+        else {
+            panic!("an automatic import must not accept an unreadable payload");
+        };
+        assert_eq!(
+            rejection.recycle_reason,
+            crate::error_reasons::media::PROBE_IO_FAILED
+        );
+
+        let ImportedFileGateDecision::Accepted(acceptance) =
+            gate_decision(&app, &title, release, &link, false, manual(Some(7200))).await
+        else {
+            panic!("an operator override imports a symlinked payload the probe cannot read");
+        };
+        assert!(acceptance.scan_error.is_some());
+        let analysis = acceptance
+            .analysis
+            .expect("a symlinked payload keeps a release-derived analysis");
+        assert_eq!(analysis.container_format.as_deref(), Some("mkv"));
+        assert_eq!(
+            (analysis.video_width, analysis.video_height),
+            (Some(1920), Some(1080))
+        );
+        assert!(std::fs::symlink_metadata(&link).is_ok());
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn unreadable_regular_payload_imports_on_override_without_inventing_analysis() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = gate_movie_title(&app, &user, "Regular Payload").await;
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("Regular.Payload.2024.1080p.mkv");
+        std::fs::write(&candidate, b"not a matroska file").unwrap();
+        let decision = gate_decision(
+            &app,
+            &title,
+            "Regular.Payload.2024.1080p",
+            &candidate,
+            false,
+            manual(Some(7200)),
+        )
+        .await;
+        match decision {
+            ImportedFileGateDecision::Accepted(acceptance) => {
+                assert!(acceptance.analysis.is_none());
+                assert!(acceptance.scan_error.is_some());
+            }
+            ImportedFileGateDecision::Rejected(rejection) => {
+                panic!("an operator override imports an unreadable payload: {rejection:?}")
+            }
+        }
+        assert_eq!(std::fs::read(&candidate).unwrap(), b"not a matroska file");
+    }
 
     #[test]
     fn resolution_boundaries_keep_cropped_analysis_and_rescoring_in_the_announced_tier() {
@@ -3872,6 +4305,51 @@ mod source_review_reason_tests {
     use super::*;
 
     #[test]
+    fn media_review_codes_preserve_sources_for_every_import_origin() {
+        use crate::error_reasons::media;
+        use crate::import_decide::{
+            ImportOrigin, RejectionDisposition, prepare_rejection_disposition_for_origin,
+        };
+        for code in [
+            media::UNVERIFIED_REPLACEMENT,
+            media::REFERENCES_REQUIRE_REVIEW,
+            media::PROBE_IO_FAILED,
+            media::PROBE_MALFORMED,
+            media::PROBE_ENCRYPTED,
+        ] {
+            let ImportedFileGateDecision::Rejected(mut rejection) =
+                media_review_hold(code, "rewritten explanation")
+            else {
+                panic!("a media review hold cannot accept a file");
+            };
+            assert!(rejection.requires_review(), "{code}");
+            assert_eq!(
+                rejection.skip_reason,
+                Some(ImportSkipReason::PolicyMismatch)
+            );
+            assert_eq!(
+                rejection.review_hold_skip_reason(),
+                ImportSkipReason::PolicyMismatch
+            );
+            assert_eq!(
+                review_hold_skip_reason_for_code(code),
+                ImportSkipReason::PolicyMismatch
+            );
+            assert_eq!(rejection.blocking_rule_codes, vec![code.to_owned()]);
+            // Safety follows the stable reason even if persisted rule details are absent.
+            rejection.blocking_rule_codes.clear();
+            assert!(rejection.requires_review(), "{code}");
+            for origin in [ImportOrigin::Automatic, ImportOrigin::OperatorQueued] {
+                assert_eq!(
+                    prepare_rejection_disposition_for_origin(&rejection, origin),
+                    RejectionDisposition::Hold,
+                    "{code}: {origin:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn source_change_review_retains_both_existing_codes_without_reading_the_sentence() {
         for code in [
             SOURCE_CHANGED_AFTER_PROBE_CODE,
@@ -3896,5 +4374,38 @@ mod source_review_reason_tests {
             review_hold_skip_reason_for_code(DISC_REVIEW_REQUIRED_CODE),
             ImportSkipReason::PolicyMismatch
         );
+    }
+
+    #[test]
+    fn primary_audio_rescore_does_not_borrow_unknown_fields_from_filename() {
+        let parsed = crate::release_parser::parse_release_metadata("Movie.2024.FLAC2.0");
+        let mut analysis = crate::MediaFileAnalysis {
+            audio_streams: vec![crate::AudioStreamDetail {
+                codec: Some("aac".into()),
+                channels: None,
+                profile: None,
+                language: None,
+                name: None,
+                bitrate_kbps: None,
+            }],
+            ..Default::default()
+        };
+        let (rescored, _) = rescore_parsed_from_analysis(&parsed, Some(&analysis));
+        assert_eq!(
+            rescored.audio.map(|codec| codec.to_string()).as_deref(),
+            Some("AAC")
+        );
+        assert_eq!(rescored.audio_channels, None);
+
+        analysis.audio_streams[0].codec = None;
+        analysis.audio_streams[0].channels = Some(1);
+        let (rescored, _) = rescore_parsed_from_analysis(&parsed, Some(&analysis));
+        assert_eq!(rescored.audio, None);
+        assert_eq!(rescored.audio_channels.as_deref(), Some("1.0"));
+
+        analysis.audio_streams.clear();
+        let (rescored, _) = rescore_parsed_from_analysis(&parsed, Some(&analysis));
+        assert_eq!(rescored.audio, parsed.audio);
+        assert_eq!(rescored.audio_channels, parsed.audio_channels);
     }
 }

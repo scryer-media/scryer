@@ -18,6 +18,7 @@ import {
   Database,
   Download,
   FilePlus2,
+  Languages,
   Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -95,6 +96,57 @@ function ScoringLogPanel({
   );
 }
 
+/**
+ * Where the release stands against the title's audio language preferences.
+ * Nothing is shown when the title has none, so rows look as they always did.
+ */
+function audioLanguageBadge(
+  rank: NonNullable<Release["qualityProfileDecision"]>["audioLanguage"],
+  t: ReturnType<typeof useTranslate>,
+): React.ReactNode {
+  if (!rank || (rank.preferredCount === 0 && rank.optionalHits === 0)) {
+    return null;
+  }
+  const parts: string[] = [];
+  let tone = "bg-[var(--scry-info-bg-strong)] text-[var(--scry-info-text)]";
+  if (rank.preferredCount > 0) {
+    if (rank.preferredRank >= rank.preferredCount) {
+      parts.push(t("nzb.audioLanguageNotPreferred"));
+      tone = "bg-[var(--scry-chip)] text-[var(--scry-muted3)]";
+    } else if (rank.preferredCount === 1) {
+      parts.push(t("nzb.audioLanguagePreferred"));
+      tone =
+        "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text-soft)]";
+    } else {
+      parts.push(
+        t("nzb.audioLanguagePreferredRank", { rank: rank.preferredRank + 1 }),
+      );
+      if (rank.preferredRank === 0) {
+        tone =
+          "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text-soft)]";
+      }
+    }
+  }
+  if (rank.optionalHits > 0) {
+    parts.push(
+      t("nzb.audioLanguageOptionalHits", { count: rank.optionalHits }),
+    );
+  }
+  return (
+    <span
+      data-ui="release-search-result-audio-language"
+      title={t("nzb.audioLanguageHint")}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-[6px] px-[7px] py-px text-[10px] font-bold",
+        tone,
+      )}
+    >
+      <Languages className="h-2.5 w-2.5 shrink-0" />
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
 function SearchResultRow({
   result,
   currentFile = false,
@@ -134,9 +186,10 @@ function SearchResultRow({
   const approvedBadge = decision?.allowed ? (
     <span className="inline-flex items-center gap-1 rounded-[6px] bg-[var(--scry-success-bg-strong)] px-[7px] py-px text-[10px] font-bold text-[var(--scry-success-text-soft)]">
       <Check className="h-2.5 w-2.5" />
-      Approved
+      {t("requests.status.approved")}
     </span>
   ) : null;
+  const languageBadge = audioLanguageBadge(decision?.audioLanguage, t);
   const currentFileBadge = currentFile ? (
     <span
       data-ui="release-search-result-current-file"
@@ -352,6 +405,7 @@ function SearchResultRow({
               {approvedBadge}
               {currentFileBadge}
               {packBadge}
+              {languageBadge}
               {rejectionBadge}
             </div>
             {selectedTitleTags.length > 0 ? (
@@ -410,7 +464,7 @@ function SearchResultRow({
             </div>
           </div>
           <div className="w-16 shrink-0 text-right max-md:w-auto max-md:text-left">
-            <div className="font-[var(--font-code)] text-[15px] font-bold text-[var(--scry-ink2)]">
+            <div className="font-[family-name:var(--font-code)] text-[15px] font-bold text-[var(--scry-ink2)]">
               {bytesToWholeReadable(result.sizeBytes)}
             </div>
           </div>
@@ -500,7 +554,7 @@ function SearchResultRow({
               </>
             ) : null}
             <span aria-hidden="true">•</span>
-            <span className="font-[var(--font-code)] font-medium text-foreground/80">
+            <span className="font-[family-name:var(--font-code)] font-medium text-foreground/80">
               {bytesToWholeReadable(result.sizeBytes)}
             </span>
             {decision ? (
@@ -521,7 +575,7 @@ function SearchResultRow({
                   >
                     {t("nzb.score")}
                     <span
-                      className={`font-[var(--font-code)] font-semibold underline decoration-dotted underline-offset-2 ${scoreToneClassName(decision.releaseScore)}`}
+                      className={`font-[family-name:var(--font-code)] font-semibold underline decoration-dotted underline-offset-2 ${scoreToneClassName(decision.releaseScore)}`}
                     >
                       {formatScore(decision.releaseScore)}
                     </span>
@@ -530,7 +584,7 @@ function SearchResultRow({
                   <span className="inline-flex items-center gap-1">
                     {t("nzb.score")}
                     <span
-                      className={`font-[var(--font-code)] font-semibold ${scoreToneClassName(decision.releaseScore)}`}
+                      className={`font-[family-name:var(--font-code)] font-semibold ${scoreToneClassName(decision.releaseScore)}`}
                     >
                       {formatScore(decision.releaseScore)}
                     </span>
@@ -540,6 +594,7 @@ function SearchResultRow({
             ) : null}
             {currentFileBadge}
             {packBadge}
+            {languageBadge}
             {rejectionBadge}
           </div>
           {parsedBits.length > 0 ? (
@@ -667,6 +722,7 @@ function SearchResultRow({
               ) : null}
               {currentFileBadge}
               {packBadge}
+              {languageBadge}
               {rejectionBadge}
             </div>
             {parsedBits.length > 0 ? (
@@ -711,7 +767,7 @@ function SearchResultRow({
             hasLog ? (
               <button
                 type="button"
-                className={`text-sm font-[var(--font-code)] underline-offset-2 hover:underline ${scoreToneClassName(decision.releaseScore)}`}
+                className={`text-sm font-[family-name:var(--font-code)] underline-offset-2 hover:underline ${scoreToneClassName(decision.releaseScore)}`}
                 data-ui="score-log-toggle"
                 onClick={() => setExpanded((prev) => !prev)}
                 aria-label={
@@ -722,18 +778,18 @@ function SearchResultRow({
               </button>
             ) : (
               <span
-                className={`text-sm font-[var(--font-code)] ${scoreToneClassName(decision.releaseScore)}`}
+                className={`text-sm font-[family-name:var(--font-code)] ${scoreToneClassName(decision.releaseScore)}`}
               >
                 {formatScore(decision.releaseScore)}
               </span>
             )
           ) : (
-            <span className="text-sm font-[var(--font-code)] text-muted-foreground">
+            <span className="text-sm font-[family-name:var(--font-code)] text-muted-foreground">
               {formatScore(undefined)}
             </span>
           )}
         </td>
-        <td className="whitespace-nowrap border border-border border-x-0 px-2 py-2 text-center align-middle font-[var(--font-code)] text-base font-semibold text-foreground">
+        <td className="whitespace-nowrap border border-border border-x-0 px-2 py-2 text-center align-middle font-[family-name:var(--font-code)] text-base font-semibold text-foreground">
           {bytesToWholeReadable(result.sizeBytes)}
         </td>
         <td className="rounded-r-lg border border-border border-l-0 px-3 py-2 text-center align-middle">
@@ -1011,7 +1067,7 @@ function SearchResultBucketsContent({
               <thead className="bg-card/80">
                 <tr>
                   <th className="px-4 py-3 text-base font-bold text-foreground">
-                    Release
+                    {t("queue.releaseTitle")}
                   </th>
                   <th className="px-2 py-3 text-center text-base font-bold text-foreground">
                     <button
@@ -1032,7 +1088,7 @@ function SearchResultBucketsContent({
                     </button>
                   </th>
                   <th className="px-3 py-3 text-center text-base font-bold text-foreground">
-                    Actions
+                    {t("label.actions")}
                   </th>
                 </tr>
               </thead>

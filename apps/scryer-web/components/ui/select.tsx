@@ -37,8 +37,8 @@ const SELECT_TRIGGER_CHROME_CLASS: Record<SelectChrome, string> = {
 
 const SELECT_VALUE_KIND_CLASS: Record<SelectValueKind, string> = {
   text: "",
-  path: "font-[var(--font-code)]",
-  code: "font-[var(--font-code)]",
+  path: "font-[family-name:var(--font-code)]",
+  code: "font-[family-name:var(--font-code)]",
 };
 
 function selectTriggerClassName({
@@ -340,7 +340,7 @@ function SingleSelectField({
               disabled={option.disabled}
               aria-label={option.ariaLabel}
               className={cn(
-                valueKind !== "text" && "font-[var(--font-code)]",
+                valueKind !== "text" && "font-[family-name:var(--font-code)]",
                 itemClassName,
               )}
             >

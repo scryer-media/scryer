@@ -45,7 +45,9 @@ import { dispatchNavigationBadgesRefresh } from "@/lib/events/navigation-badges"
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
   authorizationCacheSignature,
+  APP_PERMISSIONS,
   hasAnyLibraryPermission,
+  hasAppPermission,
   LIBRARY_PERMISSIONS,
 } from "@/lib/utils/permissions";
 
@@ -538,6 +540,10 @@ export function useGlobalSearch({
     authenticatedUser,
     LIBRARY_PERMISSIONS.manageTitles,
   );
+  const canReadCatalogSettings = hasAppPermission(
+    authenticatedUser,
+    APP_PERMISSIONS.manageCatalogSettings,
+  );
   const canViewCatalog = hasAnyLibraryPermission(
     authenticatedUser,
     LIBRARY_PERMISSIONS.view,
@@ -743,7 +749,9 @@ export function useGlobalSearch({
             canManageTitle
               ? globalSearchInitQuery
               : globalSearchRequesterInitQuery,
-            {},
+            {
+              includeMediaSettings: canReadCatalogSettings,
+            },
             { requestPolicy: "network-only" },
           )
           .toPromise();
@@ -841,7 +849,12 @@ export function useGlobalSearch({
             ? previous
             : nextRequestableLibrariesByFacet;
         });
-      } catch {
+      } catch (error) {
+        if (!isCurrentRefresh()) return;
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
+        );
         try {
           const { data, error } = await client
             .query(
@@ -865,10 +878,16 @@ export function useGlobalSearch({
           });
           catalogConfigLoadedRef.current = true;
           setCatalogConfigAuthorizationSignature(catalogAuthorizationSignature);
-        } catch {
-          // ignore requestable library fallback failures here; search remains functional
+        } catch (fallbackError) {
+          if (isCurrentRefresh()) {
+            setGlobalStatus(
+              fallbackError instanceof Error
+                ? fallbackError.message
+                : t("status.apiError"),
+              { level: "ERROR" },
+            );
+          }
         }
-        // ignore settings fetch failures here; search remains functional
       } finally {
         if (isCurrentRefresh()) {
           setCatalogConfigLoading(false);
@@ -889,7 +908,14 @@ export function useGlobalSearch({
       promise: refreshPromise,
     };
     return refreshPromise;
-  }, [canManageTitle, catalogAuthorizationSignature, client]);
+  }, [
+    canManageTitle,
+    canReadCatalogSettings,
+    catalogAuthorizationSignature,
+    client,
+    setGlobalStatus,
+    t,
+  ]);
 
   const ensureCatalogConfigReady = useCallback(
     async (facet: Facet) => {

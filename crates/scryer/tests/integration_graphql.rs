@@ -14,6 +14,8 @@ mod backups;
 mod dashboard;
 #[path = "integration_graphql/dataloader_enrichment.rs"]
 mod dataloader_enrichment;
+#[path = "integration_graphql/discovery_browse.rs"]
+mod discovery_browse;
 #[path = "integration_graphql/downloads_housekeeping_system.rs"]
 mod downloads_housekeeping_system;
 #[path = "integration_graphql/emby_contract.rs"]
@@ -24,12 +26,18 @@ mod episode_file_reassign;
 mod external_import_finalize;
 #[path = "integration_graphql/external_import_secret_drafts.rs"]
 mod external_import_secret_drafts;
+#[path = "integration_graphql/external_import_sources.rs"]
+mod external_import_sources;
 #[path = "integration_graphql/folder_match.rs"]
 mod folder_match;
 #[path = "integration_graphql/indexer_configs.rs"]
 mod indexer_configs;
+#[path = "integration_graphql/library_graph.rs"]
+mod library_graph;
 #[path = "integration_graphql/library_scan.rs"]
 mod library_scan;
+#[path = "integration_graphql/location_conflicts.rs"]
+mod location_conflicts;
 #[path = "integration_graphql/location_operations.rs"]
 mod location_operations;
 #[path = "integration_graphql/media_rename.rs"]
@@ -131,6 +139,8 @@ fn test_base32_decode_no_pad(input: &str) -> Vec<u8> {
     decoded
 }
 
+// TOTP (RFC 6238) fixes the HMAC algorithm.
+#[allow(clippy::disallowed_methods)]
 fn test_totp_code_for_step_offset(secret_base32: &str, step_offset: i64) -> String {
     let secret = test_base32_decode_no_pad(secret_base32);
     let step = Utc::now().timestamp() / 30 + step_offset;
@@ -194,6 +204,89 @@ async fn gql_with_token(ctx: &TestContext, query: &str, variables: Value, token:
 }
 
 /// Assert no GraphQL errors in response body.
+/// Replaces a facet default library's roots through `updateLibrary`; the
+/// first path is the default. A path that is already configured is sent with
+/// its stored root id.
+async fn set_default_library_roots(ctx: &TestContext, facet: &str, paths: &[&str]) {
+    let libraries = gql(
+        ctx,
+        r#"query($facet: MediaFacetValue!) {
+            libraries(facet: $facet, permission: MANAGE_LIBRARY) {
+                id isDefault roots { id path }
+            }
+        }"#,
+        json!({ "facet": facet }),
+    )
+    .await;
+    assert_no_errors(&libraries);
+    let library = libraries["data"]["libraries"]
+        .as_array()
+        .expect("libraries list")
+        .iter()
+        .find(|library| library["isDefault"] == true)
+        .unwrap_or_else(|| panic!("default {facet} library: {libraries}"))
+        .clone();
+    let comparable = |value: &str| value.trim_end_matches(['/', '\\']).to_string();
+    let stored_roots = library["roots"].as_array().expect("library roots").clone();
+    let roots = paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let mut root = json!({ "path": path, "isDefault": index == 0 });
+            if let Some(stored) = stored_roots
+                .iter()
+                .find(|stored| stored["path"].as_str().map(comparable) == Some(comparable(path)))
+            {
+                root["id"] = stored["id"].clone();
+            }
+            root
+        })
+        .collect::<Vec<_>>();
+    // Every stored root the new list leaves out is acknowledged as removed,
+    // the way the settings page confirms a removal.
+    let removed_root_ids = stored_roots
+        .iter()
+        .map(|stored| stored["id"].clone())
+        .filter(|id| !roots.iter().any(|root| root["id"] == *id))
+        .collect::<Vec<_>>();
+    let update = gql(
+        ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) { id }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library["id"],
+                "roots": roots,
+                "removedRootIds": removed_root_ids,
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+}
+
+/// Points a facet's default library at one root; a blank path leaves the
+/// facet as it is.
+async fn set_default_library_root_path(ctx: &TestContext, facet: &str, path: &str) {
+    let path = path.trim();
+    if !path.is_empty() {
+        set_default_library_roots(ctx, facet, &[path]).await;
+    }
+}
+
+/// Points the movie, series and anime default libraries at one root each.
+async fn set_default_library_root_paths(
+    ctx: &TestContext,
+    movie_path: &str,
+    series_path: &str,
+    anime_path: &str,
+) {
+    set_default_library_root_path(ctx, "MOVIE", movie_path).await;
+    set_default_library_root_path(ctx, "SERIES", series_path).await;
+    set_default_library_root_path(ctx, "ANIME", anime_path).await;
+}
+
 fn assert_no_errors(body: &Value) {
     assert!(
         body.get("errors").is_none(),
@@ -1467,15 +1560,6 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
             SettingDefinitionSeed {
                 category: "acquisition".into(),
                 scope: "system".into(),
-                key_name: "acquisition.same_tier_min_delta".into(),
-                data_type: "number".into(),
-                default_value_json: "120".into(),
-                is_sensitive: false,
-                validation_json: None,
-            },
-            SettingDefinitionSeed {
-                category: "acquisition".into(),
-                scope: "system".into(),
                 key_name: "acquisition.poll_interval_seconds".into(),
                 data_type: "number".into(),
                 default_value_json: "60".into(),
@@ -1488,6 +1572,15 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 key_name: "acquisition.walk_interval_seconds".into(),
                 data_type: "number".into(),
                 default_value_json: "300".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "acquisition".into(),
+                scope: "system".into(),
+                key_name: "acquisition.walk_intensity".into(),
+                data_type: "string".into(),
+                default_value_json: "\"normal\"".into(),
                 is_sensitive: false,
                 validation_json: None,
             },
@@ -1713,6 +1806,42 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 key_name: "audio.required_languages".into(),
                 data_type: "json".into(),
                 default_value_json: "[]".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "audio.preferred_languages".into(),
+                data_type: "json".into(),
+                default_value_json: "[]".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "audio.optional_languages".into(),
+                data_type: "json".into(),
+                default_value_json: "[]".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "audio.language_priority".into(),
+                data_type: "string".into(),
+                default_value_json: "\"quality_first\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "audio.optional_languages_keep_searching".into(),
+                data_type: "boolean".into(),
+                default_value_json: "false".into(),
                 is_sensitive: false,
                 validation_json: None,
             },

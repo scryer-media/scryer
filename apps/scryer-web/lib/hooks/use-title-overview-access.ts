@@ -4,6 +4,7 @@ import { useSessionUser } from "@/lib/hooks/use-auth";
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
   hasLibraryPermission,
+  hasPrivilegedTitleAccess,
   LIBRARY_PERMISSIONS,
 } from "@/lib/utils/permissions";
 
@@ -31,6 +32,21 @@ export function useCanManageOverviewTitle(
   const user = useSessionUser();
   return React.useMemo(
     () => canManageOverviewTitle(user, libraryId),
+    [libraryId, user],
+  );
+}
+
+/**
+ * Whether the viewer may see one title's internals: where its files live, how
+ * they were acquired, its download activity and its history. Until the
+ * title's library is known, any privileged grant is enough to ask.
+ */
+export function useCanViewTitleInternals(
+  libraryId: string | null | undefined,
+): boolean {
+  const user = useSessionUser();
+  return React.useMemo(
+    () => hasPrivilegedTitleAccess(user, libraryId),
     [libraryId, user],
   );
 }

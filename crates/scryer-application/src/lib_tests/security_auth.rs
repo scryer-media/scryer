@@ -2105,6 +2105,8 @@ fn public_url_change(value: Option<&str>, acknowledge: bool) -> UpdateServiceSet
         public_url: value.map(str::to_string),
         reset_public_url: value.is_none(),
         acknowledge_passkey_impact: acknowledge,
+        bind_host: None,
+        reset_bind_host: false,
     }
 }
 
@@ -2621,4 +2623,111 @@ async fn failed_local_login_logs_username_client_ip_and_reason_without_the_passw
             assert!(!value.contains(&stored_hash), "hash leaked: {fields:?}");
         }
     }
+}
+
+fn bind_change(host: Option<&str>, reset: bool) -> UpdateServiceSettings {
+    UpdateServiceSettings {
+        tls_cert_path: None,
+        tls_key_path: None,
+        trusted_proxy_ips: None,
+        reset_trusted_proxy_ips: false,
+        public_url: None,
+        reset_public_url: false,
+        acknowledge_passkey_impact: false,
+        bind_host: host.map(str::to_string),
+        reset_bind_host: reset,
+    }
+}
+
+#[tokio::test]
+async fn a_saved_listening_host_asks_for_a_restart_until_it_matches_startup() {
+    use crate::error_reasons::network;
+    let (app, admin) = public_url_app(
+        Some(crate::PasskeyEnrollmentCounts::default()),
+        crate::public_url::PasskeyRelyingPartySource::PublicUrl,
+    );
+
+    let settings = app
+        .update_service_settings(&admin, bind_change(Some(" 0.0.0.0 "), false))
+        .await
+        .expect("a wildcard host saves");
+    let bind = &settings.public_url.addressing.bind;
+    assert_eq!(bind.saved_host, Some("0.0.0.0".parse().unwrap()));
+    assert_eq!(bind.pending(), "0.0.0.0:8080".parse().unwrap());
+    assert!(bind.restart_required());
+
+    // Saving the address startup already uses clears the pending restart.
+    let settings = app
+        .update_service_settings(&admin, bind_change(Some("127.0.0.1"), false))
+        .await
+        .expect("loopback saves");
+    assert!(!settings.public_url.addressing.bind.restart_required());
+
+    let settings = app
+        .update_service_settings(&admin, bind_change(None, true))
+        .await
+        .expect("reset clears the saved host");
+    assert_eq!(settings.public_url.addressing.bind.saved_host, None);
+    assert!(!settings.public_url.addressing.bind.restart_required());
+
+    for (change, reason) in [
+        (
+            bind_change(Some("media.home"), false),
+            network::BIND_HOST_INVALID,
+        ),
+        (
+            bind_change(Some("0.0.0.0:9000"), false),
+            network::BIND_HOST_INVALID,
+        ),
+        (
+            bind_change(Some("0.0.0.0"), true),
+            network::BIND_SAVE_AND_RESET,
+        ),
+    ] {
+        let error = app
+            .update_service_settings(&admin, change)
+            .await
+            .expect_err("refused");
+        assert_eq!(error.validation_reason(), Some(reason), "{error}");
+    }
+
+    let error = app
+        .restart_for_bind_change(&admin)
+        .await
+        .expect_err("nothing is pending");
+    assert_eq!(
+        error.validation_reason(),
+        Some(network::RESTART_NOT_REQUIRED),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_listening_address_pinned_by_the_environment_is_read_only() {
+    use crate::error_reasons::network;
+    let (app, admin) = public_url_app(
+        Some(crate::PasskeyEnrollmentCounts::default()),
+        crate::public_url::PasskeyRelyingPartySource::PublicUrl,
+    );
+    let mut addressing = (*app.public_url_runtime().addressing()).clone();
+    addressing.bind.source = crate::public_url::ConfigValueSource::Environment;
+    addressing.bind.pinned_by = Some(crate::network_bind::BindPin::Container);
+    app.install_public_url((*app.public_url_runtime().snapshot()).clone(), addressing);
+    for change in [bind_change(Some("0.0.0.0"), false), bind_change(None, true)] {
+        let error = app
+            .update_service_settings(&admin, change)
+            .await
+            .expect_err("pinned");
+        assert_eq!(
+            error.validation_reason(),
+            Some(network::BIND_ENV_PINNED),
+            "{error}"
+        );
+    }
+    let outcome = app
+        .apply_initial_network_access(crate::network_bind::InitialNetworkAccess::OtherComputers)
+        .await
+        .expect("the setup choice is ignored, not refused");
+    assert!(outcome.ignored_because_pinned);
+    assert!(!outcome.restart_required);
 }

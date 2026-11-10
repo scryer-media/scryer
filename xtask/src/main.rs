@@ -2,6 +2,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
+// Dev-only fixed encryption key; existing local dev databases were sealed with it.
+#[allow(clippy::disallowed_types)]
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
@@ -1094,6 +1096,8 @@ fn prepare_serve_datastore(
     })
 }
 
+// Dev-only fixed encryption key; existing local dev databases were sealed with it.
+#[allow(clippy::disallowed_types)]
 fn serve_encryption_key() -> String {
     let digest = Sha256::digest(b"scryer-xtask-dev-encryption-key");
     base64::engine::general_purpose::STANDARD.encode(digest)
@@ -1321,6 +1325,7 @@ fn serve_local_scryer(ctx: &TaskContext, args: ServeArgs, mode: ServeMode) -> Re
     serve
         .env("SCRYER_DISABLE_PLATFORM_KEYSTORE", "1")
         .env("SCRYER_DEV_API_KEYS", XTASK_SERVE_DEV_API_KEY_SEED)
+        .env("SCRYER_DEV_LIBRARY_GRAPH_REBUILD", "1")
         .env("SCRYER_ENCRYPTION_KEY", &encryption_key)
         .env("SCRYER_METRICS", &metrics)
         .env("SCRYER_OPEN_BROWSER", "false")

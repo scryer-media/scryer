@@ -131,20 +131,20 @@ test("override mode keeps season-pack goals", () => {
 
 test("validation rejects what the backend rejects", () => {
   assert.equal(validateSeedingProfileDraft(draft()), null);
-  assert.match(
-    validateSeedingProfileDraft(draft({ name: "  " })) ?? "",
-    /Enter a name/,
+  assert.equal(
+    validateSeedingProfileDraft(draft({ name: "  " })),
+    "settings.seedingProfileNameRequired",
   );
-  for (const ratio of ["0", "-1", "abc"]) {
-    assert.match(
-      validateSeedingProfileDraft(draft({ ratio })) ?? "",
-      /number greater than zero/,
+  for (const ratio of ["-1", "abc", "NaN", "Infinity"]) {
+    assert.equal(
+      validateSeedingProfileDraft(draft({ ratio })),
+      "settings.seedingProfileRatioInvalid",
       ratio,
     );
   }
-  assert.match(
-    validateSeedingProfileDraft(draft({ seedTimeMinutes: "1.5" })) ?? "",
-    /duration like/,
+  assert.equal(
+    validateSeedingProfileDraft(draft({ seedTimeMinutes: "1.5" })),
+    "settings.seedingProfileDurationInvalid",
   );
   assert.equal(validateSeedingProfileDraft(draft({ ratio: "1.25" })), null);
 });
@@ -184,11 +184,11 @@ test("season-pack goals are only validated in override mode", () => {
     ),
     null,
   );
-  assert.match(
+  assert.equal(
     validateSeedingProfileDraft(
       draft({ seasonPackMode: "OVERRIDE", seasonPackRatio: "nonsense" }),
-    ) ?? "",
-    /number greater than zero/,
+    ),
+    "settings.seedingProfileRatioInvalid",
   );
 });
 
@@ -266,6 +266,33 @@ test("table cells fall back to a dash when a goal defers to the client", () => {
   );
 });
 
+test("zero ratios round-trip as explicit goals independently of blank", () => {
+  for (const ratio of ["0", "0.00", " 0.00 "]) {
+    const asDraft = draft({
+      ratio,
+      seasonPackMode: "OVERRIDE",
+      seasonPackRatio: ratio,
+    });
+    assert.equal(validateSeedingProfileDraft(asDraft), null);
+    const input = toCreateSeedingProfileInput(asDraft);
+    assert.equal(input.ratio, 0);
+    assert.equal(input.seasonPackRatio, 0);
+    const reopened = seedingProfileToDraft({ id: "zero", ...input });
+    assert.equal(reopened.ratio, "0");
+    assert.equal(reopened.seasonPackRatio, "0");
+    assert.equal(toUpdateSeedingProfileInput(reopened).ratio, 0);
+    assert.equal(formatSeedingProfileRatio(input.ratio), "0");
+    assert.equal(formatSeasonPackSummary(input, "Inherit"), "0");
+    const cleared = toUpdateSeedingProfileInput({
+      ...reopened,
+      ratio: "",
+      seasonPackRatio: "",
+    });
+    assert.equal(cleared.ratio, null);
+    assert.equal(cleared.seasonPackRatio, null);
+  }
+});
+
 test("every seeding-profile string the UI renders has an English entry", () => {
   const requiredKeys = [
     "settings.seedingProfiles",
@@ -282,6 +309,10 @@ test("every seeding-profile string the UI renders has an English entry", () => {
     "settings.seedingProfileGoalPlaceholder",
     "settings.seedingProfileRatioLabel",
     "settings.seedingProfileRatioHelp",
+    "settings.seedingProfileNameRequired",
+    "settings.seedingProfileRatioInvalid",
+    "settings.seedingProfileDurationInvalid",
+    "settings.seedingProfileMinimumSeedersInvalid",
     "settings.seedingProfileSeedTimeLabel",
     "settings.seedingProfileSeedTimeHelp",
     "settings.seedingProfileSeedTimeTransmissionHelp",

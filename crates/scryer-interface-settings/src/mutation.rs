@@ -37,9 +37,9 @@ use scryer_interface_core::{
     totp_management_actor_from_ctx,
 };
 use scryer_interface_media::mappers::{
-    from_download_client_routing_entry, from_indexer_routing_entry, from_library_paths_settings,
-    from_media_server_connection, from_media_settings, from_plex_server_discovery,
-    from_quality_profile_settings, from_service_settings, from_user_with_auth_factor_status,
+    from_download_client_routing_entry, from_indexer_routing_entry, from_media_server_connection,
+    from_media_settings, from_plex_server_discovery, from_quality_profile_settings,
+    from_service_settings, from_user_with_auth_factor_status,
 };
 use scryer_interface_media::types::*;
 
@@ -98,11 +98,12 @@ fn from_acquisition_settings(
         enabled: settings.enabled,
         // Deprecated no-op fields: nothing backs them, so they report 0.
         upgrade_cooldown_hours: 0,
-        same_tier_min_delta: settings.same_tier_min_delta,
+        same_tier_min_delta: 0,
         cross_tier_min_delta: 0,
         forced_upgrade_delta_bypass: 0,
         poll_interval_seconds: settings.poll_interval_seconds,
         walk_interval_seconds: settings.walk_interval_seconds,
+        walk_intensity: settings.walk_intensity.into(),
         long_tail_backfill_max_scopes_per_cycle: settings.long_tail_backfill_max_scopes_per_cycle,
         long_tail_reconverge_days: settings.long_tail_reconverge_days,
         // Deprecated: these report the Movie facet values they moved to.
@@ -633,6 +634,11 @@ fn normalize_quality_profile(profile: QualityProfile) -> QualityProfile {
                 .filter(|value| !value.is_empty()),
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
+            // The default is stored as absent so that saving a profile at the
+            // default leaves its convergence fingerprint where it was.
+            min_upgrade_score_delta: criteria
+                .min_upgrade_score_delta
+                .filter(|delta| *delta != scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
             facet_persona_overrides,
         },
     }
@@ -703,6 +709,11 @@ fn quality_profile_from_input(
             cutoff_score: criteria
                 .cutoff_score
                 .or_else(|| existing.and_then(|profile| profile.criteria.cutoff_score)),
+            // Omitting it keeps the stored value, like `cutoff_score`; sending
+            // the default clears it back to unset in `normalize_quality_profile`.
+            min_upgrade_score_delta: criteria
+                .min_upgrade_score_delta
+                .or_else(|| existing.and_then(|profile| profile.criteria.min_upgrade_score_delta)),
             facet_persona_overrides: std::collections::HashMap::new(),
         },
     });
@@ -717,6 +728,16 @@ fn quality_profile_from_input(
         return Err(to_gql_error(AppError::validation_refused(
             scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_NAME_REQUIRED,
             "quality profile name is required",
+        )));
+    }
+    if profile
+        .criteria
+        .min_upgrade_score_delta
+        .is_some_and(|delta| delta < 0)
+    {
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_VALUE_INVALID,
+            "criteria.minUpgradeScoreDelta cannot be negative",
         )));
     }
     if profile.criteria.quality_tiers.is_empty() {
@@ -790,7 +811,7 @@ impl SettingsMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value."
+            desc = "Complete UI settings to save; omitted or null date_time_format, discovery_grid_hide_owned, discovery_grid_hide_requested, language or table_columns keeps its current value."
         )]
         input: SetMyUiSettingsInput,
     ) -> GqlResult<UiSettingsPayload> {
@@ -925,14 +946,17 @@ impl SettingsMutations {
         let walk_interval_seconds = input
             .walk_interval_seconds
             .unwrap_or(current.walk_interval_seconds);
+        let walk_intensity = input
+            .walk_intensity
+            .map_or(current.walk_intensity, Into::into);
         let settings = app
             .update_acquisition_settings(
                 &actor,
                 AppAcquisitionSettings {
                     enabled: input.enabled,
-                    same_tier_min_delta: input.same_tier_min_delta,
                     poll_interval_seconds: input.poll_interval_seconds,
                     walk_interval_seconds,
+                    walk_intensity,
                     long_tail_backfill_max_scopes_per_cycle: input
                         .long_tail_backfill_max_scopes_per_cycle,
                     long_tail_reconverge_days: input.long_tail_reconverge_days,
@@ -1031,7 +1055,7 @@ impl SettingsMutations {
         Ok(from_recycle_bin_settings(settings))
     }
 
-    /// Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
+    /// Saves the verification depth applied to download-client completed-download copies and to location operations (library moves, root changes, consolidations), after checking the system-settings permission.
     async fn update_verification_settings(
         &self,
         ctx: &Context<'_>,
@@ -1661,17 +1685,14 @@ impl SettingsMutations {
             &actor,
             scope.into_media_facet(),
             scryer_application::UpdateMediaSettings {
-                library_path: input.library_path,
-                root_folders: input.root_folders.map(|entries| {
-                    entries
-                        .into_iter()
-                        .map(|entry| scryer_domain::RootFolderEntry {
-                            path: entry.path,
-                            is_default: entry.is_default,
-                        })
-                        .collect()
-                }),
                 required_audio_languages: input.required_audio_languages,
+                preferred_audio_languages: input.preferred_audio_languages,
+                optional_audio_languages: input.optional_audio_languages,
+                audio_language_priority: input
+                    .audio_language_priority
+                    .map(AudioLanguagePriorityValue::into_application),
+                optional_audio_languages_keep_searching: input
+                    .optional_audio_languages_keep_searching,
                 use_season_folders: input.use_season_folders,
                 folder_template: input.folder_template,
                 season_folder_template: input.season_folder_template,
@@ -1712,32 +1733,6 @@ impl SettingsMutations {
         .map_err(to_gql_error)
     }
 
-    /// Replace nonblank default library roots for movie, series, and anime facets.
-    async fn update_library_paths(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(
-            desc = "Default facet root paths; blank movie or series values and a null or blank anime value leave that facet unchanged."
-        )]
-        input: UpdateLibraryPathsInput,
-    ) -> GqlResult<LibraryPathsPayload> {
-        let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
-                .await?;
-        app.update_library_paths(
-            &actor,
-            scryer_application::UpdateLibraryPaths {
-                movie_path: input.movie_path,
-                series_path: input.series_path,
-                anime_path: input.anime_path,
-            },
-        )
-        .await
-        .map(from_library_paths_settings)
-        .map_err(to_gql_error)
-    }
-
     /// Saves service TLS paths after checking the system-settings permission.
     async fn update_service_settings(
         &self,
@@ -1759,6 +1754,8 @@ impl SettingsMutations {
                 public_url: input.public_url,
                 reset_public_url: input.reset_public_url.unwrap_or(false),
                 acknowledge_passkey_impact: input.acknowledge_passkey_impact.unwrap_or(false),
+                bind_host: input.bind_host,
+                reset_bind_host: input.reset_bind_host.unwrap_or(false),
             },
         )
         .await
@@ -2632,8 +2629,14 @@ impl SettingsMutations {
                 "the authentication choice conflicts with its password or environment configuration",
             )));
         }
-        let user = app
-            .complete_initial_authentication(input.password, input.acknowledge_no_authentication)
+        let (user, bind_outcome) = app
+            .complete_initial_authentication_with_network(
+                input.password,
+                input.acknowledge_no_authentication,
+                input
+                    .network_access
+                    .map(InitialNetworkAccess::to_application),
+            )
             .await
             .map_err(to_gql_error)?;
         runtime.apply_saved_security_settings(password_mode, false);
@@ -2658,7 +2661,21 @@ impl SettingsMutations {
         Ok(InitialAuthenticationPayload {
             completed: true,
             login,
+            restart_required_for_bind: bind_outcome.restart_required,
+            bind_ignored_because_pinned: bind_outcome.ignored_because_pinned,
         })
+    }
+
+    /// Restarts Scryer so a saved listening address takes effect.
+    async fn restart_for_network_change(&self, ctx: &Context<'_>) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+        app.restart_for_bind_change(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(true)
     }
 
     /// Replaces an administrator-provided temporary password and issues the full session.
@@ -2708,12 +2725,25 @@ impl SettingsMutations {
     }
 
     /// Mark the setup wizard as complete.
-    async fn complete_setup(&self, ctx: &Context<'_>) -> GqlResult<CompleteSetupPayload> {
+    async fn complete_setup(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Accepted source import that must be owned and resolved before setup completes; omitted for manual setup."
+        )]
+        source_import_run_id: Option<ID>,
+    ) -> GqlResult<CompleteSetupPayload> {
         let app = app_from_ctx(ctx)?;
         let actor =
             require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
                 .await?;
-        let completed = app.complete_setup(&actor).await.map_err(to_gql_error)?;
+        let completed = app
+            .complete_setup_for_source_import(
+                &actor,
+                source_import_run_id.as_ref().map(|id| id.as_str()),
+            )
+            .await
+            .map_err(to_gql_error)?;
         Ok(CompleteSetupPayload { completed })
     }
 }

@@ -134,11 +134,7 @@ where
         return Ok(Vec::new());
     }
 
-    let allowed_library_ids = app
-        .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-        .await?
-        .into_iter()
-        .collect::<HashSet<_>>();
+    let visibility = EventVisibility::load(app, actor).await?;
     let mut title_library_cache = HashMap::new();
     let mut projected = Vec::new();
     let mut before_sequence = None;
@@ -155,15 +151,7 @@ where
 
         before_sequence = batch.last().map(|event| event.sequence);
         for event in &batch {
-            if !event_allowed(
-                app,
-                actor,
-                event,
-                &allowed_library_ids,
-                &mut title_library_cache,
-            )
-            .await?
-            {
+            if !event_allowed(app, actor, event, &visibility, &mut title_library_cache).await? {
                 continue;
             }
             if let Some(item) = map(event) {
@@ -232,21 +220,106 @@ async fn require_actor_view_library(app: &AppUseCase, actor: &User) -> AppResult
     }
 }
 
+/// Whether a title-bearing event is catalog-level, visible with `View`. Every
+/// other title event carries acquisition, download, import, file or path
+/// detail and needs privileged library access. Deny by default: a new event
+/// type is privileged until it is listed here.
+fn title_event_is_catalog_level(payload: &DomainEventPayload) -> bool {
+    matches!(
+        payload,
+        DomainEventPayload::TitleAdded(_)
+            | DomainEventPayload::TitleUpdated(_)
+            | DomainEventPayload::TitleRematched(_)
+            | DomainEventPayload::TitleDeleted(_)
+            | DomainEventPayload::MetadataHydrationUpdated(_)
+            | DomainEventPayload::MediaRequestSubmitted(_)
+            | DomainEventPayload::MediaRequestUpdated(_)
+            | DomainEventPayload::MediaRequestReopened(_)
+            | DomainEventPayload::MediaRequestApproved(_)
+            | DomainEventPayload::MediaRequestRejected(_)
+            | DomainEventPayload::MediaRequestCanceled(_)
+            | DomainEventPayload::ListTitleAdded(_)
+            | DomainEventPayload::ListRequestSubmitted(_)
+            | DomainEventPayload::ListTitleLeft(_)
+    )
+}
+
+/// Activity kinds that change what the catalog shows for a title: a file
+/// arrived, was replaced or analyzed, or a subtitle landed. A reader with only
+/// `View` cannot see these events, but the live stream still owes them the
+/// signal to reload the title, or their open page stays stale.
+fn activity_kind_refreshes_catalog(kind: &ActivityKind) -> bool {
+    matches!(
+        kind,
+        ActivityKind::MovieDownloaded
+            | ActivityKind::SeriesEpisodeImported
+            | ActivityKind::FileAnalyzed
+            | ActivityKind::FileUpgraded
+            | ActivityKind::SubtitleDownloaded
+    )
+}
+
+/// The refresh signal sent in place of a privileged activity: which title and
+/// episodes changed, and how, with no message, actor or channel. The message
+/// carries paths and release detail; the rest is already visible in the
+/// catalog once the reader reloads.
+fn catalog_refresh_signal(activity: ActivityEvent) -> ActivityEvent {
+    ActivityEvent {
+        severity: ActivitySeverity::Info,
+        channels: Vec::new(),
+        actor_kind: scryer_domain::DomainEventActorKind::System,
+        actor_user_id: None,
+        actor_display_name: "System".to_string(),
+        message: String::new(),
+        ..activity
+    }
+}
+
+/// Library ids an actor may read events for: `view` for catalog-level events,
+/// `privileged` for everything that describes acquisition or files.
+struct EventVisibility {
+    view: HashSet<String>,
+    privileged: HashSet<String>,
+}
+
+impl EventVisibility {
+    async fn load(app: &AppUseCase, actor: &User) -> AppResult<Self> {
+        Ok(Self {
+            view: app
+                .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
+                .await?
+                .into_iter()
+                .collect(),
+            privileged: app
+                .privileged_library_ids(actor, None)
+                .await?
+                .into_iter()
+                .collect(),
+        })
+    }
+}
+
 async fn event_allowed(
     app: &AppUseCase,
     actor: &User,
     event: &DomainEvent,
-    allowed_library_ids: &HashSet<String>,
+    visibility: &EventVisibility,
     title_library_cache: &mut HashMap<String, Option<String>>,
 ) -> AppResult<bool> {
     if let scryer_domain::DomainEventStream::User { user_id } = &event.stream {
         return Ok(user_id == &actor.id);
     }
+    let allowed_library_ids = &visibility.view;
     if event.title_id.is_some() {
+        let library_ids = if title_event_is_catalog_level(&event.payload) {
+            &visibility.view
+        } else {
+            &visibility.privileged
+        };
         return event_title_allowed(
             app,
             event.title_id.as_deref(),
-            allowed_library_ids,
+            library_ids,
             title_library_cache,
         )
         .await;
@@ -298,11 +371,12 @@ async fn event_allowed(
             .library_id
             .as_ref()
             .is_some_and(|library_id| allowed_library_ids.contains(library_id))),
+        // Carries the discovered folder path.
         DomainEventPayload::LibraryScanTitleDiscovered(data) => {
             event_title_allowed(
                 app,
                 Some(&data.title_id),
-                allowed_library_ids,
+                &visibility.privileged,
                 title_library_cache,
             )
             .await
@@ -1278,11 +1352,7 @@ impl AppUseCase {
         } else {
             filter.limit.min(500)
         };
-        let allowed_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?
-            .into_iter()
-            .collect::<HashSet<_>>();
+        let visibility = EventVisibility::load(self, actor).await?;
         let mut title_library_cache = HashMap::new();
         let mut visible = Vec::new();
 
@@ -1304,14 +1374,7 @@ impl AppUseCase {
             let next_sequence = events.last().map(|event| event.sequence);
             let batch_len = events.len();
             for event in events {
-                if event_allowed(
-                    self,
-                    actor,
-                    &event,
-                    &allowed_library_ids,
-                    &mut title_library_cache,
-                )
-                .await?
+                if event_allowed(self, actor, &event, &visibility, &mut title_library_cache).await?
                 {
                     visible.push(event);
                     if visible.len() >= target_len {
@@ -1391,23 +1454,60 @@ impl AppUseCase {
         limit: usize,
     ) -> AppResult<Vec<(i64, ActivityEvent)>> {
         require_actor_view_library(self, actor).await?;
-        let user_facing_event_types = user_facing_domain_event_types();
+        let target_len = limit.clamp(1, 500);
+        let visibility = EventVisibility::load(self, actor).await?;
+        let mut title_library_cache = HashMap::new();
         let mut visible = Vec::new();
-        let events = self
-            .list_domain_events(
-                actor,
-                &DomainEventFilter {
-                    event_types: Some(user_facing_event_types),
-                    after_sequence: Some(after_sequence),
-                    limit: limit.max(1),
-                    ..DomainEventFilter::default()
-                },
-            )
-            .await?;
-        for event in events {
-            if let Some(activity) = activity_event_from_domain_event(&event) {
+        let mut page_filter = DomainEventFilter {
+            event_types: Some(user_facing_domain_event_types()),
+            after_sequence: Some(after_sequence),
+            limit: 500,
+            ..DomainEventFilter::default()
+        };
+
+        loop {
+            let events = self
+                .services
+                .events
+                .domain_events
+                .list(&page_filter)
+                .await?;
+            let Some(last_sequence) = events.last().map(|event| event.sequence) else {
+                break;
+            };
+            let batch_len = events.len();
+            for event in events {
+                let Some(activity) = activity_event_from_domain_event(&event) else {
+                    continue;
+                };
+                let activity =
+                    if event_allowed(self, actor, &event, &visibility, &mut title_library_cache)
+                        .await?
+                    {
+                        activity
+                    } else if !matches!(event.stream, scryer_domain::DomainEventStream::User { .. })
+                        && activity_kind_refreshes_catalog(&activity.kind)
+                        && event_title_allowed(
+                            self,
+                            event.title_id.as_deref(),
+                            &visibility.view,
+                            &mut title_library_cache,
+                        )
+                        .await?
+                    {
+                        catalog_refresh_signal(activity)
+                    } else {
+                        continue;
+                    };
                 visible.push((event.sequence, activity));
+                if visible.len() >= target_len {
+                    return Ok(visible);
+                }
             }
+            if batch_len < 500 {
+                break;
+            }
+            page_filter.after_sequence = Some(last_sequence);
         }
         Ok(visible)
     }
@@ -1663,9 +1763,7 @@ impl AppUseCase {
         limit: usize,
     ) -> AppResult<Vec<crate::DashboardRecentImport>> {
         let limit = limit.clamp(1, 50);
-        let library_ids = self
-            .authorized_library_ids(actor, None, LibraryPermission::View)
-            .await?;
+        let library_ids = self.require_privileged_library_ids(actor, None).await?;
         let mut items = Vec::with_capacity(limit);
         let mut before = None;
         let mut seen_files = HashSet::new();
@@ -1793,9 +1891,7 @@ impl AppUseCase {
         actor: &User,
         filter: &TitleHistoryFilter,
     ) -> AppResult<TitleHistoryPage> {
-        let library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+        let library_ids = self.require_privileged_library_ids(actor, None).await?;
         let mut scoped_filter = filter.clone();
         if let Some(collection_id) = &filter.collection_id {
             let collection = self.get_collection(actor, collection_id).await?;
@@ -1825,7 +1921,8 @@ impl AppUseCase {
         });
         // The library scope above is authorization, not a filter the user
         // chose: with "All Libraries" selected the page still arrives here as
-        // an explicit list of every library the actor can view. An unlinked
+        // an explicit list of every library the actor holds privileged access
+        // to. An unlinked
         // grab has no title and therefore no library, so it can never be named
         // by that list and has to be admitted separately. Gate it on the same
         // permission `event_allowed` uses for title-less events, which is also
@@ -1855,9 +1952,9 @@ impl AppUseCase {
             DASHBOARD_ACTIVITY_MIN_WINDOW_HOURS,
             DASHBOARD_ACTIVITY_MAX_WINDOW_HOURS,
         );
-        let library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+        // Activity counts summarise history, so they follow its privileged
+        // scope. An actor without it gets empty tiles, not a refusal.
+        let library_ids = self.privileged_library_ids(actor, None).await?;
         if library_ids.is_empty() {
             return Ok(DashboardActivityStats::default());
         }
@@ -1898,12 +1995,8 @@ impl AppUseCase {
                     format!("title {}", title_id),
                 )
             })?;
-        self.require_library_permission(
-            actor,
-            &title.library_id,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await?;
+        self.require_privileged_library_access(actor, &title.library_id)
+            .await?;
         project_title_history_page(
             self,
             &TitleHistoryFilter {
@@ -1955,12 +2048,8 @@ impl AppUseCase {
                     format!("title {}", episode.title_id),
                 )
             })?;
-        self.require_library_permission(
-            actor,
-            &title.library_id,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await?;
+        self.require_privileged_library_access(actor, &title.library_id)
+            .await?;
         project_episode_title_history(self, episode_id, limit).await
     }
 }

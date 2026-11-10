@@ -215,7 +215,7 @@ function Sidebar({
 
   return (
     <div
-      className="group peer text-sidebar-foreground hidden min-[981px]:block"
+      className="group peer text-sidebar-foreground hidden min-[1280px]:block"
       data-state={state}
       data-collapsible={state === "collapsed" ? collapsible : ""}
       data-variant={variant}
@@ -237,7 +237,7 @@ function Sidebar({
       <div
         data-slot="sidebar-container"
         className={cn(
-          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) pt-safe transition-[left,right,width] duration-200 ease-linear min-[981px]:flex",
+          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) pt-safe transition-[left,right,width] duration-200 ease-linear min-[1280px]:flex",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -291,17 +291,21 @@ function SidebarTrigger({
   );
 }
 
-function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
+function SidebarRail({
+  className,
+  label = "Toggle Sidebar",
+  ...props
+}: React.ComponentProps<"button"> & { label?: string }) {
   const { toggleSidebar } = useSidebar();
 
   return (
     <button
       data-sidebar="rail"
       data-slot="sidebar-rail"
-      aria-label="Toggle Sidebar"
+      aria-label={label}
       tabIndex={-1}
       onClick={toggleSidebar}
-      title="Toggle Sidebar"
+      title={label}
       className={cn(
         "hover:after:bg-sidebar-border absolute inset-y-0 z-20 hidden w-4 -translate-x-1/2 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] sm:flex",
         "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
@@ -322,7 +326,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
       data-slot="sidebar-inset"
       className={cn(
         "bg-background relative flex min-w-0 w-full flex-1 flex-col",
-        "min-[981px]:peer-data-[variant=inset]:m-2 min-[981px]:peer-data-[variant=inset]:ml-0 min-[981px]:peer-data-[variant=inset]:rounded-xl min-[981px]:peer-data-[variant=inset]:shadow-sm min-[981px]:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
+        "min-[1280px]:peer-data-[variant=inset]:m-2 min-[1280px]:peer-data-[variant=inset]:ml-0 min-[1280px]:peer-data-[variant=inset]:rounded-xl min-[1280px]:peer-data-[variant=inset]:shadow-sm min-[1280px]:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
         className,
       )}
       {...props}
@@ -440,7 +444,7 @@ function SidebarGroupAction({
       className={cn(
         "text-sidebar-foreground ring-sidebar-ring hover:bg-sidebar-accent hover:text-sidebar-accent-foreground absolute top-3.5 right-3 flex aspect-square w-5 items-center justify-center rounded-md p-0 outline-hidden transition-transform focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         // Increases the hit area of the button on mobile.
-        "after:absolute after:-inset-2 min-[981px]:after:hidden",
+        "after:absolute after:-inset-2 min-[1280px]:after:hidden",
         "group-data-[collapsible=icon]:hidden",
         className,
       )}
@@ -577,13 +581,13 @@ function SidebarMenuAction({
       className={cn(
         "text-sidebar-foreground ring-sidebar-ring hover:bg-sidebar-accent hover:text-sidebar-accent-foreground peer-hover/menu-button:text-sidebar-accent-foreground absolute top-1.5 right-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 outline-hidden transition-transform focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         // Increases the hit area of the button on mobile.
-        "after:absolute after:-inset-2 min-[981px]:after:hidden",
+        "after:absolute after:-inset-2 min-[1280px]:after:hidden",
         "peer-data-[size=sm]/menu-button:top-1",
         "peer-data-[size=default]/menu-button:top-1.5",
         "peer-data-[size=lg]/menu-button:top-2.5",
         "group-data-[collapsible=icon]:hidden",
         showOnHover &&
-          "peer-data-[active=true]/menu-button:text-sidebar-accent-foreground group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 data-[state=open]:opacity-100 min-[981px]:opacity-0",
+          "peer-data-[active=true]/menu-button:text-sidebar-accent-foreground group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 data-[state=open]:opacity-100 min-[1280px]:opacity-0",
         className,
       )}
       {...props}

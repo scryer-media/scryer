@@ -17,10 +17,15 @@ use crate::types::{
 };
 use std::collections::HashSet;
 
+mod standby;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PendingGrabOutcome {
     Grabbed {
         scope: SubmissionScope,
+        /// The client job holding the release: a new one, or the existing job
+        /// the submission reused.
+        job: ClientJobLocator,
     },
     /// The release remains the best choice, but its delay profile still holds
     /// it. The caller must not try a lower-ranked release.
@@ -93,6 +98,8 @@ pub(crate) enum PendingGrabTrigger {
     /// but bypasses the missing-download history guard.
     InteractiveSearch,
     Operator,
+    /// Explicit saved-candidate override; the caller holds the submission guard.
+    StandbyOperator,
 }
 
 /// Whether a `waiting` row is the delay lane's claim on its scope.
@@ -720,13 +727,10 @@ impl AppUseCase {
     /// List all pending releases that are waiting to be grabbed.
     pub async fn list_pending_releases(&self, actor: &User) -> AppResult<Vec<PendingRelease>> {
         let authorized_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
+            .require_privileged_library_ids(actor, None)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
-        if authorized_library_ids.is_empty() {
-            return Ok(Vec::new());
-        }
 
         let releases = self
             .services
@@ -765,12 +769,7 @@ impl AppUseCase {
         limit: i64,
         offset: i64,
     ) -> AppResult<(Vec<PendingRelease>, i64)> {
-        let authorized_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
-        if authorized_library_ids.is_empty() {
-            return Ok((Vec::new(), 0));
-        }
+        let authorized_library_ids = self.require_privileged_library_ids(actor, None).await?;
         let sort = if wanted_item_id.is_some()
             && !statuses.is_empty()
             && statuses
@@ -824,17 +823,13 @@ impl AppUseCase {
                         format!("title {}", release.title_id),
                     )
                 })?;
-            self.require_library_permission(
-                actor,
-                &title.library_id,
-                scryer_domain::LibraryPermission::View,
-            )
-            .await?;
+            self.require_privileged_library_access(actor, &title.library_id)
+                .await?;
         }
         Ok(release)
     }
 
-    /// Require `View` on the library owning `wanted_item_id`, resolving the
+    /// Require privileged access to the library owning `wanted_item_id`, resolving the
     /// library from the wanted item (falling back to its title). Shared by the
     /// per-wanted-item pending-release reads.
     async fn require_wanted_item_view(&self, actor: &User, wanted_item_id: &str) -> AppResult<()> {
@@ -866,7 +861,7 @@ impl AppUseCase {
                     )
                 })?
         };
-        self.require_library_permission(actor, &library_id, scryer_domain::LibraryPermission::View)
+        self.require_privileged_library_access(actor, &library_id)
             .await
     }
 
@@ -1122,7 +1117,10 @@ impl AppUseCase {
             )
             .await?
         {
-            if trigger == PendingGrabTrigger::Operator {
+            if matches!(
+                trigger,
+                PendingGrabTrigger::Operator | PendingGrabTrigger::StandbyOperator
+            ) {
                 return Err(denial.into_app_error());
             }
             return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
@@ -1137,12 +1135,21 @@ impl AppUseCase {
             .load_title_release_blocklist_signatures(&title.id)
             .await;
 
+        // An operator override still honours the blocklist, like Sonarr's
+        // `BlocklistSpecification` (a permanent rejection) and the operator
+        // force-grab here; the operator removes the entry to override it.
         if crate::app_usecase_discovery::is_release_blocklisted(
             pr.indexer_id.as_deref(),
             &pr.release_title,
             pr.info_hash.as_deref(),
             &db_blocklist,
         ) {
+            if trigger == PendingGrabTrigger::StandbyOperator {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::standby::RELEASE_BLOCKLISTED,
+                    "This release is on the title's blocklist",
+                ));
+            }
             return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
         }
 
@@ -1157,7 +1164,16 @@ impl AppUseCase {
         // find out by asking it.
         let route_pinned = dl_snapshot.queue_listing_failed()
             && self.release_route_is_pinned(pr.indexer_id.as_deref()).await;
-        if !route_pinned && dl_snapshot.is_active(&pr.release_title) {
+        if trigger == PendingGrabTrigger::StandbyOperator {
+            // An unreadable queue is "unknown", not "active": a client that
+            // cannot be read never blocks the operator's queue.
+            if dl_snapshot.is_known_active(&pr.release_title) {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::standby::ALREADY_ACTIVE,
+                    "This release is already in the download queue",
+                ));
+            }
+        } else if !route_pinned && dl_snapshot.is_active(&pr.release_title) {
             info!(
                 release = pr.release_title.as_str(),
                 "pending release: skipping, already active in download client"
@@ -1173,7 +1189,10 @@ impl AppUseCase {
         // Same shape as Sonarr's RSS sync, which re-runs every specification
         // over the pending list against the release's originally stored seeders;
         // an unknown count stays eligible there and here.
-        if trigger != PendingGrabTrigger::Operator {
+        if !matches!(
+            trigger,
+            PendingGrabTrigger::Operator | PendingGrabTrigger::StandbyOperator
+        ) {
             let minimum_seeders = self
                 .minimum_seeders_for_indexer(pr.indexer_id.as_deref())
                 .await;
@@ -1325,7 +1344,7 @@ impl AppUseCase {
             }
             Err(_) => Vec::new(),
         };
-        if is_series_pack {
+        if is_series_pack && trigger != PendingGrabTrigger::StandbyOperator {
             let mut owned_episode_ids = existing_files
                 .iter()
                 .filter_map(|file| file.episode_id.clone())
@@ -1443,7 +1462,7 @@ impl AppUseCase {
             &catalog_collections,
             &scoring_context,
         );
-        if !facts.allowed {
+        if !facts.allowed && trigger != PendingGrabTrigger::StandbyOperator {
             // A profile edit while the release waited now vetoes it. Expired,
             // not grabbed: there is nothing to wait for.
             info!(
@@ -1466,6 +1485,22 @@ impl AppUseCase {
                 &reads,
             )
             .await;
+        if trigger == PendingGrabTrigger::StandbyOperator {
+            return Ok(PendingJudgement::Admitted(Box::new(
+                AdmittedPendingRelease {
+                    scoring: crate::quality::grab_scoring::capture_values(
+                        candidate_score,
+                        &facts.scoring_log,
+                        &admission,
+                        "manual_override",
+                    ),
+                    title,
+                    pending_scope,
+                    candidate_score,
+                    incumbent_best_score: admission.best_score(),
+                },
+            )));
+        }
         let queued = match self
             .pending_queued_releases(
                 &title,
@@ -1507,6 +1542,7 @@ impl AppUseCase {
             facts.revision,
             candidate_score,
         )
+        .with_language(facts.language)
         .with_release_title(&pr.release_title)
         .with_revision_policy(
             facts.release_group.as_deref(),
@@ -1604,7 +1640,10 @@ impl AppUseCase {
         // may lengthen that profile before the promotion or standby walk gets
         // here. Evaluate only after admission/cooldown so a held row is one
         // that would otherwise be grabbed.
-        if trigger != PendingGrabTrigger::Operator {
+        if !matches!(
+            trigger,
+            PendingGrabTrigger::Operator | PendingGrabTrigger::StandbyOperator
+        ) {
             let delay_profiles = self.load_delay_profiles().await;
             if let Some(delay_decision) = crate::delay_profile::grab_time_delay_decision(
                 &delay_profiles,
@@ -1717,59 +1756,69 @@ impl AppUseCase {
         .is_some_and(|episode| episode.full_season);
 
         let release_listing_json = ReleaseListingSnapshot::json_for_pending_release(pr, *now);
-        if matches!(trigger, PendingGrabTrigger::Operator) {
+        if matches!(
+            trigger,
+            PendingGrabTrigger::Operator | PendingGrabTrigger::StandbyOperator
+        ) {
             scoring.decision_code = "manual_override".into();
         }
         let release_listing_json = crate::quality::grab_scoring::with_snapshot(
             release_listing_json,
             Some(scoring.clone()),
         );
-        let canonical_result = self
-            .submit_canonical_download(CanonicalDownloadSubmissionIntent {
-                automatic: trigger == PendingGrabTrigger::Automatic,
-                http_release: pr.http_release.clone(),
-                request: DownloadClientAddRequest {
-                    http: None,
-                    title: title.clone(),
-                    search_facet: (wanted.media_type == "series_movie")
-                        .then_some(scryer_domain::MediaFacet::Movie),
-                    purpose: crate::DownloadSubmissionPurpose::Standard,
-                    download_id: Some(download_id),
-                    source_hint: source_hint.clone(),
-                    staged_nzb: None,
-                    resolved_download_artifact: None,
-                    source_kind,
-                    source_title: source_title.clone(),
-                    source_password: source_password.clone(),
-                    category: Some(download_cat),
-                    queue_priority: None,
-                    download_directory: None,
-                    release_title: Some(pr.release_title.clone()),
-                    indexer_name: pr.indexer_source.clone(),
-                    indexer_id: pr.indexer_id.clone(),
-                    info_hash_hint: pr.info_hash.clone(),
-                    seed_goal_ratio: None,
-                    seed_goal_seconds: None,
-                    // Captured off the release `extra` map when the row was parked
-                    // (migration 0165), so a delayed grab gets the same tracker
-                    // clamp as an immediate one. Rows parked before that migration
-                    // carry `None` and simply fall back to the profile's own goals.
-                    tracker_min_seed_ratio: pr.seed_minimums.min_seed_ratio,
-                    tracker_min_seed_time_minutes: pr.seed_minimums.min_seed_time_minutes,
-                    season_pack_seed_ratio: pr.seed_minimums.season_pack_seed_ratio,
-                    season_pack_seed_time_minutes: pr.seed_minimums.season_pack_seed_time_minutes,
-                    is_recent,
-                    season_pack: is_season_pack.then_some(true),
-                    pinned_download_client_id: None,
+        let intent = CanonicalDownloadSubmissionIntent {
+            automatic: trigger == PendingGrabTrigger::Automatic,
+            http_release: pr.http_release.clone(),
+            request: DownloadClientAddRequest {
+                http: None,
+                title: title.clone(),
+                search_facet: (wanted.media_type == "series_movie")
+                    .then_some(scryer_domain::MediaFacet::Movie),
+                purpose: if trigger == PendingGrabTrigger::StandbyOperator {
+                    crate::DownloadSubmissionPurpose::OperatorQueued
+                } else {
+                    crate::DownloadSubmissionPurpose::Standard
                 },
-                scope: pending_scope.clone(),
-                conflict_policy: SubmissionConflictPolicy::Skip,
-                request_signature: request_signature.clone(),
-                source_provider_name: pr.indexer_source.clone(),
-                release_size_bytes: pr.release_size_bytes,
-                release_listing_json: release_listing_json.clone(),
-            })
-            .await;
+                download_id: Some(download_id),
+                source_hint: source_hint.clone(),
+                staged_nzb: None,
+                resolved_download_artifact: None,
+                source_kind,
+                source_title: source_title.clone(),
+                source_password: source_password.clone(),
+                category: Some(download_cat),
+                queue_priority: None,
+                download_directory: None,
+                release_title: Some(pr.release_title.clone()),
+                indexer_name: pr.indexer_source.clone(),
+                indexer_id: pr.indexer_id.clone(),
+                info_hash_hint: pr.info_hash.clone(),
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                // Captured off the release `extra` map when the row was parked
+                // (migration 0165), so a delayed grab gets the same tracker
+                // clamp as an immediate one. Rows parked before that migration
+                // carry `None` and simply fall back to the profile's own goals.
+                tracker_min_seed_ratio: pr.seed_minimums.min_seed_ratio,
+                tracker_min_seed_time_minutes: pr.seed_minimums.min_seed_time_minutes,
+                season_pack_seed_ratio: pr.seed_minimums.season_pack_seed_ratio,
+                season_pack_seed_time_minutes: pr.seed_minimums.season_pack_seed_time_minutes,
+                is_recent,
+                season_pack: is_season_pack.then_some(true),
+                pinned_download_client_id: None,
+            },
+            scope: pending_scope.clone(),
+            conflict_policy: SubmissionConflictPolicy::Skip,
+            request_signature: request_signature.clone(),
+            source_provider_name: pr.indexer_source.clone(),
+            release_size_bytes: pr.release_size_bytes,
+            release_listing_json: release_listing_json.clone(),
+        };
+        let canonical_result = if trigger == PendingGrabTrigger::StandbyOperator {
+            self.submit_canonical_download_locked(intent, true).await
+        } else {
+            self.submit_canonical_download(intent).await
+        };
 
         let grab_indexer = self
             .grab_indexer_name(pr.indexer_id.as_deref(), pr.indexer_source.as_deref())
@@ -1796,8 +1845,34 @@ impl AppUseCase {
             Ok(canonical_submission) => {
                 let newly_submitted = canonical_submission.newly_submitted;
                 let grab = canonical_submission.grab;
+                let grabbed_job = ClientJobLocator::new(
+                    grab.client_id.as_deref(),
+                    &grab.client_type,
+                    &grab.job_id,
+                );
                 if newly_submitted {
                     self.record_indexer_grab(pr.indexer_id.as_deref(), grab_indexer.as_deref());
+                    if trigger == PendingGrabTrigger::StandbyOperator {
+                        let identity = ClientJobLocator::new(
+                            grab.client_id.as_deref(),
+                            &grab.client_type,
+                            &grab.job_id,
+                        );
+                        if let Err(error) = self
+                            .services
+                            .workflow
+                            .download_submissions
+                            .record_submission_actor_snapshot(
+                                &identity,
+                                initiated_by
+                                    .clone()
+                                    .into_download_submission_actor_snapshot(),
+                            )
+                            .await
+                        {
+                            tracing::warn!(error = %error, "standby submission actor snapshot persistence failed");
+                        }
+                    }
                 }
 
                 let _ = self
@@ -1879,6 +1954,7 @@ impl AppUseCase {
 
                 Ok(PendingGrabOutcome::Grabbed {
                     scope: pending_scope,
+                    job: grabbed_job,
                 })
             }
             Err(err) => {
@@ -1927,6 +2003,10 @@ impl AppUseCase {
                         source_password.clone(),
                     )
                     .await;
+
+                if trigger == PendingGrabTrigger::StandbyOperator {
+                    return Err(err);
+                }
 
                 if source_gone {
                     info!(

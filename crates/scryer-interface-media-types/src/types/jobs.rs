@@ -70,6 +70,8 @@ pub enum JobKeyValue {
     ApplicationUpgrade,
     /// Location operation: a root move, transfer, or other placement change.
     LocationOperation,
+    /// Background import of selected indexers and download clients.
+    SourceImport,
     /// A user-defined scheduled script; each script is told apart by its
     /// `customJobId`.
     CustomJob,

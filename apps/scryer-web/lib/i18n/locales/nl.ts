@@ -1,6 +1,48 @@
 import type { LocaleDictionary } from "../types";
 
 const nl: LocaleDictionary = {
+  "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
+    "Deze Prowlarr-versie wordt niet ondersteund. Werk Prowlarr bij naar 2.0 of nieuwer.",
+  "error.reason.STANDBY_NOT_FOUND":
+    "Deze opgeslagen kandidaat bestaat niet meer.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "Deze opgeslagen kandidaat is niet meer beschikbaar. Vernieuw de lijst en probeer het opnieuw.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "De opgeslagen release kon niet in de wachtrij worden gezet. Hij blijft beschikbaar om opnieuw te proberen.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "Deze release staat op de blokkeerlijst van de titel. Verwijder hem van de blokkeerlijst om hem in de wachtrij te zetten.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "Deze release staat al in de downloadwachtrij.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Er loopt al een andere zoekopdracht of wachtrijactie voor deze titel. Probeer het opnieuw zodra die klaar is.",
+  "wanted.downloadStandby": "Downloaden",
+  "wanted.downloadStandbyLabel": "{{name}} downloaden",
+  "wanted.standbyConflictTitle": "Downloads al bezig",
+  "wanted.standbyConflictDescription":
+    "Zet {{name}} naast deze downloads in de wachtrij, of annuleer ze en zet deze in plaats daarvan in de wachtrij.",
+  "wanted.standbyQueue": "In wachtrij",
+  "wanted.standbyQueuedRefreshFailed":
+    "De release is in de wachtrij gezet, maar de lijst kon niet worden vernieuwd. Vernieuw de pagina om de huidige status te zien.",
+  "wanted.standbyCancelAndQueue": "Annuleren en in wachtrij",
+  "wanted.standbyQueuedCancelFailed":
+    "De release is in de wachtrij gezet, maar {{count}} conflicterende download(s) konden niet worden geannuleerd en lopen nog.",
+  "settings.oauthJellyfinCallbackCopied": "Jellyfin-callback-URL gekopieerd.",
+  "settings.oauthClientIdCopied": "OAuth-client-ID gekopieerd.",
+  "status.copyFailedSelected":
+    "Kopiëren mislukt. De tekst is geselecteerd; druk op Ctrl+C of ⌘C.",
+  "status.copyFailed":
+    "Kopiëren mislukt: de browser weigerde toegang tot het klembord.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Het mediabestand kon niet worden geverifieerd en kan daarom geen bestaand bibliotheekbestand vervangen.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Deze afspeellijst of dit bijbehorende bestand moet worden gecontroleerd omdat het van andere bestanden kan afhangen.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Het mediabestand kon niet worden gelezen. Controleer de toegang tot de bron en probeer het opnieuw.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "De mediastructuur is ongeldig. Controleer het bronbestand voordat je het importeert.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Het mediabestand is versleuteld en kon niet worden geverifieerd.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer kan geen verbinding maken met de metadatagateway omdat uw systeemklok meer dan 5 minuten afwijkt. Synchroniseer uw systeemklok en start Scryer opnieuw.",
   "httpRelease.refusal.detailsUnavailable":
@@ -243,7 +285,8 @@ const nl: LocaleDictionary = {
   "nav.logs": "Logs",
   "nav.serviceLogs": "Servicelogs",
   "nav.auditLogs": "Auditlogs",
-  "nav.usersAccess": "Gebruikers & toegang",
+  "nav.users": "Gebruikers",
+  "nav.securityAccess": "Beveiliging & toegang",
   "nav.mobileTitle": "Scryer-navigatie",
   "nav.mobileDescription": "Primaire Scryer-navigatie",
   "nav.mobileTrigger": "Navigatie openen",
@@ -353,6 +396,7 @@ const nl: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "All-time favorieten",
   "discovery.section.rightNow": "Nu populair",
   "discovery.section.fromYourTaste": "Op basis van jouw smaak",
+  "discovery.section.fromYourWatchlist": "Uit je kijklijst",
   "discovery.section.almostComplete": "Bijna compleet",
   "discovery.section.nextAnimeSeason": "Volgend anime-seizoen",
   "discovery.section.popularInAnime": "Populair in anime",
@@ -368,11 +412,77 @@ const nl: LocaleDictionary = {
   "discovery.updatePending": "Update in behandeling",
   "discovery.updatePendingHint":
     "Nieuwe bibliotheekwijzigingen verschijnen na de volgende sync.",
+  "discovery.rail.becauseYouLike.action": "Omdat je actie leuk vindt",
+  "discovery.rail.becauseYouLike.adventure": "Omdat je avontuur leuk vindt",
+  "discovery.rail.becauseYouLike.comedy": "Omdat je komedies leuk vindt",
+  "discovery.rail.becauseYouLike.crime": "Omdat je misdaad leuk vindt",
+  "discovery.rail.becauseYouLike.documentary":
+    "Omdat je documentaires leuk vindt",
+  "discovery.rail.becauseYouLike.drama": "Omdat je drama leuk vindt",
+  "discovery.rail.becauseYouLike.family": "Omdat je familievermaak leuk vindt",
+  "discovery.rail.becauseYouLike.fantasy": "Omdat je fantasy leuk vindt",
+  "discovery.rail.becauseYouLike.history": "Omdat je geschiedenis leuk vindt",
+  "discovery.rail.becauseYouLike.horror": "Omdat je horror leuk vindt",
+  "discovery.rail.becauseYouLike.mystery": "Omdat je mysteries leuk vindt",
+  "discovery.rail.becauseYouLike.romance": "Omdat je romantiek leuk vindt",
+  "discovery.rail.becauseYouLike.science-fiction":
+    "Omdat je sciencefiction leuk vindt",
+  "discovery.rail.becauseYouLike.thriller": "Omdat je thrillers leuk vindt",
+  "discovery.rail.becauseYouLike.war": "Omdat je oorlogsverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.western": "Omdat je westerns leuk vindt",
+  "discovery.rail.becauseYouLike.sports": "Omdat je sportverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.supernatural":
+    "Omdat je het bovennatuurlijke leuk vindt",
+  "discovery.rail.becauseYouLike.coming-of-age":
+    "Omdat je opgroeiverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.found-family":
+    "Omdat je gekozen families leuk vindt",
+  "discovery.rail.becauseYouLike.revenge": "Omdat je wraakverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.heist": "Omdat je overvallen leuk vindt",
+  "discovery.rail.becauseYouLike.time-travel": "Omdat je tijdreizen leuk vindt",
+  "discovery.rail.becauseYouLike.dystopia": "Omdat je dystopieën leuk vindt",
+  "discovery.rail.becauseYouLike.cyberpunk": "Omdat je cyberpunk leuk vindt",
+  "discovery.rail.becauseYouLike.superhero": "Omdat je superhelden leuk vindt",
+  "discovery.rail.becauseYouLike.vampire": "Omdat je vampiers leuk vindt",
+  "discovery.rail.becauseYouLike.zombie": "Omdat je zombies leuk vindt",
+  "discovery.rail.becauseYouLike.survival":
+    "Omdat je overlevingsverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.space": "Omdat je ruimteavonturen leuk vindt",
+  "discovery.rail.becauseYouLike.detective":
+    "Omdat je detectiveverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.organized-crime":
+    "Omdat je georganiseerde misdaad leuk vindt",
+  "discovery.rail.becauseYouLike.period-drama":
+    "Omdat je historische drama's leuk vindt",
+  "discovery.rail.becauseYouLike.psychological":
+    "Omdat je psychologische verhalen leuk vindt",
+  "discovery.rail.becauseYouLike.mythology": "Omdat je mythologie leuk vindt",
+  "discovery.rail.becauseYouLike.isekai": "Omdat je isekai leuk vindt",
+  "discovery.rail.becauseYouLike.mecha": "Omdat je mecha leuk vindt",
+  "discovery.rail.becauseYouLike.martial-arts":
+    "Omdat je vechtsporten leuk vindt",
+  "discovery.rail.becauseYouLike.music": "Omdat je muziekverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.workplace":
+    "Omdat je verhalen op de werkvloer leuk vindt",
+  "discovery.rail.becauseYouLike.medical":
+    "Omdat je ziekenhuisdrama's leuk vindt",
+  "discovery.rail.becauseYouLike.military":
+    "Omdat je militaire verhalen leuk vindt",
+  "discovery.rail.becauseYouLike.spy": "Omdat je spionageverhalen leuk vindt",
+  "discovery.rail.becauseYouLike.royal-politics":
+    "Omdat je koninklijke intriges leuk vindt",
+  "discovery.rail.becauseYouLike.first-love":
+    "Omdat je verhalen over eerste liefde leuk vindt",
+  "discovery.rail.becauseYouLike.forbidden-love":
+    "Omdat je verboden liefde leuk vindt",
+  "discovery.rail.becauseYouLike.lgbtq": "Omdat je LGBTQ+-verhalen leuk vindt",
+  "discovery.rail.becauseYouLike.samurai": "Omdat je samoerai leuk vindt",
+  "discovery.rail.becauseYouLike.magical-girl":
+    "Omdat je magical girls leuk vindt",
 
   "settings.profile": "Profiel",
   "settings.general": "Algemeen",
   "settings.backups": "Back-ups",
-  "settings.security": "Beveiliging",
   "settings.enableFormLogin": "Inloggen inschakelen",
   "settings.securityLoginSettings": "Inloginstellingen",
   "settings.securityEnableFormLoginHelp":
@@ -695,6 +805,27 @@ const nl: LocaleDictionary = {
     "Kwaliteitsprofielcatalogus is geen geldige JSON.",
   "settings.qualityProfileUnknown": 'Onbekend kwaliteitsprofiel-id "{{id}}".',
   "settings.qualitySettingsSaved": "Kwaliteitsinstellingen opgeslagen.",
+  "settings.audioLanguagePreferences": "Voorkeuren audiotaal",
+  "settings.audioLanguagePreferencesInfo":
+    "Rangschikt releases op audiotaal zonder er een af te wijzen. Anders dan bij vereiste talen wordt een release zonder deze talen toch genomen als er niets beters is, en vervangen zodra er een betere verschijnt.",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "Eigen waarden voor deze bibliotheek. Een lege lijst of de keuze overnemen gebruikt de standaard van de catalogus.",
+  "settings.audioPreferredLanguages": "Voorkeurstalen",
+  "settings.audioPreferredLanguagesHint":
+    "In volgorde van voorkeur. Een release met de eerste taal staat boven een release met alleen de tweede, enzovoort. Een bestand zonder een van deze talen blijft een upgradedoel.",
+  "settings.audioPreferredMoveUp": "{{language}} omhoog",
+  "settings.audioPreferredMoveDown": "{{language}} omlaag",
+  "settings.audioOptionalLanguages": "Optionele talen",
+  "settings.audioOptionalLanguagesHint":
+    "Mooi meegenomen. Bij releases van dezelfde kwaliteit wint de release met meer van deze talen.",
+  "settings.audioLanguagePriority": "Prioriteit",
+  "settings.audioLanguagePriorityHint":
+    "Taal eerst neemt een release in een voorkeurstaal, ook op een lager kwaliteitsniveau. Kwaliteit eerst laat de taal alleen beslissen tussen releases van dezelfde kwaliteit.",
+  "settings.audioLanguagePriorityQualityFirst": "Kwaliteit eerst",
+  "settings.audioLanguagePriorityLanguageFirst": "Taal eerst",
+  "settings.audioOptionalKeepSearching": "Blijven zoeken naar optionele talen",
+  "settings.audioOptionalKeepSearchingHint":
+    "Aan: een bestand waarin optionele talen ontbreken blijft een upgradedoel. Uit: zulke releases vervangen het nog steeds als ze gevonden worden, maar er wordt niet naar gezocht.",
   "settings.downloadClientRoutingSaved": "Downloadclient-routing opgeslagen.",
   "settings.downloadClientRoutingSavedFor":
     'Downloadclient-routing opgeslagen voor "{{name}}".',
@@ -706,10 +837,8 @@ const nl: LocaleDictionary = {
   "settings.acquisitionEnabled": "Automatisch ophalen inschakelen",
   "settings.acquisitionEnabledHelp":
     "Voert de ophaallus op de achtergrond uit: convergentiezoekacties en RSS-matching.",
-  "settings.acquisitionThresholds": "Opwaarderingsdrempels",
-  "settings.acquisitionSameTierMinDelta":
-    "Minimale scoreverschil binnen niveau",
-  "settings.acquisitionSameTierMinDeltaHelp":
+  "qualityProfile.minUpgradeScoreDelta": "Minimale scoreverschil binnen niveau",
+  "qualityProfile.minUpgradeScoreDeltaInfo":
     "Een release in dezelfde kwaliteitsniveaumoet de score van het huidige bestand met minstens deze waarde overtreffen.",
   "settings.acquisitionConvergence": "Convergentie & timing",
   "settings.acquisitionPollIntervalSeconds": "Pollinterval (seconden)",
@@ -1339,6 +1468,8 @@ const nl: LocaleDictionary = {
 
   "label.back": "Terug",
   "label.close": "Sluiten",
+  "label.copy": "Kopiëren",
+  "label.copied": "Gekopieerd",
   "label.dismiss": "Negeren",
 
   "pwa.offline":
@@ -1441,10 +1572,52 @@ const nl: LocaleDictionary = {
   "title.viewModeCompact": "Compact",
   "title.viewModePosterTable": "Lijst",
   "title.viewModePoster": "Posterview",
+  "title.viewModeGraph": "Grafiekweergave",
+  "libraryGraph.regionLabel": "Bibliotheekgraaf",
+  "libraryGraph.sizeByLabel": "Grootte op",
+  "libraryGraph.sizeBy.ratingEvidence": "Onderbouwing van beoordelingen",
+  "libraryGraph.sizeBy.rating": "Beoordeling",
+  "libraryGraph.sizeBy.popularity": "Populariteit",
+  "libraryGraph.resetView": "Graaf passend maken",
+  "libraryGraph.clustersLabel": "Clusters",
+  "libraryGraph.clusterAroundTitle": "Rond {{title}}",
+  "libraryGraph.unplaced": "Niet-ingedeelde titels",
+  "libraryGraph.collapsedCluster": "{{name}} ({{count}} titels)",
+  "libraryGraph.collapseCluster": "{{name}} samenvouwen",
+  "libraryGraph.linkedBy": "Verbonden door",
+  "libraryGraph.empty":
+    "Geen enkele titel in deze weergave staat al in de bibliotheekgraaf.",
+  "libraryGraph.edgeKind.semantic": "Vergelijkbaar",
+  "libraryGraph.edgeKind.sequel": "Vervolg",
+  "libraryGraph.edgeKind.prequel": "Prequel",
+  "libraryGraph.edgeKind.coWatch": "Vaak samen bekeken",
+  "libraryGraph.edgeKind.relation": "Verwant",
+  "libraryGraph.edgeKind.affinity": "Gedeelde interesse: {{label}}",
+  "libraryGraph.edgeKind.sharedTaste": "Gedeelde interesse",
+  "libraryGraph.edgeKind.other": "Gekoppeld",
+  "libraryGraph.edgeKind.recommendation": "Aanbevolen",
+  "libraryGraph.notBuilt": "De bibliotheekgraaf is nog niet opgebouwd.",
+  "discovery.refusal.neighborTargetKeyUnsupported":
+    "Deze titel kan niet verder worden verkend.",
+  "discovery.refusal.neighborTargetKeyFacetMismatch":
+    "Deze titel past niet bij het mediatype van deze bibliotheek en kan hier niet worden verkend.",
+  "libraryGraph.moreLikeThisEmpty": "Nog niets vergelijkbaars.",
+  "libraryGraph.backToOverview": "Terug naar overzicht",
+  "libraryGraph.findingMoreLikeThis": "Vergelijkbare titels zoeken…",
+  "libraryGraph.reason.recommendedBy": "Aanbevolen op {{sources}}",
+  "libraryGraph.reason.similarOn": "Vergelijkbaar op {{sources}}",
+  "libraryGraph.reason.shares": "Gedeeld: {{terms}}",
+  "libraryGraph.recommendationGroupsLabel": "Aanbevelingsgroepen",
+  "libraryGraph.notInLibrary": "Niet in je bibliotheek",
+  "libraryGraph.inLibrary": "In je bibliotheek",
+  "libraryGraph.openTitle": "Titel openen",
+  "libraryGraph.exploredGroup": "Verkend",
+  "libraryGraph.focusedOutsideLibrary": "{{title}}, niet in je bibliotheek",
+  "libraryGraph.trailLabel": "Verkend",
+  "libraryGraph.canvasLabel":
+    "Bibliotheekgraaf. Gebruik de pijltjestoetsen om tussen titels in een cluster te wisselen en Enter om er een te openen.",
   "title.bulkSelectionCount": "{{count}} geselecteerd",
   "title.bulkSelectionPanelTitle": "Bulkselectie",
-  "title.bulkSelectionPanelHint":
-    "Kies een actie voor de geselecteerde titels, of wis de selectie.",
   "title.bulkEditTitle": "Geselecteerde titels bewerken",
   "title.bulkEditDescription":
     "Wijzigingen toepassen op {{count}} geselecteerde titels.",
@@ -1607,6 +1780,12 @@ const nl: LocaleDictionary = {
   "tvdb.searchByTvdb": "Metadata zoeken",
 
   "nzb.searchResultsFor": "NZB-resultaten voor {{name}}",
+  "nzb.audioLanguagePreferred": "Voorkeurstaal",
+  "nzb.audioLanguagePreferredRank": "Voorkeurstaal #{{rank}}",
+  "nzb.audioLanguageNotPreferred": "Geen voorkeurstaal",
+  "nzb.audioLanguageOptionalHits": "+{{count}} optioneel",
+  "nzb.audioLanguageHint":
+    "Hoe deze release scoort tegenover de voorkeuren voor audiotaal",
   "nzb.noResultsYet": "Nog geen release-treffers.",
   "nzb.searchFailed": "Release-zoekopdracht mislukt.",
   "nzb.queue": "In wachtrij",
@@ -1963,7 +2142,6 @@ const nl: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Toegepaste facets",
   "settings.ruleAppliedFacetsHelp":
     "Laat leeg om toe te passen op alle mediatypes.",
-  "settings.ruleValidate": "Valideren",
   "settings.ruleValidating": "Valideren…",
   "settings.ruleValid": "Regel is geldig.",
   "settings.ruleValidationRequired": "Naam en Rego source zijn verplicht.",
@@ -3127,6 +3305,7 @@ const nl: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Categorie komt niet overeen",
   "wanted.decision.ambiguousIdentity": "Onduidelijke identiteit",
   "wanted.decision.qualityBlocked": "Geblokkeerd door kwaliteit",
+  "wanted.decision.episodeAvailabilityBlocked": "Wacht op uitzenddatum",
   "wanted.decision.minimumSeeders": "Te weinig seeders",
   "wanted.decision.packBelowMissingThreshold":
     "Pack onder drempel voor ontbrekende items",
@@ -4352,6 +4531,62 @@ const nl: LocaleDictionary = {
     "Het verplaatsen van het bestand naar de nieuwe naam is mislukt. Het bestand en de afleveringen zijn ongewijzigd gebleven.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Afleveringsnummering is dubbelzinnig",
+  "settings.maintenanceExecutionReason.playbackHold":
+    "Aangehouden: er wordt iets afgespeeld op een mediaserver.",
+  "settings.maintenanceExecutionReason.playbackUnknown":
+    "Aangehouden: een mediaserver kon niet worden gevraagd of er iets wordt afgespeeld.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+    "Aangehouden: de mediaserver toont een weergave die nieuwer is dan de opgeslagen kijkgeschiedenis.",
+  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+    "Aangehouden: de geschiedenis van de mediaserver toont een weergave door een account dat de kijkgeschiedenis niet meetelt.",
+  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+    "Aangehouden: de mediaserver kon de kijkgeschiedenis niet bevestigen voordat er werd gehandeld.",
+  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+    "Aangehouden: een verbonden mediaserver heeft geen overeenkomend item, dus de kijkgeschiedenis kon niet worden gecontroleerd voordat er werd gehandeld.",
+  "settings.refMaintFactsWatchedByAnyone":
+    "Of iemand met een account op een verbonden mediaserver het heeft afgespeeld, gekoppeld aan Scryer of niet; noemt niemand",
+  "settings.refMaintFactsLastWatchedByAnyoneAt":
+    "Wanneer iemand met een account op een verbonden mediaserver het voor het laatst heeft afgespeeld",
+  "settings.refMaintFactsWatchedByAnyoneValue":
+    "True wanneer een willekeurig account op een ingeschakelde mediaserver het heeft afgespeeld, ongeacht of het account aan een Scryer-gebruiker is gekoppeld; bij seizoenen en series telt elke uitgezonden aflevering. Onbekend met reden audience_not_read totdat een synchronisatie in de afgelopen 48 uur elk account op elke ingeschakelde verbinding heeft gelezen, en met de gebruikelijke redenen wanneer kijkfeiten onbekend zijn.",
+  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+    "RFC3339-tijdstempel van de meest recente weergave door een willekeurig account; afwezig met reden never_watched wanneer niemand het heeft afgespeeld, en onbekend met reden play_time_missing (episode_play_time_missing bij seizoenen en series) wanneer een weergave geen vastgelegde tijd heeft, of audience_not_read wanneer niet alle accounts zijn gelezen",
+  "settings.maintenancePreviewFacts": "Feiten die de regel las",
+  "setup.sourceImportProgress": "Bronnen importeren",
+  "setup.sourceImportInvalidRequest":
+    "Een geselecteerde bron is niet beschikbaar. Vernieuw de bronnendetectie en selecteer de bron opnieuw.",
+  "setup.sourceImportSelectionChanged":
+    "Verzonden bronselecties liggen vast. Probeer mislukte bronnen opnieuw vanuit Samenvatting.",
+  "setup.sourceImportNotOwned":
+    "Deze bronimport is niet beschikbaar voor je account.",
+  "setup.sourceImportQueueFull":
+    "De capaciteit voor bronimports is vol. Probeer het opnieuw zodra een andere import klaar is.",
+  "setup.sourceImportActive": "Deze bronimport loopt nog.",
+  "setup.sourceImportNotRetryable":
+    "Alleen mislukte of onderbroken bronnen kunnen opnieuw worden geprobeerd of overgeslagen.",
+  "setup.sourceImportUnresolved":
+    "Probeer onopgeloste bronnen opnieuw of sla ze expliciet over voordat je de installatie voltooit.",
+  "setup.sourceImportCredentialRequired":
+    "Voer de inloggegevens van de bron in voordat je doorgaat.",
+  "setup.sourceImportConfigConflict":
+    "De gereserveerde configuratie is gewijzigd. Controleer de bron voordat je het opnieuw probeert.",
+  "setup.sourceImportSourceNotReady":
+    "Wacht tot de bronnendetectie klaar is voordat je doorgaat.",
+  "setup.sourceImportResume": "Opnieuw verbinden met voortgang",
+  "setup.sourceImportLoading": "Voortgang van bronimport laden",
+  "setup.sourceImportCredential": "Gecorrigeerde inloggegevens voor {{name}}",
+  "setup.sourceImportRetry": "Mislukte bronnen opnieuw proberen",
+  "setup.sourceImportSkip": "Deze bron overslaan",
+  "setup.sourceImportItemFailed":
+    "Controleer de verbinding en inloggegevens en probeer het daarna opnieuw of sla over.",
+  "setup.sourceImportState.queued": "In wachtrij",
+  "setup.sourceImportState.installing": "Provider installeren",
+  "setup.sourceImportState.checking": "Verbinding controleren",
+  "setup.sourceImportState.saving": "Configuratie opslaan",
+  "setup.sourceImportState.succeeded": "Geïmporteerd",
+  "setup.sourceImportState.failed": "Mislukt",
+  "setup.sourceImportState.interrupted": "Onderbroken",
+  "setup.sourceImportState.skipped": "Overgeslagen",
 };
 
 export default nl;

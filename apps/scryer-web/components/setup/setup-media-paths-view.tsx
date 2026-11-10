@@ -149,7 +149,7 @@ export function SetupMediaPathsView({
                               onKeyDown={(event) =>
                                 handlePathInputKeyDown(event, target)
                               }
-                              className="cursor-pointer font-[var(--font-code)]"
+                              className="cursor-pointer font-[family-name:var(--font-code)]"
                               aria-invalid={invalid}
                             />
                           </div>

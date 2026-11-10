@@ -211,6 +211,8 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "runtime-plugin-trust")]
+    // Checks the bundled pack against the SHA-256 the catalog publishes for it.
+    #[allow(clippy::disallowed_types)]
     use sha2::{Digest, Sha256};
 
     #[test]
@@ -324,6 +326,8 @@ mod tests {
 
     #[cfg(feature = "runtime-plugin-trust")]
     #[test]
+    // Checks the bundled pack against the SHA-256 the catalog publishes for it.
+    #[allow(clippy::disallowed_types)]
     fn bundled_pack_checksum_matches_embedded_artifact() {
         let digest = Sha256::digest(include_bytes!("builtin_trash.json"));
         let checksum = digest

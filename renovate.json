@@ -18,6 +18,12 @@
       "groupName": "Rust dependencies"
     },
     {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["/^icu_/"],
+      "enabled": false,
+      "description": "icu_* collation data decides the persisted catalog sort keys; a bump needs a backfill migration, so it is never automatic."
+    },
+    {
       "matchManagers": ["npm"],
       "groupName": "npm dependencies"
     },

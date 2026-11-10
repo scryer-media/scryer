@@ -183,6 +183,8 @@ pub(crate) struct ResolvedReleaseSearchSubject {
     /// availability. Coverage from such a search proves nothing about the
     /// released catalog, so it is fingerprinted apart from released coverage.
     pub(crate) pre_release: bool,
+    /// The scoped episode's automatic acquisition window; absent for an unknown schedule.
+    pub(crate) episode_search_not_before: Option<DateTime<Utc>>,
 }
 
 /// How long after an air or availability date a search still counts as
@@ -229,6 +231,7 @@ pub(crate) enum ReleaseAutoDecisionCode {
     TitleMismatch,
     EpisodeMismatch,
     EpisodeNotMonitored,
+    EpisodeAvailabilityBlocked,
     AcquisitionPaused,
     AcquisitionStateUnavailable,
     CategoryMismatch,
@@ -285,6 +288,7 @@ impl ReleaseAutoDecisionCode {
             "title_mismatch" => Some(Self::TitleMismatch),
             "episode_mismatch" => Some(Self::EpisodeMismatch),
             "episode_not_monitored" => Some(Self::EpisodeNotMonitored),
+            "episode_availability_blocked" => Some(Self::EpisodeAvailabilityBlocked),
             "acquisition_paused" => Some(Self::AcquisitionPaused),
             "acquisition_state_unavailable" => Some(Self::AcquisitionStateUnavailable),
             // Deliberately the same string the pre-submission gate records on
@@ -326,6 +330,7 @@ impl ReleaseAutoDecisionCode {
             Self::TitleMismatch => "title_mismatch",
             Self::EpisodeMismatch => "episode_mismatch",
             Self::EpisodeNotMonitored => "episode_not_monitored",
+            Self::EpisodeAvailabilityBlocked => "episode_availability_blocked",
             Self::AcquisitionPaused => "acquisition_paused",
             Self::AcquisitionStateUnavailable => "acquisition_state_unavailable",
             Self::CategoryMismatch => "category_mismatch",
@@ -369,6 +374,9 @@ impl ReleaseAutoDecisionCode {
             // not match" and "one of these episodes is unmonitored" call for
             // different operator actions.
             Self::EpisodeNotMonitored => "release covers an episode this library is not monitoring",
+            Self::EpisodeAvailabilityBlocked => {
+                "episode has not reached its automatic acquisition window"
+            }
             Self::AcquisitionPaused => "acquisition is paused for content covered by this release",
             Self::AcquisitionStateUnavailable => {
                 "acquisition state could not be checked; try again"
@@ -460,8 +468,8 @@ pub(crate) struct AutoCandidateEvaluationContext<'a> {
     /// (`if (information.SearchCriteria != null) return Accept()`). The old-file
     /// guard binds only here.
     pub(crate) is_rss_lane: bool,
-    /// Interactive searches bypass protocol delay while retaining hard minimum
-    /// age and permanent diagnostics.
+    /// Interactive searches bypass protocol delay and the episode air window
+    /// while retaining hard minimum age and permanent diagnostics.
     pub(crate) user_invoked: bool,
     /// Publication timestamp of the oldest active pending release overlapping
     /// this scope. Populated only by the RSS merge lane.
@@ -955,7 +963,15 @@ pub(crate) fn match_parsed_release_with_asserted_ids(
     });
     let mut evidence_match =
         contextual_release_matches_title_evidence(parsed, evidence, root_or_episode_year)
-            .or_else(|| relaxed_release_matches_title_evidence(parsed, evidence, asserted_ids))?;
+            .or_else(|| relaxed_release_matches_title_evidence(parsed, evidence, asserted_ids))
+            .or_else(|| {
+                trailing_leftover_release_matches_title_evidence(
+                    parsed,
+                    evidence,
+                    asserted_ids,
+                    root_or_episode_year,
+                )
+            })?;
 
     if let (Some(parsed_year), Some(expected_year)) = (parsed.year, evidence.year)
         && parsed_year != expected_year
@@ -1094,6 +1110,147 @@ fn relaxed_release_matches_title_evidence(
                             &evidence.canonical_key,
                         ))),
         spelling: Some(matched),
+    })
+}
+
+/// Most trailing words an id-corroborated release may carry past a title key.
+const MAX_TRAILING_LEFTOVER_TOKENS: usize = 2;
+
+/// Words that, after a show's name, name a different catalog entry of it (a
+/// film, an OVA, a later season or cour) rather than a stray release tag.
+const IDENTITY_EXTENDING_LEFTOVER_WORDS: &[&str] = &[
+    "movie",
+    "film",
+    "gekijouban",
+    "ova",
+    "oad",
+    "ona",
+    "special",
+    "specials",
+    "season",
+    "part",
+    "cour",
+];
+
+fn is_roman_numeral_token(token: &str) -> bool {
+    matches!(
+        token,
+        "ii" | "iii" | "iv" | "v" | "vi" | "vii" | "viii" | "ix" | "x"
+    )
+}
+
+/// A trailing leftover is tolerable only when it looks like a stray tag: plain
+/// letters, never a number or numeral that could carry sequel or season
+/// numbering, and never a word that names another entry of the same show.
+fn trailing_leftover_token_is_tolerable(token: &str) -> bool {
+    !token.is_empty()
+        && token.chars().all(|ch| ch.is_ascii_alphabetic())
+        && !is_roman_numeral_token(token)
+        && !IDENTITY_EXTENDING_LEFTOVER_WORDS.contains(&token)
+}
+
+/// A bare group tag written as a trailing title word (`Title GRP S01E21`)
+/// keeps the neutral extraction one or two words longer than any key of the
+/// title. Text alone cannot tell such a tag from a word that belongs to the
+/// name (`Title SVU`, `Title Shippuden`), and an indexer text search returns
+/// those spin-offs for the base show, so this lane never accepts on text: it
+/// needs external ids that agree with the subject and conflict with nothing.
+/// The title key must still cover the head of the context-free extraction,
+/// so bias and ids refine an anchored identity and never manufacture one.
+fn trailing_leftover_release_matches_title_evidence(
+    parsed: &ParsedReleaseMetadata,
+    evidence: &CanonicalTitleEvidence,
+    asserted_ids: Option<bool>,
+    year_corroborated: bool,
+) -> Option<TitleEvidenceMatch> {
+    if evidence.spelling_identity.facet == MediaFacet::Movie.as_str() {
+        return None;
+    }
+    let ids = match (asserted_ids, evidence.spelling_identity.parsed_ids(parsed)) {
+        (Some(false), _) | (_, Some(false)) => return None,
+        (Some(true), _) | (_, Some(true)) => true,
+        _ => false,
+    };
+    if !ids {
+        return None;
+    }
+
+    let mut best: Option<(String, String, String)> = None;
+    for anchor_key in context_free_identity_anchor_keys(&parsed.raw_title) {
+        let tokens = anchor_key.split_whitespace().collect::<Vec<_>>();
+        let shortest_prefix = tokens
+            .len()
+            .saturating_sub(MAX_TRAILING_LEFTOVER_TOKENS)
+            .max(1);
+        for prefix_len in (shortest_prefix..tokens.len()).rev() {
+            let leftover = &tokens[prefix_len..];
+            if !leftover
+                .iter()
+                .all(|token| trailing_leftover_token_is_tolerable(token))
+            {
+                continue;
+            }
+            let prefix = tokens[..prefix_len].join(" ");
+            let Some(matched_key) = evidence_key_for_normalized(evidence, &prefix) else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .is_none_or(|(_, best_prefix, _)| prefix.len() > best_prefix.len())
+            {
+                best = Some((matched_key, prefix, leftover.join(" ")));
+            }
+            break;
+        }
+    }
+    let (matched_key, prefix, leftover) = best?;
+
+    // The target-biased parse must read that same key at the head of a title
+    // zone, so the leftover is the tail of the zone and not its start. A
+    // catalog alias can be written so that the parser never reads it back
+    // (`Name／Other (ABBR)`), so, as in the relaxed lane, the prefix that the
+    // context-free extraction already tied to a catalog key joins the context
+    // for this one parse only. Its position is still the parser's to decide.
+    let mut context = evidence.parse_context.clone();
+    context.aliases.push(crate::release_parser::ContextAlias {
+        name: prefix.clone(),
+    });
+    let contextual = crate::analyze_release_for_target(&parsed.raw_title, &context);
+    let candidate = contextual.best_candidate()?;
+    let confirmed = candidate.context_title_matches.iter().any(|hit| {
+        hit.kind != crate::release_parser::ContextTitleMatchKind::EpisodeTitle
+            && crate::title_matching::canonical_lookup_key(&hit.raw) == prefix
+            && candidate.zones.title_zones.iter().any(|zone| {
+                hit.token_range.start_token == zone.start_token
+                    && hit.token_range.end_token <= zone.end_token
+            })
+    });
+    if !confirmed {
+        tracing::debug!(
+            release = parsed.raw_title,
+            matched_alias = matched_key,
+            leftover,
+            "release title trailing leftover rejected: title key not at the head of a title zone"
+        );
+        return None;
+    }
+
+    let year_corroborated = year_corroborated
+        || (candidate.projected.year.is_some()
+            && evidence.year.is_some()
+            && candidate.projected.year == evidence.year);
+    tracing::debug!(
+        release = parsed.raw_title,
+        matched_alias = matched_key,
+        leftover,
+        "release title matched with a trailing leftover on external id agreement"
+    );
+    Some(TitleEvidenceMatch {
+        spelling: None,
+        matched_key,
+        year_corroborated,
+        id_corroborated: true,
+        requires_external_id: false,
     })
 }
 
@@ -1703,12 +1860,13 @@ pub(crate) fn incumbent_at_cutoff(
     subject: &crate::admission::AdmissionSubject,
     cutoff_score: Option<i32>,
 ) -> bool {
+    let best = subject.best_incumbent_record();
     quality_cutoff_met
-        && cutoff_score.is_none_or(|cutoff| {
-            subject
-                .best_incumbent()
-                .is_none_or(|(_, bar)| bar >= cutoff)
-        })
+        // A file the language preferences still want something from is never
+        // done: the search continues until a release in the preferred language
+        // (or, when configured, with every optional language) replaces it.
+        && best.is_none_or(|incumbent| !incumbent.language.wanted)
+        && cutoff_score.is_none_or(|cutoff| best.is_none_or(|incumbent| incumbent.score >= cutoff))
 }
 
 /// The one cutoff gate.
@@ -1825,6 +1983,7 @@ pub(crate) fn automatic_candidate_delay_decision(
         candidate_revision(candidate),
         candidate_score,
     )
+    .with_language(candidate_language(candidate))
     .with_release_title(&candidate.title)
     .with_revision_policy(
         candidate
@@ -2031,6 +2190,15 @@ fn candidate_is_pack_for_single_episode(candidate: &IndexerSearchResult) -> bool
         || episode.absolute_episode_numbers.len() >= SINGLE_EPISODE_PACK_MIN_EPISODES
 }
 
+/// The candidate's language standing, read off its scored decision like its
+/// score is. Neutral when the result was never scored.
+fn candidate_language(candidate: &IndexerSearchResult) -> crate::AudioLanguageRank {
+    candidate
+        .quality_profile_decision
+        .as_ref()
+        .map_or_else(Default::default, |decision| decision.language)
+}
+
 pub(crate) fn evaluate_auto_candidate(
     candidate: &IndexerSearchResult,
     context: &AutoCandidateEvaluationContext<'_>,
@@ -2185,6 +2353,15 @@ pub(crate) fn evaluate_auto_candidate(
         return ReleaseAutoDecisionCode::AmbiguousIdentity;
     }
 
+    if !context.user_invoked
+        && context
+            .subject
+            .episode_search_not_before
+            .is_some_and(|opens_at| *context.now < opens_at)
+    {
+        return ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked;
+    }
+
     let is_allowed = candidate
         .quality_profile_decision
         .as_ref()
@@ -2212,6 +2389,7 @@ pub(crate) fn evaluate_auto_candidate(
         candidate_revision(candidate),
         candidate_score,
     )
+    .with_language(candidate_language(candidate))
     .with_release_title(&candidate.title)
     .with_revision_policy(
         candidate
@@ -3105,6 +3283,7 @@ impl AppUseCase {
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
+            episode_search_not_before: None,
             pre_release: title.facet == MediaFacet::Movie
                 && movie_is_pre_release(
                     title.first_aired.as_deref(),
@@ -3302,6 +3481,11 @@ impl AppUseCase {
                     .and_then(|episode| episode.air_date.as_deref()),
                 &Utc::now(),
             ),
+            episode_search_not_before: crate::acquisition_policy::episode_search_not_before(
+                episode_record
+                    .as_ref()
+                    .and_then(|episode| episode.air_date.as_deref()),
+            ),
         })
     }
 
@@ -3431,6 +3615,7 @@ impl AppUseCase {
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Season,
                 submission_scope,
+                episode_search_not_before: None,
                 pre_release: false,
             },
             // Results come back under any name the index holds for the title,
@@ -3501,6 +3686,7 @@ impl AppUseCase {
                 submission_scope: SubmissionScope::SeriesMovie {
                     series_movie_link_id: link.id.clone(),
                 },
+                episode_search_not_before: None,
                 pre_release: false,
             },
         ))
@@ -3637,6 +3823,13 @@ impl AppUseCase {
                     _ => ReleaseSearchSubjectKind::Title,
                 },
                 submission_scope: direct_download_submission_scope_for_wanted_item(item, episode),
+                episode_search_not_before: if item.media_type == "episode" {
+                    crate::acquisition_policy::episode_search_not_before(
+                        episode.and_then(|episode| episode.air_date.as_deref()),
+                    )
+                } else {
+                    None
+                },
                 pre_release: match item.media_type.as_str() {
                     "episode" => episode_is_pre_release(
                         episode.and_then(|episode| episode.air_date.as_deref()),
@@ -4715,6 +4908,7 @@ mod tests {
                 episode_ids: episode_ids.iter().map(|id| (*id).to_string()).collect(),
             },
             pre_release: false,
+            episode_search_not_before: None,
         }
     }
 
@@ -4739,6 +4933,7 @@ mod tests {
                     file_path: "/data/Movies/Nightfall (2022)/Nightfall.mkv".to_string(),
                     release_group: None,
                     score,
+                    language: Default::default(),
                     covers: Vec::new(),
                     created_at: "2026-01-01T00:00:00Z".to_string(),
                 },
@@ -4757,6 +4952,7 @@ mod tests {
             tier_index: None,
             size_fit_penalty: 0,
             revision_preference: 0,
+            language: Default::default(),
         }
     }
 
@@ -4880,6 +5076,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
             pre_release: false,
+            episode_search_not_before: None,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -4958,6 +5155,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
             pre_release: false,
+            episode_search_not_before: None,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -5054,6 +5252,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Episode,
             submission_scope: SubmissionScope::Title,
             pre_release: false,
+            episode_search_not_before: None,
         }
     }
 
@@ -6010,6 +6209,89 @@ mod tests {
     }
 
     #[test]
+    fn issue_427_automatic_episode_acquisition_obeys_pre_air_window() {
+        let mut title = make_title();
+        title.name = "Example Show".into();
+        title.facet = MediaFacet::Series;
+        title.year = Some(2026);
+        title.aliases.clear();
+        title.tagged_aliases.clear();
+        let mut subject = numbering_scoped_subject(&title, Some(1), Some(1));
+        subject.submission_scope = SubmissionScope::Episode {
+            episode_id: "episode-1".into(),
+        };
+        let mut candidate = make_candidate(
+            "EXAMPLE.SHOW.S01E01.Pilot.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-GROUP",
+            None,
+        );
+        candidate.quality_profile_decision = Some(allowed_quality_decision(895));
+        let now = DateTime::parse_from_rfc3339("2026-11-04T08:19:43Z")
+            .expect("fixture time")
+            .with_timezone(&Utc);
+        let profile = QualityProfile::default();
+        let thresholds = AcquisitionThresholds::default();
+        let admission = empty_admission();
+        let db_blocklist = crate::app_usecase_discovery::TitleReleaseBlocklistSignatures::default();
+        let minimum_seeders = HashMap::new();
+        let unmonitored_episode_ids = HashSet::new();
+
+        // The window opens exactly EPISODE_PRE_AIR_WINDOW_HOURS before air.
+        let opens_now =
+            now + chrono::Duration::hours(crate::acquisition::policy::EPISODE_PRE_AIR_WINDOW_HOURS);
+        let at = |offset_seconds: i64| {
+            (opens_now + chrono::Duration::seconds(offset_seconds))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        };
+        for (air_date, blocked) in [
+            (Some("2026-11-23".to_string()), true),
+            (Some(at(1)), true),
+            (Some(at(0)), false),
+            (Some(at(-1)), false),
+            (Some("2026-11-03".to_string()), false),
+            (None, false),
+            (Some("unknown".to_string()), false),
+        ] {
+            let air_date = air_date.as_deref();
+            subject.episode_search_not_before =
+                crate::acquisition_policy::episode_search_not_before(air_date);
+            for is_rss_lane in [true, false] {
+                for user_invoked in [false, true] {
+                    let context = AutoCandidateEvaluationContext {
+                        title: &title,
+                        subject: &subject,
+                        admission: &admission,
+                        profile: &profile,
+                        thresholds: &thresholds,
+                        incumbent_at_cutoff: false,
+                        is_rss_lane,
+                        user_invoked,
+                        oldest_overlapping_pending_published_at: None,
+                        now: &now,
+                        dl_snapshot: None,
+                        db_blocklist: &db_blocklist,
+                        existing_files: &[],
+                        delay_profiles: &[],
+                        failed_routes: None,
+                        minimum_seeders: &minimum_seeders,
+                        unmonitored_episode_ids: &unmonitored_episode_ids,
+                    };
+                    assert_eq!(
+                        evaluate_auto_candidate(&candidate, &context),
+                        if blocked && !user_invoked {
+                            ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked
+                        } else {
+                            ReleaseAutoDecisionCode::Eligible
+                        },
+                        "{air_date:?}, rss={is_rss_lane}, manual={user_invoked}",
+                    );
+                }
+            }
+        }
+        let code = ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked;
+        assert_eq!(ReleaseAutoDecisionCode::parse(code.as_str()), Some(code));
+    }
+
+    #[test]
     fn numbered_episode_completion_title_is_not_rejected_as_an_unresolved_pack() {
         let title = make_title();
         let subject = numbering_scoped_subject(&title, Some(1), Some(1));
@@ -6479,6 +6761,191 @@ mod tests {
         );
     }
 
+    fn leftover_series_title(id: &str, name: &str, tvdb_id: &str) -> Title {
+        let mut title = make_title();
+        title.id = id.to_string();
+        title.name = name.to_string();
+        title.facet = MediaFacet::Anime;
+        title.year = Some(2014);
+        title.tagged_aliases.clear();
+        title.external_ids = vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())];
+        title
+    }
+
+    fn tvdb_response(tvdb_id: &str) -> IndexerResponseAttributes {
+        IndexerResponseAttributes {
+            tvdb_id: Some(tvdb_id.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn leftover_match(title: &Title, raw: &str, response: IndexerResponseAttributes) -> bool {
+        candidate_title_match(
+            &series_episode_candidate(raw, response),
+            &canonical_title_evidence(title),
+        )
+        .is_some()
+    }
+
+    #[test]
+    fn trailing_group_word_matches_only_on_external_id_agreement() {
+        let title = leftover_series_title("aokumo", "Aokumo no Kiroku", "900001");
+        let raw = "Aokumo no Kiroku TQX S01E21 1080p";
+
+        let matched = candidate_title_match(
+            &series_episode_candidate(raw, tvdb_response("900001")),
+            &canonical_title_evidence(&title),
+        )
+        .and_then(|title_match| title_match.evidence_match)
+        .expect("an agreeing indexer id corroborates the head-anchored key");
+        assert_eq!(matched.matched_key, "aokumo no kiroku");
+        assert!(matched.id_corroborated);
+        assert!(!matched.requires_external_id);
+
+        assert!(
+            !leftover_match(&title, raw, IndexerResponseAttributes::default()),
+            "text alone never accepts an extra trailing word"
+        );
+        assert!(
+            !leftover_match(&title, raw, tvdb_response("900002")),
+            "a conflicting id refuses the lane"
+        );
+        let mut mixed = tvdb_response("900001");
+        mixed.tmdb_id = Some("123456".to_string());
+        let mut with_tmdb = title.clone();
+        with_tmdb
+            .external_ids
+            .push(ExternalId::new("tmdb".to_string(), "654321".to_string()));
+        assert!(
+            !leftover_match(&with_tmdb, raw, mixed),
+            "any conflicting id refuses the lane even when another agrees"
+        );
+    }
+
+    #[test]
+    fn trailing_group_word_with_agreeing_ids_clears_the_automatic_title_gate() {
+        let title = leftover_series_title("aokumo", "Aokumo no Kiroku", "900001");
+        let subject = numbering_scoped_subject(&title, Some(1), Some(21));
+        let raw = "Aokumo.no.Kiroku.TQX.S01E21.1080p.WEB-DL";
+
+        assert_eq!(
+            decision_for(
+                &title,
+                &subject,
+                &series_episode_candidate(raw, tvdb_response("900001"))
+            ),
+            ReleaseAutoDecisionCode::QualityBlocked,
+            "identity passes, so only the default profile refuses it"
+        );
+        assert_eq!(
+            decision_for(&title, &subject, &make_candidate(raw, None)),
+            ReleaseAutoDecisionCode::TitleMismatch
+        );
+    }
+
+    #[test]
+    fn spin_off_carrying_its_own_id_is_refused_for_the_base_show() {
+        let base = leftover_series_title("hoshikage", "Hoshikage", "900010");
+        let raw = "Hoshikage Shippuden S01E05 1080p";
+
+        assert!(!leftover_match(&base, raw, tvdb_response("900011")));
+        assert!(!leftover_match(
+            &base,
+            raw,
+            IndexerResponseAttributes::default()
+        ));
+    }
+
+    #[test]
+    fn trailing_leftover_lane_refuses_numbering_and_identity_extending_words() {
+        let base = leftover_series_title("hoshikage", "Hoshikage Kiroku", "900010");
+        for raw in [
+            "Hoshikage Kiroku 2 S01E05 1080p",
+            "Hoshikage Kiroku II S01E05 1080p",
+            "Hoshikage Kiroku Movie S01E05 1080p",
+            "Hoshikage Kiroku OVA S01E05 1080p",
+            "Hoshikage Kiroku Final Arc Saga S01E05 1080p",
+            "Ryuusei Hoshikage Kiroku S01E05 1080p",
+        ] {
+            assert!(
+                !leftover_match(&base, raw, tvdb_response("900010")),
+                "{raw}"
+            );
+        }
+        assert!(leftover_match(
+            &base,
+            "Hoshikage Kiroku Ryu Grp S01E05 1080p",
+            tvdb_response("900010")
+        ));
+    }
+
+    #[test]
+    fn trailing_leftover_lane_keeps_the_year_veto() {
+        let base = leftover_series_title("hoshikage", "Hoshikage Kiroku", "900010");
+        assert!(leftover_match(
+            &base,
+            "Hoshikage Kiroku TQX 2014 S01E05 1080p",
+            tvdb_response("900010")
+        ));
+        assert!(!leftover_match(
+            &base,
+            "Hoshikage Kiroku TQX 2009 S01E05 1080p",
+            tvdb_response("900010")
+        ));
+    }
+
+    #[test]
+    fn trailing_group_word_after_a_slashed_abbreviation_alias_matches_on_id_agreement() {
+        // The catalog spells the alias with a fullwidth slash and a bracketed
+        // abbreviation, a form the target-biased parse never reads back from
+        // a release on its own.
+        let mut title =
+            leftover_series_title("tsukikage", "Tsukikage Yoru Mugen Kenseikai", "900030");
+        title.aliases.push("Tsukikage／Yoru (MKS)".to_string());
+        title.tagged_aliases.push(TaggedAlias {
+            name: "Tsukikage／Yoru (MKS)".to_string(),
+            language: "jpn".to_string(),
+            country: None,
+        });
+        let raw = "Tsukikage Yoru MKS TQX S01E21 1080p";
+
+        let matched = candidate_title_match(
+            &series_episode_candidate(raw, tvdb_response("900030")),
+            &canonical_title_evidence(&title),
+        )
+        .and_then(|title_match| title_match.evidence_match)
+        .expect("an agreeing indexer id corroborates the abbreviated alias");
+        assert_eq!(matched.matched_key, "tsukikage yoru mks");
+        assert!(matched.id_corroborated);
+        assert!(!matched.requires_external_id);
+
+        assert!(
+            !leftover_match(&title, raw, IndexerResponseAttributes::default()),
+            "text alone never accepts an extra trailing word"
+        );
+        assert!(
+            !leftover_match(&title, raw, tvdb_response("900031")),
+            "a conflicting id refuses the lane"
+        );
+    }
+
+    #[test]
+    fn trailing_leftover_lane_never_applies_to_movie_subjects() {
+        let mut movie = leftover_series_title("amber", "Amber Circuit", "900020");
+        movie.facet = MediaFacet::Movie;
+        movie.year = Some(2026);
+        movie.external_ids = vec![ExternalId::new("tmdb".to_string(), "900020".to_string())];
+        let response = IndexerResponseAttributes {
+            tmdb_id: Some("900020".to_string()),
+            ..Default::default()
+        };
+        assert!(!leftover_match(
+            &movie,
+            "Amber.Circuit.TQX.2026.1080p.WEB-DL",
+            response
+        ));
+    }
+
     #[tokio::test]
     async fn category_contradiction_outranks_identity_ambiguity() {
         // The incident release is both anime-categorized and identity-ambiguous.
@@ -6594,6 +7061,7 @@ mod tests {
                     file_path: existing[0].file_path.clone(),
                     release_group: None,
                     score: 900,
+                    language: Default::default(),
                     covers: vec!["episode-1".to_string()],
                     created_at: existing[0].created_at.clone(),
                 },
@@ -6750,6 +7218,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
             pre_release: false,
+            episode_search_not_before: None,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -6809,6 +7278,7 @@ mod tests {
                         file_path: "/data/Movies/Nightfall (2022)/Nightfall.mkv".to_string(),
                         release_group: None,
                         score,
+                        language: Default::default(),
                         covers: Vec::new(),
                         created_at: "2026-08-20T00:00:00Z".to_string(),
                     },
@@ -6842,6 +7312,7 @@ mod tests {
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 submission_scope: SubmissionScope::Title,
                 pre_release: false,
+                episode_search_not_before: None,
             }
         }
 
@@ -6857,6 +7328,7 @@ mod tests {
                         file_path: "/data/Movies/Nightfall (2022)/Nightfall.mkv".to_string(),
                         release_group: Some("GRP".into()),
                         score: 900,
+                        language: Default::default(),
                         covers: Vec::new(),
                         created_at: (now() - chrono::Duration::days(days_ago)).to_rfc3339(),
                     },
@@ -6889,6 +7361,24 @@ mod tests {
             let empty = AdmissionSubject::new(AdmissionScope::Title, []);
             assert!(incumbent_at_cutoff(true, &empty, Some(500)));
             assert!(!incumbent_at_cutoff(false, &empty, Some(500)));
+        }
+
+        /// A file the audio language preferences still want something from is
+        /// never finished, whatever its quality and score: that is what keeps
+        /// an English file searched for until a German release replaces it.
+        #[test]
+        fn a_file_missing_the_preferred_language_is_never_at_cutoff() {
+            let mut english = holding_at(600);
+            let wanted = crate::AudioLanguageRank::for_test(1, 0, true);
+            english = AdmissionSubject::new(
+                AdmissionScope::Title,
+                english.incumbents().iter().cloned().map(|mut incumbent| {
+                    incumbent.language = wanted;
+                    (incumbent, true)
+                }),
+            );
+            assert!(!incumbent_at_cutoff(true, &english, Some(500)));
+            assert!(!incumbent_at_cutoff(true, &english, None));
         }
 
         /// …and through the real gate: a same-tier candidate scoring 600 over a
@@ -7146,6 +7636,7 @@ mod tests {
                         file_path: format!("/data/TV/{id}.mkv"),
                         release_group: Some("GRP".into()),
                         score,
+                        language: Default::default(),
                         covers: vec![covers.to_string()],
                         created_at: (now() - chrono::Duration::days(days_ago)).to_rfc3339(),
                     },
@@ -7336,6 +7827,7 @@ mod tests {
                     file_path: format!("/data/TV/Nightfall/{id}.mkv"),
                     release_group: None,
                     score: incumbent_score,
+                    language: Default::default(),
                     covers: vec![id.to_string()],
                     created_at: (now - chrono::Duration::hours(2)).to_rfc3339(),
                 },
@@ -7417,6 +7909,7 @@ mod tests {
                         file_path: file.file_path.clone(),
                         release_group: None,
                         score: 900,
+                        language: Default::default(),
                         covers: vec!["episode-1".to_string()],
                         created_at: file.created_at.clone(),
                     },

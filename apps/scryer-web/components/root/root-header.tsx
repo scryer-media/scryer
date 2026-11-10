@@ -1347,9 +1347,7 @@ export const RootHeader = React.memo(function RootHeader({
         data-slot="root-header"
         className={cn(
           "relative z-50 border-b border-[var(--scry-border3)] bg-transparent pt-safe-comfort px-safe backdrop-blur transition-transform duration-200 ease-out",
-          isMobile
-            ? "fixed inset-x-0 top-[var(--root-shell-top-offset,0px)]"
-            : "sticky top-0",
+          isMobile ? "fixed inset-x-0 top-0" : "sticky top-0",
           isMobile
             ? !isMobileHeaderVisible
               ? "-translate-y-full"
@@ -1357,13 +1355,13 @@ export const RootHeader = React.memo(function RootHeader({
             : null,
         )}
       >
-        <div className="flex w-full items-center gap-3 px-[15px] py-[11px] sm:gap-[18px] sm:px-[26px] sm:py-3.5 min-[981px]:grid min-[981px]:grid-cols-[minmax(0,1fr)_minmax(0,660px)_minmax(0,1fr)]">
+        <div className="flex w-full items-center gap-3 px-[15px] py-[11px] sm:gap-[18px] sm:px-[26px] sm:py-3.5 min-[1280px]:grid min-[1280px]:grid-cols-[minmax(0,1fr)_minmax(0,660px)_minmax(0,1fr)]">
           {mobileNavigation ? (
-            <div className="shrink-0 min-[981px]:hidden">
+            <div className="shrink-0 min-[1280px]:hidden">
               {mobileNavigation}
             </div>
           ) : null}
-          <div className="relative flex min-w-0 flex-1 items-center gap-3 min-[981px]:col-start-2 min-[981px]:w-full min-[981px]:-translate-x-[calc(var(--sidebar-width,0px)/2)]">
+          <div className="relative flex min-w-0 flex-1 items-center gap-3 min-[1280px]:col-start-2 min-[1280px]:w-full min-[1280px]:-translate-x-[calc(var(--sidebar-width,0px)/2)]">
             <div ref={searchShellRef} className="relative w-full max-w-[660px]">
               {isMobile ? (
                 <button
@@ -1784,7 +1782,7 @@ export const RootHeader = React.memo(function RootHeader({
             </div>
           </div>
           {user ? (
-            <div className="shrink-0 min-[981px]:col-start-3 min-[981px]:justify-self-end">
+            <div className="shrink-0 min-[1280px]:col-start-3 min-[1280px]:justify-self-end">
               <Popover open={accountMenuOpen} onOpenChange={setAccountMenuOpen}>
                 <PopoverTrigger asChild>
                   <Button
@@ -1881,6 +1879,7 @@ export const RootHeader = React.memo(function RootHeader({
       {isMobile ? (
         <div
           aria-hidden="true"
+          data-slot="root-header-spacer"
           className="shrink-0"
           style={{ height: mobileHeaderHeight }}
         />

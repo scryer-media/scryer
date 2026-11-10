@@ -55,8 +55,14 @@ ${LOGIN_PAYLOAD_FIELDS}
 export const completeInitialAuthenticationMutation = `mutation CompleteInitialAuthentication($input: CompleteInitialAuthenticationInput!) {
   completeInitialAuthentication(input: $input) {
     completed
+    restartRequiredForBind
+    bindIgnoredBecausePinned
     login { ${LOGIN_PAYLOAD_FIELDS} }
   }
+}`;
+
+export const restartForNetworkChangeMutation = `mutation RestartForNetworkChange {
+  restartForNetworkChange
 }`;
 
 export const completeRequiredPasswordChangeMutation = `mutation CompleteRequiredPasswordChange($input: CompleteRequiredPasswordChangeInput!) {
@@ -777,6 +783,11 @@ export const createLibraryMutation = `mutation CreateLibrary($input: CreateLibra
 
 export const updateLibraryMutation = `mutation UpdateLibrary($input: UpdateLibraryInput!) {
   updateLibrary(input: $input) {${LIBRARY_FIELDS}
+    roots {
+      id
+      titleCount
+    }
+    removedTitleCount
   }
 }`;
 
@@ -882,9 +893,9 @@ export const testSubtitleProviderConnectionMutation = `mutation TestSubtitleProv
 export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSettings($input: UpdateAcquisitionSettingsInput!) {
   updateAcquisitionSettings(input: $input) {
     enabled
-    sameTierMinDelta
     pollIntervalSeconds
     walkIntervalSeconds
+    walkIntensity
     longTailBackfillMaxScopesPerCycle
     longTailReconvergeDays
   }
@@ -929,6 +940,8 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -970,6 +983,8 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -1010,6 +1025,8 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -1364,7 +1381,8 @@ const qualityProfileCriteriaFields = `
         blockUpscaled
       }
       cutoffTier
-      minScoreToGrab`;
+      minScoreToGrab
+      minUpgradeScoreDelta`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
@@ -1412,6 +1430,10 @@ const mediaSettingsFieldSelection = `
       isDefault
     }
     requiredAudioLanguages
+    preferredAudioLanguages
+    optionalAudioLanguages
+    audioLanguagePriority
+    optionalAudioLanguagesKeepSearching
     useSeasonFolders
     folderTemplate
     seasonFolderTemplate
@@ -1433,11 +1455,6 @@ const mediaSettingsFieldSelection = `
     folderChmod
     chownGroup`;
 
-const libraryPathsFieldSelection = `
-    moviePath
-    seriesPath
-    animePath`;
-
 const serviceSettingsFieldSelection = `
     tlsCertPath
     tlsKeyPath
@@ -1454,6 +1471,14 @@ const serviceSettingsFieldSelection = `
     basePathSource
     bindAddress
     bindSource
+    bindSavedHost
+    bindEditable
+    bindPinnedBy
+    bindPending
+    bindRestartRequired
+    bindFallbackCode
+    bindFallbackAddress
+    bindFallbackReason
     passkeyRpId
     passkeyRpOrigin
     passkeyRpSource
@@ -1483,11 +1508,6 @@ export const updateIndexerRoutingMutation = `mutation UpdateIndexerRouting($inpu
 
 export const updateMediaSettingsMutation = `mutation UpdateMediaSettings($input: UpdateMediaSettingsInput!) {
   updateMediaSettings(input: $input) {${mediaSettingsFieldSelection}
-  }
-}`;
-
-export const updateLibraryPathsMutation = `mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
-  updateLibraryPaths(input: $input) {${libraryPathsFieldSelection}
   }
 }`;
 
@@ -2043,12 +2063,17 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       skipReason
       skippedUntil
       rateLimited
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt
@@ -2075,12 +2100,17 @@ export const continueInteractiveReleaseSearchMutation = `mutation ContinueIntera
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       skipReason
       skippedUntil
       rateLimited
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt
@@ -2142,6 +2172,36 @@ export const forceGrabPendingReleaseMutation = `mutation ForceGrabPendingRelease
   forceGrabPendingRelease(id: $id) {
     id
     grabbed
+  }
+}`;
+
+export const queueStandbyReleaseMutation = `mutation QueueStandbyRelease($id: ID!, $choice: StandbyQueueChoiceValue!, $confirmed: [StandbyConflictIdentityInput!]!) {
+  queueStandbyRelease(id: $id, choice: $choice, confirmed: $confirmed) {
+    grabbed
+    conflicts {
+      downloadClientId
+      downloadClientType
+      downloadClientItemId
+      sourceTitle
+      titleName
+      state
+    }
+    cancelled {
+      downloadClientId
+      downloadClientType
+      downloadClientItemId
+      sourceTitle
+      titleName
+      state
+    }
+    cancelFailed {
+      downloadClientId
+      downloadClientType
+      downloadClientItemId
+      sourceTitle
+      titleName
+      state
+    }
   }
 }`;
 
@@ -2782,6 +2842,7 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
       outcome
       reasonCodes
       error
+      facts
     }
   }
 }`;
@@ -2916,8 +2977,8 @@ export const setTitleRequiredAudioMutation = `mutation SetTitleRequiredAudio($in
 
 // ── Setup Wizard ──────────────────────────────────────────────────────
 
-export const completeSetupMutation = `mutation CompleteSetup {
-  completeSetup {
+export const completeSetupMutation = `mutation CompleteSetup($sourceImportRunId: ID) {
+  completeSetup(sourceImportRunId: $sourceImportRunId) {
     completed
   }
 }`;
@@ -3016,14 +3077,18 @@ export const previewExternalImportMutation = `mutation PreviewExternalImport($in
   }
 }`;
 
-export const executeExternalImportMutation = `mutation ExecuteExternalImport($input: ExecuteExternalImportInput!) {
-  executeExternalImport(input: $input) {
-    mediaPathsSaved
-    downloadClientsCreated
-    indexersCreated
-    pluginsInstalled
-    errors
-  }
+const sourceImportJobFields = `runId active ready updatedAt items { key name configId kind state reason message }`;
+export const startExternalImportSourcesMutation = `mutation StartExternalImportSources($requestKey: String!, $input: ExecuteExternalImportInput!) {
+  startExternalImportSources(requestKey: $requestKey, input: $input) { ${sourceImportJobFields} }
+}`;
+export const externalImportSourceStatusMutation = `mutation ExternalImportSourceStatus($runId: ID!) {
+  externalImportSourceStatus(runId: $runId) { ${sourceImportJobFields} }
+}`;
+export const retryExternalImportSourcesMutation = `mutation RetryExternalImportSources($runId: ID!, $corrections: [IndexerApiKeyOverrideInput!]!) {
+  retryExternalImportSources(runId: $runId, corrections: $corrections) { ${sourceImportJobFields} }
+}`;
+export const skipExternalImportSourceMutation = `mutation SkipExternalImportSource($runId: ID!, $key: String!) {
+  skipExternalImportSource(runId: $runId, key: $key) { ${sourceImportJobFields} }
 }`;
 
 export const finalizeExternalImportMutation = `mutation FinalizeExternalImport($input: FinalizeExternalImportInput!) {
@@ -3154,6 +3219,7 @@ export type ExternalImportSourceLibraryMappingInput = {
 };
 
 export type FinalizeExternalImportInput = {
+  sourceImportRunId?: string | null;
   sourceWarmupSessionIds: string[];
   mappings: ExternalImportSourceLibraryMappingInput[];
 };

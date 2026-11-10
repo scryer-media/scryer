@@ -44,6 +44,7 @@ impl RecoveryPlan {
                 })
                 .collect(),
             outcomes: Default::default(),
+            planned_rename_sources: Default::default(),
         }])
     }
 }
@@ -280,10 +281,7 @@ impl AppUseCase {
                 super::super::operations::LocationJobRunActor::Resumed(None),
             )
             .await?;
-        self.services
-            .library
-            .location_operations
-            .set_location_operation_job_run(operation_id, &job.id)
+        self.point_location_operation_at_job_run(operation_id, &job)
             .await?;
         let observer = super::super::operations::LocationJobRunProgress {
             app: self.clone(),
@@ -319,6 +317,7 @@ impl AppUseCase {
                     current_file: None,
                     copying: 0,
                     verifying: 0,
+                    recording: 0,
                     detail: plan.unresolved.clone(),
                 }],
             )
