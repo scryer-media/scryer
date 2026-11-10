@@ -22493,3 +22493,233 @@ mod held_sources {
         }
     }
 }
+
+/// An import the title folder check refuses until the operator acts (here,
+/// another title owns the folder) waits in Import instead of retrying forever.
+#[tokio::test]
+async fn import_refused_by_the_title_folder_waits_for_the_operator() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) =
+        bootstrap_with_cleanup_tracking(download_client, download_submissions, pending_releases);
+    let import_repo = Arc::new(TrackingImportRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_imports(import_repo)
+            .with_file_importer(Arc::new(CopyingFileImporter))
+            .with_media_files(Arc::new(MockMediaFileRepo::default()))
+    });
+    let library_dir = tempfile::tempdir().expect("library tempdir");
+    register_import_fixture_root(&app, MediaFacet::Series, library_dir.path()).await;
+    let shared_folder = library_dir.path().join("Copper Kettle");
+    std::fs::create_dir_all(&shared_folder).expect("create shared folder");
+    let mut titles = Vec::new();
+    for name in ["Copper Kettle", "Copper Kettle Night"] {
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: name.to_string(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create series title");
+        app.services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, &shared_folder.to_string_lossy())
+            .await
+            .expect("record title folder");
+        titles.push(title);
+    }
+    let title = &titles[1];
+    let collection = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "3".into(),
+            Some("Season 3".into()),
+            None,
+            Some("4".into()),
+            Some("4".into()),
+        )
+        .await
+        .expect("create season");
+    app.create_episode(
+        &user,
+        title.id.clone(),
+        Some(collection.id),
+        "standard".into(),
+        Some("4".into()),
+        Some("3".into()),
+        Some("S03E04".into()),
+        Some("Fourth".into()),
+        None,
+        Some(1_500),
+        false,
+        false,
+    )
+    .await
+    .expect("create episode");
+
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let release_name = "Copper.Kettle.Night.S03E04.1080p.WEB-DL";
+    let source_dir = source_root.path().join(release_name);
+    std::fs::create_dir_all(&source_dir).expect("create source folder");
+    std::fs::File::create(source_dir.join(format!("{release_name}.mkv")))
+        .and_then(|file| file.set_len(128 * 1024 * 1024))
+        .expect("write source video");
+    let mut completed = completed_download_fixture_item(
+        "folder-refusal-1",
+        &title.id,
+        release_name,
+        &source_dir.to_string_lossy(),
+    );
+    completed.client_type = "weaver".to_string();
+    completed.client_id = "weaver-client".to_string();
+    completed.category = Some("series".to_string());
+    completed.parameters = vec![
+        ("*scryer_title_id".to_string(), title.id.clone()),
+        ("*scryer_facet".to_string(), "series".to_string()),
+    ];
+
+    let result = crate::import::import::import_completed_download(&app, &user, &completed)
+        .await
+        .expect("completed import should run");
+
+    assert_eq!(
+        result.skip_reason,
+        Some(ImportSkipReason::TitleFolderConflict),
+        "unexpected import result: {result:?}"
+    );
+    assert!(
+        !crate::import_workflow::completed_import_result_is_retryable(&result),
+        "a folder refusal must not retry on its own: {result:?}"
+    );
+    assert!(
+        source_dir.join(format!("{release_name}.mkv")).exists(),
+        "the refused source stays in place"
+    );
+}
+
+/// A queued release whose folder name has a typo still imports: the
+/// submission binds it to the title, and the inner file names the episode.
+#[tokio::test]
+async fn a_bound_download_imports_despite_a_typo_in_its_folder_name() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let import_repo = Arc::new(TrackingImportRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_imports(import_repo)
+            .with_file_importer(Arc::new(CopyingFileImporter))
+            .with_media_files(media_files)
+    });
+    let library_dir = tempfile::tempdir().expect("library tempdir");
+    register_import_fixture_root(&app, MediaFacet::Series, library_dir.path()).await;
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Copper & Kettle's Long Night".to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series title");
+    let collection = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "3".into(),
+            Some("Season 3".into()),
+            None,
+            Some("3".into()),
+            Some("3".into()),
+        )
+        .await
+        .expect("create season");
+    let episode = app
+        .create_episode(
+            &user,
+            title.id.clone(),
+            Some(collection.id),
+            "standard".into(),
+            Some("4".into()),
+            Some("3".into()),
+            Some("S03E04".into()),
+            Some("Fourth".into()),
+            None,
+            Some(1_500),
+            false,
+            false,
+        )
+        .await
+        .expect("create episode");
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let folder = "Copper.And.And.Kettles.Long.Night.S03E04.2160p.AMZN.WEB-DL.DDP5.1.HEVC-FLUX";
+    let source_dir = source_root.path().join(folder);
+    tokio::fs::create_dir_all(&source_dir).await.unwrap();
+    std::fs::File::create(
+        source_dir
+            .join("Copper.and.Kettles.Long.Night.S03E04.2160p.AMZN.WEB-DL.DDP5.1.HEVC-FLUX.mkv"),
+    )
+    .and_then(|file| file.set_len(128 * 1024 * 1024))
+    .unwrap();
+    download_submissions
+        .record_submission_with_identity(
+            DownloadSubmission {
+                download_id: scryer_domain::download_identity::DownloadId::new(),
+                title_id: title.id.clone(),
+                purpose: crate::DownloadSubmissionPurpose::OperatorQueued,
+                facet: "series".to_string(),
+                download_client_id: Some("weaver-client".to_string()),
+                download_client_type: "weaver".to_string(),
+                download_client_item_id: "typo-1".to_string(),
+                source_hint: None,
+                source_provider_id: None,
+                source_provider_name: Some("Fixture Indexer".to_string()),
+                source_kind: None,
+                source_title: Some(folder.to_string()),
+                info_hash: None,
+                release_size_bytes: None,
+                request_signature: None,
+                scope: SubmissionScope::Title,
+                release_listing_json: None,
+            },
+            DownloadSubmissionIdentity::default(),
+            None,
+        )
+        .await
+        .expect("record submission");
+    let mut completed =
+        completed_download_fixture_item("typo-1", &title.id, folder, &source_dir.to_string_lossy());
+    completed.client_type = "weaver".to_string();
+    completed.client_id = "weaver-client".to_string();
+    completed.category = Some("series".to_string());
+    completed.parameters = vec![];
+    let result = crate::import::import::import_completed_download(&app, &user, &completed)
+        .await
+        .expect("import should run");
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "unexpected import result: {result:?}"
+    );
+    assert_eq!(result.episode_ids, vec![episode.id]);
+}

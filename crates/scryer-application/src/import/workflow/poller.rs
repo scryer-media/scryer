@@ -673,14 +673,56 @@ fn completed_import_error_skip_reason(error: &AppError) -> Option<ImportSkipReas
         Some(ImportSkipReason::ArchiveExtractionPluginRequired)
     } else if crate::archive_extractor::is_timeout_error(error) {
         Some(ImportSkipReason::ArchiveExtractionTimedOut)
+    } else if error
+        .validation_reason()
+        .is_some_and(title_folder_refusal_needs_operator)
+    {
+        Some(ImportSkipReason::TitleFolderConflict)
     } else {
         None
     }
 }
 
+/// Folder refusals that stay true until the operator changes a title's folder
+/// or ownership. Retrying them only repeats the refusal, so the import waits
+/// for the operator instead. A folder that cannot be read or compared right
+/// now, or that changed mid-check, may clear by itself and keeps retrying.
+fn title_folder_refusal_needs_operator(reason: &str) -> bool {
+    use crate::error_reasons::folder_ownership as folder;
+    [
+        folder::TITLE_FOLDER_INVALID,
+        folder::TITLE_FOLDER_PATH_REQUIRED,
+        folder::PATH_OUTSIDE_LIBRARY_ROOT,
+        folder::FOLDER_NOT_TITLE_BOUNDARY,
+        folder::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE,
+        folder::FOLDER_ALREADY_OWNED_TITLE,
+        folder::TITLE_ALREADY_OWNS_ANOTHER_FOLDER,
+        folder::CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER,
+    ]
+    .contains(&reason)
+}
+
 #[cfg(test)]
 mod poller_tests {
     use super::*;
+
+    #[test]
+    fn only_a_folder_refusal_the_operator_must_resolve_stops_retrying() {
+        use crate::error_reasons::folder_ownership as folder;
+        let owned = AppError::validation_refused(
+            folder::FOLDER_ALREADY_OWNED_TITLE,
+            "folder is already owned by another title",
+        );
+        assert_eq!(
+            completed_import_error_skip_reason(&owned),
+            Some(ImportSkipReason::TitleFolderConflict)
+        );
+        let unreadable = AppError::validation_refused(
+            folder::CANNOT_INSPECT_TITLE_FOLDER,
+            "cannot inspect title folder",
+        );
+        assert_eq!(completed_import_error_skip_reason(&unreadable), None);
+    }
 
     #[test]
     fn missing_archive_extractor_is_not_an_automatic_retry() {

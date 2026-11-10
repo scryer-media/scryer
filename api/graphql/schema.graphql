@@ -8571,6 +8571,10 @@ enum ImportSkipReasonValue {
 	Archive extraction exceeded its configured time limit.
 	"""
 	ARCHIVE_EXTRACTION_TIMED_OUT
+	"""
+	The title's folder must be resolved before the import can run.
+	"""
+	TITLE_FOLDER_CONFLICT
 }
 
 """

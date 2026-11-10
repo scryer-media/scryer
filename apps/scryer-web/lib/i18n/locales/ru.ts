@@ -6520,6 +6520,8 @@ const ru: LocaleDictionary = {
     "Требуется средство распаковки архивов",
   "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT":
     "Истекло время ожидания распаковки архива",
+  "importHistory.skipReason.TITLE_FOLDER_CONFLICT":
+    "Папка тайтла требует внимания",
   "error.reason.LIST_SOURCE_RATE_LIMITED":
     "Поставщик списков запросил снижение частоты запросов.",
   "error.reason.LIST_SOURCE_UNAVAILABLE":
