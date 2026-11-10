@@ -240,6 +240,8 @@ const en: LocaleDictionary = {
     "Archive extractor required",
   "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT":
     "Archive extraction timed out",
+  "importHistory.skipReason.TITLE_FOLDER_CONFLICT":
+    "Title folder needs attention",
 
   "error.reason.LIST_SOURCE_RATE_LIMITED":
     "The list provider asked for fewer requests.",

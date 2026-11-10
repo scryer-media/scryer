@@ -1333,6 +1333,8 @@ pub enum ImportSkipReasonValue {
     ArchiveExtractionPluginRequired,
     /// Archive extraction exceeded its configured time limit.
     ArchiveExtractionTimedOut,
+    /// The title's folder must be resolved before the import can run.
+    TitleFolderConflict,
 }
 
 impl ImportSkipReasonValue {
@@ -1357,6 +1359,7 @@ impl ImportSkipReasonValue {
                 Self::ArchiveExtractionPluginRequired
             }
             ImportSkipReason::ArchiveExtractionTimedOut => Self::ArchiveExtractionTimedOut,
+            ImportSkipReason::TitleFolderConflict => Self::TitleFolderConflict,
         }
     }
 }
