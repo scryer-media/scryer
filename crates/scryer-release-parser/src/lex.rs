@@ -52,6 +52,9 @@ pub struct Token {
     pub normalized: String,
     pub span: TextSpan,
     pub separator_before: SeparatorKind,
+    /// Whitespace in the separator run, even when its kind folds to a hyphen.
+    #[serde(default)]
+    pub separator_before_has_space: bool,
     pub separator_after: SeparatorKind,
     pub group_id: Option<usize>,
     pub bracket_depth: u8,
@@ -190,6 +193,11 @@ fn build_token(
         normalized: normalize_token(raw),
         span: TextSpan { start, end },
         separator_before,
+        separator_before_has_space: input[..start]
+            .chars()
+            .rev()
+            .take_while(|ch| is_separator(*ch))
+            .any(char::is_whitespace),
         separator_after,
         group_id,
         bracket_depth: bracket_depth.min(MAX_BRACKET_DEPTH) as u8,

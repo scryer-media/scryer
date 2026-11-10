@@ -2180,6 +2180,8 @@ const it: LocaleDictionary = {
   "wanted.decision.eligible": "Idoneo",
   "wanted.decision.titleMismatch": "Titolo non corrispondente",
   "wanted.decision.qualityBlocked": "Bloccato dalla qualità",
+  "wanted.decision.episodeAvailabilityBlocked":
+    "In attesa della data di messa in onda",
   "wanted.decision.upgradeRejected": "Aggiornamento rifiutato",
   "wanted.decision.pendingDelay": "Ritardo in attesa",
   "wanted.decision.alreadyActive": "Già attivo",

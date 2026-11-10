@@ -2,8 +2,9 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 
 use crate::quality_profile::{DEFAULT_MIN_UPGRADE_SCORE_DELTA, QualityProfileCriteria};
 
-/// Episodes become searchable six hours before air time.
-pub(crate) const EPISODE_PRE_AIR_WINDOW_HOURS: i64 = 6;
+/// Episodes become searchable twelve hours before air time, for active search
+/// and for automatic RSS grabs alike.
+pub(crate) const EPISODE_PRE_AIR_WINDOW_HOURS: i64 = 12;
 
 /// Thresholds for the acquisition upgrade policy.
 ///
@@ -53,8 +54,12 @@ pub(crate) fn episode_search_window_is_open(
     baseline_date: Option<&str>,
     now: &DateTime<Utc>,
 ) -> bool {
+    episode_search_not_before(baseline_date).is_some_and(|opens_at| *now >= opens_at)
+}
+
+pub(crate) fn episode_search_not_before(baseline_date: Option<&str>) -> Option<DateTime<Utc>> {
     parse_schedule_baseline_date(baseline_date)
-        .is_some_and(|baseline| *now >= baseline - Duration::hours(EPISODE_PRE_AIR_WINDOW_HOURS))
+        .map(|baseline| baseline - Duration::hours(EPISODE_PRE_AIR_WINDOW_HOURS))
 }
 
 /// How old a file has to be before Scryer stops chasing PROPERs for it.

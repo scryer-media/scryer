@@ -3765,6 +3765,7 @@ const ru: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Несоответствие категории",
   "wanted.decision.ambiguousIdentity": "Неоднозначное совпадение",
   "wanted.decision.qualityBlocked": "Заблокировано профилем качества",
+  "wanted.decision.episodeAvailabilityBlocked": "Ожидает даты выхода",
   "wanted.decision.upgradeRejected": "Обновление отклонено",
   "wanted.decision.pendingDelay": "Отложено",
   "wanted.decision.alreadyActive": "Уже активно",

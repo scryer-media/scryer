@@ -6094,6 +6094,7 @@ mod tests {
             ReleaseAutoDecisionCode::MinimumAge,
             ReleaseAutoDecisionCode::ReleaseAgeUnknown,
             ReleaseAutoDecisionCode::DownloadClientUnavailable,
+            ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked,
         ] {
             assert!(!rss_is_permanent_rejection(code));
         }

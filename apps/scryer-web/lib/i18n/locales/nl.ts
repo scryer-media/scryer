@@ -3305,6 +3305,7 @@ const nl: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Categorie komt niet overeen",
   "wanted.decision.ambiguousIdentity": "Onduidelijke identiteit",
   "wanted.decision.qualityBlocked": "Geblokkeerd door kwaliteit",
+  "wanted.decision.episodeAvailabilityBlocked": "Wacht op uitzenddatum",
   "wanted.decision.minimumSeeders": "Te weinig seeders",
   "wanted.decision.packBelowMissingThreshold":
     "Pack onder drempel voor ontbrekende items",
