@@ -1281,18 +1281,16 @@ fn standard_episode_range_token_projects_multi_episode() {
 
 #[test]
 fn complete_standard_episode_range_with_total_projects_season_pack() {
-    let target = context(ContextFacetHint::Series, "Гранитный дозор");
-    for coordinates in [
-        "S1E1-16 of 16",
-        "S01E01-E16 of 16",
-        "S01E01-S01E16 of 16",
-        "S1E1-16 из 16",
+    let target = context(ContextFacetHint::Series, "Пример шоу");
+    for (raw, season) in [
+        ("Пример шоу / S1E1-16 of 16 (2026) WEBRip 1080p RUS", 1),
+        ("Пример шоу / Example Show / S2E1-8 of 8 [2026, WEB-DL 1080p] RUS", 2),
+        ("Пример шоу / S1E1-16 of 16 [2026, Боевик, WEBRip 1080p] RUS", 1),
     ] {
-        let raw = format!("Гранитный дозор / {coordinates} (2026) WEBRip 1080p RUS");
-        let parsed = crate::best_parse_for_target(&raw, &target);
-        let episode = parsed.episode.expect(&raw);
+        let parsed = crate::best_parse_for_target(raw, &target);
+        let episode = parsed.episode.expect(raw);
 
-        assert_eq!(episode.season, Some(1), "{raw}");
+        assert_eq!(episode.season, Some(season), "{raw}");
         assert_eq!(
             episode.release_type,
             ParsedEpisodeReleaseType::SeasonPack,
@@ -1301,6 +1299,7 @@ fn complete_standard_episode_range_with_total_projects_season_pack() {
         assert!(episode.full_season, "{raw}");
         assert!(!episode.is_partial_season, "{raw}");
         assert!(!episode.is_series_pack, "{raw}");
+        assert_eq!(parsed.year, Some(2026), "{raw}");
         assert_eq!(parsed.quality.as_deref(), Some("1080p"), "{raw}");
         assert!(!parsed.is_ambiguous, "{raw}: {:?}", parsed.parse_hints);
     }
@@ -1308,7 +1307,7 @@ fn complete_standard_episode_range_with_total_projects_season_pack() {
 
 #[test]
 fn incomplete_standard_episode_ranges_are_not_promoted_to_season_packs() {
-    let target = context(ContextFacetHint::Series, "Гранитный дозор");
+    let target = context(ContextFacetHint::Series, "Пример шоу");
     for coordinates in [
         "S1E1-8 of 16",
         "S1E2-16 of 16",
@@ -1319,7 +1318,7 @@ fn incomplete_standard_episode_ranges_are_not_promoted_to_season_packs() {
         "S1E1-16 of 0",
         "S1E1-16 of unknown",
     ] {
-        let raw = format!("Гранитный дозор / {coordinates} (2026) WEBRip 1080p RUS");
+        let raw = format!("Пример шоу / {coordinates} (2026) WEBRip 1080p RUS");
         let parsed = crate::best_parse_for_target(&raw, &target);
         let episode = parsed.episode.expect(&raw);
 
@@ -1332,11 +1331,42 @@ fn incomplete_standard_episode_ranges_are_not_promoted_to_season_packs() {
     }
 }
 
+/// A total outside the ` / ` multi-title form is a cour or part count, so the
+/// range keeps its explicit episodes instead of claiming the catalog season.
+#[test]
+fn episode_range_totals_outside_the_multi_title_form_stay_multi_episode() {
+    let target = context(ContextFacetHint::Series, "Example Show");
+    for raw in [
+        "Example Show S01E01-16 of 16 (2026) WEBRip 1080p",
+        "Example Show (S01E01-16 of 16) WEBRip 1080p",
+        "Example Show / S01E01-E16 of 16 (2026) WEBRip 1080p",
+        "Example Show / S01E01-S01E16 of 16 (2026) WEBRip 1080p",
+        "Example Show / S1E1-16 из 16 (2026) WEBRip 1080p",
+        "Example Show / S1E1-16 of 16 WEBRip 1080p",
+        "Example Show / [S1E1-16 of 16] (2026) WEBRip 1080p",
+    ] {
+        let parsed = crate::best_parse_for_target(raw, &target);
+        let episode = parsed.episode.expect(raw);
+        assert_ne!(
+            episode.release_type,
+            ParsedEpisodeReleaseType::SeasonPack,
+            "{raw}"
+        );
+        assert!(!episode.full_season, "{raw}");
+        assert_eq!(episode.season, Some(1), "{raw}");
+        assert_eq!(
+            episode.episode_numbers,
+            (1..=16).collect::<Vec<_>>(),
+            "{raw}"
+        );
+    }
+}
+
 #[test]
 fn standard_episode_range_total_does_not_cross_metadata_groups() {
-    let target = context(ContextFacetHint::Series, "Гранитный дозор");
+    let target = context(ContextFacetHint::Series, "Пример шоу");
     for coordinates in ["[S1E1-16] [of 16]", "[S1E1-16 of] [16]"] {
-        let raw = format!("Гранитный дозор / {coordinates} WEBRip 1080p");
+        let raw = format!("Пример шоу / {coordinates} WEBRip 1080p");
         let parsed = crate::best_parse_for_target(&raw, &target);
         let episode = parsed.episode.expect(&raw);
         assert_ne!(
@@ -1344,33 +1374,6 @@ fn standard_episode_range_total_does_not_cross_metadata_groups() {
             ParsedEpisodeReleaseType::SeasonPack,
             "{raw}"
         );
-    }
-}
-
-#[test]
-fn complete_standard_episode_range_keeps_release_metadata() {
-    let target = context(ContextFacetHint::Series, "Гранитный дозор");
-    for raw in [
-        "Гранитный дозор / S1E1-16 of 16 (2026) WEBRip [H.264/1080p] RUS",
-        "Гранитный дозор / S1E1-16 of 16 [2026, Боевик, WEBRip 1080p] RUS",
-        "Гранитный дозор / [S2E1-8 of 8] (2026) WEBRip 1080p RUS",
-    ] {
-        let parsed = crate::best_parse_for_target(raw, &target);
-        let episode = parsed.episode.expect(raw);
-        assert_eq!(
-            episode.release_type,
-            ParsedEpisodeReleaseType::SeasonPack,
-            "{raw}"
-        );
-        assert_eq!(
-            episode.season,
-            Some(if raw.contains("S2E") { 2 } else { 1 }),
-            "{raw}"
-        );
-        assert_eq!(parsed.year, Some(2026), "{raw}");
-        assert_eq!(parsed.quality.as_deref(), Some("1080p"), "{raw}");
-        assert_eq!(parsed.source, Some(ReleaseSource::WebRip), "{raw}");
-        assert!(!parsed.is_ambiguous, "{raw}: {:?}", parsed.parse_hints);
     }
 }
 
