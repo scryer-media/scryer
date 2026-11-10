@@ -378,7 +378,9 @@ export function useBulkDelete({
       return;
     }
     if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus("Bulk actions require titles from one library.");
+      setGlobalStatus(t("status.bulkDeleteRequiresOneLibrary"), {
+        level: "WARNING",
+      });
       return;
     }
     setBulkDeleteFilesOnDisk(false);
@@ -393,6 +395,7 @@ export function useBulkDelete({
     selectedTitleLibraryIds.length,
     selectedTitles.length,
     setGlobalStatus,
+    t,
   ]);
 
   return {

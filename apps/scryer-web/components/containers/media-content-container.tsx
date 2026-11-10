@@ -4325,21 +4325,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     };
   }, [client, rootFolderValidationSnapshot]);
 
+  // Edit changes per-title options and tags, saved title by title, so the
+  // selection may span libraries. Only moves are limited to one library.
   const openBulkTitleEdit = React.useCallback(() => {
     if (selectedTitles.length === 0 || bulkActionBusy) {
       return;
     }
-    if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus("Bulk actions require titles from one library.");
-      return;
-    }
     setBulkEditDialogOpen(true);
-  }, [
-    bulkActionBusy,
-    selectedTitleLibraryIds.length,
-    selectedTitles.length,
-    setGlobalStatus,
-  ]);
+  }, [bulkActionBusy, selectedTitles.length]);
 
   const openBulkTitleMove = React.useCallback(() => {
     if (
@@ -4350,7 +4343,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       return;
     }
     if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus("Bulk actions require titles from one library.");
+      setGlobalStatus(t("status.bulkMoveRequiresOneLibrary"), {
+        level: "WARNING",
+      });
       return;
     }
     setBulkMoveDialogOpen(true);
@@ -4360,6 +4355,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     selectedTitleLibraryIds.length,
     selectedTitles.length,
     setGlobalStatus,
+    t,
   ]);
 
   const requestDeleteTitle = React.useCallback(

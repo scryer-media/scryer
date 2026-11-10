@@ -3376,6 +3376,10 @@ const ru: LocaleDictionary = {
   "status.bulkTitleUpdatePartial":
     "Обновлено материалов: {{count}}; ошибок: {{failed}}.",
   "status.bulkTitleUpdateFailed": "Не удалось обновить выбранные материалы.",
+  "status.bulkMoveRequiresOneLibrary":
+    "Материалы можно перемещать только из одной библиотеки за раз. Выберите материалы из одной библиотеки.",
+  "status.bulkDeleteRequiresOneLibrary":
+    "Материалы можно удалять только из одной библиотеки за раз. Выберите материалы из одной библиотеки.",
   "status.bulkDeletePreviewFailed":
     "Не удалось подготовить предварительный просмотр удаления для {{failed}} выбранных материалов.",
   "status.bulkTitleDeleteSuccess": "Удалено материалов: {{count}}.",
