@@ -209,11 +209,12 @@ fn compact_episode_ranges_before_hyphenated_metadata_are_not_absolute_slots() {
         ContextFacetHint::Series,
         ContextFacetHint::Anime,
     ] {
-        let target = context(facet, "Northern Route");
+        let target = context(facet, "Example Show");
         for raw in [
-            "Northern Route - S1E1-13 - 2026 WEBDL 2160p",
-            "Northern Route.S01E01-13-2026.1080p.WEB-DL",
-            "Northern Route S01E01-13 - Complete [1080p]",
+            "Example Show - S1E1-13 - 2026 WEBDL 2160p",
+            "Example Show.S01E01-13-2026.1080p.WEB-DL",
+            "Example Show S01E01-13 - Complete [1080p]",
+            "Example Show S01E01-02-03-04-05-06-07-08-09-10-11-12-13 [1080p]",
         ] {
             let parsed = crate::best_parse_for_target(raw, &target);
             let episode = parsed.episode.expect(raw);
@@ -224,9 +225,26 @@ fn compact_episode_ranges_before_hyphenated_metadata_are_not_absolute_slots() {
                 "{raw}"
             );
         }
+        for (raw, season, last) in [
+            ("Example Show (2018) - S02E01-34 - 1080p WEB H.264", 2, 34),
+            (
+                "[Grp] Example Show (2024) - S01E01-12 - 001-012 - Season 1 - [Batch][1080p]",
+                1,
+                12,
+            ),
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(season), "{raw}");
+            assert_eq!(
+                episode.episode_numbers,
+                (1..=last).collect::<Vec<_>>(),
+                "{raw}"
+            );
+        }
         for raw in [
-            "Northern Route (1997) - S02E01 - 083 - Episode Title [1080p]",
-            "Northern Route S01E01 - 2026 - Episode Title [1080p]",
+            "Example Show (1997) - S02E01 - 083 - Episode Title [1080p]",
+            "Example Show S01E01 - 2026 - Episode Title [1080p]",
         ] {
             let parsed = crate::best_parse_for_target(raw, &target);
             assert_eq!(parsed.episode.expect(raw).episode_numbers, vec![1], "{raw}");

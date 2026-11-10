@@ -1847,14 +1847,14 @@ mod series_plan_tests {
     #[test]
     fn tracker_episode_range_pack_preserves_declared_membership() {
         let mut title = scene_pack_title();
-        title.name = "Северный маршрут".into();
+        title.name = "Пример шоу".into();
         title.aliases.clear();
         title.tagged_aliases.clear();
         let catalog: Vec<_> = (1..=13)
             .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
             .collect();
         let release =
-            "Северный маршрут  - S1E1-13 - 2026  РУ, Sub 4K, HEVC, SDR WEBDL 2160p - RUSSIAN";
+            "Пример шоу  - S1E1-13 - 2026  Sub 4K, HEVC, SDR WEBDL 2160p";
         let parsed = parse_import_release_for_title(release, &title);
         let evidence = episode_scoped_pack_evidence(release);
         let verification = verified_episode_pack(
@@ -1877,7 +1877,7 @@ mod series_plan_tests {
         );
         assert!(!pack.vouches_for(&catalog_episode("outside-pack", 14, 14)));
         for n in 1..=13 {
-            let member = format!("/downloads/Северный маршрут.S01E{n:02}.mkv");
+            let member = format!("/downloads/Пример шоу.S01E{n:02}.mkv");
             let draft = plan_episode_pack_member(
                 &title,
                 Path::new("/downloads"),
