@@ -2165,6 +2165,29 @@ pub async fn start_download_queue_poller_with_options(
 /// The id string is not unique, so the row is chosen by
 /// `TrackedDownloadService::resolve_cached_download_id`, which prefers a row
 /// that is not import-settled over a deleted title's settled sibling.
+/// Does a dismiss or resume request still name this row's download?
+///
+/// The web sends the queue item's `downloadId`: the grab's wire token, the bare
+/// id from a history row, or the client's own token such as a torrent info
+/// hash. Any of those that resolves to this row's download is the same grab.
+fn import_tracking_request_names_download(
+    requested: &str,
+    download_id: scryer_domain::download_identity::DownloadId,
+    observed_client_token: Option<&str>,
+) -> bool {
+    use scryer_domain::download_identity::DownloadId;
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return false;
+    }
+    if DownloadId::from_wire(requested).or_else(|| DownloadId::parse(requested))
+        == Some(download_id)
+    {
+        return true;
+    }
+    observed_client_token.is_some_and(|token| token.trim() == requested)
+}
+
 fn resolve_tracked_command_download(
     tracker: &crate::tracked_downloads::TrackedDownloadService,
     requested_id: &str,
@@ -2698,13 +2721,16 @@ async fn handle_tracked_download_command(
                     .ok_or_else(|| AppError::not_found_reason(
                         crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND,
                         format!("tracked download {id}")))?;
-                if download_id.to_string() != expected_download_id {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::integration::IMPORT_TRACKING_STATE_NOT_ELIGIBLE,
-                        "The client item belongs to a different download"));
-                }
                 let tracked = tracker.get_by_download_id(download_id)
                     .expect("resolved tracked download disappeared").clone();
+                if !import_tracking_request_names_download(
+                    &expected_download_id, download_id,
+                    tracked.client_item.download_id.as_deref())
+                {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::integration::IMPORT_TRACKING_DOWNLOAD_CHANGED,
+                        "The client item now belongs to a different download"));
+                }
                 if tracked_work_in_flight.contains(&runtime_id)
                     || tracked.state == TrackedDownloadState::Importing
                     || crate::import_workflow::find_active_manual_import_for_source(app,
@@ -2715,12 +2741,13 @@ async fn handle_tracked_download_command(
                         crate::error_reasons::integration::TRACKED_DOWNLOAD_BUSY_PROCESSING,
                         "Import work is active for this source"));
                 }
+                // Resume restores the block it dismissed. The blocked-row checks
+                // then run as before, including the guards that keep an assigned
+                // title or a post-import block out of automatic import.
                 let next = if dismissed {
                     TrackedDownloadState::ImportDismissed
                 } else {
-                    // Re-enter completion checking, not import execution. Resume
-                    // is not approval of the previously rejected title or route.
-                    TrackedDownloadState::Downloading
+                    TrackedDownloadState::ImportBlocked
                 };
                 if tracked.state == next {
                     return Ok(None);
@@ -2741,14 +2768,20 @@ async fn handle_tracked_download_command(
                 // must never inherit this operator decision. No cleanup/ignore finalizer,
                 // reacquisition, client commands, or import completion is performed here.
                 let preserved = ["imported", "imported_seeding", "failed", "ignored"];
+                // Keep the block's reason and detail on both sides of a dismissal,
+                // so a restart or a resume still knows why the import was blocked.
+                let reason = repository.get_identity_tracked_state_reason_for_download(
+                    Some(&download_id), &identity, source.as_ref()).await?;
+                let detail = repository.get_identity_tracked_state_detail_for_download(
+                    Some(&download_id), &identity, source.as_ref()).await?;
                 let previous = repository.upsert_identity_tracked_state_for_download_returning_previous(
                     crate::IdentityTrackedStateTarget {
                         canonical_download_id: Some(&download_id), identity: &identity,
                         source_identity: source.as_ref(),
-                    }, next.as_str(), &preserved, None, None).await?;
+                    }, next.as_str(), &preserved, reason.as_deref(), detail.as_deref()).await?;
                 if previous.as_deref().is_some_and(|state| preserved.contains(&state)) {
                     return Err(AppError::validation_refused(
-                        crate::error_reasons::integration::IMPORT_TRACKING_STATE_NOT_ELIGIBLE,
+                        crate::error_reasons::integration::IMPORT_TRACKING_ALREADY_RESOLVED,
                         "The download has already been resolved"));
                 }
                 // The canonical identity marker is the authoritative durable write.
@@ -2757,19 +2790,10 @@ async fn handle_tracked_download_command(
                 app.runtime.acquisition.invalidate_download_registry_observations();
                 let td = tracker.get_mut_by_download_id(download_id)
                     .expect("serialized tracked download disappeared");
+                // Only the state changes. The status, its messages and the retry
+                // bookkeeping stay, so a resumed row is exactly the row that was
+                // blocked, with its warning back in view.
                 td.state = next;
-                td.status = TrackedDownloadStatus::Ok;
-                // A quiet UI state is not new identity evidence. Retain a known
-                // ID-only conflict until completion resolution positively clears it.
-                td.status_messages.retain(|message|
-                    message.kind == crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict);
-                if !dismissed {
-                    td.import_attempted = false;
-                    td.waiting_for_completed_history = false;
-                    td.no_video_import_retry = None;
-                    td.import_execution_retry = None;
-                    td.notified_manual_interaction = false;
-                }
                 let activity_item = tracked_download_activity_queue_item(td);
                 app.emit_download_queue_item_command_issued_event(actor, id.clone(),
                     if dismissed { scryer_domain::DownloadQueueCommandAction::DismissImportWarning }

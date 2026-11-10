@@ -2384,6 +2384,11 @@ mod tests {
             let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
             let mut row = reconcile_row(Some("title-1"), TrackedDownloadState::ImportBlocked);
             row.client_item.is_scryer_origin = true;
+            // A torrent's queue item reports its info hash, not the grab's id.
+            let info_hash = "0123456789abcdef0123456789abcdef01234567";
+            row.client_item.download_id = Some(info_hash.to_string());
+            // A post-import block must still need an explicit retry after resume.
+            row.import_attempted = true;
             row.warn_kind(crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict,
                 "Synthetic conflict must survive dismissal and resume");
             let files = tempfile::tempdir().unwrap();
@@ -2398,15 +2403,23 @@ mod tests {
                 posted_file_names: vec![], subtitle_paths: vec![],
             });
             let download_id = tracker.insert_for_tests(row);
-            for dismissed in [true, true, false] {
+            // The web sends whatever the queue item carries: the grab's wire
+            // token, the bare id from a history row, or the client's own token.
+            for (dismissed, expected_download_id) in [
+                (true, download_id.to_wire()),
+                (true, download_id.to_string()),
+                (false, info_hash.to_string()),
+            ] {
                 let (reply, response) = tokio::sync::oneshot::channel();
                 run_tracked_command(&app, &actor, &mut tracker,
                     TrackedDownloadCommand::SetImportTrackingDismissed {
-                        id: SHARED_TORRENT_ID.to_string(), expected_download_id: download_id.to_string(), dismissed, reply,
+                        id: SHARED_TORRENT_ID.to_string(), expected_download_id, dismissed, reply,
                     }).await;
                 response.await.unwrap().unwrap();
-                let state = if dismissed { TrackedDownloadState::ImportDismissed } else { TrackedDownloadState::Downloading };
+                let state = if dismissed { TrackedDownloadState::ImportDismissed } else { TrackedDownloadState::ImportBlocked };
                 assert_eq!(tracker.get_by_download_id(download_id).unwrap().state, state);
+                assert!(tracker.get_by_download_id(download_id).unwrap().import_attempted,
+                    "dismissal and resume must not clear a post-import block");
                 assert!(crate::completed_download_handler::has_id_only_conflict(
                     tracker.get_by_download_id(download_id).unwrap()));
                 if dismissed {
@@ -2421,8 +2434,8 @@ mod tests {
                 spy.assert_untouched().await;
                 assert_eq!(std::fs::read(&sentinel).unwrap(), b"synthetic fixture payload");
             }
-            // Resume must pass the completion admission checks again. The fixture's
-            // assigned title does not exist, so it cannot become importable.
+            // Resume restores the block, so the blocked-row checks keep it out of
+            // automatic import until the operator retries it.
             assert!(super::prepare_tracked_download_background_work_dispatch(&mut tracker, download_id).is_none());
             let td = tracker.get_mut_by_download_id(download_id).unwrap();
             let lookup = crate::completed_download_handler::CompletedDownloadLookup::from_recent_downloads(
@@ -2455,7 +2468,7 @@ mod tests {
                 let error = response.await.unwrap().unwrap_err();
                 assert_eq!(error.validation_reason(), Some(if busy {
                     crate::error_reasons::integration::TRACKED_DOWNLOAD_BUSY_PROCESSING
-                } else { crate::error_reasons::integration::IMPORT_TRACKING_STATE_NOT_ELIGIBLE }));
+                } else { crate::error_reasons::integration::IMPORT_TRACKING_DOWNLOAD_CHANGED }));
                 assert_eq!(row_debug(&tracker, download_id), before);
             }
         }).await;

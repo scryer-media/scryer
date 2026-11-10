@@ -6853,6 +6853,10 @@ const en: LocaleDictionary = {
     "Import tracking resumed. Normal import checks still apply.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Only a blocked import can be dismissed, and only a dismissed import can be resumed. Refresh the queue and try again.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
+    "This client item now belongs to a different download. Refresh the queue and try again.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
+    "This download was already imported, failed or ignored, so its warning can no longer change.",
   "queue.ignoreSuccess": "Download ignored.",
   "queue.ignoreFailed": "Failed to ignore download.",
   "queue.releaseHeldSources": "Release held sources",

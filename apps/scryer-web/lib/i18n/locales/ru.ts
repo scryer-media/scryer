@@ -2211,6 +2211,10 @@ const ru: LocaleDictionary = {
     "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
+    "Этот элемент клиента теперь относится к другой загрузке. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
+    "Эта загрузка уже импортирована, завершилась ошибкой или проигнорирована, поэтому её предупреждение больше нельзя изменить.",
   "queue.ignoreSuccess": "Загрузка проигнорирована.",
   "queue.ignoreFailed": "Не удалось проигнорировать загрузку.",
   "queue.releaseHeldSources": "Освободить удерживаемые источники",
