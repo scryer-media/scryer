@@ -35,6 +35,8 @@ struct VerifiedEpisodePack {
     is_extras_release: bool,
     /// Stored same-title, single-season evidence corroborated by the grab.
     allows_leading_numbers: bool,
+    /// An unnumbered release backed by an exact, same-title EpisodeSet.
+    allows_title_season_year_members: bool,
 }
 
 enum EpisodePackVerification {
@@ -137,7 +139,13 @@ fn verified_episode_pack(
         return EpisodePackVerification::Unresolved;
     }
     let Some(episode) = parsed.episode.as_ref() else {
-        return EpisodePackVerification::NotPack;
+        return verified_unnumbered_episode_set(
+            title,
+            source_title.as_deref(),
+            scope,
+            catalog_episodes,
+            acquired_episode_ids,
+        );
     };
     let has_episode_bounds =
         episode.episode_numbers.len() > 1 || episode.absolute_episode_numbers.len() > 1;
@@ -303,6 +311,66 @@ fn verified_episode_pack(
         exact_episode_ids,
         is_extras_release: episode.is_season_extra,
         allows_leading_numbers,
+        allows_title_season_year_members: false,
+    })
+}
+
+/// A persisted set can prove membership even when the indexer supplies only
+/// the series title. It cannot prove a whole season or an absolute numbering
+/// convention: keep the exact standard episodes and one unambiguous season.
+fn verified_unnumbered_episode_set(
+    title: &scryer_domain::Title,
+    source_title: Option<&str>,
+    scope: &SubmissionScope,
+    catalog: &[scryer_domain::Episode],
+    acquired_episode_ids: Option<&HashSet<String>>,
+) -> EpisodePackVerification {
+    let SubmissionScope::EpisodeSet { episode_ids } = scope else {
+        return EpisodePackVerification::NotPack;
+    };
+    if title.facet != scryer_domain::MediaFacet::Series
+        || title.year.is_none()
+        || !source_title.is_some_and(|name| exact_catalog_title_name_matches(name, title))
+    {
+        return EpisodePackVerification::NotPack;
+    }
+    let ids: HashSet<_> = episode_ids.iter().cloned().collect();
+    if ids.len() < 2
+        || ids.len() != episode_ids.len()
+        || acquired_episode_ids.is_some_and(|acquired| !ids.is_subset(acquired))
+    {
+        return EpisodePackVerification::Unresolved;
+    }
+    let mut season = None;
+    for id in &ids {
+        let mut matches = catalog.iter().filter(|episode| &episode.id == id);
+        let Some(episode) = matches.next() else {
+            return EpisodePackVerification::Unresolved;
+        };
+        let Some(episode_season) = catalog_episode_season(episode).filter(|season| *season > 0)
+        else {
+            return EpisodePackVerification::Unresolved;
+        };
+        let Some(number) = catalog_episode_number(episode).filter(|number| *number > 0) else {
+            return EpisodePackVerification::Unresolved;
+        };
+        if matches.next().is_some()
+            || episode.title_id != title.id
+            || episode.episode_type != scryer_domain::EpisodeType::Standard
+            || season.is_some_and(|season| season != episode_season)
+            || catalog_episodes_for_season_numbers(catalog, episode_season, &[number])
+                .is_none_or(|episodes| episodes.len() != 1)
+        {
+            return EpisodePackVerification::Unresolved;
+        }
+        season = Some(episode_season);
+    }
+    EpisodePackVerification::Verified(VerifiedEpisodePack {
+        declared_seasons: season.map(|season| HashSet::from([season])),
+        exact_episode_ids: Some(ids),
+        is_extras_release: false,
+        allows_leading_numbers: false,
+        allows_title_season_year_members: true,
     })
 }
 
@@ -738,6 +806,26 @@ fn plan_episode_pack_member(
         }
     };
 
+    if let Some(pack) = pack.filter(|pack| pack.allows_title_season_year_members) {
+        match title_season_year_pack_episode(title, pack, source_root, source_path, catalog) {
+            Ok(Some(episode))
+                if folder_season
+                    .is_none_or(|season| catalog_episode_season(&episode) == Some(season)) =>
+            {
+                return PlannedMemberDraft::Resolved(vec![episode]);
+            }
+            Ok(None) => {}
+            _ => {
+                return PlannedMemberDraft::Hold {
+                    episodes: Vec::new(),
+                    reason_code: "unparseable_pack_member",
+                    message: "Automatic import could not corroborate this member's title, year, season and episode against the saved pack scope. Open Manual Import and assign the correct episode."
+                        .to_string(),
+                };
+            }
+        }
+    }
+
     let Some(identity) = pack_member_episode_identity(title, source_path, &parsed_stem, pack)
     else {
         if let Some(episode) = pack
@@ -804,6 +892,84 @@ fn plan_episode_pack_member(
         folder_season,
         catalog,
     )
+}
+
+/// Parse the complete member grammar only inside a proven exact EpisodeSet.
+/// A grammar-shaped but contradictory member must not fall through to a
+/// generic parser that could interpret the season or year as an episode.
+fn title_season_year_pack_episode(
+    title: &scryer_domain::Title,
+    pack: &VerifiedEpisodePack,
+    source_root: &Path,
+    source_path: &Path,
+    catalog: &[scryer_domain::Episode],
+) -> Result<Option<scryer_domain::Episode>, ()> {
+    static PREFIX: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^.+?\s+-\s*[0-9]{1,2}\s+\([0-9]{4}\)\s+_")
+            .expect("valid contextual member prefix")
+    });
+    static MEMBER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"^(?<title>.+?)\s+-\s*(?<season>[0-9]{1,2})\s+\((?<year>[0-9]{4})\)\s+_(?<episode>[0-9]{1,3})$",
+        )
+        .expect("valid contextual member grammar")
+    });
+    let stem = source_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or(())?;
+    if !PREFIX.is_match(stem) {
+        return Ok(None);
+    }
+    if !pack.allows_title_season_year_members
+        || pack.is_extras_release
+        || title.facet != scryer_domain::MediaFacet::Series
+    {
+        return Err(());
+    }
+    let relative = source_path.strip_prefix(source_root).map_err(|_| ())?;
+    if relative.parent().ok_or(())?.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|name| {
+            matches!(
+                name.trim().to_ascii_uppercase().as_str(),
+                "NCED"
+                    | "NCOP"
+                    | "OP"
+                    | "ED"
+                    | "EXTRAS"
+                    | "SPECIALS"
+                    | "BONUS"
+                    | "MENU"
+                    | "PV"
+                    | "CM"
+                    | "SAMPLE"
+                    | "SAMPLES"
+            )
+        })
+    }) {
+        return Err(());
+    }
+    let captures = MEMBER.captures(stem).ok_or(())?;
+    let season: u32 = captures["season"].parse().map_err(|_| ())?;
+    let year = captures["year"].parse().map_err(|_| ())?;
+    let number: u32 = captures["episode"].parse().map_err(|_| ())?;
+    if season == 0
+        || number == 0
+        || title.year != Some(year)
+        || !exact_catalog_title_name_matches(&captures["title"], title)
+        || !pack
+            .declared_seasons
+            .as_ref()
+            .is_some_and(|seasons| seasons == &HashSet::from([season]))
+    {
+        return Err(());
+    }
+    let mut episodes = catalog_episodes_for_season_numbers(catalog, season, &[number]).ok_or(())?;
+    let episode = episodes.pop().ok_or(())?;
+    if episode.title_id != title.id || !pack.vouches_for(&episode) {
+        return Err(());
+    }
+    Ok(Some(episode))
 }
 
 fn pack_member_episode_identity(
@@ -1663,6 +1829,320 @@ mod series_plan_tests {
     }
 
     #[test]
+    fn persisted_episode_set_resolves_title_season_year_underscore_members() {
+        let title = scryer_domain::Title {
+            name: "ИИнга".into(),
+            year: Some(2026),
+            ..scene_pack_title()
+        };
+        // Deliberately reverse the catalog and shuffle the files: identity must
+        // come from each filename, never catalog order or file-list position.
+        let catalog: Vec<_> = (1..=8)
+            .rev()
+            .map(|number| scryer_domain::Episode {
+                absolute_number: None,
+                ..catalog_episode(&format!("ep-{number}"), number, number)
+            })
+            .collect();
+        let expected = episode_id_set(&catalog);
+        let evidence = ReleaseEvidence::ScryerSubmission {
+            title_id: title.id.clone(),
+            facet: "series".into(),
+            source_title: Some("ИИнга".into()),
+            observed_release_name: None,
+            release_size_bytes: None,
+            release_listing_json: None,
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            scope: SubmissionScope::EpisodeSet {
+                episode_ids: (1..=8).map(|number| format!("ep-{number}")).collect(),
+            },
+        };
+        // Exercise the same admission gate as build_episode_pack_import_plan.
+        // A made-up numbered release or hand-built VerifiedEpisodePack would
+        // bypass the actual failure for this persisted, unnumbered submission.
+        let pack =
+            match verified_episode_pack(&evidence, &title, &catalog, None, Some(&expected), None) {
+                EpisodePackVerification::Verified(pack) => pack,
+                EpisodePackVerification::NotPack => {
+                    panic!("persisted single-season EpisodeSet bypassed member planning as NotPack")
+                }
+                EpisodePackVerification::Unresolved => {
+                    panic!("persisted single-season EpisodeSet was held as unresolved_pack_scope")
+                }
+            };
+        assert_eq!(pack.exact_episode_ids.as_ref(), Some(&expected));
+
+        let root = Path::new("downloads").join("ИИнга");
+        let numbers = [8, 2, 6, 1, 5, 3, 7, 4];
+        let mut drafts: Vec<_> = numbers
+            .iter()
+            .map(|number| {
+                plan_episode_pack_member(
+                    &title,
+                    &root,
+                    &root.join(format!("ИИнга -1 (2026) _{number:02}.mkv")),
+                    &catalog,
+                    None,
+                    None,
+                    Some(&pack),
+                )
+            })
+            .collect();
+        resolve_ambiguous_pack_numbering(&mut drafts, &catalog, Some(&expected));
+        hold_duplicate_pack_episode_mappings(&mut drafts);
+        for (number, draft) in numbers.into_iter().zip(drafts) {
+            let PlannedMemberDraft::Resolved(episodes) = &draft else {
+                panic!("member _{number:02} did not resolve: {draft:?}");
+            };
+            assert_eq!(
+                episodes
+                    .iter()
+                    .map(|episode| episode.id.clone())
+                    .collect::<Vec<_>>(),
+                vec![format!("ep-{number}")],
+                "member _{number:02}",
+            );
+            // Import here means identity is admitted to the normal import
+            // gates, not that existing E01..04 bypass quality/upgrade policy.
+            assert!(matches!(
+                finalize_pack_member_disposition(draft, &pack),
+                PlannedEpisodeMemberDisposition::Import { .. }
+            ));
+        }
+    }
+
+    fn unnumbered_episode_set_fixture() -> (
+        scryer_domain::Title,
+        Vec<scryer_domain::Episode>,
+        ReleaseEvidence,
+    ) {
+        let title = scryer_domain::Title {
+            name: "Orbit 9".into(),
+            aliases: vec!["Орбита 9".into()],
+            year: Some(2026),
+            ..scene_pack_title()
+        };
+        let catalog = (1..=9)
+            .map(|number| catalog_episode(&format!("ep-{number}"), number, number))
+            .collect();
+        let evidence = ReleaseEvidence::ScryerSubmission {
+            title_id: title.id.clone(),
+            facet: "series".into(),
+            source_title: Some(title.name.clone()),
+            observed_release_name: None,
+            release_size_bytes: None,
+            release_listing_json: None,
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            scope: SubmissionScope::EpisodeSet {
+                episode_ids: (1..=8).map(|number| format!("ep-{number}")).collect(),
+            },
+        };
+        (title, catalog, evidence)
+    }
+
+    #[test]
+    fn persisted_episode_set_rejects_inconsistent_scope() {
+        for case in [
+            "missing",
+            "foreign_id",
+            "foreign_source",
+            "duplicate_scope",
+            "unknown_id",
+            "multi_season",
+            "special",
+            "duplicate_id",
+            "duplicate_number",
+            "zero_season",
+            "zero_episode",
+            "unknown_year",
+            "anime",
+            "singleton",
+            "empty",
+        ] {
+            let (mut title, mut catalog, mut evidence) = unnumbered_episode_set_fixture();
+            let ReleaseEvidence::ScryerSubmission {
+                title_id,
+                source_title,
+                scope,
+                ..
+            } = &mut evidence
+            else {
+                unreachable!();
+            };
+            let SubmissionScope::EpisodeSet { episode_ids } = scope else {
+                unreachable!()
+            };
+            match case {
+                "missing" => {
+                    catalog.remove(0);
+                }
+                "foreign_id" => *title_id = "foreign-title".into(),
+                "foreign_source" => *source_title = Some("Another Series".into()),
+                "duplicate_scope" => episode_ids.push("ep-1".into()),
+                "unknown_id" => episode_ids.push("unknown".into()),
+                "multi_season" => catalog[0].season_number = Some("2".into()),
+                "special" => catalog[0].episode_type = scryer_domain::EpisodeType::Special,
+                "duplicate_id" => catalog.push(catalog[0].clone()),
+                "duplicate_number" => catalog.push(scryer_domain::Episode {
+                    id: "other-1".into(),
+                    ..catalog[0].clone()
+                }),
+                "zero_season" => catalog[0].season_number = Some("0".into()),
+                "zero_episode" => catalog[0].episode_number = Some("0".into()),
+                "unknown_year" => title.year = None,
+                "anime" => title.facet = scryer_domain::MediaFacet::Anime,
+                "singleton" => episode_ids.truncate(1),
+                "empty" => episode_ids.clear(),
+                _ => unreachable!(),
+            }
+            assert!(
+                !matches!(
+                    verified_episode_pack(&evidence, &title, &catalog, None, None, None),
+                    EpisodePackVerification::Verified(_)
+                ),
+                "accepted {case}",
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_episode_set_keeps_exact_scope_and_acquisition_bounds() {
+        let (title, catalog, evidence) = unnumbered_episode_set_fixture();
+        let EpisodePackVerification::Verified(pack) =
+            verified_episode_pack(&evidence, &title, &catalog, None, None, None)
+        else {
+            panic!("exact set was not admitted")
+        };
+        assert_eq!(pack.exact_episode_ids.as_ref().map(HashSet::len), Some(8));
+        assert!(!pack.vouches_for(&catalog[8]));
+        let narrower = HashSet::from(["ep-1".into(), "ep-2".into()]);
+        assert!(matches!(
+            verified_episode_pack(&evidence, &title, &catalog, None, Some(&narrower), None),
+            EpisodePackVerification::Unresolved
+        ));
+    }
+
+    #[test]
+    fn persisted_episode_set_holds_contradictory_or_auxiliary_members() {
+        let (title, catalog, evidence) = unnumbered_episode_set_fixture();
+        let EpisodePackVerification::Verified(pack) =
+            verified_episode_pack(&evidence, &title, &catalog, None, None, None)
+        else {
+            panic!("exact set was not admitted")
+        };
+        let root = Path::new("downloads").join("Orbit 9");
+        for member in [
+            "Another Show -1 (2026) _01.mkv",
+            "Orbit 9 -1 (2025) _01.mkv",
+            "Orbit 9 -2 (2026) _01.mkv",
+            "Orbit 9 -1 (2026) _00.mkv",
+            "Orbit 9 -1 (2026) _09.mkv",
+            "Orbit 9 -1 (2026) _1080p.mkv",
+            "Orbit 9 -1 (2026) _01 S01E02.mkv",
+            "Orbit 9 -1 (2026) _01 commentary.mkv",
+            "Orbit 9 -1 (2026) _01_02.mkv",
+            "Season 02/Orbit 9 -1 (2026) _01.mkv",
+            "Extras/Orbit 9 -1 (2026) _01.mkv",
+            "Samples/Orbit 9 -1 (2026) _01.mkv",
+            "BDMV/STREAM/Orbit 9 -1 (2026) _01.mkv",
+        ] {
+            let draft = plan_episode_pack_member(
+                &title,
+                &root,
+                &root.join(member),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            assert!(
+                !matches!(
+                    finalize_pack_member_disposition(draft, &pack),
+                    PlannedEpisodeMemberDisposition::Import { .. }
+                ),
+                "imported {member}"
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_episode_set_accepts_aliases_without_guessing_numeric_title_suffixes() {
+        let (title, catalog, evidence) = unnumbered_episode_set_fixture();
+        let EpisodePackVerification::Verified(pack) =
+            verified_episode_pack(&evidence, &title, &catalog, None, None, None)
+        else {
+            panic!("exact set was not admitted")
+        };
+        let root = Path::new("downloads").join("Orbit 9");
+        for member in [
+            "Orbit 9 -1 (2026) _02.mkv",
+            "Орбита 9 -1 (2026) _02.mkv",
+            "Orbit 9 S01E02.mkv",
+        ] {
+            let draft = plan_episode_pack_member(
+                &title,
+                &root,
+                &root.join(member),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            assert!(
+                matches!(finalize_pack_member_disposition(draft, &pack), PlannedEpisodeMemberDisposition::Import { episodes } if episodes.len() == 1 && episodes[0].id == "ep-2"),
+                "failed {member}"
+            );
+        }
+        for member in [
+            "Orbit 8 -1 (2026) _02.mkv",
+            "Orbit 9 1080p.mkv",
+            "02 Orbit 9.mkv",
+        ] {
+            let draft = plan_episode_pack_member(
+                &title,
+                &root,
+                &root.join(member),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            assert!(
+                !matches!(
+                    finalize_pack_member_disposition(draft, &pack),
+                    PlannedEpisodeMemberDisposition::Import { .. }
+                ),
+                "guessed {member}"
+            );
+        }
+        let mut drafts = vec![
+            plan_episode_pack_member(
+                &title,
+                &root,
+                &root.join("Orbit 9 -1 (2026) _02.mkv"),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            ),
+            plan_episode_pack_member(
+                &title,
+                &root,
+                &root.join("Орбита 9 -1 (2026) _02.mkv"),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            ),
+        ];
+        hold_duplicate_pack_episode_mappings(&mut drafts);
+        assert!(drafts.into_iter().all(|draft| !matches!(
+            finalize_pack_member_disposition(draft, &pack),
+            PlannedEpisodeMemberDisposition::Import { .. }
+        )));
+    }
+
+    #[test]
     fn issue_393_verified_pack_scope_is_bounded_by_release_not_initiating_episode() {
         let title = scene_pack_title();
         let catalog: Vec<_> = (1..=4)
@@ -1820,12 +2300,14 @@ mod series_plan_tests {
                 exact_episode_ids: None,
                 is_extras_release: false,
                 allows_leading_numbers: true,
+                allows_title_season_year_members: false,
             },
             VerifiedEpisodePack {
                 declared_seasons: Some(HashSet::from([1])),
                 exact_episode_ids: Some(HashSet::from(["ep-1".into()])),
                 is_extras_release: false,
                 allows_leading_numbers: true,
+                allows_title_season_year_members: false,
             },
         ] {
             assert!(
@@ -2670,6 +3152,7 @@ mod series_plan_tests {
             exact_episode_ids: None,
             is_extras_release: false,
             allows_leading_numbers: true,
+            allows_title_season_year_members: false,
         }
     }
 
@@ -2729,6 +3212,7 @@ mod series_plan_tests {
             exact_episode_ids: Some(HashSet::from([in_scope.id.clone()])),
             is_extras_release: false,
             allows_leading_numbers: true,
+            allows_title_season_year_members: false,
         };
 
         assert!(pack.vouches_for(&in_scope));
