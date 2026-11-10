@@ -1568,13 +1568,39 @@ struct ImportCopyAttempt<'a> {
     cancellation: Option<&'a scryer_application::ImportCancellation>,
 }
 
-#[cfg(any(target_os = "macos", test))]
+/// macOS `sync_all` is `F_FULLFSYNC`, which network filesystems such as smbfs
+/// reject, so plain `fsync` is tried next. Some smbfs mounts reject that too. A
+/// filesystem with no sync at all does not fail a copy whose bytes were
+/// written: verification of the destination, not the sync, is what guards the
+/// source before cleanup, and it still runs. Any other sync error fails.
+///
+/// Matched on the errno: std reports macOS `ENOTSUP` (errno 45) as
+/// `Uncategorized`, not `Unsupported`.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn sync_is_unsupported(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Unsupported
+        || matches!(
+            error.raw_os_error(),
+            Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::ENOSYS
+        )
+}
+
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn finish_macos_import_sync(
     full_sync: io::Result<()>,
     fallback: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
     match full_sync {
-        Err(error) if error.kind() == io::ErrorKind::Unsupported => fallback(),
+        Err(error) if sync_is_unsupported(&error) => match fallback() {
+            Err(error) if sync_is_unsupported(&error) => {
+                tracing::debug!(
+                    %error,
+                    "import destination filesystem does not support fsync; relying on copy verification"
+                );
+                Ok(())
+            }
+            result => result,
+        },
         result => result,
     }
 }
@@ -3871,6 +3897,7 @@ impl FsFileImporter {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn macos_import_sync_falls_back_only_when_full_sync_is_unsupported() {
         finish_macos_import_sync(Err(io::ErrorKind::Unsupported.into()), || Ok(()))
@@ -3887,6 +3914,18 @@ mod tests {
         })
         .expect_err("fallback sync failure must propagate");
         assert_eq!(error.kind(), io::ErrorKind::Other);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_import_sync_accepts_a_filesystem_without_any_sync() {
+        // smbfs on macOS can reject both F_FULLFSYNC and fsync with ENOTSUP.
+        finish_macos_import_sync(Err(io::Error::from_raw_os_error(libc::ENOTSUP)), || {
+            Err(io::Error::from_raw_os_error(libc::ENOTSUP))
+        })
+        .expect("a filesystem with no sync does not fail the copy");
+        finish_macos_import_sync(Err(io::Error::from_raw_os_error(libc::ENOTSUP)), || Ok(()))
+            .expect("ENOTSUP from full sync falls back to fsync");
     }
 
     #[test]
