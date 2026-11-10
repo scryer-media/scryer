@@ -946,6 +946,25 @@ async fn resolve_movie_metadata_match(
     {
         return Ok(MovieMetadataResolution::CreateFailed(error));
     }
+    // The new title claims the folder it was found in; refuse here, before the
+    // title exists, when the catalog would refuse that claim.
+    if let Some(folder_path) = scanned_movie_entry_folder_path(
+        Path::new(library_path),
+        &candidate.file.path,
+        candidate.representative_is_directory,
+    ) && let Err(error) = app
+        .services
+        .catalog
+        .titles
+        .check_title_folder_writes(&[crate::TitleFolderWrite::assign(
+            scryer_domain::Id::new().0,
+            folder_path,
+        )
+        .expecting(None)])
+        .await
+    {
+        return Ok(MovieMetadataResolution::CreateFailed(error));
+    }
 
     match create_title_without_hydration_for_library_scan(
         app,

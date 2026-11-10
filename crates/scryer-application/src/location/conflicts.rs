@@ -2539,6 +2539,19 @@ impl AppUseCase {
                 Err(error) => return Err(AppError::Repository(error.to_string())),
             }
         }
+        // The survivor's folder is recorded after its files move and before
+        // the others are disposed of, so it must be one the title can own
+        // before either happens.
+        if let Some(folder) = planned.destination_folder_path.as_deref() {
+            self.services
+                .catalog
+                .titles
+                .check_title_folder_writes(&[crate::TitleFolderWrite::assign(
+                    &planned.title_id,
+                    folder,
+                )])
+                .await?;
+        }
         Ok(())
     }
 

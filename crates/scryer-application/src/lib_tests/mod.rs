@@ -67,6 +67,7 @@ mod multilingual_title_matching;
 mod queueing;
 mod recycle_bin_roots;
 mod release_anchor_prefetch;
+mod rename_folder_record;
 mod request_rules;
 mod request_rules_facts;
 mod romaji_release_matching;

@@ -4825,6 +4825,71 @@ async fn movie_full_scan_title_create_failure_from_search_persists_unmatched_ite
 }
 
 #[tokio::test]
+async fn movie_full_scan_creates_no_title_for_a_folder_it_cannot_claim() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let movie_folder = tempdir.path().join("Emberfall (2020)");
+    std::fs::create_dir(&movie_folder).expect("create movie folder");
+    let movie_path = movie_folder.join("Emberfall.2020.mkv");
+    std::fs::write(&movie_path, b"movie").expect("write movie file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(vec![build_test_library_file(
+            movie_path.to_string_lossy().as_ref(),
+        )])
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user, titles) = bootstrap_with_scan_unmatched_and_metadata_tracking_and_titles(
+        settings,
+        library_scanner,
+        unmatched_items.clone(),
+        Arc::new(FixedBatchSearchMetadataGateway {
+            results: vec![MetadataSearchItem {
+                tvdb_id: "123456".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Emberfall".to_string(),
+                year: Some(2020),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".into(), "exact_year".into()],
+            }],
+        }),
+    );
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile legacy movie root");
+    titles.refuse_folder_checks.store(true, Ordering::SeqCst);
+
+    let summary = app
+        .scan_library(&user, MediaFacet::Movie)
+        .await
+        .expect("movie scan should continue");
+
+    assert_eq!(summary.unmatched, 1);
+    assert!(
+        app.list_titles_unpaged(&user, Some(MediaFacet::Movie), None, None)
+            .await
+            .expect("list titles")
+            .is_empty(),
+        "no title is created for a folder the catalog refuses"
+    );
+    let items = unmatched_items.items().await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].reason_code, "title_create_from_search_failed");
+    assert_eq!(items[0].item_path, movie_path.to_string_lossy());
+    assert_eq!(std::fs::read(&movie_path).unwrap(), b"movie");
+}
+
+#[tokio::test]
 async fn series_full_scan_persists_unmatched_folders() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir(tempdir.path().join("Unknown Show (2020)"))

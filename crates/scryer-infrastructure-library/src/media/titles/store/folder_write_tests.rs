@@ -256,7 +256,46 @@ async fn two_titles_swap_folders_in_one_write() {
 }
 
 #[tokio::test]
-async fn two_concurrent_claims_of_one_folder_leave_exactly_one_owner() {
+async fn a_folder_check_refuses_what_the_write_would_and_writes_nothing() {
+    let (store, pool) = store_with_titles(&["emberfall", "cinderwake"]).await;
+    store
+        .assign_title_folders(&[TitleFolderWrite::assign("emberfall", "/media/Emberfall")])
+        .await
+        .unwrap();
+    let error = store
+        .check_title_folder_writes(&[TitleFolderWrite::assign(
+            "cinderwake",
+            "/media/Emberfall/Extras",
+        )])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reason(error),
+        folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE
+    );
+    // A title about to be created is checked as one with no folder.
+    let error = store
+        .check_title_folder_writes(&[TitleFolderWrite::assign(
+            "not-created-yet",
+            "/media/Emberfall",
+        )
+        .expecting(None)])
+        .await
+        .unwrap_err();
+    assert_eq!(reason(error), folder_ownership::FOLDER_ALREADY_OWNED_TITLE);
+    store
+        .check_title_folder_writes(&[TitleFolderWrite::assign("cinderwake", "/media/Cinderwake")])
+        .await
+        .unwrap();
+    assert_eq!(folder_of(&pool, "cinderwake").await, (None, None));
+}
+
+/// Two titles claim one folder: exactly one owns it and the other is refused.
+/// The store's writer gate runs the claims one after the other, so this
+/// proves the second claim is checked against the first, not how a race
+/// between them resolves.
+#[tokio::test]
+async fn two_claims_of_one_folder_leave_exactly_one_owner() {
     let (store, pool) = store_with_titles(&["emberfall", "cinderwake"]).await;
     let first = [TitleFolderWrite::assign("emberfall", "/media/Shared").expecting(None)];
     let second = [TitleFolderWrite::assign("cinderwake", "/media/Shared").expecting(None)];

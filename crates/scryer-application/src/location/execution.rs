@@ -190,6 +190,11 @@ pub trait RootMoveCatalog: Send + Sync {
     /// Assign the folder the title now owns.
     async fn set_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()>;
 
+    /// Run the checks [`Self::set_title_folder_path`] would run, writing
+    /// nothing, so a folder the title cannot own is refused before any file
+    /// moves.
+    async fn check_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()>;
+
     /// Update the title's root reference (FR-078 synthetic id).
     async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()>;
 
@@ -1529,6 +1534,16 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
             if tokio::fs::symlink_metadata(&path).await.is_err() {
                 return Ok(stale(PlanInputChange::UnprocessedSourceItem, detail));
             }
+        }
+
+        // The folder this title will record must be one it can own, asked
+        // before any of its files move. A merge records no folder for it.
+        if planned.merge_target_title_id.is_none()
+            && let Some(folder) = planned.destination_folder_path.as_deref()
+        {
+            self.catalog
+                .check_title_folder_path(title_id, folder)
+                .await?;
         }
 
         Ok(TitleAdmission::Proceed)

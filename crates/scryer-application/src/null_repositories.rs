@@ -4563,6 +4563,9 @@ pub mod test_nulls {
         async fn assign_title_folders(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
             Ok(())
         }
+        async fn check_title_folder_writes(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
+            Ok(())
+        }
         async fn clear_metadata_language_for_all(&self) -> AppResult<u64> {
             Ok(0)
         }

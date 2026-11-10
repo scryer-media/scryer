@@ -884,7 +884,7 @@ impl AppUseCase {
         }
     }
 
-    async fn apply_rename_plan(
+    pub(crate) async fn apply_rename_plan(
         &self,
         actor: &User,
         preview: RenamePlan,
@@ -1355,6 +1355,21 @@ impl AppUseCase {
                 &stored_path_to_path_buf(folder_path),
             )
             .await?;
+            // The record written after the move runs these checks too; asking
+            // now refuses a folder the title cannot own before a file moves.
+            if !title.folder_path.as_deref().is_some_and(|current| {
+                crate::stored_paths::folder_paths_match(current, folder_path)
+            }) {
+                self.services
+                    .catalog
+                    .titles
+                    .check_title_folder_writes(&[crate::TitleFolderWrite::assign(
+                        &title.id,
+                        folder_path,
+                    )
+                    .expecting(title.folder_path.clone())])
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -1700,27 +1715,16 @@ impl AppUseCase {
             folder_path = %planned.folder_path,
             "repaired a title folder record that was not a title folder"
         );
-        self.record_renamed_title_folder(&title, &planned.folder_path)
-            .await
-    }
-
-    /// Record a title folder chosen by rename, unless the catalog moved on
-    /// since the checks above: a conflict found at the write is kept the
-    /// same way as one found before it.
-    async fn record_renamed_title_folder(&self, title: &Title, folder_path: &str) -> AppResult<()> {
-        let write = crate::TitleFolderWrite::assign(&title.id, folder_path)
-            .expecting(title.folder_path.clone());
+        // None of this title's files moved, so a write lost to a concurrent
+        // change leaves the record where its files still are.
         match self
-            .services
-            .catalog
-            .titles
-            .assign_title_folders(&[write])
+            .record_renamed_title_folder(&title, &planned.folder_path)
             .await
         {
             Err(error) if crate::folder_ownership::title_folder_write_lost(&error) => {
                 warn!(
                     title_id = %title.id,
-                    folder_path = %folder_path,
+                    folder_path = %planned.folder_path,
                     reason = error.validation_reason().unwrap_or_default(),
                     "keeping the title's previous folder: the folder record changed before the write"
                 );
@@ -1728,6 +1732,18 @@ impl AppUseCase {
             }
             result => result,
         }
+    }
+
+    /// Record a title folder chosen by rename. A write refused because the
+    /// catalog moved on since the caller's checks is returned as the refusal.
+    async fn record_renamed_title_folder(&self, title: &Title, folder_path: &str) -> AppResult<()> {
+        let write = crate::TitleFolderWrite::assign(&title.id, folder_path)
+            .expecting(title.folder_path.clone());
+        self.services
+            .catalog
+            .titles
+            .assign_title_folders(&[write])
+            .await
     }
 
     async fn persist_rename_title_folder(&self, planned: &RenamePlanTitleFolder) -> AppResult<()> {
@@ -1806,16 +1822,20 @@ impl AppUseCase {
                 "recording the renamed title folder although some media files did not move into it"
             );
         }
+        // From here most of the title's files are in the renamed folder, so a
+        // record left on the previous folder no longer matches them: both
+        // refusals below are returned, and the caller keeps every folder of
+        // this title on disk.
         if let Some(owner) =
             crate::folder_ownership::find_other_folder_owner(self, &title, folder_path).await?
         {
-            warn!(
-                title_id = %title.id,
-                folder_path = %folder_path,
-                owner_title_id = %owner.id,
-                "keeping the title's previous folder: another title owns the renamed folder"
-            );
-            return Ok(());
+            return Err(AppError::validation_refused(
+                crate::error_reasons::folder_ownership::FOLDER_ALREADY_OWNED_TITLE,
+                format!(
+                    "the renamed folder {folder_path} is owned by title {}; the previous folder is kept",
+                    owner.id
+                ),
+            ));
         }
         self.record_renamed_title_folder(&title, folder_path).await
     }

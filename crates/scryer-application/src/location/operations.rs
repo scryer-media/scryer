@@ -3906,6 +3906,15 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             .await
     }
 
+    async fn check_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()> {
+        self.app
+            .services
+            .catalog
+            .titles
+            .check_title_folder_writes(&[crate::TitleFolderWrite::assign(title_id, stored_path)])
+            .await
+    }
+
     async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()> {
         self.app
             .services

@@ -11,8 +11,8 @@
 //! 3. on a tie over a nested pair, the inner title keeps its folder and the
 //!    outer one is cleared.
 //!
-//! The weakest loser is cleared first and the component is re-examined until
-//! nothing in it overlaps. Clearing only ever forgets a recorded folder; no
+//! Titles claim their folders strongest first; a title whose folder collides
+//! with one already kept is cleared, so nothing left overlaps. Clearing only ever forgets a recorded folder; no
 //! file and no media row is involved.
 
 use std::collections::BTreeMap;
@@ -20,7 +20,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 
 use crate::title_folder_keys::{
-    TitleFolderKeyRelation, title_folder_key, title_folder_key_ancestors, title_folder_key_relation,
+    TitleFolderKeyRelation, title_folder_key, title_folder_key_ancestors,
+    title_folder_key_descendant_bounds, title_folder_key_relation,
 };
 
 /// Why a title's recorded folder was cleared, stored beside the title.
@@ -122,31 +123,44 @@ pub fn title_folder_overlap_components(titles: &[TitleFolderRepairCandidate]) ->
         .collect()
 }
 
-/// Which of two overlapping titles keeps its folder. `relation` is where
-/// `left`'s folder sits relative to `right`'s.
-pub fn title_folder_pair_winner<'a>(
-    left: &'a TitleFolderRepairCandidate,
-    right: &'a TitleFolderRepairCandidate,
-    relation: TitleFolderKeyRelation,
-) -> &'a TitleFolderRepairCandidate {
-    if left.own_file_count != right.own_file_count {
-        return if left.own_file_count > right.own_file_count {
-            left
-        } else {
-            right
-        };
+/// The order titles claim folders in: most own files first; among equals the
+/// deeper folder first (so the inner title of a nested pair wins a tie), then
+/// the earliest added, then the title id.
+fn claim_order(
+    left: &(usize, &TitleFolderRepairCandidate),
+    right: &(usize, &TitleFolderRepairCandidate),
+) -> std::cmp::Ordering {
+    let (left_depth, left) = left;
+    let (right_depth, right) = right;
+    right
+        .own_file_count
+        .cmp(&left.own_file_count)
+        .then_with(|| right_depth.cmp(left_depth))
+        .then_with(|| left.created_at.cmp(&right.created_at))
+        .then_with(|| left.title_id.cmp(&right.title_id))
+}
+
+/// The kept title `key` collides with, and how `key` sits relative to it: the
+/// same folder first, then the nearest kept folder holding it, then the first
+/// kept folder (by key) inside it.
+fn kept_overlap(
+    kept: &BTreeMap<String, usize>,
+    key: &str,
+) -> Option<(usize, TitleFolderKeyRelation)> {
+    if let Some(&index) = kept.get(key) {
+        return Some((index, TitleFolderKeyRelation::Same));
     }
-    match relation {
-        TitleFolderKeyRelation::Same => {
-            if (left.created_at, &left.title_id) <= (right.created_at, &right.title_id) {
-                left
-            } else {
-                right
-            }
-        }
-        TitleFolderKeyRelation::Inside => left,
-        TitleFolderKeyRelation::Contains => right,
+    if let Some(&index) = title_folder_key_ancestors(key)
+        .iter()
+        .rev()
+        .find_map(|ancestor| kept.get(ancestor.as_str()))
+    {
+        return Some((index, TitleFolderKeyRelation::Inside));
     }
+    let (low, high) = title_folder_key_descendant_bounds(key)?;
+    kept.range(low..high)
+        .next()
+        .map(|(_, &index)| (index, TitleFolderKeyRelation::Contains))
 }
 
 fn reason_for_loser(relation_of_loser: TitleFolderKeyRelation) -> &'static str {
@@ -157,74 +171,45 @@ fn reason_for_loser(relation_of_loser: TitleFolderKeyRelation) -> &'static str {
     }
 }
 
-/// Decide one component: clear the weakest loser, then look again, until no
-/// two remaining folders overlap.
+/// Decide one component. Titles claim their folders strongest first, in
+/// [`claim_order`]; a title keeps its folder only when no folder already kept
+/// is the same folder, holds it or lies inside it, and is otherwise cleared
+/// against that kept title. For any two overlapping titles this is the pair
+/// rule above, the kept folders never overlap, and every cleared title names a
+/// title that really kept its folder. Each lookup goes through an ordered map,
+/// so a component of `n` titles costs about `n log n`.
 pub fn resolve_title_folder_component(
     mut members: Vec<TitleFolderRepairCandidate>,
 ) -> TitleFolderRepairComponent {
     members.sort_by(|left, right| (&left.key, &left.title_id).cmp(&(&right.key, &right.title_id)));
-    let mut kept = vec![true; members.len()];
+    let mut order = members
+        .iter()
+        .enumerate()
+        .map(|(index, member)| (index, title_folder_key_ancestors(&member.key).len()))
+        .collect::<Vec<_>>();
+    order.sort_by(|(left, left_depth), (right, right_depth)| {
+        claim_order(
+            &(*left_depth, &members[*left]),
+            &(*right_depth, &members[*right]),
+        )
+    });
+    let mut kept = BTreeMap::<String, usize>::new();
     let mut cleared = Vec::new();
-    loop {
-        // The loser with the fewest files goes first, the latest-added among
-        // equals; it is reported against the strongest title it lost to.
-        let mut weakest: Option<(usize, usize, TitleFolderKeyRelation)> = None;
-        for left in 0..members.len() {
-            if !kept[left] {
-                continue;
+    for (index, _) in order {
+        let member = &members[index];
+        match kept_overlap(&kept, &member.key) {
+            None => {
+                kept.insert(member.key.clone(), index);
             }
-            for right in (left + 1)..members.len() {
-                if !kept[right] {
-                    continue;
-                }
-                let Some(relation) =
-                    title_folder_key_relation(&members[left].key, &members[right].key)
-                else {
-                    continue;
-                };
-                let winner = title_folder_pair_winner(&members[left], &members[right], relation);
-                let (loser, winner, loser_relation) = if std::ptr::eq(winner, &members[left]) {
-                    (right, left, invert(relation))
-                } else {
-                    (left, right, relation)
-                };
-                let rank = |loser: usize, winner: usize| {
-                    (
-                        members[loser].own_file_count,
-                        std::cmp::Reverse(members[loser].created_at),
-                        members[loser].title_id.clone(),
-                        std::cmp::Reverse(members[winner].own_file_count),
-                        members[winner].created_at,
-                        members[winner].title_id.clone(),
-                    )
-                };
-                if weakest.is_none_or(|(current_loser, current_winner, _)| {
-                    rank(loser, winner) < rank(current_loser, current_winner)
-                }) {
-                    weakest = Some((loser, winner, loser_relation));
-                }
-            }
+            Some((winner, relation)) => cleared.push(ClearedTitleFolder {
+                title_id: member.title_id.clone(),
+                lost_folder: member.folder_path.clone(),
+                reason: reason_for_loser(relation),
+                kept_by: members[winner].title_id.clone(),
+            }),
         }
-        let Some((loser, winner, relation)) = weakest else {
-            break;
-        };
-        kept[loser] = false;
-        cleared.push(ClearedTitleFolder {
-            title_id: members[loser].title_id.clone(),
-            lost_folder: members[loser].folder_path.clone(),
-            reason: reason_for_loser(relation),
-            kept_by: members[winner].title_id.clone(),
-        });
     }
     TitleFolderRepairComponent { members, cleared }
-}
-
-fn invert(relation: TitleFolderKeyRelation) -> TitleFolderKeyRelation {
-    match relation {
-        TitleFolderKeyRelation::Same => TitleFolderKeyRelation::Same,
-        TitleFolderKeyRelation::Inside => TitleFolderKeyRelation::Contains,
-        TitleFolderKeyRelation::Contains => TitleFolderKeyRelation::Inside,
-    }
 }
 
 /// The titles whose folder is a library root or holds one, in `titles` order.
@@ -391,8 +376,8 @@ mod tests {
         assert_eq!(
             cleared(&plan),
             [
-                ("middle".into(), reasons::INSIDE_KEPT_FOLDER, "top".into()),
                 ("bottom".into(), reasons::INSIDE_KEPT_FOLDER, "top".into()),
+                ("middle".into(), reasons::INSIDE_KEPT_FOLDER, "top".into()),
             ]
         );
     }
@@ -498,5 +483,83 @@ mod tests {
         let titles = [candidate("emberfall", "/srv/media/Emberfall", 0, 1)];
         assert!(title_folder_library_root_conflicts(&titles, &[]).is_empty());
         assert!(title_folder_library_root_conflicts(&titles, &["  ".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn an_outer_title_beaten_by_one_inner_does_not_take_another_inner_with_it() {
+        let plan = plan_title_folder_repair(&[
+            candidate("ashgrove-outer", "/tv/Ashgrove", 3, 1),
+            candidate("ashgrove-specials", "/tv/Ashgrove/Specials", 2, 2),
+            candidate("ashgrove-season", "/tv/Ashgrove/Season 1", 5, 3),
+        ]);
+        assert_eq!(
+            cleared(&plan),
+            [(
+                "ashgrove-outer".into(),
+                reasons::HOLDS_KEPT_FOLDER,
+                "ashgrove-season".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn twenty_thousand_children_under_one_outer_resolve() {
+        let mut titles = vec![candidate("ashgrove-outer", "/tv/Ashgrove", 1, 1)];
+        for child in 0..20_000 {
+            titles.push(candidate(
+                &format!("ashgrove-{child:05}"),
+                &format!("/tv/Ashgrove/Child {child:05}"),
+                0,
+                2,
+            ));
+        }
+        let plan = plan_title_folder_repair(&titles);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].members.len(), 20_001);
+        assert_eq!(plan[0].cleared.len(), 20_000);
+        assert!(plan[0].cleared.iter().all(|cleared| {
+            cleared.reason == reasons::INSIDE_KEPT_FOLDER && cleared.kept_by == "ashgrove-outer"
+        }));
+    }
+
+    #[test]
+    fn twenty_thousand_titles_on_one_folder_resolve() {
+        let titles = (0..20_000)
+            .map(|index| candidate(&format!("cinderwake-{index:05}"), "/tv/Cinderwake", 0, 1))
+            .collect::<Vec<_>>();
+        let plan = plan_title_folder_repair(&titles);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].cleared.len(), 19_999);
+        assert!(plan[0].cleared.iter().all(|cleared| {
+            cleared.reason == reasons::SHARED_FOLDER && cleared.kept_by == "cinderwake-00000"
+        }));
+    }
+
+    #[test]
+    fn kept_folders_never_overlap() {
+        let titles = [
+            candidate("a", "/tv/Emberfall", 2, 1),
+            candidate("b", "/tv/Emberfall/One", 2, 2),
+            candidate("c", "/tv/Emberfall/One/Deep", 7, 3),
+            candidate("d", "/tv/Emberfall/Two", 1, 4),
+            candidate("e", "/tv/Emberfall", 4, 5),
+        ];
+        let plan = plan_title_folder_repair(&titles);
+        let cleared_ids = cleared(&plan)
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect::<Vec<_>>();
+        let kept = titles
+            .iter()
+            .filter(|title| !cleared_ids.contains(&title.title_id))
+            .collect::<Vec<_>>();
+        for (index, left) in kept.iter().enumerate() {
+            for right in &kept[index + 1..] {
+                assert_eq!(title_folder_key_relation(&left.key, &right.key), None);
+            }
+        }
+        for (_, _, kept_by) in cleared(&plan) {
+            assert!(!cleared_ids.contains(&kept_by), "{kept_by} was cleared");
+        }
     }
 }

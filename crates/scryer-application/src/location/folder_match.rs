@@ -622,26 +622,53 @@ impl AppUseCase {
 
     /// Put titles' folders back and rebuild what the failed attempt detached.
     ///
+    /// Each restore is `(title, folder to put back, folder this flow
+    /// assigned)`. A write expects the folder this flow assigned, so a title
+    /// whose folder something else changed while the attempt ran is left as
+    /// it now is.
+    ///
     /// Best-effort by construction: it runs while another error is already on
     /// its way to the caller, so a second failure is logged rather than
     /// replacing the original cause.
-    async fn restore_title_folders(&self, actor: &User, restores: &[(&str, Option<&str>)]) {
+    async fn restore_title_folders(
+        &self,
+        actor: &User,
+        restores: &[(&str, Option<&str>, Option<&str>)],
+    ) {
         let writes = restores
             .iter()
-            .map(|(title_id, folder)| match folder {
-                Some(folder) => crate::TitleFolderWrite::assign(*title_id, *folder),
-                None => crate::TitleFolderWrite::clear(*title_id),
+            .map(|(title_id, folder, assigned)| {
+                match folder {
+                    Some(folder) => crate::TitleFolderWrite::assign(*title_id, *folder),
+                    None => crate::TitleFolderWrite::clear(*title_id),
+                }
+                .expecting(assigned.map(str::to_string))
             })
             .collect::<Vec<_>>();
-        if let Err(error) = self.commit_title_folders(&writes).await {
-            tracing::error!(
-                title_ids = ?restores.iter().map(|(title_id, _)| *title_id).collect::<Vec<_>>(),
-                %error,
-                "failed to restore title folder ownership after a folder-match failure"
-            );
-            return;
+        let title_ids = restores
+            .iter()
+            .map(|(title_id, _, _)| *title_id)
+            .collect::<Vec<_>>();
+        match self.commit_title_folders(&writes).await {
+            Ok(()) => {}
+            Err(error) if crate::folder_ownership::title_folder_write_lost(&error) => {
+                tracing::warn!(
+                    title_ids = ?title_ids,
+                    reason = error.validation_reason().unwrap_or_default(),
+                    "not restoring title folders after a folder-match failure: they changed since this attempt assigned them"
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::error!(
+                    title_ids = ?title_ids,
+                    %error,
+                    "failed to restore title folder ownership after a folder-match failure"
+                );
+                return;
+            }
         }
-        for (title_id, folder) in restores {
+        for (title_id, folder, _) in restores {
             if folder.is_none() {
                 continue;
             }
@@ -670,7 +697,11 @@ impl AppUseCase {
         )
         .expecting(previous_folder.clone())])
             .await?;
-        let restore = [(title_id.as_str(), previous_folder.as_deref())];
+        let restore = [(
+            title_id.as_str(),
+            previous_folder.as_deref(),
+            Some(context.selected_folder.as_str()),
+        )];
 
         let mut detached = 0;
         if let Some(previous) = previous_folder.as_deref() {
@@ -785,8 +816,16 @@ impl AppUseCase {
                 self.restore_title_folders(
                     actor,
                     &[
-                        (title_id.as_str(), Some(title_folder.as_str())),
-                        (owner_id.as_str(), Some(owner_folder.as_str())),
+                        (
+                            title_id.as_str(),
+                            Some(title_folder.as_str()),
+                            Some(owner_folder.as_str()),
+                        ),
+                        (
+                            owner_id.as_str(),
+                            Some(owner_folder.as_str()),
+                            Some(title_folder.as_str()),
+                        ),
                     ],
                 )
                 .await;
@@ -873,8 +912,12 @@ impl AppUseCase {
                 self.restore_title_folders(
                     actor,
                     &[
-                        (title_id.as_str(), previous_folder.as_deref()),
-                        (owner_id.as_str(), Some(owner_folder.as_str())),
+                        (
+                            title_id.as_str(),
+                            previous_folder.as_deref(),
+                            Some(context.selected_folder.as_str()),
+                        ),
+                        (owner_id.as_str(), Some(owner_folder.as_str()), None),
                     ],
                 )
                 .await;

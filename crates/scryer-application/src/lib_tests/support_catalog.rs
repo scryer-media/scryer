@@ -29,6 +29,9 @@ pub(crate) struct MockTitleRepo {
     pub(super) fail_tag_reads: AtomicBool,
     pub(crate) fail_get_by_id: AtomicBool,
     pub(super) lose_folder_claim: AtomicBool,
+    /// Make every pre-flight folder check refuse, as if another title owned
+    /// the folder, while the write path itself is left alone.
+    pub(super) refuse_folder_checks: AtomicBool,
     pub(super) smg_identity_backfill_attempts: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) metadata_hydration_due: Mutex<HashSet<String>>,
     pub(super) create_or_get_existing_error: Arc<Mutex<Option<String>>>,
@@ -58,6 +61,10 @@ pub(crate) struct MockTitleRepo {
     /// `title_search_terms` only, so they are kept apart here too: a read of
     /// the row never returns them, and only the index reads below do.
     pub(super) index_only_names: Arc<Mutex<HashMap<String, Vec<scryer_domain::TaggedAlias>>>>,
+    /// The library store the fixture's libraries live in, so folder writes
+    /// are checked against the configured roots the way the real store
+    /// checks them.
+    pub(super) library_store: std::sync::OnceLock<Arc<Mutex<Vec<Library>>>>,
 }
 #[derive(Default)]
 pub(crate) struct RecordingJobRunRepo {
@@ -278,6 +285,81 @@ pub(super) fn sorted_limited_job_runs(
 }
 
 impl MockTitleRepo {
+    /// Check this repository's folder writes against `libraries`' roots.
+    pub(super) fn share_library_roots(&self, libraries: MockLibraryRepo) -> Arc<MockLibraryRepo> {
+        let _ = self.library_store.set(libraries.libraries.clone());
+        Arc::new(libraries)
+    }
+
+    async fn library_roots(&self) -> Vec<String> {
+        let Some(store) = self.library_store.get() else {
+            return Vec::new();
+        };
+        let libraries = store.lock().await;
+        crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None)
+            .into_iter()
+            .map(|root| root.path)
+            .collect()
+    }
+
+    /// The store's folder-write checks, run in memory over `list`. The
+    /// injected write failures apply to the write alone, so a pre-flight
+    /// check passes where the write after it is lost.
+    /// `extra_current` stands for a title being created, which the real
+    /// store has already inserted when it checks the title's folder.
+    async fn plan_folder_writes(
+        &self,
+        list: &[Title],
+        writes: &[crate::TitleFolderWrite],
+        extra_current: Option<&Title>,
+        unknown_titles_have_no_folder: bool,
+    ) -> AppResult<Vec<crate::title_folder_keys::PlannedTitleFolderWrite>> {
+        let mut current: std::collections::BTreeMap<String, Option<String>> = list
+            .iter()
+            .chain(extra_current)
+            .map(|title| (title.id.clone(), title.folder_path.clone()))
+            .collect();
+        if unknown_titles_have_no_folder {
+            for write in writes {
+                current.entry(write.title_id.clone()).or_insert(None);
+            }
+        }
+        let occupants = list
+            .iter()
+            .filter_map(|title| {
+                let folder = title.folder_path.clone()?;
+                Some(crate::title_folder_keys::TitleFolderOccupant {
+                    title_id: title.id.clone(),
+                    title_name: title.name.clone(),
+                    key: crate::title_folder_keys::title_folder_key(&folder)?,
+                    folder_path: folder,
+                })
+            })
+            .collect::<Vec<_>>();
+        let roots = self.library_roots().await;
+        crate::title_folder_keys::plan_title_folder_writes(writes, &current, &occupants, &roots)
+    }
+
+    /// A new title's folder goes through the folder-write checks, as the
+    /// real store's creation does.
+    async fn check_created_title_folder(&self, list: &[Title], title: &Title) -> AppResult<()> {
+        let Some(folder) = title
+            .folder_path
+            .as_deref()
+            .filter(|folder| crate::title_folder_keys::title_folder_key(folder).is_some())
+        else {
+            return Ok(());
+        };
+        self.plan_folder_writes(
+            list,
+            &[crate::TitleFolderWrite::assign(&title.id, folder)],
+            Some(title),
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// The catalog rows behind titles found through the index view, which
     /// carries names no row does.
     async fn rows_of(&self, found: Vec<Title>) -> AppResult<Vec<Title>> {
@@ -997,6 +1079,7 @@ impl TitleRepository for MockTitleRepo {
             });
         }
 
+        self.check_created_title_folder(&list, &title).await?;
         list.push(title.clone());
         Ok(CreateTitleOutcome {
             title,
@@ -1086,6 +1169,7 @@ impl TitleRepository for MockTitleRepo {
             });
         }
 
+        self.check_created_title_folder(&list, &title).await?;
         let mut pending_items = pending_import_items.lock().await;
         let pending_index = pending_items
             .iter()
@@ -1117,7 +1201,9 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn create(&self, title: Title) -> AppResult<Title> {
-        self.store.lock().await.push(title.clone());
+        let mut list = self.store.lock().await;
+        self.check_created_title_folder(&list, &title).await?;
+        list.push(title.clone());
         Ok(title)
     }
 
@@ -1437,30 +1523,26 @@ impl TitleRepository for MockTitleRepo {
             }
         }
         let mut list = self.store.lock().await;
-        let current = list
-            .iter()
-            .map(|title| (title.id.clone(), title.folder_path.clone()))
-            .collect();
-        let occupants = list
-            .iter()
-            .filter_map(|title| {
-                let folder = title.folder_path.clone()?;
-                Some(crate::title_folder_keys::TitleFolderOccupant {
-                    title_id: title.id.clone(),
-                    title_name: title.name.clone(),
-                    key: crate::title_folder_keys::title_folder_key(&folder)?,
-                    folder_path: folder,
-                })
-            })
-            .collect::<Vec<_>>();
-        let planned =
-            crate::title_folder_keys::plan_title_folder_writes(writes, &current, &occupants, &[])?;
+        let planned = self.plan_folder_writes(&list, writes, None, false).await?;
         for write in planned {
             if let Some(title) = list.iter_mut().find(|entry| entry.id == write.title_id) {
                 title.folder_path = write.folder_path;
             }
         }
         Ok(())
+    }
+
+    async fn check_title_folder_writes(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
+        if self.refuse_folder_checks.load(Ordering::SeqCst) {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::folder_ownership::FOLDER_ALREADY_OWNED_TITLE,
+                "folder is already owned by another title",
+            ));
+        }
+        let list = self.store.lock().await;
+        self.plan_folder_writes(&list, writes, None, true)
+            .await
+            .map(|_| ())
     }
 
     /// Seeds a folder without the ownership checks, so fixtures can stage the

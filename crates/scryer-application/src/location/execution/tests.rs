@@ -33,6 +33,8 @@ struct FakeCatalog {
 struct FakeCatalogState {
     placements: BTreeMap<String, TitlePlacementSnapshot>,
     writes: Vec<String>,
+    /// Folders the folder-write checks refuse, as another title's would be.
+    refused_folders: BTreeSet<String>,
 }
 
 impl FakeCatalog {
@@ -96,6 +98,22 @@ impl RootMoveCatalog for FakeCatalog {
             .push(format!("folder:{title_id}={stored_path}"));
         if let Some(placement) = state.placements.get_mut(title_id) {
             placement.folder_path = Some(stored_path.to_string());
+        }
+        Ok(())
+    }
+
+    async fn check_title_folder_path(&self, _title_id: &str, stored_path: &str) -> AppResult<()> {
+        if self
+            .state
+            .lock()
+            .expect("lock")
+            .refused_folders
+            .contains(stored_path)
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::folder_ownership::FOLDER_ALREADY_OWNED_TITLE,
+                format!("{stored_path} is already owned by another title"),
+            ));
         }
         Ok(())
     }
@@ -906,6 +924,55 @@ async fn a_cross_library_transfer_flips_library_and_root_in_one_write() {
     let placement = catalog.placement("title-1").expect("placement");
     assert_eq!(placement.library_id, "lib-2");
     assert_eq!(placement.root_folder_id, "root-b");
+}
+
+/// A destination folder the title cannot own is refused at admission, before
+/// any file of the title is copied or any catalog row is written.
+#[tokio::test]
+async fn a_refused_destination_folder_stops_the_move_before_any_file_moves() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "movie.mkv",
+        11,
+    );
+    let file = &plan.titles[0].files[0];
+    write_file(&file.source(), b"hello world");
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-refused",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    catalog.state.lock().expect("lock").refused_folders.insert(
+        plan.titles[0]
+            .destination_folder_path
+            .clone()
+            .expect("destination folder"),
+    );
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+
+    let error = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-refused", &plan.to_work_plan())
+        .await
+        .expect_err("the refused folder stops the run");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::folder_ownership::FOLDER_ALREADY_OWNED_TITLE)
+    );
+    assert_eq!(std::fs::read(file.source()).unwrap(), b"hello world");
+    assert!(
+        std::fs::symlink_metadata(file.destination()).is_err(),
+        "nothing may be copied to a refused folder"
+    );
+    assert_eq!(catalog.writes(), Vec::<String>::new());
 }
 
 /// FR-089 on the transfer path: a title whose library this operation already

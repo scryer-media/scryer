@@ -3243,6 +3243,18 @@ impl TitleRepository for TitleStore {
         .await
     }
 
+    async fn check_title_folder_writes(&self, writes: &[TitleFolderWrite]) -> AppResult<()> {
+        if writes.is_empty() {
+            return Ok(());
+        }
+        read_title_folder_write_plan(
+            &mut TitleFolderPlanSource::Read(self.datastore.read_exec()),
+            writes,
+        )
+        .await
+        .map(|_| ())
+    }
+
     async fn transfer_to_library(
         &self,
         id: &str,
@@ -6266,77 +6278,11 @@ pub(crate) async fn assign_title_folders_tx(
     };
     lock_title_folder_writes_tx(tx, &first.title_id).await?;
 
+    let planned = read_title_folder_write_plan(&mut TitleFolderPlanSource::Tx(tx), writes).await?;
     let ids = writes
         .iter()
         .map(|write| SqlArg::Text(write.title_id.clone()))
         .collect::<Vec<_>>();
-    let mut current = BTreeMap::new();
-    for row in SqlRuntime::fetch_all(
-        SqlExec::Tx(tx),
-        &format!(
-            "SELECT id, folder_path FROM titles WHERE id IN ({})",
-            sql_placeholders(ids.len())
-        ),
-        &ids,
-    )
-    .await?
-    {
-        current.insert(row.text("id")?, row.opt_text("folder_path")?);
-    }
-
-    let mut occupants = Vec::new();
-    let mut seen = BTreeSet::new();
-    for key in writes
-        .iter()
-        .filter_map(|write| write.folder.as_deref().and_then(title_folder_key))
-    {
-        let mut lookups = Vec::new();
-        let mut related = title_folder_key_ancestors(&key);
-        related.push(key.clone());
-        lookups.push((
-            format!(
-                "SELECT id, name, folder_path, folder_path_key FROM titles WHERE folder_path_key IN ({})",
-                sql_placeholders(related.len())
-            ),
-            related.into_iter().map(SqlArg::Text).collect::<Vec<_>>(),
-        ));
-        if let Some((low, high)) = title_folder_key_descendant_bounds(&key) {
-            lookups.push((
-                "SELECT id, name, folder_path, folder_path_key FROM titles \
-                 WHERE folder_path_key >= {} AND folder_path_key < {}"
-                    .to_string(),
-                vec![SqlArg::Text(low), SqlArg::Text(high)],
-            ));
-        }
-        for (sql, args) in lookups {
-            for row in SqlRuntime::fetch_all(SqlExec::Tx(tx), &sql, &args).await? {
-                let title_id = row.text("id")?;
-                if !seen.insert(title_id.clone()) {
-                    continue;
-                }
-                let (Some(folder_path), Some(key)) = (
-                    row.opt_text("folder_path")?,
-                    row.opt_text("folder_path_key")?,
-                ) else {
-                    continue;
-                };
-                occupants.push(TitleFolderOccupant {
-                    title_id,
-                    title_name: row.text("name")?,
-                    folder_path,
-                    key,
-                });
-            }
-        }
-    }
-
-    let roots = SqlRuntime::fetch_all(SqlExec::Tx(tx), "SELECT path FROM library_roots", &[])
-        .await?
-        .into_iter()
-        .map(|row| row.text("path"))
-        .collect::<AppResult<Vec<_>>>()?;
-
-    let planned = plan_title_folder_writes(writes, &current, &occupants, &roots)?;
 
     SqlRuntime::execute(
         SqlExec::Tx(tx),
@@ -6368,6 +6314,110 @@ pub(crate) async fn assign_title_folders_tx(
         .await?;
     }
     Ok(())
+}
+
+/// Where [`read_title_folder_write_plan`] reads from: the write's own
+/// transaction, after the folder write lock, or a plain read for a pre-flight
+/// check that writes nothing.
+enum TitleFolderPlanSource<'a, 'db> {
+    Tx(&'a mut SqlTx<'db>),
+    Read(SqlExec<'a, 'db>),
+}
+
+impl<'db> TitleFolderPlanSource<'_, 'db> {
+    fn exec(&mut self) -> SqlExec<'_, 'db> {
+        match self {
+            Self::Tx(tx) => SqlExec::Tx(tx),
+            Self::Read(SqlExec::Target(target)) => SqlExec::Target(*target),
+            Self::Read(SqlExec::Tx(tx)) => SqlExec::Tx(tx),
+        }
+    }
+}
+
+/// Read the written titles' current folders, every title whose folder key
+/// equals, contains or lies inside a new folder, and every library root, and
+/// plan the batch against them. Refuses the batch if any write conflicts.
+async fn read_title_folder_write_plan(
+    source: &mut TitleFolderPlanSource<'_, '_>,
+    writes: &[TitleFolderWrite],
+) -> AppResult<Vec<scryer_application::title_folder_keys::PlannedTitleFolderWrite>> {
+    let ids = writes
+        .iter()
+        .map(|write| SqlArg::Text(write.title_id.clone()))
+        .collect::<Vec<_>>();
+    let mut current = BTreeMap::new();
+    for row in SqlRuntime::fetch_all(
+        source.exec(),
+        &format!(
+            "SELECT id, folder_path FROM titles WHERE id IN ({})",
+            sql_placeholders(ids.len())
+        ),
+        &ids,
+    )
+    .await?
+    {
+        current.insert(row.text("id")?, row.opt_text("folder_path")?);
+    }
+    if matches!(source, TitleFolderPlanSource::Read(_)) {
+        // A pre-flight check may name a title it is about to create.
+        for write in writes {
+            current.entry(write.title_id.clone()).or_insert(None);
+        }
+    }
+
+    let mut occupants = Vec::new();
+    let mut seen = BTreeSet::new();
+    for key in writes
+        .iter()
+        .filter_map(|write| write.folder.as_deref().and_then(title_folder_key))
+    {
+        let mut lookups = Vec::new();
+        let mut related = title_folder_key_ancestors(&key);
+        related.push(key.clone());
+        lookups.push((
+            format!(
+                "SELECT id, name, folder_path, folder_path_key FROM titles WHERE folder_path_key IN ({})",
+                sql_placeholders(related.len())
+            ),
+            related.into_iter().map(SqlArg::Text).collect::<Vec<_>>(),
+        ));
+        if let Some((low, high)) = title_folder_key_descendant_bounds(&key) {
+            lookups.push((
+                "SELECT id, name, folder_path, folder_path_key FROM titles \
+                 WHERE folder_path_key >= {} AND folder_path_key < {}"
+                    .to_string(),
+                vec![SqlArg::Text(low), SqlArg::Text(high)],
+            ));
+        }
+        for (sql, args) in lookups {
+            for row in SqlRuntime::fetch_all(source.exec(), &sql, &args).await? {
+                let title_id = row.text("id")?;
+                if !seen.insert(title_id.clone()) {
+                    continue;
+                }
+                let (Some(folder_path), Some(key)) = (
+                    row.opt_text("folder_path")?,
+                    row.opt_text("folder_path_key")?,
+                ) else {
+                    continue;
+                };
+                occupants.push(TitleFolderOccupant {
+                    title_id,
+                    title_name: row.text("name")?,
+                    folder_path,
+                    key,
+                });
+            }
+        }
+    }
+
+    let roots = SqlRuntime::fetch_all(source.exec(), "SELECT path FROM library_roots", &[])
+        .await?
+        .into_iter()
+        .map(|row| row.text("path"))
+        .collect::<AppResult<Vec<_>>>()?;
+
+    plan_title_folder_writes(writes, &current, &occupants, &roots)
 }
 
 async fn resolve_pending_import_for_created_title_tx(

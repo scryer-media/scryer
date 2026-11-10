@@ -4,8 +4,9 @@
 //! The key is decided from the stored path's own shape, never from the host
 //! the code runs on, so a catalog keyed on one machine compares the same on
 //! every other. A path with a drive letter (`C:`) or a UNC prefix (`\\server`)
-//! is a Windows path: its separators are folded to `\` and its case is folded,
-//! because Windows treats `Show` and `show` as one folder. Every other path is
+//! is a Windows path: its separators are folded to `\` and its case is folded
+//! the way Windows folds it, character by character to upper case, because
+//! Windows treats `Show` and `show` as one folder. Every other path is
 //! compared exactly as POSIX does, so `/library/Show` and `/library/show` are
 //! two folders. Both kinds drop empty and `.` components, lose trailing
 //! separators and trailing spaces, and are compared in Unicode NFC, so the
@@ -49,10 +50,13 @@ pub fn title_folder_key(stored: &str) -> Option<String> {
 fn strip_extended_length_prefix(path: &str) -> String {
     for prefix in [r"\\?\", "//?/"] {
         if let Some(rest) = path.strip_prefix(prefix) {
-            if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case(r"UNC\")
-                || rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("UNC/")
-            {
-                return format!(r"\\{}", &rest[4..]);
+            // `get` keeps a multi-byte character straddling byte 4 from
+            // panicking; such a path simply has no `UNC` marker.
+            let unc = rest.get(..4).is_some_and(|marker| {
+                marker.eq_ignore_ascii_case(r"UNC\") || marker.eq_ignore_ascii_case("UNC/")
+            });
+            if unc && let Some(share) = rest.get(4..) {
+                return format!(r"\\{share}");
             }
             return rest.to_string();
         }
@@ -78,10 +82,15 @@ fn trim_trailing(path: &str, separator: impl Fn(char) -> bool) -> &str {
 
 fn windows_key(path: &str) -> String {
     let is_separator = |c: char| c == '\\' || c == '/';
+    // Both anchors are two ASCII bytes, so splitting at byte 2 is safe; `get`
+    // keeps it that way if the recognizer above ever widens.
     let (anchor, rest) = if has_drive_letter(path) {
-        (format!("{}\\", &path[..2]), &path[2..])
+        (
+            format!("{}\\", path.get(..2).unwrap_or_default()),
+            path.get(2..).unwrap_or_default(),
+        )
     } else {
-        (r"\\".to_string(), &path[2..])
+        (r"\\".to_string(), path.get(2..).unwrap_or_default())
     };
     let rest = trim_trailing(rest, is_separator);
     let components = rest
@@ -93,7 +102,20 @@ fn windows_key(path: &str) -> String {
         components.join(&WINDOWS_SEPARATOR.to_string())
     );
     let composed = joined.nfc().collect::<String>();
-    composed.to_lowercase().nfc().collect()
+    composed.chars().map(ordinal_case_fold).nfc().collect()
+}
+
+/// Windows compares names ignoring case one character at a time, by each
+/// character's simple upper-case mapping (NTFS's upcase table, .NET's
+/// ordinal-ignore-case). A character whose upper case is not exactly one
+/// character is left as it is, so the fold never depends on its neighbours
+/// and never changes a name's length.
+fn ordinal_case_fold(c: char) -> char {
+    let mut upper = c.to_uppercase();
+    match (upper.next(), upper.next()) {
+        (Some(single), None) => single,
+        _ => c,
+    }
 }
 
 fn posix_key(path: &str) -> String {
@@ -160,12 +182,19 @@ pub fn title_folder_key_ancestors(key: &str) -> Vec<String> {
         0
     };
     let mut ancestors = Vec::new();
-    if anchor_len > 0 && key.len() > anchor_len && !key.starts_with(r"\\") {
-        ancestors.push(key[..anchor_len].to_string());
+    if anchor_len > 0
+        && key.len() > anchor_len
+        && !key.starts_with(r"\\")
+        && let Some(anchor) = key.get(..anchor_len)
+    {
+        ancestors.push(anchor.to_string());
     }
+    // Separators are ASCII, so every match index is a character boundary.
     for (index, _) in key.match_indices(separator) {
-        if index >= anchor_len {
-            ancestors.push(key[..index].to_string());
+        if index >= anchor_len
+            && let Some(ancestor) = key.get(..index)
+        {
+            ancestors.push(ancestor.to_string());
         }
     }
     ancestors
@@ -403,7 +432,7 @@ mod tests {
     #[test]
     fn windows_keys_fold_case_and_separators_on_every_host() {
         assert_eq!(key(r"C:\Media\Emberfall"), key("c:/media/EMBERFALL"));
-        assert_eq!(key(r"C:\Media\Emberfall"), r"c:\media\emberfall");
+        assert_eq!(key(r"C:\Media\Emberfall"), r"C:\MEDIA\EMBERFALL");
         assert_eq!(
             key(r"\\NAS\Share\Emberfall"),
             key(r"\\nas\share\emberfall\")
@@ -421,7 +450,7 @@ mod tests {
         ] {
             assert_eq!(key(spelling), "/library/Emberfall", "{spelling:?}");
         }
-        assert_eq!(key(r"D:\TV\.\Cinderwake\\"), r"d:\tv\cinderwake");
+        assert_eq!(key(r"D:\TV\.\Cinderwake\\"), r"D:\TV\CINDERWAKE");
     }
 
     #[test]
@@ -448,8 +477,8 @@ mod tests {
     #[test]
     fn roots_keep_their_separator() {
         assert_eq!(key("/"), "/");
-        assert_eq!(key("C:"), r"c:\");
-        assert_eq!(key(r"C:\"), r"c:\");
+        assert_eq!(key("c:"), r"C:\");
+        assert_eq!(key(r"C:\"), r"C:\");
     }
 
     #[test]
@@ -494,15 +523,15 @@ mod tests {
             vec!["/", "/library", "/library/Emberfall"]
         );
         assert_eq!(
-            title_folder_key_ancestors(r"c:\media\emberfall"),
-            vec![r"c:\", r"c:\media"]
+            title_folder_key_ancestors(r"C:\MEDIA\EMBERFALL"),
+            vec![r"C:\", r"C:\MEDIA"]
         );
         assert_eq!(
-            title_folder_key_ancestors(r"\\nas\share\emberfall"),
-            vec![r"\\nas", r"\\nas\share"]
+            title_folder_key_ancestors(r"\\NAS\SHARE\EMBERFALL"),
+            vec![r"\\NAS", r"\\NAS\SHARE"]
         );
         assert!(title_folder_key_ancestors("/").is_empty());
-        assert!(title_folder_key_ancestors(r"c:\").is_empty());
+        assert!(title_folder_key_ancestors(r"C:\").is_empty());
 
         let (low, high) = title_folder_key_descendant_bounds("/library/Emberfall").unwrap();
         assert_eq!(low, "/library/Emberfall/");
@@ -512,8 +541,37 @@ mod tests {
         let sibling = "/library/Emberfall 2";
         assert!(!(sibling >= low.as_str() && sibling < high.as_str()));
 
-        let (low, high) = title_folder_key_descendant_bounds(r"c:\").unwrap();
-        assert_eq!((low.as_str(), high.as_str()), (r"c:\", "c:]"));
+        let (low, high) = title_folder_key_descendant_bounds(r"C:\").unwrap();
+        assert_eq!((low.as_str(), high.as_str()), (r"C:\", "C:]"));
+    }
+
+    #[test]
+    fn multi_byte_characters_never_split_a_slice() {
+        for stored in [
+            "\\\\?\\a\u{e9}\u{e9}",
+            "\\\\?\\\u{e9}\u{e9}",
+            "//?/a\u{e9}\u{e9}",
+            "\\\\?\\UN\u{e9}x",
+            "\u{e9}:\\Emberfall",
+            "\\\\\u{e9}",
+            "/\u{e9}/\u{1f525}",
+        ] {
+            let key = title_folder_key(stored).expect("non-blank folders have a key");
+            title_folder_key_ancestors(&key);
+            title_folder_key_descendant_bounds(&key);
+        }
+        assert_eq!(key("\\\\?\\a\u{e9}\u{e9}"), key("a\u{e9}\u{e9}"));
+    }
+
+    #[test]
+    fn windows_case_fold_is_per_character_upper_case() {
+        let folded = key("C:\\Media\\\u{39f}\u{394}\u{39f}\u{3a3}");
+        assert_eq!(key("C:\\Media\\\u{3bf}\u{3b4}\u{3bf}\u{3c3}"), folded);
+        assert_eq!(key("C:\\Media\\\u{3bf}\u{3b4}\u{3bf}\u{3c2}"), folded);
+        // A character whose upper case is several characters is kept as is,
+        // so a name never changes length.
+        assert_eq!(key("C:\\Stra\u{df}e"), "C:\\STRA\u{df}E");
+        assert_ne!(key("C:\\Stra\u{df}e"), key("C:\\STRASSE"));
     }
 
     fn occupant(id: &str, folder: &str) -> TitleFolderOccupant {

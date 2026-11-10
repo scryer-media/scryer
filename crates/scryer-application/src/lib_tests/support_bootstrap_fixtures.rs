@@ -242,6 +242,7 @@ fn bootstrap_with_services(
         .try_lock()
         .expect("new fixture store")
         .insert(admin.id.clone(), admin.authorization.app);
+    let linked_libraries = titles.share_library_roots(libraries);
 
     let mut services_builder = AppServices::builder(
         titles.clone(),
@@ -257,7 +258,7 @@ fn bootstrap_with_services(
         String::new(),
     )
     .with_domain_events(Arc::new(MockDomainEventRepo::default()))
-    .with_libraries(Arc::new(libraries));
+    .with_libraries(linked_libraries);
     if let Some(indexer_stats) = indexer_stats {
         services_builder = services_builder.with_indexer_stats(indexer_stats);
     }
@@ -336,7 +337,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
     });
     let download_client = Arc::new(StubDownloadClient::default());
     let indexer_client = Arc::new(MockIndexerClient);
-    let libraries = Arc::new(MockLibraryRepo::default());
+    let libraries = titles.share_library_roots(MockLibraryRepo::default());
     let domain_events = Arc::new(MockDomainEventRepo::default());
     let media_requests = Arc::new(MockMediaRequestRepo {
         titles: Some(titles.clone()),
@@ -565,6 +566,7 @@ pub(super) fn bootstrap_with_metadata_gateway_settings_and_titles(
     let download_client = Arc::new(StubDownloadClient::default());
     let indexer_client = Arc::new(MockIndexerClient);
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles.clone(),
         shows,
@@ -580,7 +582,7 @@ pub(super) fn bootstrap_with_metadata_gateway_settings_and_titles(
     )
     .with_domain_events(Arc::new(MockDomainEventRepo::default()))
     .with_metadata_gateway(metadata_gateway)
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -709,6 +711,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_queue_commands(
     let settings = Arc::new(StoredSettingsRepo::default());
     let quality_profiles = Arc::new(MockQualityProfileRepo);
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles,
         shows,
@@ -727,7 +730,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_queue_commands(
     .with_pending_releases(pending_releases)
     .with_download_queue_commands(download_queue_commands)
     .with_blocklist_repo(Arc::new(MockBlocklistRepo::default()))
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -771,6 +774,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_tracked_handle(
     let settings = Arc::new(StoredSettingsRepo::default());
     let quality_profiles = Arc::new(MockQualityProfileRepo);
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles,
         shows,
@@ -789,7 +793,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_tracked_handle(
     .with_pending_releases(pending_releases)
     .with_blocklist_repo(Arc::new(MockBlocklistRepo::default()))
     .with_tracked_download_handle(tracked_download_handle)
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -833,6 +837,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_indexer(
     let settings = Arc::new(StoredSettingsRepo::default());
     let quality_profiles = Arc::new(MockQualityProfileRepo);
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles,
         shows,
@@ -851,7 +856,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_indexer(
     .with_pending_releases(pending_releases)
     .with_acquisition_scope_states(Arc::new(TrackingAcquisitionScopeStateRepo::default()))
     .with_blocklist_repo(Arc::new(MockBlocklistRepo::default()))
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -925,6 +930,7 @@ pub(super) fn bootstrap_with_search_settings_indexer_configs_and_management(
         management_client,
     });
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles,
         shows,
@@ -941,7 +947,7 @@ pub(super) fn bootstrap_with_search_settings_indexer_configs_and_management(
     .with_plugin_provider(plugin_provider)
     .with_seeding_profiles(seeding_profiles)
     .with_domain_events(Arc::new(MockDomainEventRepo::default()))
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -1091,6 +1097,7 @@ pub(super) fn bootstrap_with_cutoff_projection_state(
         .try_lock()
         .expect("new fixture store")
         .insert(admin.id.clone(), admin.authorization.app);
+    let linked_libraries = titles.share_library_roots(libraries);
     let services = AppServices::builder(
         titles.clone(),
         shows,
@@ -1106,7 +1113,7 @@ pub(super) fn bootstrap_with_cutoff_projection_state(
     )
     .with_domain_events(Arc::new(MockDomainEventRepo::default()))
     .with_media_files(media_files)
-    .with_libraries(Arc::new(libraries))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -1146,6 +1153,7 @@ pub(super) fn bootstrap_with_delete_queue(
     let quality_profiles = Arc::new(MockQualityProfileRepo);
     let indexer_client = Arc::new(MockIndexerClient);
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles,
         shows,
@@ -1161,7 +1169,7 @@ pub(super) fn bootstrap_with_delete_queue(
     )
     .with_domain_events(Arc::new(MockDomainEventRepo::default()))
     .with_download_queue_commands(download_queue_commands)
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -1303,6 +1311,7 @@ pub(super) fn bootstrap_with_acquisition_tracking_and_indexer_and_repos(
         titles.clone(),
     ));
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles.clone(),
         shows,
@@ -1320,7 +1329,7 @@ pub(super) fn bootstrap_with_acquisition_tracking_and_indexer_and_repos(
     .with_download_submissions(download_submissions.clone())
     .with_pending_releases(pending_releases.clone())
     .with_blocklist_repo(Arc::new(MockBlocklistRepo::default()))
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     // The background acquisition cursor derives targets from library state.
     // With mock catalog stores, bridge the derivation to the seeded wanted
     // rows so `run_background_acquisition_cycle_once` reaches each seeded monitored scope.
@@ -1417,6 +1426,7 @@ pub(super) fn bootstrap_with_library_delete_repositories(
     let indexer_client = Arc::new(MockIndexerClient);
     let media_files = Arc::new(MockMediaFileRepo::default());
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles,
         shows,
@@ -1437,7 +1447,7 @@ pub(super) fn bootstrap_with_library_delete_repositories(
     .with_library_scan_unmatched_items(unmatched_items)
     .with_pending_releases(pending_releases)
     .with_housekeeping(housekeeping)
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -1522,6 +1532,7 @@ pub(super) fn bootstrap_with_scan_unmatched_and_metadata_tracking_and_repos(
     let indexer_client = Arc::new(MockIndexerClient);
     let media_files = Arc::new(MockMediaFileRepo::default());
 
+    let linked_libraries = titles.share_library_roots(MockLibraryRepo::default());
     let services = AppServices::builder(
         titles.clone(),
         shows.clone(),
@@ -1540,7 +1551,7 @@ pub(super) fn bootstrap_with_scan_unmatched_and_metadata_tracking_and_repos(
     .with_library_scanner(library_scanner)
     .with_media_files(media_files.clone())
     .with_library_scan_unmatched_items(unmatched_items)
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(linked_libraries)
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();

@@ -514,6 +514,11 @@ async fn persist_title_folder_path_if_missing(
 ) -> AppResult<()> {
     crate::folder_ownership::ensure_title_folder_is_not_a_library_root(app, title).await?;
     let mut title = title.clone();
+    // An earlier step of this import may have claimed the folder already;
+    // claim against the recorded folder, not the copy the import started with.
+    if let Some(stored) = app.services.catalog.titles.get_by_id(&title.id).await? {
+        title.folder_path = stored.folder_path;
+    }
     crate::folder_ownership::claim_title_folder_if_missing(app, &mut title, folder_path).await
 }
 pub(crate) fn preserved_import_filename(source_path: &Path) -> String {

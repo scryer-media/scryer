@@ -436,7 +436,7 @@ async fn clean_catalog_only_gains_keys_and_a_second_run_changes_nothing() {
             state(
                 "cinderwake",
                 Some(r"D:\Media\Cinderwake\"),
-                Some(r"d:\media\cinderwake"),
+                Some(r"D:\MEDIA\CINDERWAKE"),
                 None,
                 None
             ),
@@ -699,4 +699,42 @@ async fn a_root_sized_title_does_not_disturb_an_unrelated_nested_pair() {
         ]
     );
     assert_eq!(media_files_snapshot(&pool).await, files_before);
+}
+
+#[tokio::test]
+async fn windows_folders_differing_only_in_case_are_one_shared_folder() {
+    let pool = catalog_before_repair().await;
+    title(
+        &pool,
+        "emberfall-upper",
+        Some(r"D:\Media\Emberfall"),
+        "2026-01-01T00:00:00Z",
+    )
+    .await;
+    title(
+        &pool,
+        "emberfall-lower",
+        Some(r"d:\media\EMBERFALL"),
+        "2026-01-02T00:00:00Z",
+    )
+    .await;
+    migrate(&pool).await;
+    assert_eq!(
+        titles(&pool).await,
+        [
+            cleared(
+                "emberfall-lower",
+                reasons::SHARED_FOLDER,
+                r"d:\media\EMBERFALL"
+            ),
+            state(
+                "emberfall-upper",
+                Some(r"D:\Media\Emberfall"),
+                Some(r"D:\MEDIA\EMBERFALL"),
+                None,
+                None
+            ),
+        ]
+    );
+    assert!(index_exists(&pool).await);
 }

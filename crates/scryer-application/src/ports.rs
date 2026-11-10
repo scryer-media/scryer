@@ -2695,6 +2695,18 @@ pub trait TitleRepository: Send + Sync {
             "this title repository cannot write title folders".into(),
         ))
     }
+    /// Run the checks [`Self::assign_title_folders`] would run on `writes`,
+    /// without its write lock, and write nothing. A caller about to move or
+    /// remove files asks this first so a refusal leaves disk untouched; the
+    /// write itself still checks, because the catalog can change in between.
+    /// A write naming a title that does not exist yet is checked as a title
+    /// with no folder, so a folder can be checked before its title is created.
+    async fn check_title_folder_writes(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
+        let _ = writes;
+        Err(AppError::Repository(
+            "this title repository cannot write title folders".into(),
+        ))
+    }
     /// Record a title's folder through [`Self::assign_title_folders`].
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
         self.assign_title_folders(&[crate::TitleFolderWrite::assign(id, folder_path)])
