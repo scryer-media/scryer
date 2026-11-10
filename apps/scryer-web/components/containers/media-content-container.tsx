@@ -1471,7 +1471,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     [canManageTitlesInLibrary, selectedTitleLibraryIds],
   );
   // Moving rewrites files on disk, so it needs the same rights as renaming.
-  const canMoveSelectedTitles = canRenameSelectedTitles;
+  // A move plans against one library's roots, so the action is offered only
+  // while the selection sits in a single library.
+  const canMoveSelectedTitles =
+    canRenameSelectedTitles && selectedTitleLibraryIds.length === 1;
   const [bulkMoveDialogOpen, setBulkMoveDialogOpen] = React.useState(false);
   const bulkMoveLibraries = React.useMemo(
     () =>
@@ -4342,21 +4345,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     ) {
       return;
     }
-    if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus(t("status.bulkMoveRequiresOneLibrary"), {
-        level: "WARNING",
-      });
-      return;
-    }
     setBulkMoveDialogOpen(true);
-  }, [
-    bulkActionBusy,
-    canMoveSelectedTitles,
-    selectedTitleLibraryIds.length,
-    selectedTitles.length,
-    setGlobalStatus,
-    t,
-  ]);
+  }, [bulkActionBusy, canMoveSelectedTitles, selectedTitles.length]);
 
   const requestDeleteTitle = React.useCallback(
     (title: TitleRecord) => {
