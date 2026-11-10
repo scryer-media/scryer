@@ -907,8 +907,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Queueing a saved standby release with conflict confirmation adds
     // `queueStandbyRelease`: 291->292.
     assert!(mutation_field_names.contains(&"queueStandbyRelease"));
+    // Import-warning dismissal adds one mutation and one exact-identity input.
+    assert!(mutation_field_names.contains(&"setTrackedDownloadImportDismissed"));
     assert_eq!(
-        mutation_field_count, 292,
+        mutation_field_count, 293,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1383,16 +1385,18 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     for name in ["DiscoveryNeighborsPayload", "DiscoveryNeighborGroup"] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    assert!(public_type_names.contains(&"TrackedDownloadImportTrackingInput"));
     assert_eq!(
         public_types.len(),
-        1019,
+        1020,
         "public types: {public_type_names:?}"
     );
     assert_eq!(kind_count("OBJECT"), 551);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
-    assert_eq!(kind_count("INPUT_OBJECT"), 247);
+    // TrackedDownloadImportTrackingInput is the dismissal command's new input.
+    assert_eq!(kind_count("INPUT_OBJECT"), 248);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
     assert_eq!(kind_count("ENUM"), 209);

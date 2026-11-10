@@ -677,6 +677,7 @@ impl DownloadMutations {
     async fn set_tracked_download_import_dismissed(
         &self,
         ctx: &Context<'_>,
+        #[graphql(desc = "Exact download identity and requested import-tracking dismissal state.")]
         input: TrackedDownloadImportTrackingInput,
     ) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;

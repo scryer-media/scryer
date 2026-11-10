@@ -19600,7 +19600,12 @@ type MutationRoot {
 	Dismiss an import warning (or explicitly resume its tracking) without changing
 	the download client entry, seeding state, files, acquisition claims or quality rules.
 	"""
-	setTrackedDownloadImportDismissed(input: TrackedDownloadImportTrackingInput!): Boolean!
+	setTrackedDownloadImportDismissed(
+		"""
+		Exact download identity and requested import-tracking dismissal state.
+		"""
+		input: TrackedDownloadImportTrackingInput!
+	): Boolean!
 	"""
 	Mark a tracked download ignored without deleting it from the download client.
 	"""
