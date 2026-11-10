@@ -309,6 +309,9 @@ fn guess_context_facet(raw: &str, tokens: &[String]) -> ContextFacetHint {
         || tokens.iter().any(|token| looks_like_daily_token(token))
         || looks_like_daily_token_sequence(tokens)
         || looks_like_season_pack_release(tokens)
+        || tokens.iter().any(|token| {
+            looks_like_season_pack_marker(&normalize_alphanumeric_upper(token), tokens)
+        })
     {
         return ContextFacetHint::Series;
     }
