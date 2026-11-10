@@ -2377,6 +2377,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dismiss_import_warning_retains_client_payload_and_requires_explicit_resume() {
+        crate::test_wait::within_deadline("dismiss and resume import tracking", async {
+            use crate::tracked_downloads::TrackedDownloadCommand;
+            let (app, actor, spy) = crate::lib_tests::bootstrap_import_tracking_spy();
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            let mut row = reconcile_row(Some("title-1"), TrackedDownloadState::ImportBlocked);
+            row.client_item.is_scryer_origin = true;
+            row.warn_kind(crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict,
+                "Synthetic conflict must survive dismissal and resume");
+            let files = tempfile::tempdir().unwrap();
+            let sentinel = files.path().join("payload.mkv");
+            std::fs::write(&sentinel, b"synthetic fixture payload").unwrap();
+            row.completed_source = Some(scryer_domain::CompletedDownload {
+                client_type: row.client_type.clone(), client_id: row.client_id.clone(),
+                download_client_item_id: row.client_item.download_client_item_id.clone(),
+                download_id: Some(row.download_id.to_string()), name: "synthetic payload".into(),
+                release_name: None, dest_dir: files.path().to_string_lossy().into_owned(),
+                category: None, size_bytes: None, completed_at: None, parameters: vec![],
+                posted_file_names: vec![], subtitle_paths: vec![],
+            });
+            let download_id = tracker.insert_for_tests(row);
+            for dismissed in [true, true, false] {
+                let (reply, response) = tokio::sync::oneshot::channel();
+                run_tracked_command(&app, &actor, &mut tracker,
+                    TrackedDownloadCommand::SetImportTrackingDismissed {
+                        id: SHARED_TORRENT_ID.to_string(), expected_download_id: download_id.to_string(), dismissed, reply,
+                    }).await;
+                response.await.unwrap().unwrap();
+                let state = if dismissed { TrackedDownloadState::ImportDismissed } else { TrackedDownloadState::Downloading };
+                assert_eq!(tracker.get_by_download_id(download_id).unwrap().state, state);
+                assert!(crate::completed_download_handler::has_id_only_conflict(
+                    tracker.get_by_download_id(download_id).unwrap()));
+                if dismissed {
+                    assert!(super::prepare_tracked_download_background_work_dispatch(&mut tracker, download_id).is_none());
+                    super::finalize_tracked_terminal_state_for_download_with(&app, &mut tracker,
+                        download_id, state, super::TerminalSettleTrigger::Reconcile, None).await;
+                    let queue = super::tracked_download_activity_queue_item(tracker.get_by_download_id(download_id).unwrap());
+                    assert!(!super::matches_download_import_filter(&queue, crate::DownloadImportFilter::Attention));
+                    assert!(!super::matches_download_import_filter(&queue, crate::DownloadImportFilter::All));
+                    assert!(super::matches_download_import_filter(&queue, crate::DownloadImportFilter::Dismissed));
+                }
+                spy.assert_untouched().await;
+                assert_eq!(std::fs::read(&sentinel).unwrap(), b"synthetic fixture payload");
+            }
+            // Resume must pass the completion admission checks again. The fixture's
+            // assigned title does not exist, so it cannot become importable.
+            assert!(super::prepare_tracked_download_background_work_dispatch(&mut tracker, download_id).is_none());
+            let td = tracker.get_mut_by_download_id(download_id).unwrap();
+            let lookup = crate::completed_download_handler::CompletedDownloadLookup::from_recent_downloads(
+                vec![td.completed_source.clone().unwrap()]);
+            crate::completed_download_handler::check_with_lookup(&app, td, Some(&lookup)).await;
+            assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+            assert!(super::prepare_tracked_download_background_work_dispatch(&mut tracker, download_id).is_none());
+            spy.assert_untouched().await;
+            assert_eq!(std::fs::read(&sentinel).unwrap(), b"synthetic fixture payload");
+        }).await;
+    }
+
+    #[tokio::test]
+    async fn dismiss_import_warning_refuses_a_stale_grab_and_import_in_flight() {
+        crate::test_wait::within_deadline("dismiss import warning refusals", async {
+            use crate::tracked_downloads::TrackedDownloadCommand;
+            let (app, actor) = crate::lib_tests::bootstrap();
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            let download_id = tracker.insert_for_tests(reconcile_row(Some("title-1"), TrackedDownloadState::ImportBlocked));
+            let before = row_debug(&tracker, download_id);
+            let (work_tx, _work_rx) = tokio::sync::mpsc::unbounded_channel();
+            for busy in [false, true] {
+                let mut in_flight = if busy { std::collections::HashSet::from([SHARED_TORRENT_ID.to_string()]) } else { Default::default() };
+                let (reply, response) = tokio::sync::oneshot::channel();
+                super::handle_tracked_download_command(&app, &actor, &mut tracker, &mut in_flight, &work_tx,
+                    TrackedDownloadCommand::SetImportTrackingDismissed {
+                        id: SHARED_TORRENT_ID.to_string(), expected_download_id: if busy { download_id.to_string() } else { scryer_domain::download_identity::DownloadId::new().to_string() },
+                        dismissed: true, reply,
+                    }).await;
+                let error = response.await.unwrap().unwrap_err();
+                assert_eq!(error.validation_reason(), Some(if busy {
+                    crate::error_reasons::integration::TRACKED_DOWNLOAD_BUSY_PROCESSING
+                } else { crate::error_reasons::integration::IMPORT_TRACKING_STATE_NOT_ELIGIBLE }));
+                assert_eq!(row_debug(&tracker, download_id), before);
+            }
+        }).await;
+    }
+
+    #[tokio::test]
     async fn operator_commands_act_on_the_live_row_when_a_settled_sibling_shares_its_id_string() {
         use crate::tracked_downloads::TrackedDownloadCommand;
         let (app, actor) = crate::lib_tests::bootstrap();

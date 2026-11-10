@@ -107,10 +107,10 @@ mod support_library_show;
 mod support_settings_scan;
 pub(crate) use library_scan::{NestedDiscoveryGateway, bootstrap_nested_discovery_app};
 use support_acquisition_downloads::*;
-pub(crate) use support_bootstrap_fixtures::bootstrap;
 #[cfg(unix)]
 pub(crate) use support_bootstrap_fixtures::bootstrap_application_upgrade;
 use support_bootstrap_fixtures::*;
+pub(crate) use support_bootstrap_fixtures::{bootstrap, bootstrap_import_tracking_spy};
 pub(crate) use support_catalog::MockTitleRepo;
 use support_catalog::*;
 use support_events_requests::*;

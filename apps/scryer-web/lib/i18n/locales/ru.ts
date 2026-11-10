@@ -2172,6 +2172,17 @@ const ru: LocaleDictionary = {
   "queue.assignTitleBeforeImport":
     "Назначьте материал перед запуском ручного импорта.",
   "queue.ignore": "Игнорировать",
+  "queue.dismissImportWarning": "Скрыть предупреждение — сохранить раздачу",
+  "queue.resumeImportTracking": "Возобновить отслеживание импорта",
+  "queue.state.importDismissed": "Предупреждение импорта скрыто",
+  "activity.importFilter.dismissed": "Скрытые предупреждения",
+  "queue.importTrackingFailed": "Не удалось изменить отслеживание импорта.",
+  "queue.importDismissedSuccess":
+    "Предупреждение скрыто. Торрент, раздача и файлы не изменены. Возобновить отслеживание можно в разделе «Скрытые предупреждения».",
+  "queue.importTrackingResumed":
+    "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
+    "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
   "queue.ignoreSuccess": "Загрузка проигнорирована.",
   "queue.ignoreFailed": "Не удалось проигнорировать загрузку.",
   "queue.releaseHeldSources": "Освободить удерживаемые источники",

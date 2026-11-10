@@ -556,6 +556,8 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     trackedStatusMessages
     trackedMatchType
     importActions {
+      dismissImportWarning
+      resumeImportTracking
       manualImportInteractive
       manualImportDirect
       assignTitle

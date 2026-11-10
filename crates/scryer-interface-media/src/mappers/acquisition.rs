@@ -321,6 +321,8 @@ pub fn from_download_queue_item(item: DownloadQueueItem) -> DownloadQueueItemPay
             assign_title: actions.assign_title,
             ignore: actions.ignore,
             mark_failed: actions.mark_failed,
+            dismiss_import_warning: actions.dismiss_import_warning,
+            resume_import_tracking: actions.resume_import_tracking,
         },
         seeding_state,
         seed_ratio: seeding.seed_ratio,

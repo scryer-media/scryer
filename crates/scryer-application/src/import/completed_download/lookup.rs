@@ -866,18 +866,18 @@ pub(super) async fn maybe_resolve_title_from_completed_download(
     app: &AppUseCase,
     td: &mut TrackedDownload,
     completed: &CompletedDownload,
-) {
+) -> bool {
     if !matches!(
         td.match_type,
         TitleMatchType::Unmatched | TitleMatchType::IdOnly | TitleMatchType::TitleParse
     ) {
-        return;
+        return true;
     }
 
-    clear_id_only_conflict(td);
-
     let Ok(matcher) = app.monitored_title_matcher().await else {
-        return;
+        // An infrastructure failure is not evidence that a previous identity
+        // conflict was resolved. The completion checker must retry, not import.
+        return false;
     };
 
     // The client-reported release name, else the media file names (non-sample,
@@ -893,8 +893,11 @@ pub(super) async fn maybe_resolve_title_from_completed_download(
                 .await
         } else {
             matcher.resolve_movie(&parsed).await
-        }
-        .unwrap_or_default();
+        };
+        let resolved = match resolved {
+            Ok(resolved) => resolved,
+            Err(_) => return false,
+        };
 
         if let Some(resolved) = resolved {
             if td.match_type == TitleMatchType::IdOnly
@@ -913,18 +916,20 @@ pub(super) async fn maybe_resolve_title_from_completed_download(
                     crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict,
                     ID_ONLY_CONFLICT_MESSAGE,
                 );
-                return;
+                return true;
             }
 
+            clear_id_only_conflict(td);
             td.title_id = Some(resolved.title.id.clone());
             td.facet = Some(resolved.title.facet.as_str().to_string());
             td.source_title = Some(release_title);
             if td.match_type != TitleMatchType::IdOnly {
                 td.match_type = resolved.match_type;
             }
-            return;
+            return true;
         }
     }
+    true
 }
 
 fn clear_id_only_conflict(td: &mut TrackedDownload) {

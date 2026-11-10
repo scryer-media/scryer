@@ -39,7 +39,7 @@ fn build_download_queue_status_detail(item: &DownloadQueueItem) -> String {
     values.join("\n")
 }
 fn base_download_queue_display_state(item: &DownloadQueueItem) -> DownloadDisplayState {
-    if item.tracked_state == Some(TrackedDownloadState::Ignored) {
+    if matches!(item.tracked_state, Some(TrackedDownloadState::Ignored | TrackedDownloadState::ImportDismissed)) {
         return DownloadDisplayState::Ignored;
     }
 
@@ -175,6 +175,8 @@ pub struct DownloadImportActions {
     pub assign_title: bool,
     pub ignore: bool,
     pub mark_failed: bool,
+    pub dismiss_import_warning: bool,
+    pub resume_import_tracking: bool,
 }
 
 /// Whether the download is in a state a manual import may be started against,
@@ -226,6 +228,8 @@ pub fn derive_download_queue_import_actions(item: &DownloadQueueItem) -> Downloa
     let manual_import = item.title_id.is_some() && download_queue_item_allows_manual_import(item);
 
     DownloadImportActions {
+        dismiss_import_warning: !busy && item.download_id.is_some() && item.tracked_state == Some(TrackedDownloadState::ImportBlocked),
+        resume_import_tracking: !busy && item.download_id.is_some() && item.tracked_state == Some(TrackedDownloadState::ImportDismissed),
         manual_import_interactive: manual_import && matches!(facet.as_str(), "series" | "anime"),
         manual_import_direct: manual_import && facet == "movie",
         assign_title: !busy && item.tracked_state == Some(TrackedDownloadState::ImportBlocked),
@@ -417,6 +421,9 @@ pub fn matches_download_queue_filter(
     }
 }
 fn matches_download_import_filter(item: &DownloadQueueItem, filter: DownloadImportFilter) -> bool {
+    if filter == DownloadImportFilter::Dismissed {
+        return item.tracked_state == Some(TrackedDownloadState::ImportDismissed);
+    }
     let classified = classify_download_queue_item(item);
     if classified.bucket != DownloadQueueBucket::Import {
         return false;
