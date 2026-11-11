@@ -379,7 +379,7 @@ fn native_path_is_within_folder(folder: &Path, path: &Path) -> bool {
     path.starts_with(folder)
 }
 
-fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<String> {
+pub(crate) fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<String> {
     let decoded = stored_path_to_path_buf(path);
     if decoded.as_os_str().is_empty() {
         return None;

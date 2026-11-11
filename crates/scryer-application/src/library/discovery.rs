@@ -392,11 +392,28 @@ pub(crate) struct TitleFolderBoundaryPolicy {
 }
 
 impl TitleFolderBoundaryPolicy {
+    #[cfg(test)]
     fn contains_stored_folder(root: &Path, folder: &Path) -> bool {
         let root = crate::stored_paths::folder_path_identity_key(&path_to_stored_string(root));
+        Self::key_contains_folder(root.as_deref(), folder)
+    }
+
+    /// Whether `folder` lies strictly inside the folder whose identity key is
+    /// `root`, so a walk normalises its root once rather than once per folder.
+    fn key_contains_folder(root: Option<&str>, folder: &Path) -> bool {
         let folder = crate::stored_paths::folder_path_identity_key(&path_to_stored_string(folder));
         match (root, folder) {
-            (Some(root), Some(folder)) => root != folder && Path::new(&folder).starts_with(&root),
+            (Some(root), Some(folder)) => root != folder && Path::new(&folder).starts_with(root),
+            _ => false,
+        }
+    }
+
+    /// Whether `folder` is the folder whose identity key is `root` or lies
+    /// inside it.
+    fn key_is_or_contains_folder(root: Option<&str>, folder: &Path) -> bool {
+        let folder = crate::stored_paths::folder_path_identity_key(&path_to_stored_string(folder));
+        match (root, folder) {
+            (Some(root), Some(folder)) => root == folder || Path::new(&folder).starts_with(root),
             _ => false,
         }
     }
@@ -413,12 +430,14 @@ impl TitleFolderBoundaryPolicy {
             .titles
             .list_delete_preview_info()
             .await?;
+        let root_key = crate::stored_paths::folder_path_identity_key(&path_to_stored_string(root));
+        let root_key = root_key.as_deref();
         let stored_folders = titles
             .iter()
             .filter(|title| title.library_id == library_id)
             .filter_map(|title| title.folder_path.as_deref())
             .map(stored_path_to_path_buf)
-            .filter(|path| Self::contains_stored_folder(root, path))
+            .filter(|path| Self::key_contains_folder(root_key, path))
             .collect();
         let mut other_roots: Vec<_> = app
             .services
@@ -429,7 +448,7 @@ impl TitleFolderBoundaryPolicy {
             .into_iter()
             .flat_map(|library| library.roots)
             .map(|root| stored_path_to_path_buf(&root.path))
-            .filter(|path| Self::contains_stored_folder(root, path))
+            .filter(|path| Self::key_contains_folder(root_key, path))
             .collect();
         other_roots.extend(
             titles
@@ -437,19 +456,119 @@ impl TitleFolderBoundaryPolicy {
                 .filter(|title| title.library_id != library_id)
                 .filter_map(|title| title.folder_path)
                 .map(|path| stored_path_to_path_buf(&path))
-                .filter(|path| {
-                    Self::contains_stored_folder(root, path)
-                        || crate::stored_paths::folder_paths_match(
-                            &path_to_stored_string(root),
-                            &path_to_stored_string(path),
-                        )
-                }),
+                .filter(|path| Self::key_is_or_contains_folder(root_key, path)),
         );
         Ok(Self {
             facet: facet.clone(),
             stored_folders,
             other_roots,
         })
+    }
+}
+
+/// How one folder a boundary walk meets stands against the recorded title
+/// folders of its policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FolderOwnership {
+    /// The folder is another library's root or another library's title folder.
+    pub(crate) other_root: bool,
+    /// The folder is a recorded title folder of this library.
+    pub(crate) owned: bool,
+    /// A recorded title folder of this library lies strictly inside it.
+    pub(crate) contains_owner: bool,
+}
+
+/// The policy's folders by identity key, built once per walk, so each folder
+/// the walk meets is normalised once and looked up instead of compared with
+/// every recorded folder. It answers exactly as [`folder_paths_match`] and
+/// [`TitleFolderBoundaryPolicy::contains_stored_folder`] pair by pair do: a
+/// folder without an identity key matches nothing.
+///
+/// [`folder_paths_match`]: crate::stored_paths::folder_paths_match
+pub(crate) struct FolderOwnershipIndex {
+    other_roots: HashSet<String>,
+    stored: HashSet<String>,
+    /// Recorded folder keys grouped by their path components, since two keys
+    /// can name the same components with different spellings.
+    stored_by_components: std::collections::HashMap<PathBuf, Vec<String>>,
+    /// Every strict component prefix of a recorded folder key.
+    stored_prefixes: HashSet<PathBuf>,
+}
+
+impl FolderOwnershipIndex {
+    pub(crate) fn new(policy: &TitleFolderBoundaryPolicy) -> Self {
+        Self::new_with(policy, crate::stored_paths::folder_path_identity_key)
+    }
+
+    pub(crate) fn new_with(
+        policy: &TitleFolderBoundaryPolicy,
+        key: impl Fn(&str) -> Option<String>,
+    ) -> Self {
+        let other_roots = policy
+            .other_roots
+            .iter()
+            .filter_map(|path| key(&path_to_stored_string(path)))
+            .collect();
+        let mut stored = HashSet::new();
+        let mut stored_by_components = std::collections::HashMap::<PathBuf, Vec<String>>::new();
+        let mut stored_prefixes = HashSet::new();
+        for folder in &policy.stored_folders {
+            let Some(folder) = key(&path_to_stored_string(folder)) else {
+                continue;
+            };
+            let mut prefix = PathBuf::new();
+            stored_prefixes.insert(prefix.clone());
+            let components = Path::new(&folder).components().collect::<Vec<_>>();
+            for component in &components[..components.len().saturating_sub(1)] {
+                prefix.push(component.as_os_str());
+                stored_prefixes.insert(prefix.clone());
+            }
+            let entry = stored_by_components
+                .entry(Path::new(&folder).to_path_buf())
+                .or_default();
+            if !entry.contains(&folder) {
+                entry.push(folder.clone());
+            }
+            stored.insert(folder);
+        }
+        Self {
+            other_roots,
+            stored,
+            stored_by_components,
+            stored_prefixes,
+        }
+    }
+
+    pub(crate) fn classify(&self, path: &Path) -> FolderOwnership {
+        self.classify_with(path, crate::stored_paths::folder_path_identity_key)
+    }
+
+    pub(crate) fn classify_with(
+        &self,
+        path: &Path,
+        key: impl Fn(&str) -> Option<String>,
+    ) -> FolderOwnership {
+        let Some(folder) = key(&path_to_stored_string(path)) else {
+            return FolderOwnership::default();
+        };
+        let components = Path::new(&folder);
+        // `Path::starts_with` compares components: a recorded folder lies
+        // inside this one when this one's components are a strict prefix of
+        // its own, or the same components spelled differently.
+        let contains_owner = (components.components().next().is_some()
+            && self.stored_prefixes.contains(components))
+            || (components.components().next().is_none()
+                && !self.stored.is_empty()
+                && self.stored.iter().any(|stored| *stored != folder))
+            || self
+                .stored_by_components
+                .get(components)
+                .is_some_and(|spellings| spellings.iter().any(|stored| *stored != folder));
+        FolderOwnership {
+            other_root: self.other_roots.contains(&folder),
+            owned: self.stored.contains(&folder),
+            contains_owner,
+        }
     }
 }
 
@@ -1130,6 +1249,7 @@ async fn discover_title_folder_boundaries(
         .await
         .map_err(|e| AppError::Repository(e.to_string()))?;
     let episodic = policy.facet != MediaFacet::Movie;
+    let ownership_index = FolderOwnershipIndex::new(&policy);
     let mut stack =
         vec![BoundaryFrame::open(root, 0, false, false, episodic, false, false, cancel).await?];
     let mut batch = Vec::with_capacity(batch_size.min(256));
@@ -1191,25 +1311,16 @@ async fn discover_title_folder_boundaries(
             if should_skip_library_top_level_entry(&path, true) {
                 continue;
             }
-            if policy.other_roots.iter().any(|other| {
-                crate::stored_paths::folder_paths_match(
-                    &path_to_stored_string(other),
-                    &path_to_stored_string(&path),
-                )
-            }) {
+            let ownership = ownership_index.classify(&path);
+            if ownership.other_root {
                 frame.child_titles = true;
                 continue;
             }
-            let owned = policy.stored_folders.iter().any(|stored| {
-                crate::stored_paths::folder_paths_match(
-                    &path_to_stored_string(stored),
-                    &path_to_stored_string(&path),
-                )
-            });
-            let contains_owner = policy
-                .stored_folders
-                .iter()
-                .any(|stored| TitleFolderBoundaryPolicy::contains_stored_folder(&path, stored));
+            let FolderOwnership {
+                owned,
+                contains_owner,
+                ..
+            } = ownership;
             let extra = path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
                 LIBRARY_IGNORED_MEDIA_SUBDIR_NAMES.contains(&n.to_ascii_lowercase().as_str())
             });
@@ -2289,6 +2400,212 @@ fn metadata_probe_marker(metadata: &std::fs::Metadata) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// The pairwise ownership answers a boundary walk used to compute for one
+    /// folder, written as the walk wrote them, with every identity key counted.
+    fn pairwise_ownership(
+        policy: &TitleFolderBoundaryPolicy,
+        path: &Path,
+        key: &dyn Fn(&str) -> Option<String>,
+    ) -> FolderOwnership {
+        let paths_match = |left: &Path, right: &Path| match (
+            key(&path_to_stored_string(left)),
+            key(&path_to_stored_string(right)),
+        ) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        };
+        let contains = |root: &Path, folder: &Path| match (
+            key(&path_to_stored_string(root)),
+            key(&path_to_stored_string(folder)),
+        ) {
+            (Some(root), Some(folder)) => root != folder && Path::new(&folder).starts_with(&root),
+            _ => false,
+        };
+        FolderOwnership {
+            other_root: policy
+                .other_roots
+                .iter()
+                .any(|other| paths_match(other, path)),
+            owned: policy
+                .stored_folders
+                .iter()
+                .any(|stored| paths_match(stored, path)),
+            contains_owner: policy
+                .stored_folders
+                .iter()
+                .any(|stored| contains(path, stored)),
+        }
+    }
+
+    fn ownership_seeds() -> (TitleFolderBoundaryPolicy, Vec<PathBuf>) {
+        let decomposed = "Cafe\u{301} Synthetic";
+        let composed = "Caf\u{e9} Synthetic";
+        let stored = [
+            "/media/Show Alpha",
+            "/media/Show Alpha/",
+            "/media/./Show Beta",
+            "/media/Nested/Outer",
+            "/media/Nested/Outer/Inner",
+            "/media/Case/Mixed Name",
+            "/media/Deep/a/b/c/d",
+            "relative/owned",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .chain([PathBuf::from("/media").join(decomposed)])
+        .collect::<Vec<_>>();
+        let other_roots = [
+            "/media-other",
+            "/media/Other Root/",
+            "/media/Other/../Elsewhere",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+        let mut entries = [
+            "/media",
+            "/media/",
+            "/media-other",
+            "/media-other/Show Alpha",
+            "/media/Show Alpha",
+            "/media/Show Alpha/",
+            "/media/Show Alpha/Season 01",
+            "/media/show alpha",
+            "/media/Show Beta",
+            "/media/./Show Beta",
+            "/media/Show Beta/.",
+            "/media/Nested",
+            "/media/Nested/Outer",
+            "/media/Nested/Outer/Inner",
+            "/media/Nested/Outer/Inner/Extras",
+            "/media/Nested/Outer-Inner",
+            "/media/Case",
+            "/media/case",
+            "/media/Case/Mixed Name",
+            "/media/Case/mixed name",
+            "/media/Deep",
+            "/media/Deep/a",
+            "/media/Deep/a/b",
+            "/media/Deep/a/b/c",
+            "/media/Deep/a/b/c/d",
+            "/media/Deep/a/b/c/d/e",
+            "/media/Deep/a/bb",
+            "/media/Other Root",
+            "/media/Elsewhere",
+            "/media/Other",
+            "relative",
+            "relative/owned",
+            "relative/owned/sub",
+            "/",
+            "",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+        entries.push(PathBuf::from("/media").join(composed));
+        entries.push(PathBuf::from("/media").join(decomposed));
+        entries.push(PathBuf::from("/media").join(composed).join("Season 01"));
+        (
+            TitleFolderBoundaryPolicy {
+                facet: MediaFacet::Series,
+                stored_folders: stored,
+                other_roots,
+            },
+            entries,
+        )
+    }
+
+    #[test]
+    fn folder_ownership_lookup_matches_the_pairwise_comparisons() {
+        let (policy, entries) = ownership_seeds();
+        for windows in [false, true] {
+            let pairwise_keys = std::cell::Cell::new(0usize);
+            let indexed_keys = std::cell::Cell::new(0usize);
+            let pairwise_key = |path: &str| {
+                pairwise_keys.set(pairwise_keys.get() + 1);
+                crate::stored_paths::folder_path_identity_key_for_platform(path, windows)
+            };
+            let indexed_key = |path: &str| {
+                indexed_keys.set(indexed_keys.get() + 1);
+                crate::stored_paths::folder_path_identity_key_for_platform(path, windows)
+            };
+            let index = FolderOwnershipIndex::new_with(&policy, indexed_key);
+            let mut answered = Vec::new();
+            for entry in &entries {
+                let expected = pairwise_ownership(&policy, entry, &pairwise_key);
+                let actual = index.classify_with(entry, indexed_key);
+                assert_eq!(actual, expected, "{entry:?} (windows keys: {windows})");
+                answered.push(actual);
+            }
+            // The seeds reach every answer, so agreement is not vacuous.
+            assert!(answered.iter().any(|answer| answer.other_root));
+            assert!(answered.iter().any(|answer| answer.owned));
+            assert!(answered.iter().any(|answer| answer.contains_owner));
+            assert!(
+                answered
+                    .iter()
+                    .any(|answer| answer.owned && answer.contains_owner)
+            );
+            assert!(
+                answered
+                    .iter()
+                    .any(|answer| *answer == FolderOwnership::default())
+            );
+            let folders = policy.stored_folders.len() + policy.other_roots.len();
+            // The pairwise form stops at the first match, so it normalises
+            // up to two keys per comparison; the lookup normalises each
+            // recorded folder once and each walked folder once.
+            let pairwise_bound =
+                entries.len() * 2 * (policy.other_roots.len() + 2 * policy.stored_folders.len());
+            eprintln!(
+                "identity keys per walk (windows keys: {windows}): pairwise {} (bound {pairwise_bound}), lookup {}",
+                pairwise_keys.get(),
+                indexed_keys.get()
+            );
+            assert!(pairwise_keys.get() <= pairwise_bound);
+            assert_eq!(indexed_keys.get(), folders + entries.len());
+            assert!(indexed_keys.get() * 10 < pairwise_keys.get());
+        }
+        // The policy load normalises its root once and answers as the pairwise
+        // comparisons it replaced.
+        for root in &entries {
+            let root_key =
+                crate::stored_paths::folder_path_identity_key(&path_to_stored_string(root));
+            for folder in entries.iter().chain(&policy.stored_folders) {
+                let contained = TitleFolderBoundaryPolicy::contains_stored_folder(root, folder);
+                assert_eq!(
+                    TitleFolderBoundaryPolicy::key_contains_folder(root_key.as_deref(), folder),
+                    contained,
+                    "{root:?} / {folder:?}"
+                );
+                assert_eq!(
+                    TitleFolderBoundaryPolicy::key_is_or_contains_folder(
+                        root_key.as_deref(),
+                        folder
+                    ),
+                    contained
+                        || crate::stored_paths::folder_paths_match(
+                            &path_to_stored_string(root),
+                            &path_to_stored_string(folder),
+                        ),
+                    "{root:?} / {folder:?}"
+                );
+            }
+        }
+        // The walk's own key function agrees with the platform it runs on.
+        let index = FolderOwnershipIndex::new(&policy);
+        for entry in &entries {
+            assert_eq!(
+                index.classify(entry),
+                pairwise_ownership(
+                    &policy,
+                    entry,
+                    &crate::stored_paths::folder_path_identity_key
+                )
+            );
+        }
+    }
 
     #[cfg(windows)]
     #[test]
