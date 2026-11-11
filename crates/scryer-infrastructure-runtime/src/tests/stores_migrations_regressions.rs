@@ -1476,3 +1476,134 @@ async fn episode_tmdb_id_round_trips_and_legacy_rows_read_back_as_none() {
 
     let _ = std::fs::remove_file(db);
 }
+
+async fn seed_history_events(pool: &sqlx::SqlitePool, old: usize, recent: usize) {
+    let now = Utc::now();
+    let mut tx = pool.begin().await.expect("begin seed");
+    for index in 0..old + recent {
+        let occurred_at = if index < old {
+            now - chrono::Duration::days(60)
+        } else {
+            now - chrono::Duration::days(1)
+        };
+        sqlx::query(
+            "INSERT INTO history_events (id, event_type, message, occurred_at, created_at)
+             VALUES (?, 'synthetic', 'synthetic', ?, ?)",
+        )
+        .bind(format!("event-{index:06}"))
+        .bind(occurred_at.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(&mut *tx)
+        .await
+        .expect("seed history event");
+    }
+    tx.commit().await.expect("commit seed");
+}
+
+async fn history_event_ids(pool: &sqlx::SqlitePool) -> Vec<String> {
+    sqlx::query_scalar::<_, String>("SELECT id FROM history_events ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .expect("list history events")
+}
+
+/// The bounded prune removes exactly the rows one unbounded `DELETE` did,
+/// across several batches, and reports the same count.
+#[tokio::test]
+async fn housekeeping_batched_retention_deletes_the_same_rows_as_one_statement() {
+    let (old_path, old_db) = temp_services("scryer_housekeeping_unbounded_prune").await;
+    let (new_path, new_db) = temp_services("scryer_housekeeping_batched_prune").await;
+    // More than two batches of old rows, plus rows that must survive.
+    let (old, recent) = (11_003, 517);
+    seed_history_events(old_path.pool(), old, recent).await;
+    seed_history_events(new_path.pool(), old, recent).await;
+
+    let cutoff = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+    let unbounded = sqlx::query("DELETE FROM history_events WHERE occurred_at < ?")
+        .bind(&cutoff)
+        .execute(old_path.pool())
+        .await
+        .expect("unbounded prune")
+        .rows_affected();
+    let batched = housekeeping_store(&new_path)
+        .delete_history_events_older_than(30)
+        .await
+        .expect("batched prune");
+
+    assert_eq!(u64::from(batched), unbounded);
+    assert_eq!(batched as usize, old);
+    assert_eq!(
+        history_event_ids(new_path.pool()).await,
+        history_event_ids(old_path.pool()).await
+    );
+    assert_eq!(history_event_ids(new_path.pool()).await.len(), recent);
+
+    // Nothing left to prune: still the same answer.
+    assert_eq!(
+        housekeeping_store(&new_path)
+            .delete_history_events_older_than(30)
+            .await
+            .expect("idle prune"),
+        0
+    );
+
+    let _ = std::fs::remove_file(old_db);
+    let _ = std::fs::remove_file(new_db);
+}
+
+/// A title id list longer than one SQLite statement accepts is deleted, in
+/// one transaction, instead of failing on the bind limit.
+#[tokio::test]
+async fn housekeeping_title_id_deletes_accept_lists_past_the_bind_limit() {
+    let (services, db) = temp_services("scryer_housekeeping_title_id_chunks").await;
+    let catalog = title_store(&services);
+    let kept = make_test_title("title-kept", None);
+    TitleRepository::create(&catalog, kept)
+        .await
+        .expect("kept title");
+    let mut title_ids = Vec::new();
+    for index in 0..3 {
+        let title = make_test_title(&format!("title-gone-{index}"), None);
+        title_ids.push(title.id.clone());
+        TitleRepository::create(&catalog, title)
+            .await
+            .expect("deleted title");
+    }
+    let now = Utc::now().to_rfc3339();
+    for (id, title_id) in [
+        ("attempt-kept", "title-kept"),
+        ("attempt-gone-0", "title-gone-0"),
+        ("attempt-gone-1", "title-gone-1"),
+        ("attempt-gone-2", "title-gone-2"),
+    ] {
+        sqlx::query(
+            "INSERT INTO release_download_attempts
+             (id, title_id, outcome, attempted_at, created_at, updated_at)
+             VALUES (?, ?, 'failed', ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(title_id)
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(services.pool())
+        .await
+        .expect("seed attempt");
+    }
+    // Pad the list past SQLite's 32,766 binds with ids nothing matches.
+    title_ids.extend((0..40_000).map(|index| format!("title-absent-{index:05}")));
+
+    let deleted = housekeeping_store(&services)
+        .delete_release_attempts_for_title_ids(&title_ids)
+        .await
+        .expect("delete past the bind limit");
+    assert_eq!(deleted, 3);
+    let remaining =
+        sqlx::query_scalar::<_, String>("SELECT id FROM release_download_attempts ORDER BY id")
+            .fetch_all(services.pool())
+            .await
+            .expect("list attempts");
+    assert_eq!(remaining, vec!["attempt-kept".to_string()]);
+
+    let _ = std::fs::remove_file(db);
+}

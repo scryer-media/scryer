@@ -114,6 +114,19 @@ impl DownloadClientStatusRepository for DownloadClientStatusStore {
     }
 
     async fn record_success(&self, client_config_id: &str) -> AppResult<()> {
+        // Every refresh tick records a success for each healthy client, and a
+        // healthy client has no row. Look first so that common case reads
+        // instead of opening a write transaction for a zero-row delete.
+        let has_row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS present FROM download_client_status WHERE client_config_id = {}",
+            &[SqlArg::Text(client_config_id.to_string())],
+        )
+        .await?
+        .is_some();
+        if !has_row {
+            return Ok(());
+        }
         self.clear(client_config_id).await
     }
 
@@ -286,5 +299,49 @@ mod tests {
         store.clear("client-missing").await.expect("clear unknown");
 
         assert!(store.list().await.expect("list").is_empty());
+    }
+
+    /// A success leaves the table exactly as an unconditional clear does, and
+    /// a success for a client with no row never waits on the writer.
+    #[tokio::test]
+    async fn success_matches_clear_and_skips_the_writer_for_healthy_clients() {
+        let seeded = ["client-alpha", "client-beta", "client-gamma"];
+        let reported = ["client-alpha", "client-gamma", "client-healthy"];
+        let cleared = store().await;
+        let succeeded = store().await;
+        for store in [&cleared, &succeeded] {
+            for (offset, id) in seeded.iter().enumerate() {
+                store
+                    .record_failure(id, at(offset as i64))
+                    .await
+                    .expect("seed failure");
+            }
+        }
+
+        for id in reported {
+            cleared.clear(id).await.expect("clear");
+            succeeded.record_success(id).await.expect("success");
+        }
+
+        let mut expected: Vec<_> = cleared.list().await.expect("list").into_iter().collect();
+        let mut actual: Vec<_> = succeeded.list().await.expect("list").into_iter().collect();
+        expected.sort_by(|left, right| left.0.cmp(&right.0));
+        actual.sort_by(|left, right| left.0.cmp(&right.0));
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 1);
+        assert_eq!(actual[0].0, "client-beta");
+
+        // Hold the writer gate: a success that wrote would wait on it.
+        let StoreDatastore::Sqlite { writer_gate, .. } = &succeeded.datastore else {
+            panic!("sqlite fixture");
+        };
+        let _held = writer_gate.lock().await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            succeeded.record_success("client-healthy"),
+        )
+        .await
+        .expect("a healthy client's success does not wait on the writer")
+        .expect("success");
     }
 }

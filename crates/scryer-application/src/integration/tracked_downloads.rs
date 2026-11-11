@@ -4574,6 +4574,50 @@ mod tests {
         }
     }
 
+    /// The prebuilt source lookup answers every identity, including ones two
+    /// cached entries share and ones nothing carries, exactly as a scan of the
+    /// same entries in the same order does.
+    #[test]
+    fn source_lookup_matches_a_scan_of_the_cache() {
+        use crate::integration::workflow::{
+            first_tracked_download_id_by_source, tracked_download_source_identity,
+        };
+
+        let mut entries = Vec::new();
+        for (client_id, item_id) in [
+            ("client-a", "job-1"),
+            ("client-a", "job-2"),
+            ("client-b", "job-1"),
+            ("client-a", "job-1"),
+            ("client-b", "  "),
+        ] {
+            let mut tracked = build_tracked_download(item_id);
+            tracked.client_id = client_id.to_string();
+            tracked.client_item.client_id = client_id.to_string();
+            entries.push(tracked);
+        }
+        let ordered: Vec<&TrackedDownload> = entries.iter().collect();
+        let lookup = first_tracked_download_id_by_source(ordered.iter().copied());
+
+        let mut queries: Vec<ClientJobLocator> = ordered
+            .iter()
+            .filter_map(|tracked| tracked_download_source_identity(tracked))
+            .collect();
+        queries.push(ClientJobLocator::new(
+            Some("client-c"),
+            &entries[0].client_type,
+            "job-9",
+        ));
+        for query in &queries {
+            let scanned = ordered
+                .iter()
+                .find(|tracked| tracked_download_source_identity(tracked).as_ref() == Some(query))
+                .map(|tracked| tracked.download_id);
+            assert_eq!(lookup.get(query).copied(), scanned, "{query:?}");
+        }
+        assert_eq!(lookup.len(), 3);
+    }
+
     #[test]
     fn status_kinds_survive_rewording_and_project_only_the_sentence() {
         let mut tracked = build_tracked_download("typed-status");
