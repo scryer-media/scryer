@@ -2551,6 +2551,10 @@ pub(crate) struct NavigationBadgeFactsCache {
     /// logged once per streak instead of once per refresh.
     pub(crate) failing_sections:
         Arc<tokio::sync::Mutex<HashSet<crate::services::NavigationBadgeSection>>>,
+    /// Bumped by every library or root change that recounts the library
+    /// sections itself, so a refresh that counted before the change cannot
+    /// publish its older numbers over the newer ones.
+    pub(crate) library_sections_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The independently refreshed sections of the durable badge facts.

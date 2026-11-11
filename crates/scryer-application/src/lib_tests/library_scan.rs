@@ -9082,6 +9082,109 @@ async fn update_library_removing_root_clears_pending_imports_for_removed_root() 
     assert!(items.is_empty());
 }
 
+/// The navigation badge answers from facts published between recounts. A root
+/// edit clears the removed root's pending imports, so the badge has to drop
+/// them as soon as the edit returns, and keep agreeing with the import page.
+#[tokio::test]
+async fn removing_a_root_recounts_the_pending_import_badge() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    crate::lib_tests::replace_library_roots(
+        &app,
+        &user,
+        &movie_library_id,
+        vec![
+            LibraryRootDraft {
+                id: None,
+                path: "/movies-kept".to_string(),
+                is_default: true,
+            },
+            LibraryRootDraft {
+                id: None,
+                path: "/movies-retired".to_string(),
+                is_default: false,
+            },
+        ],
+    )
+    .await
+    .expect("initial roots should update");
+    for (id, root, file) in [
+        ("movie-kept-root", "/movies-kept", "Quiet.Harbor.2020.mkv"),
+        (
+            "movie-retired-root-a",
+            "/movies-retired",
+            "Amber.Field.2021.mkv",
+        ),
+        (
+            "movie-retired-root-b",
+            "/movies-retired",
+            "Lantern.Row.2022.mkv",
+        ),
+    ] {
+        unmatched_items
+            .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
+                id,
+                MediaFacet::Movie,
+                root,
+                &format!("{root}/{file}"),
+                file,
+                file,
+                None,
+            ))
+            .await
+            .expect("seed pending import");
+    }
+
+    let page_total = |app: AppUseCase, user: User| async move {
+        app.pending_imports(
+            &user,
+            MediaFacet::Movie,
+            None,
+            PendingImportStatus::Pending,
+            50,
+            0,
+        )
+        .await
+        .expect("pending import page")
+        .total
+    };
+    let before = app
+        .navigation_badge_counts(&user)
+        .await
+        .expect("badge counts before the edit");
+    assert_eq!(before.pending_imports.movie, 3);
+    assert_eq!(page_total(app.clone(), user.clone()).await, 3);
+
+    crate::lib_tests::replace_library_roots(
+        &app,
+        &user,
+        &movie_library_id,
+        vec![LibraryRootDraft {
+            id: None,
+            path: "/movies-kept".to_string(),
+            is_default: true,
+        }],
+    )
+    .await
+    .expect("retiring a root should update");
+
+    let after = app
+        .navigation_badge_counts(&user)
+        .await
+        .expect("badge counts after the edit");
+    assert_eq!(after.pending_imports.movie, 1);
+    assert_eq!(
+        page_total(app.clone(), user.clone()).await,
+        after.pending_imports.movie
+    );
+}
+
 #[tokio::test]
 async fn replacing_a_reconciled_default_root_clears_only_its_pending_imports() {
     let settings = Arc::new(StoredSettingsRepo::default());

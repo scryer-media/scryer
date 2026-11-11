@@ -798,6 +798,8 @@ impl AppUseCase {
             .libraries
             .create(library, roots)
             .await?;
+        // The badge filters pending imports by the library list it holds.
+        self.refresh_navigation_badge_library_facts().await;
         if let Some(settings) = settings {
             self.update_library_settings(actor, &library.id, settings)
                 .await?;
@@ -961,6 +963,11 @@ impl AppUseCase {
             )
             .await?;
         }
+        if roots_were_provided {
+            // Retiring a root clears its pending imports and the titles under
+            // it; the badge counts must not keep listing them.
+            self.refresh_navigation_badge_library_facts().await;
+        }
         let library = self
             .services
             .catalog
@@ -1041,6 +1048,7 @@ impl AppUseCase {
             .delete_library(&library.id)
             .await?;
         if deleted {
+            self.refresh_navigation_badge_library_facts().await;
             self.refresh_download_client_category_admission_best_effort()
                 .await;
             // The delete drops this library from every delay profile scope and

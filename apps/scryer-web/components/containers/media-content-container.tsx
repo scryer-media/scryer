@@ -174,6 +174,7 @@ import { BulkRenamePreviewSummary } from "@/components/common/bulk-rename-previe
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { metadataResultExternalIds } from "@/lib/utils/metadata-result-external-ids";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { dispatchNavigationBadgesRefresh } from "@/lib/events/navigation-badges";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
 import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -4753,6 +4754,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           })
           .toPromise();
         if (error) throw error;
+        // The library list and its roots scope the pending import badge.
+        dispatchNavigationBadgesRefresh();
         const library = data?.createLibrary ?? null;
         await refreshLibraries();
         await refreshRootValidationLibraries();
@@ -4813,6 +4816,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           })
           .toPromise();
         if (error) throw error;
+        // The library list and its roots scope the pending import badge.
+        dispatchNavigationBadgesRefresh();
         const library = data?.updateLibrary ?? null;
         await refreshLibraries();
         await refreshRootValidationLibraries();
@@ -4866,6 +4871,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         if (!data?.deleteLibrary?.id) {
           throw new Error(t("settings.libraryDeleteFailed"));
         }
+        // The library list and its roots scope the pending import badge.
+        dispatchNavigationBadgesRefresh();
         setSelectedLibraryIds((current) =>
           current.filter(
             (selectedLibraryId) => selectedLibraryId !== libraryId,
