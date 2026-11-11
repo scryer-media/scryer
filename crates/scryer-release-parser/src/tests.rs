@@ -9,6 +9,30 @@ use crate::{
 };
 
 #[test]
+fn separated_explicit_episode_marker_keeps_the_preceding_season() {
+    for facet in [
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+        ContextFacetHint::Unknown,
+    ] {
+        let target = context(facet, "Specy");
+        for (marker, season, episodes) in [
+            ("S01.E16", 1, vec![16]),
+            ("S02.E03", 2, vec![3]),
+            ("S02.E03E04", 2, vec![3, 4]),
+            ("S02.E03-04", 2, vec![3, 4]),
+        ] {
+            let raw = format!("Specy.{marker}.2026.WEB-DL.1080p.ExKinoRay.mkv");
+            let parsed = crate::best_parse_for_target(&raw, &target);
+            let episode = parsed.episode.expect(&raw);
+            assert_eq!(episode.season, Some(season), "{raw}: {episode:?}");
+            assert_eq!(episode.episode_numbers, episodes, "{raw}: {episode:?}");
+            assert!(!episode.full_season, "{raw}: {episode:?}");
+        }
+    }
+}
+
+#[test]
 fn parenthetical_qualifiers_do_not_create_independent_title_identities() {
     for (name, full_title) in [
         ("The Office (US)", "THE OFFICE US"),
