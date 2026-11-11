@@ -2666,3 +2666,293 @@ fn a_shared_inode_with_different_lengths_is_compared_by_content() {
         SharedInode::Distinct
     );
 }
+
+/// A catalog holding real media rows, so "is another row already at this
+/// path" is answered from the rows the reconcile has written so far. With
+/// `lists_rows` off it answers each question by itself, the way a catalog
+/// without a title listing does.
+#[derive(Default)]
+struct RowCatalog {
+    lists_rows: bool,
+    rows: Mutex<Vec<(String, String)>>,
+    writes: Mutex<Vec<String>>,
+    row_reads: Mutex<usize>,
+    grouped_writes: Mutex<usize>,
+}
+
+impl RowCatalog {
+    fn new(lists_rows: bool, rows: &[(&str, &str)]) -> Self {
+        Self {
+            lists_rows,
+            rows: Mutex::new(
+                rows.iter()
+                    .map(|(id, path)| (id.to_string(), path.to_string()))
+                    .collect(),
+            ),
+            ..Self::default()
+        }
+    }
+}
+
+#[async_trait]
+impl RootMoveCatalog for RowCatalog {
+    async fn has_other_media_at_path(
+        &self,
+        _title_id: &str,
+        path: &str,
+        excluding_id: &str,
+    ) -> AppResult<bool> {
+        *self.row_reads.lock().unwrap() += 1;
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(id, row_path)| id != excluding_id && row_path == path))
+    }
+
+    async fn media_file_paths_for_title(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        if !self.lists_rows {
+            return Ok(None);
+        }
+        *self.row_reads.lock().unwrap() += 1;
+        Ok(Some(self.rows.lock().unwrap().clone()))
+    }
+
+    async fn title_placement(&self, _title_id: &str) -> AppResult<Option<TitlePlacementSnapshot>> {
+        Ok(None)
+    }
+
+    async fn set_media_file_path(&self, media_file_id: &str, stored_path: &str) -> AppResult<()> {
+        for (id, path) in self.rows.lock().unwrap().iter_mut() {
+            if id == media_file_id {
+                *path = stored_path.to_string();
+            }
+        }
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("media:{media_file_id}={stored_path}"));
+        Ok(())
+    }
+
+    async fn set_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        *self.grouped_writes.lock().unwrap() += 1;
+        for (media_file_id, stored_path) in paths {
+            self.set_media_file_path(media_file_id, stored_path).await?;
+        }
+        Ok(())
+    }
+
+    async fn delete_media_file(&self, media_file_id: &str) -> AppResult<()> {
+        self.rows
+            .lock()
+            .unwrap()
+            .retain(|(id, _)| id != media_file_id);
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("delete-media:{media_file_id}"));
+        Ok(())
+    }
+
+    async fn set_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("folder:{title_id}={stored_path}"));
+        Ok(())
+    }
+
+    async fn check_title_folder_path(&self, _title_id: &str, _stored_path: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("root:{title_id}={root_folder_id}"));
+        Ok(())
+    }
+
+    async fn set_title_library_and_root(
+        &self,
+        title_id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+        _converted_facet: Option<&scryer_domain::MediaFacet>,
+        _drop_tag_prefixes: &[String],
+    ) -> AppResult<()> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("library:{title_id}={library_id}/{root_folder_id}"));
+        Ok(())
+    }
+}
+
+/// Reconciling a title judges each identical copy against the catalog as the
+/// writes before it left it, and writes the same rows in the same order
+/// whether the catalog answers from one listing of the title or one question
+/// at a time.
+#[tokio::test]
+async fn reconcile_writes_the_same_rows_from_one_listing_as_from_per_file_reads() {
+    use crate::location::resolution::{FileResolution, ResolutionDisposition, file_version};
+
+    async fn run(lists_rows: bool) -> (Vec<String>, Vec<(String, String)>, usize, usize) {
+        let temp = tempfile::tempdir().unwrap();
+        let source_root = temp.path().join("a");
+        let destination_root = temp.path().join("b");
+        let mut plan = single_title_plan(&source_root, &destination_root, "unused.mkv", 4);
+        let source_folder = source_root.join("Movie");
+        let destination_folder = destination_root.join("Movie");
+        let stored = |path: PathBuf| path_to_stored_string(&path);
+        let occupied = stored(destination_folder.join("occupied.mkv"));
+        let shared = stored(destination_folder.join("shared.mkv"));
+        // (media file, source name, resolved destination, disposition)
+        let p2 = stored(source_folder.join("two.mkv"));
+        let specs: Vec<(&str, String, String, ResolutionDisposition)> = vec![
+            (
+                "mf-1",
+                stored(source_folder.join("one.mkv")),
+                stored(destination_folder.join("one.mkv")),
+                ResolutionDisposition::Placed,
+            ),
+            // Another row already sits at this destination: the copy goes.
+            (
+                "mf-2",
+                p2.clone(),
+                occupied.clone(),
+                ResolutionDisposition::Identical,
+            ),
+            // Nothing sits here yet: the row is repointed.
+            (
+                "mf-3",
+                stored(source_folder.join("three.mkv")),
+                shared.clone(),
+                ResolutionDisposition::Identical,
+            ),
+            // The row before it now sits here: this copy goes.
+            (
+                "mf-4",
+                stored(source_folder.join("four.mkv")),
+                shared.clone(),
+                ResolutionDisposition::Identical,
+            ),
+            // Only the removed row sat here: the row is repointed.
+            (
+                "mf-5",
+                stored(source_folder.join("five.mkv")),
+                p2.clone(),
+                ResolutionDisposition::Identical,
+            ),
+            (
+                "mf-6",
+                stored(source_folder.join("six.mkv")),
+                stored(destination_folder.join("six.mkv")),
+                ResolutionDisposition::Placed,
+            ),
+        ];
+        let store = InMemoryLocationOperationStore::new();
+        let mut files = Vec::new();
+        for (media_file_id, source, destination, _) in &specs {
+            write_file(&stored_path_to_path_buf(source), b"same");
+            write_file(&stored_path_to_path_buf(destination), b"same");
+            files.push(RootMoveFileExecution {
+                media_file_id: Some(media_file_id.to_string()),
+                source_path: source.clone(),
+                destination_path: destination.clone(),
+                size_bytes: 4,
+                source_content: None,
+            });
+        }
+        for (_, source, destination, disposition) in &specs {
+            store
+                .save_file_resolution(&FileResolution {
+                    operation_id: "op-1".to_string(),
+                    title_id: "title-1".to_string(),
+                    source_path: source.clone(),
+                    original_destination: destination.clone(),
+                    destination_path: destination.clone(),
+                    disposition: disposition.clone(),
+                    completed: true,
+                    source_version: Some(
+                        file_version(&stored_path_to_path_buf(source))
+                            .await
+                            .unwrap(),
+                    ),
+                    destination_version: Some(
+                        file_version(&stored_path_to_path_buf(destination))
+                            .await
+                            .unwrap(),
+                    ),
+                    identity_hash: None,
+                    warning: None,
+                    reason_code: None,
+                })
+                .await
+                .unwrap();
+        }
+        plan.titles[0].files = files;
+        let initial: Vec<(&str, &str)> = std::iter::once(("mf-other", occupied.as_str()))
+            .chain(
+                specs
+                    .iter()
+                    .map(|(id, source, _, _)| (*id, source.as_str())),
+            )
+            .collect();
+        let catalog = RowCatalog::new(lists_rows, &initial);
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+        let operation = queued_operation(
+            "op-1",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        reconciler
+            .reconcile_title(&operation, &plan.titles[0].to_planned_title())
+            .await
+            .expect("reconcile");
+        // Paths are relative to each run's own temp directory.
+        let root = path_to_stored_string(temp.path());
+        let strip = |value: &str| value.replace(&root, "<tmp>");
+        let writes = catalog
+            .writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|write| strip(write))
+            .collect();
+        let rows = catalog
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, path)| (id.clone(), strip(path)))
+            .collect();
+        let reads = *catalog.row_reads.lock().unwrap();
+        let grouped = *catalog.grouped_writes.lock().unwrap();
+        (writes, rows, reads, grouped)
+    }
+
+    let (old_writes, old_rows, old_reads, _) = run(false).await;
+    let (new_writes, new_rows, new_reads, new_grouped) = run(true).await;
+    assert_eq!(new_writes, old_writes);
+    assert_eq!(new_rows, old_rows);
+    assert!(old_writes.contains(&"delete-media:mf-2".to_string()));
+    assert!(old_writes.contains(&"delete-media:mf-4".to_string()));
+    assert!(
+        old_writes
+            .iter()
+            .any(|write| write == "media:mf-5=<tmp>/a/Movie/two.mkv"),
+        "{old_writes:?}"
+    );
+    assert_eq!(old_reads, 4, "one question per identical copy");
+    assert_eq!(new_reads, 1, "one listing for the title");
+    assert!(new_grouped >= 1, "consecutive path writes go out together");
+}

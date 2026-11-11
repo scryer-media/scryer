@@ -3829,6 +3829,30 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             .iter()
             .any(|file| file.id != excluding_id && file.file_path == path))
     }
+    async fn media_file_paths_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        Ok(Some(
+            self.app
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(title_id)
+                .await?
+                .into_iter()
+                .map(|file| (file.id, file.file_path))
+                .collect(),
+        ))
+    }
+    async fn set_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        self.app
+            .services
+            .library
+            .media_files
+            .update_media_file_paths(paths)
+            .await
+    }
     async fn title_placement(&self, title_id: &str) -> AppResult<Option<TitlePlacementSnapshot>> {
         let Some(title) = self.app.services.catalog.titles.get_by_id(title_id).await? else {
             return Ok(None);

@@ -27,7 +27,7 @@
 //! source is a completed removal, and a non-empty directory is simply left
 //! alone.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -172,12 +172,34 @@ pub trait RootMoveCatalog: Send + Sync {
     ) -> AppResult<bool> {
         Ok(false)
     }
+    /// Every `(media file id, path)` row of the title, read once so the
+    /// reconciler can answer [`Self::has_other_media_at_path`] for each of the
+    /// title's files without reading the list again. `None` means the catalog
+    /// cannot list them, and each question goes to
+    /// [`Self::has_other_media_at_path`] instead.
+    async fn media_file_paths_for_title(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        Ok(None)
+    }
     /// Where the catalog currently says the title lives. `None` when the title
     /// no longer exists.
     async fn title_placement(&self, title_id: &str) -> AppResult<Option<TitlePlacementSnapshot>>;
 
     /// Point a tracked media file at its new path.
     async fn set_media_file_path(&self, media_file_id: &str, stored_path: &str) -> AppResult<()>;
+
+    /// Point several media files at their new paths, in order. The default
+    /// writes them one at a time and stops at the first error; a SQL catalog
+    /// writes them in one transaction, so on an error nothing is kept and the
+    /// caller can replay.
+    async fn set_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        for (media_file_id, stored_path) in paths {
+            self.set_media_file_path(media_file_id, stored_path).await?;
+        }
+        Ok(())
+    }
 
     /// Drop the catalog row for a source copy the collision engine proved
     /// redundant (FR-073).
@@ -759,6 +781,36 @@ impl<'a> RootMoveReconciler<'a> {
         self
     }
 
+    /// Write the waiting media-file paths. When the grouped write fails, they
+    /// are written again one at a time, so the rows before the failing one are
+    /// kept and the same error is returned, as writing each in turn would.
+    async fn flush_media_file_paths(&self, pending: &mut Vec<(String, String)>) -> AppResult<()> {
+        match pending.len() {
+            0 => return Ok(()),
+            1 => {
+                let (media_file_id, stored_path) = &pending[0];
+                self.catalog
+                    .set_media_file_path(media_file_id, stored_path)
+                    .await?;
+            }
+            _ => {
+                if let Err(error) = self.catalog.set_media_file_paths(pending).await {
+                    tracing::debug!(
+                        error = %error,
+                        "grouped media-file path write failed; writing each path in turn"
+                    );
+                    for (media_file_id, stored_path) in pending.iter() {
+                        self.catalog
+                            .set_media_file_path(media_file_id, stored_path)
+                            .await?;
+                    }
+                }
+            }
+        }
+        pending.clear();
+        Ok(())
+    }
+
     fn title(&self, title_id: &str) -> AppResult<&RootMoveTitleExecution> {
         self.plan.title(title_id).ok_or_else(|| {
             AppError::validation_refused(
@@ -969,6 +1021,26 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
             return Ok(outcome);
         }
+        // The first resolution for a source path answers for it, as a scan of
+        // the list in order would.
+        let mut resolution_by_source: HashMap<&str, &super::resolution::FileResolution> =
+            HashMap::with_capacity(resolutions.len());
+        for row in &resolutions {
+            resolution_by_source
+                .entry(row.source_path.as_str())
+                .or_insert(row);
+        }
+        let owner_title_id = planned
+            .merge_target_title_id
+            .as_deref()
+            .unwrap_or(&title.title_id);
+        // The owner's media rows, read once on the first identical copy and
+        // kept in step with this loop's own writes, so each identical copy is
+        // judged against the catalog as the writes before it left it.
+        let mut owner_media: Option<Option<Vec<(String, String)>>> = None;
+        // Path writes wait here and go out together, ahead of any removal, so
+        // the catalog sees them in the order the loop decided them.
+        let mut pending_paths: Vec<(String, String)> = Vec::new();
         for file in planned.files.iter().chain(
             self.plan
                 .catalog_paths
@@ -979,33 +1051,59 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             let Some(media_file_id) = file.media_file_id.as_deref() else {
                 continue;
             };
-            let resolution = resolutions
-                .iter()
-                .find(|row| row.source_path == file.source_path);
-            if let Some(row) = resolution
-                && row.disposition == super::resolution::ResolutionDisposition::Identical
-                && self
-                    .catalog
-                    .has_other_media_at_path(
-                        planned
-                            .merge_target_title_id
-                            .as_deref()
-                            .unwrap_or(&title.title_id),
-                        &row.destination_path,
-                        media_file_id,
-                    )
-                    .await?
-            {
+            let resolution = resolution_by_source.get(file.source_path.as_str()).copied();
+            let redundant = match resolution {
+                Some(row)
+                    if row.disposition == super::resolution::ResolutionDisposition::Identical =>
+                {
+                    if owner_media.is_none() {
+                        // The read must see the writes decided before it.
+                        self.flush_media_file_paths(&mut pending_paths).await?;
+                        owner_media = Some(
+                            self.catalog
+                                .media_file_paths_for_title(owner_title_id)
+                                .await?,
+                        );
+                    }
+                    match owner_media.as_ref().and_then(Option::as_ref) {
+                        Some(rows) => rows
+                            .iter()
+                            .any(|(id, path)| id != media_file_id && *path == row.destination_path),
+                        None => {
+                            self.flush_media_file_paths(&mut pending_paths).await?;
+                            self.catalog
+                                .has_other_media_at_path(
+                                    owner_title_id,
+                                    &row.destination_path,
+                                    media_file_id,
+                                )
+                                .await?
+                        }
+                    }
+                }
+                _ => false,
+            };
+            if redundant {
+                self.flush_media_file_paths(&mut pending_paths).await?;
                 self.catalog.delete_media_file(media_file_id).await?;
+                if let Some(Some(rows)) = owner_media.as_mut() {
+                    rows.retain(|(id, _)| id != media_file_id);
+                }
             } else {
                 let destination = resolution
                     .map(|row| row.destination_path.as_str())
                     .unwrap_or(&file.destination_path);
-                self.catalog
-                    .set_media_file_path(media_file_id, destination)
-                    .await?;
+                if let Some(Some(rows)) = owner_media.as_mut() {
+                    for (id, path) in rows.iter_mut() {
+                        if id == media_file_id {
+                            *path = destination.to_string();
+                        }
+                    }
+                }
+                pending_paths.push((media_file_id.to_string(), destination.to_string()));
             }
         }
+        self.flush_media_file_paths(&mut pending_paths).await?;
 
         // US7: for a merge there is no source title left to point anywhere —
         // the destination title owns the folder (FR-063) and keeps the one it

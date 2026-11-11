@@ -9590,6 +9590,17 @@ pub trait MediaFileRepository: Send + Sync {
 
     async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()>;
 
+    /// `update_media_file_path` for each `(file id, path)` pair, in order. The
+    /// SQL store writes them in one transaction, so on an error nothing is
+    /// kept and a caller can replay the pairs one by one. The default runs
+    /// them one by one, stopping at the first error.
+    async fn update_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        for (file_id, file_path) in paths {
+            self.update_media_file_path(file_id, file_path).await?;
+        }
+        Ok(())
+    }
+
     async fn set_media_file_roles_for_title(
         &self,
         title_id: &str,
@@ -9649,6 +9660,22 @@ pub trait MediaFileRepository: Send + Sync {
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()>;
 
     async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>>;
+
+    /// `(file id, title id)` for each of `file_ids` that has a row, the
+    /// owner `get_media_file_by_id` reports. Order is not guaranteed. SQL
+    /// stores read only the two columns; the default reads each row.
+    async fn list_media_file_title_ids(
+        &self,
+        file_ids: &[String],
+    ) -> AppResult<Vec<(String, String)>> {
+        let mut owners = Vec::with_capacity(file_ids.len());
+        for file_id in file_ids {
+            if let Some(file) = self.get_media_file_by_id(file_id).await? {
+                owners.push((file_id.clone(), file.title_id));
+            }
+        }
+        Ok(owners)
+    }
 
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>>;
 
