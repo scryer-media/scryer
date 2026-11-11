@@ -902,6 +902,18 @@ async fn graphql_settings_mutations_require_config_step_up() {
             json!({ "input": { "regoSource": "package scryer\nallow := true" } }),
         ),
         (
+            "translateArrCustomFormats",
+            "translateArrCustomFormats",
+            r#"mutation($input: TranslateArrCustomFormatsInput!) { translateArrCustomFormats(input: $input) { regoSource } }"#,
+            json!({
+                "input": {
+                    "sourceApplication": "SONARR",
+                    "customFormatJson": "[]",
+                    "scores": []
+                }
+            }),
+        ),
+        (
             "createIndexerConfig",
             "createIndexerConfig",
             r#"mutation($input: CreateIndexerConfigInput!) { createIndexerConfig(input: $input) { id } }"#,

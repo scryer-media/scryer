@@ -2167,6 +2167,11 @@ const nl: LocaleDictionary = {
     "Geen geldige custom formats gevonden in deze JSON.",
   "settings.arrImportInvalidJson":
     "Plak geldige JSON geëxporteerd door Sonarr of Radarr.",
+  "settings.arrImportRefusalTooLarge":
+    "Plak niet meer dan {{maxBytes}} bytes JSON.",
+  "settings.arrImportRefusalEmpty": "Plak minstens één custom format.",
+  "settings.arrImportRefusalTooMany":
+    "Plak niet meer dan {{maxFormats}} custom formats tegelijk.",
   "settings.arrImportReviewFailed":
     "Deze custom formats kunnen niet worden beoordeeld.",
   "settings.arrImportScore": "Score",

@@ -7136,6 +7136,11 @@ const en: LocaleDictionary = {
     "No valid custom formats were found in this JSON.",
   "settings.arrImportInvalidJson":
     "Paste valid JSON exported by Sonarr or Radarr.",
+  "settings.arrImportRefusalTooLarge":
+    "Paste no more than {{maxBytes}} bytes of JSON.",
+  "settings.arrImportRefusalEmpty": "Paste at least one custom format.",
+  "settings.arrImportRefusalTooMany":
+    "Paste no more than {{maxFormats}} custom formats at once.",
   "settings.arrImportReviewFailed": "Unable to review these custom formats.",
   "settings.arrImportScore": "Score",
   "settings.arrImportScoreRequired":

@@ -1,6 +1,10 @@
 use super::{Long, MediaFacetValue};
-use async_graphql::{ID, InputObject, Json, SimpleObject};
+use async_graphql::{Enum, ID, InputObject, Json, SimpleObject};
 use chrono::{DateTime, Utc};
+use scryer_application::arr_custom_format::{
+    ArrCustomFormatTranslation, ArrDiagnostic, ArrDiagnosticSeverity, ArrFormatStatus,
+    ArrSourceApplication,
+};
 
 // ── Rule Sets ──────────────────────────────────────────────────────────────
 
@@ -391,6 +395,215 @@ pub struct ValidateRuleSetInput {
     pub rego_source: String,
     /// Existing rule-set ID for context, or null for standalone validation.
     pub rule_set_id: Option<ID>,
+}
+
+// ── Arr custom-format import ───────────────────────────────────────────────
+
+/// The application a custom-format export came from.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(name = "ArrSourceApplication", rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ArrSourceApplicationValue {
+    /// Sonarr custom formats.
+    Sonarr,
+    /// Radarr custom formats.
+    Radarr,
+}
+
+impl ArrSourceApplicationValue {
+    pub fn into_domain(self) -> ArrSourceApplication {
+        match self {
+            Self::Sonarr => ArrSourceApplication::Sonarr,
+            Self::Radarr => ArrSourceApplication::Radarr,
+        }
+    }
+}
+
+/// How much a custom-format import diagnostic matters.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(name = "ArrDiagnosticSeverity", rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ArrDiagnosticSeverityValue {
+    /// The format is disabled in the generated rule.
+    Error,
+    /// The format translates, but needs the operator's attention.
+    Warning,
+    /// Informational only.
+    Info,
+}
+
+/// Whether a pasted custom format became an active condition.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(name = "ArrCustomFormatStatus", rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ArrCustomFormatStatusValue {
+    /// The format scores matching releases.
+    Translated,
+    /// The format is kept as a disabled stub that never matches.
+    Disabled,
+}
+
+#[derive(InputObject)]
+/// The score the operator chose for one pasted custom format.
+pub struct ArrCustomFormatScoreInput {
+    /// Format ID from a previous translation of the same paste.
+    pub format_id: String,
+    /// Score added when the format matches.
+    pub score: i32,
+}
+
+#[derive(InputObject)]
+/// Pasted Sonarr or Radarr custom-format JSON and the scores to apply.
+pub struct TranslateArrCustomFormatsInput {
+    /// The application the JSON was exported from.
+    pub source_application: ArrSourceApplicationValue,
+    /// One custom format object, or an array of them, as exported.
+    pub custom_format_json: String,
+    /// Scores per format ID. A format without a score translates as disabled,
+    /// so an empty list reviews the paste.
+    pub scores: Vec<ArrCustomFormatScoreInput>,
+}
+
+/// One finding about a pasted custom format.
+#[derive(SimpleObject, Clone)]
+pub struct ArrCustomFormatDiagnosticPayload {
+    /// Stable condition code, such as `regex.parse_failed`.
+    pub code: String,
+    /// Diagnostic severity.
+    pub severity: ArrDiagnosticSeverityValue,
+    /// Human-readable explanation for display.
+    pub message: String,
+    /// JSON-path-like location in the pasted document, when known.
+    pub location: Option<String>,
+    /// Format the diagnostic belongs to, when it belongs to one.
+    pub format_id: Option<String>,
+    /// Zero-based specification index within the format, when known.
+    pub specification_index: Option<i32>,
+}
+
+impl From<ArrDiagnostic> for ArrCustomFormatDiagnosticPayload {
+    fn from(diagnostic: ArrDiagnostic) -> Self {
+        Self {
+            code: diagnostic.code.to_string(),
+            severity: match diagnostic.severity {
+                ArrDiagnosticSeverity::Error => ArrDiagnosticSeverityValue::Error,
+                ArrDiagnosticSeverity::Warning => ArrDiagnosticSeverityValue::Warning,
+                ArrDiagnosticSeverity::Info => ArrDiagnosticSeverityValue::Info,
+            },
+            message: diagnostic.message,
+            location: diagnostic.location,
+            format_id: diagnostic.format_id,
+            specification_index: diagnostic
+                .specification_index
+                .and_then(|index| i32::try_from(index).ok()),
+        }
+    }
+}
+
+/// A score the export suggests for a format.
+#[derive(SimpleObject, Clone)]
+pub struct ArrCustomFormatSuggestedScorePayload {
+    /// Score label from the export, such as `default`.
+    pub label: String,
+    /// Suggested score; exports may carry non-integer values.
+    pub score: f64,
+}
+
+/// One specification the import read from a format.
+#[derive(SimpleObject, Clone)]
+pub struct ArrCustomFormatSpecificationPayload {
+    /// Zero-based index in the pasted specifications array.
+    pub index: i32,
+    /// Arr implementation name.
+    pub implementation: String,
+    /// Specification name.
+    pub name: String,
+    /// Whether the condition is negated.
+    pub negate: bool,
+    /// Whether the condition is required.
+    pub required: bool,
+}
+
+/// One pasted custom format and how it translated.
+#[derive(SimpleObject, Clone)]
+pub struct ArrCustomFormatPayload {
+    /// Format ID; pass it back with a score to translate the format.
+    pub id: String,
+    /// Format name.
+    pub name: String,
+    /// Format description, when the export has one.
+    pub description: Option<String>,
+    /// Translation status.
+    pub status: ArrCustomFormatStatusValue,
+    /// Why a disabled format was disabled. Empty for translated formats.
+    pub diagnostics: Vec<ArrCustomFormatDiagnosticPayload>,
+    /// Scores the export suggests, in export order.
+    pub suggested_scores: Vec<ArrCustomFormatSuggestedScorePayload>,
+    /// Specifications the import read.
+    pub specifications: Vec<ArrCustomFormatSpecificationPayload>,
+    /// What inspection found in this format.
+    pub inspection_diagnostics: Vec<ArrCustomFormatDiagnosticPayload>,
+}
+
+/// Rego source generated from pasted custom formats. Nothing is saved.
+#[derive(SimpleObject, Clone)]
+pub struct ArrCustomFormatTranslationPayload {
+    /// Generated Rego source for the rule editor.
+    pub rego_source: String,
+    /// Suggested rule name.
+    pub name: String,
+    /// Suggested rule description.
+    pub description: String,
+    /// Media facets the rule should apply to.
+    pub applied_facets: Vec<String>,
+    /// Every format inspection could read, in paste order.
+    pub formats: Vec<ArrCustomFormatPayload>,
+    /// Diagnostics of the disabled formats.
+    pub diagnostics: Vec<ArrCustomFormatDiagnosticPayload>,
+    /// Everything inspection found, including formats it could not read.
+    pub inspection_diagnostics: Vec<ArrCustomFormatDiagnosticPayload>,
+}
+
+impl From<ArrCustomFormatTranslation> for ArrCustomFormatTranslationPayload {
+    fn from(translation: ArrCustomFormatTranslation) -> Self {
+        let diagnostics = |items: Vec<ArrDiagnostic>| items.into_iter().map(Into::into).collect();
+        Self {
+            rego_source: translation.rego_source,
+            name: translation.name,
+            description: translation.description,
+            applied_facets: translation.applied_facets,
+            formats: translation
+                .formats
+                .into_iter()
+                .map(|format| ArrCustomFormatPayload {
+                    id: format.id,
+                    name: format.name,
+                    description: format.description,
+                    status: match format.status {
+                        ArrFormatStatus::Translated => ArrCustomFormatStatusValue::Translated,
+                        ArrFormatStatus::Disabled => ArrCustomFormatStatusValue::Disabled,
+                    },
+                    diagnostics: diagnostics(format.diagnostics),
+                    suggested_scores: format
+                        .suggested_scores
+                        .into_iter()
+                        .map(|(label, score)| ArrCustomFormatSuggestedScorePayload { label, score })
+                        .collect(),
+                    specifications: format
+                        .specifications
+                        .into_iter()
+                        .map(|spec| ArrCustomFormatSpecificationPayload {
+                            index: i32::try_from(spec.index).unwrap_or(i32::MAX),
+                            implementation: spec.implementation,
+                            name: spec.name,
+                            negate: spec.negate,
+                            required: spec.required,
+                        })
+                        .collect(),
+                    inspection_diagnostics: diagnostics(format.inspection_diagnostics),
+                })
+                .collect(),
+            diagnostics: diagnostics(translation.diagnostics),
+            inspection_diagnostics: diagnostics(translation.inspection_diagnostics),
+        }
+    }
 }
 
 #[derive(InputObject)]

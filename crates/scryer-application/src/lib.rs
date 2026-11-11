@@ -151,6 +151,7 @@ mod rate_limit_signal;
 mod release_facts;
 pub mod request_rules;
 mod rules;
+pub use rules::arr_custom_format;
 pub use rules::preview::{
     RuleSetTestContext, RuleSetTestDraft, RuleSetTestDraftContribution, RuleSetTestEntry,
     RuleSetTestError, RuleSetTestListingFacts, RuleSetTestListingInput, RuleSetTestParsed,

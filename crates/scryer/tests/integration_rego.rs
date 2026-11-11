@@ -686,6 +686,118 @@ async fn rego_validate_unknown_input_path_rejected() {
     }));
 }
 
+const TRANSLATE_ARR_MUTATION: &str = r#"mutation($input: TranslateArrCustomFormatsInput!) {
+    translateArrCustomFormats(input: $input) {
+        regoSource
+        appliedFacets
+        formats {
+            id
+            name
+            status
+            diagnostics { code severity formatId specificationIndex }
+            suggestedScores { label score }
+        }
+    }
+}"#;
+
+const SYNTHETIC_ARR_FORMAT: &str = r#"{
+    "name": "Synthetic Group",
+    "trash_scores": { "default": 25 },
+    "specifications": [{
+        "name": "Group",
+        "implementation": "ReleaseGroupSpecification",
+        "negate": false,
+        "required": true,
+        "fields": { "value": "^(SynthGroup)$" }
+    }]
+}"#;
+
+#[tokio::test]
+async fn arr_translate_reviews_then_translates_with_scores() {
+    let ctx = TestContext::new().await;
+    let review = gql(
+        &ctx,
+        TRANSLATE_ARR_MUTATION,
+        json!({ "input": {
+            "sourceApplication": "RADARR",
+            "customFormatJson": SYNTHETIC_ARR_FORMAT,
+            "scores": []
+        } }),
+    )
+    .await;
+    assert_no_errors(&review);
+    let reviewed = &review["data"]["translateArrCustomFormats"];
+    assert_eq!(reviewed["appliedFacets"], json!(["movie"]));
+    let format = &reviewed["formats"][0];
+    assert_eq!(format["name"], "Synthetic Group");
+    assert_eq!(format["status"], "DISABLED");
+    assert_eq!(
+        format["suggestedScores"],
+        json!([{ "label": "default", "score": 25.0 }])
+    );
+    assert_eq!(format["diagnostics"][0]["code"], "arr.score.invalid");
+    let format_id = format["id"].as_str().expect("format id").to_string();
+
+    let translated = gql(
+        &ctx,
+        TRANSLATE_ARR_MUTATION,
+        json!({ "input": {
+            "sourceApplication": "RADARR",
+            "customFormatJson": SYNTHETIC_ARR_FORMAT,
+            "scores": [{ "formatId": format_id, "score": 25 }]
+        } }),
+    )
+    .await;
+    assert_no_errors(&translated);
+    let result = &translated["data"]["translateArrCustomFormats"];
+    assert_eq!(result["formats"][0]["status"], "TRANSLATED");
+    assert_eq!(result["formats"][0]["diagnostics"], json!([]));
+    let rego = result["regoSource"].as_str().expect("rego source");
+    assert!(rego.contains(":= 25 if"), "{rego}");
+}
+
+#[tokio::test]
+async fn arr_translate_refusals_carry_reasons_and_limits() {
+    let ctx = TestContext::new().await;
+    let refusal = |body: &Value| {
+        let extensions = &body["errors"][0]["extensions"];
+        assert_eq!(extensions["code"], "VALIDATION_ERROR", "{body}");
+        assert!(
+            body["data"].is_null() || body["data"]["translateArrCustomFormats"].is_null(),
+            "{body}"
+        );
+        extensions.clone()
+    };
+    let input = |json_text: String| {
+        json!({ "input": {
+            "sourceApplication": "SONARR",
+            "customFormatJson": json_text,
+            "scores": []
+        } })
+    };
+
+    let empty = gql(&ctx, TRANSLATE_ARR_MUTATION, input("[]".to_string())).await;
+    assert_eq!(refusal(&empty)["reason"], "ARR_CUSTOM_FORMAT_FORMATS_EMPTY");
+
+    let invalid = gql(&ctx, TRANSLATE_ARR_MUTATION, input("{".to_string())).await;
+    assert_eq!(
+        refusal(&invalid)["reason"],
+        "ARR_CUSTOM_FORMAT_JSON_INVALID"
+    );
+
+    let too_many = format!("[{}]", vec!["{}"; 1001].join(","));
+    let too_many = gql(&ctx, TRANSLATE_ARR_MUTATION, input(too_many)).await;
+    let extensions = refusal(&too_many);
+    assert_eq!(extensions["reason"], "ARR_CUSTOM_FORMAT_FORMATS_TOO_MANY");
+    assert_eq!(extensions["maxFormats"], "1000");
+
+    let too_large = " ".repeat(16 * 1024 * 1024 + 1);
+    let too_large = gql(&ctx, TRANSLATE_ARR_MUTATION, input(too_large)).await;
+    let extensions = refusal(&too_large);
+    assert_eq!(extensions["reason"], "ARR_CUSTOM_FORMAT_JSON_TOO_LARGE");
+    assert_eq!(extensions["maxBytes"], (16 * 1024 * 1024).to_string());
+}
+
 #[tokio::test]
 async fn rego_create_invalid_rego_fails() {
     let ctx = TestContext::new().await;

@@ -235,6 +235,36 @@ impl RulesMutations {
         })
     }
 
+    /// Translate pasted Sonarr or Radarr custom-format JSON into Rego source
+    /// for the rule editor without saving anything.
+    async fn translate_arr_custom_formats(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Pasted custom-format JSON, its source application, and per-format scores."
+        )]
+        input: TranslateArrCustomFormatsInput,
+    ) -> GqlResult<ArrCustomFormatTranslationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let scores = input
+            .scores
+            .into_iter()
+            .map(|entry| (entry.format_id, entry.score))
+            .collect();
+        let translation = app
+            .translate_arr_custom_formats(
+                &actor,
+                input.source_application.into_domain(),
+                input.custom_format_json,
+                scores,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(translation.into())
+    }
+
     /// Validate rule source without saving it, using a supplied or temporary rule identity.
     async fn validate_rule_set(
         &self,

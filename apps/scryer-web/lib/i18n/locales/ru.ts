@@ -11282,6 +11282,11 @@ const ru: LocaleDictionary = {
     "В этом JSON не найдено допустимых пользовательских форматов.",
   "settings.arrImportInvalidJson":
     "Вставьте корректный JSON, экспортированный из Sonarr или Radarr.",
+  "settings.arrImportRefusalTooLarge":
+    "Вставьте не более {{maxBytes}} байт JSON.",
+  "settings.arrImportRefusalEmpty": "Вставьте хотя бы один пользовательский формат.",
+  "settings.arrImportRefusalTooMany":
+    "Вставьте не более {{maxFormats}} пользовательских форматов за раз.",
   "settings.arrImportReviewFailed":
     "Не удалось проверить эти пользовательские форматы.",
   "settings.arrImportScore": "Баллы",
