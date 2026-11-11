@@ -3576,3 +3576,81 @@ impl SubtitleDownloadRepository for SubtitleDownloadStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod title_id_delete_tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::delete_for_title_ids_shared;
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+    async fn seeded() -> StoreDatastore {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        let datastore = StoreDatastore::Sqlite {
+            pool,
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        };
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "CREATE TABLE title_rows (id INTEGER PRIMARY KEY, title_id TEXT NOT NULL)",
+            &[],
+        )
+        .await
+        .expect("create table");
+        for title_id in ["t-a", "t-a", "t-b", "t-c", "t-d", "t-e", "t-e"] {
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "INSERT INTO title_rows (title_id) VALUES ({})",
+                &[SqlArg::Text(title_id.to_string())],
+            )
+            .await
+            .expect("seed row");
+        }
+        datastore
+    }
+
+    async fn remaining(datastore: &StoreDatastore) -> Vec<String> {
+        SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            "SELECT title_id FROM title_rows ORDER BY id",
+            &[],
+        )
+        .await
+        .expect("read rows")
+        .iter()
+        .map(|row| row.text("title_id").expect("title_id"))
+        .collect()
+    }
+
+    /// A list longer than one statement can bind removes the same rows, and
+    /// reports the same count, as the single statement does.
+    #[tokio::test]
+    async fn a_title_id_list_past_the_bind_limit_deletes_what_one_statement_would() {
+        let ids: Vec<String> = ["t-e", "t-a", "t-e", "t-c", "t-missing"]
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+
+        let single = seeded().await;
+        let single_count = delete_for_title_ids_shared(&single, "test", "title_rows", &ids)
+            .await
+            .expect("single statement");
+
+        let chunked = seeded().await;
+        let chunked_count = {
+            let _limit = crate::media::id_list_statements::lower_max_binds_for_tests(2);
+            delete_for_title_ids_shared(&chunked, "test", "title_rows", &ids)
+                .await
+                .expect("chunked statements")
+        };
+
+        assert_eq!(single_count, 5);
+        assert_eq!(chunked_count, single_count);
+        assert_eq!(remaining(&chunked).await, remaining(&single).await);
+        assert_eq!(remaining(&single).await, vec!["t-b", "t-d"]);
+    }
+}

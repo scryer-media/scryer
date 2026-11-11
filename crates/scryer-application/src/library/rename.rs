@@ -267,6 +267,8 @@ pub const RENAME_CROSS_ROOT_REFUSED: &str = "cross_root_rename_refused";
 pub const RENAME_FOLDER_RECORD_FAILED: &str = "folder_record_failed";
 /// A sidecar (external subtitle, `.nfo`) following its media file.
 pub const RENAME_COMPANION_MOVE: &str = "rename_companion_move";
+/// Applied media-file paths recorded per write transaction.
+const RENAME_PATH_WRITE_CHUNK: usize = 500;
 const GENERATED_COMPONENT_MAX_BYTES: usize = 240;
 const GENERATED_COMPONENT_SUFFIX_RESERVE_BYTES: usize = 24;
 const MAX_RENAME_TEMPLATE_PADDING_WIDTH: usize = 240;
@@ -284,6 +286,35 @@ struct RenamePersistenceFailure {
 struct RenameRollbackOutcome {
     fully_restored: bool,
     detail: String,
+}
+
+/// The title each item of one rename plan belongs to, read once per apply.
+///
+/// A media file is attributed to the title its row names and a collection to
+/// its title, exactly as a per-item lookup would; an item whose file or
+/// collection has no row belongs to no title. Applying a plan rewrites paths
+/// but never which title owns a file or collection, so the answer holds for
+/// the whole apply. `None` when the batched read failed: callers then look
+/// each item up on its own, as before.
+struct RenameItemTitleIds {
+    by_media_file: HashMap<String, String>,
+    by_collection: HashMap<String, String>,
+}
+
+impl RenameItemTitleIds {
+    fn title_id(&self, media_file_id: Option<&str>, collection_id: Option<&str>) -> Option<&str> {
+        match (media_file_id, collection_id) {
+            (Some(file_id), _) => self.by_media_file.get(file_id).map(String::as_str),
+            (None, Some(collection_id)) => {
+                self.by_collection.get(collection_id).map(String::as_str)
+            }
+            (None, None) => None,
+        }
+    }
+
+    fn title_id_for_result(&self, item: &RenameApplyItemResult) -> Option<&str> {
+        self.title_id(item.media_file_id.as_deref(), item.collection_id.as_deref())
+    }
 }
 
 /// Facet-level rename settings, resolved once per plan.
@@ -487,34 +518,53 @@ impl AppUseCase {
         }
 
         let settings = self.read_rename_plan_settings(&facet).await?;
+        let mut titles = self.facet_rename_manageable_titles(actor, &facet).await?;
+        titles.sort_by(|left, right| left.id.cmp(&right.id));
+        let effective_languages = self.resolve_metadata_languages_for_titles(&titles).await;
+        self.build_rename_plan_for_titles(facet, &titles, None, settings, &effective_languages)
+            .await
+    }
+
+    /// The facet's titles the actor may manage, in catalog list order.
+    ///
+    /// A facet plan must never reach into a library the actor cannot manage:
+    /// holding a catalog-settings permission is not the same as being allowed
+    /// to rewrite someone else's library. The answer is the same for every
+    /// title of one library, so each library is checked once.
+    async fn facet_rename_manageable_titles(
+        &self,
+        actor: &User,
+        facet: &MediaFacet,
+    ) -> AppResult<Vec<Title>> {
         let titles = self
             .services
             .catalog
             .titles
             .list(Some(facet.clone()), None)
             .await?;
-        // A facet plan must never reach into a library the actor cannot manage:
-        // holding a catalog-settings permission is not the same as being allowed
-        // to rewrite someone else's library.
+        let mut library_allowed = HashMap::<String, bool>::new();
         let mut manageable = Vec::with_capacity(titles.len());
         for title in titles {
-            if self
-                .require_library_permission(
-                    actor,
-                    &title.library_id,
-                    scryer_domain::LibraryPermission::ManageTitles,
-                )
-                .await
-                .is_ok()
-            {
+            let allowed = match library_allowed.get(&title.library_id) {
+                Some(allowed) => *allowed,
+                None => {
+                    let allowed = self
+                        .require_library_permission(
+                            actor,
+                            &title.library_id,
+                            scryer_domain::LibraryPermission::ManageTitles,
+                        )
+                        .await
+                        .is_ok();
+                    library_allowed.insert(title.library_id.clone(), allowed);
+                    allowed
+                }
+            };
+            if allowed {
                 manageable.push(title);
             }
         }
-        let mut titles = manageable;
-        titles.sort_by(|left, right| left.id.cmp(&right.id));
-        let effective_languages = self.resolve_metadata_languages_for_titles(&titles).await;
-        self.build_rename_plan_for_titles(facet, &titles, None, settings, &effective_languages)
-            .await
+        Ok(manageable)
     }
 
     pub async fn apply_rename_for_title(
@@ -526,8 +576,26 @@ impl AppUseCase {
     ) -> AppResult<RenameApplyResult> {
         // Keep preview read-only. The execution endpoint is the only place a
         // stale language selection may refresh and persist catalog metadata.
-        self.preview_rename_for_title(actor, title_id, facet.clone())
+        let preview = self
+            .preview_rename_for_title(actor, title_id, facet.clone())
             .await?;
+        self.apply_rename_for_title_after_preview(actor, title_id, facet, preview, plan_fingerprint)
+            .await
+    }
+
+    /// Apply a title's rename given the preview the caller just built for it
+    /// with no write in between. That preview has already authorized the
+    /// actor and refused a plan that cannot be built, so it is not built a
+    /// second time for that. It is built again only after a metadata refresh
+    /// was attempted, since a refresh can change every name in it.
+    async fn apply_rename_for_title_after_preview(
+        &self,
+        actor: &User,
+        title_id: &str,
+        facet: MediaFacet,
+        preview: RenamePlan,
+        plan_fingerprint: &str,
+    ) -> AppResult<RenameApplyResult> {
         let title = self
             .services
             .catalog
@@ -547,11 +615,14 @@ impl AppUseCase {
             .get(&title.id)
             .map(String::as_str)
             .unwrap_or("eng");
-        self.refresh_rename_title_metadata_if_stale(&title, effective_language)
-            .await;
-        let preview = self
-            .preview_rename_for_title(actor, title_id, facet)
-            .await?;
+        let preview = if rename_title_metadata_is_stale(&title, effective_language) {
+            self.refresh_rename_title_metadata_if_stale(&title, effective_language)
+                .await;
+            self.preview_rename_for_title(actor, title_id, facet)
+                .await?
+        } else {
+            preview
+        };
         self.apply_previewed_rename_plan(actor, preview, plan_fingerprint)
             .await
     }
@@ -564,39 +635,53 @@ impl AppUseCase {
     ) -> AppResult<RenameApplyResult> {
         // Authorize and build the read-only plan before issuing any execution
         // refreshes, then only refresh titles the actor may actually rename.
-        self.preview_rename_for_facet(actor, facet.clone()).await?;
-        let titles = self
-            .services
-            .catalog
-            .titles
-            .list(Some(facet.clone()), None)
+        // This is the same work `preview_rename_for_facet` does, kept here so
+        // its titles and plan serve the rest of the apply.
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
-        let manageable = futures_util::future::join_all(titles.into_iter().map(|title| async {
-            self.require_library_permission(
-                actor,
-                &title.library_id,
-                scryer_domain::LibraryPermission::ManageTitles,
+        if !self.resolve_rename_enabled(&facet).await? {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RENAMER_DISABLED,
+                "renamer_disabled",
+            ));
+        }
+        let settings = self.read_rename_plan_settings(&facet).await?;
+        let manageable = self.facet_rename_manageable_titles(actor, &facet).await?;
+        let mut sorted = manageable.clone();
+        sorted.sort_by(|left, right| left.id.cmp(&right.id));
+        let effective_languages = self.resolve_metadata_languages_for_titles(&sorted).await;
+        let preview = self
+            .build_rename_plan_for_titles(
+                facet.clone(),
+                &sorted,
+                None,
+                settings,
+                &effective_languages,
             )
-            .await
-            .is_ok()
-            .then_some(title)
-        }))
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-        let effective_languages = self
-            .resolve_metadata_languages_for_titles(&manageable)
-            .await;
-        for title in &manageable {
-            let effective_language = effective_languages
+            .await?;
+
+        let effective_language_of = |title: &Title| {
+            effective_languages
                 .get(&title.id)
                 .map(String::as_str)
-                .unwrap_or("eng");
-            self.refresh_rename_title_metadata_if_stale(title, effective_language)
-                .await;
-        }
-        let preview = self.preview_rename_for_facet(actor, facet).await?;
+                .unwrap_or("eng")
+                .to_string()
+        };
+        let stale = manageable
+            .iter()
+            .filter(|title| rename_title_metadata_is_stale(title, &effective_language_of(title)))
+            .collect::<Vec<_>>();
+        // A refresh can change any name in the plan, so the plan is built
+        // again only when one was attempted.
+        let preview = if stale.is_empty() {
+            preview
+        } else {
+            for title in stale {
+                self.refresh_rename_title_metadata_if_stale(title, &effective_language_of(title))
+                    .await;
+            }
+            self.preview_rename_for_facet(actor, facet).await?
+        };
         self.apply_previewed_rename_plan(actor, preview, plan_fingerprint)
             .await
     }
@@ -914,7 +999,11 @@ impl AppUseCase {
         // its folder is corrected: the plan was built against the root the
         // files are really under, so the record catches up with it (#224).
         // Preview stays read-only.
-        let planned_title_folders = self.heal_rename_plan_title_roots(&preview).await;
+        let item_title_ids = self.load_rename_item_title_ids(&preview.items).await;
+        let item_title_ids = item_title_ids.as_ref();
+        let planned_title_folders = self
+            .heal_rename_plan_title_roots(&preview, item_title_ids)
+            .await;
         self.preflight_rename_folder_ownership(&preview).await?;
         self.services
             .library
@@ -951,10 +1040,16 @@ impl AppUseCase {
         // that has to be rolled back takes its sidecars back with it (#224).
         let companions_by_primary = rename_companions_by_primary(&preview);
 
+        // The new paths of applied media files are written a chunk at a time,
+        // each chunk in one transaction. A chunk that fails keeps nothing and
+        // its items go through the item-by-item write below, which handles a
+        // failure by rolling that item back exactly as before.
+        let persisted = self.persist_rename_media_paths_batched(&item_results).await;
+
         // Indexed rather than iterated: rolling a primary back also rewrites
         // its companions' results, which sit elsewhere in the same vector.
         for index in 0..item_results.len() {
-            if item_results[index].status != RenameApplyStatus::Applied {
+            if item_results[index].status != RenameApplyStatus::Applied || persisted[index] {
                 continue;
             }
             let Some(final_path) = item_results[index].final_path.clone() else {
@@ -992,17 +1087,19 @@ impl AppUseCase {
         }
 
         let unrecorded_titles = self
-            .persist_rename_title_folders(&preview, &item_results)
+            .persist_rename_title_folders(&preview, &item_results, item_title_ids)
             .await;
 
         // The files did move and their rows say so, so subtitle rows and
         // notifications follow them before the items are reported failed.
         self.repoint_rename_external_subtitles(&item_results).await;
-        self.emit_rename_notifications(actor, &item_results).await;
+        self.emit_rename_notifications(actor, &item_results, item_title_ids)
+            .await;
         self.fail_rename_items_of_unrecorded_titles(
             &preview,
             &mut item_results,
             &unrecorded_titles,
+            item_title_ids,
         )
         .await;
 
@@ -1061,6 +1158,7 @@ impl AppUseCase {
         preview: &RenamePlan,
         item_results: &mut [RenameApplyItemResult],
         unrecorded_titles: &HashSet<String>,
+        item_title_ids: Option<&RenameItemTitleIds>,
     ) {
         if unrecorded_titles.is_empty() {
             return;
@@ -1079,12 +1177,7 @@ impl AppUseCase {
             {
                 continue;
             }
-            let title_id = self
-                .resolve_title_for_rename_item(item)
-                .await
-                .ok()
-                .flatten()
-                .map(|title| title.id);
+            let title_id = self.rename_item_title_id(item, item_title_ids).await;
             title_by_path.insert(item.current_path.clone(), title_id);
         }
 
@@ -1184,12 +1277,25 @@ impl AppUseCase {
     async fn heal_rename_plan_title_roots(
         &self,
         preview: &RenamePlan,
+        item_title_ids: Option<&RenameItemTitleIds>,
     ) -> Vec<RenamePlanTitleFolder> {
+        let probes = preview
+            .items
+            .iter()
+            .map(rename_apply_probe_for_item)
+            .collect::<Vec<_>>();
+        // Healing one title writes only that title's row, so every title is
+        // read up front in one statement instead of once per item.
+        let titles = self
+            .rename_titles_for_items(probes.iter(), item_title_ids)
+            .await;
         let mut healed = HashSet::new();
         let mut title_folders = Vec::new();
-        for item in &preview.items {
-            let probe = rename_apply_probe_for_item(item);
-            let Ok(Some(mut title)) = self.resolve_title_for_rename_item(&probe).await else {
+        for probe in &probes {
+            let Ok(Some(mut title)) = self
+                .rename_item_title(probe, item_title_ids, titles.as_ref())
+                .await
+            else {
                 continue;
             };
             if !healed.insert(title.id.clone()) {
@@ -1628,6 +1734,7 @@ impl AppUseCase {
         &self,
         preview: &RenamePlan,
         item_results: &[RenameApplyItemResult],
+        item_title_ids: Option<&RenameItemTitleIds>,
     ) -> HashSet<String> {
         if preview.title_folders.is_empty() {
             return HashSet::new();
@@ -1642,8 +1749,8 @@ impl AppUseCase {
             {
                 continue;
             }
-            if let Ok(Some(title)) = self.resolve_title_for_rename_item(item).await {
-                moved_titles.insert(title.id);
+            if let Some(title_id) = self.rename_item_title_id(item, item_title_ids).await {
+                moved_titles.insert(title_id);
             }
         }
 
@@ -1907,6 +2014,14 @@ impl AppUseCase {
         if moved.is_empty() {
             return;
         }
+        // Keyed by the identity `paths_match` compares; the first moved item
+        // with a key wins, as a front-to-back search finds it.
+        let mut moved_by_key = HashMap::<String, &str>::with_capacity(moved.len());
+        for (from, to) in &moved {
+            if let Some(key) = crate::stored_paths::path_identity_key(from) {
+                moved_by_key.entry(key).or_insert(*to);
+            }
+        }
 
         let media_file_ids = items
             .iter()
@@ -1932,13 +2047,12 @@ impl AppUseCase {
                 }
             };
             for mut subtitle in subtitles {
-                let Some((_, final_path)) = moved
-                    .iter()
-                    .find(|(from, _)| crate::stored_paths::paths_match(from, &subtitle.file_path))
+                let Some(final_path) = crate::stored_paths::path_identity_key(&subtitle.file_path)
+                    .and_then(|key| moved_by_key.get(&key).copied())
                 else {
                     continue;
                 };
-                subtitle.file_path = (*final_path).to_string();
+                subtitle.file_path = final_path.to_string();
                 if let Err(error) = self
                     .services
                     .workflow
@@ -1950,7 +2064,7 @@ impl AppUseCase {
                         error = %error,
                         subtitle_id = subtitle.id.as_str(),
                         file_id = media_file_id,
-                        final_path = *final_path,
+                        final_path,
                         "failed to re-point an external subtitle after rename"
                     );
                 }
@@ -1958,10 +2072,27 @@ impl AppUseCase {
         }
     }
 
-    async fn emit_rename_notifications(&self, actor: &User, items: &[RenameApplyItemResult]) {
+    async fn emit_rename_notifications(
+        &self,
+        actor: &User,
+        items: &[RenameApplyItemResult],
+        item_title_ids: Option<&RenameItemTitleIds>,
+    ) {
         let mut grouped: HashMap<String, (Title, Vec<NotificationMediaUpdate>, Vec<String>)> =
             HashMap::new();
         let mut cached_episode_ids_by_file: HashMap<String, Vec<String>> = HashMap::new();
+        // Each title's file list is read once; it answers every file of it.
+        let mut listed_titles = HashSet::<String>::new();
+        // Read after the title folders were recorded, so each event carries
+        // the title as it now stands.
+        let titles = self
+            .rename_titles_for_items(
+                items.iter().filter(|item| {
+                    matches!(item.status, RenameApplyStatus::Applied) && item.final_path.is_some()
+                }),
+                item_title_ids,
+            )
+            .await;
 
         for item in items {
             if !matches!(item.status, RenameApplyStatus::Applied) {
@@ -1972,7 +2103,10 @@ impl AppUseCase {
                 continue;
             };
 
-            let title = match self.resolve_title_for_rename_item(item).await {
+            let title = match self
+                .rename_item_title(item, item_title_ids, titles.as_ref())
+                .await
+            {
                 Ok(Some(title)) => title,
                 Ok(None) => continue,
                 Err(error) => {
@@ -1986,23 +2120,30 @@ impl AppUseCase {
             };
 
             let episode_ids = if let Some(media_file_id) = item.media_file_id.as_deref() {
-                if let Some(cached) = cached_episode_ids_by_file.get(media_file_id) {
-                    cached.clone()
-                } else {
-                    let ids = self
+                if !cached_episode_ids_by_file.contains_key(media_file_id)
+                    && listed_titles.insert(title.id.clone())
+                {
+                    // Every file of the title gets its entry, in list order,
+                    // as a read filtered to that one file would give it. A
+                    // failed read leaves the file with no episodes, as before.
+                    for media_file in self
                         .services
                         .library
                         .media_files
                         .list_media_files_for_title(&title.id)
                         .await
                         .unwrap_or_default()
-                        .into_iter()
-                        .filter(|media_file| media_file.id == media_file_id)
-                        .filter_map(|media_file| media_file.episode_id)
-                        .collect::<Vec<_>>();
-                    cached_episode_ids_by_file.insert(media_file_id.to_string(), ids.clone());
-                    ids
+                    {
+                        let ids = cached_episode_ids_by_file.entry(media_file.id).or_default();
+                        if let Some(episode_id) = media_file.episode_id {
+                            ids.push(episode_id);
+                        }
+                    }
                 }
+                cached_episode_ids_by_file
+                    .get(media_file_id)
+                    .cloned()
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -2085,6 +2226,185 @@ impl AppUseCase {
             Some(title_id) => self.services.catalog.titles.get_by_id(&title_id).await,
             None => Ok(None),
         }
+    }
+
+    /// Which title owns each plan item's media file or collection, in two
+    /// reads for the whole plan. `None` when a read failed.
+    async fn load_rename_item_title_ids(
+        &self,
+        items: &[RenamePlanItem],
+    ) -> Option<RenameItemTitleIds> {
+        let file_ids = items
+            .iter()
+            .filter_map(|item| item.media_file_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let collection_ids = items
+            .iter()
+            .filter(|item| item.media_file_id.is_none())
+            .filter_map(|item| item.collection_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let by_media_file = if file_ids.is_empty() {
+            HashMap::new()
+        } else {
+            match self
+                .services
+                .library
+                .media_files
+                .list_media_file_title_ids(&file_ids)
+                .await
+            {
+                Ok(owners) => owners.into_iter().collect(),
+                Err(error) => {
+                    warn!(error = %error, "reading rename item owners failed; resolving per item");
+                    return None;
+                }
+            }
+        };
+        let by_collection = if collection_ids.is_empty() {
+            HashMap::new()
+        } else {
+            match self
+                .services
+                .catalog
+                .shows
+                .get_collections_by_ids(&collection_ids)
+                .await
+            {
+                Ok(collections) => collections
+                    .into_iter()
+                    .map(|collection| (collection.id, collection.title_id))
+                    .collect(),
+                Err(error) => {
+                    warn!(error = %error, "reading rename item owners failed; resolving per item");
+                    return None;
+                }
+            }
+        };
+        Some(RenameItemTitleIds {
+            by_media_file,
+            by_collection,
+        })
+    }
+
+    /// The titles owning `items`, keyed by id, in one read. `None` when the
+    /// owners are not known or the read failed; callers then look each item
+    /// up on its own.
+    async fn rename_titles_for_items<'a>(
+        &self,
+        items: impl Iterator<Item = &'a RenameApplyItemResult>,
+        item_title_ids: Option<&RenameItemTitleIds>,
+    ) -> Option<HashMap<String, Title>> {
+        let item_title_ids = item_title_ids?;
+        let title_ids = items
+            .filter_map(|item| item_title_ids.title_id_for_result(item))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if title_ids.is_empty() {
+            return Some(HashMap::new());
+        }
+        match self.services.catalog.titles.get_by_ids(&title_ids).await {
+            Ok(titles) => Some(
+                titles
+                    .into_iter()
+                    .map(|title| (title.id.clone(), title))
+                    .collect(),
+            ),
+            Err(error) => {
+                warn!(error = %error, "reading renamed titles failed; resolving per item");
+                None
+            }
+        }
+    }
+
+    /// [`Self::resolve_title_for_rename_item`] answered from the reads made
+    /// once for the apply, when they succeeded.
+    async fn rename_item_title(
+        &self,
+        item: &RenameApplyItemResult,
+        item_title_ids: Option<&RenameItemTitleIds>,
+        titles: Option<&HashMap<String, Title>>,
+    ) -> AppResult<Option<Title>> {
+        match (item_title_ids, titles) {
+            (Some(item_title_ids), Some(titles)) => Ok(item_title_ids
+                .title_id_for_result(item)
+                .and_then(|title_id| titles.get(title_id))
+                .cloned()),
+            _ => self.resolve_title_for_rename_item(item).await,
+        }
+    }
+
+    /// The id of the title owning `item`. A per-item lookup that fails counts
+    /// as no title, as it always has.
+    async fn rename_item_title_id(
+        &self,
+        item: &RenameApplyItemResult,
+        item_title_ids: Option<&RenameItemTitleIds>,
+    ) -> Option<String> {
+        match item_title_ids {
+            Some(item_title_ids) => item_title_ids.title_id_for_result(item).map(str::to_owned),
+            None => self
+                .resolve_title_for_rename_item(item)
+                .await
+                .ok()
+                .flatten()
+                .map(|title| title.id),
+        }
+    }
+
+    /// Record the new path of every applied media-file item that has no
+    /// collection, [`RENAME_PATH_WRITE_CHUNK`] items per transaction. Returns,
+    /// per item, whether its path is now recorded; an item left `false` is
+    /// written by [`Self::persist_rename_item_paths`].
+    async fn persist_rename_media_paths_batched(
+        &self,
+        item_results: &[RenameApplyItemResult],
+    ) -> Vec<bool> {
+        let mut persisted = vec![false; item_results.len()];
+        let batchable = item_results
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.status == RenameApplyStatus::Applied && item.collection_id.is_none()
+            })
+            .filter_map(|(index, item)| {
+                Some((index, item.media_file_id.clone()?, item.final_path.clone()?))
+            })
+            .collect::<Vec<_>>();
+        // One item gains nothing from a batch; it is written on its own path.
+        if batchable.len() < 2 {
+            return persisted;
+        }
+        for chunk in batchable.chunks(RENAME_PATH_WRITE_CHUNK) {
+            let paths = chunk
+                .iter()
+                .map(|(_, file_id, final_path)| (file_id.clone(), final_path.clone()))
+                .collect::<Vec<_>>();
+            match self
+                .services
+                .library
+                .media_files
+                .update_media_file_paths(&paths)
+                .await
+            {
+                Ok(()) => {
+                    for (index, _, _) in chunk {
+                        persisted[*index] = true;
+                    }
+                }
+                Err(error) => warn!(
+                    error = %error,
+                    items = chunk.len(),
+                    "batched rename path write failed; writing the items one by one"
+                ),
+            }
+        }
+        persisted
     }
 
     async fn persist_rename_item_paths(
@@ -2256,13 +2576,24 @@ impl AppUseCase {
         );
         plan.title_folders = title_folders;
         plan.folder_repairs = folder_repairs;
+        // First title wins for a repeated id, as a linear search would.
+        let mut titles_by_id = HashMap::with_capacity(titles.len());
+        for title in titles {
+            titles_by_id.entry(title.id.as_str()).or_insert(title);
+        }
+        let mut roots_by_library = HashMap::<(String, MediaFacet), Vec<_>>::new();
         for planned in &plan.title_folders {
-            let Some(title) = titles.iter().find(|title| title.id == planned.title_id) else {
+            let Some(title) = titles_by_id.get(planned.title_id.as_str()).copied() else {
                 continue;
             };
-            let roots = self
-                .root_folders_for_library(&title.library_id, &title.facet)
-                .await?;
+            let roots_key = (title.library_id.clone(), title.facet.clone());
+            if !roots_by_library.contains_key(&roots_key) {
+                let roots = self
+                    .root_folders_for_library(&title.library_id, &title.facet)
+                    .await?;
+                roots_by_library.insert(roots_key.clone(), roots);
+            }
+            let roots = &roots_by_library[&roots_key];
             let proposed = stored_path_to_path_buf(&planned.folder_path);
             let root = roots
                 .iter()
@@ -2732,13 +3063,13 @@ impl AppUseCase {
         title: &Title,
         effective_language: &str,
     ) -> Title {
+        if !rename_title_metadata_is_stale(title, effective_language) {
+            return title.clone();
+        }
         let metadata_language = title
             .metadata_language
             .as_deref()
             .and_then(crate::normalize_metadata_language_code);
-        if metadata_language.as_deref() == Some(effective_language) {
-            return title.clone();
-        }
 
         match self
             .hydrate_title_single_apq_with_language(
@@ -2778,9 +3109,10 @@ impl AppUseCase {
         if plan.facet != MediaFacet::Movie {
             return Ok(());
         }
+        let moving_paths = rename_items_moving_to_another_folder(&plan.items);
         for planned in &plan.title_folders {
             if self
-                .additional_movie_folder_move_blocked(planned, &plan.items)
+                .additional_movie_folder_move_blocked_by(planned, &moving_paths)
                 .await?
             {
                 return Err(AppError::validation_refused(
@@ -2799,6 +3131,20 @@ impl AppUseCase {
         planned: &RenamePlanTitleFolder,
         items: &[RenamePlanItem],
     ) -> AppResult<bool> {
+        self.additional_movie_folder_move_blocked_by(
+            planned,
+            &rename_items_moving_to_another_folder(items),
+        )
+        .await
+    }
+
+    /// [`Self::additional_movie_folder_move_blocked`] given the current paths
+    /// of the items that move a file into another folder.
+    async fn additional_movie_folder_move_blocked_by(
+        &self,
+        planned: &RenamePlanTitleFolder,
+        moving_paths: &HashSet<&str>,
+    ) -> AppResult<bool> {
         let files = self
             .services
             .library
@@ -2808,19 +3154,7 @@ impl AppUseCase {
         let moves_primary = files
             .iter()
             .filter(|file| file.role.is_primary())
-            .any(|file| {
-                items.iter().any(|item| {
-                    item.current_path == file.file_path
-                        && matches!(
-                            item.write_action,
-                            RenameWriteAction::Move | RenameWriteAction::Replace
-                        )
-                        && item.proposed_path.as_deref().is_some_and(|target| {
-                            stored_path_to_path_buf(target).parent()
-                                != stored_path_to_path_buf(&item.current_path).parent()
-                        })
-                })
-            });
+            .any(|file| moving_paths.contains(file.file_path.as_str()));
         Ok(moves_primary
             && files.iter().any(|file| {
                 !file.role.is_primary()
@@ -2991,6 +3325,36 @@ impl AppUseCase {
 
         Ok(default)
     }
+}
+
+/// Whether applying a rename first refreshes the title's metadata in the
+/// language the rename renders: true when the stored metadata is in another
+/// language, or in none.
+fn rename_title_metadata_is_stale(title: &Title, effective_language: &str) -> bool {
+    title
+        .metadata_language
+        .as_deref()
+        .and_then(crate::normalize_metadata_language_code)
+        .as_deref()
+        != Some(effective_language)
+}
+
+/// Current paths of the plan items that move or replace a file into a
+/// different folder than the one it is in.
+fn rename_items_moving_to_another_folder(items: &[RenamePlanItem]) -> HashSet<&str> {
+    items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.write_action,
+                RenameWriteAction::Move | RenameWriteAction::Replace
+            ) && item.proposed_path.as_deref().is_some_and(|target| {
+                stored_path_to_path_buf(target).parent()
+                    != stored_path_to_path_buf(&item.current_path).parent()
+            })
+        })
+        .map(|item| item.current_path.as_str())
+        .collect()
 }
 
 fn parse_collision_policy(raw: &str) -> Option<RenameCollisionPolicy> {
@@ -5978,6 +6342,10 @@ pub struct RenameTitlesJobAccepted {
     pub accepted_title_ids: Vec<String>,
 }
 
+/// How often a running title rename job writes its progress row.
+const TITLE_RENAME_PROGRESS_PERSIST_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(1);
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TitleRenameProgress {
@@ -6038,7 +6406,25 @@ impl AppUseCase {
             ));
         }
 
+        // One read for the whole request; each title is still checked in
+        // request order, so the first refusal is the one reported.
+        let distinct_ids = title_ids
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut loaded = self
+            .services
+            .catalog
+            .titles
+            .get_by_ids(&distinct_ids)
+            .await?
+            .into_iter()
+            .map(|title| (title.id.clone(), title))
+            .collect::<HashMap<_, _>>();
         let mut seen = HashSet::new();
+        let mut permitted_libraries = HashSet::new();
         let mut titles = Vec::with_capacity(title_ids.len());
         for title_id in title_ids {
             if !seen.insert(title_id.clone()) {
@@ -6047,24 +6433,21 @@ impl AppUseCase {
                     format!("duplicate title id in rename request: {title_id}"),
                 ));
             }
-            let title = self
-                .services
-                .catalog
-                .titles
-                .get_by_id(title_id)
-                .await?
-                .ok_or_else(|| {
-                    AppError::not_found_reason(
-                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
-                        format!("title {title_id}"),
-                    )
-                })?;
-            self.require_library_permission(
-                actor,
-                &title.library_id,
-                scryer_domain::LibraryPermission::ManageTitles,
-            )
-            .await?;
+            let title = loaded.remove(title_id).ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
+            if !permitted_libraries.contains(&title.library_id) {
+                self.require_library_permission(
+                    actor,
+                    &title.library_id,
+                    scryer_domain::LibraryPermission::ManageTitles,
+                )
+                .await?;
+                permitted_libraries.insert(title.library_id.clone());
+            }
             if title.facet != facet {
                 return Err(AppError::validation_refused(
                     crate::error_reasons::library::REQUESTED_FACET_DOES_NOT_MATCH_TITLE_FACET,
@@ -6170,23 +6553,29 @@ impl AppUseCase {
         let mut succeeded = 0usize;
         let mut files_renamed = 0usize;
         let mut failures = Vec::new();
+        let mut progress_persisted_at: Option<std::time::Instant> = None;
 
         for (index, title) in titles.iter().enumerate() {
-            let _ = self
-                .update_title_rename_progress(
-                    &mut run,
-                    TitleRenameProgress {
-                        status: crate::JobRunStatus::Running.as_str().to_string(),
-                        phase: "renaming".to_string(),
-                        total,
-                        processed: index,
-                        succeeded,
-                        failed: failures.len(),
-                        files_renamed,
-                        current_title: Some(title.name.clone()),
-                    },
-                )
-                .await;
+            let progress = TitleRenameProgress {
+                status: crate::JobRunStatus::Running.as_str().to_string(),
+                phase: "renaming".to_string(),
+                total,
+                processed: index,
+                succeeded,
+                failed: failures.len(),
+                files_renamed,
+                current_title: Some(title.name.clone()),
+            };
+            // Live progress follows every title; the row is written at a
+            // bounded rate, and the finish write records the final counts.
+            if progress_persisted_at
+                .is_none_or(|at| at.elapsed() >= TITLE_RENAME_PROGRESS_PERSIST_INTERVAL)
+            {
+                progress_persisted_at = Some(std::time::Instant::now());
+                let _ = self.update_title_rename_progress(&mut run, progress).await;
+            } else {
+                self.publish_title_rename_progress(&mut run, progress).await;
+            }
 
             // Each title is previewed and applied inside the job so the plan is
             // built against what is on disk now, not what the caller saw.
@@ -6195,8 +6584,14 @@ impl AppUseCase {
                     .preview_rename_for_title(&actor, &title.id, title.facet.clone())
                     .await?;
                 let fingerprint = preview.fingerprint.clone();
-                self.apply_rename_for_title(&actor, &title.id, title.facet.clone(), &fingerprint)
-                    .await
+                self.apply_rename_for_title_after_preview(
+                    &actor,
+                    &title.id,
+                    title.facet.clone(),
+                    preview,
+                    &fingerprint,
+                )
+                .await
             }
             .await;
 
@@ -6255,6 +6650,21 @@ impl AppUseCase {
             .upsert_active_run(crate::JobRun::from_record(&updated, None))
             .await;
         Ok(())
+    }
+
+    /// Show progress on the live job run without writing the row.
+    async fn publish_title_rename_progress(
+        &self,
+        run: &mut crate::JobRunRecord,
+        progress: TitleRenameProgress,
+    ) {
+        run.progress_json = serde_json::to_string(&progress).ok();
+        run.updated_at = chrono::Utc::now();
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(crate::JobRun::from_record(run, None))
+            .await;
     }
 
     async fn finish_title_rename_job(

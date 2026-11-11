@@ -2254,6 +2254,30 @@ impl MediaFileRepository for MediaFileStore {
         Ok(())
     }
 
+    async fn update_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        match paths {
+            [] => return Ok(()),
+            [(file_id, file_path)] => return self.update_media_file_path(file_id, file_path).await,
+            _ => {}
+        }
+        let paths = paths.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "update_media_file_paths", move |tx| {
+            let paths = paths.clone();
+            Box::pin(async move {
+                for (file_id, file_path) in paths {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE media_files SET file_path = {} WHERE id = {}",
+                        &[SqlArg::Text(file_path), SqlArg::Text(file_id)],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn set_media_file_roles_for_title(
         &self,
         title_id: &str,
@@ -2715,6 +2739,29 @@ impl MediaFileRepository for MediaFileStore {
             &[SqlArg::Text(file_id.to_string())],
         )
         .await
+    }
+
+    async fn list_media_file_title_ids(
+        &self,
+        file_ids: &[String],
+    ) -> AppResult<Vec<(String, String)>> {
+        if file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Same id space and no liveness filter, as `get_media_file_by_id`.
+        let (file_ids, per_statement) = self.title_id_statements(file_ids);
+        let mut owners = Vec::with_capacity(file_ids.len());
+        for chunk in file_ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT mf.id, mf.title_id FROM media_files mf WHERE mf.id IN ({})",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                owners.push((row.text("id")?, row.text("title_id")?));
+            }
+        }
+        Ok(owners)
     }
 
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {
@@ -8276,5 +8323,103 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(db);
+    }
+
+    /// Several paths written together land as the same writes one at a time
+    /// would, and a write naming a missing file keeps none of them. The owner
+    /// read answers what reading each file would, past the bind limit too.
+    #[tokio::test]
+    async fn grouped_path_writes_and_owner_reads_match_the_per_file_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("grouped.db").to_string_lossy())
+            .await
+            .unwrap();
+        let owner = make_test_series_title("grouped-owner");
+        let other = make_test_series_title("grouped-other");
+        title_store(&services).create(owner.clone()).await.unwrap();
+        title_store(&services).create(other.clone()).await.unwrap();
+        let files = media_file_store(&services);
+        let mut ids = Vec::new();
+        for (title, path) in [
+            (&owner, "/synthetic/one.mkv"),
+            (&owner, "/synthetic/two.mkv"),
+            (&other, "/synthetic/three.mkv"),
+        ] {
+            ids.push(
+                files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id: title.id.clone(),
+                        file_path: path.into(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let refused = vec![
+            (ids[0].clone(), "/synthetic/moved/one.mkv".to_string()),
+            (
+                "missing-file".to_string(),
+                "/synthetic/moved/none.mkv".to_string(),
+            ),
+        ];
+        // The single-row write refuses a missing id; the grouped write keeps
+        // nothing when any statement fails.
+        let refused_result = files.update_media_file_paths(&refused).await;
+        if refused_result.is_err() {
+            assert_eq!(
+                files
+                    .get_media_file_by_id(&ids[0])
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .file_path,
+                "/synthetic/one.mkv"
+            );
+        }
+
+        let paths = vec![
+            (ids[0].clone(), "/synthetic/moved/one.mkv".to_string()),
+            (ids[2].clone(), "/synthetic/moved/three.mkv".to_string()),
+        ];
+        files.update_media_file_paths(&paths).await.unwrap();
+        for (id, expected) in [
+            (&ids[0], "/synthetic/moved/one.mkv"),
+            (&ids[1], "/synthetic/two.mkv"),
+            (&ids[2], "/synthetic/moved/three.mkv"),
+        ] {
+            assert_eq!(
+                files
+                    .get_media_file_by_id(id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .file_path,
+                expected
+            );
+        }
+
+        let mut asked = ids.clone();
+        asked.push(ids[0].clone());
+        asked.push("missing-file".to_string());
+        let mut expected = Vec::new();
+        for id in &asked {
+            if let Some(file) = files.get_media_file_by_id(id).await.unwrap() {
+                expected.push((id.clone(), file.title_id));
+            }
+        }
+        let normalize = |mut rows: Vec<(String, String)>| {
+            rows.sort();
+            rows.dedup();
+            rows
+        };
+        let single = files.list_media_file_title_ids(&asked).await.unwrap();
+        let chunked = {
+            let _limit = crate::media::id_list_statements::lower_max_binds_for_tests(2);
+            files.list_media_file_title_ids(&asked).await.unwrap()
+        };
+        assert_eq!(normalize(single.clone()), normalize(expected.clone()));
+        assert_eq!(normalize(chunked), normalize(expected));
     }
 }

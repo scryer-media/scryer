@@ -267,6 +267,10 @@ pub(crate) struct MockMediaFileRepo {
     /// store projects them (`NULL AS episode_id`): the links are only in
     /// `episode_ids`. Off by default for fixtures written before this switch.
     pub(super) scoped_rows_without_episode_id: bool,
+    /// Stands in for a store failure while writing several file paths at once.
+    pub(super) grouped_path_write_error: Arc<Mutex<Option<String>>>,
+    /// How many grouped path writes were attempted.
+    pub(super) grouped_path_writes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl MockMediaFileRepo {
@@ -1111,6 +1115,29 @@ impl MediaFileRepository for MockMediaFileRepo {
             .find(|entry| entry.id == file_id)
             .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
         entry.file_path = file_path.to_string();
+        Ok(())
+    }
+
+    async fn update_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        self.grouped_path_writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(message) = self.grouped_path_write_error.lock().await.clone() {
+            return Err(AppError::Repository(message));
+        }
+        // All or nothing, as the SQL store's transaction is.
+        let mut list = self.store.lock().await;
+        if let Some((missing, _)) = paths
+            .iter()
+            .find(|(file_id, _)| !list.iter().any(|entry| &entry.id == file_id))
+        {
+            return Err(AppError::NotFound(format!("media file {missing}")));
+        }
+        for (file_id, file_path) in paths {
+            // The same row the single write would change.
+            if let Some(entry) = list.iter_mut().find(|entry| &entry.id == file_id) {
+                entry.file_path = file_path.clone();
+            }
+        }
         Ok(())
     }
 
