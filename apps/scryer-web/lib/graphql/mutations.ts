@@ -2671,7 +2671,27 @@ export const validateRuleSetMutation = `mutation ValidateRuleSet($input: Validat
   }
 }`;
 
-export const testRuleSetMutation = `mutation TestRuleSet($input: TestRuleSetInput!) {
+export const translateArrCustomFormatsMutation = `mutation TranslateArrCustomFormats($input: TranslateArrCustomFormatsInput!) {
+  translateArrCustomFormats(input: $input) {
+    regoSource
+    name
+    description
+    appliedFacets
+    formats {
+      id
+      name
+      status
+      diagnostics { code severity message location formatId specificationIndex }
+      suggestedScores { label score }
+      specifications { index negate }
+      inspectionDiagnostics { code severity message location formatId specificationIndex }
+    }
+    diagnostics { code severity message location formatId specificationIndex }
+    inspectionDiagnostics { code severity message location formatId specificationIndex }
+  }
+}`;
+
+export const testRuleSetMutation =`mutation TestRuleSet($input: TestRuleSetInput!) {
   testRuleSet(input: $input) {
     score
     releaseName

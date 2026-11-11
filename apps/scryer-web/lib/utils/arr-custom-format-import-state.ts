@@ -1,8 +1,63 @@
-import type {
-  ArrSource,
-  Diagnostic,
-  ImportedCustomFormat,
-} from "@/lib/arr-custom-format/types";
+import type { Translate } from "@/components/root/types";
+import {
+  graphQlErrorExtension,
+  userFacingGraphQlErrorMessage,
+} from "../graphql/error-message.ts";
+
+export type ArrSource = "sonarr" | "radarr";
+
+export type ArrDiagnostic = {
+  code: string;
+  severity: "ERROR" | "WARNING" | "INFO";
+  message: string;
+  location?: string | null;
+  formatId?: string | null;
+  specificationIndex?: number | null;
+};
+
+export type ArrCustomFormatPayload = {
+  id: string;
+  name: string;
+  status: "TRANSLATED" | "DISABLED";
+  diagnostics: ArrDiagnostic[];
+  suggestedScores: { label: string; score: number }[];
+  specifications: { index: number; negate: boolean }[];
+  inspectionDiagnostics: ArrDiagnostic[];
+};
+
+/** The `translateArrCustomFormats` result. */
+export type ArrCustomFormatTranslation = {
+  regoSource: string;
+  name: string;
+  description: string;
+  appliedFacets: string[];
+  formats: ArrCustomFormatPayload[];
+  diagnostics: ArrDiagnostic[];
+  inspectionDiagnostics: ArrDiagnostic[];
+};
+
+/** A reviewed format, with its suggested scores keyed by export label. */
+export type ReviewedCustomFormat = {
+  id: string;
+  name: string;
+  specifications: { negate: boolean }[];
+  suggestedScores: Record<string, number>;
+  inspectionDiagnostics?: ArrDiagnostic[];
+};
+
+export function reviewedFormat(
+  format: ArrCustomFormatPayload,
+): ReviewedCustomFormat {
+  return {
+    id: format.id,
+    name: format.name,
+    specifications: format.specifications,
+    suggestedScores: Object.fromEntries(
+      format.suggestedScores.map(({ label, score }) => [label, score]),
+    ),
+    inspectionDiagnostics: format.inspectionDiagnostics,
+  };
+}
 
 const MIN_I32 = -2_147_483_648;
 const MAX_I32 = 2_147_483_647;
@@ -11,12 +66,12 @@ function validScore(value: number): boolean {
   return Number.isSafeInteger(value) && value >= MIN_I32 && value <= MAX_I32;
 }
 
-export function candidateScores(format: ImportedCustomFormat): number[] {
+export function candidateScores(format: ReviewedCustomFormat): number[] {
   return [...new Set(Object.values(format.suggestedScores).filter(validScore))];
 }
 
 export function hasScoreConflict(
-  diagnostics: Diagnostic[],
+  diagnostics: ArrDiagnostic[],
   formatId: string,
 ): boolean {
   return diagnostics.some(
@@ -27,8 +82,8 @@ export function hasScoreConflict(
 }
 
 export function defaultScore(
-  format: ImportedCustomFormat,
-  diagnostics: Diagnostic[],
+  format: ReviewedCustomFormat,
+  diagnostics: ArrDiagnostic[],
 ): string {
   const recommendation = recommendScore(format, diagnostics);
   return recommendation ? String(recommendation.value) : "";
@@ -48,8 +103,8 @@ export type ScoreRecommendation = {
  * Never infer a preference from an implementation, regex, or negate flag.
  */
 export function recommendScore(
-  format: ImportedCustomFormat,
-  diagnostics: Diagnostic[],
+  format: ReviewedCustomFormat,
+  diagnostics: ArrDiagnostic[],
 ): ScoreRecommendation | null {
   if (
     hasScoreConflict(
@@ -75,7 +130,7 @@ export function recommendScore(
   if (
     !format.specifications.length ||
     [...diagnostics, ...(format.inspectionDiagnostics ?? [])].some(
-      (item) => item.level === "error" && item.formatId === format.id,
+      (item) => item.severity === "ERROR" && item.formatId === format.id,
     )
   )
     return null;
@@ -120,11 +175,12 @@ export function sourceFacets(source: ArrSource): string[] {
 }
 
 export function collectFormatScores(
-  formats: ImportedCustomFormat[],
+  formats: ReviewedCustomFormat[],
   scores: Record<string, string>,
 ):
-  { scores: Record<string, number> } | { missingFormat: ImportedCustomFormat } {
-  const result: Record<string, number> = {};
+  | { scores: { formatId: string; score: number }[] }
+  | { missingFormat: ReviewedCustomFormat } {
+  const result: { formatId: string; score: number }[] = [];
   for (const format of formats) {
     const value = scores[format.id]?.trim() ?? "";
     if (!/^-?\d+$/.test(value)) {
@@ -134,15 +190,57 @@ export function collectFormatScores(
     if (!validScore(score)) {
       return { missingFormat: format };
     }
-    result[format.id] = score;
+    result.push({ formatId: format.id, score });
   }
   return { scores: result };
 }
 
-/** Worker responses are ignored after cancellation, a retry, or newer input. */
+/** Responses are ignored after cancellation, a retry, or newer input. */
 export function isCurrentTranslationRequest(
   activeRequestId: number,
   responseRequestId: number,
 ) {
   return activeRequestId === responseRequestId;
+}
+
+/**
+ * The server names why it refused a paste as `extensions.reason` on a
+ * `VALIDATION_ERROR`, with the limit it applied as a separate extension.
+ */
+export const ARR_IMPORT_REFUSAL_KEYS: Readonly<
+  Record<string, { key: string; fact?: string }>
+> = {
+  ARR_CUSTOM_FORMAT_JSON_TOO_LARGE: {
+    key: "settings.arrImportRefusalTooLarge",
+    fact: "maxBytes",
+  },
+  ARR_CUSTOM_FORMAT_JSON_INVALID: { key: "settings.arrImportInvalidJson" },
+  ARR_CUSTOM_FORMAT_FORMATS_EMPTY: { key: "settings.arrImportRefusalEmpty" },
+  ARR_CUSTOM_FORMAT_FORMATS_TOO_MANY: {
+    key: "settings.arrImportRefusalTooMany",
+    fact: "maxFormats",
+  },
+};
+
+/**
+ * What to show for a failed import request: the translated reason when the
+ * server named one this client knows, otherwise the server's own sentence, and
+ * `fallback` when the failure carries no usable sentence.
+ */
+export function arrImportErrorMessage(
+  error: unknown,
+  t: Translate,
+  fallback: string,
+): string {
+  const reason = graphQlErrorExtension(error, "VALIDATION_ERROR", "reason");
+  const refusal =
+    reason !== null && Object.hasOwn(ARR_IMPORT_REFUSAL_KEYS, reason)
+      ? ARR_IMPORT_REFUSAL_KEYS[reason]!
+      : null;
+  if (!refusal) return userFacingGraphQlErrorMessage(error, fallback, t);
+  if (!refusal.fact) return t(refusal.key);
+  const value = graphQlErrorExtension(error, "VALIDATION_ERROR", refusal.fact);
+  return value === null
+    ? userFacingGraphQlErrorMessage(error, fallback, t)
+    : t(refusal.key, { [refusal.fact]: value });
 }

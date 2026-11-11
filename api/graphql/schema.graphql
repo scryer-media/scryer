@@ -965,6 +965,208 @@ type ApproveMediaRequestPayload {
 }
 
 """
+One finding about a pasted custom format.
+"""
+type ArrCustomFormatDiagnosticPayload {
+	"""
+	Stable condition code, such as `regex.parse_failed`.
+	"""
+	code: String!
+	"""
+	Diagnostic severity.
+	"""
+	severity: ArrDiagnosticSeverity!
+	"""
+	Human-readable explanation for display.
+	"""
+	message: String!
+	"""
+	JSON-path-like location in the pasted document, when known.
+	"""
+	location: String
+	"""
+	Format the diagnostic belongs to, when it belongs to one.
+	"""
+	formatId: String
+	"""
+	Zero-based specification index within the format, when known.
+	"""
+	specificationIndex: Int
+}
+
+"""
+One pasted custom format and how it translated.
+"""
+type ArrCustomFormatPayload {
+	"""
+	Format ID; pass it back with a score to translate the format.
+	"""
+	id: String!
+	"""
+	Format name.
+	"""
+	name: String!
+	"""
+	Format description, when the export has one.
+	"""
+	description: String
+	"""
+	Translation status.
+	"""
+	status: ArrCustomFormatStatus!
+	"""
+	Why a disabled format was disabled. Empty for translated formats.
+	"""
+	diagnostics: [ArrCustomFormatDiagnosticPayload!]!
+	"""
+	Scores the export suggests, in export order.
+	"""
+	suggestedScores: [ArrCustomFormatSuggestedScorePayload!]!
+	"""
+	Specifications the import read.
+	"""
+	specifications: [ArrCustomFormatSpecificationPayload!]!
+	"""
+	What inspection found in this format.
+	"""
+	inspectionDiagnostics: [ArrCustomFormatDiagnosticPayload!]!
+}
+
+"""
+The score the operator chose for one pasted custom format.
+"""
+input ArrCustomFormatScoreInput {
+	"""
+	Format ID from a previous translation of the same paste.
+	"""
+	formatId: String!
+	"""
+	Score added when the format matches.
+	"""
+	score: Int!
+}
+
+"""
+One specification the import read from a format.
+"""
+type ArrCustomFormatSpecificationPayload {
+	"""
+	Zero-based index in the pasted specifications array.
+	"""
+	index: Int!
+	"""
+	Arr implementation name.
+	"""
+	implementation: String!
+	"""
+	Specification name.
+	"""
+	name: String!
+	"""
+	Whether the condition is negated.
+	"""
+	negate: Boolean!
+	"""
+	Whether the condition is required.
+	"""
+	required: Boolean!
+}
+
+"""
+Whether a pasted custom format became an active condition.
+"""
+enum ArrCustomFormatStatus {
+	"""
+	The format scores matching releases.
+	"""
+	TRANSLATED
+	"""
+	The format is kept as a disabled stub that never matches.
+	"""
+	DISABLED
+}
+
+"""
+A score the export suggests for a format.
+"""
+type ArrCustomFormatSuggestedScorePayload {
+	"""
+	Score label from the export, such as `default`.
+	"""
+	label: String!
+	"""
+	Suggested score; exports may carry non-integer values.
+	"""
+	score: Float!
+}
+
+"""
+Rego source generated from pasted custom formats. Nothing is saved.
+"""
+type ArrCustomFormatTranslationPayload {
+	"""
+	Generated Rego source for the rule editor.
+	"""
+	regoSource: String!
+	"""
+	Suggested rule name.
+	"""
+	name: String!
+	"""
+	Suggested rule description.
+	"""
+	description: String!
+	"""
+	Media facets the rule should apply to.
+	"""
+	appliedFacets: [String!]!
+	"""
+	Every format inspection could read, in paste order.
+	"""
+	formats: [ArrCustomFormatPayload!]!
+	"""
+	Diagnostics of the disabled formats.
+	"""
+	diagnostics: [ArrCustomFormatDiagnosticPayload!]!
+	"""
+	Everything inspection found, including formats it could not read.
+	"""
+	inspectionDiagnostics: [ArrCustomFormatDiagnosticPayload!]!
+}
+
+"""
+How much a custom-format import diagnostic matters.
+"""
+enum ArrDiagnosticSeverity {
+	"""
+	The format is disabled in the generated rule.
+	"""
+	ERROR
+	"""
+	The format translates, but needs the operator's attention.
+	"""
+	WARNING
+	"""
+	Informational only.
+	"""
+	INFO
+}
+
+"""
+The application a custom-format export came from.
+"""
+enum ArrSourceApplication {
+	"""
+	Sonarr custom formats.
+	"""
+	SONARR
+	"""
+	Radarr custom formats.
+	"""
+	RADARR
+}
+
+"""
 Assigns a tracked download to a title and an explicit acquisition scope.
 """
 input AssignTrackedDownloadTitleInput {
@@ -21150,6 +21352,16 @@ type MutationRoot {
 		input: SetTitleRequiredAudioInput!
 	): SetTitleRequiredAudioPayload!
 	"""
+	Translate pasted Sonarr or Radarr custom-format JSON into Rego source
+	for the rule editor without saving anything.
+	"""
+	translateArrCustomFormats(
+		"""
+		Pasted custom-format JSON, its source application, and per-format scores.
+		"""
+		input: TranslateArrCustomFormatsInput!
+	): ArrCustomFormatTranslationPayload!
+	"""
 	Validate rule source without saving it, using a supplied or temporary rule identity.
 	"""
 	validateRuleSet(
@@ -33557,6 +33769,25 @@ input TrackedRulePackPriorityInput {
 	Local evaluation priority.
 	"""
 	priority: Int!
+}
+
+"""
+Pasted Sonarr or Radarr custom-format JSON and the scores to apply.
+"""
+input TranslateArrCustomFormatsInput {
+	"""
+	The application the JSON was exported from.
+	"""
+	sourceApplication: ArrSourceApplication!
+	"""
+	One custom format object, or an array of them, as exported.
+	"""
+	customFormatJson: String!
+	"""
+	Scores per format ID. A format without a score translates as disabled,
+	so an empty list reviews the paste.
+	"""
+	scores: [ArrCustomFormatScoreInput!]!
 }
 
 """

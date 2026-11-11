@@ -6098,6 +6098,56 @@ pub mod scripts {
     pub const ALL: &[&str] = &[SCHEDULE_INVALID];
 }
 
+pub mod arr_custom_formats {
+    /// The pasted custom-format JSON is larger than the import accepts.
+    pub const JSON_TOO_LARGE: &str = "ARR_CUSTOM_FORMAT_JSON_TOO_LARGE";
+    /// The pasted text is not valid JSON.
+    pub const JSON_INVALID: &str = "ARR_CUSTOM_FORMAT_JSON_INVALID";
+    /// The pasted JSON is an empty array.
+    pub const FORMATS_EMPTY: &str = "ARR_CUSTOM_FORMAT_FORMATS_EMPTY";
+    /// The pasted JSON holds more custom formats than one import accepts.
+    pub const FORMATS_TOO_MANY: &str = "ARR_CUSTOM_FORMAT_FORMATS_TOO_MANY";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        JSON_TOO_LARGE,
+        JSON_INVALID,
+        FORMATS_EMPTY,
+        FORMATS_TOO_MANY,
+    ];
+
+    /// The largest accepted paste, in UTF-8 bytes.
+    pub const MAX_BYTES_FACT: &str = "maxBytes";
+    /// The most custom formats one import accepts.
+    pub const MAX_FORMATS_FACT: &str = "maxFormats";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[MAX_BYTES_FACT, MAX_FORMATS_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6143,6 +6193,7 @@ mod tests {
             ("NOTIFICATION_", notifications::ALL),
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),
+            ("ARR_CUSTOM_FORMAT_", arr_custom_formats::ALL),
         ];
         let mut distinct = std::collections::BTreeSet::new();
         for (prefix, codes) in areas {

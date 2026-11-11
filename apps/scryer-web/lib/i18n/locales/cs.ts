@@ -2560,6 +2560,11 @@ const cs: LocaleDictionary = {
     "V tomto JSON nebyly nalezeny žádné platné vlastní formáty.",
   "settings.arrImportInvalidJson":
     "Vložte platný JSON exportovaný ze Sonarru nebo Radarru.",
+  "settings.arrImportRefusalTooLarge":
+    "Vložte nejvýše {{maxBytes}} bajtů JSON.",
+  "settings.arrImportRefusalEmpty": "Vložte alespoň jeden vlastní formát.",
+  "settings.arrImportRefusalTooMany":
+    "Vložte najednou nejvýše {{maxFormats}} vlastních formátů.",
   "settings.arrImportReviewFailed":
     "Tyto vlastní formáty se nepodařilo zkontrolovat.",
   "settings.arrImportScore": "Skóre",

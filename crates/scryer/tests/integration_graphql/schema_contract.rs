@@ -907,8 +907,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Queueing a saved standby release with conflict confirmation adds
     // `queueStandbyRelease`: 291->292.
     assert!(mutation_field_names.contains(&"queueStandbyRelease"));
+    // The server-side Arr custom-format translator adds
+    // `translateArrCustomFormats`: 292->293.
+    assert!(mutation_field_names.contains(&"translateArrCustomFormats"));
     assert_eq!(
-        mutation_field_count, 292,
+        mutation_field_count, 293,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1397,19 +1400,36 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     for name in ["AudioLanguagePriorityValue", "QualityRankingModeValue"] {
         assert!(!public_type_names.contains(&name), "retired type {name}");
     }
+    // The Arr custom-format translator adds its result objects, its input and
+    // score input, and its source, severity and status enums: public types
+    // 1022->1032, OBJECT 552->557, INPUT_OBJECT 247->249, ENUM 211->214.
+    for name in [
+        "ArrCustomFormatTranslationPayload",
+        "ArrCustomFormatPayload",
+        "ArrCustomFormatDiagnosticPayload",
+        "ArrCustomFormatSuggestedScorePayload",
+        "ArrCustomFormatSpecificationPayload",
+        "TranslateArrCustomFormatsInput",
+        "ArrCustomFormatScoreInput",
+        "ArrSourceApplication",
+        "ArrDiagnosticSeverity",
+        "ArrCustomFormatStatus",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1022,
+        1032,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 552);
+    assert_eq!(kind_count("OBJECT"), 557);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
-    assert_eq!(kind_count("INPUT_OBJECT"), 247);
+    assert_eq!(kind_count("INPUT_OBJECT"), 249);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 211);
+    assert_eq!(kind_count("ENUM"), 214);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

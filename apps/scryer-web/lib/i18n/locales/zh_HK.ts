@@ -2239,6 +2239,11 @@ const zh_HK: LocaleDictionary = {
   "settings.arrImportNoFormats": "在此 JSON 中找不到有效的自訂格式。",
   "settings.arrImportInvalidJson":
     "請貼上由 Sonarr 或 Radarr 導出的有效 JSON。",
+  "settings.arrImportRefusalTooLarge":
+    "請貼上不超過 {{maxBytes}} 位元組的 JSON。",
+  "settings.arrImportRefusalEmpty": "請至少貼上一個自訂格式。",
+  "settings.arrImportRefusalTooMany":
+    "每次最多貼上 {{maxFormats}} 個自訂格式。",
   "settings.arrImportReviewFailed": "無法審查這些自訂格式。",
   "settings.arrImportScore": "分數",
   "settings.arrImportScoreRequired": "在翻譯前請為 {{name}} 輸入整數分數。",
