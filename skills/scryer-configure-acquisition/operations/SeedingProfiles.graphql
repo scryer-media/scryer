@@ -1,0 +1,10 @@
+# Seeding profiles that torrent routing entries can reference.
+query SeedingProfiles {
+  seedingProfiles {
+    id
+    name
+    ratio
+    seedTimeMinutes
+    minimumSeeders
+  }
+}

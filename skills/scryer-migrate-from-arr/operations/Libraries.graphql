@@ -1,0 +1,15 @@
+# Scryer libraries and their roots. Variables: none.
+query Libraries {
+  libraries {
+    id
+    facet
+    name
+    qualityProfileId
+    roots {
+      id
+      path
+      isDefault
+      titleCount
+    }
+  }
+}

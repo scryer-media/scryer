@@ -1,0 +1,7 @@
+# Categories the client reports. Contacts the client. Variables: {"clientId": "..."}
+query DownloadClientCategories($clientId: ID!) {
+  downloadClientCategories(clientId: $clientId) {
+    supported
+    categories
+  }
+}

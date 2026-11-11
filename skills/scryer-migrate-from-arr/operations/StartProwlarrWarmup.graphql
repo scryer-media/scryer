@@ -1,0 +1,9 @@
+# Optional: read Prowlarr so its indexers can be imported. Variables:
+# {"input": {"connection": {"baseUrl": "...", "apiKey": "..."}}}
+mutation StartProwlarrWarmup($input: StartExternalImportProwlarrWarmupInput!) {
+  startExternalImportProwlarrWarmup(input: $input) {
+    sessionId
+    status
+    phase
+  }
+}

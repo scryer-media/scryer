@@ -1,0 +1,10 @@
+# Register one tag. Side effect: confirm the batch first.
+# Variables: {"input": {"label": "...", "description": null}}
+mutation CreateTitleTagDefinition($input: CreateTitleTagDefinitionInput!) {
+  createTitleTagDefinition(input: $input) {
+    definition {
+      id
+      label
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# Write. Sets the client list order. Variables: {"input": {"ids": ["...", "..."]}}
+mutation ReorderDownloadClients($input: ReorderDownloadClientConfigsInput!) {
+  reorderDownloadClientConfigs(input: $input) {
+    ids
+  }
+}

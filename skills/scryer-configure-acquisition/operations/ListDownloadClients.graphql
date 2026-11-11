@@ -1,0 +1,30 @@
+# All download clients with their stored config. Secret values come back only
+# as SecretConfigValuePayload { stored }.
+query ListDownloadClients {
+  downloadClientConfigs {
+    id
+    name
+    clientType
+    baseUrl
+    isEnabled
+    status
+    lastError
+    proxyConfigId
+    storedSecretKeys
+    config {
+      key
+      label
+      fieldType
+      required
+      role
+      value {
+        __typename
+        ... on StringConfigValuePayload { stringValue: value }
+        ... on BoolConfigValuePayload { boolValue: value }
+        ... on IntConfigValuePayload { intValue: value }
+        ... on FloatConfigValuePayload { floatValue: value }
+        ... on SecretConfigValuePayload { stored }
+      }
+    }
+  }
+}

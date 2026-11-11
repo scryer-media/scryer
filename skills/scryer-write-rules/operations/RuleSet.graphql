@@ -1,0 +1,14 @@
+# One rule set with its source. Variables: {"id": "..."}
+query RuleSet($id: ID!) {
+  ruleSet(id: $id) {
+    id
+    name
+    description
+    enabled
+    priority
+    appliedFacets
+    isManaged
+    disabledReason
+    regoSource
+  }
+}

@@ -1,0 +1,19 @@
+# Episode ids of one series or anime title, for testRuleSet's episodeId.
+# Write to a file and pick one with jq; long series return many rows.
+# Variables: {"id": "..."}
+query TitleEpisodes($id: ID!) {
+  title(id: $id) {
+    id
+    name
+    facet
+    collections {
+      collectionIndex
+      episodes {
+        id
+        seasonNumber
+        episodeNumber
+        absoluteNumber
+      }
+    }
+  }
+}

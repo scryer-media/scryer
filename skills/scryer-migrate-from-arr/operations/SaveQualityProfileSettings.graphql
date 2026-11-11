@@ -1,0 +1,12 @@
+# Add or change quality profiles. Always send replaceExisting: false so profiles not
+# listed stay as they are. Side effect: confirm first. Variables: {"input": {
+#   "profiles": [{"id": "...", "name": "...", "criteria": {...}}],
+#   "categorySelections": [], "categoryPersonaSelections": [], "replaceExisting": false}}
+mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
+  saveQualityProfileSettings(input: $input) {
+    profiles {
+      id
+      name
+    }
+  }
+}

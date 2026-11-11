@@ -1,0 +1,19 @@
+# Releases held back (delay, standby, review) for one title.
+# Variables: {"titleId": "...", "limit": 25, "offset": 0}
+query PendingReleases($titleId: ID, $limit: Int!, $offset: Int!) {
+  pendingReleases(filter: { titleId: $titleId }, limit: $limit, offset: $offset) {
+    totalCount
+    hasMore
+    items {
+      releaseTitle
+      releaseScore
+      indexerSource
+      publishedAt
+      addedAt
+      delayUntil
+      lastDecisionCode
+      role
+      status
+    }
+  }
+}

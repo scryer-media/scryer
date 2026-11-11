@@ -1,0 +1,26 @@
+# Installed download-client providers and the config fields each declares.
+query DownloadClientProviderTypes {
+  downloadClientProviderTypes {
+    providerType
+    name
+    defaultBaseUrl
+    supportsTest
+    availableHostBindings
+    dynamicConfigTriggerKeys
+    configFields {
+      key
+      label
+      fieldType
+      required
+      defaultValue
+      valueSource
+      role
+      hostBinding
+      helpText
+      advanced
+      options { value label configOverrides { key value } }
+      visibleWhen { key op values }
+      requiredWhen { key op values }
+    }
+  }
+}

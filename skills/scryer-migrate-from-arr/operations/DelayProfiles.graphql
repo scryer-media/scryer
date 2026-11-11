@@ -1,0 +1,19 @@
+# Existing delay profiles. Variables: none.
+query DelayProfiles {
+  delayProfiles {
+    id
+    name
+    usenetDelayMinutes
+    torrentDelayMinutes
+    enableUsenet
+    enableTorrent
+    preferredProtocol
+    minAgeMinutes
+    bypassScoreThreshold
+    bypassIfHighestQuality
+    appliesToFacets
+    tags
+    priority
+    enabled
+  }
+}

@@ -1,0 +1,13 @@
+# Write. Always send replaceExisting: false (merge by id). true removes every
+# profile not listed. Empty categorySelections / categoryPersonaSelections and
+# a null globalProfileId leave those unchanged.
+# Variables: {"input": SaveQualityProfileSettingsInput}
+mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
+  saveQualityProfileSettings(input: $input) {
+    globalProfileId
+    globalScoringPersona
+    categorySelections { scope overrideProfileId effectiveProfileId inheritsGlobal }
+    categoryPersonaSelections { scope overridePersona effectivePersona inheritsGlobal }
+    profiles { id name }
+  }
+}

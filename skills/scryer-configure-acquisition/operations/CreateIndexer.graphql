@@ -1,0 +1,26 @@
+# Write. Validates the connection (contacts the indexer) and adds default
+# routing entries. Variables: {"input": CreateIndexerConfigInput}
+mutation CreateIndexer($input: CreateIndexerConfigInput!) {
+  createIndexerConfig(input: $input) {
+    id
+    name
+    providerType
+    baseUrl
+    isEnabled
+    isManaged
+    enableInteractiveSearch
+    enableAutoSearch
+    proxyConfigId
+    downloadClientId
+    seedingProfileId
+    rateLimitSeconds
+    rateLimitBurst
+    maxQueriesPerMinute
+    storedSecretKeys
+    lastHealthStatus
+    lastErrorAt
+    disabledUntil
+    rateLimitedUntil
+    capsCategories { code label }
+  }
+}

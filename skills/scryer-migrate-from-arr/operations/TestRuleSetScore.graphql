@@ -1,0 +1,21 @@
+# Score one release name with a draft rule set; returns only what the replay needs.
+# Variables: {"input": {"draft": {...}, "copyDisablesSource": false, "titleId": "...",
+#   "episodeId": "...", "releaseName": "...", "sizeBytes": 0}}
+mutation TestRuleSetScore($input: TestRuleSetInput!) {
+  testRuleSet(input: $input) {
+    draftContribution {
+      score
+      applies
+    }
+    ruleSets {
+      isDraft
+      entries {
+        code
+        delta
+      }
+    }
+    errors {
+      code
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# Indexer routing for one scope. Variables: {"scope": "MOVIE"} (MOVIE|SERIES|ANIME)
+query IndexerRouting($scope: ContentScopeValue!) {
+  indexerRouting(scope: $scope) {
+    indexerId
+    enabled
+    categories
+    priority
+  }
+}

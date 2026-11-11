@@ -1,0 +1,20 @@
+# Progress of a warm-up or finalize session. Variables: {"sessionId": "..."}
+query ExternalImportWarmupStatus($sessionId: ID!) {
+  externalImportWarmupStatus(sessionId: $sessionId) {
+    sessionId
+    status
+    phase
+    matchedMovieCount
+    matchedSeriesCount
+    unmatchedMovieCount
+    unmatchedSeriesCount
+    ambiguousMovieCount
+    ambiguousSeriesCount
+    overallProgress {
+      total
+      completed
+      failed
+    }
+    errorMessage
+  }
+}

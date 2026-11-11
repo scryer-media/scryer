@@ -1,0 +1,9 @@
+# Cheap connection check: who the key acts for and which app permissions it has.
+query Me {
+  me {
+    username
+    accountKind
+    appPermissions
+    hasMfa
+  }
+}

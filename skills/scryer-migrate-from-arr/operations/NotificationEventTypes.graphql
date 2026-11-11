@@ -1,0 +1,4 @@
+# Event names a notification subscription can use. Variables: none.
+query NotificationEventTypes {
+  notificationEventTypes
+}

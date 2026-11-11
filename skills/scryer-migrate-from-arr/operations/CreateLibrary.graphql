@@ -1,0 +1,15 @@
+# Create a library. Side effect: confirm first.
+# Variables: {"input": {"facet": "MOVIE"|"SERIES"|"ANIME", "name": "...",
+#   "roots": [{"path": "/media/movies", "isDefault": true}]}}
+mutation CreateLibrary($input: CreateLibraryInput!) {
+  createLibrary(input: $input) {
+    id
+    facet
+    name
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
+}

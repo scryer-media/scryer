@@ -1,0 +1,7 @@
+# Send one event type to a channel. One call per event type. Side effect: confirm first.
+# Variables: {"input": {"channelId": "...", "eventType": "...", "scope": "global", "isEnabled": true}}
+mutation CreateNotificationSubscription($input: CreateNotificationSubscriptionInput!) {
+  createNotificationSubscription(input: $input) {
+    id
+  }
+}

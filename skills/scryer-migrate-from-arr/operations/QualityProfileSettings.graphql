@@ -1,0 +1,47 @@
+# Scryer quality profiles and which one each facet uses. Read-only. Variables: none.
+# The criteria fields match QualityProfileCriteriaInput one for one, so a profile
+# can be copied with jq, edited, and sent back through SaveQualityProfileSettings.
+query QualityProfileSettings {
+  qualityProfileSettings {
+    globalProfileId
+    profiles {
+      id
+      name
+      criteria {
+        qualityTiers
+        archivalQuality
+        allowUnknownQuality
+        sourceAllowlist
+        sourceBlocklist
+        videoCodecAllowlist
+        videoCodecBlocklist
+        audioCodecAllowlist
+        audioCodecBlocklist
+        dolbyVisionAllowed
+        detectedHdrAllowed
+        preferRemux
+        allowBdDisk
+        allowUpgrades
+        ignoreProperRepack
+        scoringOverrides {
+          allowX265Non4K
+          blockDvWithoutFallback
+          preferCompactEncodes
+          preferLosslessAudio
+          blockUpscaled
+        }
+        cutoffTier
+        minScoreToGrab
+        cutoffScore
+        minUpgradeScoreDelta
+        decisionPipeline
+      }
+    }
+    categorySelections {
+      scope
+      overrideProfileId
+      effectiveProfileId
+      inheritsGlobal
+    }
+  }
+}

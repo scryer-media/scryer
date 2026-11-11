@@ -1,0 +1,14 @@
+# Download-client routing for one scope; list order is priority.
+# Variables: {"scope": "SERIES"}
+query DownloadClientRouting($scope: ContentScopeValue!) {
+  downloadClientRouting(scope: $scope) {
+    clientId
+    enabled
+    category
+    recentQueuePriority
+    olderQueuePriority
+    removeCompleted
+    removeFailed
+    seedingProfileId
+  }
+}

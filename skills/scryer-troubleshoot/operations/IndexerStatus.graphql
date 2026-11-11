@@ -1,0 +1,21 @@
+# Indexer state without config values or secrets.
+query IndexerStatus {
+  indexers {
+    id
+    name
+    providerType
+    isEnabled
+    isManaged
+    enableInteractiveSearch
+    enableAutoSearch
+    proxyConfigId
+    downloadClientId
+    lastHealthStatus
+    lastErrorMessage
+    lastErrorAt
+    lastQueryAt
+    disabledUntil
+    rateLimitedUntil
+    maxQueriesPerMinute
+  }
+}

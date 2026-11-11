@@ -1,0 +1,13 @@
+# Configured indexers, for verification. Variables: none.
+query Indexers {
+  indexers {
+    id
+    name
+    providerType
+    isEnabled
+    enableAutoSearch
+    enableInteractiveSearch
+    hasApiKey
+    lastHealthStatus
+  }
+}

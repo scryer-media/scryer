@@ -1,0 +1,49 @@
+# What the import found: sources, root folders, download clients and indexers.
+# Read-only. Variables: {"input": {"sourceWarmupSessionIds": ["..."],
+#   "prowlarrWarmupSessionId": null}}
+mutation PreviewExternalImport($input: PreviewExternalImportInput!) {
+  previewExternalImport(input: $input) {
+    prowlarrConnected
+    prowlarrError
+    arrSources {
+      sessionId
+      sourceKey
+      kind
+      baseUrl
+      connected
+      version
+      status
+      error
+    }
+    rootFolders {
+      sourceWarmupSessionId
+      sourceKey
+      kind
+      arrRootPath
+    }
+    downloadClients {
+      dedupKey
+      name
+      implementation
+      scryerClientType
+      supported
+      requiresPasswordOverride
+      apiKeyPresent
+      host
+      port
+      sourceKeys
+    }
+    indexers {
+      dedupKey
+      name
+      implementation
+      scryerProviderType
+      supported
+      requiresApiKeyOverride
+      apiKeyPresent
+      childCount
+      apiKeyHelpUrl
+      sourceKeys
+    }
+  }
+}

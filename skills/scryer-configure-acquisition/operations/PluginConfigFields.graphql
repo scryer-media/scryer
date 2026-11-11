@@ -1,0 +1,25 @@
+# Re-resolve a provider's fields from the values entered so far. Call it when
+# a key in dynamicConfigTriggerKeys changes. Read-only for Scryer, but some
+# providers contact their service to build the field list.
+# Variables: {"providerType": "...", "values": [ProviderConfigValueInput], "indexerId": null, "proxyConfigId": null}
+query PluginConfigFields($providerType: String!, $values: [ProviderConfigValueInput!]!, $indexerId: ID, $proxyConfigId: ID) {
+  pluginConfigFields(providerType: $providerType, values: $values, indexerId: $indexerId, proxyConfigId: $proxyConfigId) {
+    hiddenFieldKeys
+    loginChallenge { answerFieldKey contentType }
+    fields {
+      key
+      label
+      fieldType
+      required
+      defaultValue
+      valueSource
+      role
+      hostBinding
+      helpText
+      advanced
+      options { value label configOverrides { key value } }
+      visibleWhen { key op values }
+      requiredWhen { key op values }
+    }
+  }
+}
