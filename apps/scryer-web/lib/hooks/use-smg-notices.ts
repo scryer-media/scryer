@@ -165,10 +165,25 @@ export function useSmgNotices({
   useEffect(() => {
     if (typeof window === "undefined") return;
     void refreshSmgVersionCompatibilityNotice();
+    // A hidden tab skips ticks and refreshes once when it becomes visible.
+    let missedWhileHidden = false;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || !missedWhileHidden) return;
+      missedWhileHidden = false;
+      void refreshSmgVersionCompatibilityNotice();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     const interval = window.setInterval(() => {
+      if (document.hidden) {
+        missedWhileHidden = true;
+        return;
+      }
       void refreshSmgVersionCompatibilityNotice();
     }, CLOCK_NOTICE_REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(interval);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.clearInterval(interval);
+    };
   }, [refreshSmgVersionCompatibilityNotice]);
 
   const refreshSmgScryerUpdateNotice = useCallback(async () => {
@@ -264,7 +279,9 @@ export function useSmgNotices({
 
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    // A hidden tab skips ticks; becoming visible refreshes above.
     const intervalId = window.setInterval(() => {
+      if (document.hidden) return;
       void refreshSmgNotices();
     }, SMG_NOTICE_REFRESH_INTERVAL_MS);
     return () => {

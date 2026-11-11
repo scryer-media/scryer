@@ -22,6 +22,8 @@ import type { LibraryGraphRequest } from "./library-graph-source.ts";
 
 type CompactGraph = {
   g: string;
+  // The server's view key; absent on graphs stored before it existed.
+  w?: string;
   // Subject key, target key (0 when it is the subject key), cluster id.
   n: [string, string | 0, number][];
   k: string[];
@@ -55,6 +57,7 @@ export function encodeLibraryGraph(graph: LibraryGraphResult): CompactGraph {
   }
   return {
     g: graph.generatedAt,
+    ...(graph.viewKey ? { w: graph.viewKey } : {}),
     n: graph.nodes.map((node) => [
       node.subjectKey,
       node.targetKey === node.subjectKey ? 0 : node.targetKey,
@@ -101,6 +104,7 @@ export function decodeLibraryGraph(compact: CompactGraph): LibraryGraphResult {
   );
   return {
     generatedAt: compact.g,
+    ...(compact.w ? { viewKey: compact.w } : {}),
     nodes,
     edges,
     clusters,
@@ -178,6 +182,40 @@ export function readCachedLibraryGraph(
   return readBrowserCache(store, key, codec, (value) =>
     decodeLibraryGraph(value as CompactGraph),
   );
+}
+
+/**
+ * How long the graph view waits for the stored graph before it asks the
+ * server without one. A blocked or stalled IndexedDB must not hold the
+ * network load back.
+ */
+export const LIBRARY_GRAPH_CACHE_READ_TIMEOUT_MS = 1500;
+
+/**
+ * The stored graph, or null when there is none, it cannot be read, or the
+ * read does not settle within `timeoutMs`. Always settles.
+ */
+export function readCachedLibraryGraphWithin(
+  store: BrowserCacheStore,
+  key: string,
+  codec: () => Promise<BrowserCacheCodec>,
+  timeoutMs: number = LIBRARY_GRAPH_CACHE_READ_TIMEOUT_MS,
+): Promise<LibraryGraphResult | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    const finish = (graph: LibraryGraphResult | null) => {
+      clearTimeout(timer);
+      resolve(graph);
+    };
+    let read: Promise<LibraryGraphResult | null>;
+    try {
+      read = readCachedLibraryGraph(store, key, codec);
+    } catch {
+      finish(null);
+      return;
+    }
+    read.then(finish, () => finish(null));
+  });
 }
 
 /** Stores the graph; a null graph clears the entry. */

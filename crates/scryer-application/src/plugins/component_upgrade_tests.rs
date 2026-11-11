@@ -363,6 +363,56 @@ async fn blocked_plugins_are_found_by_provider_type_not_only_by_plugin_id() {
 }
 
 #[tokio::test]
+async fn batched_provider_blockers_match_the_per_provider_lookup() {
+    let h = bootstrap_plugins(None);
+    let providers = ["beta", "  ALPHA  ", "gamma", "alpha", "", "delta"];
+    assert_eq!(
+        h.app.plugin_component_blockers_for_providers(&providers).await,
+        vec![None; providers.len()],
+        "no blockers means no reasons"
+    );
+    let mut legacy = official_catalog_installation("alpha-legacy", "0.1.0");
+    legacy.provider_type = "alpha".into();
+    seed_auto_update_installation(&h, legacy.clone()).await;
+    let gamma = official_catalog_installation("gamma", "0.1.0");
+    seed_auto_update_installation(&h, gamma.clone()).await;
+    h.app
+        .set_plugin_component_blocker(&legacy, Some("no compatible build".into()))
+        .await
+        .unwrap();
+    h.app
+        .set_plugin_component_blocker(&gamma, Some("gamma is retired".into()))
+        .await
+        .unwrap();
+
+    let mut expected = Vec::new();
+    for provider in providers {
+        expected.push(h.app.plugin_component_blocker_for_provider(provider).await);
+    }
+    assert_eq!(
+        h.app.plugin_component_blockers_for_providers(&providers).await,
+        expected
+    );
+    assert_eq!(
+        expected,
+        vec![
+            None,
+            Some("no compatible build".to_string()),
+            Some("gamma is retired".to_string()),
+            Some("no compatible build".to_string()),
+            None,
+            None,
+        ]
+    );
+    assert!(
+        h.app
+            .plugin_component_blockers_for_providers(&[])
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn testing_a_blocked_provider_says_it_is_blocked_and_why() {
     let h = bootstrap_plugins(None);
     let installation = official_catalog_installation("alpha", "0.1.0");

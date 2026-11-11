@@ -949,17 +949,25 @@ impl AppUseCase {
             .ok_or_else(|| {
                 AppError::Repository(format!("wanted item {} not found", pr.wanted_item_id))
             })?;
-        Ok(matches!(
-            self.try_grab_pending_release(
-                &wanted,
-                &pr,
-                &now,
-                PendingGrabTrigger::Operator,
-                &DomainEventActor::system(),
-            )
-            .await?,
-            PendingGrabOutcome::Grabbed { .. }
-        ))
+        let trigger = PendingGrabTrigger::Operator;
+        let outcome = match self
+            .judge_pending_release_for_title(&wanted, &pr, &now, trigger, Some(title))
+            .await?
+        {
+            PendingJudgement::Decided(outcome) => outcome,
+            PendingJudgement::Admitted(admitted) => {
+                self.grab_admitted_pending_release(
+                    &wanted,
+                    &pr,
+                    &now,
+                    trigger,
+                    *admitted,
+                    &DomainEventActor::system(),
+                )
+                .await?
+            }
+        };
+        Ok(matches!(outcome, PendingGrabOutcome::Grabbed { .. }))
     }
 
     /// Dismiss a pending release (set status to dismissed).
@@ -1108,6 +1116,20 @@ impl AppUseCase {
         now: &chrono::DateTime<Utc>,
         trigger: PendingGrabTrigger,
     ) -> AppResult<PendingJudgement> {
+        self.judge_pending_release_for_title(wanted, pr, now, trigger, None)
+            .await
+    }
+
+    /// [`Self::judge_pending_release`] with the title the caller already
+    /// loaded; `None` reads it here.
+    async fn judge_pending_release_for_title(
+        &self,
+        wanted: &AcquisitionScopeState,
+        pr: &PendingRelease,
+        now: &chrono::DateTime<Utc>,
+        trigger: PendingGrabTrigger,
+        loaded_title: Option<Title>,
+    ) -> AppResult<PendingJudgement> {
         if let Some(denial) = self
             .location_ownership_denial_for_title(
                 &crate::location::ownership_guard::TITLE_DOWNLOAD_ENTRY,
@@ -1124,8 +1146,15 @@ impl AppUseCase {
             return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
         }
         // Load title
-        let Some(title) = self.services.catalog.titles.get_by_id(&pr.title_id).await? else {
-            return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
+        let title = match loaded_title {
+            Some(title) => title,
+            None => {
+                let Some(title) = self.services.catalog.titles.get_by_id(&pr.title_id).await?
+                else {
+                    return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
+                };
+                title
+            }
         };
 
         // Check the per-title blocklist (the single, removable exclusion source).

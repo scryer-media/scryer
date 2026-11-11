@@ -262,6 +262,7 @@ pub struct AppListServices {
     pub(crate) auth: Arc<dyn crate::lists::account_transport::ListAccountAuthGateway>,
     pub(crate) account_runtime: Arc<crate::lists::accounts::ListAccountRuntime>,
     pub(crate) vocabulary: Arc<crate::lists::vocabulary::VocabularyRuntime>,
+    pub(crate) chart_catalog: Arc<crate::lists::public::ListChartCatalogCache>,
 }
 
 impl AppListServices {
@@ -277,6 +278,7 @@ impl AppListServices {
             auth: Arc::new(crate::lists::account_transport::NullListAccountAuthGateway),
             account_runtime: Arc::new(crate::lists::accounts::ListAccountRuntime::default()),
             vocabulary: Arc::new(crate::lists::vocabulary::VocabularyRuntime::default()),
+            chart_catalog: Arc::new(crate::lists::public::ListChartCatalogCache::default()),
         }
     }
 }

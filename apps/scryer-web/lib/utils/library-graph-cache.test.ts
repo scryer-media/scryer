@@ -11,6 +11,8 @@ import {
   libraryGraphCacheKey,
   readCachedGraphTitles,
   readCachedLibraryGraph,
+  readCachedLibraryGraphWithin,
+  LIBRARY_GRAPH_CACHE_READ_TIMEOUT_MS,
   writeCachedGraphTitles,
   writeCachedLibraryGraph,
 } from "./library-graph-cache.ts";
@@ -21,6 +23,7 @@ import {
 
 const graph: LibraryGraphResult = {
   generatedAt: "2026-01-01T00:00:00Z",
+  viewKey: "v1:synthetic-view",
   nodes: [
     { subjectKey: "s:a", targetKey: "s:a", clusterId: 0 },
     { subjectKey: "s:b", targetKey: "t:b", clusterId: -1 },
@@ -64,6 +67,12 @@ const request = { facet: "MOVIE" as const, libraryIds: ["l2", "l1"] };
 
 test("a graph survives the compact encoding unchanged", () => {
   assert.deepEqual(decodeLibraryGraph(encodeLibraryGraph(graph)), graph);
+  // A graph stored before view keys existed reads back without one.
+  const { viewKey: _viewKey, ...withoutKey } = graph;
+  assert.deepEqual(
+    decodeLibraryGraph(encodeLibraryGraph(withoutKey)),
+    withoutKey,
+  );
 });
 
 test("a listing survives the field-wise encoding, missing fields included", () => {
@@ -164,6 +173,51 @@ test("the listing is kept beside the graph and replaces only its own kind", asyn
   );
   assert.deepEqual(
     await readCachedLibraryGraph(storage, graphKey, browserCacheZstdCodec),
+    graph,
+  );
+});
+
+test("a stalled or failing cache read settles as no stored graph", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const stalled: BrowserCacheStore = {
+    ...memoryStorage(),
+    get: () => new Promise<Uint8Array | null>(() => {}),
+  };
+  const read = readCachedLibraryGraphWithin(
+    stalled,
+    libraryGraphCacheKey("v", request),
+    browserCacheZstdCodec,
+  );
+  let answer: LibraryGraphResult | null | "pending" = "pending";
+  void read.then((value) => {
+    answer = value;
+  });
+  t.mock.timers.tick(LIBRARY_GRAPH_CACHE_READ_TIMEOUT_MS - 1);
+  await Promise.resolve();
+  assert.equal(answer, "pending");
+  t.mock.timers.tick(1);
+  assert.equal(await read, null);
+
+  const failing: BrowserCacheStore = {
+    ...memoryStorage(),
+    get: () => Promise.reject(new Error("blocked")),
+  };
+  assert.equal(
+    await readCachedLibraryGraphWithin(
+      failing,
+      libraryGraphCacheKey("v", request),
+      browserCacheZstdCodec,
+    ),
+    null,
+  );
+});
+
+test("a cache read that settles in time returns the stored graph", async () => {
+  const storage = memoryStorage();
+  const key = libraryGraphCacheKey("v", request);
+  await writeCachedLibraryGraph(storage, key, graph, browserCacheZstdCodec);
+  assert.deepEqual(
+    await readCachedLibraryGraphWithin(storage, key, browserCacheZstdCodec),
     graph,
   );
 });

@@ -13151,3 +13151,249 @@ async fn scheduled_library_refresh_waits_for_pending_import_after_setup() {
         );
     }
 }
+
+#[tokio::test]
+async fn cleared_unmatched_rows_are_removed_together_and_failures_are_only_warned() {
+    use crate::library_scan_unmatched::{
+        ClearedLibraryScanUnmatchedItems, IgnoredLibraryScanItemArgs,
+        LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE, build_ignored_library_scan_item,
+    };
+
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, _) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let rows = [
+        (
+            MediaFacet::Series,
+            "library-emberfall",
+            "/media/Emberfall/S01E01.mkv",
+        ),
+        (
+            MediaFacet::Series,
+            "library-emberfall",
+            "/media/Emberfall/S01E02.mkv",
+        ),
+        (
+            MediaFacet::Anime,
+            "library-cinderwake",
+            "/media/Cinderwake/01.mkv",
+        ),
+        (
+            MediaFacet::Series,
+            "library-emberfall",
+            "/media/Ashgrove/S01E01.mkv",
+        ),
+        (
+            MediaFacet::Anime,
+            "library-emberfall",
+            "/media/Emberfall/S01E01.mkv",
+        ),
+    ];
+    for (facet, library_id, item_path) in rows {
+        let item = build_ignored_library_scan_item(
+            &facet,
+            library_id,
+            IgnoredLibraryScanItemArgs {
+                title_id: None,
+                session_id: Some("fixture-session"),
+                library_path: "/media",
+                item_path,
+                display_name: item_path,
+                query: item_path,
+                year_hint: None,
+                reason_code: LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE,
+                error_message: None,
+                size_bytes: None,
+            },
+        );
+        unmatched_items
+            .upsert_library_scan_unmatched_item(&item)
+            .await
+            .expect("seed unmatched item");
+    }
+    let remaining = |items: Vec<LibraryScanUnmatchedItem>| {
+        let mut rows: Vec<_> = items
+            .into_iter()
+            .map(|item| (item.facet, item.library_id, item.item_path))
+            .collect();
+        rows.sort_by(|a, b| (a.0.as_str(), &a.1, &a.2).cmp(&(b.0.as_str(), &b.1, &b.2)));
+        rows
+    };
+
+    // A failing store keeps every row and the walk carries on.
+    let failing_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    for item in unmatched_items.items().await {
+        failing_items
+            .upsert_library_scan_unmatched_item(&item)
+            .await
+            .expect("seed failing unmatched item");
+    }
+    let (failing_app, _) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        failing_items.clone(),
+    );
+    let mut failing = ClearedLibraryScanUnmatchedItems::new(&failing_app, "title-emberfall");
+    failing.push(
+        &MediaFacet::Series,
+        "library-emberfall",
+        "/media/Emberfall/S01E01.mkv",
+    );
+    failing_items
+        .fail_delete("injected unmatched-item cleanup failure")
+        .await;
+    failing.clear().await;
+    assert_eq!(failing_items.items().await.len(), 5);
+
+    let mut cleared = ClearedLibraryScanUnmatchedItems::new(&app, "title-emberfall");
+    cleared.push(
+        &MediaFacet::Series,
+        "library-emberfall",
+        " /media/Emberfall/S01E01.mkv ",
+    );
+    cleared.push(
+        &MediaFacet::Anime,
+        "library-cinderwake",
+        "/media/Cinderwake/01.mkv",
+    );
+    cleared.push(
+        &MediaFacet::Series,
+        "library-emberfall",
+        "/media/Emberfall/S01E02.mkv",
+    );
+    cleared.push(&MediaFacet::Series, "library-emberfall", "   ");
+    cleared.clear().await;
+
+    assert_eq!(
+        remaining(unmatched_items.items().await),
+        vec![
+            (
+                MediaFacet::Anime,
+                "library-emberfall".to_string(),
+                "/media/Emberfall/S01E01.mkv".to_string(),
+            ),
+            (
+                MediaFacet::Series,
+                "library-emberfall".to_string(),
+                "/media/Ashgrove/S01E01.mkv".to_string(),
+            ),
+        ]
+    );
+
+    // A cleared collector is empty, so clearing again removes nothing more.
+    cleared.clear().await;
+    assert_eq!(unmatched_items.items().await.len(), 2);
+}
+
+#[tokio::test]
+async fn cleared_unmatched_row_persisted_again_in_the_same_walk_is_kept_as_new() {
+    use crate::library_scan_unmatched::{
+        ClearedLibraryScanUnmatchedItems, IgnoredLibraryScanItemArgs,
+        LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE, build_ignored_library_scan_item,
+    };
+
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, _) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let item_path = "/media/Emberfall/S01E03.mkv";
+    let row = |created_at: &str| {
+        let mut item = build_ignored_library_scan_item(
+            &MediaFacet::Series,
+            "library-emberfall",
+            IgnoredLibraryScanItemArgs {
+                title_id: Some("title-emberfall"),
+                session_id: Some("fixture-session"),
+                library_path: "/media",
+                item_path,
+                display_name: item_path,
+                query: item_path,
+                year_hint: None,
+                reason_code: LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE,
+                error_message: None,
+                size_bytes: None,
+            },
+        );
+        item.created_at = created_at.to_string();
+        item
+    };
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&row("2026-01-01T00:00:00Z"))
+        .await
+        .expect("seed unmatched item");
+
+    // The walk clears the row, then records the same path as unmatched again.
+    // The earlier clear runs first, as the per-row delete did, so the row is
+    // written fresh rather than merged into the old one, and the batch at the
+    // end of the walk leaves it in place.
+    let mut cleared = ClearedLibraryScanUnmatchedItems::new(&app, "title-emberfall");
+    cleared.push(&MediaFacet::Series, "library-emberfall", item_path);
+    cleared
+        .clear_before_persist(&MediaFacet::Series, "library-emberfall", item_path)
+        .await;
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&row("2026-02-01T00:00:00Z"))
+        .await
+        .expect("persist unmatched item again");
+    cleared.clear().await;
+
+    let items = unmatched_items.items().await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].item_path, item_path);
+    assert_eq!(items[0].created_at, "2026-02-01T00:00:00Z");
+}
+
+#[tokio::test]
+async fn cleared_unmatched_rows_of_a_dropped_walk_are_still_removed() {
+    use crate::library_scan_unmatched::{
+        ClearedLibraryScanUnmatchedItems, IgnoredLibraryScanItemArgs,
+        LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE, build_ignored_library_scan_item,
+    };
+
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, _) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let item_path = "/media/Cinderwake/S01E01.mkv";
+    let item = build_ignored_library_scan_item(
+        &MediaFacet::Series,
+        "library-cinderwake",
+        IgnoredLibraryScanItemArgs {
+            title_id: Some("title-cinderwake"),
+            session_id: Some("fixture-session"),
+            library_path: "/media",
+            item_path,
+            display_name: item_path,
+            query: item_path,
+            year_hint: None,
+            reason_code: LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE,
+            error_message: None,
+            size_bytes: None,
+        },
+    );
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .expect("seed unmatched item");
+
+    // A walk dropped before it ends (its title task aborted) never reaches
+    // its own clear; the rows it already cleared are removed anyway.
+    let mut cleared = ClearedLibraryScanUnmatchedItems::new(&app, "title-cinderwake");
+    cleared.push(&MediaFacet::Series, "library-cinderwake", item_path);
+    drop(cleared);
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !unmatched_items.items().await.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropped walk's cleared rows should be removed");
+}

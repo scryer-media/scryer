@@ -1759,6 +1759,94 @@ async fn graphql_users_query_exposes_auth_factor_status_with_manage_users() {
 }
 
 #[tokio::test]
+async fn graphql_users_auth_factor_status_matches_the_single_user_read() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let mut created = Vec::new();
+    for username in [
+        "emberfall_totp",
+        "cinderwake_passkeys",
+        "ashgrove_both",
+        "emberfall_none",
+    ] {
+        created.push(
+            ctx.app
+                .create_user(
+                    &admin,
+                    username.to_string(),
+                    "s3cr3t!!".to_string(),
+                    AppPermissionMask::NONE,
+                    vec![],
+                )
+                .await
+                .expect("create factor user"),
+        );
+    }
+    enroll_totp_for_test(&ctx, &created[0]).await;
+    seed_test_passkey(&ctx, &created[1].id, "cinderwake-passkey-1").await;
+    seed_test_passkey(&ctx, &created[1].id, "cinderwake-passkey-2").await;
+    enroll_totp_for_test(&ctx, &created[2]).await;
+    seed_test_passkey(&ctx, &created[2].id, "ashgrove-passkey").await;
+
+    let body = schema_exec(
+        &ctx,
+        "{ users { id hasMfa hasPasskey } }",
+        Some(manage_users_actor("factor-batch-manager")),
+    )
+    .await;
+    assert_no_errors(&body);
+    let rows = body["data"]["users"].as_array().expect("users");
+    let all_users = ctx.app.list_users(&admin).await.expect("list users");
+    assert_eq!(rows.len(), all_users.len());
+    for row in rows {
+        let id = row["id"].as_str().expect("user id");
+        let single = ctx
+            .app
+            .user_auth_factor_status(id)
+            .await
+            .expect("single-user factor status");
+        assert_eq!(row["hasMfa"], single.has_mfa, "hasMfa for {id}");
+        assert_eq!(row["hasPasskey"], single.has_passkey, "hasPasskey for {id}");
+    }
+    let expected = [(true, false), (false, true), (true, true), (false, false)];
+    for (user, (has_mfa, has_passkey)) in created.iter().zip(expected) {
+        let row = rows
+            .iter()
+            .find(|row| row["id"].as_str() == Some(user.id.as_str()))
+            .expect("created user listed");
+        assert_eq!(row["hasMfa"], has_mfa, "hasMfa for {}", user.username);
+        assert_eq!(
+            row["hasPasskey"], has_passkey,
+            "hasPasskey for {}",
+            user.username
+        );
+    }
+
+    // More ids than one statement takes, with the factor owners spread
+    // across the statements.
+    let mut ids: Vec<String> = (0..1_200)
+        .map(|index| format!("absent-{index:04}"))
+        .collect();
+    for (offset, user) in created.iter().enumerate() {
+        ids.insert(offset * 400, user.id.clone());
+    }
+    let batched = ctx
+        .app
+        .users_auth_factor_status(&ids)
+        .await
+        .expect("batched factor status");
+    assert_eq!(batched.len(), ids.len());
+    for id in &ids {
+        let single = ctx
+            .app
+            .user_auth_factor_status(id)
+            .await
+            .expect("single-user factor status");
+        assert_eq!(batched[id], single, "factor status for {id}");
+    }
+}
+
+#[tokio::test]
 async fn graphql_set_user_login_enabled_updates_status_and_auth_epoch() {
     let ctx = TestContext::new().await;
     let admin = ctx.app.find_or_create_default_user().await.unwrap();

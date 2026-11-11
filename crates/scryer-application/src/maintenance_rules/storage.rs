@@ -244,13 +244,7 @@ impl AppUseCase {
         let Some(root) = self.maintenance_storage_root(storage_root_id).await? else {
             return Ok(MaintenanceRootFileSummary::default());
         };
-        let Some(matching) = root_filtered_files(files, &root).await else {
-            return Ok(MaintenanceRootFileSummary::default());
-        };
-        Ok(MaintenanceRootFileSummary {
-            file_count: Some(matching.len() as i64),
-            total_size_bytes: Some(matching.iter().map(|file| file.size_bytes).sum()),
-        })
+        Ok(maintenance_root_file_summary_on(files, &root).await)
     }
 
     /// Filter a previously-authorized candidate manifest to an exact root.
@@ -312,6 +306,21 @@ impl AppUseCase {
                     .into_iter()
                     .all(|on_root_or_absent| on_root_or_absent)
             }))
+    }
+}
+
+/// [`AppUseCase::maintenance_root_file_summary`] for a root the caller has
+/// already resolved.
+pub(crate) async fn maintenance_root_file_summary_on(
+    files: &[crate::types::TitleMediaFile],
+    root: &MaintenanceStorageRoot,
+) -> MaintenanceRootFileSummary {
+    let Some(matching) = root_filtered_files(files, root).await else {
+        return MaintenanceRootFileSummary::default();
+    };
+    MaintenanceRootFileSummary {
+        file_count: Some(matching.len() as i64),
+        total_size_bytes: Some(matching.iter().map(|file| file.size_bytes).sum()),
     }
 }
 

@@ -4,6 +4,7 @@ use chrono::Utc;
 use scryer_application::{AppResult, TitleExternalRating, TitleRatingSummary};
 use scryer_domain::{CanonicalMediaTag, Title};
 
+use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, SqlTx};
 
 #[derive(Clone, Copy)]
@@ -201,6 +202,22 @@ pub async fn load_title_metadata_tags(
     load_metadata_tags(exec, TITLE_METADATA_TABLES, title_ids, None).await
 }
 
+/// Load a title's tags whose `LOWER(category)` is one of `lowered_categories`
+/// (already lowercase), with their sources and source keys.
+pub async fn load_title_metadata_tags_in_lowered_categories(
+    exec: SqlExec<'_, '_>,
+    title_ids: &[String],
+    lowered_categories: &[&str],
+) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
+    load_metadata_tags(
+        exec,
+        TITLE_METADATA_TABLES,
+        title_ids,
+        Some(CategoryFilter::LoweredIn(lowered_categories)),
+    )
+    .await
+}
+
 pub async fn load_discovery_title_metadata_tags(
     exec: SqlExec<'_, '_>,
     discovery_title_ids: &[String],
@@ -231,9 +248,18 @@ pub async fn load_discovery_title_metadata_tags_in_category(
         exec,
         DISCOVERY_TITLE_METADATA_TABLES,
         discovery_title_ids,
-        Some(category),
+        Some(CategoryFilter::Trimmed(category)),
     )
     .await
+}
+
+/// Which tag categories a read keeps.
+#[derive(Clone, Copy)]
+enum CategoryFilter<'a> {
+    /// `LOWER(TRIM(category))` equals this value trimmed and lowercased.
+    Trimmed(&'a str),
+    /// `LOWER(category)` is one of these lowercase values.
+    LoweredIn(&'a [&'a str]),
 }
 
 /// Owner ids bound into one tag read statement. Each statement binds one value
@@ -254,16 +280,33 @@ async fn load_metadata_tags(
     mut exec: SqlExec<'_, '_>,
     tables: MetadataTables,
     owner_ids: &[String],
-    category: Option<&str>,
+    category: Option<CategoryFilter<'_>>,
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
-    let category = category.map(|category| category.trim().to_ascii_lowercase());
+    let (category_clause, category_args) = match category {
+        None => (String::new(), Vec::new()),
+        Some(CategoryFilter::Trimmed(category)) => (
+            " AND LOWER(TRIM(t.category)) = {}".to_string(),
+            vec![SqlArg::Text(category.trim().to_ascii_lowercase())],
+        ),
+        Some(CategoryFilter::LoweredIn(categories)) => (
+            format!(
+                " AND LOWER(t.category) IN ({})",
+                bind_placeholders(categories.len())
+            ),
+            categories
+                .iter()
+                .map(|category| SqlArg::Text((*category).to_string()))
+                .collect(),
+        ),
+    };
+    let category = category.map(|_| (category_clause.as_str(), category_args.as_slice()));
     let mut merged = BTreeMap::<String, OwnerTags>::new();
     for chunk in owner_ids.chunks(METADATA_TAG_OWNER_CHUNK) {
         load_metadata_tags_chunk(
             reborrow_exec(&mut exec),
             tables,
             chunk,
-            category.as_deref(),
+            category,
             &mut merged,
         )
         .await?;
@@ -291,7 +334,7 @@ async fn load_metadata_tags_chunk(
     mut exec: SqlExec<'_, '_>,
     tables: MetadataTables,
     owner_ids: &[String],
-    category: Option<&str>,
+    category: Option<(&str, &[SqlArg])>,
     merged: &mut BTreeMap<String, OwnerTags>,
 ) -> AppResult<()> {
     if owner_ids.is_empty() {
@@ -303,13 +346,12 @@ async fn load_metadata_tags_chunk(
         .cloned()
         .map(SqlArg::Text)
         .collect::<Vec<_>>();
-    if let Some(category) = category {
-        args.push(SqlArg::Text(category.to_string()));
-    }
-    let category_clause = if category.is_some() {
-        " AND LOWER(TRIM(t.category)) = {}"
-    } else {
-        ""
+    let category_clause = match category {
+        Some((clause, category_args)) => {
+            args.extend(category_args.iter().cloned());
+            clause
+        }
+        None => "",
     };
     let owner_column = tables.owner_column;
 
@@ -370,7 +412,8 @@ async fn load_metadata_tags_chunk(
     } else {
         String::new()
     };
-    let tag_values: [(&str, &str, fn(&mut CanonicalMediaTag) -> &mut Vec<String>); 2] = [
+    type ValuesOf = fn(&mut CanonicalMediaTag) -> &mut Vec<String>;
+    let tag_values: [(&str, &str, ValuesOf); 2] = [
         (tables.tag_sources, "source", |tag| &mut tag.sources),
         (tables.tag_source_keys, "source_tag_key", |tag| {
             &mut tag.source_tag_keys
@@ -561,7 +604,30 @@ pub async fn load_discovery_title_metadata_ratings(
     .await
 }
 
+/// Reads every owner's ratings in one statement, which binds each owner three
+/// times. Only a list too long for one statement is read a third of
+/// [`METADATA_TAG_OWNER_CHUNK`] distinct owners at a time; an owner's rows
+/// always come from one statement.
 async fn load_metadata_ratings(
+    mut exec: SqlExec<'_, '_>,
+    owner: MetadataRatingOwner,
+    owner_ids: &[String],
+) -> AppResult<BTreeMap<String, TitleRatingSummary>> {
+    let (owner_ids, per_statement) = id_list_statements(
+        owner_ids,
+        3,
+        0,
+        max_binds(&exec),
+        METADATA_TAG_OWNER_CHUNK / 3,
+    );
+    let mut ratings = BTreeMap::new();
+    for chunk in owner_ids.chunks(per_statement) {
+        ratings.extend(load_metadata_ratings_chunk(reborrow_exec(&mut exec), owner, chunk).await?);
+    }
+    Ok(ratings)
+}
+
+async fn load_metadata_ratings_chunk(
     exec: SqlExec<'_, '_>,
     owner: MetadataRatingOwner,
     owner_ids: &[String],
@@ -691,6 +757,7 @@ async fn insert_tag_values_tx(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn rows_to_tags_by_owner<'a>(
     rows: impl IntoIterator<Item = &'a crate::queries::sql_runtime::SqlRow>,
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {

@@ -10442,6 +10442,10 @@ type LibraryGraph {
 	"""
 	generatedAt: String!
 	"""
+	Opaque key of exactly this graph as this viewer sees it: it changes when the graph is rebuilt, when the libraries the read covers change, or when a visible title changes its name or external IDs.
+	"""
+	viewKey: String!
+	"""
 	Owned titles in the graph.
 	"""
 	nodes: [LibraryGraphNode!]!
@@ -10461,6 +10465,10 @@ type LibraryGraph {
 	True when the facet had more titles than one graph covers, so the newest were graphed and the rest left out.
 	"""
 	truncated: Boolean!
+	"""
+	True when this graph is the one named by `knownViewKey`; nodes, edges and clusters are then empty, subjectCount is 0 and truncated is false, and the client keeps the graph it holds.
+	"""
+	unchanged: Boolean!
 }
 
 """
@@ -10523,6 +10531,10 @@ input LibraryGraphInput {
 	Library IDs to cover; omitted or empty covers every library of the facet the viewer can see. IDs the viewer cannot see are ignored.
 	"""
 	libraryIds: [ID!]
+	"""
+	`viewKey` of the graph the client already holds. When the graph this read would return has that key, the answer has `unchanged` true and no nodes, edges or clusters.
+	"""
+	knownViewKey: String
 }
 
 """
@@ -25504,7 +25516,7 @@ type QueryRoot {
 		"""
 		titleId: ID!,
 		"""
-		Maximum entries to return; defaults to 100 and values below 1 become 1.
+		Maximum entries to return; defaults to 100 and is clamped to 1 through 1000.
 		"""
 		limit: Int
 	): [TitleReleaseBlocklistEntryPayload!]!
@@ -25555,7 +25567,7 @@ type QueryRoot {
 		"""
 		beforeSequence: Long,
 		"""
-		Maximum events to return; defaults to 100 and values below 1 become 1.
+		Maximum events to return; defaults to 100 and is clamped to 1 through 500.
 		"""
 		limit: Int
 	): [DomainEventEnvelopePayload!]!
@@ -25676,7 +25688,7 @@ type QueryRoot {
 	activeJobRuns: [JobRunPayload!]!
 	"""
 	List recent runs for one job key, or for one scheduled script when the key is
-	`CUSTOM_JOB`; the limit defaults to 10 and values below 1 become 1.
+	`CUSTOM_JOB`; the limit defaults to 10 and is clamped to 1 through 500.
 	"""
 	jobRuns(
 		"""
@@ -25688,16 +25700,16 @@ type QueryRoot {
 		"""
 		customJobId: ID,
 		"""
-		Maximum runs to return; defaults to 10 and values below 1 become 1.
+		Maximum runs to return; defaults to 10 and is clamped to 1 through 500.
 		"""
 		limit: Int
 	): [JobRunPayload!]!
 	"""
-	List recent job runs; the limit defaults to 50 and values below 1 become 1.
+	List recent job runs; the limit defaults to 50 and is clamped to 1 through 500.
 	"""
 	recentJobRuns(
 		"""
-		Maximum runs to return; defaults to 50 and values below 1 become 1.
+		Maximum runs to return; defaults to 50 and is clamped to 1 through 500.
 		"""
 		limit: Int
 	): [JobRunPayload!]!
@@ -26385,7 +26397,7 @@ type QueryRoot {
 		"""
 		libraryId: ID,
 		"""
-		Maximum number of candidates to return.
+		Maximum number of candidates to return; defaults to 50, at most 200.
 		"""
 		limit: Int
 	): [MaintenanceCandidate!]!
@@ -26402,7 +26414,7 @@ type QueryRoot {
 		"""
 		ruleSetId: ID,
 		"""
-		Maximum number of runs to return.
+		Maximum number of runs to return; defaults to 50, at most 200.
 		"""
 		limit: Int
 	): [MaintenanceEvaluationRun!]!

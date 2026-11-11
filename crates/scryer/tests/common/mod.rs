@@ -631,6 +631,12 @@ impl HousekeepingRepository for TestLibraryStateStore {
             .await
     }
 
+    async fn delete_maintenance_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
+        self.housekeeping
+            .delete_maintenance_evaluation_runs_older_than(days)
+            .await
+    }
+
     async fn delete_history_events_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32> {
         self.housekeeping
             .delete_history_events_for_title_ids(title_ids)

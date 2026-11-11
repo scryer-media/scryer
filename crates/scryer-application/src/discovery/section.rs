@@ -723,6 +723,8 @@ fn discovery_requested_value_aliases(value: &str) -> Vec<String> {
 pub(super) struct DiscoverySectionMembers {
     section: Option<DiscoverySectionResult>,
     candidates_by_id: HashMap<String, DiscoveryHomeCandidate>,
+    /// The pending requests read while composing, if any were.
+    pending_requests: Option<Vec<scryer_domain::MediaRequest>>,
 }
 
 /// A composed, filtered and sorted section as the cache holds it: the
@@ -748,6 +750,7 @@ impl DiscoverySectionPages {
         let DiscoverySectionMembers {
             section,
             mut candidates_by_id,
+            ..
         } = members;
         let mut header = section?;
         let members = std::mem::take(&mut header.items)
@@ -1079,9 +1082,16 @@ impl AppUseCase {
                             DiscoverySectionTarget::Watchlist
                         )
                     {
-                        let requested = self
-                            .discovery_pending_request_visibility(&visibility)
-                            .await?;
+                        // The requests the composition already read, else one read.
+                        let requested = match members.pending_requests.as_deref() {
+                            Some(pending) => {
+                                DiscoveryRequestedVisibility::from_media_requests(pending)
+                            }
+                            None => {
+                                self.discovery_pending_request_visibility(&visibility)
+                                    .await?
+                            }
+                        };
                         section
                             .items
                             .retain(|item| !requested.item_is_requested(item));
@@ -1124,24 +1134,84 @@ impl AppUseCase {
 
     /// The home as the section's dashboard composed it: same filters, same
     /// rail size, owned titles excluded.
+    /// It reuses the viewer's visibility and sync status this request already
+    /// read; the status is read again only when the personalized switch read
+    /// here gives a different personalized gate. The pending requests the
+    /// home's watchlist read come back with it, since they depend only on the
+    /// viewer's visibility.
     async fn discovery_section_home(
         &self,
         actor: &User,
+        visibility: &DiscoveryVisibility,
+        can_view_personalized: bool,
+        status: &DiscoverySyncStatus,
         section_query: &DiscoverySectionItemsQuery,
         include_unresolved: bool,
-    ) -> AppResult<DiscoveryHomeResult> {
-        self.discovery_home_projected(
-            actor,
-            DiscoveryHomeQuery {
-                include_public: true,
-                include_personalized: true,
-                include_unresolved,
-                limit_per_section: discovery_section_limit(section_query.rail_limit),
-                filters: section_query.filters.clone(),
-            },
-            crate::DiscoveryHomeProjection::default(),
-        )
-        .await
+    ) -> AppResult<(
+        DiscoveryHomeResult,
+        Option<CatalogOwnedVisibility>,
+        Option<Vec<scryer_domain::MediaRequest>>,
+    )> {
+        let started_at = std::time::Instant::now();
+        let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
+        let home_can_view_personalized =
+            !visibility.readable_library_ids.is_empty() && personalized_discovery_enabled;
+        let reuses_status = home_can_view_personalized == can_view_personalized;
+        let home_status = if reuses_status {
+            status.clone()
+        } else {
+            self.load_discovery_sync_status_for_visibility(home_can_view_personalized)
+                .await?
+        };
+        let (home, owned_visibility, pending_requests) = self
+            .discovery_home_projected_for(
+                actor,
+                DiscoveryHomeQuery {
+                    include_public: true,
+                    include_personalized: true,
+                    include_unresolved,
+                    limit_per_section: discovery_section_limit(section_query.rail_limit),
+                    filters: section_query.filters.clone(),
+                },
+                // The hero is selected so the section leaves out the title the
+                // home's hero shows, as the home's rails do.
+                crate::DiscoveryHomeProjection {
+                    hero: true,
+                    ..crate::DiscoveryHomeProjection::default()
+                },
+                visibility,
+                personalized_discovery_enabled,
+                home_status,
+                started_at,
+            )
+            .await?;
+        // The home's owned visibility answers for the section only when it was
+        // built from the section's own sync state.
+        Ok((
+            home,
+            reuses_status.then_some(owned_visibility),
+            pending_requests,
+        ))
+    }
+
+    /// The owned visibility the section's home computed, or the same one read
+    /// for the section's sync state.
+    async fn discovery_section_owned_visibility(
+        &self,
+        visibility: &DiscoveryVisibility,
+        status: &DiscoverySyncStatus,
+        home_owned_visibility: Option<CatalogOwnedVisibility>,
+    ) -> AppResult<CatalogOwnedVisibility> {
+        match home_owned_visibility {
+            Some(owned_visibility) => Ok(owned_visibility),
+            None => {
+                self.discovery_home_owned_visibility(
+                    &sorted_discovery_library_ids(&visibility.owned_library_ids),
+                    &status.state,
+                )
+                .await
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1166,6 +1236,7 @@ impl AppUseCase {
             .flatten();
         let public_run_id = status.state.last_public_feed_generation_id.as_deref();
         let mut candidates_by_id = HashMap::<String, DiscoveryHomeCandidate>::new();
+        let mut pending_requests = None;
 
         let section = match discovery_section_target(section_id) {
             DiscoverySectionTarget::Watchlist => {
@@ -1258,7 +1329,7 @@ impl AppUseCase {
                 // The home's own watchlist claims, so page one is the
                 // home rail and later pages never offer a title the
                 // watchlist holds.
-                let watchlist_claims = self
+                let watchlist = self
                     .discovery_section_watchlist(
                         actor,
                         visibility,
@@ -1268,8 +1339,9 @@ impl AppUseCase {
                         include_unresolved,
                         rail_limit,
                     )
-                    .await?
-                    .claimed_item_keys;
+                    .await?;
+                pending_requests = watchlist.pending_requests;
+                let watchlist_claims = watchlist.claimed_item_keys;
                 let shelf = personalized_section_results_in_context(
                     home_visible_items,
                     &library_profile,
@@ -1285,17 +1357,21 @@ impl AppUseCase {
                 )
             }
             DiscoverySectionTarget::TopRated => {
-                let home = self
-                    .discovery_section_home(actor, section_query, include_unresolved)
+                let (home, home_owned_visibility, home_pending_requests) = self
+                    .discovery_section_home(
+                        actor,
+                        visibility,
+                        can_view_personalized,
+                        status,
+                        section_query,
+                        include_unresolved,
+                    )
                     .await?;
+                pending_requests = home_pending_requests;
                 let hero_key = discovery_home_hero_key(&home);
                 let window = discovery_rendered_window(&home, section_id, hero_key.as_deref());
-                let owned_library_ids = &visibility.owned_library_ids;
                 let owned_visibility = self
-                    .discovery_home_owned_visibility(
-                        &sorted_discovery_library_ids(owned_library_ids),
-                        &status.state,
-                    )
+                    .discovery_section_owned_visibility(visibility, status, home_owned_visibility)
                     .await?;
                 let excluded_identity_keys = if include_owned {
                     Vec::new()
@@ -1345,9 +1421,17 @@ impl AppUseCase {
                 let Some(context_run_id) = context_run_id else {
                     return Ok(DiscoverySectionMembers::default());
                 };
-                let home = self
-                    .discovery_section_home(actor, section_query, include_unresolved)
+                let (home, _, home_pending_requests) = self
+                    .discovery_section_home(
+                        actor,
+                        visibility,
+                        can_view_personalized,
+                        status,
+                        section_query,
+                        include_unresolved,
+                    )
                     .await?;
+                pending_requests = home_pending_requests;
                 let hero_key = discovery_home_hero_key(&home);
                 let window = discovery_rendered_window(&home, section_id, hero_key.as_deref());
                 let candidates = self
@@ -1393,17 +1477,26 @@ impl AppUseCase {
                 if source_ids.is_empty() {
                     return Ok(DiscoverySectionMembers::default());
                 }
-                let home = self
-                    .discovery_section_home(actor, section_query, include_unresolved)
+                let (home, home_owned_visibility, home_pending_requests) = self
+                    .discovery_section_home(
+                        actor,
+                        visibility,
+                        can_view_personalized,
+                        status,
+                        section_query,
+                        include_unresolved,
+                    )
                     .await?;
+                pending_requests = home_pending_requests;
                 let hero_key = discovery_home_hero_key(&home);
                 let window = discovery_rendered_window(&home, section_id, hero_key.as_deref());
                 let records = self
                     .services
                     .library
                     .discovery
-                    .list_public_discovery_section_items(
+                    .list_public_discovery_section_items_in(
                         public_run_id,
+                        &sections,
                         &source_ids,
                         &allowed_media_kinds,
                         include_unresolved,
@@ -1414,10 +1507,10 @@ impl AppUseCase {
                 let owned_visibility = if include_owned {
                     CatalogOwnedVisibility::default()
                 } else {
-                    let owned_library_ids = &visibility.owned_library_ids;
-                    self.discovery_home_owned_visibility(
-                        &sorted_discovery_library_ids(owned_library_ids),
-                        &status.state,
+                    self.discovery_section_owned_visibility(
+                        visibility,
+                        status,
+                        home_owned_visibility,
                     )
                     .await?
                 };
@@ -1444,6 +1537,7 @@ impl AppUseCase {
         Ok(DiscoverySectionMembers {
             section,
             candidates_by_id,
+            pending_requests,
         })
     }
 
@@ -1669,6 +1763,7 @@ mod cache_tests {
                 label_key: None,
             }),
             candidates_by_id: HashMap::from([("item-1".to_string(), candidate)]),
+            pending_requests: None,
         })
         .expect("a composed section caches");
         assert!(pages.header.items.is_empty());

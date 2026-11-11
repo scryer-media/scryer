@@ -3109,6 +3109,8 @@ impl DownloadClient for StubDownloadClient {
 pub(super) struct TrackingDownloadQueueCommandRepo {
     pub(super) queued: Arc<Mutex<Vec<DownloadQueueCommandRecord>>>,
     pub(super) recovered_count: Arc<Mutex<u64>>,
+    pub(super) recover_calls: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) list_pending_calls: Arc<std::sync::atomic::AtomicUsize>,
     /// Signalled whenever a command's status changes, so tests wait on the
     /// transition instead of polling.
     status_changed: Arc<tokio::sync::Notify>,
@@ -3215,10 +3217,14 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
     }
 
     async fn recover_stale_running_delete_commands(&self, _stale_seconds: i64) -> AppResult<u64> {
+        self.recover_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(*self.recovered_count.lock().await)
     }
 
     async fn list_pending_delete_commands(&self) -> AppResult<Vec<DownloadQueueCommandRecord>> {
+        self.list_pending_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self
             .queued
             .lock()

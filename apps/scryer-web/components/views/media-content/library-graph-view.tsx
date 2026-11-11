@@ -116,7 +116,7 @@ import {
 import {
   libraryGraphCacheKey,
   readCachedGraphTitles,
-  readCachedLibraryGraph,
+  readCachedLibraryGraphWithin,
   writeCachedGraphTitles,
   writeCachedLibraryGraph,
 } from "@/lib/utils/library-graph-cache";
@@ -982,33 +982,40 @@ export default function LibraryGraphView({
       facet,
       libraryIds: libraryIdSignature ? libraryIdSignature.split(",") : [],
     };
-    // The last graph read draws at once; the server's answer replaces it
-    // only when it is a different graph, and is kept for the next visit.
+    // The last graph read draws at once; the server is told which graph is
+    // drawn, and its answer replaces it only when it is a different graph,
+    // and is kept for the next visit. The cache read is bounded, so a stalled
+    // IndexedDB never holds the network load back.
     const storage = viewerId ? browserCacheStore() : null;
     const cacheKey = libraryGraphCacheKey(viewerId, request);
     let shown: LibraryGraphResult | null = null;
-    if (storage) {
-      void readCachedLibraryGraph(
-        storage,
-        cacheKey,
-        browserCacheZstdCodec,
-      ).then((cached) => {
-        if (cancelled || settled || !cached) return;
-        shown = cached;
-        setResult(cached);
-        setLoadStatus("loaded");
-        resetExploration();
-      });
-    }
-    void libraryGraphSourceForCatalog(client)
-      .load(request)
+    const cachedRead: Promise<void> = storage
+      ? readCachedLibraryGraphWithin(
+          storage,
+          cacheKey,
+          browserCacheZstdCodec,
+        ).then(
+          (cached) => {
+            if (cancelled || settled || !cached) return;
+            shown = cached;
+            setResult(cached);
+            setLoadStatus("loaded");
+            resetExploration();
+          },
+          () => undefined,
+        )
+      : Promise.resolve();
+    void cachedRead
+      .then(() =>
+        libraryGraphSourceForCatalog(client).load({ ...request, held: shown }),
+      )
       .then((loaded) => {
         settled = true;
         const unchanged =
           loaded !== null &&
           shown !== null &&
-          loaded.generatedAt !== "" &&
-          loaded.generatedAt === shown.generatedAt;
+          Boolean(loaded.viewKey) &&
+          loaded.viewKey === shown.viewKey;
         if (!cancelled && !unchanged) {
           setResult(loaded);
           setLoadStatus(loaded ? "loaded" : "notBuilt");

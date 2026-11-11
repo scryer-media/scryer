@@ -74,6 +74,28 @@ impl MovieEntityPayload {
     }
 }
 
+impl LibraryPayload {
+    /// Both request-profile fields read one resolution per library per request.
+    async fn request_quality_profile_settings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<scryer_application::RequestQualityProfileSettings> {
+        if let Some(loaders) = loaders_from_ctx(ctx)
+            && let Some(outcome) = loaders
+                .request_quality_profile_settings
+                .load_one(self.id.to_string())
+                .await?
+        {
+            return outcome;
+        }
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.request_quality_profile_settings_for_library(&actor, self.id.as_ref())
+            .await
+            .map_err(to_gql_error)
+    }
+}
+
 #[ComplexObject]
 impl LibraryPayload {
     /// Effective title quality-profile ID for this library; requires title-management or catalog-settings access.
@@ -88,23 +110,13 @@ impl LibraryPayload {
 
     /// Quality-profile IDs currently allowed for requests in this library; access requires request, title-management, or relevant application permission.
     async fn request_quality_profile_ids(&self, ctx: &Context<'_>) -> GqlResult<Vec<ID>> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let settings = app
-            .request_quality_profile_settings_for_library(&actor, self.id.as_ref())
-            .await
-            .map_err(to_gql_error)?;
+        let settings = self.request_quality_profile_settings(ctx).await?;
         Ok(settings.profile_ids.into_iter().map(Into::into).collect())
     }
 
     /// Default request quality-profile ID, selected from the library's effective allowed profiles.
     async fn request_quality_profile_default_id(&self, ctx: &Context<'_>) -> GqlResult<ID> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let settings = app
-            .request_quality_profile_settings_for_library(&actor, self.id.as_ref())
-            .await
-            .map_err(to_gql_error)?;
+        let settings = self.request_quality_profile_settings(ctx).await?;
         Ok(settings.default_profile_id.into())
     }
 
@@ -560,11 +572,22 @@ impl TitlePayload {
         Box::pin(async move {
             let app = app_from_ctx(ctx)?;
             let actor = actor_from_ctx(ctx)?;
-            app.title_root_folder_path_for_viewer(
+            let library_id = self.library_id.to_string();
+            // Rows on a page share a handful of libraries, so the batched
+            // library read replaces one library read per row. A loader miss
+            // or failure falls back to the direct read, which reports it.
+            let load_library = || async {
+                Ok(match loaders_from_ctx(ctx) {
+                    Some(loaders) => loaders.library.load_one(library_id).await.ok().flatten(),
+                    None => None,
+                })
+            };
+            app.title_root_folder_path_for_viewer_loading(
                 &actor,
                 self.root_folder_id.as_ref(),
                 self.library_id.as_ref(),
                 &self.facet.into_domain(),
+                load_library,
             )
             .await
             .map_err(to_gql_error)

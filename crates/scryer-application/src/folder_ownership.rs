@@ -56,6 +56,18 @@ fn non_empty_folder_path(path: Option<&str>) -> Option<&str> {
     path.filter(|path| !path.is_empty())
 }
 
+/// Run a synchronous folder comparison off the async runtime, inside the
+/// caller's tracing span. A panic in `check` resumes in the caller.
+pub(crate) async fn run_folder_check_blocking<T: Send + 'static>(
+    check: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let span = tracing::Span::current();
+    match tokio::task::spawn_blocking(move || span.in_scope(check)).await {
+        Ok(value) => value,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
 /// Resolve links in the existing prefix without requiring a destination to
 /// exist yet. Callers must repeat this check after creating the destination.
 pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::PathBuf> {
@@ -127,13 +139,49 @@ pub(crate) fn stored_title_folders_overlap(left: &str, right: &str) -> bool {
 }
 
 pub(crate) fn title_folders_overlap(left: &str, right: &str) -> AppResult<bool> {
+    title_folders_overlap_with(left, &mut None, right)
+}
+
+/// One folder compared with many others by [`title_folders_overlap`],
+/// resolving it on disk only once. A failed resolution is not kept, so the
+/// next comparison tries again exactly as a fresh call would.
+pub(crate) struct OverlapLeft {
+    stored: String,
+    resolved: Option<std::path::PathBuf>,
+}
+
+impl OverlapLeft {
+    pub(crate) fn new(stored: &str) -> Self {
+        Self {
+            stored: stored.to_string(),
+            resolved: None,
+        }
+    }
+
+    pub(crate) fn overlaps(&mut self, right: &str) -> AppResult<bool> {
+        title_folders_overlap_with(&self.stored, &mut self.resolved, right)
+    }
+}
+
+fn title_folders_overlap_with(
+    left: &str,
+    resolved_left: &mut Option<std::path::PathBuf>,
+    right: &str,
+) -> AppResult<bool> {
     fn overlaps(left: &str, right: &str) -> bool {
         stored_title_folders_overlap(left, right)
     }
     if overlaps(left, right) {
         return Ok(true);
     }
-    let left = resolved_folder_identity(&stored_path_to_path_buf(left))?;
+    let left = match resolved_left {
+        Some(resolved) => resolved.clone(),
+        None => {
+            let resolved = resolved_folder_identity(&stored_path_to_path_buf(left))?;
+            *resolved_left = Some(resolved.clone());
+            resolved
+        }
+    };
     let right = match resolved_folder_identity(&stored_path_to_path_buf(right)) {
         Ok(path) => path,
         Err(error) => {
@@ -515,8 +563,8 @@ pub(crate) struct FolderOverlapKeys {
 }
 
 impl FolderOverlapKeys {
-    async fn load(app: &AppUseCase, folder_path: &str) -> AppResult<Self> {
-        let root_paths = match ScanFolderRoots::current_all() {
+    async fn root_paths(app: &AppUseCase) -> AppResult<Vec<String>> {
+        Ok(match ScanFolderRoots::current_all() {
             Some(roots) => roots,
             None => app
                 .all_library_root_folders()
@@ -524,8 +572,7 @@ impl FolderOverlapKeys {
                 .into_iter()
                 .map(|root| root.path)
                 .collect(),
-        };
-        Self::from_roots(folder_path, &root_paths)
+        })
     }
 
     pub(crate) fn from_roots(folder_path: &str, root_paths: &[String]) -> AppResult<Self> {
@@ -650,47 +697,111 @@ pub(crate) async fn ensure_folder_move_available_to_title(
     if let Some(context) = ScanOwnershipContext::current() {
         return context.check(app, title, folder_path).await;
     }
-    let mut keys = None;
-    for owner in app
+    let owners = app
         .services
         .catalog
         .titles
         .list_delete_preview_info()
-        .await?
-    {
-        let Some(owned_path) = owner.folder_path.as_deref().filter(|path| !path.is_empty()) else {
-            continue;
+        .await?;
+    let Some(first) = owners
+        .iter()
+        .position(|owner| move_check_compares_owner(owner, &title.id))
+    else {
+        return Ok(());
+    };
+    let root_paths = FolderOverlapKeys::root_paths(app).await?;
+    let mut scan = MoveOverlapScan {
+        title_id: title.id.clone(),
+        folder_path,
+        owners,
+        next: first,
+        keys: None,
+        root_paths,
+        left: None,
+    };
+    loop {
+        let (returned, found) = run_folder_check_blocking(move || {
+            let found = scan.next_overlap();
+            (scan, found)
+        })
+        .await;
+        scan = returned;
+        let Some(index) = found? else {
+            return Ok(());
         };
-        if owner.title_id == title.id {
-            continue;
-        }
-        if keys.is_none() {
-            keys = Some(FolderOverlapKeys::load(app, &folder_path).await?);
-        }
-        if !keys
-            .as_mut()
-            .expect("overlap keys loaded")
-            .needs_exact_comparison(owned_path)?
-        {
-            continue;
-        }
-        let overlaps = title_folders_overlap(&folder_path, owned_path).map_err(|error| {
-            AppError::validation_refused(crate::error_reasons::folder_ownership::CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE, format!(
-                "cannot compare folder {folder_path} with folder {owned_path} owned by title {}: {error}",
-                owner.title_id
-            ))
-        })?;
-        if overlaps && !folder_spans_a_library_root(app, owned_path).await? {
+        let owner = &scan.owners[index];
+        let owned_path = owner.folder_path.as_deref().unwrap_or_default();
+        if !folder_spans_a_library_root(app, owned_path).await? {
             return Err(AppError::validation_refused(
                 crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE,
                 format!(
-                    "folder {folder_path} overlaps the folder owned by title {}",
-                    owner.title_id
+                    "folder {} overlaps the folder owned by title {}",
+                    scan.folder_path, owner.title_id
                 ),
             ));
         }
     }
-    Ok(())
+}
+
+fn move_check_compares_owner(owner: &crate::TitleDeletePreviewInfo, title_id: &str) -> bool {
+    owner
+        .folder_path
+        .as_deref()
+        .is_some_and(|path| !path.is_empty())
+        && owner.title_id != title_id
+}
+
+/// The synchronous part of [`ensure_folder_move_available_to_title`]: walks
+/// the owners in order and stops at each overlapping one so the caller can
+/// apply the library-root exemption before going on.
+struct MoveOverlapScan {
+    title_id: String,
+    folder_path: String,
+    owners: Vec<crate::TitleDeletePreviewInfo>,
+    next: usize,
+    keys: Option<FolderOverlapKeys>,
+    root_paths: Vec<String>,
+    left: Option<std::path::PathBuf>,
+}
+
+impl MoveOverlapScan {
+    fn next_overlap(&mut self) -> AppResult<Option<usize>> {
+        while self.next < self.owners.len() {
+            let index = self.next;
+            self.next += 1;
+            let owner = &self.owners[index];
+            if !move_check_compares_owner(owner, &self.title_id) {
+                continue;
+            }
+            let owned_path = owner.folder_path.as_deref().unwrap_or_default();
+            if self.keys.is_none() {
+                self.keys = Some(FolderOverlapKeys::from_roots(
+                    &self.folder_path,
+                    &self.root_paths,
+                )?);
+            }
+            if !self
+                .keys
+                .as_mut()
+                .expect("overlap keys loaded")
+                .needs_exact_comparison(owned_path)?
+            {
+                continue;
+            }
+            let folder_path = &self.folder_path;
+            let overlaps = title_folders_overlap_with(folder_path, &mut self.left, owned_path)
+                .map_err(|error| {
+                    AppError::validation_refused(crate::error_reasons::folder_ownership::CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE, format!(
+                        "cannot compare folder {folder_path} with folder {owned_path} owned by title {}: {error}",
+                        owner.title_id
+                    ))
+                })?;
+            if overlaps {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// Recycle entries retain their original path even after a title is removed.
@@ -707,6 +818,18 @@ pub(crate) async fn ensure_restore_ownership(
         .list_delete_preview_info()
         .await?;
     let destination = path_to_stored_string(destination);
+    let title_id = title_id.map(str::to_string);
+    run_folder_check_blocking(move || {
+        restore_ownership_check(title_id.as_deref(), &destination, &owners)
+    })
+    .await
+}
+
+fn restore_ownership_check(
+    title_id: Option<&str>,
+    destination: &str,
+    owners: &[crate::TitleDeletePreviewInfo],
+) -> AppResult<()> {
     let current_folder = owners
         .iter()
         .find(|owner| Some(owner.title_id.as_str()) == title_id)
@@ -714,16 +837,16 @@ pub(crate) async fn ensure_restore_ownership(
         .filter(|folder| !folder.is_empty());
     if let Some(folder) = current_folder {
         let resolved_folder = resolved_folder_identity(&stored_path_to_path_buf(folder))?;
-        let resolved_destination =
-            resolved_folder_identity(&stored_path_to_path_buf(&destination))?;
-        if !crate::title_folder_rules::path_is_strictly_within(&destination, folder)
+        let resolved_destination = resolved_folder_identity(&stored_path_to_path_buf(destination))?;
+        if !crate::title_folder_rules::path_is_strictly_within(destination, folder)
             || resolved_destination == resolved_folder
             || !resolved_destination.starts_with(&resolved_folder)
         {
             return Err(AppError::validation_refused(crate::error_reasons::folder_ownership::RECYCLE_RESTORE_PATH_OUTSIDE_TITLE_S_CURRENT_OWNED_FOLDER, "recycle restore path is outside the title's current owned folder; resolve the folder change before restoring"));
         }
     }
-    for owner in &owners {
+    let mut checked = OverlapLeft::new(current_folder.unwrap_or(destination));
+    for owner in owners {
         if Some(owner.title_id.as_str()) == title_id {
             continue;
         }
@@ -731,7 +854,7 @@ pub(crate) async fn ensure_restore_ownership(
             .folder_path
             .as_deref()
             .filter(|folder| !folder.is_empty())
-            && title_folders_overlap(current_folder.unwrap_or(&destination), folder)?
+            && checked.overlaps(folder)?
         {
             return Err(AppError::validation_refused(crate::error_reasons::folder_ownership::RECYCLE_RESTORE_DESTINATION_OVERLAPS_ANOTHER_TITLE_S_OWNED_FOLDER, "recycle restore destination overlaps another title's owned folder; recycled files were preserved"));
         }
@@ -793,25 +916,33 @@ pub(crate) async fn claim_title_folder_for_delete(
         return Ok(());
     }
     let stored = path_to_stored_string(folder_path);
-    for owner in app
+    let owners = app
         .services
         .catalog
         .titles
         .list_delete_preview_info()
+        .await?;
+    let stored = {
+        let title_id = title.id.clone();
+        run_folder_check_blocking(move || {
+            let mut checked = OverlapLeft::new(&stored);
+            for owner in &owners {
+                if owner.title_id == title_id {
+                    continue;
+                }
+                if let Some(other) = owner.folder_path.as_deref().filter(|path| !path.is_empty())
+                    && checked.overlaps(other)?
+                {
+                    return Err(AppError::validation_refused(
+                        crate::title_delete::FOLDER_OVERLAPS_TITLE,
+                        "title folder overlaps another title's recorded folder",
+                    ));
+                }
+            }
+            Ok(stored)
+        })
         .await?
-    {
-        if owner.title_id == title.id {
-            continue;
-        }
-        if let Some(other) = owner.folder_path.as_deref().filter(|path| !path.is_empty())
-            && title_folders_overlap(&stored, other)?
-        {
-            return Err(AppError::validation_refused(
-                crate::title_delete::FOLDER_OVERLAPS_TITLE,
-                "title folder overlaps another title's recorded folder",
-            ));
-        }
-    }
+    };
     ensure_unowned_folder_claimable(app, title, folder_path, TitleFolderClaimLayout::Configured)
         .await?;
     let write = crate::TitleFolderWrite::assign(&title.id, &stored).expecting(None);
@@ -1598,6 +1729,569 @@ mod tests {
             assert!(title_owns_folder(&title, candidate));
         } else {
             assert!(title_owns_another_folder(&title, candidate));
+        }
+    }
+
+    /// The guards before their comparison loops moved off the runtime and
+    /// stopped re-resolving the compared folder per owner, kept verbatim so
+    /// the current guards can be held to their decisions.
+    mod previous {
+        use super::super::*;
+
+        pub(super) async fn move_available(
+            app: &AppUseCase,
+            title: &Title,
+            folder_path: &Path,
+        ) -> AppResult<()> {
+            if folder_path.as_os_str().is_empty() {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::folder_ownership::TITLE_FOLDER_PATH_REQUIRED,
+                    "title folder path is required",
+                ));
+            }
+            let folder_path = path_to_stored_string(folder_path);
+            if let Some(context) = ScanOwnershipContext::current() {
+                return context.check(app, title, folder_path).await;
+            }
+            let mut keys = None;
+            for owner in app
+                .services
+                .catalog
+                .titles
+                .list_delete_preview_info()
+                .await?
+            {
+                let Some(owned_path) = owner.folder_path.as_deref().filter(|path| !path.is_empty())
+                else {
+                    continue;
+                };
+                if owner.title_id == title.id {
+                    continue;
+                }
+                if keys.is_none() {
+                    let root_paths = FolderOverlapKeys::root_paths(app).await?;
+                    keys = Some(FolderOverlapKeys::from_roots(&folder_path, &root_paths)?);
+                }
+                if !keys
+                    .as_mut()
+                    .expect("overlap keys loaded")
+                    .needs_exact_comparison(owned_path)?
+                {
+                    continue;
+                }
+                let overlaps = title_folders_overlap(&folder_path, owned_path).map_err(|error| {
+                    AppError::validation_refused(crate::error_reasons::folder_ownership::CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE, format!(
+                        "cannot compare folder {folder_path} with folder {owned_path} owned by title {}: {error}",
+                        owner.title_id
+                    ))
+                })?;
+                if overlaps && !folder_spans_a_library_root(app, owned_path).await? {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE,
+                        format!(
+                            "folder {folder_path} overlaps the folder owned by title {}",
+                            owner.title_id
+                        ),
+                    ));
+                }
+            }
+            Ok(())
+        }
+
+        pub(super) async fn restore_ownership(
+            app: &AppUseCase,
+            title_id: Option<&str>,
+            destination: &Path,
+        ) -> AppResult<()> {
+            let owners = app
+                .services
+                .catalog
+                .titles
+                .list_delete_preview_info()
+                .await?;
+            let destination = path_to_stored_string(destination);
+            let current_folder = owners
+                .iter()
+                .find(|owner| Some(owner.title_id.as_str()) == title_id)
+                .and_then(|owner| owner.folder_path.as_deref())
+                .filter(|folder| !folder.is_empty());
+            if let Some(folder) = current_folder {
+                let resolved_folder = resolved_folder_identity(&stored_path_to_path_buf(folder))?;
+                let resolved_destination =
+                    resolved_folder_identity(&stored_path_to_path_buf(&destination))?;
+                if !crate::title_folder_rules::path_is_strictly_within(&destination, folder)
+                    || resolved_destination == resolved_folder
+                    || !resolved_destination.starts_with(&resolved_folder)
+                {
+                    return Err(AppError::validation_refused(crate::error_reasons::folder_ownership::RECYCLE_RESTORE_PATH_OUTSIDE_TITLE_S_CURRENT_OWNED_FOLDER, "recycle restore path is outside the title's current owned folder; resolve the folder change before restoring"));
+                }
+            }
+            for owner in &owners {
+                if Some(owner.title_id.as_str()) == title_id {
+                    continue;
+                }
+                if let Some(folder) = owner
+                    .folder_path
+                    .as_deref()
+                    .filter(|folder| !folder.is_empty())
+                    && title_folders_overlap(current_folder.unwrap_or(&destination), folder)?
+                {
+                    return Err(AppError::validation_refused(crate::error_reasons::folder_ownership::RECYCLE_RESTORE_DESTINATION_OVERLAPS_ANOTHER_TITLE_S_OWNED_FOLDER, "recycle restore destination overlaps another title's owned folder; recycled files were preserved"));
+                }
+            }
+            Ok(())
+        }
+
+        pub(super) async fn claim_for_delete(
+            app: &AppUseCase,
+            title: &mut Title,
+            folder_path: &Path,
+        ) -> AppResult<()> {
+            ensure_folder_available_to_title(app, title, folder_path).await?;
+            if non_empty_folder_path(title.folder_path.as_deref()).is_some() {
+                return Ok(());
+            }
+            let stored = path_to_stored_string(folder_path);
+            for owner in app
+                .services
+                .catalog
+                .titles
+                .list_delete_preview_info()
+                .await?
+            {
+                if owner.title_id == title.id {
+                    continue;
+                }
+                if let Some(other) = owner.folder_path.as_deref().filter(|path| !path.is_empty())
+                    && title_folders_overlap(&stored, other)?
+                {
+                    return Err(AppError::validation_refused(
+                        crate::title_delete::FOLDER_OVERLAPS_TITLE,
+                        "title folder overlaps another title's recorded folder",
+                    ));
+                }
+            }
+            ensure_unowned_folder_claimable(
+                app,
+                title,
+                folder_path,
+                TitleFolderClaimLayout::Configured,
+            )
+            .await?;
+            let write = crate::TitleFolderWrite::assign(&title.id, &stored).expecting(None);
+            match app
+                .services
+                .catalog
+                .titles
+                .assign_title_folders(&[write])
+                .await
+            {
+                Ok(()) => {}
+                Err(error) if title_folder_write_lost(&error) => {
+                    return Err(AppError::validation_refused(
+                        crate::title_delete::FOLDER_CLAIM_LOST,
+                        "title folder ownership changed before deletion",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+            title.folder_path = Some(recorded_folder_after_claim(app, &title.id, stored).await?);
+            Ok(())
+        }
+
+        /// The folder-match overlap loop, given the catalog it read.
+        pub(super) fn folder_match_overlaps(
+            selected_folder: &str,
+            title_id: &str,
+            candidates: Vec<crate::TitleDeletePreviewInfo>,
+        ) -> AppResult<bool> {
+            for candidate in candidates {
+                if candidate.title_id == title_id {
+                    continue;
+                }
+                if let Some(folder) = candidate.folder_path
+                    && !crate::stored_paths::folder_paths_match(selected_folder, &folder)
+                    && title_folders_overlap(selected_folder, &folder)?
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+    }
+
+    const EMBERFALL_OWNER: &str = "emberfall-owner";
+    const ROOT_SPANNING_OWNER: &str = "root-spanning-owner";
+
+    /// The decision a guard reached: allowed, refused with a reason, or
+    /// failed without one. The message stays out of it only where a
+    /// failure carries no reason code.
+    fn decision(result: &AppResult<()>) -> Result<(), (Option<String>, String)> {
+        result.as_ref().map(|_| ()).map_err(|error| {
+            (
+                error.validation_reason().map(str::to_string),
+                error.to_string(),
+            )
+        })
+    }
+
+    struct GuardFixture {
+        _root: tempfile::TempDir,
+        root: std::path::PathBuf,
+        app: AppUseCase,
+        user: scryer_domain::User,
+        subject: Title,
+    }
+
+    /// A Movie library rooted in a temp dir, a folderless subject title and
+    /// one owner of `Shelf/Emberfall`. `root_spanning` adds an owner of the
+    /// library root itself ahead of it.
+    async fn guard_fixture(root_spanning: bool) -> GuardFixture {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root_dir.path()).unwrap();
+        for folder in [
+            "Shelf/Emberfall/Season 01",
+            "Shelf/Ember",
+            "Shelf/Cinderwake",
+            "Shelf/Ashgrove",
+            CINDERWAKE_NFC,
+        ] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("Shelf/Emberfall"), root.join("Shelf/Ash Alias"))
+            .unwrap();
+        let (app, user) = crate::lib_tests::bootstrap();
+        let facet = MediaFacet::Movie;
+        let library_id = scryer_domain::default_library_id_for_facet(&facet);
+        let library = app
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&library_id)
+            .await
+            .unwrap()
+            .unwrap();
+        app.services
+            .catalog
+            .libraries
+            .update(
+                &library_id,
+                library.name,
+                library.slug,
+                vec![crate::LibraryRootDraft {
+                    id: None,
+                    path: path_to_stored_string(&root),
+                    is_default: true,
+                }],
+            )
+            .await
+            .unwrap();
+        let subject = app
+            .create_title_without_hydration_in_library(
+                &user,
+                crate::NewTitle {
+                    name: "Ashgrove".into(),
+                    facet,
+                    ..Default::default()
+                },
+                library_id,
+            )
+            .await
+            .unwrap()
+            .title;
+        let mut owners = Vec::new();
+        if root_spanning {
+            owners.push((ROOT_SPANNING_OWNER, root.clone()));
+        }
+        owners.push((EMBERFALL_OWNER, root.join("Shelf/Emberfall")));
+        owners.push(("cinderwake-owner", root.join(CINDERWAKE_NFC)));
+        for (id, folder) in owners {
+            let mut owner = subject.clone();
+            owner.id = id.into();
+            owner.name = "Emberfall".into();
+            owner.folder_path = None;
+            app.services
+                .catalog
+                .titles
+                .create_or_get_existing(owner)
+                .await
+                .unwrap();
+            // The test catalog records a library-root folder as damage would.
+            app.services
+                .catalog
+                .titles
+                .set_folder_path(id, &path_to_stored_string(folder))
+                .await
+                .unwrap();
+        }
+        GuardFixture {
+            _root: root_dir,
+            root,
+            app,
+            user,
+            subject,
+        }
+    }
+
+    /// Folders each guard is asked about, relative to the library root,
+    /// with whether they overlap `Shelf/Emberfall`.
+    fn guard_cases() -> Vec<(&'static str, bool)> {
+        let cases = vec![
+            ("Shelf/Emberfall", true),
+            ("Shelf/Emberfall/", true),
+            ("Shelf/Emberfall/Season 01", true),
+            ("Shelf/Emberfall/Season 02", true),
+            ("Shelf", true),
+            ("Shelf/Ember", false),
+            ("Shelf/Emberfall 2", false),
+            ("Shelf/Cinderwake", false),
+            ("Shelf/Ashgrove", false),
+        ];
+        #[cfg(unix)]
+        let cases = [
+            cases,
+            vec![
+                ("Shelf/Ash Alias", true),
+                ("Shelf/Ash Alias/Season 01", true),
+            ],
+        ]
+        .concat();
+        cases
+    }
+
+    /// A second owner whose folder name has a precomposed letter.
+    const CINDERWAKE_NFC: &str = "Shelf/Cinderwak\u{e9}";
+
+    /// Case and Unicode spellings, whose outcome can depend on the volume.
+    const SPELLING_CASES: [&str; 4] = [
+        "Shelf/emberfall",
+        "Shelf/EMBERFALL/Season 01",
+        "Shelf/Cinderwake\u{301}",
+        "Shelf/Cinderwake\u{301}/Season 01",
+    ];
+
+    #[tokio::test]
+    async fn folder_move_guard_matches_previous_decisions() {
+        for root_spanning in [false, true] {
+            let fixture = guard_fixture(root_spanning).await;
+            let folders = guard_cases()
+                .into_iter()
+                .map(|(folder, overlaps)| (folder, Some(overlaps)))
+                .chain(SPELLING_CASES.iter().map(|folder| (*folder, None)));
+            for (folder, overlaps) in folders {
+                let path = fixture.root.join(folder);
+                let current =
+                    ensure_folder_move_available_to_title(&fixture.app, &fixture.subject, &path)
+                        .await;
+                let previous =
+                    previous::move_available(&fixture.app, &fixture.subject, &path).await;
+                assert_eq!(decision(&current), decision(&previous), "{folder}");
+                // The library-root owner overlaps everything and is exempt.
+                if let Some(overlaps) = overlaps {
+                    assert_eq!(
+                        current.err().and_then(|error| error
+                            .validation_reason()
+                            .map(str::to_string)),
+                        overlaps.then(|| crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE.to_string()),
+                        "{folder}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_guard_matches_previous_decisions() {
+        let fixture = guard_fixture(false).await;
+        let folders = guard_cases()
+            .into_iter()
+            .map(|(folder, overlaps)| (folder, Some(overlaps)))
+            .chain(SPELLING_CASES.iter().map(|folder| (*folder, None)));
+        for (folder, overlaps) in folders {
+            let path = fixture.root.join(folder);
+            for title_id in [None, Some(fixture.subject.id.as_str())] {
+                let current = ensure_restore_ownership(&fixture.app, title_id, &path).await;
+                let previous = previous::restore_ownership(&fixture.app, title_id, &path).await;
+                assert_eq!(decision(&current), decision(&previous), "{folder}");
+                if let Some(overlaps) = overlaps {
+                    assert_eq!(current.is_err(), overlaps, "{folder}");
+                }
+            }
+        }
+        // The restoring title's own folder is the compared one when it has
+        // one: a destination inside it, inside another title's folder, and
+        // outside it.
+        let fixture = guard_fixture(false).await;
+        for folder in [
+            "Shelf/Emberfall/Season 01",
+            "Shelf/Ember/Season 01",
+            "Shelf/Cinderwake/Season 01",
+            "Shelf/Ember",
+        ] {
+            let path = fixture.root.join(folder);
+            for title_id in [Some(EMBERFALL_OWNER), Some("missing-title")] {
+                let current = ensure_restore_ownership(&fixture.app, title_id, &path).await;
+                let previous = previous::restore_ownership(&fixture.app, title_id, &path).await;
+                assert_eq!(decision(&current), decision(&previous), "{folder}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_claim_guard_matches_previous_decisions() {
+        let folders = guard_cases()
+            .into_iter()
+            .map(|(folder, overlaps)| (folder, Some(overlaps)))
+            .chain(SPELLING_CASES.iter().map(|folder| (*folder, None)));
+        for (folder, overlaps) in folders {
+            // The claim records the folder, so each side gets its own catalog.
+            let current_fixture = guard_fixture(false).await;
+            let previous_fixture = guard_fixture(false).await;
+            let mut current_title = current_fixture.subject.clone();
+            let mut previous_title = previous_fixture.subject.clone();
+            let current = claim_title_folder_for_delete(
+                &current_fixture.app,
+                &mut current_title,
+                &current_fixture.root.join(folder),
+            )
+            .await;
+            let previous = previous::claim_for_delete(
+                &previous_fixture.app,
+                &mut previous_title,
+                &previous_fixture.root.join(folder),
+            )
+            .await;
+            let relative = |fixture: &GuardFixture, title: &Title| {
+                title.folder_path.as_deref().map(|recorded| {
+                    recorded
+                        .strip_prefix(&path_to_stored_string(&fixture.root))
+                        .unwrap_or(recorded)
+                        .to_string()
+                })
+            };
+            let message_free = |result: &AppResult<()>| {
+                decision(result).map_err(|(reason, message)| {
+                    (
+                        reason,
+                        message
+                            .replace(&path_to_stored_string(&current_fixture.root), "<root>")
+                            .replace(&path_to_stored_string(&previous_fixture.root), "<root>"),
+                    )
+                })
+            };
+            assert_eq!(message_free(&current), message_free(&previous), "{folder}");
+            assert_eq!(
+                relative(&current_fixture, &current_title),
+                relative(&previous_fixture, &previous_title),
+                "{folder}"
+            );
+            // An exact owner is refused by the ownership check ahead of the
+            // overlap loop.
+            if let Some(overlaps) = overlaps {
+                assert_eq!(current.is_err(), overlaps, "{folder}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn folder_match_guard_matches_previous_decisions() {
+        let fixture = guard_fixture(false).await;
+        let folders = guard_cases()
+            .into_iter()
+            .map(|(folder, _)| folder)
+            .chain(SPELLING_CASES);
+        for folder in folders {
+            let selected = path_to_stored_string(fixture.root.join(folder));
+            let catalog = fixture
+                .app
+                .services
+                .catalog
+                .titles
+                .list_delete_preview_info()
+                .await
+                .unwrap();
+            let previous = previous::folder_match_overlaps(
+                &path_to_stored_string(stored_path_to_path_buf(&selected)),
+                &fixture.subject.id,
+                catalog,
+            );
+            let current = fixture
+                .app
+                .change_title_folder_preview(&fixture.user, &fixture.subject.id, &selected)
+                .await;
+            let refused_for_overlap = current
+                .as_ref()
+                .err()
+                .and_then(|error| error.validation_reason())
+                == Some(
+                    crate::error_reasons::location::SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER,
+                );
+            // Checks ahead of the overlap loop may refuse first; the loop's
+            // refusal appears exactly where the previous loop refused.
+            match previous {
+                Ok(true) => assert!(current.is_err(), "{folder}"),
+                Ok(false) => assert!(!refused_for_overlap, "{folder}"),
+                Err(_) => assert!(current.is_err(), "{folder}"),
+            }
+        }
+    }
+
+    #[test]
+    fn one_folder_compared_with_many_matches_single_comparisons() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir_all(root.join("Shelf/Emberfall/Season 01")).unwrap();
+        std::fs::create_dir_all(root.join("Shelf/Cinderwake")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("Shelf/Emberfall"), root.join("Shelf/Ash Alias"))
+            .unwrap();
+        let others = [
+            "",
+            "relative/Ashgrove",
+            "../Ashgrove",
+            "/Shelf/../Ashgrove",
+            "Shelf/Emberfall",
+            "Shelf/Emberfall/Season 01",
+            "Shelf",
+            "Shelf/Ember",
+            "Shelf/Emberfall 2",
+            "Shelf/Cinderwake",
+            "Shelf/emberfall",
+            "Shelf/Emberfall\u{0301}",
+            "Shelf/Ash Alias",
+            "Shelf/Ash Alias/Season 01",
+        ]
+        .map(|other| {
+            if other.is_empty() || other.starts_with("relative") || other.starts_with("..") {
+                other.to_string()
+            } else {
+                path_to_stored_string(root.join(other.trim_start_matches('/')))
+            }
+        });
+        let lefts = [
+            path_to_stored_string(root.join("Shelf/Emberfall")),
+            path_to_stored_string(root.join("Shelf/Ember")),
+            path_to_stored_string(root.join("Shelf/Missing/Ashgrove")),
+            path_to_stored_string(root.join("Shelf/Ash Alias")),
+            "relative/Ashgrove".to_string(),
+        ];
+        for left in lefts {
+            let mut checked = OverlapLeft::new(&left);
+            for other in &others {
+                let single = title_folders_overlap(&left, other);
+                let shared = checked.overlaps(other);
+                assert_eq!(
+                    single.as_ref().ok(),
+                    shared.as_ref().ok(),
+                    "{left} vs {other}"
+                );
+                assert_eq!(
+                    single.err().map(|error| error.to_string()),
+                    shared.err().map(|error| error.to_string()),
+                    "{left} vs {other}"
+                );
+            }
         }
     }
 }

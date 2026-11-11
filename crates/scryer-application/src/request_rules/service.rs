@@ -124,6 +124,21 @@ pub struct RequestRulePreviewResult {
     pub metadata_partial: bool,
 }
 
+/// A rule set with its current revision; a missing revision is a repository
+/// fault.
+fn request_rule_detail(
+    rule_set: RequestRuleSet,
+    revision: Option<RequestRuleRevision>,
+) -> AppResult<RequestRuleSetDetail> {
+    let revision = revision.ok_or_else(|| {
+        AppError::Repository(format!(
+            "request rule set {} has no revision {}",
+            rule_set.id, rule_set.current_revision_number
+        ))
+    })?;
+    Ok(RequestRuleSetDetail { rule_set, revision })
+}
+
 // ── Service ─────────────────────────────────────────────────────────────────
 
 impl AppUseCase {
@@ -144,11 +159,21 @@ impl AppUseCase {
         actor: &User,
     ) -> AppResult<Vec<RequestRuleSetDetail>> {
         let rule_sets = self.list_request_rule_sets(actor).await?;
-        let mut details = Vec::with_capacity(rule_sets.len());
-        for rule_set in rule_sets {
-            details.push(self.load_request_rule_detail(rule_set).await?);
-        }
-        Ok(details)
+        let keys: Vec<(String, i64)> = rule_sets
+            .iter()
+            .map(|rule_set| (rule_set.id.clone(), rule_set.current_revision_number))
+            .collect();
+        let revisions = self
+            .services
+            .customization
+            .request_rule_sets
+            .get_revisions(&keys)
+            .await?;
+        rule_sets
+            .into_iter()
+            .zip(revisions)
+            .map(|(rule_set, revision)| request_rule_detail(rule_set, revision))
+            .collect()
     }
 
     pub async fn get_request_rule_set(
@@ -609,14 +634,8 @@ impl AppUseCase {
             .customization
             .request_rule_sets
             .get_revision(&rule_set.id, rule_set.current_revision_number)
-            .await?
-            .ok_or_else(|| {
-                AppError::Repository(format!(
-                    "request rule set {} has no revision {}",
-                    rule_set.id, rule_set.current_revision_number
-                ))
-            })?;
-        Ok(RequestRuleSetDetail { rule_set, revision })
+            .await?;
+        request_rule_detail(rule_set, revision)
     }
 
     async fn resolve_request_preview_policy(

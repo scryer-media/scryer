@@ -73,63 +73,99 @@ pub async fn start_background_download_delete_poller(
 ) {
     let worker = PollingWorker::new("download_delete_poller", token);
     tracing::info!(
-        interval_seconds = DOWNLOAD_DELETE_POLLER_INTERVAL_SECONDS,
+        recovery_interval_seconds = DOWNLOAD_DELETE_STALE_RECOVERY_SECONDS,
         "download delete poller started"
     );
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-        DOWNLOAD_DELETE_POLLER_INTERVAL_SECONDS,
-    ));
+    let wake = app.runtime.acquisition.download_delete_wake.clone();
+    let recovery_interval =
+        std::time::Duration::from_secs(DOWNLOAD_DELETE_STALE_RECOVERY_SECONDS.unsigned_abs());
+    let retry_interval = std::time::Duration::from_secs(DOWNLOAD_DELETE_POLLER_INTERVAL_SECONDS);
+    // Commands persist across restarts, so the first pass recovers and drains.
+    let mut next_recovery_at = tokio::time::Instant::now();
 
     loop {
-        if !worker.wait_for_tick(&mut interval).await {
+        let now = tokio::time::Instant::now();
+        if now >= next_recovery_at {
+            next_recovery_at = if recover_stale_delete_commands(&app, &worker).await {
+                now + recovery_interval
+            } else {
+                now + retry_interval
+            };
+        }
+
+        let had_error = run_pending_delete_commands(&app, &worker).await;
+
+        // Idle: nothing is read again until a delete is queued or the next
+        // stale-command recovery is due. A failed pass retries on the old cadence.
+        let until_recovery =
+            next_recovery_at.saturating_duration_since(tokio::time::Instant::now());
+        let wait = if had_error {
+            until_recovery.min(retry_interval)
+        } else {
+            until_recovery
+        };
+        if !worker.wait_for_wake_or_timeout(&wake, wait).await {
             return;
         }
+    }
+}
 
-        match app
-            .services
-            .workflow
-            .download_queue_commands
-            .recover_stale_running_delete_commands(DOWNLOAD_DELETE_STALE_RECOVERY_SECONDS)
-            .await
-        {
-            Ok(recovered) if recovered > 0 => {
+/// Returns false when the recovery could not run and should be retried soon.
+async fn recover_stale_delete_commands(app: &AppUseCase, worker: &PollingWorker) -> bool {
+    match app
+        .services
+        .workflow
+        .download_queue_commands
+        .recover_stale_running_delete_commands(DOWNLOAD_DELETE_STALE_RECOVERY_SECONDS)
+        .await
+    {
+        Ok(recovered) => {
+            if recovered > 0 {
                 worker.warn_recovered("recover_stale_running_delete_commands", recovered);
             }
-            Err(error) => {
-                worker.warn_error("recover_stale_running_delete_commands", &error);
-            }
-            _ => {}
+            true
         }
+        Err(error) => {
+            worker.warn_error("recover_stale_running_delete_commands", &error);
+            false
+        }
+    }
+}
 
-        let pending = match app
+/// Runs every queued delete once. Returns true when a step failed and the
+/// queue should be looked at again soon.
+async fn run_pending_delete_commands(app: &AppUseCase, worker: &PollingWorker) -> bool {
+    let pending = match app
+        .services
+        .workflow
+        .download_queue_commands
+        .list_pending_delete_commands()
+        .await
+    {
+        Ok(pending) => pending,
+        Err(error) => {
+            worker.warn_error("list_pending_delete_commands", &error);
+            return true;
+        }
+    };
+
+    let mut had_error = false;
+    for command in pending {
+        if let Err(error) = app
             .services
             .workflow
             .download_queue_commands
-            .list_pending_delete_commands()
+            .mark_delete_command_running(&command.id)
             .await
         {
-            Ok(pending) => pending,
-            Err(error) => {
-                worker.warn_error("list_pending_delete_commands", &error);
-                continue;
-            }
-        };
-
-        for command in pending {
-            if let Err(error) = app
-                .services
-                .workflow
-                .download_queue_commands
-                .mark_delete_command_running(&command.id)
-                .await
-            {
-                worker.warn_error("mark_delete_command_running", &error);
-                continue;
-            }
-
-            execute_delete_command(&app, &worker, &command).await;
+            worker.warn_error("mark_delete_command_running", &error);
+            had_error = true;
+            continue;
         }
+
+        execute_delete_command(app, worker, &command).await;
     }
+    had_error
 }
 
 /// Execute one queued user delete: remove the client entry, finalize the

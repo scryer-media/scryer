@@ -472,3 +472,195 @@ fn list_request_counts_skip_manual_and_old_requests() {
     assert_eq!(counts.get("member-a"), Some(&1));
     assert_eq!(counts.get("member-b"), Some(&1));
 }
+
+fn chart(chart_key: &str) -> ListChartCatalogEntry {
+    ListChartCatalogEntry {
+        provider: "emberfall".into(),
+        chart_key: chart_key.into(),
+        scope: "global".into(),
+        label: format!("Emberfall {chart_key}"),
+        kinds: vec!["movie".into()],
+        refreshed_at: None,
+        item_count: 10,
+    }
+}
+
+fn gateway_failure() -> AppError {
+    AppError::Repository("fixture gateway failure".into())
+}
+
+#[tokio::test(start_paused = true)]
+async fn chart_catalog_is_served_from_the_cache_for_ten_minutes() {
+    let cache = ListChartCatalogCache::default();
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let fetch = |charts: Vec<ListChartCatalogEntry>| {
+        let calls = &calls;
+        async move {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(charts)
+        }
+    };
+
+    assert_eq!(
+        cache.get(fetch(vec![chart("trending")])).await.unwrap(),
+        vec![chart("trending")]
+    );
+    tokio::time::advance(LIST_CHART_CATALOG_TTL - std::time::Duration::from_secs(1)).await;
+    // Still fresh: the gateway's newer answer is not asked for.
+    let served = cache.get(fetch(vec![chart("newer")])).await.unwrap();
+    assert_eq!(served, vec![chart("trending")]);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    assert_eq!(
+        cache.get(fetch(vec![chart("popular")])).await.unwrap(),
+        vec![chart("popular")]
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_chart_catalog_fetch_serves_the_last_good_answer_and_is_not_cached() {
+    let cache = ListChartCatalogCache::default();
+    // With nothing cached, the failure is the answer, and nothing is stored.
+    assert!(cache.get(async { Err(gateway_failure()) }).await.is_err());
+    // Within the hold the gateway is not asked again; after it, it is.
+    assert!(cache.get(async { Ok(vec![chart("held")]) }).await.is_err());
+    tokio::time::advance(LIST_CHART_CATALOG_FAILURE_HOLD).await;
+    assert_eq!(
+        cache
+            .get(async { Ok(vec![chart("trending")]) })
+            .await
+            .unwrap(),
+        vec![chart("trending")]
+    );
+
+    tokio::time::advance(LIST_CHART_CATALOG_TTL).await;
+    assert_eq!(
+        cache.get(async { Err(gateway_failure()) }).await.unwrap(),
+        vec![chart("trending")],
+        "the last good catalog is served when the gateway fails"
+    );
+    // Within the hold the last good catalog is served without a fetch.
+    assert_eq!(
+        cache.get(async { Ok(vec![chart("held")]) }).await.unwrap(),
+        vec![chart("trending")]
+    );
+    // The failure did not refresh the cache: after the hold the next read
+    // asks again.
+    tokio::time::advance(LIST_CHART_CATALOG_FAILURE_HOLD).await;
+    assert_eq!(
+        cache
+            .get(async { Ok(vec![chart("popular")]) })
+            .await
+            .unwrap(),
+        vec![chart("popular")]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_chart_catalog_readers_share_one_fetch() {
+    let cache = std::sync::Arc::new(ListChartCatalogCache::default());
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let first = {
+        let cache = cache.clone();
+        let calls = calls.clone();
+        tokio::spawn(async move {
+            cache
+                .get(async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    released.await.expect("release");
+                    Ok(vec![chart("trending")])
+                })
+                .await
+        })
+    };
+    // Wait until the first reader is inside its fetch.
+    while calls.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    let second = {
+        let cache = cache.clone();
+        let calls = calls.clone();
+        tokio::spawn(async move {
+            cache
+                .get(async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(vec![chart("popular")])
+                })
+                .await
+        })
+    };
+    // Let the second reader reach the cache while the first still fetches.
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    release.send(()).expect("first reader waits");
+    assert_eq!(first.await.unwrap().unwrap(), vec![chart("trending")]);
+    assert_eq!(second.await.unwrap().unwrap(), vec![chart("trending")]);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn readers_queued_behind_a_failing_chart_catalog_fetch_do_not_fetch_again() {
+    for seeded in [false, true] {
+        let cache = std::sync::Arc::new(ListChartCatalogCache::default());
+        if seeded {
+            cache
+                .get(async { Ok(vec![chart("trending")]) })
+                .await
+                .unwrap();
+            tokio::time::advance(LIST_CHART_CATALOG_TTL).await;
+        }
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let first = {
+            let cache = cache.clone();
+            let calls = calls.clone();
+            tokio::spawn(async move {
+                cache
+                    .get(async move {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        released.await.expect("release");
+                        Err(gateway_failure())
+                    })
+                    .await
+            })
+        };
+        while calls.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        let waiters = (0..5)
+            .map(|_| {
+                let cache = cache.clone();
+                let calls = calls.clone();
+                tokio::spawn(async move {
+                    cache
+                        .get(async move {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            Err(gateway_failure())
+                        })
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        release.send(()).expect("first reader waits");
+        let mut answers = vec![first.await.unwrap()];
+        for waiter in waiters {
+            answers.push(waiter.await.unwrap());
+        }
+        for answer in answers {
+            if seeded {
+                assert_eq!(answer.unwrap(), vec![chart("trending")]);
+            } else {
+                assert!(matches!(answer, Err(AppError::Repository(_))));
+            }
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "seeded={seeded}"
+        );
+    }
+}

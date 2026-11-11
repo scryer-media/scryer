@@ -306,6 +306,16 @@ impl IndexerConfigStore {
 
 #[async_trait]
 impl IndexerConfigRepository for IndexerConfigStore {
+    async fn any_configured(&self) -> AppResult<bool> {
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS present FROM indexers LIMIT 1",
+            &[],
+        )
+        .await?
+        .is_some())
+    }
+
     async fn list(&self, provider_type: Option<String>) -> AppResult<Vec<IndexerConfig>> {
         let encryption_key = self.encryption_key()?;
         let (sql, args) = match provider_type {

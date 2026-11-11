@@ -71,6 +71,7 @@ enum TitleRecommendationRefreshEnqueueOutcome {
     Queued,
     ReplacedPending,
     QueuedAfterInFlight,
+    SkippedInFlight,
 }
 
 #[derive(Default)]
@@ -108,6 +109,18 @@ impl TitleRecommendationRefreshQueue {
         } else {
             TitleRecommendationRefreshEnqueueOutcome::Queued
         }
+    }
+
+    /// Enqueues like [`Self::enqueue`], except that a title whose refresh is
+    /// already running and has nothing pending gets no follow-up run.
+    fn enqueue_unless_in_flight(
+        &mut self,
+        job: TitleRecommendationRefreshJob,
+    ) -> TitleRecommendationRefreshEnqueueOutcome {
+        if self.in_flight.contains(&job.title.id) && !self.pending.contains_key(&job.title.id) {
+            return TitleRecommendationRefreshEnqueueOutcome::SkippedInFlight;
+        }
+        self.enqueue(job)
     }
 
     fn take_next(&mut self) -> Option<TitleRecommendationRefreshJob> {
@@ -399,6 +412,63 @@ mod title_recommendation_refresh_queue_tests {
         queue.complete("title-1");
         let follow_up = queue.take_next().expect("follow-up job");
         assert_eq!(follow_up.title.name, "Follow Up");
+    }
+
+    #[test]
+    fn due_check_queues_no_follow_up_for_a_running_title() {
+        let mut queue = TitleRecommendationRefreshQueue::default();
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-1", "Emberfall")),
+            TitleRecommendationRefreshEnqueueOutcome::Queued
+        );
+        let running = queue.take_next().expect("initial job");
+        assert_eq!(running.title.name, "Emberfall");
+
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-1", "Emberfall Again")),
+            TitleRecommendationRefreshEnqueueOutcome::SkippedInFlight
+        );
+        assert!(!queue.has_pending());
+        // Another title still queues while the first one runs.
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-2", "Cinderwake")),
+            TitleRecommendationRefreshEnqueueOutcome::Queued
+        );
+        queue.complete("title-1");
+        assert_eq!(
+            queue.take_next().expect("other title").title.name,
+            "Cinderwake"
+        );
+        assert!(queue.take_next().is_none());
+
+        // Once the run completes, the title queues again.
+        queue.complete("title-2");
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-1", "Emberfall Later")),
+            TitleRecommendationRefreshEnqueueOutcome::Queued
+        );
+    }
+
+    #[test]
+    fn due_check_keeps_replacing_a_pending_follow_up() {
+        let mut queue = TitleRecommendationRefreshQueue::default();
+        queue.enqueue(job("title-1", "Ashgrove"));
+        queue.take_next().expect("initial job");
+        // A follow-up queued by hydration while the title runs is kept, and a
+        // due check replaces it as it always has.
+        assert_eq!(
+            queue.enqueue(job("title-1", "Ashgrove Hydrated")),
+            TitleRecommendationRefreshEnqueueOutcome::QueuedAfterInFlight
+        );
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-1", "Ashgrove Due")),
+            TitleRecommendationRefreshEnqueueOutcome::ReplacedPending
+        );
+        queue.complete("title-1");
+        assert_eq!(
+            queue.take_next().expect("follow-up").title.name,
+            "Ashgrove Due"
+        );
     }
 
     #[test]
@@ -1744,6 +1814,27 @@ impl AppUseCase {
             return;
         }
 
+        self.queue_title_more_like_this_refresh(
+            title,
+            external_ids,
+            seeded_more_like_this,
+            source,
+            false,
+        )
+        .await;
+    }
+
+    /// Queues a background refresh and wakes a worker. With
+    /// `skip_if_in_flight`, a title whose refresh is already running gets no
+    /// follow-up run. Returns whether a run was queued.
+    async fn queue_title_more_like_this_refresh(
+        &self,
+        title: &Title,
+        external_ids: &[scryer_domain::ExternalId],
+        seeded_more_like_this: &[crate::DiscoveryTitle],
+        source: HydrationSource,
+        skip_if_in_flight: bool,
+    ) -> bool {
         self.ensure_title_recommendation_refresh_workers_started()
             .await;
         let job = TitleRecommendationRefreshJob::new(
@@ -1759,7 +1850,11 @@ impl AppUseCase {
                 .title_recommendation_refresh_queue
                 .lock()
                 .await;
-            queue.enqueue(job)
+            if skip_if_in_flight {
+                queue.enqueue_unless_in_flight(job)
+            } else {
+                queue.enqueue(job)
+            }
         };
 
         match outcome {
@@ -1784,11 +1879,21 @@ impl AppUseCase {
                 seeded_count = seeded_more_like_this.len(),
                 "queued follow-up title recommendations refresh after in-flight refresh"
             ),
+            TitleRecommendationRefreshEnqueueOutcome::SkippedInFlight => {
+                debug!(
+                    hydration_source = source.as_str(),
+                    facet = title.facet.as_str(),
+                    title_id = %title.id,
+                    "title recommendations refresh already running; no follow-up queued"
+                );
+                return false;
+            }
         }
         self.runtime
             .catalog
             .title_recommendation_refresh_wake
             .notify_one();
+        true
     }
 
     pub(crate) async fn queue_title_more_like_this_refresh_if_due(
@@ -1822,9 +1927,15 @@ impl AppUseCase {
             return Ok(false);
         }
 
-        self.refresh_or_queue_title_more_like_this_after_hydration(title, &[], &[], source)
-            .await;
-        Ok(true)
+        if source.refresh_recommendations_inline() {
+            self.refresh_or_queue_title_more_like_this_after_hydration(title, &[], &[], source)
+                .await;
+            return Ok(true);
+        }
+        // A refresh already running for this title answers this check too.
+        Ok(self
+            .queue_title_more_like_this_refresh(title, &[], &[], source, true)
+            .await)
     }
 
     async fn ensure_title_recommendation_refresh_workers_started(&self) {

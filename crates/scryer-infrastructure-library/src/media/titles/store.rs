@@ -33,6 +33,7 @@ use crate::media::canonical_tags::{
     attach_metadata_tags_to_titles, load_title_metadata_ratings, load_title_metadata_tags,
     replace_title_metadata_ratings_tx, replace_title_metadata_tags_tx,
 };
+use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::media::monitor_selections::{
     OWNER_KIND_TITLE, load_monitor_selection, replace_monitor_selection_tx,
 };
@@ -387,6 +388,9 @@ impl TitleStore {
 /// variable ceiling with room for the monitored bind.
 const SET_TITLES_MONITORED_BIND_CHUNK: usize = 900;
 
+/// Ids per `SELECT ... WHERE id IN (...)`, the same ceiling as above.
+const TITLE_ID_LIST_BIND_CHUNK: usize = 900;
+
 /// The `folder_path` half of the folder-ownership lookup, with its binds.
 ///
 /// The narrowing has to let through every row `folder_paths_match` would
@@ -693,28 +697,26 @@ impl TitleRepository for TitleStore {
              selected AS (SELECT * FROM submitted UNION ALL
                  SELECT * FROM scoped WHERE NOT EXISTS (SELECT 1 FROM submitted))"
         );
-        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &format!(
-            "{scope} SELECT s.id, s.facet, t.title_id AS owner_id, t.tag_key, t.category, t.name,
-                 t.confidence, t.affinity_signals_json, t.is_adult, t.is_spoiler,
-                 ts.source, tk.source_tag_key
-             FROM selected s LEFT JOIN title_metadata_tags t ON t.title_id = s.id
-                 AND LOWER(t.category) IN ('genre', 'theme')
-             LEFT JOIN title_metadata_tag_sources ts ON ts.title_id = t.title_id AND ts.tag_key = t.tag_key
-             LEFT JOIN title_metadata_tag_source_keys tk ON tk.title_id = t.title_id AND tk.tag_key = t.tag_key
-             ORDER BY s.id, t.sort_index, t.category, t.name,
-                 ts.sort_index, ts.source, tk.sort_index, tk.source_tag_key"
-        ), &args).await?;
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!("{scope} SELECT s.id, s.facet FROM selected s"),
+            &args,
+        )
+        .await?;
         let mut identities = BTreeMap::new();
-        let mut tag_rows = Vec::new();
         for row in &rows {
             identities
                 .entry(row.text("id")?)
                 .or_insert(row.text("facet")?);
-            if row.opt_text("tag_key")?.is_some() {
-                tag_rows.push(row);
-            }
         }
-        let mut tags = crate::media::canonical_tags::rows_to_tags_by_owner(tag_rows)?;
+        let ids = identities.keys().cloned().collect::<Vec<_>>();
+        let mut tags =
+            crate::media::canonical_tags::load_title_metadata_tags_in_lowered_categories(
+                self.datastore.read_exec(),
+                &ids,
+                &["genre", "theme"],
+            )
+            .await?;
         Ok(identities
             .into_iter()
             .map(|(id, facet)| scryer_application::DiscoveryAffinityTitle {
@@ -1191,9 +1193,45 @@ impl TitleRepository for TitleStore {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let (sql, args) = build_title_page_after_id_sql(after_id.as_deref(), limit);
+        let (sql, args) = build_title_page_after_id_sql(after_id.as_deref(), &[], limit);
         let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
         decode_runtime_title_rows(&rows, PersistedTitleReadMode::Canonical, true)
+    }
+
+    async fn list_page_after_id_in_libraries(
+        &self,
+        after_id: Option<String>,
+        library_ids: &[String],
+        limit: usize,
+    ) -> AppResult<Vec<Title>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        if library_ids.is_empty() {
+            return self.list_page_after_id(after_id, limit).await;
+        }
+        // Rows with no library decode to a facet default that may fall outside
+        // `library_ids`; dropping those can leave a short page, so read on
+        // until the page is full or the catalog ends.
+        let mut selected = Vec::new();
+        let mut cursor = after_id;
+        loop {
+            let (sql, args) = build_title_page_after_id_sql(cursor.as_deref(), library_ids, limit);
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            let read = rows.len();
+            let titles = decode_runtime_title_rows(&rows, PersistedTitleReadMode::Canonical, true)?;
+            cursor = titles.last().map(|title| title.id.clone());
+            selected.extend(
+                titles
+                    .into_iter()
+                    .filter(|title| library_ids.contains(&title.library_id)),
+            );
+            if read < limit || selected.len() >= limit {
+                break;
+            }
+        }
+        selected.truncate(limit);
+        Ok(selected)
     }
 
     async fn update_title_artwork_urls(&self, updates: &[TitleArtworkUrlUpdate]) -> AppResult<u64> {
@@ -1358,23 +1396,29 @@ impl TitleRepository for TitleStore {
         )
         .await?;
         let query = resolved_search.as_ref();
-        let filter_counts = if aggregates.filter_counts {
-            fetch_title_catalog_filter_counts(
+        let (filter_counts, total_count) = if aggregates.filter_counts {
+            let (counts, total) = fetch_title_catalog_filter_counts(
+                &self.datastore,
+                facet.clone(),
+                library_ids,
+                query,
+                &filter,
+                aggregates.file_state_counts,
+            )
+            .await?;
+            (counts, if aggregates.total_count { total } else { 0 })
+        } else if aggregates.total_count {
+            let total = fetch_title_catalog_count(
                 &self.datastore,
                 facet.clone(),
                 library_ids,
                 query,
                 &filter,
             )
-            .await?
+            .await?;
+            (TitleCatalogFilterCounts::default(), total)
         } else {
-            TitleCatalogFilterCounts::default()
-        };
-        let total_count = if aggregates.total_count {
-            fetch_title_catalog_count(&self.datastore, facet.clone(), library_ids, query, &filter)
-                .await?
-        } else {
-            0
+            (TitleCatalogFilterCounts::default(), 0)
         };
         let managed_bytes = if aggregates.managed_bytes {
             fetch_title_catalog_managed_bytes(
@@ -1645,9 +1689,21 @@ impl TitleRepository for TitleStore {
             &[],
         )
         .await?;
-        rows.iter()
-            .map(|row| Ok((row.text("library_id")?, row.text("facet")?)))
-            .collect()
+        // Same library and facet values the full title decode yields: a NULL
+        // library falls back to the facet's default library.
+        let mut scopes = rows
+            .iter()
+            .map(|row| {
+                let facet = parse_facet(&row.text("facet")?);
+                let library_id = row
+                    .opt_text("library_id")?
+                    .unwrap_or_else(|| scryer_domain::default_library_id_for_facet(&facet));
+                Ok((library_id, facet.as_str().to_string()))
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        scopes.sort();
+        scopes.dedup();
+        Ok(scopes)
     }
 
     async fn find_titles_by_external_id(&self, source: &str, value: &str) -> AppResult<Vec<Title>> {
@@ -2145,16 +2201,63 @@ impl TitleRepository for TitleStore {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = std::iter::repeat_n("{}", ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!("SELECT {TITLE_COLUMNS} FROM titles WHERE id IN ({placeholders})");
-        let args = ids.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
-        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
-        let mut titles =
-            decode_runtime_title_rows(&rows, PersistedTitleReadMode::Presentation, true)?;
+        let (ids, per_statement) = id_list_statements(
+            ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            TITLE_ID_LIST_BIND_CHUNK,
+        );
+        let mut titles = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(per_statement) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!("SELECT {TITLE_COLUMNS} FROM titles WHERE id IN ({placeholders})");
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            titles.extend(decode_runtime_title_rows(
+                &rows,
+                PersistedTitleReadMode::Presentation,
+                true,
+            )?);
+        }
         attach_metadata_tags_to_titles(self.datastore.read_exec(), &mut titles).await?;
         Ok(titles)
+    }
+
+    async fn list_library_ids_for_titles(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<(String, String)>> {
+        let (ids, per_statement) = id_list_statements(
+            ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            TITLE_ID_LIST_BIND_CHUNK,
+        );
+        let mut pairs = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(per_statement) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql =
+                format!("SELECT id, library_id, facet FROM titles WHERE id IN ({placeholders})");
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                // A NULL library falls back to the facet's default, as the
+                // full title decode does.
+                let library_id = match row.opt_text("library_id")? {
+                    Some(library_id) => library_id,
+                    None => scryer_domain::default_library_id_for_facet(&parse_facet(
+                        &row.text("facet")?,
+                    )),
+                };
+                pairs.push((row.text("id")?, library_id));
+            }
+        }
+        Ok(pairs)
     }
 
     async fn get_title_ratings(&self, title_id: &str) -> AppResult<TitleRatingSummary> {
@@ -4501,10 +4604,8 @@ async fn fetch_title_catalog_managed_bytes(
     let dialect = title_catalog_dialect_for_datastore(datastore);
     let (scope_sql, args) =
         build_title_catalog_where_sql(facet, library_ids, query, filter, dialect);
-    let media_size_sql = title_catalog_media_size_subquery_scoped(
-        dialect,
-        "JOIN scoped_titles ON scoped_titles.id = mf.title_id",
-    );
+    let media_size_sql =
+        title_catalog_media_size_subquery_scoped(dialect, TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN);
     let sql = format!(
         "WITH scoped_titles AS (SELECT id FROM titles WHERE {scope_sql}) \
          SELECT CAST(COALESCE(SUM(catalog_media_size.total_size_bytes), 0) AS BIGINT) AS managed_bytes \
@@ -4640,39 +4741,125 @@ async fn fetch_title_catalog_file_counts(
     })
 }
 
+/// Builds the single scan behind the monitored and status counts and the page total.
+///
+/// The WHERE clause is the page predicate with the monitored and status dimensions
+/// dropped; each count puts back the dimensions it does not swap as its CASE
+/// condition. `total` puts both back, so it equals the page's own COUNT(*).
+fn build_title_catalog_dimension_counts_sql(
+    facet: Option<MediaFacet>,
+    library_ids: &[String],
+    query: Option<&crate::queries::title_search::ResolvedTitleSearch>,
+    active_filter: &TitleCatalogFilter,
+    dialect: TitleCatalogSqlDialect,
+) -> (String, Vec<SqlArg>) {
+    let scoped = TitleCatalogFilter {
+        monitored: None,
+        content_statuses: Vec::new(),
+        ..active_filter.clone()
+    };
+    let (where_sql, where_args) =
+        build_title_catalog_where_sql(facet, library_ids, query, &scoped, dialect);
+
+    // The SELECT list precedes the WHERE clause, so its binds come first, in the
+    // order the placeholders appear.
+    let mut args = Vec::new();
+    let active_statuses = active_filter.content_statuses.as_slice();
+    let mut counted = |monitored: Option<bool>, statuses: &[TitleCatalogContentStatus]| {
+        let monitored_condition = match monitored {
+            Some(value) => {
+                args.push(SqlArg::Bool(value));
+                "monitored = {}".to_string()
+            }
+            None => "1 = 1".to_string(),
+        };
+        let values = title_catalog_content_status_values(statuses);
+        let status_condition = if values.is_empty() {
+            "1 = 1".to_string()
+        } else {
+            let placeholders = std::iter::repeat_n("{}", values.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            args.extend(values.into_iter().map(SqlArg::Text));
+            format!("LOWER(TRIM(COALESCE(content_status, ''))) IN ({placeholders})")
+        };
+        format!(
+            "COALESCE(SUM(CASE WHEN ({monitored_condition}) AND ({status_condition}) \
+             THEN 1 ELSE 0 END), 0)"
+        )
+    };
+
+    let monitored = counted(Some(true), active_statuses);
+    let unmonitored = counted(Some(false), active_statuses);
+    let continuing = counted(
+        active_filter.monitored,
+        &[TitleCatalogContentStatus::Continuing],
+    );
+    let ended = counted(active_filter.monitored, &[TitleCatalogContentStatus::Ended]);
+    let total = counted(active_filter.monitored, active_statuses);
+    args.extend(where_args);
+
+    let sql = format!(
+        "SELECT COUNT(*) AS all_count, {monitored} AS monitored, {unmonitored} AS unmonitored, \
+                {continuing} AS continuing, {ended} AS ended, {total} AS total \
+           FROM titles{where_clause}",
+        where_clause = if where_sql.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {where_sql}")
+        },
+    );
+    (sql, args)
+}
+
+/// The monitored and status counts and the page total, from one statement.
+async fn fetch_title_catalog_dimension_counts(
+    datastore: &StoreDatastore,
+    facet: Option<MediaFacet>,
+    library_ids: &[String],
+    query: Option<&crate::queries::title_search::ResolvedTitleSearch>,
+    active_filter: &TitleCatalogFilter,
+) -> AppResult<(TitleCatalogFilterCounts, usize)> {
+    let (sql, args) = build_title_catalog_dimension_counts_sql(
+        facet,
+        library_ids,
+        query,
+        active_filter,
+        title_catalog_dialect_for_datastore(datastore),
+    );
+    let row = SqlRuntime::fetch_optional(datastore.read_exec(), &sql, &args).await?;
+    let count = |column: &str| -> AppResult<usize> {
+        Ok(row
+            .as_ref()
+            .map(|row| row.i64(column))
+            .transpose()?
+            .unwrap_or(0)
+            .max(0) as usize)
+    };
+    Ok((
+        TitleCatalogFilterCounts {
+            all: count("all_count")?,
+            monitored: count("monitored")?,
+            unmonitored: count("unmonitored")?,
+            continuing: count("continuing")?,
+            ended: count("ended")?,
+            ..TitleCatalogFilterCounts::default()
+        },
+        count("total")?,
+    ))
+}
+
+/// Returns the filter counts and the page total. The four file-state counts run
+/// only when `include_file_states` is set.
 async fn fetch_title_catalog_filter_counts(
     datastore: &StoreDatastore,
     facet: Option<MediaFacet>,
     library_ids: &[String],
     query: Option<&crate::queries::title_search::ResolvedTitleSearch>,
     active_filter: &TitleCatalogFilter,
-) -> AppResult<TitleCatalogFilterCounts> {
-    let all_filter = TitleCatalogFilter {
-        monitored: None,
-        content_statuses: Vec::new(),
-        ..active_filter.clone()
-    };
-    let monitored_filter = TitleCatalogFilter {
-        monitored: Some(true),
-        content_statuses: active_filter.content_statuses.clone(),
-        ..active_filter.clone()
-    };
-    let unmonitored_filter = TitleCatalogFilter {
-        monitored: Some(false),
-        content_statuses: active_filter.content_statuses.clone(),
-        ..active_filter.clone()
-    };
-    let continuing_filter = TitleCatalogFilter {
-        monitored: active_filter.monitored,
-        content_statuses: vec![TitleCatalogContentStatus::Continuing],
-        ..active_filter.clone()
-    };
-    let ended_filter = TitleCatalogFilter {
-        monitored: active_filter.monitored,
-        content_statuses: vec![TitleCatalogContentStatus::Ended],
-        ..active_filter.clone()
-    };
-    let file_counts = fetch_title_catalog_file_counts(
+    include_file_states: bool,
+) -> AppResult<(TitleCatalogFilterCounts, usize)> {
+    let (mut counts, total) = fetch_title_catalog_dimension_counts(
         datastore,
         facet.clone(),
         library_ids,
@@ -4680,47 +4867,16 @@ async fn fetch_title_catalog_filter_counts(
         active_filter,
     )
     .await?;
-
-    Ok(TitleCatalogFilterCounts {
-        all: fetch_title_catalog_count(datastore, facet.clone(), library_ids, query, &all_filter)
-            .await?,
-        monitored: fetch_title_catalog_count(
-            datastore,
-            facet.clone(),
-            library_ids,
-            query,
-            &monitored_filter,
-        )
-        .await?,
-        unmonitored: fetch_title_catalog_count(
-            datastore,
-            facet.clone(),
-            library_ids,
-            query,
-            &unmonitored_filter,
-        )
-        .await?,
-        continuing: fetch_title_catalog_count(
-            datastore,
-            facet.clone(),
-            library_ids,
-            query,
-            &continuing_filter,
-        )
-        .await?,
-        ended: fetch_title_catalog_count(
-            datastore,
-            facet.clone(),
-            library_ids,
-            query,
-            &ended_filter,
-        )
-        .await?,
-        missing: file_counts.missing,
-        partial: file_counts.partial,
-        complete: file_counts.complete,
-        needs_attention: file_counts.needs_attention,
-    })
+    if include_file_states {
+        let file_counts =
+            fetch_title_catalog_file_counts(datastore, facet, library_ids, query, active_filter)
+                .await?;
+        counts.missing = file_counts.missing;
+        counts.partial = file_counts.partial;
+        counts.complete = file_counts.complete;
+        counts.needs_attention = file_counts.needs_attention;
+    }
+    Ok((counts, total))
 }
 
 async fn fetch_title_catalog_filter_options(
@@ -4834,13 +4990,31 @@ fn build_title_catalog_page_sql(
         .filter(|column| title_column_selected(column, projection))
         .collect::<Vec<_>>()
         .join(", ");
-    let mut sql = format!("SELECT {columns} FROM titles");
-    sql.push_str(&build_title_catalog_sort_join_sql(sort.key, dialect));
     let (where_sql, mut args) =
         build_title_catalog_where_sql(facet, library_ids, query, filter, dialect);
-    if !where_sql.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&where_sql);
+    let mut sql = String::new();
+    if title_catalog_sort_join_is_scoped(sort.key) {
+        // The sort's aggregate reads only the titles this page can show. The scope
+        // is evaluated once, in the CTE, and the page reads it back, so the binds
+        // stay in the order the WHERE clause pushed them.
+        let scope_sql = if where_sql.is_empty() {
+            "1 = 1"
+        } else {
+            where_sql.as_str()
+        };
+        sql.push_str(&format!(
+            "WITH scoped_titles AS (SELECT id FROM titles WHERE {scope_sql}) \
+             SELECT {columns} FROM titles"
+        ));
+        sql.push_str(&build_title_catalog_sort_join_sql(sort.key, dialect));
+        sql.push_str(" WHERE titles.id IN (SELECT id FROM scoped_titles)");
+    } else {
+        sql.push_str(&format!("SELECT {columns} FROM titles"));
+        sql.push_str(&build_title_catalog_sort_join_sql(sort.key, dialect));
+        if !where_sql.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&where_sql);
+        }
     }
     sql.push(' ');
     sql.push_str(&build_title_catalog_order_sql(&sort, dialect, &mut args));
@@ -5255,6 +5429,21 @@ fn title_catalog_content_status_values(statuses: &[TitleCatalogContentStatus]) -
     normalized
 }
 
+/// Sorts whose join aggregates per-title rows. Their join reads `scoped_titles`,
+/// which [`build_title_catalog_page_sql`] defines from the page's own scope, so
+/// the aggregate covers only the titles the page can show instead of the whole
+/// database. Each aggregate is per title, so a title in scope gets the same value
+/// either way.
+fn title_catalog_sort_join_is_scoped(key: TitleCatalogSortKey) -> bool {
+    matches!(
+        key,
+        TitleCatalogSortKey::Size | TitleCatalogSortKey::Episodes | TitleCatalogSortKey::Quality
+    )
+}
+
+const TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN: &str =
+    "JOIN scoped_titles ON scoped_titles.id = mf.title_id";
+
 fn build_title_catalog_sort_join_sql(
     key: TitleCatalogSortKey,
     dialect: TitleCatalogSqlDialect,
@@ -5267,11 +5456,14 @@ fn build_title_catalog_sort_join_sql(
             .to_string(),
         TitleCatalogSortKey::Size => format!(
             " LEFT JOIN ({}) catalog_media_size ON catalog_media_size.title_id = titles.id",
-            title_catalog_media_size_subquery(dialect)
+            title_catalog_media_size_subquery_scoped(dialect, TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN)
         ),
         TitleCatalogSortKey::Episodes => format!(
             " LEFT JOIN ({}) catalog_episode_progress ON catalog_episode_progress.title_id = titles.id",
-            title_catalog_episode_progress_subquery(dialect)
+            title_catalog_episode_progress_subquery_scoped(
+                dialect,
+                "JOIN scoped_titles ON scoped_titles.id = e.title_id"
+            )
         ),
         TitleCatalogSortKey::Root => " LEFT JOIN library_roots title_catalog_root
                ON title_catalog_root.id = titles.root_folder_id
@@ -5279,7 +5471,10 @@ fn build_title_catalog_sort_join_sql(
             .to_string(),
         TitleCatalogSortKey::Quality => format!(
             " LEFT JOIN ({}) catalog_media_quality ON catalog_media_quality.title_id = titles.id",
-            title_catalog_media_quality_subquery(dialect)
+            title_catalog_media_quality_subquery_scoped(
+                dialect,
+                TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN
+            )
         ),
         TitleCatalogSortKey::MediaResolution
         | TitleCatalogSortKey::MediaHdr
@@ -5287,12 +5482,14 @@ fn build_title_catalog_sort_join_sql(
             " LEFT JOIN ({}) catalog_movie_media ON catalog_movie_media.title_id = titles.id",
             title_catalog_movie_media_subquery(dialect)
         ),
-        TitleCatalogSortKey::RatingScryer => {
-            format!(
-                " LEFT JOIN ({}) catalog_rating_scryer ON catalog_rating_scryer.title_id = titles.id",
-                title_catalog_scryer_rating_subquery()
-            )
-        }
+        // A title has at most one summary (unique on `title_id`), so this is a plain
+        // join. The two columns are projected rather than the table joined bare
+        // because the summary's own `created_at` would make the page's unqualified
+        // `created_at` ambiguous; both planners flatten the projection.
+        TitleCatalogSortKey::RatingScryer => " LEFT JOIN (
+                SELECT title_id, rating FROM title_metadata_rating_summaries
+            ) catalog_rating_scryer ON catalog_rating_scryer.title_id = titles.id"
+            .to_string(),
         key @ (TitleCatalogSortKey::RatingImdb
         | TitleCatalogSortKey::RatingRottenTomatoes
         | TitleCatalogSortKey::RatingPopcornmeter
@@ -5620,14 +5817,6 @@ fn title_catalog_normalized_rating_source_expression(alias: &str) -> String {
     format!("LOWER(REPLACE(REPLACE(REPLACE(TRIM({alias}.source), ' ', ''), '_', ''), '-', ''))")
 }
 
-fn title_catalog_scryer_rating_subquery() -> String {
-    "SELECT rating.title_id,
-            MAX(rating.rating) AS rating
-       FROM title_metadata_rating_summaries rating
-      GROUP BY rating.title_id"
-        .to_string()
-}
-
 fn title_catalog_external_rating_subquery(sources: &[&str]) -> String {
     let source_list = sources
         .iter()
@@ -5736,7 +5925,13 @@ fn title_catalog_media_quality_rank_expression(alias: &str) -> String {
 /// The quality rank of the file the catalog shows as a title's quality: its
 /// lowest-quality primary file, or its best additional file when it has no
 /// primary. Keep the file choice in step with `list_title_quality_summaries`.
-fn title_catalog_media_quality_subquery(dialect: TitleCatalogSqlDialect) -> String {
+///
+/// `scope_join` narrows the files read to whole titles; every window partition is
+/// one title, so a title it keeps ranks exactly as it would unscoped.
+fn title_catalog_media_quality_subquery_scoped(
+    dialect: TitleCatalogSqlDialect,
+    scope_join: &str,
+) -> String {
     let quality_rank = title_catalog_media_quality_rank_expression("mf");
     format!(
         "SELECT title_id, quality_rank
@@ -5751,6 +5946,7 @@ fn title_catalog_media_quality_subquery(dialect: TitleCatalogSqlDialect) -> Stri
                                    mf.id DESC
                        ) AS quality_row
                   FROM media_files mf
+                  {scope_join}
                  WHERE {}
                    AND mf.role IN ('primary', 'additional')
                    AND mf.scan_status <> 'review_required'
@@ -5796,48 +5992,46 @@ fn title_catalog_movie_media_subquery(dialect: TitleCatalogSqlDialect) -> String
     )
 }
 
-fn title_catalog_media_size_subquery(dialect: TitleCatalogSqlDialect) -> String {
-    title_catalog_media_size_subquery_scoped(dialect, "")
-}
-
+/// Per-title bytes of the live files linked to an episode, a collection's ordered
+/// path, or a series-movie link. Each file counts once: the links are asked as
+/// EXISTS, so a file with several of them is still one row and needs no DISTINCT.
 fn title_catalog_media_size_subquery_scoped(
     dialect: TitleCatalogSqlDialect,
     scope_join: &str,
 ) -> String {
-    let total_size_expression =
-        title_catalog_total_size_sum_expression(dialect, "matched.size_bytes");
+    let total_size_expression = title_catalog_total_size_sum_expression(
+        dialect,
+        "CASE WHEN mf.size_bytes > 0 THEN mf.size_bytes ELSE 0 END",
+    );
     format!(
-        "SELECT matched.title_id,
+        "SELECT mf.title_id,
                 {total_size_expression} AS total_size_bytes
-           FROM (
-                SELECT DISTINCT mf.id,
-                       mf.title_id,
-                       CASE
-                           WHEN mf.size_bytes > 0 THEN mf.size_bytes
-                           ELSE 0
-                       END AS size_bytes
-                  FROM media_files mf
-                  {scope_join}
-             LEFT JOIN file_episode_map fem
-                    ON fem.file_id = mf.id
-             LEFT JOIN collections c
-                    ON c.title_id = mf.title_id
-                   AND c.ordered_path = mf.file_path
-             LEFT JOIN file_series_movie_link_map fsmlm
-                    ON fsmlm.file_id = mf.id
-                 WHERE {}
-                   AND (
-                       fem.file_id IS NOT NULL
-                       OR c.id IS NOT NULL
-                       OR fsmlm.file_id IS NOT NULL
-                   )
-           ) matched
-          GROUP BY matched.title_id",
+           FROM media_files mf
+           {scope_join}
+          WHERE {}
+            AND (
+                EXISTS (SELECT 1 FROM file_episode_map fem WHERE fem.file_id = mf.id)
+                OR EXISTS (
+                    SELECT 1
+                      FROM collections c
+                     WHERE c.title_id = mf.title_id
+                       AND c.ordered_path = mf.file_path
+                )
+                OR EXISTS (
+                    SELECT 1 FROM file_series_movie_link_map fsmlm WHERE fsmlm.file_id = mf.id
+                )
+            )
+          GROUP BY mf.title_id",
         title_catalog_live_media_file_predicate(dialect, "mf")
     )
 }
 
-fn title_catalog_episode_progress_subquery(dialect: TitleCatalogSqlDialect) -> String {
+/// `scope_join` narrows the episodes read to whole titles, and each count is per
+/// title, so a title it keeps counts exactly as it would unscoped.
+fn title_catalog_episode_progress_subquery_scoped(
+    dialect: TitleCatalogSqlDialect,
+    scope_join: &str,
+) -> String {
     format!(
         // Ownership is asked as EXISTS rather than joined through
         // `file_episode_map`. An episode can map to several files, so the join
@@ -5848,6 +6042,8 @@ fn title_catalog_episode_progress_subquery(dialect: TitleCatalogSqlDialect) -> S
         // the `collections` join is on its key, so COUNT(*) counts exactly the
         // episodes COUNT(DISTINCT e.id) did, and an episode is owned exactly
         // when the join would have found it at least one live primary file.
+        // Owned uses the same file conditions as the episode counts shown on
+        // the card, so the sort agrees with the displayed numbers.
         "SELECT e.title_id,
                 COUNT(*) AS total_episodes,
                 COUNT(CASE WHEN {} THEN 1 END) AS monitored_episodes,
@@ -5857,9 +6053,11 @@ fn title_catalog_episode_progress_subquery(dialect: TitleCatalogSqlDialect) -> S
                            JOIN media_files mf ON mf.id = fem.file_id
                           WHERE fem.episode_id = e.id
                             AND {}
-                            AND mf.role = 'primary'
+                            AND fem.role = 'primary'
+                            AND mf.scan_status <> 'review_required'
                      ) THEN 1 END) AS owned_episodes
            FROM episodes e
+           {scope_join}
           INNER JOIN collections c ON c.id = e.collection_id
           WHERE c.collection_type <> 'specials'
             AND c.collection_index <> '0'
@@ -5872,12 +6070,33 @@ fn title_catalog_episode_progress_subquery(dialect: TitleCatalogSqlDialect) -> S
     )
 }
 
-fn build_title_page_after_id_sql(after_id: Option<&str>, limit: usize) -> (String, Vec<SqlArg>) {
+/// An empty `library_ids` pages every library. Otherwise a row with no library
+/// is read too: it decodes to its facet's default library, so the caller
+/// filters on the decoded title.
+fn build_title_page_after_id_sql(
+    after_id: Option<&str>,
+    library_ids: &[String],
+    limit: usize,
+) -> (String, Vec<SqlArg>) {
     let mut sql = format!("SELECT {TITLE_COLUMNS} FROM titles");
     let mut args = Vec::new();
+    let mut conditions = Vec::new();
     if let Some(after_id) = after_id {
-        sql.push_str(" WHERE id > {}");
+        conditions.push("id > {}".to_string());
         args.push(SqlArg::Text(after_id.to_string()));
+    }
+    if !library_ids.is_empty() {
+        let placeholders = std::iter::repeat_n("{}", library_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        conditions.push(format!(
+            "(library_id IN ({placeholders}) OR library_id IS NULL)"
+        ));
+        args.extend(library_ids.iter().cloned().map(SqlArg::Text));
+    }
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
     }
     sql.push_str(" ORDER BY id LIMIT {}");
     args.push(SqlArg::I64(limit as i64));
@@ -7529,6 +7748,160 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// The single joined statement the affinity read used before its tags were
+    /// split out, decoded the way it was decoded then.
+    async fn joined_reference_affinity_titles(
+        datastore: &StoreDatastore,
+        library_ids: &[String],
+        run_id: Option<&str>,
+    ) -> Vec<(String, MediaFacet, Vec<CanonicalMediaTag>)> {
+        let libraries = std::iter::repeat_n("{}", library_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut args = library_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        args.push(SqlArg::OptText(run_id.map(str::to_owned)));
+        args.extend(library_ids.iter().cloned().map(SqlArg::Text));
+        let sql = format!(
+            "WITH scoped AS (SELECT id, facet FROM titles WHERE library_id IN ({libraries})),
+             submitted AS (SELECT DISTINCT t.id, t.facet FROM scoped t
+                 JOIN discovery_submitted_subjects s ON s.title_id = t.id
+                 WHERE s.run_id = {{}} AND s.library_id IN ({libraries})),
+             selected AS (SELECT * FROM submitted UNION ALL
+                 SELECT * FROM scoped WHERE NOT EXISTS (SELECT 1 FROM submitted))
+             SELECT s.id, s.facet, t.title_id AS owner_id, t.tag_key, t.category, t.name,
+                 t.confidence, t.affinity_signals_json, t.is_adult, t.is_spoiler,
+                 ts.source, tk.source_tag_key
+             FROM selected s LEFT JOIN title_metadata_tags t ON t.title_id = s.id
+                 AND LOWER(t.category) IN ('genre', 'theme')
+             LEFT JOIN title_metadata_tag_sources ts ON ts.title_id = t.title_id AND ts.tag_key = t.tag_key
+             LEFT JOIN title_metadata_tag_source_keys tk ON tk.title_id = t.title_id AND tk.tag_key = t.tag_key
+             ORDER BY s.id, t.sort_index, t.category, t.name,
+                 ts.sort_index, ts.source, tk.sort_index, tk.source_tag_key"
+        );
+        let rows = SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args)
+            .await
+            .unwrap();
+        let mut identities = BTreeMap::new();
+        let mut tag_rows = Vec::new();
+        for row in &rows {
+            identities
+                .entry(row.text("id").unwrap())
+                .or_insert(row.text("facet").unwrap());
+            if row.opt_text("tag_key").unwrap().is_some() {
+                tag_rows.push(row);
+            }
+        }
+        let mut tags = crate::media::canonical_tags::rows_to_tags_by_owner(tag_rows).unwrap();
+        identities
+            .into_iter()
+            .map(|(id, facet)| {
+                let canonical_tags = tags.remove(&id).unwrap_or_default();
+                (id, parse_facet(&facet), canonical_tags)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn discovery_affinity_split_tag_read_matches_the_joined_read() {
+        let (datastore, pool) = metadata_tag_store(&[("title", "title_id")]).await;
+        sqlx::raw_sql(
+            "CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT, facet TEXT);
+             CREATE TABLE discovery_submitted_subjects (run_id TEXT, title_id TEXT, library_id TEXT);
+             INSERT INTO titles VALUES ('emberfall','visible','movie'), ('cinderwake','visible','anime'),
+                 ('ashgrove','visible','series'), ('ashgrove-private','private','movie');
+             INSERT INTO discovery_submitted_subjects VALUES ('run','emberfall','visible'),
+                 ('run','cinderwake','visible'), ('run','cinderwake','visible'),
+                 ('run','ashgrove-private','private');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let tags = "title_metadata_tags";
+        let sources = "title_metadata_tag_sources";
+        let keys = "title_metadata_tag_source_keys";
+        // Mixed-case categories pass, a padded one and other categories do not;
+        // sources and keys multiply in the joined read and carry ties, padding
+        // and blanks.
+        insert_tag_row(&pool, tags, &["emberfall", "drama", "Genre", "Drama"], 2).await;
+        insert_tag_row(&pool, tags, &["emberfall", "heist", "THEME", "Heist"], 0).await;
+        insert_tag_row(&pool, tags, &["emberfall", "padded", " genre", "Padded"], 1).await;
+        insert_tag_row(&pool, tags, &["emberfall", "studio", "studio", "Studio"], 1).await;
+        insert_tag_row(&pool, tags, &["emberfall", "action", "genre", "Action"], 2).await;
+        insert_tag_row(&pool, sources, &["emberfall", "drama", "tmdb"], 1).await;
+        insert_tag_row(&pool, sources, &["emberfall", "drama", "anilist"], 0).await;
+        insert_tag_row(&pool, sources, &["emberfall", "drama", " tmdb "], 2).await;
+        insert_tag_row(&pool, sources, &["emberfall", "drama", " "], 3).await;
+        insert_tag_row(&pool, sources, &["emberfall", "padded", "tmdb"], 0).await;
+        insert_tag_row(&pool, sources, &["emberfall", "studio", "tmdb"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "drama", "kb"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "drama", "ka"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "heist", "kh"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "studio", "ks"], 0).await;
+        insert_tag_row(
+            &pool,
+            tags,
+            &["cinderwake", "mystery", "theme", "Mystery"],
+            0,
+        )
+        .await;
+        // Ashgrove has only a tag outside the categories.
+        insert_tag_row(&pool, tags, &["ashgrove", "studio", "studio", "Studio"], 0).await;
+        insert_tag_row(
+            &pool,
+            tags,
+            &["ashgrove-private", "drama", "genre", "Drama"],
+            0,
+        )
+        .await;
+
+        let visible = vec!["visible".to_string()];
+        let both = vec!["visible".to_string(), "private".to_string()];
+        let store = TitleStore::new(datastore.clone());
+        for (libraries, run_id) in [
+            (&visible, Some("run")),
+            (&visible, Some("missing")),
+            (&visible, None),
+            (&both, Some("run")),
+            (&both, Some("missing")),
+        ] {
+            let loaded = store
+                .list_discovery_affinity_titles(libraries, run_id, &[])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|title| (title.id, title.facet, title.canonical_tags))
+                .collect::<Vec<_>>();
+            let reference = joined_reference_affinity_titles(&datastore, libraries, run_id).await;
+            assert!(!loaded.is_empty());
+            assert_eq!(loaded, reference, "{libraries:?} {run_id:?}");
+        }
+        let emberfall = store
+            .list_discovery_affinity_titles(&visible, Some("run"), &[])
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|title| title.id == "emberfall")
+            .unwrap();
+        assert_eq!(
+            emberfall.canonical_tags,
+            vec![
+                expected_tag("heist", "THEME", "Heist", &[], &["kh"]),
+                expected_tag(
+                    "drama",
+                    "Genre",
+                    "Drama",
+                    &["anilist", "tmdb"],
+                    &["ka", "kb"]
+                ),
+                expected_tag("action", "genre", "Action", &[], &[]),
+            ]
         );
     }
 
@@ -9226,6 +9599,36 @@ mod tests {
             "{}",
             sql_for(&attention)
         );
+    }
+
+    /// The monitored and status counts and the total are one statement on both
+    /// engines, with one bind per placeholder in placeholder order.
+    #[test]
+    fn title_catalog_dimension_counts_are_one_statement() {
+        for dialect in [
+            TitleCatalogSqlDialect::Sqlite,
+            TitleCatalogSqlDialect::Postgres,
+        ] {
+            let (sql, args) = build_title_catalog_dimension_counts_sql(
+                Some(MediaFacet::Series),
+                &["library-1".to_string(), "library-2".to_string()],
+                None,
+                &TitleCatalogFilter {
+                    monitored: Some(true),
+                    content_statuses: vec![TitleCatalogContentStatus::Ended],
+                    minimum_year: Some(2000),
+                    ..TitleCatalogFilter::default()
+                },
+                dialect,
+            );
+            assert_eq!(sql.matches("FROM titles").count(), 1, "{sql}");
+            assert_eq!(sql.matches("{}").count(), args.len(), "{sql}");
+            let where_sql = &sql[sql.find(" WHERE ").expect("scoped")..];
+            assert!(!where_sql.contains("monitored = {}"), "{sql}");
+            assert!(!where_sql.contains("content_status"), "{sql}");
+            assert!(matches!(args.first(), Some(SqlArg::Bool(true))));
+            assert!(matches!(args.last(), Some(SqlArg::I32(2000))));
+        }
     }
 
     /// The four file counts share one scan because they differ only in the condition

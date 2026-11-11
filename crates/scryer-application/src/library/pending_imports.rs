@@ -361,7 +361,15 @@ fn pending_import_item_is_folder_ownership_item(item: &LibraryScanUnmatchedItem)
             == crate::library_scan_unmatched::LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER
 }
 
-fn pending_import_item_requires_action(item: &LibraryScanUnmatchedItem) -> bool {
+/// The reason codes [`pending_import_item_is_folder_ownership_item`] matches.
+pub const PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES: [&str; 2] = [
+    crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER,
+    crate::library_scan_unmatched::LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER,
+];
+
+/// Whether a pending item still needs a person: a folder-ownership item, or
+/// anything other than a movie already bound to a title.
+pub fn pending_import_item_requires_action(item: &LibraryScanUnmatchedItem) -> bool {
     pending_import_item_is_folder_ownership_item(item)
         || !(item.facet == MediaFacet::Movie && item.title_id.is_some())
 }
@@ -475,6 +483,23 @@ impl AppUseCase {
     ) -> AppResult<HashMap<String, PendingImportCounts>> {
         let repository = self.services.library.library_scan_unmatched_items.clone();
         let mut by_library: HashMap<String, PendingImportCounts> = HashMap::new();
+        // A store that counts in place applies the same predicate there.
+        if let Some(grouped) = repository
+            .count_pending_library_scan_items_requiring_action(
+                &PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES,
+            )
+            .await?
+        {
+            for (library_id, facet, count) in grouped {
+                let counts = by_library.entry(library_id).or_default();
+                match facet {
+                    MediaFacet::Movie => counts.movie += count,
+                    MediaFacet::Series => counts.series += count,
+                    MediaFacet::Anime => counts.anime += count,
+                }
+            }
+            return Ok(by_library);
+        }
         for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
             let items = repository
                 .list_library_scan_unmatched_items(

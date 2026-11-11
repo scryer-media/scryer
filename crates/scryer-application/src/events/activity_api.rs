@@ -150,6 +150,7 @@ where
         }
 
         before_sequence = batch.last().map(|event| event.sequence);
+        prefetch_event_title_libraries(app, &batch, &mut title_library_cache).await?;
         for event in &batch {
             if !event_allowed(app, actor, event, &visibility, &mut title_library_cache).await? {
                 continue;
@@ -188,14 +189,50 @@ async fn event_title_allowed(
         .services
         .catalog
         .titles
-        .get_by_id(title_id)
+        .list_library_ids_for_titles(&[title_id.to_string()])
         .await?
-        .map(|title| title.library_id);
+        .into_iter()
+        .find(|(id, _)| id == title_id)
+        .map(|(_, library_id)| library_id);
     let allowed = library_id
         .as_ref()
         .is_some_and(|library_id| allowed_library_ids.contains(library_id));
     title_library_cache.insert(title_id.to_string(), library_id);
     Ok(allowed)
+}
+
+/// Fill `title_library_cache` for every title the batch's events name, in one
+/// read, so the per-event checks find their library already cached.
+async fn prefetch_event_title_libraries(
+    app: &AppUseCase,
+    events: &[DomainEvent],
+    title_library_cache: &mut HashMap<String, Option<String>>,
+) -> AppResult<()> {
+    let missing = events
+        .iter()
+        .filter(|event| !matches!(event.stream, scryer_domain::DomainEventStream::User { .. }))
+        .filter_map(|event| event.title_id.as_ref())
+        .filter(|title_id| !title_library_cache.contains_key(*title_id))
+        .cloned()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut found = app
+        .services
+        .catalog
+        .titles
+        .list_library_ids_for_titles(&missing)
+        .await?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    for title_id in missing {
+        let library_id = found.remove(&title_id);
+        title_library_cache.insert(title_id, library_id);
+    }
+    Ok(())
 }
 
 async fn actor_can_view_titleless_operational_event(
@@ -482,10 +519,15 @@ fn title_history_collection_matches(
 /// allowed to see title-less history and has not scoped the page to titles of
 /// their own choosing. It is never set for a user-chosen title or title search,
 /// where a record with no title genuinely does not match.
+///
+/// With `include_total` false the returned `total_count` is not the full
+/// count; it only decides whether more records follow the page: it exceeds
+/// `offset + records.len()` exactly when the full count would.
 async fn project_title_history_page(
     app: &AppUseCase,
     filter: &TitleHistoryFilter,
     include_titleless: bool,
+    include_total: bool,
 ) -> AppResult<TitleHistoryPage> {
     // Title and episode history are projected exclusively from durable domain events.
     // The legacy `title_history` table is deprecated compatibility state and must not
@@ -550,6 +592,34 @@ async fn project_title_history_page(
         && !include_request_history
     {
         let limit = filter.limit.max(1);
+        // The page read caps at 500 rows, so one extra row can only stand in
+        // for the count below that.
+        if !include_total && limit < 500 {
+            let mut page_events = app
+                .services
+                .events
+                .domain_events
+                .list_title_history_page_events(
+                    filter.event_types.as_deref(),
+                    effective_title_ids.as_deref(),
+                    include_titleless,
+                    filter.download_id.as_deref(),
+                    limit + 1,
+                    filter.offset,
+                )
+                .await?;
+            let total_count = filter.offset.saturating_add(page_events.len()) as i64;
+            page_events.truncate(limit);
+            let mut records = page_events
+                .iter()
+                .filter_map(title_history_record_from_domain_event)
+                .collect::<Vec<_>>();
+            hydrate_title_history_record_contexts(app, &mut records).await?;
+            return Ok(TitleHistoryPage {
+                records,
+                total_count,
+            });
+        }
         let total_count = app
             .services
             .events
@@ -592,7 +662,7 @@ async fn project_title_history_page(
         });
     }
 
-    let mut domain_filter = DomainEventFilter {
+    let domain_filter = DomainEventFilter {
         title_id: (!include_request_history)
             .then(|| {
                 filter
@@ -613,74 +683,87 @@ async fn project_title_history_page(
     } else {
         Vec::new()
     };
-    let mut before_sequence = None;
+    // With request history on for exactly one title and no title-less records
+    // admitted, only that title's events and request submissions can yield a
+    // record. Read those two streams and merge them newest first, in place of
+    // walking every history event of every title.
+    let single_request_title = if include_request_history && !include_titleless {
+        let distinct = matched_title_ids.iter().collect::<HashSet<_>>();
+        (distinct.len() == 1).then(|| matched_title_ids[0].clone())
+    } else {
+        None
+    };
+    let mut cursors = match single_request_title {
+        Some(title_id) => vec![
+            TitleHistoryEventCursor::new(DomainEventFilter {
+                title_id: Some(title_id),
+                event_types: Some(
+                    TITLE_HISTORY_DOMAIN_EVENT_TYPES
+                        .iter()
+                        .copied()
+                        .filter(|event_type| *event_type != DomainEventType::MediaRequestSubmitted)
+                        .collect(),
+                ),
+                ..DomainEventFilter::default()
+            }),
+            TitleHistoryEventCursor::new(DomainEventFilter {
+                event_types: Some(vec![DomainEventType::MediaRequestSubmitted]),
+                ..DomainEventFilter::default()
+            }),
+        ],
+        None => vec![TitleHistoryEventCursor::new(domain_filter)],
+    };
     let mut total_count = 0i64;
     let mut records = Vec::new();
 
-    loop {
-        domain_filter.after_sequence = None;
-        domain_filter.before_sequence = before_sequence;
-        domain_filter.limit = 500;
+    'walk: while let Some(event) = next_title_history_event(app, &mut cursors).await? {
+        let event = &event;
+        let event_records =
+            if matches!(&event.payload, DomainEventPayload::MediaRequestSubmitted(_)) {
+                media_request_title_history_records(event, &media_request_match_titles)
+            } else if filter.group_by_event {
+                crate::event_views::title_history_record_from_domain_event(event)
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            } else {
+                title_history_records_from_domain_event(event)
+            };
 
-        let batch = app
-            .services
-            .events
-            .domain_events
-            .list(&domain_filter)
-            .await?;
-        if batch.is_empty() {
-            break;
-        }
-
-        before_sequence = batch.last().map(|event| event.sequence);
-        for event in &batch {
-            let event_records =
-                if matches!(&event.payload, DomainEventPayload::MediaRequestSubmitted(_)) {
-                    media_request_title_history_records(event, &media_request_match_titles)
-                } else if filter.group_by_event {
-                    crate::event_views::title_history_record_from_domain_event(event)
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                } else {
-                    title_history_records_from_domain_event(event)
-                };
-
-            for record in event_records {
-                // A title-scoped page is about those titles; a record with no
-                // catalog title behind it belongs to none of them - unless the
-                // scope came from the caller's library authorization rather
-                // than titles they chose, in which case an unlinked grab
-                // (FR-026) is admitted on its own terms, exactly as the grouped
-                // page query above admits it.
-                if !matched_title_ids.is_empty()
-                    && !record
-                        .title_id
-                        .as_ref()
-                        .is_some_and(|title_id| matched_title_ids.contains(title_id))
-                    && !(include_titleless && record.title_id.is_none())
-                {
-                    continue;
-                }
-                if !title_history_record_matches(&record, filter)
-                    || !title_history_collection_matches(
-                        &record,
-                        filter.collection_id.as_deref(),
-                        collection_episode_ids.as_ref(),
-                    )
-                {
-                    continue;
-                }
-
-                let current_index = total_count as usize;
-                total_count += 1;
-                if current_index >= filter.offset && records.len() < limit {
-                    records.push(record);
-                }
+        for record in event_records {
+            // A title-scoped page is about those titles; a record with no
+            // catalog title behind it belongs to none of them - unless the
+            // scope came from the caller's library authorization rather
+            // than titles they chose, in which case an unlinked grab
+            // (FR-026) is admitted on its own terms, exactly as the grouped
+            // page query above admits it.
+            if !matched_title_ids.is_empty()
+                && !record
+                    .title_id
+                    .as_ref()
+                    .is_some_and(|title_id| matched_title_ids.contains(title_id))
+                && !(include_titleless && record.title_id.is_none())
+            {
+                continue;
             }
-        }
+            if !title_history_record_matches(&record, filter)
+                || !title_history_collection_matches(
+                    &record,
+                    filter.collection_id.as_deref(),
+                    collection_episode_ids.as_ref(),
+                )
+            {
+                continue;
+            }
 
-        if batch.len() < 500 {
-            break;
+            let current_index = total_count as usize;
+            total_count += 1;
+            if current_index >= filter.offset && records.len() < limit {
+                records.push(record);
+            }
+            // One record past the page settles whether more follow.
+            if !include_total && current_index >= filter.offset.saturating_add(limit) {
+                break 'walk;
+            }
         }
     }
 
@@ -690,6 +773,51 @@ async fn project_title_history_page(
         records,
         total_count,
     })
+}
+
+/// A newest-first read of matching domain events in 500-row batches.
+struct TitleHistoryEventCursor {
+    filter: DomainEventFilter,
+    batch: std::collections::VecDeque<DomainEvent>,
+    exhausted: bool,
+}
+
+impl TitleHistoryEventCursor {
+    fn new(filter: DomainEventFilter) -> Self {
+        Self {
+            filter,
+            batch: std::collections::VecDeque::new(),
+            exhausted: false,
+        }
+    }
+
+    async fn head_sequence(&mut self, app: &AppUseCase) -> AppResult<Option<i64>> {
+        if self.batch.is_empty() && !self.exhausted {
+            self.filter.after_sequence = None;
+            self.filter.limit = 500;
+            let batch = app.services.events.domain_events.list(&self.filter).await?;
+            self.exhausted = batch.len() < 500;
+            self.filter.before_sequence = batch.last().map(|event| event.sequence);
+            self.batch.extend(batch);
+        }
+        Ok(self.batch.front().map(|event| event.sequence))
+    }
+}
+
+/// The next event across `cursors`, highest sequence first.
+async fn next_title_history_event(
+    app: &AppUseCase,
+    cursors: &mut [TitleHistoryEventCursor],
+) -> AppResult<Option<DomainEvent>> {
+    let mut newest: Option<(usize, i64)> = None;
+    for (index, cursor) in cursors.iter_mut().enumerate() {
+        if let Some(sequence) = cursor.head_sequence(app).await?
+            && newest.is_none_or(|(_, best)| sequence > best)
+        {
+            newest = Some((index, sequence));
+        }
+    }
+    Ok(newest.and_then(|(index, _)| cursors[index].batch.pop_front()))
 }
 
 async fn load_title_history_media_request_match_titles(
@@ -795,6 +923,33 @@ async fn resolve_title_history_title_ids(
     app: &AppUseCase,
     filter: &TitleHistoryFilter,
 ) -> AppResult<Vec<String>> {
+    // Chosen titles inside a library scope: look up only those titles'
+    // libraries instead of listing every title in the scope.
+    if let (Some(title_ids), None, Some(library_ids)) = (
+        filter.title_ids.as_ref(),
+        filter.title_search.as_ref(),
+        filter.library_ids.as_deref(),
+    ) {
+        if library_ids.is_empty() || title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let library_ids = library_ids.iter().collect::<HashSet<_>>();
+        let scoped_set = app
+            .services
+            .catalog
+            .titles
+            .list_library_ids_for_titles(title_ids)
+            .await?
+            .into_iter()
+            .filter(|(_, library_id)| library_ids.contains(library_id))
+            .map(|(title_id, _)| title_id)
+            .collect::<HashSet<_>>();
+        return Ok(title_ids
+            .iter()
+            .filter(|title_id| scoped_set.contains(*title_id))
+            .cloned()
+            .collect());
+    }
     let scoped_titles = match filter.library_ids.as_deref() {
         Some(library_ids) => Some(
             app.services
@@ -867,16 +1022,23 @@ async fn hydrate_title_history_record_contexts(
         })
         // A record with no catalog title has nothing to hydrate from.
         .filter_map(|record| record.title_id.clone())
-        .collect::<HashSet<_>>();
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if missing_title_ids.is_empty() {
+        return Ok(());
+    }
 
-    for title_id in missing_title_ids {
-        let Some(title) = app.services.catalog.titles.get_by_id(&title_id).await? else {
-            continue;
-        };
-
+    for title in app
+        .services
+        .catalog
+        .titles
+        .get_by_ids(&missing_title_ids)
+        .await?
+    {
         for record in records
             .iter_mut()
-            .filter(|record| record.title_id.as_deref() == Some(title_id.as_str()))
+            .filter(|record| record.title_id.as_deref() == Some(title.id.as_str()))
         {
             if record.title_name.is_none() {
                 record.title_name = Some(title.name.clone());
@@ -1379,6 +1541,7 @@ impl AppUseCase {
 
             let next_sequence = events.last().map(|event| event.sequence);
             let batch_len = events.len();
+            prefetch_event_title_libraries(self, &events, &mut title_library_cache).await?;
             for event in events {
                 if event_allowed(self, actor, &event, &visibility, &mut title_library_cache).await?
                 {
@@ -1482,6 +1645,7 @@ impl AppUseCase {
                 break;
             };
             let batch_len = events.len();
+            prefetch_event_title_libraries(self, &events, &mut title_library_cache).await?;
             for event in events {
                 let Some(activity) = activity_event_from_domain_event(&event) else {
                     continue;
@@ -1897,6 +2061,17 @@ impl AppUseCase {
         actor: &User,
         filter: &TitleHistoryFilter,
     ) -> AppResult<TitleHistoryPage> {
+        self.list_title_history_page(actor, filter, true).await
+    }
+
+    /// [`Self::list_title_history`]; with `include_total` false the page's
+    /// `total_count` is only exact enough to tell whether more records follow.
+    pub async fn list_title_history_page(
+        &self,
+        actor: &User,
+        filter: &TitleHistoryFilter,
+        include_total: bool,
+    ) -> AppResult<TitleHistoryPage> {
         let library_ids = self.require_privileged_library_ids(actor, None).await?;
         let mut scoped_filter = filter.clone();
         if let Some(collection_id) = &filter.collection_id {
@@ -1938,7 +2113,7 @@ impl AppUseCase {
         let include_titleless = self
             .has_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
-        project_title_history_page(self, &scoped_filter, include_titleless).await
+        project_title_history_page(self, &scoped_filter, include_titleless, include_total).await
     }
 
     /// Count dashboard activity events over a trailing window and the window
@@ -2020,6 +2195,7 @@ impl AppUseCase {
             // A single title's own history page: a record with no catalog title
             // behind it is not part of it.
             false,
+            true,
         )
         .await
     }

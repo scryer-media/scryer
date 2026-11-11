@@ -125,7 +125,7 @@ pub async fn start_full_hash_backfill_worker(
         next_full_hash_backfill_window(&app.runtime.environment.now().with_timezone(&Local), true)
             .expect("a future full-hash backfill window must be available");
     loop {
-        app.set_job_next_run_at(crate::JobKey::FullHashBackfill, next_run)
+        app.advertise_job_next_run_at(crate::JobKey::FullHashBackfill, next_run)
             .await;
         let wait = (next_run - app.runtime.environment.now())
             .to_std()

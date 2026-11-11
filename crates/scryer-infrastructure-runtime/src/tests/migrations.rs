@@ -5452,7 +5452,9 @@ async fn migration_0206_rebuilds_media_requests_without_losing_child_rows() {
         indexes,
         vec![
             "idx_media_requests_created_title".to_string(),
+            "idx_media_requests_fingerprint_created".to_string(),
             "idx_media_requests_library_facet_status".to_string(),
+            "idx_media_requests_requester_created".to_string(),
             "idx_media_requests_status_updated".to_string(),
         ]
     );
@@ -6155,8 +6157,8 @@ async fn title_folder_repair_upgrade_repairs_root_folders_and_is_idempotent() {
     );
     assert_eq!(
         folder_of("ambiguous"),
-        Some(root.clone()),
-        "ambiguous media leaves the record for the operator"
+        None,
+        "ambiguous media is not repaired, and the later folder key repair clears a folder equal to the root"
     );
     assert_eq!(
         media_snapshot(&pool).await,

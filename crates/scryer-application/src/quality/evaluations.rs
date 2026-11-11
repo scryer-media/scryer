@@ -133,26 +133,42 @@ impl AppUseCase {
             )
             .await?;
         }
+        self.score_inputs_for_file(file, &title).await
+    }
+
+    /// Scoring inputs for a file already loaded with its authorized title.
+    async fn score_inputs_for_file(
+        &self,
+        file: TitleMediaFile,
+        title: &scryer_domain::Title,
+    ) -> AppResult<EvaluationInputs> {
         let episode_ids = self
             .services
             .library
             .media_files
             .score_evaluation_episode_ids(&file)
             .await?;
-        let episodes = self
-            .services
-            .catalog
-            .shows
-            .list_episodes_for_title(&title.id)
-            .await?;
+        // The span basis reads only the mapped episodes of this title.
+        let episodes = if episode_ids.is_empty() {
+            Vec::new()
+        } else {
+            let mut episodes = self
+                .services
+                .catalog
+                .shows
+                .get_episodes_by_ids(&episode_ids)
+                .await?;
+            episodes.retain(|episode| episode.title_id == title.id);
+            episodes
+        };
         let basis = crate::acquisition_coverage::episode_span_size_basis(
             &episodes,
             &episode_ids,
             title.runtime_minutes,
         );
-        let profile = self.resolve_quality_profile_for_title(&title).await?;
+        let profile = self.resolve_quality_profile_for_title(title).await?;
         let context = self
-            .resolve_canonical_scoring_context(&title, &profile)
+            .resolve_canonical_scoring_context(title, &profile)
             .await;
         let fingerprint = context.evaluation_fingerprint(&file, basis, &episode_ids);
         Ok(EvaluationInputs {

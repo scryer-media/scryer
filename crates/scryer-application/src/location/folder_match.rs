@@ -382,26 +382,34 @@ impl AppUseCase {
             crate::library_discovery::ensure_existing_title_boundary(&selected_path, &patterns)
                 .await?;
         }
-        for candidate in self
+        let candidates = self
             .services
             .catalog
             .titles
             .list_delete_preview_info()
+            .await?;
+        let selected_folder = {
+            let title_id = title.id.clone();
+            crate::folder_ownership::run_folder_check_blocking(move || {
+                let mut checked = crate::folder_ownership::OverlapLeft::new(&selected_folder);
+                for candidate in candidates {
+                    if candidate.title_id == title_id {
+                        continue;
+                    }
+                    if let Some(folder) = candidate.folder_path
+                        && !crate::stored_paths::folder_paths_match(&selected_folder, &folder)
+                        && checked.overlaps(&folder)?
+                    {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::location::SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER,
+                            "selected folder overlaps another title's folder; no ownership was changed",
+                        ));
+                    }
+                }
+                Ok(selected_folder)
+            })
             .await?
-        {
-            if candidate.title_id == title.id {
-                continue;
-            }
-            if let Some(folder) = candidate.folder_path
-                && !crate::stored_paths::folder_paths_match(&selected_folder, &folder)
-                && crate::folder_ownership::title_folders_overlap(&selected_folder, &folder)?
-            {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::location::SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER,
-                    "selected folder overlaps another title's folder; no ownership was changed",
-                ));
-            }
-        }
+        };
 
         let current_root = title_folder_path(&title).and_then(|current| {
             library

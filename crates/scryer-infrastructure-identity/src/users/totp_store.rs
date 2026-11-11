@@ -41,6 +41,31 @@ impl TotpRepository for TotpStore {
         load_credential_for_user(self.datastore.read_exec(), user_id, encryption_key.as_ref()).await
     }
 
+    async fn list_credentials_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<Vec<TotpCredentialRecord>> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let encryption_key = current_encryption_key(&self.encryption_key)?;
+        let mut credentials = Vec::new();
+        for chunk in user_ids.chunks(crate::users::USER_ID_BATCH) {
+            let placeholders = vec!["{}"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT id, user_id, secret_base32, algorithm, digits, period_seconds, last_accepted_step, created_at, updated_at, last_used_at
+                 FROM totp_credentials
+                 WHERE user_id IN ({placeholders})"
+            );
+            let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            for row in &rows {
+                credentials.push(row_to_credential(row, encryption_key.as_ref())?);
+            }
+        }
+        Ok(credentials)
+    }
+
     async fn upsert_credential(
         &self,
         credential: TotpCredentialRecord,

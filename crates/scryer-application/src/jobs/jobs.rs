@@ -1099,21 +1099,19 @@ impl AppUseCase {
             .map(|run| (run.id.clone(), run))
             .collect::<HashMap<_, _>>();
 
+        let records = self
+            .services
+            .events
+            .job_runs
+            .list_latest_job_run_per_job_key(&crate::jobs::ALL_JOB_KEYS)
+            .await?;
         let mut runs = Vec::with_capacity(crate::jobs::ALL_JOB_KEYS.len());
-        for job_key in crate::jobs::ALL_JOB_KEYS {
-            let records = self
-                .services
-                .events
-                .job_runs
-                .list_job_runs(Some(job_key), 1)
-                .await?;
-            runs.extend(records.into_iter().map(|record| {
-                active_runs_by_id
-                    .get(&record.id)
-                    .cloned()
-                    .unwrap_or_else(|| JobRun::from_record(&record, None))
-            }));
-        }
+        runs.extend(records.into_iter().map(|record| {
+            active_runs_by_id
+                .get(&record.id)
+                .cloned()
+                .unwrap_or_else(|| JobRun::from_record(&record, None))
+        }));
         runs.extend(self.latest_custom_job_runs(&active_runs_by_id).await?);
         Ok(runs)
     }
@@ -4256,7 +4254,8 @@ async fn run_background_library_refresh_worker(
         .unwrap_or(BACKGROUND_LIBRARY_REFRESH_INTERVAL_SECONDS)
         .max(1) as u64;
     let initial_next_run_at = Utc::now() + chrono::Duration::seconds(initial_delay as i64);
-    app.set_job_next_run_at(job_key, initial_next_run_at).await;
+    app.advertise_job_next_run_at(job_key, initial_next_run_at)
+        .await;
 
     tokio::select! {
         _ = token.cancelled() => return,
@@ -4273,7 +4272,7 @@ async fn run_background_library_refresh_worker(
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     interval.tick().await;
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         job_key,
         Utc::now() + chrono::Duration::seconds(interval_seconds as i64),
     )
@@ -4283,7 +4282,7 @@ async fn run_background_library_refresh_worker(
         tokio::select! {
             _ = token.cancelled() => return,
             _ = interval.tick() => {
-                app.set_job_next_run_at(
+                app.advertise_job_next_run_at(
                     job_key,
                     Utc::now() + chrono::Duration::seconds(interval_seconds as i64),
                 ).await;

@@ -49,6 +49,63 @@ async fn create_user_and_list_users() {
 }
 
 #[tokio::test]
+async fn attaching_authorization_to_many_users_matches_attaching_it_to_each() {
+    let (app, admin) = bootstrap();
+    for (username, presets) in [
+        ("emberfall", vec![TestPermissionPreset::CatalogView]),
+        (
+            "cinderwake",
+            vec![
+                TestPermissionPreset::CatalogView,
+                TestPermissionPreset::TitleManagement,
+            ],
+        ),
+        ("ashgrove", Vec::new()),
+    ] {
+        create_user_with_permissions(&app, &admin, username, "password123", presets)
+            .await
+            .expect("create user");
+    }
+    let mut users = app.list_users(&admin).await.expect("list users");
+    users.push(admin.clone());
+    users[0].set_login_status(scryer_domain::UserLoginStatus::Disabled);
+
+    let mut expected = Vec::new();
+    for user in users.clone() {
+        expected.push(
+            app.attach_user_authorization(user)
+                .await
+                .expect("per-user authorization"),
+        );
+    }
+    let batched = app
+        .attach_users_authorization(users)
+        .await
+        .expect("batched authorization");
+    assert_eq!(batched.len(), expected.len());
+    for (batched, expected) in batched.iter().zip(&expected) {
+        assert_eq!(batched.id, expected.id);
+        assert_eq!(batched.login_status(), expected.login_status());
+        let (left, right) = (&batched.authorization, &expected.authorization);
+        assert_eq!(left.app, right.app, "app mask for {}", batched.username);
+        assert_eq!(
+            left.libraries, right.libraries,
+            "grants for {}",
+            batched.username
+        );
+        assert_eq!(left.default_library, right.default_library);
+        assert_eq!(left.actor_capabilities, right.actor_capabilities);
+        assert_eq!(left.loaded, right.loaded);
+    }
+    assert!(
+        app.attach_users_authorization(Vec::new())
+            .await
+            .expect("no users")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn create_user_without_permission_grants_allows_manage_users_only_actor() {
     let (app, _) = bootstrap();
     let actor = test_user_with_app_permissions("user-admin", AppPermissionMask::MANAGE_USERS);

@@ -790,6 +790,49 @@ impl UserExternalAccountRepository for UserStore {
         rows.iter().map(row_to_external_account).collect()
     }
 
+    async fn list_by_user_ids(&self, user_ids: &[String]) -> AppResult<Vec<UserExternalAccount>> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Each user's rows come from one statement, in that statement's order.
+        let mut distinct_ids: Vec<&String> = user_ids.iter().collect();
+        distinct_ids.sort();
+        distinct_ids.dedup();
+        let mut rows = Vec::new();
+        for chunk in distinct_ids.chunks(crate::users::USER_ID_BATCH) {
+            let placeholders = vec!["{}"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT id, user_id, provider, connection_id, external_user_id, username,
+                        display_name, avatar_url, status, verified_at, last_login_at, created_at, updated_at
+                   FROM user_external_accounts
+                  WHERE user_id IN ({placeholders})
+                  ORDER BY provider, username"
+            );
+            let args: Vec<SqlArg> = chunk
+                .iter()
+                .map(|user_id| SqlArg::Text((*user_id).clone()))
+                .collect();
+            rows.extend(SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?);
+        }
+        let mut by_user: std::collections::HashMap<&str, Vec<&SqlRow>> = user_ids
+            .iter()
+            .map(|id| (id.as_str(), Vec::new()))
+            .collect();
+        for row in &rows {
+            let user_id = row.text("user_id")?;
+            if let Some(user_rows) = by_user.get_mut(user_id.as_str()) {
+                user_rows.push(row);
+            }
+        }
+        let mut accounts = Vec::with_capacity(rows.len());
+        for user_id in user_ids {
+            for row in by_user.get(user_id.as_str()).into_iter().flatten() {
+                accounts.push(row_to_external_account(row)?);
+            }
+        }
+        Ok(accounts)
+    }
+
     async fn get_by_id(&self, id: &str) -> AppResult<Option<UserExternalAccount>> {
         load_external_account_by_id(self.datastore.read_exec(), id).await
     }
@@ -2842,6 +2885,126 @@ mod tests {
                 "{table}"
             );
         }
+    }
+
+    /// One batched read returns each requested user's accounts exactly as the
+    /// per-user read orders them, users in request order, and nothing for
+    /// users outside the request.
+    #[tokio::test]
+    async fn external_accounts_for_several_users_match_the_per_user_reads() {
+        let store = test_store().await;
+        for user_id in ["emberfall", "cinderwake", "ashgrove", "unrequested"] {
+            UserRepository::create(&store, test_user(user_id))
+                .await
+                .expect("create user");
+        }
+        for (id, user_id, provider, connection_id, external_user_id) in [
+            (
+                "acct-1",
+                "emberfall",
+                ExternalAccountProvider::Plex,
+                "conn-a",
+                "zeta",
+            ),
+            (
+                "acct-2",
+                "emberfall",
+                ExternalAccountProvider::Jellyfin,
+                "conn-a",
+                "beta",
+            ),
+            (
+                "acct-3",
+                "emberfall",
+                ExternalAccountProvider::Plex,
+                "conn-b",
+                "alpha",
+            ),
+            (
+                "acct-4",
+                "cinderwake",
+                ExternalAccountProvider::Emby,
+                "conn-c",
+                "gamma",
+            ),
+            (
+                "acct-5",
+                "unrequested",
+                ExternalAccountProvider::Plex,
+                "conn-d",
+                "delta",
+            ),
+            (
+                "acct-6",
+                "cinderwake",
+                ExternalAccountProvider::Jellyfin,
+                "conn-e",
+                "omega",
+            ),
+        ] {
+            UserExternalAccountRepository::create(
+                &store,
+                test_account(id, user_id, provider, connection_id, external_user_id),
+            )
+            .await
+            .expect("create account");
+        }
+
+        let requested = [
+            "cinderwake".to_string(),
+            "ashgrove".to_string(),
+            "emberfall".to_string(),
+            "missing".to_string(),
+        ];
+        let mut expected = Vec::new();
+        for user_id in &requested {
+            expected.extend(
+                UserExternalAccountRepository::list_by_user_id(&store, user_id)
+                    .await
+                    .expect("per-user accounts"),
+            );
+        }
+        let batched = UserExternalAccountRepository::list_by_user_ids(&store, &requested)
+            .await
+            .expect("batched accounts");
+        assert_eq!(batched, expected);
+        assert_eq!(
+            batched
+                .iter()
+                .map(|account| account.id.as_str())
+                .collect::<Vec<_>>(),
+            ["acct-4", "acct-6", "acct-2", "acct-3", "acct-1"]
+        );
+
+        // More ids than one statement binds, with the requested users split
+        // across statements and one repeated: the answer is the same.
+        let mut split_request: Vec<String> = (0..1_200)
+            .map(|index| format!("absent-{index:04}"))
+            .collect();
+        for (offset, user_id) in requested.iter().enumerate() {
+            split_request.insert(offset * 400, user_id.clone());
+        }
+        split_request.push("emberfall".to_string());
+        let mut split_expected = Vec::new();
+        for user_id in &split_request {
+            split_expected.extend(
+                UserExternalAccountRepository::list_by_user_id(&store, user_id)
+                    .await
+                    .expect("per-user accounts"),
+            );
+        }
+        assert_eq!(
+            UserExternalAccountRepository::list_by_user_ids(&store, &split_request)
+                .await
+                .expect("split batched accounts"),
+            split_expected
+        );
+        assert!(
+            UserExternalAccountRepository::list_by_user_ids(&store, &[])
+                .await
+                .expect("empty request")
+                .is_empty()
+        );
     }
 
     #[tokio::test]

@@ -48,8 +48,13 @@ use crate::maintenance_rules::facts::{
     watch_signal_sweep_is_fresh,
 };
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
-use crate::maintenance_rules::storage::{MaintenanceRootFileSummary, MaintenanceStorageFactCache};
-use crate::maintenance_rules::subjects::MaintenanceTitleEpisodeInventory;
+use crate::maintenance_rules::storage::{
+    MaintenanceRootFileSummary, MaintenanceStorageFactCache, MaintenanceStorageRoot,
+    maintenance_root_file_summary_on,
+};
+use crate::maintenance_rules::subjects::{
+    MaintenanceListingInventories, MaintenanceTitleEpisodeInventory,
+};
 use crate::media_server_signals::SIGNAL_SYNC_PROVIDERS;
 use crate::ports::MaintenanceCandidateQuery;
 use crate::settings::keys::{
@@ -543,14 +548,18 @@ impl AppUseCase {
             .maintenance_title_names(visible.iter().map(|candidate| candidate.title_id.clone()))
             .await?;
 
+        let mut inventories = MaintenanceListingInventories::default();
         let summaries = self
-            .maintenance_subject_summaries(
+            .maintenance_listing_subject_summaries(
                 visible
                     .iter()
                     .map(|row| (row.subject_kind.clone(), row.title_id.clone())),
+                &mut inventories,
             )
             .await?;
-        let storage_root_summaries = self.maintenance_candidate_root_summaries(&visible).await?;
+        let storage_root_summaries = self
+            .maintenance_candidate_root_summaries(&visible, &mut inventories)
+            .await?;
         let coordinates: Vec<_> = visible
             .iter()
             .map(
@@ -605,6 +614,7 @@ impl AppUseCase {
     async fn maintenance_candidate_root_summaries(
         &self,
         candidates: &[LifecycleCandidate],
+        inventories: &mut MaintenanceListingInventories,
     ) -> AppResult<HashMap<String, MaintenanceRootFileSummary>> {
         let mut root_by_revision: HashMap<(String, i64), Option<String>> = HashMap::new();
         for candidate in candidates {
@@ -636,6 +646,15 @@ impl AppUseCase {
             .collect();
         let files_by_title = self.maintenance_files_for_titles(&titles).await?;
 
+        // Candidates of several rules can share a root, a title and a subject:
+        // each root, title manifest and (root, subject) summary is read once.
+        let mut roots: HashMap<String, Option<MaintenanceStorageRoot>> = HashMap::new();
+        let mut title_deletion_files: HashMap<String, Option<Vec<crate::types::TitleMediaFile>>> =
+            HashMap::new();
+        let mut subject_summaries: HashMap<
+            (String, String, String, String),
+            Option<MaintenanceRootFileSummary>,
+        > = HashMap::new();
         let mut summaries = HashMap::new();
         for candidate in candidates {
             let revision_key = (candidate.rule_set_id.clone(), candidate.revision_number);
@@ -648,16 +667,29 @@ impl AppUseCase {
             let Some(title) = titles_by_id.get(&candidate.title_id) else {
                 continue;
             };
+            let summary_key = (
+                storage_root_id.to_string(),
+                title.id.clone(),
+                candidate.subject_kind.clone(),
+                candidate.subject_id.clone(),
+            );
+            if let Some(known) = subject_summaries.get(&summary_key) {
+                if let Some(root_summary) = known {
+                    summaries.insert(candidate.id.clone(), root_summary.clone());
+                }
+                continue;
+            }
             let files = files_by_title
                 .get(&title.id)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
             let subject = match self
-                .maintenance_resolve_subject(
+                .maintenance_resolve_listing_subject(
                     &candidate.subject_kind,
                     &candidate.subject_id,
                     title,
                     files,
+                    inventories,
                 )
                 .await
             {
@@ -668,23 +700,38 @@ impl AppUseCase {
                     | AppError::Validation(_)
                     | AppError::ValidationRefused { .. }
                     | AppError::ValidationRefusedWithCount { .. },
-                ) => continue,
+                ) => {
+                    subject_summaries.insert(summary_key, None);
+                    continue;
+                }
                 Err(error) => return Err(error),
             };
-            let root_summary = if subject.kind == scryer_domain::MaintenanceRuleSubjectKind::Title {
-                match self.maintenance_title_deletion_files(title).await {
-                    Ok(files) => {
-                        self.maintenance_root_file_summary(&files, Some(storage_root_id))
-                            .await?
-                    }
-                    Err(_) => MaintenanceRootFileSummary::default(),
+            let summary_files = if subject.kind == scryer_domain::MaintenanceRuleSubjectKind::Title
+            {
+                if !title_deletion_files.contains_key(&title.id) {
+                    let files = self.maintenance_title_deletion_files(title).await.ok();
+                    title_deletion_files.insert(title.id.clone(), files);
                 }
+                title_deletion_files[&title.id].as_deref()
             } else if subject.ambiguous_files {
-                MaintenanceRootFileSummary::default()
+                None
             } else {
-                self.maintenance_root_file_summary(&subject.files, Some(storage_root_id))
-                    .await?
+                Some(subject.files.as_slice())
             };
+            let root_summary = match summary_files {
+                Some(summary_files) => {
+                    if !roots.contains_key(storage_root_id) {
+                        let root = self.maintenance_storage_root(Some(storage_root_id)).await?;
+                        roots.insert(storage_root_id.to_string(), root);
+                    }
+                    match &roots[storage_root_id] {
+                        Some(root) => maintenance_root_file_summary_on(summary_files, root).await,
+                        None => MaintenanceRootFileSummary::default(),
+                    }
+                }
+                None => MaintenanceRootFileSummary::default(),
+            };
+            subject_summaries.insert(summary_key, Some(root_summary.clone()));
             summaries.insert(candidate.id.clone(), root_summary);
         }
         Ok(summaries)
@@ -1044,23 +1091,21 @@ impl AppUseCase {
         let mut counts = RuleCounts::default();
         let mut after_id = None;
         loop {
-            let page = self
+            // The rule's libraries filter in the page read (none means all).
+            let selected = self
                 .services
                 .catalog
                 .titles
-                .list_page_after_id(after_id.clone(), MAINTENANCE_EVALUATION_TITLE_CHUNK)
+                .list_page_after_id_in_libraries(
+                    after_id.clone(),
+                    &rule_set.library_ids,
+                    MAINTENANCE_EVALUATION_TITLE_CHUNK,
+                )
                 .await?;
-            if page.is_empty() {
+            if selected.is_empty() {
                 break;
             }
-            after_id = page.last().map(|title| title.id.clone());
-            let selected: Vec<_> = page
-                .into_iter()
-                .filter(|title| {
-                    rule_set.library_ids.is_empty()
-                        || rule_set.library_ids.contains(&title.library_id)
-                })
-                .collect();
+            after_id = selected.last().map(|title| title.id.clone());
             let chunk = selected.as_slice();
             let files_by_title = self.maintenance_files_for_titles(chunk).await?;
             let series_movies_by_title = self.maintenance_series_movies_for_titles(chunk).await?;

@@ -547,6 +547,41 @@ impl AppUseCase {
         let status = self
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
+        self.discovery_home_projected_for(
+            actor,
+            query,
+            projection,
+            &visibility,
+            personalized_discovery_enabled,
+            status,
+            discovery_home_started_at,
+        )
+        .await
+        .map(|(result, _, _)| result)
+    }
+
+    /// The home for a viewer whose visibility, personalized switch and sync
+    /// status the caller already read for this request, with the owned
+    /// visibility it computed for the viewer's owned libraries and that status,
+    /// and the pending requests its watchlist read (`None` when it read none).
+    #[allow(clippy::too_many_arguments)]
+    async fn discovery_home_projected_for(
+        &self,
+        actor: &User,
+        query: DiscoveryHomeQuery,
+        projection: crate::DiscoveryHomeProjection,
+        visibility: &DiscoveryVisibility,
+        personalized_discovery_enabled: bool,
+        status: DiscoverySyncStatus,
+        discovery_home_started_at: Instant,
+    ) -> AppResult<(
+        DiscoveryHomeResult,
+        CatalogOwnedVisibility,
+        Option<Vec<scryer_domain::MediaRequest>>,
+    )> {
+        let readable_library_ids = &visibility.readable_library_ids;
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && personalized_discovery_enabled;
         let limit = discovery_section_limit(query.limit_per_section);
         let include_unresolved = query.include_unresolved;
         let readable_library_id_list = sorted_discovery_library_ids(readable_library_ids);
@@ -598,7 +633,7 @@ impl AppUseCase {
                 public_sections = filter_discovery_sections_for_owned_items(
                     public_section_results,
                     &owned_visibility,
-                    &visibility,
+                    visibility,
                     limit,
                 );
             }
@@ -610,7 +645,7 @@ impl AppUseCase {
         let watchlist = if query.include_personalized && personalized_discovery_enabled {
             self.discovery_watchlist_composition(
                 actor,
-                &visibility,
+                visibility,
                 &owned_library_id_list,
                 &status.state,
                 can_view_personalized,
@@ -726,7 +761,7 @@ impl AppUseCase {
 
         let mut browse_query = self
             .discovery_browse_query_with_owned(
-                &visibility,
+                visibility,
                 &status.state,
                 can_view_personalized && query.include_personalized,
                 &DiscoveryItemsQuery {
@@ -884,7 +919,7 @@ impl AppUseCase {
             elapsed_ms = discovery_home_elapsed_ms(discovery_home_started_at),
             "discovery home loaded"
         );
-        Ok(result)
+        Ok((result, owned_visibility, watchlist.pending_requests))
     }
 
     async fn hydrate_discovery_home_result(
@@ -1078,13 +1113,13 @@ impl AppUseCase {
             offset: 0,
             ..DiscoveryItemsStorageQuery::default()
         };
-        let mut page = self
+        let mut items = self
             .services
             .library
             .discovery
-            .query_discovery_items(&storage_query)
+            .query_discovery_items_uncounted(&storage_query)
             .await?;
-        if page.items.is_empty() {
+        if items.is_empty() {
             // A watchlist card built from the viewer's own list rows has no
             // stored item; it reads back under the rail's own gates.
             return self
@@ -1101,13 +1136,13 @@ impl AppUseCase {
                 .discovery_submitted_subjects_for_items(
                     context_run_id,
                     &sorted_discovery_library_ids(readable_library_ids),
-                    page.items.iter(),
+                    items.iter(),
                 )
                 .await?;
-            resolve_discovery_matched_subjects(&mut page.items, &submitted_subjects)?;
+            resolve_discovery_matched_subjects(&mut items, &submitted_subjects)?;
         }
 
-        Ok(page.items.into_iter().next())
+        Ok(items.into_iter().next())
     }
 
     pub async fn catalog_discovery(
@@ -1391,12 +1426,6 @@ impl AppUseCase {
             .get_discovery_sync_state(DISCOVERY_DEFAULT_SCOPE_KEY)
             .await?
             .unwrap_or_default();
-        let mut recent_runs = self
-            .services
-            .library
-            .discovery
-            .list_recent_discovery_sync_runs(10)
-            .await?;
         let mut pending_context_change_count = self
             .services
             .library
@@ -1418,13 +1447,14 @@ impl AppUseCase {
             state.backoff_until = None;
             state.inflight_subject_fingerprint = None;
             state.inflight_domain_event_sequence = None;
-            recent_runs.retain(|run| run.kind == "public_feed");
             pending_context_change_count = 0;
         }
 
+        // Home and section composition never read recent runs, and the
+        // GraphQL status payload does not carry them.
         Ok(DiscoverySyncStatus {
             state,
-            recent_runs,
+            recent_runs: Vec::new(),
             pending_context_change_count,
         })
     }

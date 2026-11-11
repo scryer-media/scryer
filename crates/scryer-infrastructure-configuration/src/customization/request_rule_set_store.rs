@@ -121,6 +121,39 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         .transpose()
     }
 
+    async fn get_revisions(
+        &self,
+        keys: &[(String, i64)],
+    ) -> AppResult<Vec<Option<RequestRuleRevision>>> {
+        let mut found = std::collections::HashMap::new();
+        for chunk in keys.chunks(REVISION_KEY_CHUNK) {
+            let predicate =
+                vec!["(rule_set_id = {} AND revision_number = {})"; chunk.len()].join(" OR ");
+            let sql = format!(
+                "SELECT {REVISION_COLUMNS}
+                   FROM request_rule_revisions
+                  WHERE {predicate}"
+            );
+            let args: Vec<SqlArg> = chunk
+                .iter()
+                .flat_map(|(rule_set_id, revision_number)| {
+                    [
+                        SqlArg::Text(rule_set_id.clone()),
+                        SqlArg::I64(*revision_number),
+                    ]
+                })
+                .collect();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                let revision = row_to_revision(&row)?;
+                found.insert(
+                    (revision.rule_set_id.clone(), revision.revision_number),
+                    revision,
+                );
+            }
+        }
+        Ok(keys.iter().map(|key| found.get(key).cloned()).collect())
+    }
+
     async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<RequestRuleRevision>> {
         let sql = format!(
             "SELECT {REVISION_COLUMNS}
@@ -212,6 +245,9 @@ const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source,
     matcher_content_hash, created_by, created_at";
+
+/// Revision keys per statement: two binds each, well under every engine's ceiling.
+const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO request_rule_sets
         (id, name, description, enabled, evaluation_mode,

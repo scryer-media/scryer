@@ -435,6 +435,59 @@ async fn request_rule_sets_and_revisions_round_trip() {
     let _ = std::fs::remove_file(db);
 }
 
+/// The batched revision read answers every key exactly as one `get_revision`
+/// call does, in key order, across chunk boundaries, with repeats and misses.
+#[tokio::test]
+async fn batched_request_revision_reads_match_the_per_key_reads() {
+    let (services, db) = temp_services("scryer_request_revision_batch").await;
+    let store = crate::RequestRuleSetStore::new(services.datastore());
+    for id in ["emberfall", "cinderwake"] {
+        store
+            .create_rule_set(&rule_set(id, Vec::new()), &revision(id, 1))
+            .await
+            .expect("create rule set");
+        store
+            .add_revision(&revision(id, 2), Utc::now())
+            .await
+            .expect("add revision");
+    }
+
+    let mut keys = vec![
+        ("cinderwake".to_string(), 2),
+        ("emberfall".to_string(), 1),
+        ("ashgrove".to_string(), 1),
+        ("emberfall".to_string(), 3),
+        ("emberfall".to_string(), 1),
+    ];
+    for index in 0..900 {
+        let id = if index % 2 == 0 {
+            "emberfall"
+        } else {
+            "cinderwake"
+        };
+        keys.push((id.to_string(), (index % 3) as i64 + 1));
+    }
+    let batched = store.get_revisions(&keys).await.expect("batched revisions");
+    assert_eq!(batched.len(), keys.len());
+    for ((rule_set_id, revision_number), found) in keys.iter().zip(&batched) {
+        let expected = store
+            .get_revision(rule_set_id, *revision_number)
+            .await
+            .expect("per-key revision");
+        assert_eq!(found, &expected, "{rule_set_id} revision {revision_number}");
+    }
+    assert!(batched[2].is_none() && batched[3].is_none());
+    assert!(
+        store
+            .get_revisions(&[])
+            .await
+            .expect("empty batch")
+            .is_empty()
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
 #[tokio::test]
 async fn request_rule_decisions_round_trip() {
     let (services, db) = temp_services("scryer_request_rule_decisions").await;

@@ -1931,7 +1931,8 @@ export const titleCatalogManagedBytesQuery = `query TitleCatalogManagedBytes(
   }
 }`;
 
-export const titlesQuery = buildTitlesQuery();
+// The title picker reads only the matching items.
+export const titlesQuery = buildTitlesQuery({}, { includeAggregates: false });
 
 export const indexerGrabClientsQuery = `query IndexerGrabClients($searchId: ID!, $downloadUrl: String!, $titleId: ID) {
   indexerGrabClients(searchId: $searchId, downloadUrl: $downloadUrl, titleId: $titleId) {
@@ -2009,6 +2010,7 @@ export const libraryGraphTitleDetailsQuery = `query LibraryGraphTitleDetails($id
 export const libraryGraphQuery = `query LibraryGraph($input: LibraryGraphInput!) {
   libraryGraph(input: $input) {
     generatedAt
+    viewKey
     nodes {
       subjectKey
       targetKey
@@ -2029,6 +2031,7 @@ export const libraryGraphQuery = `query LibraryGraph($input: LibraryGraphInput!)
     }
     subjectCount
     truncated
+    unchanged
   }
 }`;
 

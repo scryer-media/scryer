@@ -779,8 +779,9 @@ impl AppUseCase {
             stale_import_history,
             stale_download_queue_deletes,
             stale_rule_set_history,
+            stale_maintenance_evaluation_runs,
         ) = if general_settings.keep_history_forever {
-            (0, 0, 0, 0, 0, 0)
+            (0, 0, 0, 0, 0, 0, 0)
         } else {
             (
                 self.services
@@ -818,6 +819,11 @@ impl AppUseCase {
                     .housekeeping
                     .delete_rule_set_history_older_than(history_retention_days)
                     .await?,
+                self.services
+                    .workflow
+                    .housekeeping
+                    .delete_maintenance_evaluation_runs_older_than(history_retention_days)
+                    .await?,
             )
         };
         let stale_operational_domain_events = self
@@ -850,6 +856,7 @@ impl AppUseCase {
             + stale_import_history
             + stale_download_queue_deletes
             + stale_rule_set_history
+            + stale_maintenance_evaluation_runs
             + stale_list_sync_runs;
 
         // 3. Stale staged NZB artifacts (> 1 hour old)

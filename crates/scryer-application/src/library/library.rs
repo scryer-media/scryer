@@ -402,16 +402,38 @@ pub(crate) fn library_scan_cancel_requested(token: Option<&CancellationToken>) -
     token.is_some_and(CancellationToken::is_cancelled)
 }
 
+/// Folds the pending file progress into the live session now; the event log
+/// gets it every few hundred files or quarter second, and at the walk's
+/// final flush.
 async fn flush_title_scan_progress_batch(
     app: &AppUseCase,
     session_id: Option<&str>,
     pending_progress: &mut TitleScanProgressDelta,
 ) {
+    flush_title_scan_progress(app, session_id, pending_progress, false).await;
+}
+
+/// [`flush_title_scan_progress_batch`] that also appends any file progress
+/// the event log has not caught up on yet.
+async fn flush_title_scan_progress_final(
+    app: &AppUseCase,
+    session_id: Option<&str>,
+    pending_progress: &mut TitleScanProgressDelta,
+) {
+    flush_title_scan_progress(app, session_id, pending_progress, true).await;
+}
+
+async fn flush_title_scan_progress(
+    app: &AppUseCase,
+    session_id: Option<&str>,
+    pending_progress: &mut TitleScanProgressDelta,
+    force: bool,
+) {
     let Some(session_id) = session_id else {
         *pending_progress = TitleScanProgressDelta::default();
         return;
     };
-    if pending_progress.total() == 0 {
+    if pending_progress.total() == 0 && !force {
         return;
     }
 
@@ -421,7 +443,7 @@ async fn flush_title_scan_progress_batch(
     // coalesced progress event are the same events in the same order, they
     // just no longer each pay a commit (and two fsyncs) of their own.
     coordinator
-        .mark_file_progress_and_publish(delta.completed, delta.failed)
+        .mark_file_progress_and_publish_when_due(delta.completed, delta.failed, force)
         .await;
 }
 

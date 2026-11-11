@@ -753,10 +753,62 @@ impl SqlUpstreamSchedulerStore {
         &self,
         entries: Vec<(SchedulerStateKey, SchedulerStateEntry)>,
     ) -> AppResult<()> {
-        if entries.is_empty() {
+        self.flush_upserts(
+            "flush_upstream_scheduler_states",
+            vec![Self::scheduler_state_upserts(entries)],
+        )
+        .await
+    }
+
+    async fn flush_rss_cadence(
+        &self,
+        entries: Vec<(SchedulerStateKey, RssCadenceEntry)>,
+    ) -> AppResult<()> {
+        self.flush_upserts(
+            "flush_upstream_scheduler_rss_cadence",
+            vec![Self::rss_cadence_upserts(entries)],
+        )
+        .await
+    }
+
+    async fn flush_destination_cooldowns(
+        &self,
+        cooldowns: Vec<PersistedDestinationCooldown>,
+    ) -> AppResult<()> {
+        self.flush_upserts(
+            "flush_upstream_destination_cooldowns",
+            vec![Self::destination_cooldown_upserts(cooldowns)],
+        )
+        .await
+    }
+
+    /// Run each batch's statement once per argument row, batches in order,
+    /// in one transaction. Nothing to write opens no transaction.
+    async fn flush_upserts(
+        &self,
+        op_name: &'static str,
+        batches: Vec<UpsertBatch>,
+    ) -> AppResult<()> {
+        if batches.iter().all(|(_, rows)| rows.is_empty()) {
             return Ok(());
         }
+        SqlRuntime::run_in_transaction(&self.datastore, op_name, move |tx| {
+            let batches = batches.clone();
+            Box::pin(async move {
+                for (sql, rows) in &batches {
+                    for args in rows {
+                        tx.execute(sql, args).await?;
+                    }
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
 
+    fn scheduler_state_upserts(
+        entries: Vec<(SchedulerStateKey, SchedulerStateEntry)>,
+    ) -> UpsertBatch {
         const UPSERT_STATE_SQL: &str = "INSERT INTO upstream_scheduler_states (
                     host_key, destination_key, account_quota_key, rss_request_key,
                     api_current, api_max, grab_current, grab_max, quota_observed_at,
@@ -829,30 +881,10 @@ impl SqlUpstreamSchedulerStore {
                 ]
             })
             .collect();
-        SqlRuntime::run_in_transaction(
-            &self.datastore,
-            "flush_upstream_scheduler_states",
-            move |tx| {
-                let arg_rows = arg_rows.clone();
-                Box::pin(async move {
-                    for args in &arg_rows {
-                        tx.execute(UPSERT_STATE_SQL, args).await?;
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await
+        (UPSERT_STATE_SQL, arg_rows)
     }
 
-    async fn flush_rss_cadence(
-        &self,
-        entries: Vec<(SchedulerStateKey, RssCadenceEntry)>,
-    ) -> AppResult<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-
+    fn rss_cadence_upserts(entries: Vec<(SchedulerStateKey, RssCadenceEntry)>) -> UpsertBatch {
         const UPSERT_CADENCE_SQL: &str = "INSERT INTO upstream_scheduler_rss_cadence (
                     host_key, destination_key, account_quota_key, rss_request_key,
                     last_successful_poll_at, last_attempt_at, target_interval_seconds,
@@ -916,30 +948,10 @@ impl SqlUpstreamSchedulerStore {
                 ]
             })
             .collect();
-        SqlRuntime::run_in_transaction(
-            &self.datastore,
-            "flush_upstream_scheduler_rss_cadence",
-            move |tx| {
-                let arg_rows = arg_rows.clone();
-                Box::pin(async move {
-                    for args in &arg_rows {
-                        tx.execute(UPSERT_CADENCE_SQL, args).await?;
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await
+        (UPSERT_CADENCE_SQL, arg_rows)
     }
 
-    async fn flush_destination_cooldowns(
-        &self,
-        cooldowns: Vec<PersistedDestinationCooldown>,
-    ) -> AppResult<()> {
-        if cooldowns.is_empty() {
-            return Ok(());
-        }
-
+    fn destination_cooldown_upserts(cooldowns: Vec<PersistedDestinationCooldown>) -> UpsertBatch {
         const UPSERT_COOLDOWN_SQL: &str = "INSERT INTO upstream_destination_cooldowns (
                     destination_key, cooldown_until, retry_after_seconds, source,
                     status_code, message, observed_at, updated_at
@@ -974,22 +986,12 @@ impl SqlUpstreamSchedulerStore {
                 ]
             })
             .collect();
-        SqlRuntime::run_in_transaction(
-            &self.datastore,
-            "flush_upstream_destination_cooldowns",
-            move |tx| {
-                let arg_rows = arg_rows.clone();
-                Box::pin(async move {
-                    for args in &arg_rows {
-                        tx.execute(UPSERT_COOLDOWN_SQL, args).await?;
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await
+        (UPSERT_COOLDOWN_SQL, arg_rows)
     }
 }
+
+/// One upsert statement and the argument rows it runs with.
+type UpsertBatch = (&'static str, Vec<Vec<SqlArg>>);
 
 type DirtySchedulerEntries = Vec<(SchedulerStateKey, SchedulerStateEntry)>;
 type DirtyRssCadenceEntries = Vec<(SchedulerStateKey, RssCadenceEntry)>;
@@ -1035,6 +1037,25 @@ async fn flush_dirty_state(
         .iter()
         .map(|(key, _)| key.clone())
         .collect::<Vec<_>>();
+
+    // One transaction for all three sets. If it fails nothing was written,
+    // so the per-set sequence below runs and keeps its partial-write and
+    // requeue behaviour.
+    let combined = store
+        .flush_upserts(
+            "flush_upstream_scheduler_dirty_state",
+            vec![
+                SqlUpstreamSchedulerStore::scheduler_state_upserts(entries.clone()),
+                SqlUpstreamSchedulerStore::rss_cadence_upserts(rss_cadence.clone()),
+                SqlUpstreamSchedulerStore::destination_cooldown_upserts(
+                    destination_cooldowns.clone(),
+                ),
+            ],
+        )
+        .await;
+    if combined.is_ok() {
+        return Ok(());
+    }
 
     if let Err(error) = store.flush_entries(entries).await {
         requeue_dirty_entries(state, entry_keys);
@@ -3390,5 +3411,165 @@ mod tests {
         );
         // Quota observation is recorded just like Success: 5/100 used → 0.95 free.
         assert_eq!(entry.api_remaining_fraction, Some(0.95));
+    }
+
+    async fn flush_fixture(fail_table: Option<&str>) -> SqlUpstreamSchedulerStore {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        for statement in include_str!("../../scryer/src/db/migrations/0140_0_17_release_rollup.sql")
+            .split(';')
+            .map(str::trim)
+            .filter(|statement| {
+                statement.contains("upstream_scheduler_states")
+                    || statement.contains("upstream_scheduler_rss_cadence")
+                    || statement.contains("upstream_destination_cooldowns")
+            })
+        {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("scheduler schema should apply");
+        }
+        if let Some(table) = fail_table {
+            let trigger: &'static str = match table {
+                "upstream_scheduler_states" => {
+                    "CREATE TRIGGER fail_states BEFORE INSERT ON upstream_scheduler_states
+                     BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+                }
+                "upstream_scheduler_rss_cadence" => {
+                    "CREATE TRIGGER fail_cadence BEFORE INSERT ON upstream_scheduler_rss_cadence
+                     BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+                }
+                "upstream_destination_cooldowns" => {
+                    "CREATE TRIGGER fail_cooldowns BEFORE INSERT ON upstream_destination_cooldowns
+                     BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+                }
+                other => panic!("no failure trigger for {other}"),
+            };
+            sqlx::query(trigger)
+                .execute(&pool)
+                .await
+                .expect("failure trigger should apply");
+        }
+        SqlUpstreamSchedulerStore::new(StoreDatastore::Sqlite {
+            pool,
+            writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    fn flush_key(host: &str) -> SchedulerStateKey {
+        SchedulerStateKey {
+            host_key: host.into(),
+            destination_key: host.into(),
+            account_quota_key: Some("indexer-emberfall".into()),
+            rss_request_key: None,
+        }
+    }
+
+    fn dirty_flush_state() -> Arc<Mutex<SchedulerState>> {
+        let mut state = SchedulerState::default();
+        for host in ["emberfall.test", "cinderwake.test"] {
+            let key = flush_key(host);
+            state.entries.insert(
+                key.clone(),
+                SchedulerStateEntry {
+                    last_decision: Some("admitted".to_string()),
+                    admitted_count: 3,
+                    ..SchedulerStateEntry::default()
+                },
+            );
+            state.dirty.insert(key);
+        }
+        let rss_key = flush_key("emberfall.test");
+        state.rss_cadence.insert(
+            rss_key.clone(),
+            RssCadenceEntry {
+                target_interval: Some(Duration::from_secs(900)),
+                ..RssCadenceEntry::default()
+            },
+        );
+        state.dirty_rss_cadence.insert(rss_key);
+        Arc::new(Mutex::new(state))
+    }
+
+    fn ashgrove_cooldown() -> PersistedDestinationCooldown {
+        let now = Utc::now();
+        PersistedDestinationCooldown {
+            destination_key: "ashgrove.test".into(),
+            cooldown_until: now + chrono::Duration::minutes(10),
+            retry_after: Some(Duration::from_secs(600)),
+            source: RetryAfterSource::Seconds,
+            status_code: Some(429),
+            message: None,
+            observed_at: now,
+        }
+    }
+
+    async fn persisted_counts(store: &SqlUpstreamSchedulerStore) -> (usize, usize, usize) {
+        (
+            store.load_entries().await.expect("entries load").len(),
+            store.load_rss_cadence().await.expect("cadence loads").len(),
+            store
+                .load_destination_cooldowns()
+                .await
+                .expect("cooldowns load")
+                .len(),
+        )
+    }
+
+    /// Flushing all dirty sets in one transaction leaves the rows, the dirty
+    /// sets and the cooldown queue exactly where the per-set flushes left
+    /// them, including when a later set fails after earlier sets would have
+    /// committed on their own.
+    #[tokio::test]
+    async fn dirty_state_flush_matches_the_per_set_outcome() {
+        // (failing table, rows persisted, dirty entries, dirty cadence, cooldown requeued)
+        let cases = [
+            (None, (2, 1, 1), 0, 0, false),
+            (
+                Some("upstream_destination_cooldowns"),
+                (2, 1, 0),
+                0,
+                0,
+                true,
+            ),
+            (
+                Some("upstream_scheduler_rss_cadence"),
+                (2, 0, 0),
+                0,
+                1,
+                true,
+            ),
+            (Some("upstream_scheduler_states"), (0, 0, 0), 2, 1, true),
+        ];
+        for (fail_table, expected_rows, dirty_entries, dirty_cadence, requeued) in cases {
+            let registry = RateLimitRegistry::indexers();
+            registry.drain_dirty_destination_cooldowns();
+            registry.requeue_dirty_destination_cooldowns([ashgrove_cooldown()]);
+            let store = flush_fixture(fail_table).await;
+            let state = dirty_flush_state();
+
+            let result = flush_dirty_state(&store, &state).await;
+
+            assert_eq!(result.is_err(), fail_table.is_some(), "{fail_table:?}");
+            assert_eq!(
+                persisted_counts(&store).await,
+                expected_rows,
+                "{fail_table:?}"
+            );
+            let guard = state.lock().expect("state lock");
+            assert_eq!(guard.dirty.len(), dirty_entries, "{fail_table:?}");
+            assert_eq!(
+                guard.dirty_rss_cadence.len(),
+                dirty_cadence,
+                "{fail_table:?}"
+            );
+            drop(guard);
+            let requeued_cooldowns = registry.drain_dirty_destination_cooldowns();
+            assert_eq!(!requeued_cooldowns.is_empty(), requeued, "{fail_table:?}");
+        }
     }
 }

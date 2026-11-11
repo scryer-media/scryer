@@ -7,8 +7,9 @@ use crate::library_filename_parser::{
     parse_library_filename_with_index,
 };
 use crate::library_scan_unmatched::{
-    IgnoredLibraryScanItemArgs, LIBRARY_SCAN_SKIPPED_FILE_METADATA_UNREADABLE,
-    build_title_bound_unmatched_scan_item, persist_ignored_library_scan_item,
+    ClearedLibraryScanUnmatchedItems, IgnoredLibraryScanItemArgs,
+    LIBRARY_SCAN_SKIPPED_FILE_METADATA_UNREADABLE, build_title_bound_unmatched_scan_item,
+    persist_ignored_library_scan_item,
 };
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 
@@ -1976,6 +1977,7 @@ struct TitleScanAnalysisFinalizeContext<'a> {
     session_id: Option<&'a str>,
     title_updated_since_emit: &'a mut bool,
     cancel_token: Option<&'a CancellationToken>,
+    cleared_unmatched: &'a mut ClearedLibraryScanUnmatchedItems,
 }
 
 async fn finalize_title_scan_analysis_task_result(
@@ -2026,21 +2028,9 @@ async fn finalize_title_scan_analysis_task_result(
         ctx.external_subtitle_cache,
     )
     .await;
-    if outcome.progress.failed == 0
-        && let Err(error) = clear_library_scan_unmatched_item(
-            ctx.app,
-            &ctx.title.facet,
-            &ctx.title.library_id,
-            &file_path,
-        )
-        .await
-    {
-        warn!(
-            error = %error,
-            title_id = %ctx.title.id,
-            file_path = %file_path,
-            "failed to clear unmatched title scan item"
-        );
+    if outcome.progress.failed == 0 {
+        ctx.cleared_unmatched
+            .push(&ctx.title.facet, &ctx.title.library_id, &file_path);
     }
     ctx.pending_progress.absorb(outcome.progress);
     *ctx.title_updated_since_emit |= outcome.title_updated;
@@ -2532,8 +2522,24 @@ impl AppUseCase {
                     full_folder_scan,
                     file_analysis_concurrency,
                 };
-                self.walk_episodic_library_title(actor, title, options)
-                    .await
+                // Rows the walk cleared are removed together when it ends, and
+                // its file progress gets a final flush, on every way out of it.
+                let mut cleared_unmatched = ClearedLibraryScanUnmatchedItems::new(self, &title.id);
+                let mut pending_progress = TitleScanProgressDelta::default();
+                let result = self
+                    .walk_episodic_library_title(
+                        actor,
+                        title,
+                        options,
+                        &mut cleared_unmatched,
+                        &mut pending_progress,
+                    )
+                    .await;
+                if result.is_err() {
+                    flush_title_scan_progress_final(self, session_id, &mut pending_progress).await;
+                }
+                cleared_unmatched.clear().await;
+                result
             }
         }
     }
@@ -2686,6 +2692,8 @@ impl AppUseCase {
         actor: &User,
         title: Title,
         options: LibraryScanTitleWalkOptions<'_>,
+        cleared_unmatched: &mut ClearedLibraryScanUnmatchedItems,
+        pending_progress: &mut TitleScanProgressDelta,
     ) -> AppResult<LibraryTitleWalkResult> {
         let LibraryScanTitleWalkOptions {
             session_id,
@@ -3055,7 +3063,6 @@ impl AppUseCase {
         let mut layout_summary = TitleScanLayoutSummary::default();
         let mut seen_paths = HashSet::new();
         let analysis_limit = self.runtime.library.library_scan_analysis_limit.clone();
-        let mut pending_progress = TitleScanProgressDelta::default();
         let mut unchanged_file_skips = 0usize;
         let mut analyzed_files = 0usize;
         let mut external_subtitle_cache =
@@ -3108,6 +3115,9 @@ impl AppUseCase {
                             } else {
                                 display_name
                             };
+                            cleared_unmatched
+                                .clear_before_persist(&title.facet, &title.library_id, &file.path)
+                                .await;
                             if let Err(persist_error) = persist_ignored_library_scan_item(
                                 self,
                                 &title.facet,
@@ -3138,7 +3148,7 @@ impl AppUseCase {
                             flush_title_scan_progress_batch(
                                 self,
                                 session_id,
-                                &mut pending_progress,
+                                &mut *pending_progress,
                             )
                             .await;
                             continue;
@@ -3270,6 +3280,9 @@ impl AppUseCase {
                         reason,
                         file.size_bytes,
                     );
+                    cleared_unmatched
+                        .clear_before_persist(&title.facet, &title.library_id, &file.path)
+                        .await;
                     if let Err(error) =
                         persist_library_scan_unmatched_item(self, &unmatched_item).await
                     {
@@ -3282,7 +3295,7 @@ impl AppUseCase {
                     }
                     summary.unmatched += 1;
                     pending_progress.absorb(TitleScanProgressDelta::failed(1));
-                    flush_title_scan_progress_batch(self, session_id, &mut pending_progress).await;
+                    flush_title_scan_progress_batch(self, session_id, &mut *pending_progress).await;
                     continue;
                 }
 
@@ -3382,25 +3395,12 @@ impl AppUseCase {
                         &mut external_subtitle_cache,
                     )
                     .await;
-                    if outcome.progress.failed == 0
-                        && let Err(error) = clear_library_scan_unmatched_item(
-                            self,
-                            &title.facet,
-                            &title.library_id,
-                            &file_path,
-                        )
-                        .await
-                    {
-                        warn!(
-                            error = %error,
-                            title_id = %title.id,
-                            file_path = %file_path,
-                            "failed to clear unmatched title scan item"
-                        );
+                    if outcome.progress.failed == 0 {
+                        cleared_unmatched.push(&title.facet, &title.library_id, &file_path);
                     }
                     pending_progress.absorb(outcome.progress);
                     title_updated_since_emit |= outcome.title_updated;
-                    flush_title_scan_progress_batch(self, session_id, &mut pending_progress).await;
+                    flush_title_scan_progress_batch(self, session_id, &mut *pending_progress).await;
                 } else {
                     analyzed_files += 1;
                     pending_analysis_plans.push_back(plan);
@@ -3424,10 +3424,11 @@ impl AppUseCase {
                             summary: &mut summary,
                             db_elapsed: &mut db_elapsed,
                             external_subtitle_cache: &mut external_subtitle_cache,
-                            pending_progress: &mut pending_progress,
+                            pending_progress: &mut *pending_progress,
                             session_id,
                             title_updated_since_emit: &mut title_updated_since_emit,
                             cancel_token: cancel_token.as_ref(),
+                            cleared_unmatched: &mut *cleared_unmatched,
                         },
                         result,
                     )
@@ -3480,10 +3481,11 @@ impl AppUseCase {
                     summary: &mut summary,
                     db_elapsed: &mut db_elapsed,
                     external_subtitle_cache: &mut external_subtitle_cache,
-                    pending_progress: &mut pending_progress,
+                    pending_progress: &mut *pending_progress,
                     session_id,
                     title_updated_since_emit: &mut title_updated_since_emit,
                     cancel_token: cancel_token.as_ref(),
+                    cleared_unmatched: &mut *cleared_unmatched,
                 },
                 result,
             )
@@ -3497,7 +3499,8 @@ impl AppUseCase {
             }
         }
 
-        flush_title_scan_progress_batch(self, session_id, &mut pending_progress).await;
+        flush_title_scan_progress_final(self, session_id, &mut *pending_progress).await;
+        cleared_unmatched.clear().await;
 
         if !library_scan_cancel_requested(cancel_token.as_ref()) {
             let mut title_updated_after_scan = false;

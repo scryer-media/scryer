@@ -379,6 +379,141 @@ pub(crate) async fn clear_library_scan_unmatched_item(
         .await
 }
 
+/// A title walk's cleared rows, removed together when the walk ends.
+///
+/// A row that is persisted again before the walk ends is removed first, at
+/// that point, so it is never removed after it was written. A walk that is
+/// dropped before it ends still removes the rows it cleared.
+pub(crate) struct ClearedLibraryScanUnmatchedItems {
+    app: AppUseCase,
+    title_id: String,
+    /// (library id, facet, normalized item path), in the order they were
+    /// cleared.
+    items: Vec<(String, MediaFacet, String)>,
+    keys: HashSet<(String, MediaFacet, String)>,
+}
+
+impl ClearedLibraryScanUnmatchedItems {
+    pub(crate) fn new(app: &AppUseCase, title_id: &str) -> Self {
+        Self {
+            app: app.clone(),
+            title_id: title_id.to_string(),
+            items: Vec::new(),
+            keys: HashSet::new(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, facet: &MediaFacet, library_id: &str, item_path: &str) {
+        let item_path = normalize_library_scan_item_path(item_path);
+        if item_path.is_empty() {
+            return;
+        }
+        let key = (library_id.to_string(), facet.clone(), item_path);
+        if self.keys.insert(key.clone()) {
+            self.items.push(key);
+        }
+    }
+
+    /// Call before persisting `item_path` as unmatched: a pending clear of
+    /// that row runs now, so the row persisted next is kept, as when every
+    /// clear ran at once.
+    pub(crate) async fn clear_before_persist(
+        &mut self,
+        facet: &MediaFacet,
+        library_id: &str,
+        item_path: &str,
+    ) {
+        let key = (
+            library_id.to_string(),
+            facet.clone(),
+            normalize_library_scan_item_path(item_path),
+        );
+        if !self.keys.remove(&key) {
+            return;
+        }
+        self.items.retain(|item| *item != key);
+        let (library_id, facet, item_path) = key;
+        clear_library_scan_unmatched_items_now(
+            &self.app,
+            &self.title_id,
+            vec![(library_id, facet, vec![item_path])],
+        )
+        .await;
+    }
+
+    /// Removes every collected row: one statement per library and facet, and
+    /// when that fails, `clear_library_scan_unmatched_item` per row, warning
+    /// and carrying on past each failure, as clearing them one at a time did.
+    pub(crate) async fn clear(&mut self) {
+        let groups = self.take_groups();
+        clear_library_scan_unmatched_items_now(&self.app, &self.title_id, groups).await;
+    }
+
+    fn take_groups(&mut self) -> Vec<(String, MediaFacet, Vec<String>)> {
+        self.keys.clear();
+        let mut groups: Vec<(String, MediaFacet, Vec<String>)> = Vec::new();
+        let mut group_index: HashMap<(String, MediaFacet), usize> = HashMap::new();
+        for (library_id, facet, item_path) in std::mem::take(&mut self.items) {
+            match group_index.get(&(library_id.clone(), facet.clone())) {
+                Some(index) => groups[*index].2.push(item_path),
+                None => {
+                    group_index.insert((library_id.clone(), facet.clone()), groups.len());
+                    groups.push((library_id, facet, vec![item_path]));
+                }
+            }
+        }
+        groups
+    }
+}
+
+impl Drop for ClearedLibraryScanUnmatchedItems {
+    fn drop(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let groups = self.take_groups();
+        let app = self.app.clone();
+        let title_id = std::mem::take(&mut self.title_id);
+        runtime.spawn(async move {
+            clear_library_scan_unmatched_items_now(&app, &title_id, groups).await;
+        });
+    }
+}
+
+async fn clear_library_scan_unmatched_items_now(
+    app: &AppUseCase,
+    title_id: &str,
+    groups: Vec<(String, MediaFacet, Vec<String>)>,
+) {
+    for (library_id, facet, paths) in groups {
+        if app
+            .services
+            .library
+            .library_scan_unmatched_items
+            .delete_library_scan_unmatched_items(&library_id, facet.clone(), &paths)
+            .await
+            .is_ok()
+        {
+            continue;
+        }
+        for item_path in &paths {
+            if let Err(error) =
+                clear_library_scan_unmatched_item(app, &facet, &library_id, item_path).await
+            {
+                tracing::warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    file_path = %item_path,
+                    "failed to clear unmatched title scan item"
+                );
+            }
+        }
+    }
+}
+
 pub(crate) async fn reconcile_library_scan_unmatched_items(
     app: &AppUseCase,
     facet: &MediaFacet,

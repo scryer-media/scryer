@@ -94,6 +94,39 @@ async fn graphql_indexer_query_budget_is_set_preserved_and_cleared() {
 }
 
 #[tokio::test]
+async fn setup_status_reports_configured_integrations_like_the_lists() {
+    const SETUP_STATUS: &str =
+        r#"query { setupStatus { setupComplete hasDownloadClients hasIndexers } }"#;
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let before = gql(&ctx, SETUP_STATUS, json!({})).await;
+    assert_no_errors(&before);
+    assert_eq!(before["data"]["setupStatus"]["hasIndexers"], false);
+    assert_eq!(before["data"]["setupStatus"]["hasDownloadClients"], false);
+
+    let shell_only = gql(
+        &ctx,
+        r#"query { setupStatus { setupComplete } }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&shell_only);
+    assert_eq!(
+        shell_only["data"]["setupStatus"]["setupComplete"],
+        before["data"]["setupStatus"]["setupComplete"]
+    );
+
+    let created = gql(&ctx, CREATE_INDEXER, create_input(Value::Null)).await;
+    assert_no_errors(&created);
+
+    let after = gql(&ctx, SETUP_STATUS, json!({})).await;
+    assert_no_errors(&after);
+    assert_eq!(after["data"]["setupStatus"]["hasIndexers"], true);
+    assert_eq!(after["data"]["setupStatus"]["hasDownloadClients"], false);
+}
+
+#[tokio::test]
 async fn graphql_indexer_query_budget_rejects_zero() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;

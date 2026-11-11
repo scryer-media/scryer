@@ -231,11 +231,21 @@ impl AppUseCase {
         actor: &User,
     ) -> AppResult<Vec<MaintenanceRuleSetDetail>> {
         let rule_sets = self.list_maintenance_rule_sets(actor).await?;
-        let mut details = Vec::with_capacity(rule_sets.len());
-        for rule_set in rule_sets {
-            details.push(self.load_maintenance_rule_detail(rule_set).await?);
-        }
-        Ok(details)
+        let keys: Vec<(String, i64)> = rule_sets
+            .iter()
+            .map(|rule_set| (rule_set.id.clone(), rule_set.current_revision_number))
+            .collect();
+        let revisions = self
+            .services
+            .customization
+            .maintenance_rule_sets
+            .get_revisions(&keys)
+            .await?;
+        rule_sets
+            .into_iter()
+            .zip(revisions)
+            .map(|(rule_set, revision)| maintenance_rule_detail(rule_set, revision))
+            .collect()
     }
 
     pub async fn get_maintenance_rule_set(
@@ -1165,19 +1175,8 @@ impl AppUseCase {
             .customization
             .maintenance_rule_sets
             .get_revision(&rule_set.id, rule_set.current_revision_number)
-            .await?
-            .ok_or_else(|| {
-                AppError::Repository(format!(
-                    "maintenance rule set {} has no revision {}",
-                    rule_set.id, rule_set.current_revision_number
-                ))
-            })?;
-        let action_definition = decode_action_definition(&revision)?;
-        Ok(MaintenanceRuleSetDetail {
-            rule_set,
-            revision,
-            action_definition,
-        })
+            .await?;
+        maintenance_rule_detail(rule_set, revision)
     }
 
     async fn resolve_preview_policy(
@@ -1572,6 +1571,26 @@ fn build_revision(
         created_by,
         created_at,
     }
+}
+
+/// A rule set with its current revision; a missing revision is a repository
+/// fault.
+fn maintenance_rule_detail(
+    rule_set: MaintenanceRuleSet,
+    revision: Option<MaintenanceRuleRevision>,
+) -> AppResult<MaintenanceRuleSetDetail> {
+    let revision = revision.ok_or_else(|| {
+        AppError::Repository(format!(
+            "maintenance rule set {} has no revision {}",
+            rule_set.id, rule_set.current_revision_number
+        ))
+    })?;
+    let action_definition = decode_action_definition(&revision)?;
+    Ok(MaintenanceRuleSetDetail {
+        rule_set,
+        revision,
+        action_definition,
+    })
 }
 
 /// Read the stored action back through the closed catalog. Stored JSON that no

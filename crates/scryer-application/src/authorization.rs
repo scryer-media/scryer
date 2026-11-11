@@ -7,6 +7,37 @@ use scryer_domain::{
 
 use crate::{AppError, AppResult, AppUseCase};
 
+/// A user's authorization from its stored app mask and library grants.
+fn build_user_authorization(
+    actor: &User,
+    app: AppPermissionMask,
+    grants: Vec<scryer_domain::LibraryGrant>,
+) -> UserAuthorization {
+    let mut libraries = HashMap::with_capacity(grants.len());
+    for grant in grants {
+        libraries.insert(grant.library_id, grant.permissions);
+    }
+
+    // An administrator who can grant library permissions holds every
+    // library permission on every library, including libraries created
+    // after the account was provisioned and therefore missing a grant
+    // row. Explicit rows still win where one exists.
+    let default_library = if app.contains(AppPermissionMask::MANAGE_PERMISSIONS) {
+        UserAuthorization::full_admin().default_library
+    } else {
+        LibraryPermissionMask::NONE
+    };
+
+    UserAuthorization {
+        app,
+        libraries,
+        default_library,
+        actor_capabilities: ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
+        login_status: actor.login_status(),
+        loaded: true,
+    }
+}
+
 fn permission_allows_app_library_override(permission: LibraryPermission) -> bool {
     !matches!(
         permission,
@@ -83,29 +114,7 @@ impl AppUseCase {
             .libraries
             .permission_masks_for_user(&actor.id)
             .await?;
-        let mut libraries = HashMap::with_capacity(grants.len());
-        for grant in grants {
-            libraries.insert(grant.library_id, grant.permissions);
-        }
-
-        // An administrator who can grant library permissions holds every
-        // library permission on every library, including libraries created
-        // after the account was provisioned and therefore missing a grant
-        // row. Explicit rows still win where one exists.
-        let default_library = if app.contains(AppPermissionMask::MANAGE_PERMISSIONS) {
-            UserAuthorization::full_admin().default_library
-        } else {
-            LibraryPermissionMask::NONE
-        };
-
-        Ok(UserAuthorization {
-            app,
-            libraries,
-            default_library,
-            actor_capabilities: ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
-            login_status: actor.login_status(),
-            loaded: true,
-        })
+        Ok(build_user_authorization(actor, app, grants))
     }
 
     pub async fn attach_user_authorization(&self, mut actor: User) -> AppResult<User> {
@@ -113,6 +122,29 @@ impl AppUseCase {
         actor.authorization = self.load_user_authorization(&actor).await?;
         actor.set_login_status(login_status);
         Ok(actor)
+    }
+
+    /// [`Self::attach_user_authorization`] for several users, with one
+    /// app-mask read and one grant read for all of them.
+    pub async fn attach_users_authorization(&self, users: Vec<User>) -> AppResult<Vec<User>> {
+        let user_ids: Vec<String> = users.iter().map(|user| user.id.clone()).collect();
+        let libraries = &self.services.catalog.libraries;
+        let app_masks = libraries.app_permission_masks_for_users(&user_ids).await?;
+        let grants = libraries.permission_masks_for_users(&user_ids).await?;
+        Ok(users
+            .into_iter()
+            .map(|mut user| {
+                let login_status = user.login_status();
+                let app = app_masks
+                    .get(&user.id)
+                    .copied()
+                    .unwrap_or(AppPermissionMask::NONE);
+                let user_grants = grants.get(&user.id).cloned().unwrap_or_default();
+                user.authorization = build_user_authorization(&user, app, user_grants);
+                user.set_login_status(login_status);
+                user
+            })
+            .collect())
     }
 
     pub(crate) async fn authorization_for_actor(

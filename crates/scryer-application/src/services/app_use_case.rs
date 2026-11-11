@@ -1158,31 +1158,108 @@ impl AppUseCase {
         title_id: &str,
         episode_ids: &[String],
     ) -> AppResult<std::collections::HashMap<String, Vec<TitleMediaFile>>> {
-        if episode_ids.is_empty() {
+        Ok(self
+            .list_episode_media_files_for_titles(
+                actor,
+                &[(title_id.to_string(), episode_ids.to_vec())],
+            )
+            .await?
+            .into_iter()
+            .map(|((_, episode_id), files)| (episode_id, files))
+            .collect())
+    }
+
+    /// [`Self::list_episode_media_files_for_title`] for several titles at once,
+    /// keyed `(title id, episode id)`: one library lookup and one files read
+    /// for the whole batch.
+    pub async fn list_episode_media_files_for_titles(
+        &self,
+        actor: &User,
+        requests: &[(String, Vec<String>)],
+    ) -> AppResult<std::collections::HashMap<(String, String), Vec<TitleMediaFile>>> {
+        let requests = requests
+            .iter()
+            .filter(|(_, episode_ids)| !episode_ids.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let Some(title) = self.services.catalog.titles.get_by_id(title_id).await? else {
-            return Ok(std::collections::HashMap::new());
-        };
+        let title_ids = requests
+            .iter()
+            .map(|(title_id, _)| title_id.clone())
+            .collect::<Vec<_>>();
+        let library_by_title = self
+            .services
+            .catalog
+            .titles
+            .list_library_ids_for_titles(&title_ids)
+            .await?
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
         let allowed_library_ids = self
             .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
             .await?;
-        if !allowed_library_ids.contains(&title.library_id) {
+        let mut privileged_by_library = std::collections::HashMap::new();
+        let mut visible = Vec::new();
+        for (title_id, episode_ids) in requests {
+            let Some(library_id) = library_by_title.get(&title_id) else {
+                continue;
+            };
+            if !allowed_library_ids.contains(library_id) {
+                continue;
+            }
+            if !privileged_by_library.contains_key(library_id) {
+                let privileged = self
+                    .has_privileged_library_access(actor, library_id)
+                    .await?;
+                privileged_by_library.insert(library_id.clone(), privileged);
+            }
+            visible.push((title_id, episode_ids));
+        }
+        if visible.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let privileged = self
-            .has_privileged_library_access(actor, &title.library_id)
-            .await?;
-        let scoped_files = self
+        let scoped_by_title = self
             .services
             .library
             .media_files
-            .list_live_media_files_for_episode_ids(title_id, episode_ids)
+            .list_live_media_files_for_titles_episode_ids(&visible)
             .await?;
-        let mut files_by_episode: std::collections::HashMap<String, Vec<TitleMediaFile>> =
+
+        let mut files_by_episode: std::collections::HashMap<(String, String), Vec<TitleMediaFile>> =
             std::collections::HashMap::new();
+        for (title_id, scoped_files) in scoped_by_title {
+            let privileged = library_by_title
+                .get(&title_id)
+                .and_then(|library_id| privileged_by_library.get(library_id))
+                .copied()
+                .unwrap_or(false);
+            let episode_ids = visible
+                .iter()
+                .filter(|(id, _)| *id == title_id)
+                .flat_map(|(_, episode_ids)| episode_ids.iter())
+                .collect::<Vec<_>>();
+            Self::group_scoped_files_by_episode(
+                &title_id,
+                scoped_files,
+                &episode_ids,
+                privileged,
+                &mut files_by_episode,
+            );
+        }
+        Ok(files_by_episode)
+    }
+
+    fn group_scoped_files_by_episode(
+        title_id: &str,
+        scoped_files: Vec<crate::EpisodeScopedMediaFile>,
+        episode_ids: &[&String],
+        privileged: bool,
+        files_by_episode: &mut std::collections::HashMap<(String, String), Vec<TitleMediaFile>>,
+    ) {
         for scoped_file in scoped_files {
-            for episode_id in episode_ids {
+            for &episode_id in episode_ids {
                 if scoped_file
                     .episode_ids
                     .iter()
@@ -1200,7 +1277,7 @@ impl AppUseCase {
                         crate::MediaFileRole::Additional
                     };
                     files_by_episode
-                        .entry(episode_id.clone())
+                        .entry((title_id.to_string(), episode_id.clone()))
                         .or_default()
                         .push(if privileged {
                             media_file
@@ -1210,7 +1287,6 @@ impl AppUseCase {
                 }
             }
         }
-        Ok(files_by_episode)
     }
 
     pub async fn get_title_wanted_item(

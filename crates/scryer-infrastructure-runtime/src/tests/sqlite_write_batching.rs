@@ -134,3 +134,45 @@ async fn sqlite_wal_autocheckpoint_honors_the_env_override() {
     unsafe { std::env::remove_var("SCRYER_SQLITE_WAL_AUTOCHECKPOINT_PAGES") };
     assert_eq!(pages, 4096);
 }
+
+#[tokio::test]
+async fn sqlite_connections_use_normal_sync_and_a_20_mb_cache() {
+    let (services, _db) = temp_services("scryer_sqlite_sync_cache").await;
+    let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+        .fetch_one(services.pool())
+        .await
+        .expect("pragma should read");
+    // 1 = NORMAL.
+    assert_eq!(synchronous, 1);
+    let cache_size: i64 = sqlx::query_scalar("PRAGMA cache_size")
+        .fetch_one(services.pool())
+        .await
+        .expect("pragma should read");
+    assert_eq!(cache_size, -20_000);
+}
+
+#[tokio::test]
+async fn sqlite_startup_refreshes_planner_statistics_and_resets_the_limit() {
+    let (services, _db) = temp_services("scryer_sqlite_startup_optimize").await;
+    let stat_table: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'",
+    )
+    .fetch_one(services.pool())
+    .await
+    .expect("schema should read");
+    assert_eq!(stat_table, 1);
+    // Hold every connection the pool has open at once, so the one that ran
+    // the optimize cannot be skipped: none may carry its analysis limit.
+    let open = services.pool().size().max(1);
+    let mut held = Vec::new();
+    for _ in 0..open {
+        held.push(services.pool().acquire().await.expect("connection"));
+    }
+    for conn in &mut held {
+        let analysis_limit: i64 = sqlx::query_scalar("PRAGMA analysis_limit")
+            .fetch_one(&mut **conn)
+            .await
+            .expect("pragma should read");
+        assert_eq!(analysis_limit, 0);
+    }
+}

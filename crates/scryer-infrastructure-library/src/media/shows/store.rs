@@ -16,6 +16,7 @@ use super::bridge_cache::AnimeNumberingBridgeCache;
 use crate::media::canonical_tags::{
     load_movie_entity_metadata_ratings, replace_movie_entity_metadata_ratings_tx,
 };
+use crate::media::id_list_statements::{id_list_statements, max_binds_for_target};
 use crate::media::title_credits::{load_movie_entity_credits, replace_movie_entity_credits_tx};
 // Series-movie tags are the same bag with the same rules as a title's, so the
 // patch, the per-owner cap, and the reserved-namespace guard are the title
@@ -722,6 +723,26 @@ async fn list_series_movie_links_for_titles_query(
     if title_ids.is_empty() {
         return Ok(Vec::new());
     }
+    let (title_ids, per_statement) = id_list_statements(
+        title_ids,
+        1,
+        0,
+        max_binds_for_target(target),
+        SQL_BIND_CHUNK,
+    );
+    let mut links = Vec::new();
+    for chunk in title_ids.chunks(per_statement) {
+        links.extend(series_movie_links_statement(target, chunk).await?);
+    }
+    attach_movie_entity_ratings(SqlExec::Target(target), &mut links).await?;
+    Ok(links)
+}
+
+/// One statement of [`list_series_movie_links_for_titles_query`].
+async fn series_movie_links_statement(
+    target: SqlTarget<'_>,
+    title_ids: &[String],
+) -> AppResult<Vec<SeriesMovieLink>> {
     let placeholders = bind_placeholders(title_ids.len());
     let sql = format!(
         "SELECT {SERIES_MOVIE_LINK_COLUMNS}
@@ -735,17 +756,8 @@ async fn list_series_movie_links_for_titles_query(
         .cloned()
         .map(SqlArg::Text)
         .collect::<Vec<_>>();
-    let query_target = match &target {
-        SqlTarget::Sqlite(pool) => SqlTarget::Sqlite(pool),
-        SqlTarget::Postgres(pool) => SqlTarget::Postgres(pool),
-    };
-    let rows = SqlRuntime::fetch_all(SqlExec::Target(query_target), &sql, &args).await?;
-    let mut links = rows
-        .iter()
-        .map(row_to_series_movie_link)
-        .collect::<AppResult<Vec<_>>>()?;
-    attach_movie_entity_ratings(SqlExec::Target(target), &mut links).await?;
-    Ok(links)
+    let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
+    rows.iter().map(row_to_series_movie_link).collect()
 }
 
 /// The linked movies of series in `library_ids` that `probe` names by any of
@@ -1246,24 +1258,30 @@ async fn list_collections_for_titles_query(
         return Ok(HashMap::new());
     }
 
-    let placeholders = bind_placeholders(title_ids.len());
-    let sql = format!(
-        "SELECT {COLLECTION_COLUMNS} FROM collections WHERE title_id IN ({placeholders}) ORDER BY title_id ASC, collection_index ASC, id ASC"
+    // A split list is distinct, so each title's collections come from one
+    // statement in its own order.
+    let (title_ids, per_statement) = id_list_statements(
+        title_ids,
+        1,
+        0,
+        max_binds_for_target(target),
+        SQL_BIND_CHUNK,
     );
-    let args = title_ids
-        .iter()
-        .cloned()
-        .map(SqlArg::Text)
-        .collect::<Vec<_>>();
-    let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
-
     let mut grouped = HashMap::<String, Vec<Collection>>::new();
-    for row in &rows {
-        let collection = row_to_collection(row)?;
-        grouped
-            .entry(collection.title_id.clone())
-            .or_default()
-            .push(collection);
+    for chunk in title_ids.chunks(per_statement) {
+        let placeholders = bind_placeholders(chunk.len());
+        let sql = format!(
+            "SELECT {COLLECTION_COLUMNS} FROM collections WHERE title_id IN ({placeholders}) ORDER BY title_id ASC, collection_index ASC, id ASC"
+        );
+        let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
+        for row in &rows {
+            let collection = row_to_collection(row)?;
+            grouped
+                .entry(collection.title_id.clone())
+                .or_default()
+                .push(collection);
+        }
     }
 
     Ok(grouped)
@@ -1425,17 +1443,26 @@ async fn list_episodes_for_titles_query(
     if title_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = bind_placeholders(title_ids.len());
-    let sql = format!(
-        "SELECT {EPISODE_COLUMNS} FROM episodes WHERE title_id IN ({placeholders}) ORDER BY title_id ASC, season_number ASC, episode_number ASC, id ASC"
+    let (title_ids, per_statement) = id_list_statements(
+        title_ids,
+        1,
+        0,
+        max_binds_for_target(target),
+        SQL_BIND_CHUNK,
     );
-    let args = title_ids
-        .iter()
-        .cloned()
-        .map(SqlArg::Text)
-        .collect::<Vec<_>>();
-    let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
-    rows.iter().map(row_to_episode).collect()
+    let mut episodes = Vec::new();
+    for chunk in title_ids.chunks(per_statement) {
+        let placeholders = bind_placeholders(chunk.len());
+        let sql = format!(
+            "SELECT {EPISODE_COLUMNS} FROM episodes WHERE title_id IN ({placeholders}) ORDER BY title_id ASC, season_number ASC, episode_number ASC, id ASC"
+        );
+        let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
+        for row in &rows {
+            episodes.push(row_to_episode(row)?);
+        }
+    }
+    Ok(episodes)
 }
 
 async fn list_episodes_for_title_query(
@@ -1509,11 +1536,20 @@ async fn get_episodes_by_ids_query(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = bind_placeholders(ids.len());
-    let sql = format!("SELECT {EPISODE_COLUMNS} FROM episodes WHERE id IN ({placeholders})");
-    let args = ids.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
-    let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
-    rows.iter().map(row_to_episode).collect()
+    // A split list is distinct, so no episode is returned by two statements.
+    let (ids, per_statement) =
+        id_list_statements(ids, 1, 0, max_binds_for_target(target), SQL_BIND_CHUNK);
+    let mut episodes = Vec::new();
+    for chunk in ids.chunks(per_statement) {
+        let placeholders = bind_placeholders(chunk.len());
+        let sql = format!("SELECT {EPISODE_COLUMNS} FROM episodes WHERE id IN ({placeholders})");
+        let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
+        for row in &rows {
+            episodes.push(row_to_episode(row)?);
+        }
+    }
+    Ok(episodes)
 }
 
 async fn find_episode_by_title_and_numbers_query(

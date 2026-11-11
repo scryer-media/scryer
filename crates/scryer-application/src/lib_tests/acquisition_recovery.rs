@@ -3313,7 +3313,7 @@ async fn acquisition_cycle_looks_up_submissions_once_per_title_for_grabbed_items
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
     let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
     let (app, user) = bootstrap_with_acquisition_tracking(
-        download_client,
+        download_client.clone(),
         download_submissions.clone(),
         pending_releases,
         wanted_items.clone(),
@@ -3398,6 +3398,11 @@ async fn acquisition_cycle_looks_up_submissions_once_per_title_for_grabbed_items
         .await
         .expect("record shared submission");
 
+    // The failure sweep only runs when the client reports a failed item; one
+    // for another job makes it check the grabbed rows, and the title's two
+    // rows share one submissions read.
+    *download_client.history_items.lock().await =
+        vec![failed_history_item("unrelated-job", "Unrelated.Release")];
     app.run_background_acquisition_cycle_once().await;
 
     let calls = download_submissions
@@ -3406,6 +3411,74 @@ async fn acquisition_cycle_looks_up_submissions_once_per_title_for_grabbed_items
         .await
         .clone();
     assert_eq!(calls, vec![title.id.clone()]);
+}
+
+#[tokio::test]
+async fn acquisition_cycle_reads_no_submissions_when_no_client_item_failed() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        download_client,
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Ashgrove".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    wanted_items
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: "wanted-ashgrove".to_string(),
+            title_id: title.id.clone(),
+            title_name: Some(title.name.clone()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: None,
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "movie".to_string(),
+            last_search_at: Some((Utc::now() - chrono::Duration::minutes(5)).to_rfc3339()),
+            status: AcquisitionScopeStatus::Grabbed,
+            grabbed_release: Some(
+                serde_json::json!({ "title": "Ashgrove.2021.1080p", "score": 100 }).to_string(),
+            ),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        })
+        .await
+        .expect("seed grabbed wanted item");
+
+    app.run_background_acquisition_cycle_once().await;
+
+    // No failed client item can match a grabbed row, so the failure sweep
+    // has nothing to look up and the row stays grabbed.
+    assert!(
+        download_submissions
+            .list_for_title_calls
+            .lock()
+            .await
+            .is_empty()
+    );
+    let stored = wanted_items.store.lock().await.clone();
+    assert_eq!(stored[0].status, AcquisitionScopeStatus::Grabbed);
 }
 
 #[tokio::test]

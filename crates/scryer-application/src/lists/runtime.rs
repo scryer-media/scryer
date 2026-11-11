@@ -568,6 +568,25 @@ impl ListActions for AppListActions<'_> {
             .is_some())
     }
 
+    async fn titles_present(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<std::collections::HashSet<String>> {
+        if title_ids.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        Ok(self
+            .app
+            .services
+            .catalog
+            .titles
+            .list_library_ids_for_titles(title_ids)
+            .await?
+            .into_iter()
+            .map(|(title_id, _)| title_id)
+            .collect())
+    }
+
     async fn record_departure(
         &self,
         subscription: &ListSubscription,

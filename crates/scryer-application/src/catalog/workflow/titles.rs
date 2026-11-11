@@ -1827,12 +1827,15 @@ impl AppUseCase {
                 )
                 .await
             {
-                Ok(_) => debug!(
-                    title_id = %title_id,
-                    client_type = %identity.client_type,
-                    download_item_id = %identity.item_id,
-                    "queued targeted download cancellation for deleted title"
-                ),
+                Ok(_) => {
+                    self.runtime.acquisition.download_delete_wake.notify_one();
+                    debug!(
+                        title_id = %title_id,
+                        client_type = %identity.client_type,
+                        download_item_id = %identity.item_id,
+                        "queued targeted download cancellation for deleted title"
+                    )
+                }
                 Err(err) => warn!(
                     title_id = %title_id,
                     client_type = %identity.client_type,

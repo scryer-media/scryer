@@ -2,7 +2,7 @@ use super::*;
 use std::sync::atomic::AtomicBool;
 
 #[derive(Default)]
-pub(super) struct MockDomainEventRepo {
+pub(crate) struct MockDomainEventRepo {
     space_notification_receipts: Mutex<std::collections::BTreeSet<(String, String)>>,
     space_notification_attempts: Mutex<HashMap<String, i64>>,
     pub(super) fail_append_many: AtomicBool,
@@ -14,6 +14,8 @@ pub(super) struct MockDomainEventRepo {
     /// Every `list` filter this repo was asked for, so a test can assert on the
     /// *shape* of the read and not only its result.
     pub(super) list_filters: Arc<Mutex<Vec<DomainEventFilter>>>,
+    /// Every subscriber offset write, in order.
+    pub(crate) subscriber_offset_writes: std::sync::Mutex<Vec<(String, i64)>>,
 }
 
 impl MockDomainEventRepo {
@@ -477,6 +479,10 @@ impl DomainEventRepository for MockDomainEventRepo {
     }
 
     async fn set_subscriber_offset(&self, subscriber: &str, sequence: i64) -> AppResult<()> {
+        self.subscriber_offset_writes
+            .lock()
+            .expect("subscriber offset writes")
+            .push((subscriber.to_string(), sequence));
         let mut offsets = self.subscriber_offsets.lock().await;
         offsets.insert(subscriber.to_string(), sequence);
         Ok(())

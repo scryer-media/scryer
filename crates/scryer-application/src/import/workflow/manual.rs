@@ -3144,7 +3144,8 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     let archive_source = trusted_source_root
         .as_deref()
         .is_some_and(crate::archive_extractor::is_owned_archive_workspace);
-    let (result, cleanups) =
+    // Every file of this import is gated on one observation of the client.
+    let (result, cleanups) = crate::seeding_gate::with_import_seeding_observations(
         collect_deferred_import_source_cleanup(execute_manual_import_with_release_evidence_inner(
             app,
             actor,
@@ -3154,8 +3155,9 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             release_evidence,
             files,
             trusted_source_root,
-        ))
-        .await;
+        )),
+    )
+    .await;
     let mut results = result?;
     let can_release = results
         .iter()

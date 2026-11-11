@@ -7049,6 +7049,39 @@ mod seed_goal_tests {
         assert!(store.cleanup_seed_watermark().await.unwrap().is_some());
     }
 
+    #[tokio::test]
+    async fn cleanup_seed_idle_narrowed_pass_advances_its_change_bound() {
+        let store = store().await;
+        let watermark = Utc::now() - chrono::Duration::minutes(1);
+        set_cleanup_seed_watermark(&store, watermark, watermark).await;
+
+        store.seed_download_cleanup(100).await.unwrap();
+        let idle = store.cleanup_seed_watermark().await.unwrap().unwrap();
+        assert!(seeded_cleanup_ids(&store).await.is_empty());
+        assert!(
+            idle.changed_through > watermark,
+            "a narrowed pass that seeds nothing still advances its change bound"
+        );
+        assert_eq!(idle.full_scan_at, watermark);
+
+        // A full pass records itself even when it seeds nothing.
+        let stale_full =
+            Utc::now() - CLEANUP_SEED_FULL_SCAN_INTERVAL - chrono::Duration::minutes(1);
+        set_cleanup_seed_watermark(&store, watermark, stale_full).await;
+        store.seed_download_cleanup(100).await.unwrap();
+        let full = store.cleanup_seed_watermark().await.unwrap().unwrap();
+        assert!(full.full_scan_at > stale_full);
+        assert!(full.changed_through > watermark);
+        set_cleanup_seed_watermark(&store, watermark, watermark).await;
+
+        let changed = missed_terminal_download(&store, "emberfall", Utc::now()).await;
+        store.seed_download_cleanup(100).await.unwrap();
+        assert_eq!(seeded_cleanup_ids(&store).await, vec![changed]);
+        let advanced = store.cleanup_seed_watermark().await.unwrap().unwrap();
+        assert!(advanced.changed_through > watermark);
+        assert_eq!(advanced.full_scan_at, watermark);
+    }
+
     #[test]
     fn cleanup_seed_falls_back_to_a_full_pass_when_the_watermark_is_not_trustworthy() {
         let now = Utc::now();

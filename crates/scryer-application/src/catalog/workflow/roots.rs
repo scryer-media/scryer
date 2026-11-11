@@ -367,19 +367,40 @@ impl AppUseCase {
         library_id: &str,
         facet: &MediaFacet,
     ) -> AppResult<String> {
+        self.title_root_folder_path_in_library(root_folder_id, library_id, facet, None)
+            .await
+    }
+
+    /// As [`Self::title_root_folder_path_for_parts`], reading `library` when the
+    /// caller already holds that library's row and fetching it otherwise.
+    async fn title_root_folder_path_in_library(
+        &self,
+        root_folder_id: &str,
+        library_id: &str,
+        facet: &MediaFacet,
+        library: Option<scryer_domain::Library>,
+    ) -> AppResult<String> {
         let root_folder_id = root_folder_id.trim();
         if root_folder_id.is_empty() {
             return Err(AppError::Repository(
                 "title root folder id cannot be empty".to_string(),
             ));
         }
-        let library = self
-            .services
-            .catalog
-            .libraries
-            .get_by_id(library_id)
-            .await?
-            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::LIBRARY_NOT_FOUND, format!("library {library_id}")))?;
+        let library = match library.filter(|library| library.id == library_id) {
+            Some(library) => library,
+            None => self
+                .services
+                .catalog
+                .libraries
+                .get_by_id(library_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::LIBRARY_NOT_FOUND,
+                        format!("library {library_id}"),
+                    )
+                })?,
+        };
         if library.facet != *facet {
             return Err(AppError::Repository(format!(
                 "title root folder library {library_id} does not match title facet {}",
@@ -408,12 +429,41 @@ impl AppUseCase {
         library_id: &str,
         facet: &MediaFacet,
     ) -> AppResult<Option<String>> {
+        self.title_root_folder_path_for_viewer_loading(
+            actor,
+            root_folder_id,
+            library_id,
+            facet,
+            || async { Ok(None) },
+        )
+        .await
+    }
+
+    /// As [`Self::title_root_folder_path_for_viewer`], taking the library row
+    /// from `load_library` (a request's batched loader) once access is
+    /// established. A `None` from it falls back to reading the row directly.
+    pub async fn title_root_folder_path_for_viewer_loading<F, Fut>(
+        &self,
+        actor: &User,
+        root_folder_id: &str,
+        library_id: &str,
+        facet: &MediaFacet,
+        load_library: F,
+    ) -> AppResult<Option<String>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = AppResult<Option<scryer_domain::Library>>>,
+    {
         self.require_library_permission(actor, library_id, scryer_domain::LibraryPermission::View)
             .await?;
-        if !self.has_privileged_library_access(actor, library_id).await? {
+        if !self
+            .has_privileged_library_access(actor, library_id)
+            .await?
+        {
             return Ok(None);
         }
-        self.title_root_folder_path_for_parts(root_folder_id, library_id, facet)
+        let library = load_library().await?;
+        self.title_root_folder_path_in_library(root_folder_id, library_id, facet, library)
             .await
             .map(Some)
     }

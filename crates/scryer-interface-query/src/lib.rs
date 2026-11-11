@@ -129,6 +129,80 @@ fn browse_path_read_dir(path: &str) -> Result<fs::ReadDir, AppError> {
     fs::read_dir(target).map_err(|error| browse_path_io_error(path, error))
 }
 
+/// The non-hidden directories (and, when asked, regular files) under `path`,
+/// sorted by lowercased name. Blocking.
+fn browse_path_entries(
+    path: &str,
+    include_files: bool,
+) -> Result<Vec<DirectoryEntryPayload>, AppError> {
+    let read_dir = browse_path_read_dir(path)?;
+    let mut entries: Vec<DirectoryEntryPayload> = Vec::new();
+    for entry in read_dir.flatten() {
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if !(ft.is_dir() || include_files && ft.is_file()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let full_path = entry.path().to_string_lossy().into_owned();
+        entries.push(DirectoryEntryPayload {
+            name,
+            path: full_path,
+            is_directory: ft.is_dir(),
+        });
+    }
+    entries.sort_by_key(|a| a.name.to_lowercase());
+    Ok(entries)
+}
+
+#[cfg(test)]
+mod browse_path_tests {
+    use super::browse_path_entries;
+
+    #[tokio::test]
+    async fn browse_path_entries_lists_sorted_visible_entries_off_the_runtime() {
+        let root = std::env::temp_dir().join(format!(
+            "scryer_browse_path_{}",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        for dir in ["Emberfall", "ashgrove", "Cinderwake", ".hidden"] {
+            std::fs::create_dir_all(root.join(dir)).expect("create dir");
+        }
+        std::fs::write(root.join("Notes.txt"), b"x").expect("write file");
+        let path = root.to_string_lossy().into_owned();
+
+        let directories = {
+            let path = path.clone();
+            tokio::task::spawn_blocking(move || browse_path_entries(&path, false))
+                .await
+                .expect("join")
+                .expect("list directories")
+        };
+        let names: Vec<_> = directories
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, ["ashgrove", "Cinderwake", "Emberfall"]);
+        assert!(directories.iter().all(|entry| entry.is_directory));
+
+        let with_files = browse_path_entries(&path, true).expect("list with files");
+        let names: Vec<_> = with_files.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["ashgrove", "Cinderwake", "Emberfall", "Notes.txt"]);
+        assert!(!with_files[3].is_directory);
+
+        let file_path = root.join("Notes.txt").to_string_lossy().into_owned();
+        assert!(browse_path_entries(&file_path, false).is_err());
+        assert!(browse_path_entries("relative/path", false).is_err());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
 fn browse_path_io_error(path: &str, error: io::Error) -> AppError {
     let message = match error.kind() {
         io::ErrorKind::NotFound => format!("Directory does not exist: {path}"),
@@ -247,6 +321,19 @@ fn parse_supported_title_history_event_types(
 }
 
 const TITLE_CATALOG_PAGE_SIZE: usize = 300;
+const JOB_RUNS_MAX_LIMIT: i32 = 500;
+/// Maintenance candidate and evaluation-run lists, like maintenance action
+/// runs: an omitted or non-positive limit returns 50, and larger requests are
+/// capped at 200.
+const MAINTENANCE_LIST_DEFAULT_LIMIT: i32 = 50;
+const MAINTENANCE_LIST_MAX_LIMIT: i32 = 200;
+
+fn maintenance_list_limit(limit: Option<i32>) -> usize {
+    limit
+        .filter(|limit| *limit > 0)
+        .unwrap_or(MAINTENANCE_LIST_DEFAULT_LIMIT)
+        .min(MAINTENANCE_LIST_MAX_LIMIT) as usize
+}
 
 fn title_catalog_page_limit(limit: Option<i32>) -> usize {
     limit
@@ -261,6 +348,17 @@ fn catalog_bulk_page_limit_preserves_default_and_bounds_explicit_requests() {
     assert_eq!(title_catalog_page_limit(Some(i32::MAX)), 10_000);
     assert_eq!(title_catalog_page_limit(Some(0)), 1);
     assert_eq!(title_catalog_page_limit(Some(-1)), 1);
+}
+
+#[test]
+fn maintenance_list_limit_defaults_and_caps_like_action_runs() {
+    assert_eq!(maintenance_list_limit(None), 50);
+    assert_eq!(maintenance_list_limit(Some(0)), 50);
+    assert_eq!(maintenance_list_limit(Some(-3)), 50);
+    // The web asks for 25 runs and 200 candidates.
+    assert_eq!(maintenance_list_limit(Some(25)), 25);
+    assert_eq!(maintenance_list_limit(Some(200)), 200);
+    assert_eq!(maintenance_list_limit(Some(i32::MAX)), 200);
 }
 
 fn title_catalog_page_offset(offset: Option<i32>) -> usize {
@@ -1383,9 +1481,13 @@ impl CatalogQueries {
         let selection = TitlePayloadSelection::from_ctx(ctx);
         let lookahead = ctx.look_ahead();
         let catalog_filter = title_catalog_filter_from_input(filter).map_err(to_gql_error)?;
+        let filter_counts_lookahead = lookahead.field("filterCounts");
         let aggregates = scryer_application::TitleCatalogAggregates {
             total_count: lookahead.field("totalCount").exists(),
-            filter_counts: lookahead.field("filterCounts").exists(),
+            filter_counts: filter_counts_lookahead.exists(),
+            file_state_counts: ["missing", "partial", "complete", "needsAttention"]
+                .iter()
+                .any(|field| filter_counts_lookahead.field(field).exists()),
             managed_bytes: lookahead.field("managedBytes").exists(),
         };
         let page_limit = if lookahead.field("items").exists() || lookahead.field("hasMore").exists()
@@ -1527,10 +1629,20 @@ impl CatalogQueries {
             .map_err(to_gql_error)?
             .into_iter()
             .collect();
-        let root_title_counts = app
-            .library_root_title_counts()
-            .await
-            .map_err(to_gql_error)?;
+        // Counting titles per root scans the catalog, so it runs only when a
+        // root's title count was asked for and some root will be shown.
+        let wants_title_counts = ctx.look_ahead().field("roots").field("titleCount").exists();
+        let root_title_counts = if wants_title_counts
+            && libraries
+                .iter()
+                .any(|library| privileged.contains(&library.id))
+        {
+            app.library_root_title_counts()
+                .await
+                .map_err(to_gql_error)?
+        } else {
+            std::collections::HashMap::new()
+        };
         Ok(libraries
             .into_iter()
             .map(|mut library| {
@@ -2412,8 +2524,10 @@ impl CatalogQueries {
         };
 
         let offset = f.offset;
+        // Without totalCount, the walk stops one record past the page.
+        let include_total = ctx.look_ahead().field("totalCount").exists();
         let page = app
-            .list_title_history(&actor, &f)
+            .list_title_history_page(&actor, &f, include_total)
             .await
             .map_err(to_gql_error)?;
         Ok(from_title_history_page(page, offset).map_err(to_gql_error)?)
@@ -2425,7 +2539,7 @@ impl CatalogQueries {
         ctx: &Context<'_>,
         #[graphql(desc = "Title ID whose blocked releases are returned.")] title_id: ID,
         #[graphql(
-            desc = "Maximum entries to return; defaults to 100 and values below 1 become 1."
+            desc = "Maximum entries to return; defaults to 100 and is clamped to 1 through 1000."
         )]
         limit: Option<i32>,
     ) -> GqlResult<Vec<TitleReleaseBlocklistEntryPayload>> {
@@ -2435,7 +2549,7 @@ impl CatalogQueries {
             .list_title_release_blocklist(
                 &actor,
                 title_id.as_ref(),
-                limit.unwrap_or(100).max(1) as usize,
+                limit.unwrap_or(100).clamp(1, 1_000) as usize,
             )
             .await
             .map_err(to_gql_error)?;
@@ -2502,7 +2616,9 @@ impl ActivityQueries {
         after_sequence: Option<Long>,
         #[graphql(desc = "Return events before this exclusive sequence number.")]
         before_sequence: Option<Long>,
-        #[graphql(desc = "Maximum events to return; defaults to 100 and values below 1 become 1.")]
+        #[graphql(
+            desc = "Maximum events to return; defaults to 100 and is clamped to 1 through 500."
+        )]
         limit: Option<i32>,
     ) -> GqlResult<Vec<DomainEventEnvelopePayload>> {
         let app = app_from_ctx(ctx)?;
@@ -2519,7 +2635,7 @@ impl ActivityQueries {
             stream_id: None,
             after_sequence: after_sequence.map(|value| value.0),
             before_sequence: before_sequence.map(|value| value.0),
-            limit: limit.unwrap_or(100).max(1) as usize,
+            limit: limit.unwrap_or(100).clamp(1, 500) as usize,
         };
         let events = app.audit_log(&actor, &filter).await.map_err(to_gql_error)?;
         Ok(events.into_iter().map(from_domain_event).collect())
@@ -2855,7 +2971,7 @@ impl JobAndDownloadQueries {
     }
 
     /// List recent runs for one job key, or for one scheduled script when the key is
-    /// `CUSTOM_JOB`; the limit defaults to 10 and values below 1 become 1.
+    /// `CUSTOM_JOB`; the limit defaults to 10 and is clamped to 1 through 500.
     async fn job_runs(
         &self,
         ctx: &Context<'_>,
@@ -2864,12 +2980,14 @@ impl JobAndDownloadQueries {
             desc = "Scheduled script whose runs should be listed; required with `CUSTOM_JOB` and rejected with any other key."
         )]
         custom_job_id: Option<ID>,
-        #[graphql(desc = "Maximum runs to return; defaults to 10 and values below 1 become 1.")]
+        #[graphql(
+            desc = "Maximum runs to return; defaults to 10 and is clamped to 1 through 500."
+        )]
         limit: Option<i32>,
     ) -> GqlResult<Vec<JobRunPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let limit = limit.unwrap_or(10).max(1) as usize;
+        let limit = limit.unwrap_or(10).clamp(1, JOB_RUNS_MAX_LIMIT) as usize;
         let runs = match (job_key, custom_job_id) {
             (JobKeyValue::CustomJob, Some(custom_job_id)) => {
                 app.list_custom_job_runs(&actor, custom_job_id.as_str(), limit)
@@ -2892,17 +3010,22 @@ impl JobAndDownloadQueries {
         Ok(runs.into_iter().map(from_job_run).collect())
     }
 
-    /// List recent job runs; the limit defaults to 50 and values below 1 become 1.
+    /// List recent job runs; the limit defaults to 50 and is clamped to 1 through 500.
     async fn recent_job_runs(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Maximum runs to return; defaults to 50 and values below 1 become 1.")]
+        #[graphql(
+            desc = "Maximum runs to return; defaults to 50 and is clamped to 1 through 500."
+        )]
         limit: Option<i32>,
     ) -> GqlResult<Vec<JobRunPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let runs = app
-            .list_recent_job_runs(&actor, limit.unwrap_or(50).max(1) as usize)
+            .list_recent_job_runs(
+                &actor,
+                limit.unwrap_or(50).clamp(1, JOB_RUNS_MAX_LIMIT) as usize,
+            )
             .await
             .map_err(to_gql_error)?;
         Ok(runs.into_iter().map(from_job_run).collect())
@@ -4050,7 +4173,8 @@ impl AcquisitionQueries {
         #[graphql(desc = "Return candidates whose subject belongs to this library only.")]
         library_id: Option<ID>,
 
-        #[graphql(desc = "Maximum number of candidates to return.")] limit: Option<i32>,
+        #[graphql(desc = "Maximum number of candidates to return; defaults to 50, at most 200.")]
+        limit: Option<i32>,
     ) -> GqlResult<Vec<MaintenanceCandidate>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -4067,7 +4191,7 @@ impl AcquisitionQueries {
                         .collect(),
                     library_id: library_id.map(String::from),
 
-                    limit: limit.filter(|limit| *limit > 0).map(|limit| limit as usize),
+                    limit: Some(maintenance_list_limit(limit)),
                 },
             )
             .await
@@ -4087,7 +4211,8 @@ impl AcquisitionQueries {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Return runs of this rule set only.")] rule_set_id: Option<ID>,
-        #[graphql(desc = "Maximum number of runs to return.")] limit: Option<i32>,
+        #[graphql(desc = "Maximum number of runs to return; defaults to 50, at most 200.")]
+        limit: Option<i32>,
     ) -> GqlResult<Vec<MaintenanceEvaluationRun>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -4096,7 +4221,7 @@ impl AcquisitionQueries {
             .list_maintenance_evaluation_runs(
                 &actor,
                 rule_set_id.as_ref().map(|id| id.as_str()),
-                limit.filter(|limit| *limit > 0).map(|limit| limit as usize),
+                Some(maintenance_list_limit(limit)),
             )
             .await
             .map_err(to_gql_error)?;
@@ -4773,14 +4898,21 @@ impl UtilityQueries {
         let mut payloads = Vec::with_capacity(channels.len());
         for channel in channels {
             let fields = app.notification_provider_config_fields(channel.channel_type.as_str());
-            let mut payload =
-                crate::mappers::from_notification_channel_with_fields(channel, &fields);
-            // A blocked plugin leaves the stored row enabled and healthy-looking;
-            // the row is where the operator looks first, so say it there.
-            payload.blocked_reason = app
-                .plugin_component_blocker_for_provider(&payload.channel_type)
-                .await;
-            payloads.push(payload);
+            payloads.push(crate::mappers::from_notification_channel_with_fields(
+                channel, &fields,
+            ));
+        }
+        // A blocked plugin leaves the stored row enabled and healthy-looking;
+        // the row is where the operator looks first, so say it there.
+        let provider_types: Vec<&str> = payloads
+            .iter()
+            .map(|payload| payload.channel_type.as_str())
+            .collect();
+        let reasons = app
+            .plugin_component_blockers_for_providers(&provider_types)
+            .await;
+        for (payload, reason) in payloads.iter_mut().zip(reasons) {
+            payload.blocked_reason = reason;
         }
         Ok(payloads)
     }
@@ -4873,17 +5005,15 @@ impl UtilityQueries {
         let actor = actor_from_ctx(ctx)?;
         let setup_complete = app.setup_complete().await.map_err(to_gql_error)?;
 
-        let has_download_clients = !app
-            .list_download_client_configs(&actor, None)
+        let selection = ctx.look_ahead();
+        let (has_download_clients, has_indexers) = app
+            .setup_integration_presence(
+                &actor,
+                selection.field("hasDownloadClients").exists(),
+                selection.field("hasIndexers").exists(),
+            )
             .await
-            .map_err(to_gql_error)?
-            .is_empty();
-
-        let has_indexers = !app
-            .list_indexer_configs(&actor, None)
-            .await
-            .map_err(to_gql_error)?
-            .is_empty();
+            .map_err(to_gql_error)?;
 
         Ok(SetupStatusPayload {
             setup_complete,
@@ -4907,30 +5037,12 @@ impl UtilityQueries {
         include_files: Option<bool>,
     ) -> GqlResult<Vec<DirectoryEntryPayload>> {
         require_library_settings_permission(ctx).await?;
-        let read_dir = browse_path_read_dir(&path).map_err(to_gql_error)?;
-        let mut entries: Vec<DirectoryEntryPayload> = Vec::new();
         let include_files = include_files.unwrap_or(false);
-        for entry in read_dir.flatten() {
-            let ft = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
-            if !(ft.is_dir() || include_files && ft.is_file()) {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
-                continue;
-            }
-            let full_path = entry.path().to_string_lossy().into_owned();
-            entries.push(DirectoryEntryPayload {
-                name,
-                path: full_path,
-                is_directory: ft.is_dir(),
-            });
+        // Directory reads block, so they run off the async runtime.
+        match tokio::task::spawn_blocking(move || browse_path_entries(&path, include_files)).await {
+            Ok(entries) => entries.map_err(to_gql_error),
+            Err(error) => std::panic::resume_unwind(error.into_panic()),
         }
-        entries.sort_by_key(|a| a.name.to_lowercase());
-        Ok(entries)
     }
 
     /// Return the most recent buffered service log lines; requires system-settings permission.

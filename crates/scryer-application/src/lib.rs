@@ -123,6 +123,7 @@ mod ports;
 pub use acquisition::anime_numbering::{ExactCourTitleMatch, exact_cour_title_match};
 pub use ports::ObservationTouch;
 pub use ports::UnfinishedLibraryScanSession;
+pub use ports::ensure_acquisition_scopes_grabbed_per_row;
 pub use ports::{
     AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedProbe,
     CatalogOwnedSeriesMovieRecord, CatalogOwnedTitleRecord, DiscoveryItemTargetRecord,
@@ -263,6 +264,9 @@ pub use integration::indexer_caps_cache::{
 pub use integration::tracked_downloads;
 pub use library::filesystem_walk;
 pub use library::leftover_title_folders::EmptyDuplicateTitleFolderReport;
+pub use library::pending_imports::{
+    PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES, pending_import_item_requires_action,
+};
 pub use library::recycle_bin;
 pub use metrics_support::describe_freshness_and_health_metrics;
 pub use notifications::runtime::{
