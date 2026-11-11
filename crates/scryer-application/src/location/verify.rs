@@ -961,12 +961,18 @@ fn write_claimed_destination(
             destination.display()
         ))
     })?;
-    output.sync_all().map_err(|error| {
+    let sync = crate::fs_safety::sync_written_file(&output).map_err(|error| {
         AppError::Repository(format!(
             "failed to fsync copy destination: {}: {error}",
             destination.display()
         ))
     })?;
+    if sync == crate::fs_safety::FileSync::Unsupported {
+        tracing::debug!(
+            destination = %destination.display(),
+            "copy destination filesystem does not support fsync; relying on copy verification"
+        );
+    }
     drop(output);
 
     // The file's own fsync does not promise its directory entry survives a
