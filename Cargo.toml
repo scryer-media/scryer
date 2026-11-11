@@ -105,6 +105,10 @@ panic = "abort"
 debug = 0
 split-debuginfo = "off"
 
+# The library scan parses every file name with the release parser.
+[profile.dev.package.scryer-release-parser]
+opt-level = 1
+
 [profile.test]
 debug = 0
 split-debuginfo = "off"
