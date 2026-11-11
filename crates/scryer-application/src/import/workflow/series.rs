@@ -2951,7 +2951,7 @@ fn file_episode_evidence_for_title(
     };
     source_video_stem(Some(source_video))
         .map(|stem| parse_import_release_for_title(&stem, title))
-        .filter(&identifies_file)
+        .filter(identifies_file)
         .or_else(|| {
             let evidence = parsed_release_from_file_stem(source_video);
             identifies_file(&evidence).then_some(evidence)
