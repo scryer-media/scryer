@@ -1125,9 +1125,15 @@ impl AppUseCase {
     ) -> AppResult<usize> {
         let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
 
+        let mut recycle_index = crate::recycle_bin::TitleRecycleEntryIndex::default();
         for title in titles {
-            self.purge_title_logical_dependents(title, clear_recycle_bin, actor.clone())
-                .await?;
+            self.purge_title_logical_dependents(
+                title,
+                clear_recycle_bin,
+                actor.clone(),
+                &mut recycle_index,
+            )
+            .await?;
         }
 
         if !title_ids.is_empty() {

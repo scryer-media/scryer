@@ -23,6 +23,7 @@ impl AppUseCase {
         &self,
         title: &scryer_domain::Title,
         actor: DomainEventActor,
+        recycle_index: &mut recycle_bin::TitleRecycleEntryIndex,
     ) -> RecyclePurgeOutcome {
         let mut outcome = RecyclePurgeOutcome::default();
         let roots = match self.all_library_root_folders_for_facet(&title.facet).await {
@@ -45,7 +46,13 @@ impl AppUseCase {
                 outcome.failed += 1;
                 continue;
             }
-            let entries = match recycle_bin::list_committed_entries(&config).await {
+            let entries = match recycle_bin::list_committed_entries_for_title(
+                &config,
+                &title.id,
+                recycle_index,
+            )
+            .await
+            {
                 Ok(entries) => entries,
                 Err(error) => {
                     tracing::warn!(%error, title_id = %title.id, "cannot enumerate recycle entries");
@@ -54,9 +61,6 @@ impl AppUseCase {
                 }
             };
             for entry in entries {
-                if entry.manifest.title_id.as_deref() != Some(title.id.as_str()) {
-                    continue;
-                }
                 let Some(id) = entry.manifest.entry_id.as_deref() else {
                     outcome.preserved += 1;
                     continue;

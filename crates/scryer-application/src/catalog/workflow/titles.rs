@@ -1626,6 +1626,7 @@ impl AppUseCase {
         title: &scryer_domain::Title,
         purge_recycle_bin_entries: bool,
         actor: impl Into<DomainEventActor>,
+        recycle_index: &mut crate::recycle_bin::TitleRecycleEntryIndex,
     ) -> AppResult<()> {
         let actor = actor.into();
         let title_id = title.id.as_str();
@@ -1651,12 +1652,15 @@ impl AppUseCase {
             let configs = self.recycle_bin_configs_for_recycling(media_roots).await;
             let mut purged = 0u32;
             for (media_root, config) in configs {
-                match crate::recycle_bin::list_committed_entries(&config).await {
+                match crate::recycle_bin::list_committed_entries_for_title(
+                    &config,
+                    title_id,
+                    recycle_index,
+                )
+                .await
+                {
                     Ok(entries) => {
                         for entry in entries {
-                            if entry.manifest.title_id.as_deref() != Some(title_id) {
-                                continue;
-                            }
                             match self
                                 .purge_recycle_entry_after_validation(
                                     &media_root,

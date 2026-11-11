@@ -211,6 +211,7 @@ impl AppUseCase {
             confirmation
                 .as_ref()
                 .and_then(|value| value.typed_confirmation.as_deref()),
+            &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
         )
         .await
     }
@@ -464,6 +465,7 @@ impl AppUseCase {
         let mut failures = Vec::new();
         let mut recycle_incomplete = Vec::new();
         let mut recycle_outcomes = std::collections::BTreeMap::new();
+        let mut recycle_index = crate::recycle_bin::TitleRecycleEntryIndex::default();
 
         for item in request.items {
             let phase = "validating";
@@ -488,6 +490,7 @@ impl AppUseCase {
                     &item,
                     request.delete_files_on_disk,
                     request.typed_confirmation.as_deref(),
+                    &mut recycle_index,
                 )
                 .await;
             match result {
@@ -577,6 +580,7 @@ impl AppUseCase {
         item: &DeleteTitlesJobItem,
         delete_files_on_disk: bool,
         typed_confirmation: Option<&str>,
+        recycle_index: &mut crate::recycle_bin::TitleRecycleEntryIndex,
     ) -> AppResult<crate::title_delete::RecyclePurgeOutcome> {
         let delete_guard = self.acquire_title_delete_guard(&item.title_id).await?;
         let _location_guard = self
@@ -633,7 +637,11 @@ impl AppUseCase {
         }
 
         let outcome = self
-            .purge_explicit_title_recycle_entries(&title, DomainEventActor::from(actor))
+            .purge_explicit_title_recycle_entries(
+                &title,
+                DomainEventActor::from(actor),
+                recycle_index,
+            )
             .await;
         self.delete_title_logical_cleanup(
             &title,
@@ -808,6 +816,7 @@ impl AppUseCase {
                 title,
                 options.purge_recycle_bin_entries,
                 actor.clone(),
+                &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
             )
             .await?;
         }

@@ -611,9 +611,14 @@ async fn title_delete_leaves_a_custom_bin_untouched_when_library_roots_are_unrea
             }))
     });
 
-    app.purge_title_logical_dependents(&fixture.deleted, true, DomainEventActor::system())
-        .await
-        .expect("the purge completes without the bin");
+    app.purge_title_logical_dependents(
+        &fixture.deleted,
+        true,
+        DomainEventActor::system(),
+        &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
+    )
+    .await
+    .expect("the purge completes without the bin");
 
     assert_eq!(snapshot_tree(&bin), before, "nothing in the bin changed");
     assert!(deleted_entry.exists());
@@ -642,7 +647,12 @@ async fn title_delete_policy_cleanup_keeps_replacement_validation() {
     let kept_before = snapshot_tree(&kept);
     fixture
         .with_bin_setting(None)
-        .purge_title_logical_dependents(&fixture.deleted, true, DomainEventActor::system())
+        .purge_title_logical_dependents(
+            &fixture.deleted,
+            true,
+            DomainEventActor::system(),
+            &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
+        )
         .await
         .unwrap();
     let manifest: crate::recycle_bin::RecycleManifest =
@@ -1390,4 +1400,171 @@ async fn a_library_root_that_links_to_the_folder_holding_the_custom_bin_is_refus
         .expect_err("a root reaching the bin through a link is refused");
     assert_bin_conflict(error, &root);
     assert_eq!(library_names(&app).await, libraries_before);
+}
+
+/// Three titles, each with an entry in the default bin, deleted as one job
+/// whose middle item is refused because another deletion holds it. The job
+/// reports the same outcomes and leaves the bin in the same state as deleting
+/// the same titles one at a time, each with its own fresh bin listing.
+#[tokio::test]
+async fn title_delete_bulk_matches_one_title_at_a_time() {
+    struct Run {
+        outcomes: Vec<Result<crate::title_delete::RecyclePurgeOutcome, Option<&'static str>>>,
+        bin: Vec<(String, Option<Vec<u8>>)>,
+        remaining: Vec<bool>,
+    }
+    async fn scenario(bulk: bool) -> Run {
+        let fixture = TitleDeleteFixture::new().await;
+        let root_a = fixture.fixture.root_a();
+        let middle_folder = root_a.join("Synthetic Middle Feature (2003)");
+        std::fs::create_dir_all(&middle_folder).unwrap();
+        let middle = create_movie_title_with_folder(
+            &fixture.app,
+            &fixture.user,
+            "Synthetic Middle Feature",
+            &middle_folder,
+        )
+        .await;
+        let bin = root_a.join(".scryer-recycle");
+        fixture.seed_bin(&bin).await;
+        let config = crate::recycle_bin::RecycleBinConfig {
+            enabled: true,
+            base_path: bin.clone(),
+            retention_days: 7,
+            cleanup_enabled: true,
+            validation_error: None,
+            source_roots: vec![root_a.clone()],
+        };
+        let source = root_a.join("synthetic-middle-feature.mkv");
+        std::fs::write(&source, "synthetic middle content").unwrap();
+        let mut manifest = removal_manifest(&source);
+        manifest.title_id = Some(middle.id.clone());
+        crate::recycle_bin::recycle_file(&config, &source, manifest)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let jobs = Arc::new(RecordingJobRunRepo::default());
+        let app = fixture
+            .with_bin_setting(None)
+            .with_test_overrides(|services| services.with_job_runs(jobs.clone()));
+        let titles = [
+            fixture.deleted.id.clone(),
+            middle.id.clone(),
+            fixture.kept.id.clone(),
+        ];
+        let _held = app
+            .runtime
+            .jobs
+            .interactive_operation_guards
+            .try_acquire(&format!("title-delete:{}", middle.id))
+            .await
+            .unwrap();
+        let mut outcomes = Vec::new();
+        if bulk {
+            let accepted = app
+                .start_delete_titles_job(
+                    &fixture.user,
+                    DeleteTitlesJobRequest {
+                        items: titles
+                            .iter()
+                            .map(|id| DeleteTitlesJobItem {
+                                title_id: id.clone(),
+                                preview_fingerprint: None,
+                            })
+                            .collect(),
+                        delete_files_on_disk: false,
+                        typed_confirmation: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let run = crate::test_wait::wait_for("the deletion job finishes", || async {
+                jobs.runs
+                    .lock()
+                    .await
+                    .iter()
+                    .find(|run| run.id == accepted.job_run.id && run.status.is_terminal())
+                    .cloned()
+            })
+            .await;
+            let summary: serde_json::Value =
+                serde_json::from_str(run.summary_json.as_deref().unwrap()).unwrap();
+            for id in &titles {
+                match summary["recycleOutcomes"].get(id) {
+                    Some(outcome) => outcomes.push(Ok(crate::title_delete::RecyclePurgeOutcome {
+                        purged: outcome["purged"].as_u64().unwrap() as usize,
+                        preserved: outcome["preserved"].as_u64().unwrap() as usize,
+                        busy: outcome["busy"].as_u64().unwrap() as usize,
+                        failed: outcome["failed"].as_u64().unwrap() as usize,
+                    })),
+                    None => {
+                        let failure = summary["failures"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|failure| failure["titleId"] == id.as_str())
+                            .unwrap();
+                        assert_eq!(
+                            failure["reason"],
+                            crate::title_delete::IN_PROGRESS,
+                            "the held title is refused with its reason"
+                        );
+                        outcomes.push(Err(Some(crate::title_delete::IN_PROGRESS)));
+                    }
+                }
+            }
+        } else {
+            for id in &titles {
+                outcomes.push(
+                    app.delete_title_with_outcome(&fixture.user, id, false, None)
+                        .await
+                        .map_err(|error| error.validation_reason()),
+                );
+            }
+        }
+        let mut remaining = Vec::new();
+        for id in &titles {
+            remaining.push(
+                app.services
+                    .catalog
+                    .titles
+                    .get_by_id(id)
+                    .await
+                    .unwrap()
+                    .is_some(),
+            );
+        }
+        // Entry directory names are generated, so compare the bin by what each
+        // entry holds rather than by its name.
+        let mut bin_state = snapshot_tree(&bin)
+            .into_iter()
+            .filter_map(|(path, bytes)| {
+                let name = path.file_name()?.to_string_lossy().to_string();
+                (name != "manifest.json").then_some((name, bytes))
+            })
+            .filter(|(name, bytes)| bytes.is_some() || !name.starts_with("20"))
+            .collect::<Vec<_>>();
+        bin_state.sort();
+        Run {
+            outcomes,
+            bin: bin_state,
+            remaining,
+        }
+    }
+
+    let bulk = scenario(true).await;
+    let single = scenario(false).await;
+    assert_eq!(bulk.outcomes, single.outcomes);
+    assert_eq!(bulk.bin, single.bin);
+    assert_eq!(bulk.remaining, single.remaining);
+    assert_eq!(bulk.remaining, vec![false, true, false]);
+    assert_eq!(bulk.outcomes[0].as_ref().unwrap().purged, 1);
+    assert_eq!(bulk.outcomes[2].as_ref().unwrap().purged, 1);
+    assert!(
+        bulk.bin
+            .iter()
+            .any(|(name, _)| name == "synthetic-middle-feature.mkv"),
+        "the refused title's entry stays"
+    );
 }
