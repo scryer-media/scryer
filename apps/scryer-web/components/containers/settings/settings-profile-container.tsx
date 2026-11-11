@@ -40,6 +40,7 @@ import {
 import {
   externalAuthRuntimeSettingsQuery,
   linkedAccountsQuery,
+  mediaServerConnectionAccountsQuery,
   meQuery,
   myOauthAppsQuery,
   myPasskeysQuery,
@@ -66,6 +67,7 @@ import type {
   ExternalAuthRuntimeConnection,
   ExternalAuthRuntimeSettings,
   LinkedAccount,
+  MediaServerConnectionAccount,
   OAuthConnectedApp,
   PasskeySummary,
   TotpEnrollmentComplete,
@@ -89,7 +91,11 @@ import { authenticateWithPlexPin } from "@/lib/utils/plex-oauth";
 import {
   canSubmitJellyfinLink,
   effectiveEmbyLinkMode,
+  selectableUsername,
+  serverAccountOptions,
+  shouldListServerAccounts,
 } from "@/lib/utils/external-account-link-gate";
+import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 
 type Props = {
   userId?: string;
@@ -263,6 +269,16 @@ export function SettingsProfileContainer({ userId, username }: Props) {
   });
   const [linkAccountBusy, setLinkAccountBusy] = useState(false);
   const [linkAccountError, setLinkAccountError] = useState<string | null>(null);
+  // The selected connection's accounts, keyed by the connection they were
+  // read from so a list from an earlier selection is never offered.
+  const [serverAccounts, setServerAccounts] = useState<{
+    connectionId: string;
+    accounts: MediaServerConnectionAccount[];
+  } | null>(null);
+  const canManageConnections = hasAppPermission(
+    authUser,
+    APP_PERMISSIONS.manageSystemSettings,
+  );
 
   const formatPasskeyError = useCallback(
     (error: unknown) => {
@@ -1340,6 +1356,78 @@ export function SettingsProfileContainer({ userId, username }: Props) {
     }));
   }, []);
 
+  // Read the selected connection's accounts only while a username link form
+  // is open for someone who manages connections, and again whenever the
+  // selection changes. Any failure keeps the free-text username field.
+  const serverAccountsConnectionId = shouldListServerAccounts({
+    provider: linkingProvider,
+    embyMode: linkAccountDraft.embyMode,
+    connectionId: linkAccountDraft.connectionId,
+    canManageConnections,
+  })
+    ? linkAccountDraft.connectionId
+    : "";
+  useEffect(() => {
+    if (!serverAccountsConnectionId) {
+      return undefined;
+    }
+    let current = true;
+    const connectionId = serverAccountsConnectionId;
+    client
+      .query<{
+        mediaServerConnectionAccounts?: MediaServerConnectionAccount[];
+      }>(
+        mediaServerConnectionAccountsQuery,
+        { connectionId },
+        { requestPolicy: "network-only" },
+      )
+      .toPromise()
+      .then(
+        (result) => {
+          if (!current) {
+            return;
+          }
+          const accounts = result.error
+            ? null
+            : (result.data?.mediaServerConnectionAccounts ?? null);
+          if (!accounts) {
+            setServerAccounts(null);
+            return;
+          }
+          setServerAccounts({ connectionId, accounts });
+          const options = serverAccountOptions(accounts);
+          setLinkAccountDraft((draft) =>
+            draft.connectionId === connectionId
+              ? {
+                  ...draft,
+                  jellyfinUsername: selectableUsername(
+                    draft.jellyfinUsername,
+                    options,
+                  ),
+                }
+              : draft,
+          );
+        },
+        () => {
+          if (current) {
+            setServerAccounts(null);
+          }
+        },
+      );
+    return () => {
+      current = false;
+    };
+  }, [client, serverAccountsConnectionId]);
+  const linkAccountServerOptions = useMemo(
+    () =>
+      serverAccounts &&
+      serverAccountsConnectionId &&
+      serverAccounts.connectionId === serverAccountsConnectionId
+        ? serverAccountOptions(serverAccounts.accounts)
+        : null,
+    [serverAccounts, serverAccountsConnectionId],
+  );
+
   const handleLinkAccountConnectionChange = useCallback(
     (connectionId: string) => {
       const connection = linkableConnections.emby.find(
@@ -1633,6 +1721,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
         linkingProvider={linkingProvider}
         linkAccountConnectionId={linkAccountDraft.connectionId}
         linkAccountUsername={linkAccountDraft.jellyfinUsername}
+        linkAccountServerOptions={linkAccountServerOptions}
         linkAccountPassword={linkAccountDraft.jellyfinPassword}
         linkAccountEmbyMode={linkAccountDraft.embyMode}
         linkAccountBusy={linkAccountBusy}

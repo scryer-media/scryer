@@ -10,7 +10,8 @@ use scryer_interface_core::{
 use scryer_interface_media::mappers::{
     from_download_client_config_with_fields, from_download_client_routing_entry,
     from_indexer_config_with_fields, from_indexer_routing_entry, from_jellyfin_server_user,
-    from_library_paths_settings, from_media_server_connection, from_media_server_signal_sync_state,
+    from_library_paths_settings, from_media_server_connection,
+    from_media_server_connection_account, from_media_server_signal_sync_state,
     from_media_server_user_group, from_media_settings, from_proxy_config,
     from_public_url_change_preview, from_quality_profile_settings, from_seeding_profile,
     from_service_settings, from_subtitle_provider_config, from_user_with_auth_factor_status,
@@ -1152,6 +1153,31 @@ impl SettingsQueries {
         app.list_jellyfin_server_users(&actor, connection_id.as_ref(), search.as_deref())
             .await
             .map(|users| users.into_iter().map(from_jellyfin_server_user).collect())
+            .map_err(to_gql_error)
+    }
+
+    /// Lists the accounts a Jellyfin or Emby connection's server knows, read
+    /// with the connection's stored API key, so a user linking theirs can pick
+    /// it instead of typing it. Requires the permission that manages
+    /// media-server connections. Picking an account proves nothing; linking
+    /// still signs in as it.
+    async fn media_server_connection_accounts(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID of the Jellyfin or Emby media-server connection to list.")]
+        connection_id: ID,
+    ) -> GqlResult<Vec<MediaServerConnectionAccountPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let include_linked = ctx.look_ahead().field("linked").exists();
+        app.list_media_server_connection_accounts(&actor, connection_id.as_ref(), include_linked)
+            .await
+            .map(|accounts| {
+                accounts
+                    .into_iter()
+                    .map(from_media_server_connection_account)
+                    .collect()
+            })
             .map_err(to_gql_error)
     }
 

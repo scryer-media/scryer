@@ -3268,6 +3268,8 @@ const zh_TW: LocaleDictionary = {
   "profile.linkPlexAccount": "連結 Plex",
   "profile.linkAccountConnection": "連線",
   "profile.linkAccountUsername": "使用者名稱",
+  "profile.linkAccountChooseAccount": "選擇帳戶",
+  "profile.linkAccountAlreadyLinked": "{{username}}（已連結）",
   "profile.linkAccountPassword": "密碼",
   "profile.linkAccountPasswordlessHint":
     "若此 Jellyfin 帳號沒有密碼請留空。無密碼帳號可以關聯，但無法用於登入 Scryer。",

@@ -369,6 +369,13 @@ export type ExternalAuthRuntimeConnection = {
   embyConnectEnabled: boolean;
 };
 
+/** One account a media-server connection's server knows, as the link form lists it. */
+export type MediaServerConnectionAccount = {
+  id: string;
+  username: string;
+  linked: boolean;
+};
+
 export type ExternalAuthRuntimeSettings = {
   loginProviders: ExternalAccountProvider[];
   linkingProviders: ExternalAccountProvider[];

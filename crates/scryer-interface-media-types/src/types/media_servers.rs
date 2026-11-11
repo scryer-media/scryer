@@ -214,6 +214,21 @@ pub struct MediaServerUserPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// An account one media-server connection's server knows, offered when a user
+/// links theirs. Choosing it does not prove ownership; the link still signs in
+/// as the account.
+pub struct MediaServerConnectionAccountPayload {
+    /// Server-side user identity.
+    pub id: String,
+    /// Username on the server, the name the link signs in with.
+    pub username: String,
+    /// Optional display name.
+    pub display_name: Option<String>,
+    /// Whether a Scryer user already holds a verified link to this account.
+    pub linked: bool,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Grouped media-server users and discovery status.
 pub struct MediaServerUserGroupPayload {
     /// Media-server connection identity.

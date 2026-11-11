@@ -2665,6 +2665,14 @@ export const jellyfinServerUsersQuery = `query JellyfinServerUsers($connectionId
   }
 }`;
 
+export const mediaServerConnectionAccountsQuery = `query MediaServerConnectionAccounts($connectionId: ID!) {
+  mediaServerConnectionAccounts(connectionId: $connectionId) {
+    id
+    username
+    linked
+  }
+}`;
+
 export const mediaServerUsersQuery = `query MediaServerUsers($search: String) {
   mediaServerUsers(search: $search) {
     connectionId
