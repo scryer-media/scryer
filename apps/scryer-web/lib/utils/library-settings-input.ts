@@ -23,6 +23,7 @@ export function librarySettingsInput(
       settings.optionalAudioLanguagesKeepSearching,
     metadataLanguage: settings.metadataLanguage,
     useSeasonFolders: settings.useSeasonFolders,
+    defaultMonitorType: settings.defaultMonitorType ?? null,
     qualityProfileId: settings.qualityProfileId,
     requestQualityProfileIds: settings.requestQualityProfileIds,
     scoringPersona: settings.scoringPersona,

@@ -12,6 +12,7 @@ const settings: LibrarySettingsDraft = {
   optionalAudioLanguagesKeepSearching: false,
   metadataLanguage: "eng",
   useSeasonFolders: true,
+  defaultMonitorType: null,
   qualityProfileId: "profile",
   requestQualityProfileIds: ["request-profile"],
   scoringPersona: null,

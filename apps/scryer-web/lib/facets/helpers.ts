@@ -1,3 +1,4 @@
+import { resolveDefaultMonitorType } from "../utils/default-monitor-type";
 import { facetById, facetForView } from "./registry";
 import type { Translate } from "@/components/root/types";
 import type { Facet } from "@/lib/types/titles";
@@ -16,8 +17,13 @@ export function viewFromFacet(facetId: Facet): ViewId {
 
 export function defaultMonitorTypeForFacet(
   facetId: Facet,
+  saved?: string | null,
 ): MetadataCatalogMonitorType {
-  return facetById(facetId)?.defaultMonitorType ?? "MONITORED";
+  return resolveDefaultMonitorType(
+    facetId,
+    saved,
+    facetById(facetId)?.defaultMonitorType ?? "MONITORED",
+  ) as MetadataCatalogMonitorType;
 }
 
 export function facetFromView(viewId: string): Facet | undefined {

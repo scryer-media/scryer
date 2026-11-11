@@ -63,6 +63,7 @@ fn library_settings_draft(
         optional_audio_languages_keep_searching: input.optional_audio_languages_keep_searching,
         metadata_language: input.metadata_language,
         use_season_folders: input.use_season_folders,
+        default_monitor_type: input.default_monitor_type,
         quality_profile_id: input.quality_profile_id.map(String::from),
         request_quality_profile_ids: input
             .request_quality_profile_ids

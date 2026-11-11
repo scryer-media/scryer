@@ -82,12 +82,13 @@ function buildDefaultDraft(
   facet: Facet,
   defaultLibraryId?: string,
   defaultRootFolderId?: string,
+  savedMonitorType?: string | null,
 ): MetadataCatalogAddOptions {
   return {
     libraryId: defaultLibraryId,
     rootFolderId: defaultRootFolderId,
     seasonFolder: facet !== "MOVIE",
-    monitorType: defaultMonitorTypeForFacet(facet),
+    monitorType: defaultMonitorTypeForFacet(facet, savedMonitorType),
     ...(facet === "ANIME"
       ? {
           monitorSpecials: false,
@@ -137,6 +138,7 @@ export function AddToCatalogDialog({
       defaultRootFolderId(
         defaultLibrary(libraries)?.roots ?? fallbackRootFolders,
       ),
+      defaultLibrary(libraries)?.defaultMonitorType,
     ),
   );
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -166,7 +168,12 @@ export function AddToCatalogDialog({
     }
     draftResetKeyRef.current = draftResetKey;
     setDraft(
-      buildDefaultDraft(facet, nextDefaultLibraryId, nextDefaultRootFolderId),
+      buildDefaultDraft(
+        facet,
+        nextDefaultLibraryId,
+        nextDefaultRootFolderId,
+        nextDefaultLibrary?.defaultMonitorType,
+      ),
     );
     setIsSubmitting(false);
     setMonitorSelectionLoading(false);
@@ -175,6 +182,7 @@ export function AddToCatalogDialog({
     facet,
     nextDefaultLibraryId,
     nextDefaultRootFolderId,
+    nextDefaultLibrary?.defaultMonitorType,
     open,
   ]);
 
@@ -359,7 +367,14 @@ export function AddToCatalogDialog({
                     );
                     setDraft((previous) =>
                       draftForCatalogLibrary(
-                        previous,
+                        {
+                          ...previous,
+                          monitorType: defaultMonitorTypeForFacet(
+                            facet,
+                            library?.defaultMonitorType,
+                          ),
+                          monitorSelection: undefined,
+                        },
                         v,
                         library?.roots ?? fallbackRootFolders,
                       ),

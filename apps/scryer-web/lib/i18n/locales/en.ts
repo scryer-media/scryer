@@ -1,6 +1,9 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "settings.defaultMonitorType": "Default monitoring for new titles",
+  "settings.defaultMonitorTypeHelp":
+    "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
   "settings.oauthClientIdCopied": "OAuth client ID copied.",
   "status.copyFailedSelected":
