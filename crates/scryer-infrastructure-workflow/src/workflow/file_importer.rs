@@ -1568,65 +1568,6 @@ struct ImportCopyAttempt<'a> {
     cancellation: Option<&'a scryer_application::ImportCancellation>,
 }
 
-/// macOS `sync_all` is `F_FULLFSYNC`, which network filesystems such as smbfs
-/// reject, so plain `fsync` is tried next. Some smbfs mounts reject that too. A
-/// filesystem with no sync at all does not fail a copy whose bytes were
-/// written: verification of the destination, not the sync, is what guards the
-/// source before cleanup, and it still runs. Any other sync error fails.
-///
-/// Matched on the errno: std reports macOS `ENOTSUP` (errno 45) as
-/// `Uncategorized`, not `Unsupported`.
-#[cfg(any(target_os = "macos", all(test, unix)))]
-fn sync_is_unsupported(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::Unsupported
-        || matches!(
-            error.raw_os_error(),
-            Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::ENOSYS
-        )
-}
-
-#[cfg(any(target_os = "macos", all(test, unix)))]
-fn finish_macos_import_sync(
-    full_sync: io::Result<()>,
-    fallback: impl FnOnce() -> io::Result<()>,
-) -> io::Result<()> {
-    match full_sync {
-        Err(error) if sync_is_unsupported(&error) => match fallback() {
-            Err(error) if sync_is_unsupported(&error) => {
-                tracing::debug!(
-                    %error,
-                    "import destination filesystem does not support fsync; relying on copy verification"
-                );
-                Ok(())
-            }
-            result => result,
-        },
-        result => result,
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn sync_import_destination(file: &std::fs::File) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-
-    finish_macos_import_sync(file.sync_all(), || {
-        loop {
-            if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
-                return Ok(());
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(error);
-            }
-        }
-    })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn sync_import_destination(file: &std::fs::File) -> io::Result<()> {
-    file.sync_all()
-}
-
 fn copy_regular_source_to_destination_once(
     attempt_context: ImportCopyAttempt<'_>,
     options: ImportFileOptions,
@@ -1704,8 +1645,15 @@ fn copy_regular_source_to_destination_once(
     temp_file
         .flush()
         .map_err(|error| ImportCopyAttemptError::new("flush", error))?;
-    sync_import_destination(&temp_file)
+    let sync = scryer_application::fs_safety::sync_written_file(&temp_file)
         .map_err(|error| ImportCopyAttemptError::new("sync", error))?;
+    if sync == scryer_application::fs_safety::FileSync::Unsupported {
+        // Verification below, not the sync, guards the source before cleanup.
+        tracing::debug!(
+            dest = %dest.display(),
+            "import destination filesystem does not support fsync; relying on copy verification"
+        );
+    }
     drop(temp_file);
 
     ensure_same_source(source, source_fingerprint)
@@ -3896,50 +3844,6 @@ impl FsFileImporter {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn macos_import_sync_falls_back_only_when_full_sync_is_unsupported() {
-        finish_macos_import_sync(Err(io::ErrorKind::Unsupported.into()), || Ok(()))
-            .expect("ordinary fsync succeeds when full sync is unsupported");
-        finish_macos_import_sync(Ok(()), || panic!("successful full sync needs no fallback"))
-            .expect("full sync succeeds");
-        let error = finish_macos_import_sync(Err(io::ErrorKind::PermissionDenied.into()), || {
-            panic!("real sync errors must not fall back")
-        })
-        .expect_err("permission failure must propagate");
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-        let error = finish_macos_import_sync(Err(io::ErrorKind::Unsupported.into()), || {
-            Err(io::ErrorKind::Other.into())
-        })
-        .expect_err("fallback sync failure must propagate");
-        assert_eq!(error.kind(), io::ErrorKind::Other);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn macos_import_sync_accepts_a_filesystem_without_any_sync() {
-        // smbfs on macOS can reject both F_FULLFSYNC and fsync with ENOTSUP.
-        finish_macos_import_sync(Err(io::Error::from_raw_os_error(libc::ENOTSUP)), || {
-            Err(io::Error::from_raw_os_error(libc::ENOTSUP))
-        })
-        .expect("a filesystem with no sync does not fail the copy");
-        finish_macos_import_sync(Err(io::Error::from_raw_os_error(libc::ENOTSUP)), || Ok(()))
-            .expect("ENOTSUP from full sync falls back to fsync");
-    }
-
-    #[test]
-    fn import_destination_sync_preserves_file_contents() {
-        let directory = tempfile::tempdir().expect("temporary destination");
-        let path = directory.path().join("copied-video.mkv");
-        let mut file = std::fs::File::create(&path).expect("create destination");
-        file.write_all(b"verified-copy").expect("write destination");
-        sync_import_destination(&file).expect("sync destination");
-        assert_eq!(
-            std::fs::read(path).expect("read destination"),
-            b"verified-copy"
-        );
-    }
 
     fn round_trip_worker_error(error: AppError) -> AppError {
         let event = ImportFileWorkerEvent::Error {
