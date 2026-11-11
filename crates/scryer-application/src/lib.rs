@@ -6,6 +6,8 @@ mod catalog;
 pub mod challenge_solver;
 mod contracts;
 pub mod delete_refusal;
+#[cfg(feature = "runtime-diagnostics")]
+pub mod diagnostics;
 mod discovery;
 pub use discovery::{
     CatalogOwnershipDecisions, DISCOVERY_CREDIBLE_RATING_MIN_VOTES,

@@ -6943,6 +6943,13 @@ const en: LocaleDictionary = {
   "importHistory.retrySuccess": "Import retry started",
 
   "system.title": "System Health",
+  "system.diagnosticsBundle.download": "Download diagnostics bundle",
+  "system.diagnosticsBundle.preparing": "Preparing diagnostics…",
+  "system.diagnosticsBundle.helper": "Logs, metrics and a settings summary in one file for the maintainer. Names, addresses, paths and secrets are removed on a best-effort basis; review the bundle before sharing it.",
+  "system.diagnosticsBundle.failed": "Could not download the diagnostics bundle.",
+  "system.diagnosticsBundle.refusal.authenticationRequired": "Sign in again to download diagnostics.",
+  "system.diagnosticsBundle.refusal.permissionDenied": "Downloading diagnostics requires the system settings permission.",
+  "system.diagnosticsBundle.refusal.failed": "The diagnostics bundle could not be built. Check the server log for details.",
   "system.jobsTitle": "Jobs",
   "system.auditTitle": "Audit",
   "system.auditLoaded": "Audit log loaded.",

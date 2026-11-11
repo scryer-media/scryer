@@ -6391,6 +6391,13 @@ mod tests {
             "/backups/scryer.scryer-backup.enc/download"
         ));
         assert!(!skip_http_rate_limit(&Method::GET, "/api/system/jobs"));
+        assert_eq!(
+            classify_http_rate_limit(
+                &Method::GET,
+                crate::diagnostics_routes::DIAGNOSTICS_BUNDLE_PATH
+            ),
+            Some(HttpRateLimitClass::Api)
+        );
         for flavor in ["sonarr", "radarr"] {
             for endpoint in ["system/status", "release/push", "series", "movie", "tag"] {
                 assert_eq!(

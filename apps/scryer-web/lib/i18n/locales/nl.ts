@@ -1985,6 +1985,13 @@ const nl: LocaleDictionary = {
   "importHistory.retrySuccess": "Import opnieuw gestart",
 
   "system.title": "Systeemstatus",
+  "system.diagnosticsBundle.download": "Diagnosebundel downloaden",
+  "system.diagnosticsBundle.preparing": "Diagnose voorbereiden…",
+  "system.diagnosticsBundle.helper": "Logboeken, metrics en een overzicht van de instellingen in één bestand voor de beheerder. Namen, adressen, paden en geheimen worden zo goed mogelijk verwijderd; controleer de bundel voordat je hem deelt.",
+  "system.diagnosticsBundle.failed": "Kan de diagnosebundel niet downloaden.",
+  "system.diagnosticsBundle.refusal.authenticationRequired": "Meld je opnieuw aan om de diagnose te downloaden.",
+  "system.diagnosticsBundle.refusal.permissionDenied": "Voor het downloaden van de diagnose is de machtiging voor systeeminstellingen nodig.",
+  "system.diagnosticsBundle.refusal.failed": "De diagnosebundel kon niet worden gemaakt. Zie het serverlogboek voor details.",
   "system.jobsTitle": "Taken",
   "system.auditTitle": "Auditlog",
   "system.auditLoaded": "Auditlog geladen.",
