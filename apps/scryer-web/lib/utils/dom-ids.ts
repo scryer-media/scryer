@@ -403,6 +403,11 @@ export function titleClaimReleaseId(claimId: string): string {
 export const TITLE_CLAIM_EXTEND_DATE_ID = "title-claim-extend-date";
 export const TITLE_CLAIM_RELEASE_REASON_ID = "title-claim-release-reason";
 
+/** The "Download diagnostics bundle" button on the server logs page. */
+export function systemLogsDiagnosticsBundleId(): string {
+  return selectorId("system-logs-diagnostics-bundle");
+}
+
 /** The acquisition walk intensity picker on the acquisition settings page. */
 export function settingsAcquisitionWalkIntensityId(): string {
   return selectorId("settings-acquisition-walk-intensity");
