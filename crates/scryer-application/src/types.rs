@@ -1750,6 +1750,15 @@ pub struct IgnorePendingImportResult {
     pub status: PendingImportStatus,
 }
 
+/// Each requested pending import, ignored or refused, in request order.
+#[derive(Debug)]
+pub struct IgnorePendingImportsResult {
+    pub ignored: Vec<IgnorePendingImportResult>,
+    /// The id as requested and why it was not ignored: the same error
+    /// ignoring it alone would have returned.
+    pub failed: Vec<(String, crate::AppError)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct CancelLibraryScanResult {
     pub session_id: String,

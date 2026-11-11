@@ -722,6 +722,29 @@ pub struct IgnorePendingImportPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// A pending import a batch ignore did not ignore, with the error ignoring it
+/// alone would have returned.
+pub struct IgnorePendingImportFailurePayload {
+    /// Pending-import item ID as requested.
+    pub id: ID,
+    /// The error's message.
+    pub message: String,
+    /// The error's `code` extension.
+    pub code: Option<String>,
+    /// The error's `reason` extension, when it names one.
+    pub reason: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Result of ignoring several pending imports, each in request order.
+pub struct IgnorePendingImportsPayload {
+    /// Pending imports now ignored.
+    pub ignored: Vec<IgnorePendingImportPayload>,
+    /// Pending imports that were not ignored.
+    pub failed: Vec<IgnorePendingImportFailurePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Result of requesting cancellation for an acquisition search.
 pub struct CancelAcquisitionSearchPayload {
     /// Acquisition-search job ID.

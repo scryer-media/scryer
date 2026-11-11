@@ -8267,6 +8267,248 @@ async fn pending_import_counts_and_items_are_facet_scoped() {
 }
 
 #[tokio::test]
+async fn bulk_ignore_gives_each_id_the_outcome_a_serial_ignore_gives() {
+    async fn seeded() -> (AppUseCase, User, Arc<TrackingLibraryScanUnmatchedItemRepo>) {
+        let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+        let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+            Arc::new(StoredSettingsRepo::default()),
+            Arc::new(MutableLibraryScanner::default()),
+            unmatched_items.clone(),
+            Arc::new(HydratingMovieSearchGateway {
+                search_item: MetadataSearchItem {
+                    tvdb_id: "123456".to_string(),
+                    smg_id: None,
+                    primary_source: None,
+                    external_ids: vec![],
+                    name: "Emberfall".to_string(),
+                    year: Some(2020),
+                    auto_match_safe: true,
+                    auto_match_signals: vec!["exact_title".to_string()],
+                },
+                movie: make_movie_metadata(123456, "Emberfall"),
+            }),
+        );
+        for (id, ignored) in [
+            ("movie-bulk-1", false),
+            ("movie-bulk-2", true),
+            ("movie-bulk-3", false),
+        ] {
+            let mut item = build_test_unmatched_item(
+                id,
+                MediaFacet::Movie,
+                "/movies",
+                &format!("/movies/{id}.mkv"),
+                "Emberfall",
+                "Emberfall",
+                Some(2020),
+            );
+            if ignored {
+                item.status = PendingImportStatus::Ignored;
+            }
+            unmatched_items
+                .upsert_library_scan_unmatched_item(&item)
+                .await
+                .expect("seed pending import");
+        }
+        (app, user, unmatched_items)
+    }
+    async fn statuses(repo: &TrackingLibraryScanUnmatchedItemRepo) -> Vec<(String, String)> {
+        let mut rows = repo
+            .list_library_scan_unmatched_items(None, None, None, i64::MAX, 0)
+            .await
+            .expect("list rows")
+            .into_iter()
+            .map(|item| (item.id, item.status.as_str().to_string()))
+            .collect::<Vec<_>>();
+        rows.sort();
+        rows
+    }
+
+    let requested = [
+        "movie-bulk-1",
+        "",
+        "movie-bulk-2",
+        "movie-absent",
+        "movie-bulk-1",
+        " movie-bulk-3 ",
+    ]
+    .map(str::to_string);
+
+    let (serial_app, serial_user, serial_repo) = seeded().await;
+    let mut seen = std::collections::HashSet::new();
+    let mut serial_ignored = Vec::new();
+    let mut serial_failed = Vec::new();
+    for id in requested
+        .iter()
+        .filter(|id| seen.insert(id.trim().to_string()))
+    {
+        match serial_app.ignore_pending_import(&serial_user, id).await {
+            Ok(result) => serial_ignored.push(format!("{result:?}")),
+            Err(error) => serial_failed.push((id.clone(), format!("{error:?}"))),
+        }
+    }
+
+    let (bulk_app, bulk_user, bulk_repo) = seeded().await;
+    let bulk = bulk_app
+        .ignore_pending_imports(&bulk_user, &requested)
+        .await
+        .expect("bulk ignore");
+    let bulk_ignored = bulk
+        .ignored
+        .iter()
+        .map(|result| format!("{result:?}"))
+        .collect::<Vec<_>>();
+    let bulk_failed = bulk
+        .failed
+        .iter()
+        .map(|(id, error)| (id.clone(), format!("{error:?}")))
+        .collect::<Vec<_>>();
+
+    assert_eq!(bulk_ignored, serial_ignored);
+    assert_eq!(bulk_failed, serial_failed);
+    assert_eq!(bulk_ignored.len(), 3);
+    assert_eq!(bulk_failed.len(), 2);
+    assert_eq!(statuses(&bulk_repo).await, statuses(&serial_repo).await);
+
+    let pending = bulk_app
+        .pending_imports(
+            &bulk_user,
+            MediaFacet::Movie,
+            None,
+            PendingImportStatus::Pending,
+            50,
+            0,
+        )
+        .await
+        .expect("pending after bulk ignore");
+    assert_eq!(pending.total, 0);
+}
+
+#[tokio::test]
+async fn bulk_ignore_refuses_more_distinct_ids_than_the_maximum_and_counts_repeats_once() {
+    use crate::error_reasons::library as reasons;
+
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+        Arc::new(HydratingMovieSearchGateway {
+            search_item: MetadataSearchItem {
+                tvdb_id: "123456".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Emberfall".to_string(),
+                year: Some(2020),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".to_string()],
+            },
+            movie: make_movie_metadata(123456, "Emberfall"),
+        }),
+    );
+    let seeded = ["movie-cap-1", "movie-cap-2"];
+    for id in seeded {
+        unmatched_items
+            .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
+                id,
+                MediaFacet::Movie,
+                "/movies",
+                &format!("/movies/{id}.mkv"),
+                "Emberfall",
+                "Emberfall",
+                Some(2020),
+            ))
+            .await
+            .expect("seed pending import");
+    }
+    let statuses = || async {
+        let mut rows = unmatched_items
+            .list_library_scan_unmatched_items(None, None, None, i64::MAX, 0)
+            .await
+            .expect("list rows")
+            .into_iter()
+            .map(|item| (item.id, item.status))
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows
+    };
+    let distinct_ids = |count: usize| {
+        seeded
+            .iter()
+            .map(|id| id.to_string())
+            .chain((seeded.len()..count).map(|n| format!("movie-cap-absent-{n}")))
+            .collect::<Vec<_>>()
+    };
+
+    // One past the maximum is refused whole, and nothing changes.
+    let before = statuses().await;
+    let error = app
+        .ignore_pending_imports(&user, &distinct_ids(PENDING_IMPORT_IGNORE_BATCH_MAX + 1))
+        .await
+        .expect_err("one past the maximum is refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(reasons::PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE)
+    );
+    let AppError::ValidationRefused { facts, .. } = &error else {
+        panic!("expected a refusal with facts, got {error:?}");
+    };
+    assert_eq!(
+        facts,
+        &vec![
+            RefusalFact::new(
+                reasons::PENDING_IMPORT_IGNORE_MAX_IDS_FACT,
+                PENDING_IMPORT_IGNORE_BATCH_MAX.to_string(),
+            ),
+            RefusalFact::new(
+                reasons::PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT,
+                (PENDING_IMPORT_IGNORE_BATCH_MAX + 1).to_string(),
+            ),
+        ]
+    );
+    assert_eq!(statuses().await, before);
+    assert!(
+        before
+            .iter()
+            .all(|(_, status)| *status == PendingImportStatus::Pending)
+    );
+
+    // Repeats, including ones that differ only by surrounding space, count
+    // once, so a longer list of exactly the maximum distinct ids is accepted.
+    let mut with_repeats = distinct_ids(PENDING_IMPORT_IGNORE_BATCH_MAX);
+    with_repeats.extend(seeded.iter().map(|id| format!(" {id} ")));
+    with_repeats.extend(seeded.iter().map(|id| id.to_string()));
+    assert!(with_repeats.len() > PENDING_IMPORT_IGNORE_BATCH_MAX);
+    let accepted = app
+        .ignore_pending_imports(&user, &with_repeats)
+        .await
+        .expect("repeats count once");
+    assert_eq!(accepted.ignored.len(), seeded.len());
+    assert_eq!(
+        accepted.failed.len(),
+        PENDING_IMPORT_IGNORE_BATCH_MAX - seeded.len()
+    );
+    assert!(
+        statuses()
+            .await
+            .iter()
+            .all(|(_, status)| *status == PendingImportStatus::Ignored)
+    );
+
+    // Exactly the maximum distinct ids is accepted.
+    let exact = app
+        .ignore_pending_imports(&user, &distinct_ids(PENDING_IMPORT_IGNORE_BATCH_MAX))
+        .await
+        .expect("exactly the maximum is accepted");
+    assert_eq!(
+        exact.ignored.len() + exact.failed.len(),
+        PENDING_IMPORT_IGNORE_BATCH_MAX
+    );
+    assert_eq!(exact.ignored.len(), seeded.len());
+}
+
+#[tokio::test]
 async fn ignore_pending_import_moves_item_out_of_pending_counts() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let library_scanner = Arc::new(MutableLibraryScanner::default());

@@ -5,6 +5,7 @@ use scryer_application::{
 };
 use scryer_domain::MediaFacet;
 
+use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
 use crate::storage::sql::json::{canonical_json_arg, json_text_or};
@@ -283,6 +284,191 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
         }
         Ok(Some(counts))
     }
+
+    async fn page_library_scan_items_requiring_action(
+        &self,
+        facet: MediaFacet,
+        status: PendingImportStatus,
+        library_ids: &[String],
+        folder_ownership_reason_codes: &[&str],
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Option<(i64, Vec<LibraryScanUnmatchedItem>)>> {
+        if library_ids.is_empty() {
+            return Ok(Some((0, Vec::new())));
+        }
+        let (where_sql, args) = requiring_action_page_filter(
+            &facet,
+            &status,
+            library_ids,
+            folder_ownership_reason_codes,
+        );
+        let count_sql =
+            format!("SELECT COUNT(*) AS count FROM library_scan_unmatched_items WHERE {where_sql}");
+        let total = SqlRuntime::fetch_optional(self.datastore.read_exec(), &count_sql, &args)
+            .await?
+            .ok_or_else(|| AppError::Repository("missing unmatched item count".to_string()))?
+            .i64("count")?;
+        if total == 0 || limit <= 0 || offset >= total {
+            return Ok(Some((total, Vec::new())));
+        }
+        let page_sql = format!(
+            "SELECT {UNMATCHED_COLUMNS}
+               FROM library_scan_unmatched_items
+              WHERE {where_sql}
+              ORDER BY updated_at DESC, item_path ASC
+              LIMIT {{}} OFFSET {{}}"
+        );
+        let mut page_args = args;
+        page_args.push(SqlArg::I64(limit));
+        page_args.push(SqlArg::I64(offset));
+        let items =
+            fetch_unmatched_items(self.datastore.read_exec(), &page_sql, &page_args).await?;
+        Ok(Some((total, items)))
+    }
+
+    async fn get_library_scan_unmatched_items(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<LibraryScanUnmatchedItem>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (ids, per_statement) = id_list_statements(
+            ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            UNMATCHED_ID_LIST_BIND_CHUNK,
+        );
+        let mut items = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT {UNMATCHED_COLUMNS}
+                   FROM library_scan_unmatched_items
+                  WHERE id IN ({})",
+                std::iter::repeat_n("{}", chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            items.extend(fetch_unmatched_items(self.datastore.read_exec(), &sql, &args).await?);
+        }
+        Ok(items)
+    }
+
+    async fn ignore_library_scan_unmatched_items(
+        &self,
+        rows: &[(String, String)],
+    ) -> AppResult<Option<()>> {
+        if rows.is_empty() {
+            return Ok(Some(()));
+        }
+        // Each row binds its id twice (the CASE arm and the IN list) and its
+        // timestamp once; a statement stays well under both engines' limits.
+        const ROWS_PER_STATEMENT: usize = 1_000;
+        let mut bound = Vec::with_capacity(rows.len());
+        for (id, updated_at) in rows {
+            bound.push((
+                id.clone(),
+                timestamp_arg_for_datastore(&self.datastore, updated_at)?,
+            ));
+        }
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "ignore_library_scan_unmatched_items",
+            move |tx| {
+                let bound = bound.clone();
+                Box::pin(async move {
+                    let ignored = PendingImportStatus::Ignored.as_str();
+                    for chunk in bound.chunks(ROWS_PER_STATEMENT) {
+                        let mut args = vec![SqlArg::Text(ignored.to_string())];
+                        for (id, updated_at) in chunk {
+                            args.push(SqlArg::Text(id.clone()));
+                            args.push(updated_at.clone());
+                        }
+                        args.push(SqlArg::Text(ignored.to_string()));
+                        args.extend(chunk.iter().map(|(id, _)| SqlArg::Text(id.clone())));
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            &format!(
+                                "UPDATE library_scan_unmatched_items
+                                    SET status = {{}},
+                                        updated_at = CASE id {} END
+                                  WHERE status <> {{}} AND id IN ({})",
+                                std::iter::repeat_n("WHEN {} THEN {}", chunk.len())
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                                std::iter::repeat_n("{}", chunk.len())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                            &args,
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await?;
+        Ok(Some(()))
+    }
+}
+
+/// Ids per statement once an id list is too long for one.
+const UNMATCHED_ID_LIST_BIND_CHUNK: usize = 1_000;
+
+/// The `WHERE` clause and its binds for
+/// `page_library_scan_items_requiring_action`: the facet and status the
+/// `(facet, status, updated_at)` index serves, the caller's libraries (a row
+/// without one is in the facet's default library), and the requires-action
+/// predicate `count_pending_library_scan_items_requiring_action` counts.
+fn requiring_action_page_filter(
+    facet: &MediaFacet,
+    status: &PendingImportStatus,
+    library_ids: &[String],
+    folder_ownership_reason_codes: &[&str],
+) -> (String, Vec<SqlArg>) {
+    let placeholders = |count: usize| {
+        std::iter::repeat_n("{}", count)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut args = vec![
+        SqlArg::Text(facet.as_str().to_string()),
+        SqlArg::Text(status.as_str().to_string()),
+    ];
+    args.extend(library_ids.iter().cloned().map(SqlArg::Text));
+    let default_library = scryer_domain::default_library_id_for_facet(facet);
+    let null_library_sql = if library_ids.contains(&default_library) {
+        " OR library_id IS NULL"
+    } else {
+        ""
+    };
+    let reason_sql = if folder_ownership_reason_codes.is_empty() {
+        "1 = 0".to_string()
+    } else {
+        args.extend(
+            folder_ownership_reason_codes
+                .iter()
+                .map(|code| SqlArg::Text((*code).to_string())),
+        );
+        format!(
+            "reason_code IN ({})",
+            placeholders(folder_ownership_reason_codes.len())
+        )
+    };
+    args.push(SqlArg::Text(MediaFacet::Movie.as_str().to_string()));
+    (
+        format!(
+            "facet = {{}} AND status = {{}}
+               AND (library_id IN ({}){null_library_sql})
+               AND ({reason_sql} OR NOT (facet = {{}} AND title_id IS NOT NULL))",
+            placeholders(library_ids.len())
+        ),
+        args,
+    )
 }
 
 fn build_unmatched_list_sql(
@@ -595,5 +781,234 @@ mod tests {
         );
         assert!(via_rust.keys().any(|(library_id, _)| library_id
             == &scryer_domain::default_library_id_for_facet(&MediaFacet::Anime)));
+    }
+
+    /// Seeds the requires-action matrix with distinct `updated_at` values and
+    /// some shared ones, so the page order's tie-break on `item_path` is
+    /// exercised too.
+    async fn seed_page_matrix(store: &LibraryScanUnmatchedStore) {
+        let ownership = PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES;
+        let mut n = 0;
+        for library in [Some("lib-cinderwake"), Some("lib-ashgrove"), None] {
+            for facet in ["movie", "series", "anime"] {
+                for status in ["pending", "ignored"] {
+                    for title_id in [None, Some("title-emberfall")] {
+                        for reason in [ownership[0], "no_match", ""] {
+                            n += 1;
+                            let id = format!("item-{n:04}");
+                            seed_row(store, &id, library, facet, status, title_id, reason).await;
+                            let minute = n % 7;
+                            execute_write(
+                                &store.datastore,
+                                "seed_updated_at",
+                                "UPDATE library_scan_unmatched_items SET updated_at = {} WHERE id = {}",
+                                vec![
+                                    SqlArg::Text(format!("2026-01-01T00:{minute:02}:00Z")),
+                                    SqlArg::Text(id),
+                                ],
+                            )
+                            .await
+                            .expect("set updated_at");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The previous pending-imports page: every row of the facet and status,
+    /// filtered and paged in memory.
+    async fn page_via_rust(
+        store: &LibraryScanUnmatchedStore,
+        facet: MediaFacet,
+        status: PendingImportStatus,
+        library_ids: &[String],
+        limit: i64,
+        offset: i64,
+    ) -> (i64, Vec<String>) {
+        let filtered = store
+            .list_library_scan_unmatched_items(Some(facet), None, Some(status), i64::MAX, 0)
+            .await
+            .expect("list items")
+            .into_iter()
+            .filter(|item| {
+                library_ids.contains(&item.library_id) && pending_import_item_requires_action(item)
+            })
+            .collect::<Vec<_>>();
+        let total = filtered.len() as i64;
+        let ids = filtered
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .map(|item| item.id)
+            .collect();
+        (total, ids)
+    }
+
+    #[tokio::test]
+    async fn requiring_action_page_matches_in_memory_paging() {
+        let store = test_store().await;
+        seed_page_matrix(&store).await;
+
+        let default_movie = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+        let default_series = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+        let library_sets = [
+            vec!["lib-cinderwake".to_string()],
+            vec!["lib-ashgrove".to_string(), "lib-cinderwake".to_string()],
+            vec![default_movie.clone(), default_series.clone()],
+            vec![
+                default_movie,
+                default_series,
+                "lib-ashgrove".to_string(),
+                "lib-cinderwake".to_string(),
+            ],
+            vec!["lib-absent".to_string()],
+        ];
+        let mut compared = 0;
+        let mut non_empty = 0;
+        for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+            for status in [PendingImportStatus::Pending, PendingImportStatus::Ignored] {
+                for library_ids in &library_sets {
+                    for (limit, offset) in [(50, 0), (2, 0), (2, 1), (3, 4), (0, 0), (5, 100)] {
+                        let (total, items) = store
+                            .page_library_scan_items_requiring_action(
+                                facet.clone(),
+                                status.clone(),
+                                library_ids,
+                                &PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES,
+                                limit,
+                                offset,
+                            )
+                            .await
+                            .expect("page items")
+                            .expect("sql store pages in place");
+                        let via_sql = (total, items.into_iter().map(|item| item.id).collect());
+                        let via_rust = page_via_rust(
+                            &store,
+                            facet.clone(),
+                            status.clone(),
+                            library_ids,
+                            limit,
+                            offset,
+                        )
+                        .await;
+                        assert_eq!(
+                            via_sql, via_rust,
+                            "{facet:?} {status:?} {library_ids:?} limit {limit} offset {offset}"
+                        );
+                        compared += 1;
+                        non_empty += usize::from(!via_rust.1.is_empty());
+                    }
+                }
+            }
+        }
+        assert_eq!(compared, 3 * 2 * 5 * 6);
+        assert!(
+            non_empty > 40,
+            "matrix must exercise real pages: {non_empty}"
+        );
+
+        let (total, items) = store
+            .page_library_scan_items_requiring_action(
+                MediaFacet::Movie,
+                PendingImportStatus::Pending,
+                &[],
+                &PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES,
+                50,
+                0,
+            )
+            .await
+            .expect("page items")
+            .expect("sql store pages in place");
+        assert_eq!((total, items.len()), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn batched_unmatched_read_matches_reads_by_id() {
+        let store = test_store().await;
+        seed_page_matrix(&store).await;
+        let mut ids = (1..=40).map(|n| format!("item-{n:04}")).collect::<Vec<_>>();
+        ids.push("item-absent".to_string());
+
+        let mut via_batch = store
+            .get_library_scan_unmatched_items(&ids)
+            .await
+            .expect("batched read");
+        via_batch.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut via_single = Vec::new();
+        for id in &ids {
+            if let Some(item) = store
+                .get_library_scan_unmatched_item(id)
+                .await
+                .expect("single read")
+            {
+                via_single.push(item);
+            }
+        }
+        via_single.sort_by(|left, right| left.id.cmp(&right.id));
+        assert_eq!(via_batch.len(), 40);
+        assert_eq!(format!("{via_batch:?}"), format!("{via_single:?}"));
+    }
+
+    async fn all_rows(store: &LibraryScanUnmatchedStore) -> Vec<LibraryScanUnmatchedItem> {
+        let mut rows = store
+            .list_library_scan_unmatched_items(None, None, None, i64::MAX, 0)
+            .await
+            .expect("list rows");
+        rows.sort_by(|left, right| left.id.cmp(&right.id));
+        rows
+    }
+
+    #[tokio::test]
+    async fn batched_ignore_writes_the_rows_a_serial_upsert_writes() {
+        let batched = test_store().await;
+        let serial = test_store().await;
+        seed_page_matrix(&batched).await;
+        seed_page_matrix(&serial).await;
+
+        // Pending rows only: the service skips the write for an ignored row.
+        let targets = all_rows(&serial)
+            .await
+            .into_iter()
+            .filter(|item| item.status == PendingImportStatus::Pending)
+            .take(25)
+            .collect::<Vec<_>>();
+        assert_eq!(targets.len(), 25);
+        let rows = targets
+            .iter()
+            .enumerate()
+            .map(|(k, item)| (item.id.clone(), format!("2026-02-01T00:00:{k:02}+00:00")))
+            .collect::<Vec<_>>();
+
+        for (item, (_, updated_at)) in targets.iter().zip(&rows) {
+            let mut item = item.clone();
+            item.status = PendingImportStatus::Ignored;
+            item.updated_at = updated_at.clone();
+            serial
+                .upsert_library_scan_unmatched_item(&item)
+                .await
+                .expect("serial upsert");
+        }
+        assert_eq!(
+            batched
+                .ignore_library_scan_unmatched_items(&rows)
+                .await
+                .expect("batched ignore"),
+            Some(())
+        );
+
+        let after_batched = all_rows(&batched).await;
+        let after_serial = all_rows(&serial).await;
+        assert_eq!(format!("{after_batched:?}"), format!("{after_serial:?}"));
+        assert_eq!(
+            after_batched
+                .iter()
+                .filter(|item| item.status == PendingImportStatus::Ignored)
+                .count(),
+            after_serial
+                .iter()
+                .filter(|item| item.status == PendingImportStatus::Ignored)
+                .count()
+        );
     }
 }

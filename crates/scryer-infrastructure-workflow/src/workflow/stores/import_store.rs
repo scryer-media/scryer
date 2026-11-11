@@ -613,6 +613,50 @@ impl ImportRepository for ImportStore {
         .await
     }
 
+    async fn list_completed_manual_import_ids(
+        &self,
+        updated_after: chrono::DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Option<Vec<String>>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id FROM imports
+             WHERE import_type = {} AND status = 'completed'
+               AND updated_at >= {}
+             ORDER BY updated_at DESC LIMIT {}",
+            &[
+                SqlArg::Text(ImportType::ManualImport.as_str().to_string()),
+                SqlArg::Timestamp(updated_after),
+                SqlArg::I64((limit as i64).clamp(1, 500)),
+            ],
+        )
+        .await?;
+        rows.iter()
+            .map(|row| row.text("id"))
+            .collect::<AppResult<Vec<_>>>()
+            .map(Some)
+    }
+
+    async fn get_imports_by_ids(&self, ids: &[String]) -> AppResult<Vec<ImportRecord>> {
+        // Well under both engines' bind limits per statement.
+        const IDS_PER_STATEMENT: usize = 500;
+        let mut records = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(IDS_PER_STATEMENT) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            records.extend(
+                fetch_imports(
+                    self.datastore.read_exec(),
+                    &format!("SELECT {IMPORT_COLUMNS} FROM imports WHERE id IN ({placeholders})"),
+                    &chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>(),
+                )
+                .await?,
+            );
+        }
+        Ok(records)
+    }
+
     async fn replace_manual_import_selection(
         &self,
         selection: ManualImportSelection,
@@ -1845,5 +1889,80 @@ mod tests {
             };
             assert_eq!(record.id, expected_id);
         }
+    }
+
+    #[tokio::test]
+    async fn completed_manual_import_ids_and_batched_read_match_the_full_list() {
+        let store = store().await;
+        let mut n = 0;
+        for import_type in [ImportType::ManualImport.as_str(), "tv_download"] {
+            for status in ["completed", "pending", "failed"] {
+                for minute in [1, 5, 5, 9, 30] {
+                    n += 1;
+                    sqlx::query(
+                        "INSERT INTO imports
+                         (id, source_client_id, source_system, source_ref, import_type, status,
+                          payload_json, result_json, created_at, updated_at)
+                         VALUES (?, 'client-1', 'nzbget', ?, ?, ?, '{}', '{\"ok\":true}', ?, ?)",
+                    )
+                    .bind(format!("import-{n:03}"))
+                    .bind(format!("job-{n:03}"))
+                    .bind(import_type)
+                    .bind(status)
+                    .bind(format!("2026-01-01T00:{minute:02}:00+00:00"))
+                    .bind(format!("2026-01-01T00:{minute:02}:00+00:00"))
+                    .execute(match &store.datastore {
+                        StoreDatastore::Sqlite { pool, .. } => pool,
+                        StoreDatastore::Postgres { .. } => unreachable!("sqlite fixture"),
+                    })
+                    .await
+                    .expect("seed import");
+                }
+            }
+        }
+
+        for (updated_after, limit) in [
+            ("2026-01-01T00:00:00+00:00", 500),
+            ("2026-01-01T00:05:00+00:00", 500),
+            ("2026-01-01T00:00:00+00:00", 2),
+            ("2026-01-01T01:00:00+00:00", 500),
+        ] {
+            let updated_after = chrono::DateTime::parse_from_rfc3339(updated_after)
+                .unwrap()
+                .with_timezone(&Utc);
+            let full = store
+                .list_completed_manual_imports(updated_after, limit)
+                .await
+                .expect("full list");
+            let ids = store
+                .list_completed_manual_import_ids(updated_after, limit)
+                .await
+                .expect("id list")
+                .expect("sql store lists ids");
+            let mut by_id = store
+                .get_imports_by_ids(&ids)
+                .await
+                .expect("batched read")
+                .into_iter()
+                .map(|record| (record.id.clone(), record))
+                .collect::<std::collections::HashMap<_, _>>();
+            let narrowed = ids
+                .iter()
+                .filter_map(|id| by_id.remove(id))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                full.iter()
+                    .map(|record| record.id.clone())
+                    .collect::<Vec<_>>(),
+                ids,
+                "same ids in the same order"
+            );
+            assert_eq!(format!("{full:?}"), format!("{narrowed:?}"));
+        }
+        let absent = store
+            .get_imports_by_ids(&["import-absent".to_string()])
+            .await
+            .expect("batched read");
+        assert!(absent.is_empty());
     }
 }

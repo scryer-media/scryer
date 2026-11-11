@@ -8236,6 +8236,8 @@ const ru: LocaleDictionary = {
     "Файл ожидающего импорта недоступен.",
   "error.reason.LIBRARY_PENDING_IMPORT_ID_REQUIRED":
     "Требуется идентификатор ожидающего импорта.",
+  "error.reason.LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE":
+    "Слишком много ожидающих импортов для игнорирования за один раз.",
   "error.reason.LIBRARY_PENDING_IMPORT_NOT_FOUND":
     "Ожидающий импорт не найден.",
   "error.reason.LIBRARY_PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES":

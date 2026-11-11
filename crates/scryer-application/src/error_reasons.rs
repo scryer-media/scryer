@@ -217,6 +217,11 @@ pub mod library {
         "LIBRARY_PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES";
     /// Pending import id is required.
     pub const PENDING_IMPORT_ID_REQUIRED: &str = "LIBRARY_PENDING_IMPORT_ID_REQUIRED";
+    /// One bulk ignore names more distinct pending imports than it accepts.
+    /// Carries [`PENDING_IMPORT_IGNORE_MAX_IDS_FACT`] and
+    /// [`PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT`].
+    pub const PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE: &str =
+        "LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE";
     /// Pending import was not found.
     pub const PENDING_IMPORT_NOT_FOUND: &str = "LIBRARY_PENDING_IMPORT_NOT_FOUND";
     /// Pending import requires explicit episode binding.
@@ -402,6 +407,7 @@ pub mod library {
         PENDING_IMPORT_ALREADY_BEING_RESOLVED,
         PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES,
         PENDING_IMPORT_ID_REQUIRED,
+        PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE,
         PENDING_IMPORT_NOT_FOUND,
         PENDING_IMPORT_REQUIRES_EXPLICIT_EPISODE_BINDING,
         TITLE_IDENTITY_REQUIRED,
@@ -470,12 +476,18 @@ pub mod library {
     pub const ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT: &str = "unacknowledgedRootPaths";
     /// Ids listed as removed that the edit keeps or the library does not have.
     pub const ROOT_REMOVAL_MISMATCHED_IDS_FACT: &str = "mismatchedRootIds";
+    /// The most distinct pending imports one bulk ignore accepts.
+    pub const PENDING_IMPORT_IGNORE_MAX_IDS_FACT: &str = "maxPendingImportIds";
+    /// How many distinct pending imports the refused bulk ignore named.
+    pub const PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT: &str = "requestedPendingImportIds";
 
     /// Every refusal fact key this area publishes.
     pub const ALL_FACTS: &[&str] = &[
         ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT,
         ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT,
         ROOT_REMOVAL_MISMATCHED_IDS_FACT,
+        PENDING_IMPORT_IGNORE_MAX_IDS_FACT,
+        PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT,
     ];
 
     #[cfg(test)]

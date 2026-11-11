@@ -8476,6 +8476,29 @@ type HistoryScoringPayload {
 }
 
 """
+A pending import a batch ignore did not ignore, with the error ignoring it
+alone would have returned.
+"""
+type IgnorePendingImportFailurePayload {
+	"""
+	Pending-import item ID as requested.
+	"""
+	id: ID!
+	"""
+	The error's message.
+	"""
+	message: String!
+	"""
+	The error's `code` extension.
+	"""
+	code: String
+	"""
+	The error's `reason` extension, when it names one.
+	"""
+	reason: String
+}
+
+"""
 Result of ignoring one pending import.
 """
 type IgnorePendingImportPayload {
@@ -8487,6 +8510,20 @@ type IgnorePendingImportPayload {
 	Status after the ignore operation.
 	"""
 	status: PendingImportStatusValue!
+}
+
+"""
+Result of ignoring several pending imports, each in request order.
+"""
+type IgnorePendingImportsPayload {
+	"""
+	Pending imports now ignored.
+	"""
+	ignored: [IgnorePendingImportPayload!]!
+	"""
+	Pending imports that were not ignored.
+	"""
+	failed: [IgnorePendingImportFailurePayload!]!
 }
 
 """
@@ -21004,6 +21041,21 @@ type MutationRoot {
 		"""
 		pendingImportId: ID!
 	): IgnorePendingImportPayload!
+	"""
+	Mark several pending imports ignored without importing their files.
+	Each id is answered on its own: ignored, or failed with the error
+	`ignorePendingImport` would have returned for it. A repeated id counts
+	once. At most 1000 distinct ids per request: a larger request is
+	refused whole with reason `LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE`
+	and the `maxPendingImportIds` and `requestedPendingImportIds`
+	extensions, and no pending import changes.
+	"""
+	ignorePendingImports(
+		"""
+		Pending-import identities to ignore.
+		"""
+		pendingImportIds: [ID!]!
+	): IgnorePendingImportsPayload!
 	"""
 	Apply a title rename plan after validating its preview fingerprint and optional idempotency key.
 	"""

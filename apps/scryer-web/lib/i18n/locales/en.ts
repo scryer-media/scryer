@@ -1930,6 +1930,8 @@ const en: LocaleDictionary = {
     "Pending import file is unavailable.",
   "error.reason.LIBRARY_PENDING_IMPORT_ID_REQUIRED":
     "Pending import id is required.",
+  "error.reason.LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE":
+    "Too many pending imports to ignore at once.",
   "error.reason.LIBRARY_PENDING_IMPORT_NOT_FOUND":
     "Pending import was not found.",
   "error.reason.LIBRARY_PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES":
