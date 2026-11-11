@@ -658,6 +658,45 @@ body {
     0 18px 32px -20px rgba(0, 0, 0, 0.7);
 }
 
+/* Inside the title panel the docked bar spans the whole panel, not just the
+   episodes card: it bleeds past the card padding, the card border and the
+   panel padding, and pads back by the same amount so its content stays
+   aligned with the rows. The card stops clipping while docked so the bar can
+   reach the panel edges. */
+[data-slot="title-context-scroll"]
+  [data-slot="card"][data-ui="series-episodes"]:not(.bg-transparent):has(
+    > [data-slot="card-header"][data-docked]
+  ) {
+  overflow: visible;
+}
+
+[data-slot="title-context-scroll"]
+  [data-slot="card"][data-ui="series-episodes"]
+  > [data-slot="card-header"][data-docked] {
+  --episodes-dock-bleed: calc(1rem + 1px + 1.25rem);
+  margin-inline: calc(-1 * var(--episodes-dock-bleed));
+  padding-inline: var(--episodes-dock-bleed);
+}
+
+@media (max-width: 639px) {
+  [data-slot="title-context-scroll"]
+    [data-slot="card"][data-ui="series-episodes"]
+    > [data-slot="card-header"][data-docked] {
+    --episodes-dock-bleed: calc(0.5rem + 1px + 1rem);
+    padding-inline: calc(var(--episodes-dock-bleed) + 0.25rem);
+  }
+}
+
+/* Where the panel itself scrolls, sit flush with its top edge instead of
+   below its padding, so no rows show above the bar. */
+@media (min-width: 1280px) {
+  [data-slot="title-context-scroll"]
+    [data-slot="card"][data-ui="series-episodes"]
+    > [data-slot="card-header"][data-sticky] {
+    top: -1.25rem;
+  }
+}
+
 .dark [data-slot="sidebar-inner"] {
   background:
     linear-gradient(180deg, rgba(12, 18, 34, 0.96), rgba(7, 12, 24, 0.98)),
