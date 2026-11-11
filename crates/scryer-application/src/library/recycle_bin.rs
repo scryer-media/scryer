@@ -477,16 +477,28 @@ async fn quarantine_untrusted_committed_entry(
 
 async fn read_manifest(entry_dir: &Path) -> AppResult<Option<RecycleManifest>> {
     let path = manifest_path(entry_dir);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let manifest_bytes = tokio::fs::read(&path).await.map_err(|e| {
-        AppError::Repository(format!(
-            "failed to read recycle manifest {}: {}",
-            path.display(),
-            e
-        ))
-    })?;
+    // Read first: a missing manifest answers NotFound from the read itself,
+    // so the common case costs one call. Any other failure falls back to the
+    // existence check, which still decides "no manifest" (for example a
+    // directory that cannot be searched) exactly as before.
+    let manifest_bytes = match tokio::fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            let exists_path = path.clone();
+            let exists = tokio::task::spawn_blocking(move || exists_path.exists())
+                .await
+                .unwrap_or(true);
+            if !exists {
+                return Ok(None);
+            }
+            return Err(AppError::Repository(format!(
+                "failed to read recycle manifest {}: {}",
+                path.display(),
+                error
+            )));
+        }
+    };
     let manifest: RecycleManifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
         AppError::Repository(format!(
             "failed to parse recycle manifest {}: {}",
@@ -5219,5 +5231,95 @@ mod tests {
         // The second title was purged only while its bin was not ready.
         assert!(remaining.contains_key(&PathBuf::from(entry("bbb001"))));
         assert!(!remaining.contains_key(&PathBuf::from(entry("bbb002"))));
+    }
+
+    /// The manifest read without an existence check first gives the answer
+    /// the check-then-read did for every shape an entry directory can take.
+    #[tokio::test]
+    async fn manifest_read_without_a_prior_exists_check_answers_the_same() {
+        async fn check_then_read(entry_dir: &Path) -> AppResult<Option<RecycleManifest>> {
+            let path = manifest_path(entry_dir);
+            if !path.exists() {
+                return Ok(None);
+            }
+            let bytes = tokio::fs::read(&path)
+                .await
+                .map_err(|e| AppError::Repository(e.to_string()))?;
+            serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|e| AppError::Repository(e.to_string()))
+        }
+        fn shape(outcome: &AppResult<Option<RecycleManifest>>) -> String {
+            match outcome {
+                Ok(Some(manifest)) => serde_json::to_string(manifest).unwrap(),
+                Ok(None) => "none".to_string(),
+                Err(_) => "error".to_string(),
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let valid = base.join("valid");
+        std::fs::create_dir(&valid).unwrap();
+        std::fs::write(
+            manifest_path(&valid),
+            r#"{"recycled_at":"2026-01-01T00:00:00Z","original_path":"/synthetic/a.mkv","size_bytes":3,"reason":"synthetic"}"#,
+        )
+        .unwrap();
+        let missing = base.join("missing");
+        std::fs::create_dir(&missing).unwrap();
+        let garbled = base.join("garbled");
+        std::fs::create_dir(&garbled).unwrap();
+        std::fs::write(manifest_path(&garbled), b"{not json").unwrap();
+        let manifest_is_dir = base.join("manifest-is-dir");
+        std::fs::create_dir_all(manifest_path(&manifest_is_dir)).unwrap();
+        let entry_is_file = base.join("entry-is-file");
+        std::fs::write(&entry_is_file, b"synthetic").unwrap();
+        let absent_entry = base.join("absent-entry");
+        let mut cases = vec![
+            (valid, "valid"),
+            (missing, "none"),
+            (garbled, "error"),
+            (manifest_is_dir, "error"),
+            (entry_is_file, "none"),
+            (absent_entry, "none"),
+        ];
+        #[cfg(unix)]
+        let unsearchable = {
+            use std::os::unix::fs::PermissionsExt;
+            let dangling = base.join("dangling");
+            std::fs::create_dir(&dangling).unwrap();
+            std::os::unix::fs::symlink(base.join("nowhere.json"), manifest_path(&dangling))
+                .unwrap();
+            cases.push((dangling, "none"));
+            let unsearchable = base.join("unsearchable");
+            std::fs::create_dir(&unsearchable).unwrap();
+            std::fs::write(manifest_path(&unsearchable), b"{}").unwrap();
+            std::fs::set_permissions(&unsearchable, std::fs::Permissions::from_mode(0o000))
+                .unwrap();
+            // Unreadable to an ordinary user; a privileged runner reads it,
+            // and both paths then agree on the parse error instead.
+            cases.push((unsearchable.clone(), "either"));
+            unsearchable
+        };
+
+        for (entry_dir, expected) in &cases {
+            let before = check_then_read(entry_dir).await;
+            let after = read_manifest(entry_dir).await;
+            assert_eq!(shape(&after), shape(&before), "{}", entry_dir.display());
+            match *expected {
+                "valid" => assert!(matches!(after, Ok(Some(_)))),
+                "none" => assert!(matches!(after, Ok(None))),
+                "error" => assert!(after.is_err()),
+                _ => {}
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&unsearchable, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
     }
 }

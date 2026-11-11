@@ -1602,6 +1602,56 @@ async fn execute_housekeeping_delete(
     Ok(rows_affected as u32)
 }
 
+/// Most rows one retention batch deletes, so a large backlog never holds the
+/// single SQLite writer for one long statement.
+const HOUSEKEEPING_DELETE_BATCH: i64 = 5_000;
+
+/// Ids per statement when a title id list is too long for one statement.
+const HOUSEKEEPING_TITLE_ID_CHUNK: usize = 900;
+
+/// Deletes every `table` row matching `predicate`, the same rows one
+/// unbounded `DELETE ... WHERE predicate` removes, in batches of at most
+/// [`HOUSEKEEPING_DELETE_BATCH`] keyed by `key`, one write transaction each.
+///
+/// A read asks first whether any row matches, so a prune with nothing to do
+/// takes no write transaction. `predicate` binds `args` with `{}`.
+async fn execute_housekeeping_delete_batched(
+    datastore: &StoreDatastore,
+    op_name: &'static str,
+    table: &'static str,
+    key: &'static str,
+    predicate: &str,
+    args: Vec<SqlArg>,
+) -> AppResult<u32> {
+    let probe_sql = format!("SELECT 1 AS present FROM {table} WHERE {predicate} LIMIT 1");
+    let delete_sql = format!(
+        "DELETE FROM {table}
+          WHERE {key} IN (SELECT {key} FROM {table} WHERE {predicate} LIMIT {{}})"
+    );
+    let mut delete_args = args.clone();
+    delete_args.push(SqlArg::I64(HOUSEKEEPING_DELETE_BATCH));
+    let mut deleted_total = 0u64;
+    loop {
+        if SqlRuntime::fetch_optional(datastore.read_exec(), &probe_sql, &args)
+            .await?
+            .is_none()
+        {
+            break;
+        }
+        let deleted = SqlRuntime::run_in_transaction(datastore, op_name, |tx| {
+            let sql = delete_sql.clone();
+            let args = delete_args.clone();
+            Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
+        })
+        .await?;
+        deleted_total = deleted_total.saturating_add(deleted);
+        if deleted < HOUSEKEEPING_DELETE_BATCH as u64 {
+            break;
+        }
+    }
+    Ok(deleted_total as u32)
+}
+
 async fn delete_for_title_ids_shared(
     datastore: &StoreDatastore,
     op_name: &'static str,
@@ -1612,16 +1662,34 @@ async fn delete_for_title_ids_shared(
         return Ok(0);
     }
 
-    let sql = format!(
-        "DELETE FROM {table} WHERE title_id IN ({})",
-        placeholders(title_ids.len())
-    );
-    let args = title_ids
-        .iter()
-        .cloned()
-        .map(SqlArg::Text)
-        .collect::<Vec<_>>();
-    execute_housekeeping_delete(datastore, op_name, sql, args).await
+    // One transaction as before; a list longer than one statement accepts is
+    // split across statements inside it.
+    let title_ids = title_ids.to_vec();
+    let rows_affected = SqlRuntime::run_in_transaction(datastore, op_name, move |tx| {
+        let title_ids = title_ids.clone();
+        Box::pin(async move {
+            let limit = crate::media::id_list_statements::max_binds(&SqlExec::Tx(tx));
+            let (title_ids, per_statement) = crate::media::id_list_statements::id_list_statements(
+                &title_ids,
+                1,
+                0,
+                limit,
+                HOUSEKEEPING_TITLE_ID_CHUNK,
+            );
+            let mut deleted = 0u64;
+            for chunk in title_ids.chunks(per_statement) {
+                let sql = format!(
+                    "DELETE FROM {table} WHERE title_id IN ({})",
+                    placeholders(chunk.len())
+                );
+                let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+                deleted += SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
+            }
+            Ok(deleted)
+        })
+    })
+    .await?;
+    Ok(rows_affected as u32)
 }
 
 async fn delete_media_files_by_ids_shared(
@@ -1651,11 +1719,12 @@ impl HousekeepingRepository for HousekeepingStore {
         // The newest terminal run of each job is kept whatever its age. Every
         // user-defined job shares the `custom_job` key, so those runs keep
         // one per operation type (one per script) instead of one in total.
-        let deleted = execute_housekeeping_delete(
+        let deleted = execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_stale_workflow_operations",
-            "DELETE FROM workflow_operations
-             WHERE NOT EXISTS (SELECT 1 FROM workflow_private_inputs WHERE workflow_private_inputs.run_id = workflow_operations.id AND workflow_private_inputs.input_encrypted IS NOT NULL)
+            "workflow_operations",
+            "id",
+            "NOT EXISTS (SELECT 1 FROM workflow_private_inputs WHERE workflow_private_inputs.run_id = workflow_operations.id AND workflow_private_inputs.input_encrypted IS NOT NULL)
                AND job_key IS NOT NULL
                 AND (
                     (status = 'completed' AND started_at <= {})
@@ -1686,11 +1755,12 @@ impl HousekeepingRepository for HousekeepingStore {
         )
         .await?;
         // A request receipt whose run is gone can no longer resolve a replay.
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_orphaned_workflow_private_inputs",
-            "DELETE FROM workflow_private_inputs
-             WHERE NOT EXISTS (
+            "workflow_private_inputs",
+            "run_id",
+            "NOT EXISTS (
                  SELECT 1 FROM workflow_operations
                   WHERE workflow_operations.id = workflow_private_inputs.run_id
              )",
@@ -1701,10 +1771,12 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_release_decisions_older_than",
-            "DELETE FROM release_decisions WHERE created_at < {}",
+            "release_decisions",
+            "id",
+            "created_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await
@@ -1716,11 +1788,12 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_release_attempts_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_release_attempts_older_than",
-            "DELETE FROM release_download_attempts
-              WHERE attempted_at < {}
+            "release_download_attempts",
+            "id",
+            "attempted_at < {}
                 AND outcome != 'pending'",
             vec![housekeeping_cutoff_arg(days)],
         )
@@ -1728,10 +1801,12 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_history_events_older_than",
-            "DELETE FROM history_events WHERE occurred_at < {}",
+            "history_events",
+            "id",
+            "occurred_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await
@@ -1746,9 +1821,8 @@ impl HousekeepingRepository for HousekeepingStore {
             return Ok(0);
         }
 
-        let sql = format!(
-            "DELETE FROM domain_events
-              WHERE occurred_at <= {{}}
+        let predicate = format!(
+            "occurred_at <= {{}}
                 AND event_type IN ({})",
             placeholders(event_types.len())
         );
@@ -1758,21 +1832,24 @@ impl HousekeepingRepository for HousekeepingStore {
                 .iter()
                 .map(|event_type| SqlArg::Text(event_type.as_str().to_string())),
         );
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_domain_events_older_than_for_types",
-            sql,
+            "domain_events",
+            "sequence",
+            &predicate,
             args,
         )
         .await
     }
 
     async fn delete_download_import_artifacts_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_download_import_artifacts_older_than",
-            "DELETE FROM download_import_artifacts
-              WHERE created_at < {}
+            "download_import_artifacts",
+            "id",
+            "created_at < {}
                 AND (
                     import_id IS NULL
                     OR NOT EXISTS (
@@ -1793,11 +1870,12 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_terminal_imports_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_terminal_imports_older_than",
-            "DELETE FROM imports
-              WHERE status IN ('completed', 'failed', 'skipped')
+            "imports",
+            "id",
+            "status IN ('completed', 'failed', 'skipped')
                 AND updated_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
@@ -1808,11 +1886,12 @@ impl HousekeepingRepository for HousekeepingStore {
         &self,
         days: i64,
     ) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_terminal_download_queue_commands_older_than",
-            "DELETE FROM download_queue_commands
-              WHERE action = 'delete'
+            "download_queue_commands",
+            "id",
+            "action = 'delete'
                 AND status IN ('completed', 'failed')
                 AND updated_at < {}",
             vec![housekeeping_cutoff_arg(days)],
@@ -1821,20 +1900,24 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_rule_set_history_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_rule_set_history_older_than",
-            "DELETE FROM rule_set_history WHERE created_at < {}",
+            "rule_set_history",
+            "id",
+            "created_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await
     }
 
     async fn delete_maintenance_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_maintenance_evaluation_runs_older_than",
-            "DELETE FROM maintenance_evaluation_runs WHERE started_at < {}",
+            "maintenance_evaluation_runs",
+            "id",
+            "started_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await

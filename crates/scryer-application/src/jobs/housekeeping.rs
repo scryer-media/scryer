@@ -666,42 +666,30 @@ impl AppUseCase {
                 .await?;
             let mut orphaned_media_files = 0u32;
             let mut promotions = crate::catalog::workflow::PrimaryPromotionBatch::default();
-            for media_file in all_files {
-                if protected_upgrade_file_ids.contains(&media_file.media_file_id) {
+            let mut unprobed = all_files
+                .into_iter()
+                .filter(|media_file| {
+                    !protected_upgrade_file_ids.contains(&media_file.media_file_id)
+                })
+                .collect::<std::collections::VecDeque<_>>();
+            while !unprobed.is_empty() {
+                // The probes are blocking filesystem calls, so they run off the
+                // runtime. Each blocking pass stops at the first orphan it
+                // finds, so every row is still removed straight after its own
+                // root check and file probe, exactly as when they ran inline.
+                let (rest, orphan) = tokio::task::spawn_blocking(move || {
+                    let orphan =
+                        next_orphan_media_file(&mut unprobed, ORPHAN_SWEEP_PROBES_PER_PASS);
+                    (unprobed, orphan)
+                })
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!("orphan media-file probe task failed: {error}"))
+                })?;
+                unprobed = rest;
+                let Some(media_file) = orphan else {
                     continue;
-                }
-
-                let file_path = crate::stored_paths::stored_path_to_path_buf(&media_file.file_path);
-                let roots = media_file
-                    .root_paths
-                    .iter()
-                    .map(|root| crate::stored_paths::stored_path_to_path_buf(root))
-                    .collect::<Vec<_>>();
-                if let Err(error) =
-                    crate::fs_safety::resolve_available_root_for_path(&file_path, &roots)
-                {
-                    warn!(
-                        error = %error,
-                        file_id = %media_file.media_file_id,
-                        path = %file_path.display(),
-                        "skipping orphan media-file cleanup because media root is unavailable"
-                    );
-                    continue;
-                }
-
-                match std::fs::symlink_metadata(&file_path) {
-                    Ok(_) => continue,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        warn!(
-                            error = %error,
-                            file_id = %media_file.media_file_id,
-                            path = %file_path.display(),
-                            "skipping orphan media-file cleanup because file status could not be read"
-                        );
-                        continue;
-                    }
-                }
+                };
 
                 self.record_primary_promotion_candidate(
                     &mut promotions,
@@ -2547,9 +2535,159 @@ impl AppUseCase {
     }
 }
 
+/// How many catalog rows one blocking orphan-sweep pass may probe before it
+/// hands control back, so a large library does not hold one blocking thread
+/// for the whole sweep.
+const ORPHAN_SWEEP_PROBES_PER_PASS: usize = 256;
+
+/// Probes catalog rows from the front of `files` until one is proven missing
+/// on disk, and returns it. Rows whose root is unavailable, or whose status
+/// cannot be read, are skipped with a warning; rows that exist are dropped.
+/// Stops after `budget` rows without an orphan and returns `None`.
+///
+/// Blocking: call it from a blocking thread.
+fn next_orphan_media_file(
+    files: &mut std::collections::VecDeque<crate::HousekeepingMediaFileRootRow>,
+    budget: usize,
+) -> Option<crate::HousekeepingMediaFileRootRow> {
+    for _ in 0..budget {
+        let media_file = files.pop_front()?;
+        let file_path = crate::stored_paths::stored_path_to_path_buf(&media_file.file_path);
+        let roots = media_file
+            .root_paths
+            .iter()
+            .map(|root| crate::stored_paths::stored_path_to_path_buf(root))
+            .collect::<Vec<_>>();
+        // Root availability is checked before probing the file path so a
+        // disconnected media root cannot make every row look orphaned.
+        if let Err(error) = crate::fs_safety::resolve_available_root_for_path(&file_path, &roots) {
+            warn!(
+                error = %error,
+                file_id = %media_file.media_file_id,
+                path = %file_path.display(),
+                "skipping orphan media-file cleanup because media root is unavailable"
+            );
+            continue;
+        }
+
+        match std::fs::symlink_metadata(&file_path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Some(media_file);
+            }
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    file_id = %media_file.media_file_id,
+                    path = %file_path.display(),
+                    "skipping orphan media-file cleanup because file status could not be read"
+                );
+                continue;
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sweep's decisions as they were made inline, row by row, before the
+    /// probes moved to a blocking thread.
+    fn inline_orphan_decisions(files: &[crate::HousekeepingMediaFileRootRow]) -> Vec<String> {
+        let mut orphans = Vec::new();
+        for media_file in files {
+            let file_path = crate::stored_paths::stored_path_to_path_buf(&media_file.file_path);
+            let roots = media_file
+                .root_paths
+                .iter()
+                .map(|root| crate::stored_paths::stored_path_to_path_buf(root))
+                .collect::<Vec<_>>();
+            if crate::fs_safety::resolve_available_root_for_path(&file_path, &roots).is_err() {
+                continue;
+            }
+            match std::fs::symlink_metadata(&file_path) {
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => continue,
+            }
+            orphans.push(media_file.media_file_id.clone());
+        }
+        orphans
+    }
+
+    #[test]
+    fn blocking_orphan_probe_decides_exactly_like_the_inline_sweep() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mounted = temp.path().join("mounted");
+        let empty = temp.path().join("empty");
+        let unmounted = temp.path().join("unmounted");
+        std::fs::create_dir_all(mounted.join("Sample Show")).expect("mounted root");
+        std::fs::create_dir_all(&empty).expect("empty root");
+        std::fs::write(mounted.join("Sample Show").join("present.mkv"), b"x").expect("present");
+        std::fs::write(mounted.join("Sample Show").join("kept.mkv"), b"x").expect("kept");
+
+        let row = |id: &str, path: std::path::PathBuf, roots: &[&std::path::Path]| {
+            crate::HousekeepingMediaFileRootRow {
+                media_file_id: id.to_string(),
+                title_id: format!("title-{id}"),
+                file_path: path.to_string_lossy().into_owned(),
+                library_id: "library-1".to_string(),
+                root_paths: roots
+                    .iter()
+                    .map(|root| root.to_string_lossy().into_owned())
+                    .collect(),
+            }
+        };
+        let mut files = Vec::new();
+        for index in 0..40 {
+            let id = format!("file-{index:03}");
+            let (path, roots): (std::path::PathBuf, Vec<&std::path::Path>) = match index % 6 {
+                0 => (
+                    mounted.join("Sample Show").join("present.mkv"),
+                    vec![&mounted],
+                ),
+                1 => (
+                    mounted
+                        .join("Sample Show")
+                        .join(format!("gone-{index}.mkv")),
+                    vec![&mounted],
+                ),
+                2 => (empty.join(format!("gone-{index}.mkv")), vec![&empty]),
+                3 => (
+                    unmounted.join(format!("gone-{index}.mkv")),
+                    vec![&unmounted],
+                ),
+                4 => (
+                    temp.path().join(format!("outside-{index}.mkv")),
+                    vec![&mounted],
+                ),
+                _ => (
+                    mounted.join("Sample Show").join("kept.mkv"),
+                    vec![&empty, &mounted],
+                ),
+            };
+            files.push(row(&id, path, &roots));
+        }
+
+        let expected = inline_orphan_decisions(&files);
+        assert!(!expected.is_empty(), "the fixture must contain orphans");
+
+        for budget in [1, 3, ORPHAN_SWEEP_PROBES_PER_PASS] {
+            let mut pending = files
+                .iter()
+                .cloned()
+                .collect::<std::collections::VecDeque<_>>();
+            let mut found = Vec::new();
+            while !pending.is_empty() {
+                if let Some(orphan) = next_orphan_media_file(&mut pending, budget) {
+                    found.push(orphan.media_file_id);
+                }
+            }
+            assert_eq!(found, expected, "budget {budget}");
+        }
+    }
 
     fn test_library() -> RecycleEntryLibrary {
         RecycleEntryLibrary {

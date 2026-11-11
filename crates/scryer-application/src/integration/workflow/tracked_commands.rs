@@ -1261,16 +1261,17 @@ async fn process_tracked_download_snapshot(
         TrackedDownloadSnapshotPrune::None => Vec::new(),
     };
 
+    // The loop below changes only fields of cached entries, never which
+    // entries exist, so one lookup built up front gives every iteration the
+    // same first match a scan of the cache would.
+    let cached_ids_by_source = if unavailable_sources.is_empty() {
+        HashMap::new()
+    } else {
+        first_tracked_download_id_by_source(runtime.tracker.get_all())
+    };
     for source_identity in unavailable_sources {
         let recorded = drop_source_removed_from_client(app, &source_identity).await;
-        let cached_id = runtime
-            .tracker
-            .get_all()
-            .into_iter()
-            .find(|tracked| {
-                tracked_download_source_identity(tracked).as_ref() == Some(&source_identity)
-            })
-            .map(|tracked| tracked.download_id);
+        let cached_id = cached_ids_by_source.get(&source_identity).copied();
         if let Some(tracked) = cached_id.and_then(|id| runtime.tracker.get_mut_by_download_id(id)) {
             if !recorded {
                 // Retry the transition on the next authoritative observation.
@@ -4292,7 +4293,7 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
     }
 }
 
-fn tracked_download_source_identity(tracked: &TrackedDownload) -> Option<crate::ClientJobLocator> {
+pub(crate) fn tracked_download_source_identity(tracked: &TrackedDownload) -> Option<crate::ClientJobLocator> {
     let client_type = tracked.client_type.trim();
     let item_id = tracked.client_item.download_client_item_id.trim();
     if client_type.is_empty() || item_id.is_empty() {
@@ -4303,6 +4304,20 @@ fn tracked_download_source_identity(tracked: &TrackedDownload) -> Option<crate::
         client_type,
         item_id,
     ))
+}
+
+/// The id of the first cached download, in the order given, that carries
+/// each source identity: what a `find` over the same entries returns for it.
+pub(crate) fn first_tracked_download_id_by_source<'a>(
+    tracked: impl IntoIterator<Item = &'a TrackedDownload>,
+) -> HashMap<crate::ClientJobLocator, scryer_domain::download_identity::DownloadId> {
+    let mut by_source = HashMap::new();
+    for tracked in tracked {
+        if let Some(source) = tracked_download_source_identity(tracked) {
+            by_source.entry(source).or_insert(tracked.download_id);
+        }
+    }
+    by_source
 }
 
 #[cfg(test)]

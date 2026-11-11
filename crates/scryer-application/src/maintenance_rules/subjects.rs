@@ -384,15 +384,28 @@ impl AppUseCase {
         &self,
         title: &Title,
     ) -> AppResult<Arc<MaintenanceTitleEpisodeInventory>> {
-        self.load_title_episode_inventory(title, true).await
+        self.load_title_episode_inventory(title, FilePresence::Probe(None))
+            .await
     }
 
-    /// `stat_files` is false only for a candidate listing, through
+    /// [`Self::maintenance_load_title_episode_inventory`] for an evaluation
+    /// pass: a file whose presence this pass already probed for another rule
+    /// is answered from `presence` instead of probing the share again.
+    pub(crate) async fn maintenance_load_title_episode_inventory_for_pass(
+        &self,
+        title: &Title,
+        presence: &mut MaintenancePassFilePresence,
+    ) -> AppResult<Arc<MaintenanceTitleEpisodeInventory>> {
+        self.load_title_episode_inventory(title, FilePresence::Probe(Some(presence)))
+            .await
+    }
+
+    /// [`FilePresence::Skip`] only for a candidate listing, through
     /// [`MaintenanceListingInventories`], which never hands the inventory on.
     async fn load_title_episode_inventory(
         &self,
         title: &Title,
-        stat_files: bool,
+        mut presence: FilePresence<'_>,
     ) -> AppResult<Arc<MaintenanceTitleEpisodeInventory>> {
         let collections = self
             .services
@@ -447,10 +460,22 @@ impl AppUseCase {
         let mut episode_coverage: HashMap<String, EpisodeFileCoverage> = HashMap::new();
         let mut file_availabilities = HashMap::new();
         for scoped in &scoped_files {
-            let availability = if stat_files {
-                Some(file_availability(&scoped.media_file.file_path).await)
-            } else {
-                None
+            let availability = match &mut presence {
+                FilePresence::Skip => None,
+                FilePresence::Probe(None) => {
+                    Some(file_availability(&scoped.media_file.file_path).await)
+                }
+                FilePresence::Probe(Some(memo)) => {
+                    let path = &scoped.media_file.file_path;
+                    Some(match memo.by_path.get(path) {
+                        Some(availability) => *availability,
+                        None => {
+                            let availability = file_availability(path).await;
+                            memo.by_path.insert(path.clone(), availability);
+                            availability
+                        }
+                    })
+                }
             };
             if let Some(availability) = availability {
                 file_availabilities.insert(scoped.media_file.id.clone(), availability);
@@ -654,7 +679,9 @@ impl AppUseCase {
             let inventory = match inventories.by_title.get(&title.id) {
                 Some(inventory) => Arc::clone(inventory),
                 None => {
-                    let inventory = self.load_title_episode_inventory(title, false).await?;
+                    let inventory = self
+                        .load_title_episode_inventory(title, FilePresence::Skip)
+                        .await?;
                     inventories
                         .by_title
                         .insert(title.id.clone(), Arc::clone(&inventory));
@@ -741,6 +768,30 @@ impl From<MaintenanceSubject> for MaintenanceListingSubject {
 #[derive(Default)]
 pub(crate) struct MaintenanceListingInventories {
     by_title: HashMap<String, Arc<MaintenanceTitleEpisodeInventory>>,
+}
+
+/// Whether an inventory load probes its files' presence on disk.
+enum FilePresence<'a> {
+    /// A candidate listing: no listing field depends on presence.
+    Skip,
+    /// Probe each file, answering from the pass memo when one is given.
+    Probe(Option<&'a mut MaintenancePassFilePresence>),
+}
+
+/// File presence probed during one evaluation pass, by catalog path. Every
+/// rule of the pass sees the presence sampled the first time any rule loaded
+/// that file, the way rules already shared a cached title inventory. It lives
+/// only for the pass; previews and execution always probe afresh.
+#[derive(Default)]
+pub(crate) struct MaintenancePassFilePresence {
+    by_path: HashMap<String, EpisodeFileAvailability>,
+}
+
+#[cfg(test)]
+impl MaintenancePassFilePresence {
+    pub(crate) fn probed_paths(&self) -> usize {
+        self.by_path.len()
+    }
 }
 
 async fn file_availability(path: &str) -> EpisodeFileAvailability {

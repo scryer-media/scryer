@@ -53,7 +53,7 @@ use crate::maintenance_rules::storage::{
     maintenance_root_file_summary_on,
 };
 use crate::maintenance_rules::subjects::{
-    MaintenanceListingInventories, MaintenanceTitleEpisodeInventory,
+    MaintenanceListingInventories, MaintenancePassFilePresence, MaintenanceTitleEpisodeInventory,
 };
 use crate::media_server_signals::SIGNAL_SYNC_PROVIDERS;
 use crate::ports::MaintenanceCandidateQuery;
@@ -79,9 +79,12 @@ const MAINTENANCE_SEQUENCE_COMPLETION_RECONCILIATION_LIMIT: usize = 100;
 /// long evaluation cannot retain its entire catalog, while repeated rules can
 /// reuse a consistent first-page snapshot. Capacity observations are keyed by
 /// root and intentionally live only for this scheduled/manual evaluation pass.
+/// File presence is kept for the whole pass, by path only, so a second rule
+/// past the first page does not probe the share again for the same file.
 #[derive(Default)]
 struct MaintenanceEvaluationBatchCache {
     inventories: HashMap<String, Arc<MaintenanceTitleEpisodeInventory>>,
+    file_presence: MaintenancePassFilePresence,
     storage_facts: MaintenanceStorageFactCache,
 }
 
@@ -1162,8 +1165,12 @@ impl AppUseCase {
                     {
                         inventory.clone()
                     } else {
-                        let inventory =
-                            self.maintenance_load_title_episode_inventory(title).await?;
+                        let inventory = self
+                            .maintenance_load_title_episode_inventory_for_pass(
+                                title,
+                                &mut batch_cache.file_presence,
+                            )
+                            .await?;
                         if batch_cache.inventories.len() < MAINTENANCE_EVALUATION_TITLE_CHUNK {
                             batch_cache
                                 .inventories

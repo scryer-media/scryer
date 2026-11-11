@@ -410,6 +410,89 @@ async fn candidate_listing_subjects_match_evaluation_subjects_and_evaluation_sti
 }
 
 #[tokio::test]
+async fn evaluation_pass_probes_each_file_once_and_sees_what_a_fresh_load_sees() {
+    use crate::lib_tests::maintenance_title_completion::{add_episode_file, season_and_episode};
+    use crate::maintenance_rules::subjects::MaintenancePassFilePresence;
+
+    let fixture = title_fixture("Quillmarsh", MediaFacet::Series).await;
+    let (_, first) = season_and_episode(&fixture, 1, 1, "2024-01-01").await;
+    let (_, second) = season_and_episode(&fixture, 2, 1, "2024-02-01").await;
+    let (_, gone) = season_and_episode(&fixture, 3, 1, "2024-03-01").await;
+    add_episode_file(&fixture, &first, "Quillmarsh/S01E01.mkv").await;
+    add_episode_file(&fixture, &second, "Quillmarsh/S02E01.mkv").await;
+    add_episode_file(&fixture, &gone, "Quillmarsh/S03E01.mkv").await;
+    std::fs::remove_file(fixture.root.join("Quillmarsh/S03E01.mkv")).expect("remove one file");
+
+    let app = &fixture.execution.app;
+    let title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&fixture.title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("read title files");
+    let downloaded = |inventory: std::sync::Arc<
+        crate::maintenance_rules::subjects::MaintenanceTitleEpisodeInventory,
+    >|
+     -> Vec<(String, i64)> {
+        let mut counts: Vec<_> = app
+            .maintenance_subjects_from_episode_inventory(
+                MaintenanceRuleSubjectKind::Episode,
+                &title,
+                &files,
+                &inventory,
+            )
+            .expect("episode subjects")
+            .into_iter()
+            .map(|subject| (subject.id, subject.episode_file_count))
+            .collect();
+        counts.sort();
+        counts
+    };
+
+    // The first rule of a pass loads exactly what a fresh load sees.
+    let mut presence = MaintenancePassFilePresence::default();
+    let fresh = downloaded(
+        app.maintenance_load_title_episode_inventory(&title)
+            .await
+            .expect("fresh inventory"),
+    );
+    let first_rule = downloaded(
+        app.maintenance_load_title_episode_inventory_for_pass(&title, &mut presence)
+            .await
+            .expect("first rule inventory"),
+    );
+    assert_eq!(first_rule, fresh);
+    assert_eq!(presence.probed_paths(), 3, "one probe per file");
+
+    // A later rule of the same pass reuses those probes rather than asking
+    // the share again: removing a file in between is not seen until the next
+    // pass, while a fresh load (preview, execution) sees it at once.
+    std::fs::remove_file(fixture.root.join("Quillmarsh/S02E01.mkv")).expect("remove second");
+    let later_rule = downloaded(
+        app.maintenance_load_title_episode_inventory_for_pass(&title, &mut presence)
+            .await
+            .expect("later rule inventory"),
+    );
+    assert_eq!(later_rule, first_rule);
+    assert_eq!(presence.probed_paths(), 3, "no further probes");
+    let fresh_after = downloaded(
+        app.maintenance_load_title_episode_inventory(&title)
+            .await
+            .expect("fresh inventory after removal"),
+    );
+    assert_ne!(fresh_after, later_rule);
+}
+
+#[tokio::test]
 async fn storage_recovery_stops_before_the_next_file() {
     // Evaluation, action safety, first file, then a recovered capacity before
     // the second file. The recovery must cancel the remaining manifest.

@@ -2270,3 +2270,123 @@ async fn guarded_rule_deletion_preserves_action_history_even_for_terminal_candid
     services.pool().close().await;
     let _ = std::fs::remove_file(db);
 }
+
+async fn seed_sequence_memberships(
+    services: &SqliteServices,
+    at: chrono::DateTime<Utc>,
+) -> crate::MaintenanceEvaluationStore {
+    seed_rule_set(services, "rule-a").await;
+    let store = evaluation_store(services);
+    // (subject, created offset in seconds, already released)
+    let rows = [
+        ("subject-active", 0, false),
+        ("subject-released", 0, true),
+        ("subject-created-later", 60, false),
+    ];
+    for (index, (subject, created_offset, released)) in rows.into_iter().enumerate() {
+        let candidate = candidate(&format!("candidate-{index}"), "rule-a", subject, 1);
+        store.create_candidate(&candidate).await.expect("candidate");
+        let created_at = at + chrono::Duration::seconds(created_offset);
+        sqlx::query(
+            "INSERT INTO maintenance_sequence_terminal_memberships
+             (id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id,
+              subject_kind, subject_id, match_generation, sequence_content_hash, outcome,
+              created_at, released_at)
+             VALUES (?, ?, 'rule-a', 1, 'hash-1', ?, 'title', ?, 1, 'sequence-hash',
+                     'succeeded', ?, ?)",
+        )
+        .bind(format!("membership-{index}"))
+        .bind(&candidate.id)
+        .bind(subject)
+        .bind(subject)
+        .bind(created_at.to_rfc3339())
+        .bind(released.then(|| created_at.to_rfc3339()))
+        .execute(services.pool())
+        .await
+        .expect("membership");
+    }
+    store
+}
+
+async fn membership_rows(services: &SqliteServices) -> Vec<(String, Option<String>)> {
+    sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT id, released_at FROM maintenance_sequence_terminal_memberships ORDER BY id",
+    )
+    .fetch_all(services.pool())
+    .await
+    .expect("memberships")
+}
+
+/// Releasing on a confirmed non-match answers and changes exactly what the
+/// unconditional update did, and a subject with nothing to release never
+/// waits on the writer.
+#[tokio::test]
+async fn confirmed_non_match_release_matches_the_unconditional_update() {
+    let at = Utc::now();
+    let released_at = at + chrono::Duration::seconds(30);
+    let (old_path, old_db) = temp_services("scryer_sequence_release_unconditional").await;
+    let (new_path, new_db) = temp_services("scryer_sequence_release_probed").await;
+    seed_sequence_memberships(&old_path, at).await;
+    let store = seed_sequence_memberships(&new_path, at).await;
+
+    for subject in [
+        "subject-active",
+        "subject-released",
+        "subject-created-later",
+        "subject-without-membership",
+    ] {
+        let unconditional = sqlx::query(
+            "UPDATE maintenance_sequence_terminal_memberships
+                SET released_at = ?
+              WHERE rule_set_id = 'rule-a' AND revision_number = 1 AND subject_kind = 'title'
+                AND subject_id = ? AND released_at IS NULL AND created_at <= ?",
+        )
+        .bind(released_at.to_rfc3339())
+        .bind(subject)
+        .bind(released_at.to_rfc3339())
+        .execute(old_path.pool())
+        .await
+        .expect("unconditional release")
+        .rows_affected()
+            == 1;
+        let probed = store
+            .release_sequence_completion_on_confirmed_non_match(
+                "rule-a",
+                1,
+                "title",
+                subject,
+                released_at,
+            )
+            .await
+            .expect("probed release");
+        assert_eq!(probed, unconditional, "{subject}");
+        assert_eq!(probed, subject == "subject-active", "{subject}");
+    }
+    assert_eq!(
+        membership_rows(&new_path).await,
+        membership_rows(&old_path).await
+    );
+
+    let writer_gate = new_path.writer_gate();
+    let _held = writer_gate.lock().await;
+    let idle = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        store.release_sequence_completion_on_confirmed_non_match(
+            "rule-a",
+            1,
+            "title",
+            "subject-without-membership",
+            released_at,
+        ),
+    )
+    .await
+    .expect("a subject with nothing to release does not wait on the writer")
+    .expect("probed release");
+    assert!(!idle);
+    drop(_held);
+
+    old_path.pool().close().await;
+    new_path.pool().close().await;
+    let _ = std::fs::remove_file(old_db);
+    let _ = std::fs::remove_file(new_db);
+}
