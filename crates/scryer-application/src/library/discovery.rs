@@ -364,8 +364,9 @@ impl DiscoveredBoundaryEvidence {
             return Ok(false);
         }
         let owner = BoundaryEvidence::from_external_ids(ids);
-        let folder =
-            BoundaryEvidence::from_name(&path.file_name().unwrap_or_default().to_string_lossy());
+        let folder = BoundaryEvidence::ids_from_name(
+            &path.file_name().unwrap_or_default().to_string_lossy(),
+        );
         if self.media.conflicts_with(&owner)
             || self.media.conflicts_with(&folder)
             || folder.conflicts_with(&owner)
@@ -516,20 +517,34 @@ impl BoundaryEvidence {
         }
     }
 
+    #[cfg(test)]
     fn from_name(name: &str) -> Self {
+        let mut evidence = Self::ids_from_name(name);
+        evidence.title = Self::title_from_name(name);
+        evidence
+    }
+
+    /// The external ids a name carries, without its title. Conflict checks
+    /// read only these.
+    fn ids_from_name(name: &str) -> Self {
         let (walk, conflict) =
             crate::library_filename_parser::library_title_walk_with_id_conflicts(name);
-        let title = crate::helpers::parse_usable_release_title(name)
-            .map(|parsed| crate::title_matching::canonical_lookup_key(&parsed.normalized_title))
-            .filter(|title| !title.is_empty());
         Self {
-            title,
             conflict,
             ids: walk
                 .map(|walk| [walk.imdb_id, walk.tmdb_id, walk.tvdb_id])
                 .unwrap_or_default(),
             ..Default::default()
         }
+    }
+
+    /// The title a name carries. This runs the full release parser.
+    fn title_from_name(name: &str) -> Option<String> {
+        #[cfg(test)]
+        BOUNDARY_TITLE_PARSES.with(|count| count.set(count.get() + 1));
+        crate::helpers::parse_usable_release_title(name)
+            .map(|parsed| crate::title_matching::canonical_lookup_key(&parsed.normalized_title))
+            .filter(|title| !title.is_empty())
     }
 
     fn from_external_ids(external_ids: &[scryer_domain::ExternalId]) -> Self {
@@ -758,6 +773,13 @@ tokio::task_local! {
     static BOUNDARY_ENTRY_METADATA_FAILURE: PathBuf;
 }
 
+#[cfg(test)]
+thread_local! {
+    static BOUNDARY_TITLE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Parse every name, as every walk did before titles became on demand.
+    static BOUNDARY_ALL_TITLES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 async fn boundary_entry_file_type(
     entry: &tokio::fs::DirEntry,
 ) -> std::io::Result<std::fs::FileType> {
@@ -797,7 +819,7 @@ pub(crate) async fn read_discovery_nfo(path: &Path) -> std::io::Result<Option<St
 
 impl BoundaryFrame {
     fn identity_conflicts(&self) -> bool {
-        let folder = BoundaryEvidence::from_name(
+        let folder = BoundaryEvidence::ids_from_name(
             &self.path.file_name().unwrap_or_default().to_string_lossy(),
         );
         self.evidence.conflicts_with(&folder)
@@ -843,31 +865,34 @@ impl BoundaryFrame {
         {
             return false;
         }
+        // A season holds its parent's episodes whatever its files are named.
+        if self.season {
+            return true;
+        }
         let matches_owner = owner.is_some_and(|title| {
-            let folder = BoundaryEvidence::from_name(
+            let folder = BoundaryEvidence::title_from_name(
                 &self.path.file_name().unwrap_or_default().to_string_lossy(),
             );
-            folder
-                .title
-                .iter()
-                .chain(self.evidence.title.iter())
-                .any(|name| {
-                    std::iter::once(title.name)
-                        .chain(title.aliases.iter().map(String::as_str))
-                        .any(|alias| crate::title_matching::canonical_lookup_key(alias) == *name)
-                })
+            folder.iter().chain(self.evidence.title.iter()).any(|name| {
+                std::iter::once(title.name)
+                    .chain(title.aliases.iter().map(String::as_str))
+                    .any(|alias| crate::title_matching::canonical_lookup_key(alias) == *name)
+            })
         });
-        if self.matches_folder && !self.matches_parent && !self.season && !matches_owner {
+        if self.matches_folder && !self.matches_parent && !matches_owner {
             return false;
         }
-        self.season
-            || self.matches_parent
-            || matches_owner
-            || (parent.has_title_nfo && self.evidence.has_media)
+        self.matches_parent || matches_owner || (parent.has_title_nfo && self.evidence.has_media)
     }
 
     /// `reusable` asks for evidence a later claim may reuse. Folded season and
     /// part frames never yield it, so they are never stamped.
+    ///
+    /// `titles` asks for the names of the folder, its parent and its media
+    /// files. Only a caller that reads them asks: the release parser is the
+    /// costliest step of a walk, and a frame's ids come from the cheap id
+    /// scan either way.
+    #[allow(clippy::too_many_arguments)]
     async fn open(
         path: PathBuf,
         depth: usize,
@@ -875,8 +900,11 @@ impl BoundaryFrame {
         part: bool,
         episodic: bool,
         reusable: bool,
+        titles: bool,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> AppResult<Self> {
+        #[cfg(test)]
+        let titles = titles || BOUNDARY_ALL_TITLES.with(std::cell::Cell::get);
         let folded = season || part;
         let reusable = reusable && !folded;
         // The directory is stamped before it is listed, so any entry change
@@ -906,14 +934,18 @@ impl BoundaryFrame {
         let mut listing_complete = false;
         let mut evidence = BoundaryEvidence::default();
 
-        let folder_name =
-            BoundaryEvidence::from_name(&path.file_name().unwrap_or_default().to_string_lossy())
-                .title;
+        let folder_name = titles
+            .then(|| {
+                BoundaryEvidence::title_from_name(
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                )
+            })
+            .flatten();
         let parent_name = path
             .parent()
             .and_then(Path::file_name)
-            .map(|name| BoundaryEvidence::from_name(&name.to_string_lossy()))
-            .and_then(|e| e.title);
+            .filter(|_| titles)
+            .and_then(|name| BoundaryEvidence::title_from_name(&name.to_string_lossy()));
         let mut matches_folder = false;
         let mut matches_parent = false;
         let mut inspection_error = None;
@@ -960,9 +992,11 @@ impl BoundaryFrame {
                     .and_then(|n| n.to_str())
                     .is_some_and(is_ignored_media_extra_file_name)
             {
-                let mut file = BoundaryEvidence::from_name(
-                    &child.file_stem().unwrap_or_default().to_string_lossy(),
-                );
+                let stem = child.file_stem().unwrap_or_default().to_string_lossy();
+                let mut file = BoundaryEvidence::ids_from_name(&stem);
+                if titles {
+                    file.title = BoundaryEvidence::title_from_name(&stem);
+                }
                 file.has_media = true;
                 matches_folder |= file
                     .title
@@ -1097,7 +1131,7 @@ async fn discover_title_folder_boundaries(
         .map_err(|e| AppError::Repository(e.to_string()))?;
     let episodic = policy.facet != MediaFacet::Movie;
     let mut stack =
-        vec![BoundaryFrame::open(root, 0, false, false, episodic, false, cancel).await?];
+        vec![BoundaryFrame::open(root, 0, false, false, episodic, false, false, cancel).await?];
     let mut batch = Vec::with_capacity(batch_size.min(256));
     let mut first_io_error = None;
     while let Some(frame) = stack.last_mut() {
@@ -1260,8 +1294,21 @@ async fn discover_title_folder_boundaries(
                         .then(|| "folder contains another recorded title boundary".into()),
                 });
             } else {
-                match BoundaryFrame::open(path.clone(), depth, season, part, episodic, true, cancel)
-                    .await
+                // Season and part file names are folded into their parent and
+                // never compared; every other frame may become a candidate
+                // whose names decide it.
+                let titles = !season && !part;
+                match BoundaryFrame::open(
+                    path.clone(),
+                    depth,
+                    season,
+                    part,
+                    episodic,
+                    true,
+                    titles,
+                    cancel,
+                )
+                .await
                 {
                     Ok(mut child) => {
                         // A missing recorded descendant still owns its path;
@@ -1605,6 +1652,7 @@ async fn verify_scan_boundary(
             false,
             episodic,
             false,
+            false,
             &cancel,
         )
         .await?,
@@ -1615,7 +1663,7 @@ async fn verify_scan_boundary(
         }
         if frame.evidence.conflicts_with(&owner.identity)
             || frame.identity_conflicts()
-            || BoundaryEvidence::from_name(
+            || BoundaryEvidence::ids_from_name(
                 &frame.path.file_name().unwrap_or_default().to_string_lossy(),
             )
             .conflicts_with(&owner.identity)
@@ -1663,9 +1711,15 @@ async fn verify_scan_boundary(
             }
             let season = episodic && !frame.part && conventional_season(&child);
             let part = !season && title_part_folder(&child);
+            // Names are compared only for an episodic folder below the title
+            // folder. A season's file names reach that comparison only when
+            // the season merges into such a folder, never into the title
+            // folder itself.
+            let titles = episodic && !part && (!season || depth >= 2);
             timing.frames_opened += 1;
             stack.push(
-                BoundaryFrame::open(child, depth, season, part, episodic, false, &cancel).await?,
+                BoundaryFrame::open(child, depth, season, part, episodic, false, titles, &cancel)
+                    .await?,
             );
         } else {
             let child = stack.pop().unwrap();
@@ -3103,6 +3157,154 @@ mod tests {
         let path = root.join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"synthetic media").unwrap();
+    }
+
+    /// Discovery output and the outcome of verifying every candidate, as one
+    /// comparable transcript.
+    async fn boundary_walk_transcript(root: &Path, facet: MediaFacet) -> Vec<String> {
+        let mut transcript = Vec::new();
+        let boundaries = collect_nested_boundaries(root, discovery_policy(facet.clone())).await;
+        let mut folders = Vec::new();
+        for boundary in &boundaries {
+            transcript.push(format!("{boundary:?}"));
+            folders.push(boundary.path.clone());
+        }
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(folder) = stack.pop() {
+            for entry in std::fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path.clone());
+                    stack.push(path);
+                }
+            }
+        }
+        folders.sort();
+        folders.dedup();
+        for folder in folders {
+            let folder_name = folder.file_name().unwrap().to_string_lossy().to_string();
+            for (name, ids) in [
+                (folder_name.as_str(), vec![]),
+                ("Unrelated Fixture Name", vec![]),
+                (
+                    folder_name.as_str(),
+                    vec![scryer_domain::ExternalId::new("tvdb", "100")],
+                ),
+            ] {
+                let title = scryer_domain::NewTitle {
+                    name: name.into(),
+                    facet: facet.clone(),
+                    external_ids: ids,
+                    ..Default::default()
+                };
+                let outcome = verify_new_scan_title_boundary(&folder, &title).await;
+                transcript.push(format!(
+                    "{} as {name}: {:?}",
+                    folder.display(),
+                    outcome.map_err(|error| (error.validation_reason(), error.to_string()))
+                ));
+            }
+        }
+        transcript
+    }
+
+    /// Titles are parsed only where a decision reads them. Every boundary,
+    /// rejection, evidence value and verification outcome stays what it was
+    /// when every name was parsed.
+    #[tokio::test]
+    async fn on_demand_titles_leave_every_walk_outcome_unchanged() {
+        let series = tempfile::tempdir().unwrap();
+        for file in [
+            "Alpha Fixture {tvdb-100}/Season 01/Alpha.Fixture.S01E01.mkv",
+            "Alpha Fixture {tvdb-100}/Season 02/Alpha.Fixture.S02E01.{tvdb-999}.mkv",
+            "Alpha Fixture {tvdb-100}/Alpha.Fixture.S00E01.mkv",
+            "Beta Fixture/Season 1/Other.Sample.S01E01.mkv",
+            "Gamma Fixture/Bonus Reel/Gamma.Fixture.S00E05.mkv",
+            "Delta Fixture/Random Folder/Unrelated.Program.S01E01.mkv",
+            "Delta Fixture/Season 01/Delta.Fixture.S01E01.mkv",
+            "Shelf/Epsilon Fixture/Season 01/Epsilon.Fixture.S01E01.mkv",
+            "Shelf/Epsilon Fixture/Season 01/Nested/Epsilon.Fixture.S01E02.mkv",
+            "Zeta Fixture/Season 01/Zeta.Fixture.S01E01.mkv",
+            "Zeta Fixture/Zeta Spinoff Fixture/Season 01/Zeta.Spinoff.Fixture.S01E01.mkv",
+            "Eta Fixture/Eta.Fixture.S01E01.{tvdb-1}.mkv",
+            "Eta Fixture/Eta.Fixture.S01E02.{tvdb-2}.mkv",
+            "Theta Fixture/Disc 1/Theta.Fixture.S01E01.mkv",
+            "Iota Fixture/Iota Fixture Specials/Season 01/Iota.Fixture.S01E01.mkv",
+            "Iota Fixture/Iota Fixture Specials/Season 02/Other.Sample.S02E01.mkv",
+            "Kappa Fixture/Kappa Extras/Season 01/Kappa.Fixture.S01E01.{tvdb-7}.mkv",
+            "Kappa Fixture/Kappa.Fixture.S01E02.mkv",
+            "Lambda.Fixture.S01E01.mkv",
+        ] {
+            write_discovery_fixture(series.path(), file);
+        }
+        let movies = tempfile::tempdir().unwrap();
+        for file in [
+            "Bucket/Alpha.Fixture.2001.1080p.mkv",
+            "Bucket/Beta.Sample.Work.2004.720p.mkv",
+            "Gamma Film {tmdb-5}/Gamma.Film.2003.{tmdb-6}.mkv",
+            "Delta Film/Delta.Film.2004.mkv",
+            "Delta Film/Disc 1/Delta.Film.2004.Part1.mkv",
+            "Film Shelf/Epsilon Film/Epsilon.Film.2005.mkv",
+            "Film Shelf/Epsilon Film/Bonus/Other.Film.2006.mkv",
+            "Loose.Film.2007.mkv",
+        ] {
+            write_discovery_fixture(movies.path(), file);
+        }
+
+        for (root, facet) in [
+            (series.path(), MediaFacet::Series),
+            (series.path(), MediaFacet::Anime),
+            (movies.path(), MediaFacet::Movie),
+        ] {
+            BOUNDARY_ALL_TITLES.with(|all| all.set(true));
+            let every_name = boundary_walk_transcript(root, facet.clone()).await;
+            BOUNDARY_ALL_TITLES.with(|all| all.set(false));
+            let on_demand = boundary_walk_transcript(root, facet.clone()).await;
+            assert_eq!(every_name, on_demand, "{facet:?}");
+            assert!(every_name.iter().any(|line| line.contains("Err(")));
+            assert!(every_name.iter().any(|line| line.contains("Ok(())")));
+        }
+    }
+
+    #[tokio::test]
+    async fn season_and_part_file_names_are_not_parsed() {
+        let root = tempfile::tempdir().unwrap();
+        for file in [
+            "Show Fixture/Season 01/Show.Fixture.S01E01.mkv",
+            "Show Fixture/Season 01/Show.Fixture.S01E02.mkv",
+            "Show Fixture/Season 02/Show.Fixture.S02E01.mkv",
+            "Show Fixture/Disc 1/Show.Fixture.S03E01.mkv",
+            "Show Fixture/Show.Fixture.S00E01.mkv",
+        ] {
+            write_discovery_fixture(root.path(), file);
+        }
+        let parses = || BOUNDARY_TITLE_PARSES.with(std::cell::Cell::get);
+        let before = parses();
+        let boundaries =
+            collect_nested_boundaries(root.path(), discovery_policy(MediaFacet::Series)).await;
+        let folder = root.path().join("Show Fixture");
+        assert!(
+            boundaries
+                .iter()
+                .any(|boundary| boundary.path == folder && boundary.rejection.is_none())
+        );
+        // The candidate's own name, its parent's name and its one loose file.
+        assert_eq!(parses() - before, 3);
+
+        let before = parses();
+        let title = scryer_domain::NewTitle {
+            name: "Show Fixture".into(),
+            facet: MediaFacet::Series,
+            ..Default::default()
+        };
+        verify_new_scan_title_boundary(&folder, &title)
+            .await
+            .unwrap();
+        assert_eq!(
+            parses() - before,
+            0,
+            "verification of a title folder parses no names"
+        );
     }
 
     #[tokio::test]
