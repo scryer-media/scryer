@@ -47,6 +47,7 @@ impl ScanOwnershipContext {
     ) -> AppResult<()> {
         // Admission precedes reads and dispatch. A cancelled waiter cannot leave
         // an unbounded queue of blocking tasks or reuse an old ownership result.
+        let check_started = Instant::now();
         let permit = self
             .admission
             .clone()
@@ -55,6 +56,8 @@ impl ScanOwnershipContext {
             .map_err(|error| {
                 AppError::Repository(format!("ownership admission failed: {error}"))
             })?;
+        let admission_wait_ms = elapsed_ms(check_started);
+        let stage = Instant::now();
         let owners: Vec<_> = app
             .services
             .catalog
@@ -70,8 +73,11 @@ impl ScanOwnershipContext {
                     .map(|path| (owner.title_id, path))
             })
             .collect();
+        let owners_read_ms = elapsed_ms(stage);
+        let owner_count = owners.len();
         // Roots come from the scan's snapshot when one is in scope, the same
         // view the root and library-boundary checks use for this claim.
+        let stage = Instant::now();
         let roots: Vec<_> = match ScanFolderRoots::current_all() {
             Some(roots) => roots,
             None => app
@@ -81,10 +87,15 @@ impl ScanOwnershipContext {
                 .map(|root| root.path)
                 .collect(),
         };
+        let roots_ms = elapsed_ms(stage);
+        let dispatched = Instant::now();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
+            let blocking_queue_ms = elapsed_ms(dispatched);
             let started = Instant::now();
             let mut cache = self.cache.lock().map_err(|_| AppError::Repository("ownership evidence lock poisoned".into()))?;
+            let lock_wait_ms = elapsed_ms(started);
+            let before = (cache.probes, cache.hits, cache.invalidations, cache.fallbacks);
             let result = (|| {
                 let mut keys = FolderOverlapKeys::from_roots(&candidate, &roots)?;
                 cache.set_roots(&keys.roots);
@@ -112,6 +123,23 @@ impl ScanOwnershipContext {
             })();
             cache.checks += 1;
             cache.elapsed += started.elapsed();
+            tracing::debug!(
+                folder = %candidate,
+                admission_wait_ms,
+                owners_read_ms,
+                owners = owner_count,
+                roots_ms,
+                blocking_queue_ms,
+                lock_wait_ms,
+                compare_ms = elapsed_ms(started),
+                probes = cache.probes - before.0,
+                hits = cache.hits - before.1,
+                invalidations = cache.invalidations - before.2,
+                fallbacks = cache.fallbacks - before.3,
+                ok = result.is_ok(),
+                total_ms = elapsed_ms(check_started),
+                "scan ownership check timing"
+            );
             result
         }).await.map_err(|error| AppError::Repository(format!("ownership verification task failed to join: {error}")))?
     }

@@ -1554,6 +1554,72 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
     }
 }
 
+/// Per-candidate stage timings for resolved series candidates. Emitted once on
+/// drop so every return path reports; stages that did not run stay at 0.
+struct SeriesCandidateStageTiming {
+    mode: &'static str,
+    name: String,
+    folder: String,
+    started: std::time::Instant,
+    existing_match: bool,
+    boundary_verify_ms: f64,
+    folder_check_ms: f64,
+    create_ms: f64,
+    prepare_ms: f64,
+    merge_ms: f64,
+    clear_unmatched_ms: f64,
+    persist_unmatched_ms: f64,
+    mark_completed_ms: f64,
+    refresh_existing_match_ms: f64,
+}
+
+impl SeriesCandidateStageTiming {
+    fn new(mode: &'static str, candidate: &PreparedSeriesLibraryScanCandidate) -> Self {
+        Self {
+            mode,
+            name: candidate.query.clone(),
+            folder: candidate.folder_path.display().to_string(),
+            started: std::time::Instant::now(),
+            existing_match: false,
+            boundary_verify_ms: 0.0,
+            folder_check_ms: 0.0,
+            create_ms: 0.0,
+            prepare_ms: 0.0,
+            merge_ms: 0.0,
+            clear_unmatched_ms: 0.0,
+            persist_unmatched_ms: 0.0,
+            mark_completed_ms: 0.0,
+            refresh_existing_match_ms: 0.0,
+        }
+    }
+}
+
+fn elapsed_ms(started: std::time::Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
+}
+
+impl Drop for SeriesCandidateStageTiming {
+    fn drop(&mut self) {
+        debug!(
+            mode = self.mode,
+            candidate = %self.name,
+            folder = %self.folder,
+            existing_match = self.existing_match,
+            boundary_verify_ms = self.boundary_verify_ms,
+            folder_check_ms = self.folder_check_ms,
+            create_ms = self.create_ms,
+            prepare_ms = self.prepare_ms,
+            merge_ms = self.merge_ms,
+            clear_unmatched_ms = self.clear_unmatched_ms,
+            persist_unmatched_ms = self.persist_unmatched_ms,
+            mark_completed_ms = self.mark_completed_ms,
+            refresh_existing_match_ms = self.refresh_existing_match_ms,
+            total_ms = elapsed_ms(self.started),
+            "library scan series candidate stage timing"
+        );
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "resolved series scan candidates update shared scan state, indexes, and reporting together"
@@ -1610,6 +1676,7 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
         coordinator.mark_title_match_completed(1).await;
         return Ok(());
     };
+    let mut timing = SeriesCandidateStageTiming::new("full", &candidate);
 
     let selected_metadata =
         select_series_metadata_from_batch_results(&candidate, batch_search_results)?;
@@ -1629,10 +1696,14 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
             None,
             None,
         );
+        let stage = std::time::Instant::now();
         persist_library_scan_unmatched_item(app, &unmatched_item).await?;
+        timing.persist_unmatched_ms = elapsed_ms(stage);
         unmatched_items.push(unmatched_item);
         summary.unmatched += 1;
+        let stage = std::time::Instant::now();
         coordinator.mark_title_match_completed(1).await;
+        timing.mark_completed_ms = elapsed_ms(stage);
         return Ok(());
     };
 
@@ -1642,7 +1713,9 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
         existing_titles_by_name,
         existing_titles_by_tvdb_id,
     ) {
-        if let Some(conflict) = prepare_series_title_for_candidate(
+        timing.existing_match = true;
+        let stage = std::time::Instant::now();
+        let prepared = prepare_series_title_for_candidate(
             app,
             library,
             facet,
@@ -1652,13 +1725,17 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
             &mut existing_titles[index],
             &candidate,
         )
-        .await?
-        {
+        .await?;
+        timing.prepare_ms = elapsed_ms(stage);
+        if let Some(conflict) = prepared {
             unmatched_items.push(conflict);
             summary.unmatched += 1;
+            let stage = std::time::Instant::now();
             coordinator.mark_title_match_completed(1).await;
+            timing.mark_completed_ms = elapsed_ms(stage);
             return Ok(());
         }
+        let stage = std::time::Instant::now();
         merge_series_title_work_for_index(
             app,
             library,
@@ -1670,19 +1747,28 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
             false,
         )
         .await?;
+        timing.merge_ms = elapsed_ms(stage);
         summary.matched += 1;
+        let stage = std::time::Instant::now();
         clear_library_scan_unmatched_item(app, facet, library_id, &item_path).await?;
+        timing.clear_unmatched_ms = elapsed_ms(stage);
+        let stage = std::time::Instant::now();
         coordinator.mark_title_match_completed(1).await;
+        timing.mark_completed_ms = elapsed_ms(stage);
         return Ok(());
     }
 
     let new_title = build_new_title_from_metadata_match(facet, &selected);
     // Validate the resolved boundary before creating even an unhydrated title.
     // A failed verification must not leave a catalog row behind.
-    if let Err(error) =
-        crate::library_discovery::verify_new_scan_title_boundary(&candidate.folder_path, &new_title)
-            .await
-    {
+    let stage = std::time::Instant::now();
+    let boundary = crate::library_discovery::verify_new_scan_title_boundary(
+        &candidate.folder_path,
+        &new_title,
+    )
+    .await;
+    timing.boundary_verify_ms = elapsed_ms(stage);
+    if let Err(error) = boundary {
         let item = build_series_unmatched_scan_item(
             facet,
             library_id,
@@ -1693,33 +1779,43 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
             Some("title_folder_boundary_unresolved"),
             Some(error.to_string()),
         );
+        let stage = std::time::Instant::now();
         persist_library_scan_unmatched_item(app, &item).await?;
+        timing.persist_unmatched_ms = elapsed_ms(stage);
         unmatched_items.push(item);
         summary.unmatched += 1;
+        let stage = std::time::Instant::now();
         coordinator.mark_title_match_completed(1).await;
+        timing.mark_completed_ms = elapsed_ms(stage);
         return Ok(());
     }
 
-    let created =
-        match check_new_scan_title_folder(app, path_to_stored_string(&candidate.folder_path)).await
-        {
-            Ok(()) => {
-                create_title_without_hydration_for_library_scan(
-                    app,
-                    actor,
-                    library_id,
-                    library_path,
-                    new_title,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        };
+    let stage = std::time::Instant::now();
+    let folder_check =
+        check_new_scan_title_folder(app, path_to_stored_string(&candidate.folder_path)).await;
+    timing.folder_check_ms = elapsed_ms(stage);
+    let created = match folder_check {
+        Ok(()) => {
+            let stage = std::time::Instant::now();
+            let created = create_title_without_hydration_for_library_scan(
+                app,
+                actor,
+                library_id,
+                library_path,
+                new_title,
+            )
+            .await;
+            timing.create_ms = elapsed_ms(stage);
+            created
+        }
+        Err(error) => Err(error),
+    };
     match created {
         Ok(created) => {
             let was_created = !created.reused_existing;
             let mut created_title = created.title;
-            if let Some(conflict) = prepare_series_title_for_candidate(
+            let stage = std::time::Instant::now();
+            let prepared = prepare_series_title_for_candidate(
                 app,
                 library,
                 facet,
@@ -1729,14 +1825,18 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
                 &mut created_title,
                 &candidate,
             )
-            .await?
-            {
+            .await?;
+            timing.prepare_ms = elapsed_ms(stage);
+            if let Some(conflict) = prepared {
                 unmatched_items.push(conflict);
                 summary.unmatched += 1;
+                let stage = std::time::Instant::now();
                 coordinator.mark_title_match_completed(1).await;
+                timing.mark_completed_ms = elapsed_ms(stage);
                 return Ok(());
             }
             let candidate_folder = candidate.folder_path.clone();
+            let stage = std::time::Instant::now();
             append_series_title_and_merge_work(
                 app,
                 library,
@@ -1752,12 +1852,17 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
                 was_created,
             )
             .await?;
+            timing.merge_ms = elapsed_ms(stage);
             if was_created {
                 summary.imported += 1;
             }
             summary.matched += 1;
+            let stage = std::time::Instant::now();
             clear_library_scan_unmatched_item(app, facet, library_id, &item_path).await?;
+            timing.clear_unmatched_ms = elapsed_ms(stage);
+            let stage = std::time::Instant::now();
             coordinator.mark_title_match_completed(1).await;
+            timing.mark_completed_ms = elapsed_ms(stage);
         }
         Err(error) => {
             warn!(
@@ -1776,10 +1881,14 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
                 Some("title_create_from_search_failed"),
                 Some(error.to_string()),
             );
+            let stage = std::time::Instant::now();
             persist_library_scan_unmatched_item(app, &unmatched_item).await?;
+            timing.persist_unmatched_ms = elapsed_ms(stage);
             unmatched_items.push(unmatched_item);
             summary.unmatched += 1;
+            let stage = std::time::Instant::now();
             coordinator.mark_title_match_completed(1).await;
+            timing.mark_completed_ms = elapsed_ms(stage);
         }
     }
 
@@ -1918,6 +2027,7 @@ pub(super) async fn process_resolved_series_refresh_candidate(
         summary.skipped += 1;
         return Ok(());
     };
+    let mut timing = SeriesCandidateStageTiming::new("refresh", &candidate);
 
     let selected_metadata =
         select_series_metadata_from_batch_results(&candidate, batch_search_results)?;
@@ -1932,6 +2042,8 @@ pub(super) async fn process_resolved_series_refresh_candidate(
         existing_titles_by_name,
         existing_titles_by_tvdb_id,
     ) {
+        timing.existing_match = true;
+        let stage = std::time::Instant::now();
         refresh_existing_series_title_match(
             app,
             library,
@@ -1947,14 +2059,19 @@ pub(super) async fn process_resolved_series_refresh_candidate(
             summary,
         )
         .await?;
+        timing.refresh_existing_match_ms = elapsed_ms(stage);
         return Ok(());
     }
 
     let new_title = build_new_title_from_metadata_match(facet, &selected);
-    if let Err(error) =
-        crate::library_discovery::verify_new_scan_title_boundary(&candidate.folder_path, &new_title)
-            .await
-    {
+    let stage = std::time::Instant::now();
+    let boundary = crate::library_discovery::verify_new_scan_title_boundary(
+        &candidate.folder_path,
+        &new_title,
+    )
+    .await;
+    timing.boundary_verify_ms = elapsed_ms(stage);
+    if let Err(error) = boundary {
         let item = build_series_unmatched_scan_item(
             facet,
             library_id,
@@ -1965,31 +2082,39 @@ pub(super) async fn process_resolved_series_refresh_candidate(
             Some("title_folder_boundary_unresolved"),
             Some(error.to_string()),
         );
+        let stage = std::time::Instant::now();
         persist_library_scan_unmatched_item(app, &item).await?;
+        timing.persist_unmatched_ms = elapsed_ms(stage);
         summary.unmatched += 1;
         return Ok(());
     }
 
-    let created =
-        match check_new_scan_title_folder(app, path_to_stored_string(&candidate.folder_path)).await
-        {
-            Ok(()) => {
-                create_title_without_hydration_for_library_scan(
-                    app,
-                    actor,
-                    library_id,
-                    library_path,
-                    new_title,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        };
+    let stage = std::time::Instant::now();
+    let folder_check =
+        check_new_scan_title_folder(app, path_to_stored_string(&candidate.folder_path)).await;
+    timing.folder_check_ms = elapsed_ms(stage);
+    let created = match folder_check {
+        Ok(()) => {
+            let stage = std::time::Instant::now();
+            let created = create_title_without_hydration_for_library_scan(
+                app,
+                actor,
+                library_id,
+                library_path,
+                new_title,
+            )
+            .await;
+            timing.create_ms = elapsed_ms(stage);
+            created
+        }
+        Err(error) => Err(error),
+    };
     match created {
         Ok(created) => {
             let was_created = !created.reused_existing;
             let mut created_title = created.title;
-            if prepare_series_title_for_candidate(
+            let stage = std::time::Instant::now();
+            let prepared = prepare_series_title_for_candidate(
                 app,
                 library,
                 facet,
@@ -1999,12 +2124,13 @@ pub(super) async fn process_resolved_series_refresh_candidate(
                 &mut created_title,
                 &candidate,
             )
-            .await?
-            .is_some()
-            {
+            .await?;
+            timing.prepare_ms = elapsed_ms(stage);
+            if prepared.is_some() {
                 summary.unmatched += 1;
                 return Ok(());
             }
+            let stage = std::time::Instant::now();
             let index = append_series_title_and_merge_work(
                 app,
                 library,
@@ -2020,6 +2146,7 @@ pub(super) async fn process_resolved_series_refresh_candidate(
                 was_created,
             )
             .await?;
+            timing.merge_ms = elapsed_ms(stage);
             update_series_title_folder_path_index(
                 existing_titles_by_folder_path,
                 &existing_titles[index],

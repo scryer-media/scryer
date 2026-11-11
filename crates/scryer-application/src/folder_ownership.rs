@@ -1021,13 +1021,18 @@ async fn claim_title_folder_with_layout(
     folder_path: &Path,
     layout: TitleFolderClaimLayout<'_>,
 ) -> AppResult<()> {
+    let started = std::time::Instant::now();
     ensure_folder_available_to_title(app, title, folder_path).await?;
+    let available_ms = elapsed_ms(started);
     if non_empty_folder_path(title.folder_path.as_deref()).is_some() {
         return Ok(());
     }
 
+    let stage = std::time::Instant::now();
     ensure_unowned_folder_claimable(app, title, folder_path, layout).await?;
+    let claimable_ms = elapsed_ms(stage);
     let folder_path = path_to_stored_string(folder_path);
+    let stage = std::time::Instant::now();
     app.services
         .catalog
         .titles
@@ -1035,8 +1040,25 @@ async fn claim_title_folder_with_layout(
             crate::TitleFolderWrite::assign(&title.id, &folder_path).expecting(None)
         ])
         .await?;
+    let write_ms = elapsed_ms(stage);
+    let folder = folder_path.clone();
+    let stage = std::time::Instant::now();
     title.folder_path = Some(recorded_folder_after_claim(app, &title.id, folder_path).await?);
+    let reread_ms = elapsed_ms(stage);
+    tracing::debug!(
+        folder = %folder,
+        available_ms,
+        claimable_ms,
+        write_ms,
+        reread_ms,
+        total_ms = elapsed_ms(started),
+        "title folder claim stage timing"
+    );
     Ok(())
+}
+
+fn elapsed_ms(started: std::time::Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 /// The folder a title records after a claim of `claimed`. A title that
@@ -1064,7 +1086,10 @@ async fn ensure_unowned_folder_claimable(
     folder_path: &Path,
     layout: TitleFolderClaimLayout<'_>,
 ) -> AppResult<()> {
+    let started = std::time::Instant::now();
     ensure_folder_move_available_to_title(app, title, folder_path).await?;
+    let ownership_ms = elapsed_ms(started);
+    let stage = std::time::Instant::now();
     let boundary_verified = match &layout {
         TitleFolderClaimLayout::Conventional(Some(evidence)) => {
             evidence
@@ -1073,6 +1098,8 @@ async fn ensure_unowned_folder_claimable(
         }
         _ => false,
     };
+    let evidence_verify_ms = elapsed_ms(stage);
+    let stage = std::time::Instant::now();
     // Imports reserve missing or empty destinations before writing media. A
     // destination with contents must not hold other titles' folders; stray
     // files or empty subfolders left by an earlier attempt do not block it.
@@ -1091,6 +1118,8 @@ async fn ensure_unowned_folder_claimable(
             Err(error) => return Err(AppError::Repository(error.to_string())),
         }
     };
+    let contents_probe_ms = elapsed_ms(stage);
+    let stage = std::time::Instant::now();
     if has_contents {
         match layout {
             TitleFolderClaimLayout::Configured => {
@@ -1111,9 +1140,13 @@ async fn ensure_unowned_folder_claimable(
             }
         }
     }
+    let child_titles_ms = elapsed_ms(stage);
 
     let folder_path = path_to_stored_string(folder_path);
-    if folder_spans_a_library_root(app, &folder_path).await? {
+    let stage = std::time::Instant::now();
+    let spans_root = folder_spans_a_library_root(app, &folder_path).await?;
+    let spans_root_ms = elapsed_ms(stage);
+    if spans_root {
         tracing::warn!(
             title_id = %title.id,
             folder_path = %folder_path,
@@ -1124,7 +1157,10 @@ async fn ensure_unowned_folder_claimable(
             "cannot claim a library root as a title folder",
         ));
     }
-    if title_folder_is_outside_its_library(app, title, &folder_path).await? {
+    let stage = std::time::Instant::now();
+    let outside_library = title_folder_is_outside_its_library(app, title, &folder_path).await?;
+    let outside_library_ms = elapsed_ms(stage);
+    if outside_library {
         tracing::warn!(
             title_id = %title.id,
             library_id = %title.library_id,
@@ -1136,6 +1172,19 @@ async fn ensure_unowned_folder_claimable(
             "cannot claim a title folder outside its library roots",
         ));
     }
+    tracing::debug!(
+        folder = %folder_path,
+        ownership_ms,
+        evidence_verify_ms,
+        evidence_verified = boundary_verified,
+        contents_probe_ms,
+        has_contents,
+        child_titles_ms,
+        spans_root_ms,
+        outside_library_ms,
+        total_ms = elapsed_ms(started),
+        "title folder claimable stage timing"
+    );
     Ok(())
 }
 
