@@ -1288,6 +1288,60 @@ mod tests {
         assert!(indexes.remove("idx_titles_catalog_sort_key"));
         assert!(indexes.insert("idx_titles_catalog_order_asc".to_string()));
         assert!(indexes.insert("idx_titles_catalog_order_desc".to_string()));
+        // 0336 drops duplicates and indexes a key or longer index covers, and
+        // adds indexes for statements that scanned their table.
+        for dropped in [
+            "idx_discovery_item_rank_components_item",
+            "idx_discovery_items_run",
+            "idx_discovery_title_source_tags_title",
+            "idx_discovery_titles_key_language",
+            "idx_domain_events_occurred_at",
+            "idx_download_identity_states_canonical_download_id",
+            "idx_external_subtitle_probe_cache_media_file",
+            "idx_history_title_time",
+            "idx_history_type_time",
+            "idx_indexer_search_learning_title",
+            "idx_indexer_search_run_sources_run",
+            "idx_maintenance_action_steps_candidate",
+            "idx_manual_import_selection_candidates_selection",
+            "idx_media_files_title",
+            "idx_monitor_selections_owner",
+            "idx_subtitle_blocklist_media_file",
+            "idx_title_image_variants_image_variant",
+            "idx_title_images_title_kind",
+            "idx_title_search_terms_title_id",
+            "idx_wanted_items_title",
+        ] {
+            assert!(
+                indexes.remove(dropped),
+                "{dropped} should be in the baseline"
+            );
+        }
+        for added in [
+            "idx_discovery_items_discovery_title",
+            "idx_discovery_items_tombstoned_by_run",
+            "idx_discovery_section_items_item",
+            "idx_domain_events_event_type_occurred_at",
+            "idx_download_identity_states_reason_canonical",
+            "idx_history_events_actor_user",
+            "idx_imports_canonical_download_id",
+            "idx_imports_source_identity",
+            "idx_imports_type_status_updated_at",
+            "idx_indexer_search_runs_session",
+            "idx_maintenance_evaluation_runs_started",
+            "idx_media_files_title_attention",
+            "idx_media_requests_fingerprint_created",
+            "idx_media_requests_requester_created",
+            "idx_pending_releases_title_added",
+            "idx_release_decisions_title_created_at",
+            "idx_request_rule_decisions_evaluated",
+            "idx_request_rule_decisions_outcome_evaluated",
+            "idx_titles_library_catalog_order_asc",
+            "idx_titles_library_catalog_order_desc",
+            "idx_wanted_items_status_updated_at",
+        ] {
+            assert!(indexes.insert(added.to_string()), "{added} is new in 0336");
+        }
         indexes
     }
 

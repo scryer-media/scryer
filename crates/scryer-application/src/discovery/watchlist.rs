@@ -143,6 +143,9 @@ pub(super) struct DiscoveryWatchlistComposition {
     /// Identity keys of every resolved watchlist member that is not owned,
     /// whether or not it fit in the section.
     pub(super) claimed_item_keys: HashSet<String>,
+    /// The pending requests the composition read, for a caller in the same
+    /// request that needs them too; `None` when it read none.
+    pub(super) pending_requests: Option<Vec<scryer_domain::MediaRequest>>,
 }
 
 /// What a composition decides with, besides the members and their items.
@@ -195,28 +198,28 @@ impl AppUseCase {
             return Ok(None);
         }
 
-        let mut members = Vec::new();
-        for subscription in &subscriptions {
-            let rows = self
-                .services
-                .lists
-                .memberships
-                .list_by_subscription(&subscription.id)
-                .await?;
-            members.extend(
-                rows.into_iter()
-                    .filter(|row| {
-                        row.left_at.is_none()
-                            // In a library somewhere, possibly one this viewer
-                            // cannot see: not the watchlist's to offer.
-                            && !matches!(
-                                row.state,
-                                ListMembershipState::InLibrary | ListMembershipState::Added
-                            )
-                    })
-                    .map(DiscoveryWatchlistMember::from_row),
-            );
-        }
+        let subscription_ids = subscriptions
+            .iter()
+            .map(|subscription| subscription.id.clone())
+            .collect::<Vec<_>>();
+        let mut members = self
+            .services
+            .lists
+            .memberships
+            .list_active_by_subscriptions(&subscription_ids)
+            .await?
+            .into_iter()
+            .filter(|row| {
+                row.left_at.is_none()
+                    // In a library somewhere, possibly one this viewer
+                    // cannot see: not the watchlist's to offer.
+                    && !matches!(
+                        row.state,
+                        ListMembershipState::InLibrary | ListMembershipState::Added
+                    )
+            })
+            .map(DiscoveryWatchlistMember::from_row)
+            .collect::<Vec<_>>();
         sort_discovery_watchlist_members(&mut members);
         Ok(Some(members))
     }
@@ -285,9 +288,11 @@ impl AppUseCase {
                 self.services
                     .library
                     .discovery
-                    .query_discovery_items(&storage_query(keys, &DiscoveryHomeFilters::default()))
-                    .await?
-                    .items,
+                    .query_discovery_items_uncounted(&storage_query(
+                        keys,
+                        &DiscoveryHomeFilters::default(),
+                    ))
+                    .await?,
             );
         }
 
@@ -308,11 +313,10 @@ impl AppUseCase {
                     self.services
                         .library
                         .discovery
-                        .query_discovery_items(&storage_query(keys, filters))
+                        .query_discovery_item_identity_keys(&storage_query(keys, filters))
                         .await?
-                        .items
                         .iter()
-                        .map(|item| discovery_item_identity_key(item).to_ascii_lowercase()),
+                        .map(|key| key.to_ascii_lowercase()),
                 );
             }
             Some(admitted)
@@ -337,7 +341,7 @@ impl AppUseCase {
         let pending_requests = self.discovery_pending_requests(visibility).await?;
 
         let row_card_media_kinds = discovery_watchlist_row_card_media_kinds(visibility, filters);
-        Ok(compose_discovery_watchlist(
+        let mut composition = compose_discovery_watchlist(
             &members,
             items,
             &DiscoveryWatchlistRules {
@@ -349,7 +353,9 @@ impl AppUseCase {
                 include_unresolved,
                 limit,
             },
-        ))
+        );
+        composition.pending_requests = Some(pending_requests);
+        Ok(composition)
     }
 
     /// The card the watchlist rail builds from list rows for `target_key`, for

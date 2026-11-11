@@ -1496,6 +1496,9 @@ pub enum TitleCatalogContentStatus {
 pub struct TitleCatalogAggregates {
     pub total_count: bool,
     pub filter_counts: bool,
+    /// Also count the file states (missing, partial, complete, needs attention)
+    /// when `filter_counts` is set; they are zero otherwise.
+    pub file_state_counts: bool,
     pub managed_bytes: bool,
 }
 

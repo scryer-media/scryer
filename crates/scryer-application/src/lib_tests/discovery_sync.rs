@@ -2715,6 +2715,85 @@ async fn discovery_neighbors_asks_again_after_an_ungrouped_answer() {
 }
 
 #[tokio::test]
+async fn discovery_neighbors_serve_an_entry_still_ungrouped_after_regrouping() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let viewer = library_permission_user_with_grants(
+        "discovery-neighbors-regroup-viewer",
+        &[(
+            &movie_library_id,
+            &[
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::Request,
+            ],
+        )],
+    );
+    let mut source_title = test_title(
+        "source-title",
+        "Emberfall",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "100")],
+    );
+    source_title.library_id = movie_library_id.clone();
+    titles.store.lock().await.push(source_title);
+    *gateway.title_recommendation_results.lock().await = vec![
+        neighbor_discovery_title("tmdb:movie:605", "Cinderwake"),
+        neighbor_discovery_title("tmdb:movie:606", "Ashgrove"),
+    ];
+    let query = crate::DiscoveryNeighborsQuery {
+        target_key: "tmdb:movie:100".to_string(),
+        facet: MediaFacet::Movie,
+        limit: crate::DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
+    };
+    let calls = || async { gateway.title_recommendation_inputs.lock().await.len() };
+
+    let first = app
+        .discovery_neighbors(&viewer, query.clone())
+        .await
+        .expect("an ungrouped answer is served");
+    assert!(first.groups.is_empty());
+    assert_eq!(calls().await, 1);
+
+    // The next read asks once more; the answer is still ungrouped.
+    let regrouped = app
+        .discovery_neighbors(&viewer, query.clone())
+        .await
+        .expect("the regroup answer is served");
+    let keys = |view: &crate::DiscoveryNeighborsView| {
+        view.items
+            .iter()
+            .map(|entry| entry.item.target_key.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(&regrouped), keys(&first));
+    assert!(regrouped.groups.is_empty());
+    assert_eq!(calls().await, 2);
+    let cached = discovery.neighbor_cache.lock().await.clone();
+    assert_eq!(cached.len(), 1);
+    assert!(cached[0].regroup_attempted);
+
+    // From then on the entry is served like any other until it expires.
+    for _ in 0..3 {
+        let again = app
+            .discovery_neighbors(&viewer, query.clone())
+            .await
+            .expect("the cached entry is served");
+        assert_eq!(again, regrouped);
+    }
+    assert_eq!(calls().await, 2);
+
+    // Once the entry is a day old it is fetched again, as every entry is.
+    discovery.neighbor_cache.lock().await[0].fetched_at -= chrono::Duration::hours(24);
+    app.discovery_neighbors(&viewer, query)
+        .await
+        .expect("an expired entry is refetched");
+    assert_eq!(calls().await, 3);
+}
+
+#[tokio::test]
 async fn discovery_neighbors_refuses_an_unknown_target_key_with_a_reason_code() {
     let gateway = Arc::new(SnapshotMetadataGateway::default());
     let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
@@ -9621,12 +9700,20 @@ async fn discovery_section_pages(
     fixture: &DiscoverySectionFixture,
     query: impl Fn(usize) -> DiscoveryItemsQuery,
 ) -> (Vec<Vec<String>>, i64) {
+    discovery_section_pages_for(&fixture.app, &fixture.viewer, query).await
+}
+
+/// [`discovery_section_pages`] for any app and viewer.
+async fn discovery_section_pages_for(
+    app: &crate::AppUseCase,
+    viewer: &scryer_domain::User,
+    query: impl Fn(usize) -> DiscoveryItemsQuery,
+) -> (Vec<Vec<String>>, i64) {
     let mut pages = Vec::new();
     let mut offset = 0;
     let total_count = loop {
-        let page = fixture
-            .app
-            .discovery_items(&fixture.viewer, query(offset))
+        let page = app
+            .discovery_items(viewer, query(offset))
             .await
             .expect("section page should load");
         assert!(page.section.is_some(), "a section page names its section");
@@ -10143,6 +10230,104 @@ async fn discovery_public_section_page_folds_its_merged_source() {
         .collect::<HashSet<_>>();
     assert_eq!(keys.len(), 60);
     assert!(keys.iter().all(|key| !key.starts_with("tmdb:movie:32")));
+}
+
+#[tokio::test]
+async fn discovery_public_section_pages_leave_out_the_home_hero() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let (_viewer, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "discovery-section-hero",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-hero".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery
+        .sections
+        .lock()
+        .await
+        .push(discovery_section_record(
+            "public-hero",
+            "popular_now",
+            "POPULAR_RIGHT_NOW",
+            "public",
+        ));
+    let mut items = Vec::new();
+    for index in 0..30 {
+        let mut item = discovery_item_record(
+            "public-hero",
+            "public-hero",
+            Some("popular_now"),
+            &format!("tmdb:movie:{}", 33_000 + index),
+            &format!("Emberfall {index}"),
+            "movie",
+            100.0 - index as f64,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        );
+        if index == 0 {
+            item.background_url = Some("https://example.invalid/emberfall-0.jpg".to_string());
+        }
+        items.push(item);
+    }
+    discovery.items.lock().await.extend(items);
+
+    let home = app
+        .discovery_home(
+            &viewer,
+            DiscoveryHomeQuery {
+                include_public: true,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("home should load");
+    let hero_key = home
+        .hero_item
+        .as_ref()
+        .map(|item| item.target_key.clone())
+        .expect("the home selects a hero");
+    assert_eq!(hero_key, "tmdb:movie:33000");
+    // The dashboard shows the hero once, in the hero slot, and the rail
+    // starts with the next title.
+    let rendered_rail = home
+        .public_sections
+        .iter()
+        .find(|section| section.section_id == "popular_now")
+        .expect("popular rail")
+        .items
+        .iter()
+        .map(|item| item.target_key.clone())
+        .filter(|key| *key != hero_key)
+        .collect::<Vec<_>>();
+
+    let (pages, total_count) = discovery_section_pages_for(&app, &viewer, |offset| {
+        discovery_section_items_query("popular_now", 25, offset, 25)
+    })
+    .await;
+    let listed = pages.into_iter().flatten().collect::<Vec<_>>();
+    assert_eq!(rendered_rail.len(), 24);
+    assert_eq!(listed[..rendered_rail.len()], rendered_rail[..]);
+    assert_eq!(total_count, 29, "the hero is not counted in the section");
+    assert_eq!(listed.len(), 29);
+    assert!(!listed.contains(&hero_key));
 }
 
 #[tokio::test]

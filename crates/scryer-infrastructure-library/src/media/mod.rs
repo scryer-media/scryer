@@ -1,4 +1,5 @@
 pub mod canonical_tags;
+pub(crate) mod id_list_statements;
 pub mod images;
 pub mod libraries;
 pub mod lifecycle_claims;

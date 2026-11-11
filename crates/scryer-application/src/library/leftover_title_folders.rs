@@ -78,7 +78,18 @@ impl AppUseCase {
             .into_iter()
             .map(|root| root.path)
             .collect::<Vec<_>>();
-        let titles = self.services.catalog.titles.list(None, None).await?;
+        // Folders, names, years and ids decide everything here; no tags.
+        let titles = self
+            .services
+            .catalog
+            .titles
+            .list_with_projection(
+                None,
+                None,
+                None,
+                crate::TitleListProjection::without_canonical_tags(),
+            )
+            .await?;
         let recorded = titles
             .iter()
             .filter_map(|title| {
@@ -249,7 +260,18 @@ impl AppUseCase {
             return Ok(Some("a location operation is unfinished"));
         }
         // Read again: this runs while the application is serving requests.
-        let titles = self.services.catalog.titles.list(None, None).await?;
+        // Only ids and folder records are compared.
+        let titles = self
+            .services
+            .catalog
+            .titles
+            .list_with_projection(
+                None,
+                None,
+                None,
+                crate::TitleListProjection::without_canonical_tags(),
+            )
+            .await?;
         for owner in owners {
             let Some(current) = titles.iter().find(|title| title.id == owner.id) else {
                 return Ok(Some("the title is gone"));

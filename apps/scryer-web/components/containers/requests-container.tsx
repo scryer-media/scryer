@@ -574,7 +574,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       }
       const source = (event as CustomEvent<NavigationBadgesRefreshDetail>)
         .detail?.source;
-      if (source === "poll" || source === "focus") {
+      if (!document.hidden && (source === "poll" || source === "focus")) {
         void refresh();
       }
     };

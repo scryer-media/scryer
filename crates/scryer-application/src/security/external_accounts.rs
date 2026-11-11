@@ -202,17 +202,21 @@ impl AppUseCase {
     ) -> AppResult<Vec<scryer_domain::UserExternalAccount>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageUsers)
             .await?;
-        let users = self.services.identity.users.list_all().await?;
-        let mut accounts = Vec::new();
-        for user in users {
-            accounts.extend(
-                self.services
-                    .identity
-                    .external_accounts
-                    .list_by_user_id(&user.id)
-                    .await?,
-            );
-        }
+        let user_ids: Vec<String> = self
+            .services
+            .identity
+            .users
+            .list_all()
+            .await?
+            .into_iter()
+            .map(|user| user.id)
+            .collect();
+        let mut accounts = self
+            .services
+            .identity
+            .external_accounts
+            .list_by_user_ids(&user_ids)
+            .await?;
         accounts.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)

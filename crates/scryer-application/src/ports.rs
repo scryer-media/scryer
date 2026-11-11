@@ -426,6 +426,9 @@ pub struct DiscoveryNeighborCacheRecord {
     pub items: Vec<DiscoveryNeighborItemRecord>,
     pub groups: Vec<crate::DiscoveryRelatedGroup>,
     pub fetched_at: DateTime<Utc>,
+    /// The gateway was asked again for an entry that came back without
+    /// groups. `false` on an entry cached before this was recorded.
+    pub regroup_attempted: bool,
 }
 
 /// One related title of an anchor and the neighbourhood it belongs to.
@@ -1099,6 +1102,31 @@ pub trait DiscoveryRepository: Send + Sync {
         filters: &DiscoveryHomeFilters,
         limit_per_section: i64,
     ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>>;
+    /// [`Self::list_public_discovery_section_items`] for a caller that already
+    /// read the run's public sections (`list_discovery_sections(run_id,
+    /// Some("public"))`), so they are not read again.
+    #[allow(clippy::too_many_arguments)]
+    async fn list_public_discovery_section_items_in(
+        &self,
+        run_id: &str,
+        public_sections: &[DiscoverySectionRecord],
+        section_ids: &[String],
+        allowed_media_kinds: &[String],
+        include_unresolved: bool,
+        filters: &DiscoveryHomeFilters,
+        limit_per_section: i64,
+    ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>> {
+        let _ = public_sections;
+        self.list_public_discovery_section_items(
+            run_id,
+            section_ids,
+            allowed_media_kinds,
+            include_unresolved,
+            filters,
+            limit_per_section,
+        )
+        .await
+    }
     /// The personalized pool. Rows the gateway marked as owned in the
     /// submitted context are left out unless `include_owned` is set.
     #[allow(clippy::too_many_arguments)]
@@ -1196,6 +1224,33 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         query: &DiscoveryItemsStorageQuery,
     ) -> AppResult<DiscoveryItemsPageRecord>;
+    /// The page `query_discovery_items` returns, without its total count.
+    async fn query_discovery_items_uncounted(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+    ) -> AppResult<Vec<DiscoveryItemRecord>> {
+        Ok(self.query_discovery_items(query).await?.items)
+    }
+    /// The `target_key` (or `id` for a blank key) of each item in the page
+    /// `query_discovery_items` returns, in page order.
+    async fn query_discovery_item_identity_keys(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+    ) -> AppResult<Vec<String>> {
+        Ok(self
+            .query_discovery_items(query)
+            .await?
+            .items
+            .into_iter()
+            .map(|item| {
+                if item.target_key.trim().is_empty() {
+                    item.id
+                } else {
+                    item.target_key
+                }
+            })
+            .collect())
+    }
     async fn count_discovery_browse_labels(
         &self,
         query: &DiscoveryItemsStorageQuery,
@@ -1244,6 +1299,17 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         facet: &str,
     ) -> AppResult<Option<LibraryGraphSnapshotRecord>>;
+    /// When the newest complete graph for a facet was built, without reading
+    /// the graph. The outer `None` means no complete graph is stored.
+    async fn get_latest_library_graph_generated_at(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<Option<String>>> {
+        Ok(self
+            .get_latest_library_graph(facet)
+            .await?
+            .map(|snapshot| snapshot.run.generated_at))
+    }
     /// The newest run for a facet, complete or failed.
     async fn get_latest_library_graph_run(
         &self,
@@ -2466,6 +2532,19 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(titles)
     }
+    /// `(title id, library id)` for each id that exists, for permission checks
+    /// that need nothing else from the row. Order is not guaranteed.
+    async fn list_library_ids_for_titles(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<(String, String)>> {
+        Ok(self
+            .get_by_ids(ids)
+            .await?
+            .into_iter()
+            .map(|title| (title.id, title.library_id))
+            .collect())
+    }
     async fn get_title_ratings(&self, _title_id: &str) -> AppResult<TitleRatingSummary> {
         Ok(TitleRatingSummary::default())
     }
@@ -2782,6 +2861,34 @@ pub trait TitleRepository: Send + Sync {
             .take(limit)
             .collect();
         Ok(filtered)
+    }
+    /// [`Self::list_page_after_id`] restricted to titles in `library_ids`:
+    /// the same titles in the same id order as filtering every page, with
+    /// full pages. An empty `library_ids` pages every library.
+    async fn list_page_after_id_in_libraries(
+        &self,
+        after_id: Option<String>,
+        library_ids: &[String],
+        limit: usize,
+    ) -> AppResult<Vec<Title>> {
+        if library_ids.is_empty() {
+            return self.list_page_after_id(after_id, limit).await;
+        }
+        let mut selected = Vec::new();
+        let mut after_id = after_id;
+        while selected.len() < limit {
+            let page = self.list_page_after_id(after_id.clone(), limit).await?;
+            let Some(last) = page.last() else {
+                break;
+            };
+            after_id = Some(last.id.clone());
+            selected.extend(
+                page.into_iter()
+                    .filter(|title| library_ids.contains(&title.library_id)),
+            );
+        }
+        selected.truncate(limit);
+        Ok(selected)
     }
     async fn update_title_artwork_urls(
         &self,
@@ -3143,6 +3250,33 @@ pub trait LibraryRepository: Send + Sync {
         permissions: AppPermissionMask,
     ) -> AppResult<()>;
     async fn permission_masks_for_user(&self, user_id: &str) -> AppResult<Vec<LibraryGrant>>;
+    /// [`Self::app_permission_mask_for_user`] for several users, keyed by user
+    /// id. SQL stores override this with one read.
+    async fn app_permission_masks_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, AppPermissionMask>> {
+        let mut masks = std::collections::HashMap::with_capacity(user_ids.len());
+        for user_id in user_ids {
+            let mask = self.app_permission_mask_for_user(user_id).await?;
+            masks.insert(user_id.clone(), mask);
+        }
+        Ok(masks)
+    }
+    /// [`Self::permission_masks_for_user`] for several users, keyed by user
+    /// id, each user's grants in the same order. SQL stores override this
+    /// with one read.
+    async fn permission_masks_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<LibraryGrant>>> {
+        let mut grants = std::collections::HashMap::with_capacity(user_ids.len());
+        for user_id in user_ids {
+            let user_grants = self.permission_masks_for_user(user_id).await?;
+            grants.insert(user_id.clone(), user_grants);
+        }
+        Ok(grants)
+    }
     async fn set_grants_for_user(&self, user_id: &str, grants: Vec<LibraryGrant>) -> AppResult<()>;
     async fn title_library_id(&self, title_id: &str) -> AppResult<Option<String>>;
     /// The number of titles under each library root, keyed by root id. A
@@ -3299,6 +3433,22 @@ pub trait MediaRequestRepository: Send + Sync {
 
     async fn count_pending_by_facet(&self, library_ids: &[String])
     -> AppResult<MediaRequestCounts>;
+
+    /// [`Self::count_pending_by_facet`] for each library on its own, one entry
+    /// per library id. SQL stores count them in one grouped read.
+    async fn count_pending_by_library_and_facet(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<HashMap<String, MediaRequestCounts>> {
+        let mut by_library = HashMap::with_capacity(library_ids.len());
+        for library_id in library_ids {
+            let counts = self
+                .count_pending_by_facet(std::slice::from_ref(library_id))
+                .await?;
+            by_library.insert(library_id.clone(), counts);
+        }
+        Ok(by_library)
+    }
 
     /// Requester user ids for each of `title_ids`, keyed by title id.
     ///
@@ -3575,6 +3725,14 @@ pub trait ImageProxyRepository: Send + Sync {
     ) -> AppResult<()>;
 
     async fn delete_image_proxy_cache_entry(&self, token: &str, variant: &str) -> AppResult<()>;
+
+    /// [`Self::delete_image_proxy_cache_entry`] for each `(token, variant)`.
+    async fn delete_image_proxy_cache_entries(&self, keys: &[(String, String)]) -> AppResult<()> {
+        for (token, variant) in keys {
+            self.delete_image_proxy_cache_entry(token, variant).await?;
+        }
+        Ok(())
+    }
 
     async fn list_image_proxy_cache_entries_lru(
         &self,
@@ -4206,6 +4364,18 @@ pub trait UserExternalAccountRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> AppResult<Vec<scryer_domain::UserExternalAccount>>;
+    /// [`Self::list_by_user_id`] for each user in `user_ids` order, the
+    /// results concatenated. SQL stores override this with one read.
+    async fn list_by_user_ids(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<Vec<scryer_domain::UserExternalAccount>> {
+        let mut accounts = Vec::new();
+        for user_id in user_ids {
+            accounts.extend(self.list_by_user_id(user_id).await?);
+        }
+        Ok(accounts)
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::UserExternalAccount>>;
     async fn get_by_provider_identity(
         &self,
@@ -4757,6 +4927,17 @@ pub trait WebauthnRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> AppResult<Vec<WebauthnCredentialRecord>>;
+    /// [`Self::list_credentials_for_user`] for several users at once.
+    async fn list_credentials_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<Vec<WebauthnCredentialRecord>> {
+        let mut credentials = Vec::new();
+        for user_id in user_ids {
+            credentials.extend(self.list_credentials_for_user(user_id).await?);
+        }
+        Ok(credentials)
+    }
     /// Counts users with passkeys in one query, for settings that warn before
     /// a change would stop those passkeys from working.
     async fn passkey_enrollment_counts(&self) -> AppResult<crate::PasskeyEnrollmentCounts> {
@@ -4858,6 +5039,17 @@ pub trait TotpRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> AppResult<Option<TotpCredentialRecord>>;
+    /// [`Self::get_credential_for_user`] for several users at once.
+    async fn list_credentials_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<Vec<TotpCredentialRecord>> {
+        let mut credentials = Vec::new();
+        for user_id in user_ids {
+            credentials.extend(self.get_credential_for_user(user_id).await?);
+        }
+        Ok(credentials)
+    }
     async fn upsert_credential(
         &self,
         credential: TotpCredentialRecord,
@@ -5198,6 +5390,10 @@ pub trait DownloadClientStatusRepository: Send + Sync {
 #[async_trait]
 pub trait IndexerConfigRepository: Send + Sync {
     async fn list(&self, provider_type: Option<String>) -> AppResult<Vec<IndexerConfig>>;
+    /// Whether any indexer is configured; stores answer without decrypting.
+    async fn any_configured(&self) -> AppResult<bool> {
+        Ok(!self.list(None).await?.is_empty())
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<IndexerConfig>>;
     async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig>;
     async fn touch_last_error(&self, id: &str) -> AppResult<()>;
@@ -5467,6 +5663,10 @@ pub trait ScopeIndexerCoverageRepository: Send + Sync {
 #[async_trait]
 pub trait DownloadClientConfigRepository: Send + Sync {
     async fn list(&self, client_type: Option<String>) -> AppResult<Vec<DownloadClientConfig>>;
+    /// Whether any client is configured; stores answer without decrypting.
+    async fn any_configured(&self) -> AppResult<bool> {
+        Ok(!self.list(None).await?.is_empty())
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<DownloadClientConfig>>;
     async fn create(&self, config: DownloadClientConfig) -> AppResult<DownloadClientConfig>;
     async fn update(&self, update: DownloadClientConfigUpdate) -> AppResult<DownloadClientConfig>;
@@ -5637,6 +5837,10 @@ pub trait HousekeepingRepository: Send + Sync {
     async fn delete_terminal_download_queue_commands_older_than(&self, days: i64)
     -> AppResult<u32>;
     async fn delete_rule_set_history_older_than(&self, days: i64) -> AppResult<u32>;
+    /// Evaluation runs are display-only history; nothing decides from them.
+    async fn delete_maintenance_evaluation_runs_older_than(&self, _days: i64) -> AppResult<u32> {
+        Ok(0)
+    }
     async fn delete_history_events_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32>;
     async fn delete_download_import_artifacts_for_title_ids(
         &self,
@@ -7621,6 +7825,19 @@ pub trait JobRunRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// The newest run of each key, in the order the keys are given; a key
+    /// with no runs contributes nothing.
+    async fn list_latest_job_run_per_job_key(
+        &self,
+        job_keys: &[JobKey],
+    ) -> AppResult<Vec<JobRunRecord>> {
+        let mut runs = Vec::with_capacity(job_keys.len());
+        for job_key in job_keys {
+            runs.extend(self.list_job_runs(Some(*job_key), 1).await?);
+        }
+        Ok(runs)
+    }
+
     async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>>;
 
     /// Fail every persisted run still in a non-terminal state and return the
@@ -7656,6 +7873,23 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
         facet: MediaFacet,
         item_path: &str,
     ) -> AppResult<()>;
+
+    /// `delete_library_scan_unmatched_item` for each of `item_paths`. The SQL
+    /// store deletes them in one transaction, so on an error nothing is
+    /// removed and a caller can replay the paths one by one. The default
+    /// deletes them one by one, stopping at the first error.
+    async fn delete_library_scan_unmatched_items(
+        &self,
+        library_id: &str,
+        facet: MediaFacet,
+        item_paths: &[String],
+    ) -> AppResult<()> {
+        for item_path in item_paths {
+            self.delete_library_scan_unmatched_item(library_id, facet.clone(), item_path)
+                .await?;
+        }
+        Ok(())
+    }
     async fn delete_for_library(&self, library_id: &str) -> AppResult<u32>;
     /// Remove every row bound to `title_id`; the title they point at is gone.
     async fn delete_for_title(&self, title_id: &str) -> AppResult<u32>;
@@ -7704,6 +7938,18 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
         scan_root: Option<&str>,
         status: Option<PendingImportStatus>,
     ) -> AppResult<i64>;
+
+    /// Pending movie, series and anime rows per `(library id, facet)` that
+    /// still need a person: the reason code is one of
+    /// `folder_ownership_reason_codes`, or the row is not a movie bound to a
+    /// title. A row without a library counts under its facet's default
+    /// library. `None` when the store cannot count in place.
+    async fn count_pending_library_scan_items_requiring_action(
+        &self,
+        _folder_ownership_reason_codes: &[&str],
+    ) -> AppResult<Option<Vec<(String, MediaFacet, i64)>>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -9079,6 +9325,30 @@ pub trait MediaFileRepository: Send + Sync {
         episode_ids: &[String],
     ) -> AppResult<Vec<EpisodeScopedMediaFile>>;
 
+    /// [`Self::list_live_media_files_for_episode_ids`] for several titles, one
+    /// entry per distinct title in `requests`. SQL stores read them together.
+    async fn list_live_media_files_for_titles_episode_ids(
+        &self,
+        requests: &[(String, Vec<String>)],
+    ) -> AppResult<Vec<(String, Vec<EpisodeScopedMediaFile>)>> {
+        let mut results: Vec<(String, Vec<EpisodeScopedMediaFile>)> = Vec::new();
+        for (title_id, _) in requests {
+            if results.iter().any(|(id, _)| id == title_id) {
+                continue;
+            }
+            let episode_ids = requests
+                .iter()
+                .filter(|(id, _)| id == title_id)
+                .flat_map(|(_, episode_ids)| episode_ids.iter().cloned())
+                .collect::<Vec<_>>();
+            let files = self
+                .list_live_media_files_for_episode_ids(title_id, &episode_ids)
+                .await?;
+            results.push((title_id.clone(), files));
+        }
+        Ok(results)
+    }
+
     async fn list_series_movie_link_ids_with_files_for_title(
         &self,
         title_id: &str,
@@ -9335,6 +9605,24 @@ pub trait MediaFileRepository: Send + Sync {
         additional_file_ids: &[String],
     ) -> AppResult<()>;
 
+    /// `set_media_file_roles_for_episode` with no additional files, for each
+    /// of `episode_ids`. The SQL store writes them in one transaction, so on
+    /// an error nothing is kept and a caller can replay the episodes one by
+    /// one. The default runs them one by one, stopping at the first error;
+    /// each write is idempotent, so a replay after it ends the same.
+    async fn set_primary_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        episode_ids: &[String],
+        primary_file_id: &str,
+    ) -> AppResult<()> {
+        for episode_id in episode_ids {
+            self.set_media_file_roles_for_episode(title_id, episode_id, primary_file_id, &[])
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Make `file_id` Primary for every episode in `episode_ids`, but only
     /// while, at write time, no file is Primary for any of them and `file_id`
     /// is the one file linked to each, as Additional. Returns whether it
@@ -9436,6 +9724,19 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         .await
     }
 
+    /// Get-or-create each candidate's row, then mark it grabbed with
+    /// `grabbed_release`, keeping the row's stored `last_search_at`. Applied in
+    /// order; the first failure stops the run and is returned. SQL stores run
+    /// the whole batch in one transaction and, if it fails, replay this
+    /// per-row path so the end state matches it.
+    async fn ensure_acquisition_scopes_grabbed(
+        &self,
+        candidates: &[AcquisitionScopeState],
+        grabbed_release: &str,
+    ) -> AppResult<()> {
+        ensure_acquisition_scopes_grabbed_per_row(self, candidates, grabbed_release).await
+    }
+
     async fn transition_acquisition_scope_to_completed(
         &self,
         transition: &AcquisitionScopeCompleteTransition,
@@ -9482,6 +9783,29 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         .await?;
 
         Ok(true)
+    }
+
+    /// `complete_acquisition_scope_for_title` for each episode of one title.
+    /// The SQL store writes them in one statement, so on an error nothing is
+    /// kept and a caller can replay the episodes one by one. The default runs
+    /// them one by one, stopping at the first error.
+    async fn complete_acquisition_scopes_for_episodes(
+        &self,
+        title_id: &str,
+        episode_ids: &[String],
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<()> {
+        for episode_id in episode_ids {
+            self.complete_acquisition_scope_for_title(
+                title_id,
+                Some(episode_id),
+                last_search_at,
+                landed_import,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     async fn transition_acquisition_scope_to_paused(
@@ -9536,6 +9860,20 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
     async fn delete_acquisition_scope_states_for_episode(&self, episode_id: &str) -> AppResult<()>;
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String>;
+
+    /// `insert_release_decision` for each decision in order, one result per
+    /// decision. SQL stores write the batch in one transaction and replay it
+    /// row by row if that fails, so each result matches the per-row call.
+    async fn insert_release_decisions(
+        &self,
+        decisions: &[ReleaseDecision],
+    ) -> Vec<AppResult<String>> {
+        let mut results = Vec::with_capacity(decisions.len());
+        for decision in decisions {
+            results.push(self.insert_release_decision(decision).await);
+        }
+        results
+    }
 
     async fn get_acquisition_scope_state_by_id(
         &self,
@@ -9626,6 +9964,27 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         &self,
         wanted_item_id: &str,
     ) -> AppResult<i64>;
+}
+
+/// One row at a time: ensure, read back `last_search_at`, mark grabbed.
+pub async fn ensure_acquisition_scopes_grabbed_per_row<
+    R: AcquisitionScopeStateRepository + ?Sized,
+>(
+    repo: &R,
+    candidates: &[AcquisitionScopeState],
+    grabbed_release: &str,
+) -> AppResult<()> {
+    for candidate in candidates {
+        let id = repo.ensure_acquisition_scope_state(candidate).await?;
+        let existing = repo.get_acquisition_scope_state_by_id(&id).await?;
+        repo.transition_acquisition_scope_to_grabbed(&AcquisitionScopeGrabTransition {
+            id,
+            last_search_at: existing.and_then(|state| state.last_search_at),
+            grabbed_release: grabbed_release.to_string(),
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 /// Locate the acquisition-state row matching `item`'s scope (episode /
@@ -9981,6 +10340,19 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         rule_set_id: &str,
         revision_number: i64,
     ) -> AppResult<Option<MaintenanceRuleRevision>>;
+
+    /// [`Self::get_revision`] for each `(rule_set_id, revision_number)` key,
+    /// in key order. SQL stores override this with one read.
+    async fn get_revisions(
+        &self,
+        keys: &[(String, i64)],
+    ) -> AppResult<Vec<Option<MaintenanceRuleRevision>>> {
+        let mut revisions = Vec::with_capacity(keys.len());
+        for (rule_set_id, revision_number) in keys {
+            revisions.push(self.get_revision(rule_set_id, *revision_number).await?);
+        }
+        Ok(revisions)
+    }
 
     /// Newest revision first.
     async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>>;
@@ -10555,6 +10927,19 @@ pub trait RequestRuleSetRepository: Send + Sync {
         rule_set_id: &str,
         revision_number: i64,
     ) -> AppResult<Option<scryer_domain::RequestRuleRevision>>;
+
+    /// [`Self::get_revision`] for each `(rule_set_id, revision_number)` key,
+    /// in key order. SQL stores override this with one read.
+    async fn get_revisions(
+        &self,
+        keys: &[(String, i64)],
+    ) -> AppResult<Vec<Option<scryer_domain::RequestRuleRevision>>> {
+        let mut revisions = Vec::with_capacity(keys.len());
+        for (rule_set_id, revision_number) in keys {
+            revisions.push(self.get_revision(rule_set_id, *revision_number).await?);
+        }
+        Ok(revisions)
+    }
 
     /// Newest revision first.
     async fn list_revisions(

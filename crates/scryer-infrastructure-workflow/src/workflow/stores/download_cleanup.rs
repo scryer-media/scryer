@@ -258,15 +258,42 @@ impl DownloadSubmissionStore {
         )
         .await?;
         let drained = rows.len() < limit;
-        for row in rows {
-            let id = row.text("id")?;
-            let state = row.text("tracked_state")?;
-            SqlRuntime::run_in_transaction(&self.datastore, "seed_download_cleanup", move |tx| {
-                let id = id.clone();
-                let state = state.clone();
-                Box::pin(async move { enqueue_cleanup_tx(tx, &id, &state).await })
-            })
-            .await?;
+        let seeds = rows
+            .iter()
+            .map(|row| Ok((row.text("id")?, row.text("tracked_state")?)))
+            .collect::<AppResult<Vec<(String, String)>>>()?;
+        if !seeds.is_empty() {
+            // One write transaction for the page; a failure retries row by row
+            // so one bad row cannot hold back the rest.
+            let batch = seeds.clone();
+            let batched = SqlRuntime::run_in_transaction(
+                &self.datastore,
+                "seed_download_cleanup",
+                move |tx| {
+                    let batch = batch.clone();
+                    Box::pin(async move {
+                        for (id, state) in &batch {
+                            enqueue_cleanup_tx(tx, id, state).await?;
+                        }
+                        Ok(())
+                    })
+                },
+            )
+            .await;
+            if batched.is_err() {
+                for (id, state) in seeds.iter() {
+                    SqlRuntime::run_in_transaction(
+                        &self.datastore,
+                        "seed_download_cleanup",
+                        move |tx| {
+                            let id = id.clone();
+                            let state = state.clone();
+                            Box::pin(async move { enqueue_cleanup_tx(tx, &id, &state).await })
+                        },
+                    )
+                    .await?;
+                }
+            }
         }
         // A full page may have left eligible rows behind, so the bound stays
         // where it was until a pass drains its candidate set; every seed

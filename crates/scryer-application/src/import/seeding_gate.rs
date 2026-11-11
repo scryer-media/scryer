@@ -678,6 +678,51 @@ fn tracked_matches_lookup_key(item: &DownloadQueueItem, key: &SeedGoalLookupKey)
     }
 }
 
+tokio::task_local! {
+    /// The client observations already made by the import running on this
+    /// task, so every file of one import of a download is gated on the same
+    /// observation. `None` records that no fresh observation was available.
+    static IMPORT_SEEDING_OBSERVATIONS:
+        std::cell::RefCell<Vec<(SeedGoalLookupKey, Option<TorrentSeedingObservation>)>>;
+}
+
+/// Runs one import of a download. Inside it, the seeding gate observes each
+/// client item once and reuses that observation for the import's later files;
+/// the next import observes again.
+pub(crate) async fn with_import_seeding_observations<T>(
+    operation: impl std::future::Future<Output = T>,
+) -> T {
+    IMPORT_SEEDING_OBSERVATIONS
+        .scope(std::cell::RefCell::new(Vec::new()), operation)
+        .await
+}
+
+fn recorded_import_seeding_observation(
+    key: &SeedGoalLookupKey,
+) -> Option<Option<TorrentSeedingObservation>> {
+    IMPORT_SEEDING_OBSERVATIONS
+        .try_with(|recorded| {
+            recorded
+                .borrow()
+                .iter()
+                .find(|(recorded_key, _)| recorded_key == key)
+                .map(|(_, observation)| observation.clone())
+        })
+        .ok()
+        .flatten()
+}
+
+fn record_import_seeding_observation(
+    key: &SeedGoalLookupKey,
+    observation: &Option<TorrentSeedingObservation>,
+) {
+    let _ = IMPORT_SEEDING_OBSERVATIONS.try_with(|recorded| {
+        recorded
+            .borrow_mut()
+            .push((key.clone(), observation.clone()));
+    });
+}
+
 /// Assemble the gate input for one client item and decide.
 pub(crate) async fn evaluate_seeding_gate_for(
     app: &AppUseCase,
@@ -687,11 +732,35 @@ pub(crate) async fn evaluate_seeding_gate_for(
     if !client_type_is_torrent(app, &key.client_type) {
         return SeedingGateDecision::not_applicable();
     }
+    let observation = match recorded_import_seeding_observation(key) {
+        Some(observation) => observation,
+        None => {
+            let observation = observe_completed_client_item(app, key).await;
+            record_import_seeding_observation(key, &observation);
+            observation
+        }
+    };
+    let Some(observation) = observation else {
+        return SeedingGateDecision::new(
+            SeedingGateOutcome::Hold,
+            "fresh_seeding_observation_unavailable",
+            false,
+        );
+    };
+    evaluate_seeding_gate_with(app, key, present_in_client, Some(observation), None).await
+}
+
+/// The original client's current, completed view of the item, or `None` when
+/// the client cannot give one that is still this download.
+async fn observe_completed_client_item(
+    app: &AppUseCase,
+    key: &SeedGoalLookupKey,
+) -> Option<TorrentSeedingObservation> {
     // Moving imported data also stops seeding. A published observation may
     // predate a pause, recheck, or locator reuse, so read the original client.
     let locator =
         ClientJobLocator::new(Some(&key.client_id), &key.client_type, &key.client_item_id);
-    let item = match app
+    match app
         .services
         .integrations
         .download_client
@@ -712,24 +781,10 @@ pub(crate) async fn evaluate_seeding_gate_for(
                     .zip(key.canonical_download_id)
                     .is_some_and(|(observed, expected)| observed != expected) =>
         {
-            item
+            Some(observation_from_queue_item(&item).unwrap_or_default())
         }
-        _ => {
-            return SeedingGateDecision::new(
-                SeedingGateOutcome::Hold,
-                "fresh_seeding_observation_unavailable",
-                false,
-            );
-        }
-    };
-    evaluate_seeding_gate_with(
-        app,
-        key,
-        present_in_client,
-        Some(observation_from_queue_item(&item).unwrap_or_default()),
-        None,
-    )
-    .await
+        _ => None,
+    }
 }
 
 /// As `evaluate_seeding_gate_for`, with an observation the caller already has.

@@ -4354,6 +4354,87 @@ mod file_delete_subscription_tests {
         assert_eq!(payload.health.unwrap().status.as_deref(), Some("restored"));
     }
 
+    #[tokio::test]
+    async fn dispatch_pending_events_saves_the_offset_after_every_event() {
+        let store = Arc::new(InMemoryNotificationStore::default());
+        let channel = store.seed_channel("channel-fixture");
+        store.seed_subscription(
+            "sub-fixture",
+            &channel.id,
+            NotificationEventType::FileDeleted,
+        );
+        let provider = Arc::new(RecordingNotificationProvider::default());
+        let domain_events = Arc::new(crate::lib_tests::MockDomainEventRepo::default());
+        let (app, _) = bootstrap();
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_domain_events(domain_events.clone())
+                .with_notification_store(store.clone())
+                .with_notification_provider(provider.clone())
+        });
+        let title_added = |name: &str| {
+            crate::domain_events::new_global_domain_event(
+                None,
+                DomainEventPayload::TitleAdded(TitleAddedEventData {
+                    title: TitleContextSnapshot {
+                        title_name: name.to_string(),
+                        facet: MediaFacet::Movie,
+                        external_ids: DomainExternalIds::default(),
+                        poster_url: None,
+                        year: Some(2024),
+                    },
+                }),
+            )
+        };
+        let deleted = crate::domain_events::new_global_domain_event(
+            None,
+            media_file_deleted_event("evt-emberfall-deleted", MediaFileDeletedReason::Deleted)
+                .payload,
+        );
+        app.append_domain_events(vec![
+            title_added("Emberfall"),
+            title_added("Cinderwake"),
+            deleted,
+            title_added("Ashgrove"),
+            title_added("Emberfall II"),
+        ])
+        .await
+        .expect("events should append");
+
+        let last_sequence = dispatch_pending_events(&app, 0)
+            .await
+            .expect("dispatch should replay");
+
+        assert_eq!(last_sequence, 5);
+        assert_eq!(provider.sent(), vec![NotificationEventType::FileDeleted]);
+        // Saved after each event, whether or not it reached a target.
+        assert_eq!(
+            domain_events
+                .subscriber_offset_writes
+                .lock()
+                .expect("offset writes")
+                .clone(),
+            (1_i64..=5)
+                .map(|sequence| (NOTIFICATION_SUBSCRIBER.to_string(), sequence))
+                .collect::<Vec<_>>()
+        );
+
+        // Nothing new: no offset write at all.
+        domain_events
+            .subscriber_offset_writes
+            .lock()
+            .expect("offset writes")
+            .clear();
+        assert_eq!(dispatch_pending_events(&app, 5).await.unwrap(), 5);
+        assert!(
+            domain_events
+                .subscriber_offset_writes
+                .lock()
+                .expect("offset writes")
+                .is_empty()
+        );
+    }
+
     async fn dispatched_event_types(
         subscribed_to: NotificationEventType,
         reason: MediaFileDeletedReason,

@@ -233,6 +233,44 @@ async fn graphql_catalog_scroll_has_more_without_aggregates() {
     }
 }
 
+#[tokio::test]
+async fn graphql_catalog_counts_file_states_only_when_selected() {
+    let ctx = TestContext::new().await;
+    add_test_title(&ctx, "Emberfall", "MOVIE").await;
+    let narrow = "{ titles { filterCounts { all monitored unmonitored continuing ended } } }";
+    let full = "{ titles { filterCounts { all monitored unmonitored continuing ended missing partial complete needsAttention } } }";
+
+    let body = gql(&ctx, full, json!({})).await;
+    assert_no_errors(&body);
+    let full_counts = body["data"]["titles"]["filterCounts"].clone();
+    assert_eq!(full_counts["all"], 1);
+    assert_eq!(full_counts["missing"], 1);
+    assert_eq!(full_counts["partial"], 0);
+    assert_eq!(full_counts["complete"], 0);
+    assert_eq!(full_counts["needsAttention"], 0);
+
+    // Only the file-state counts read media_files, so with the table gone a selection
+    // without them must still answer, with the same numbers.
+    sqlx::query("ALTER TABLE media_files RENAME TO unavailable_media_files")
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    let body = gql(&ctx, narrow, json!({})).await;
+    assert_no_errors(&body);
+    let narrow_counts = &body["data"]["titles"]["filterCounts"];
+    for field in ["all", "monitored", "unmonitored", "continuing", "ended"] {
+        assert_eq!(narrow_counts[field], full_counts[field], "{field}");
+    }
+    for field in ["missing", "partial", "complete", "needsAttention"] {
+        let query = format!("{{ titles {{ filterCounts {{ all {field} }} }} }}");
+        let body = gql(&ctx, &query, json!({})).await;
+        assert!(
+            body.get("errors").is_some(),
+            "selecting {field} must still count file states"
+        );
+    }
+}
+
 async fn create_title_catalog_library(
     ctx: &TestContext,
     facet: &str,

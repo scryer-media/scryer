@@ -1000,18 +1000,22 @@ mod tests {
     fn a_profile_stores_its_order_only_when_the_switch_does_not_imply_it() {
         for pipeline in every_pipeline() {
             for ignore in [false, true] {
-                let mut criteria = crate::QualityProfileCriteria::default();
-                criteria.ignore_proper_repack = ignore;
-                criteria.decision_pipeline = pipeline;
+                let mut criteria = crate::QualityProfileCriteria {
+                    ignore_proper_repack: ignore,
+                    decision_pipeline: pipeline,
+                    ..Default::default()
+                };
                 criteria.reconcile_revision_gate();
                 assert_eq!(
                     criteria.ignore_proper_repack,
                     !criteria.decision_pipeline.contains(DecisionGate::Revision)
                 );
                 // What storage keeps reads back to the same profile.
-                let mut reread = crate::QualityProfileCriteria::default();
-                reread.ignore_proper_repack = criteria.ignore_proper_repack;
-                reread.decision_pipeline = criteria.stored_decision_pipeline().unwrap_or_default();
+                let mut reread = crate::QualityProfileCriteria {
+                    ignore_proper_repack: criteria.ignore_proper_repack,
+                    decision_pipeline: criteria.stored_decision_pipeline().unwrap_or_default(),
+                    ..Default::default()
+                };
                 reread.reconcile_revision_gate();
                 assert_eq!(
                     reread.decision_pipeline, criteria.decision_pipeline,

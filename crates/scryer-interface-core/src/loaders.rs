@@ -24,8 +24,9 @@ use async_graphql::dataloader::{DataLoader, Loader};
 use scryer_application::{
     AcquisitionScopeState, AppUseCase, CollectionEpisodeProgressSummary,
     CollectionMediaSizeSummary, EpisodeMediaAvailability, EpisodeMediaSizeSummary,
-    PrimaryCollectionSummary, TitleEpisodeProgressSummary, TitleMediaFile, TitleMediaSizeSummary,
-    TitleMovieMediaSummary, TitleQualitySummary, TitleRatingSummary,
+    PrimaryCollectionSummary, RequestQualityProfileSettings, TitleEpisodeProgressSummary,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary,
+    TitleRatingSummary,
 };
 use scryer_domain::{Collection, Episode, Library, SeriesMovieLink, Title, User};
 
@@ -107,6 +108,26 @@ loader!(LibraryLoader, String, Library, |ctx, keys| {
     map.retain(|id, _| keys.contains(id));
     Ok(map)
 });
+
+// Each library's outcome is kept per key, so a library the actor may not read
+// fails only its own fields, as the direct call does.
+loader!(
+    RequestQualityProfileSettingsLoader,
+    String,
+    Result<RequestQualityProfileSettings, GqlError>,
+    |ctx, keys| {
+        let mut settings = HashMap::with_capacity(keys.len());
+        for library_id in keys {
+            let outcome = ctx
+                .app
+                .request_quality_profile_settings_for_library(&ctx.actor, library_id)
+                .await
+                .map_err(to_gql_error);
+            settings.insert(library_id.clone(), outcome);
+        }
+        Ok(settings)
+    }
+);
 
 loader!(CollectionLoader, String, Collection, |ctx, keys| {
     let collections = ctx
@@ -462,31 +483,25 @@ loader!(
     }
 );
 
-// Keyed (title_id, episode_id): one scoped-files fetch per distinct title.
+// Keyed (title_id, episode_id): one scoped-files read for the whole batch.
 loader!(
     EpisodeMediaFilesLoader,
     (String, String),
     Vec<TitleMediaFile>,
     |ctx, keys| {
-        let mut episode_ids_by_title: HashMap<&str, Vec<String>> = HashMap::new();
+        let mut requests: Vec<(String, Vec<String>)> = Vec::new();
+        let mut index: HashMap<&str, usize> = HashMap::new();
         for (title_id, episode_id) in keys {
-            episode_ids_by_title
-                .entry(title_id.as_str())
-                .or_default()
-                .push(episode_id.clone());
+            let slot = *index.entry(title_id.as_str()).or_insert_with(|| {
+                requests.push((title_id.clone(), Vec::new()));
+                requests.len() - 1
+            });
+            requests[slot].1.push(episode_id.clone());
         }
-        let mut map = HashMap::new();
-        for (title_id, episode_ids) in episode_ids_by_title {
-            let files_by_episode = ctx
-                .app
-                .list_episode_media_files_for_title(&ctx.actor, title_id, &episode_ids)
-                .await
-                .map_err(to_gql_error)?;
-            for (episode_id, files) in files_by_episode {
-                map.insert((title_id.to_string(), episode_id), files);
-            }
-        }
-        Ok(map)
+        ctx.app
+            .list_episode_media_files_for_titles(&ctx.actor, &requests)
+            .await
+            .map_err(to_gql_error)
     }
 );
 
@@ -545,6 +560,7 @@ pub struct RequestLoaders {
     pub title: DataLoader<TitleLoader>,
     pub title_for_management: DataLoader<TitleForManagementLoader>,
     pub library: DataLoader<LibraryLoader>,
+    pub request_quality_profile_settings: DataLoader<RequestQualityProfileSettingsLoader>,
     pub collection: DataLoader<CollectionLoader>,
     pub episode: DataLoader<EpisodeLoader>,
     pub media_files_for_title: DataLoader<MediaFilesForTitleLoader>,
@@ -588,6 +604,7 @@ impl RequestLoaders {
             title: dl!(TitleLoader),
             title_for_management: dl!(TitleForManagementLoader),
             library: dl!(LibraryLoader),
+            request_quality_profile_settings: dl!(RequestQualityProfileSettingsLoader),
             collection: dl!(CollectionLoader),
             episode: dl!(EpisodeLoader),
             media_files_for_title: dl!(MediaFilesForTitleLoader),

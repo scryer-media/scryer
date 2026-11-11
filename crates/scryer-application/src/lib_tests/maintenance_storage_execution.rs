@@ -312,6 +312,104 @@ async fn candidate_view_reports_exact_selected_root_file_totals() {
 }
 
 #[tokio::test]
+async fn candidate_listing_subjects_match_evaluation_subjects_and_evaluation_still_stats() {
+    use crate::lib_tests::maintenance_title_completion::{add_episode_file, season_and_episode};
+    use crate::maintenance_rules::subjects::MaintenanceListingInventories;
+
+    let fixture = title_fixture("Cinderwake", MediaFacet::Series).await;
+    let (_, present) = season_and_episode(&fixture, 1, 1, "2024-01-01").await;
+    let (_, missing) = season_and_episode(&fixture, 2, 1, "2024-02-01").await;
+    add_episode_file(&fixture, &present, "Cinderwake/S01E01.mkv").await;
+    add_episode_file(&fixture, &missing, "Cinderwake/S02E01.mkv").await;
+    std::fs::remove_file(fixture.root.join("Cinderwake/S02E01.mkv")).expect("remove one file");
+
+    let app = &fixture.execution.app;
+    let title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&fixture.title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("read title files");
+
+    // Evaluation's loader still stats: only the episode whose file is on
+    // disk counts as downloaded.
+    let inventory = app
+        .maintenance_load_title_episode_inventory(&title)
+        .await
+        .expect("load evaluation inventory");
+    let downloaded: HashMap<String, i64> = app
+        .maintenance_subjects_from_episode_inventory(
+            MaintenanceRuleSubjectKind::Episode,
+            &title,
+            &files,
+            &inventory,
+        )
+        .expect("episode subjects")
+        .into_iter()
+        .map(|subject| (subject.id, subject.episode_file_count))
+        .collect();
+    assert_eq!(downloaded.get(&present.id), Some(&1));
+    assert_eq!(downloaded.get(&missing.id), Some(&0));
+
+    let mut inventories = MaintenanceListingInventories::default();
+    for kind in [
+        MaintenanceRuleSubjectKind::Title,
+        MaintenanceRuleSubjectKind::Season,
+        MaintenanceRuleSubjectKind::Episode,
+    ] {
+        let fresh: Vec<_> = app
+            .maintenance_subjects_for_title(kind, &title, &files)
+            .await
+            .expect("fresh subjects")
+            .into_iter()
+            .map(|subject| {
+                (
+                    subject.id,
+                    subject.kind,
+                    subject.label,
+                    subject
+                        .files
+                        .into_iter()
+                        .map(|file| file.id)
+                        .collect::<Vec<_>>(),
+                    subject.ambiguous_files,
+                )
+            })
+            .collect();
+        let listed: Vec<_> = app
+            .maintenance_listing_subjects(kind, &title, &files, &mut inventories)
+            .await
+            .expect("listing subjects")
+            .into_iter()
+            .map(|subject| {
+                (
+                    subject.id,
+                    subject.kind,
+                    subject.label,
+                    subject
+                        .files
+                        .into_iter()
+                        .map(|file| file.id)
+                        .collect::<Vec<_>>(),
+                    subject.ambiguous_files,
+                )
+            })
+            .collect();
+        assert!(!fresh.is_empty(), "{kind:?} has subjects");
+        assert_eq!(listed, fresh, "{kind:?} listing subjects");
+    }
+}
+
+#[tokio::test]
 async fn storage_recovery_stops_before_the_next_file() {
     // Evaluation, action safety, first file, then a recovered capacity before
     // the second file. The recovery must cancel the remaining manifest.

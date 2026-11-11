@@ -126,6 +126,55 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
         Ok(())
     }
 
+    async fn delete_library_scan_unmatched_items(
+        &self,
+        library_id: &str,
+        facet: MediaFacet,
+        item_paths: &[String],
+    ) -> AppResult<()> {
+        // Keeps each statement well under both engines' bind limits.
+        const PATHS_PER_STATEMENT: usize = 500;
+        if item_paths.is_empty() {
+            return Ok(());
+        }
+        let library_id = library_id.to_string();
+        let facet = facet.as_str().to_string();
+        let item_paths = item_paths.to_vec();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_library_scan_unmatched_items",
+            move |tx| {
+                let library_id = library_id.clone();
+                let facet = facet.clone();
+                let item_paths = item_paths.clone();
+                Box::pin(async move {
+                    for chunk in item_paths.chunks(PATHS_PER_STATEMENT) {
+                        let placeholders = std::iter::repeat_n("{}", chunk.len())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let mut args = vec![
+                            SqlArg::Text(library_id.clone()),
+                            SqlArg::Text(facet.clone()),
+                        ];
+                        args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            &format!(
+                                "DELETE FROM library_scan_unmatched_items
+                                 WHERE library_id = {{}} AND facet = {{}}
+                                   AND item_path IN ({placeholders})"
+                            ),
+                            &args,
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
     async fn delete_for_library(&self, library_id: &str) -> AppResult<u32> {
         execute_write(
             &self.datastore,
@@ -179,6 +228,60 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
             .await?
             .ok_or_else(|| AppError::Repository("missing unmatched item count".to_string()))?;
         row.i64("count")
+    }
+
+    async fn count_pending_library_scan_items_requiring_action(
+        &self,
+        folder_ownership_reason_codes: &[&str],
+    ) -> AppResult<Option<Vec<(String, MediaFacet, i64)>>> {
+        let facets = [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime];
+        let mut args = vec![SqlArg::Text(
+            PendingImportStatus::Pending.as_str().to_string(),
+        )];
+        args.extend(
+            facets
+                .iter()
+                .map(|facet| SqlArg::Text(facet.as_str().to_string())),
+        );
+        let reason_sql = if folder_ownership_reason_codes.is_empty() {
+            "1 = 0".to_string()
+        } else {
+            args.extend(
+                folder_ownership_reason_codes
+                    .iter()
+                    .map(|code| SqlArg::Text((*code).to_string())),
+            );
+            format!(
+                "reason_code IN ({})",
+                std::iter::repeat_n("{}", folder_ownership_reason_codes.len())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        args.push(SqlArg::Text(MediaFacet::Movie.as_str().to_string()));
+        let sql = format!(
+            "SELECT library_id, facet, COUNT(*) AS count
+               FROM library_scan_unmatched_items
+              WHERE status = {{}}
+                AND facet IN ({{}}, {{}}, {{}})
+                AND ({reason_sql} OR NOT (facet = {{}} AND title_id IS NOT NULL))
+              GROUP BY library_id, facet"
+        );
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        let mut counts = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let facet_raw = row.text("facet")?;
+            let facet = MediaFacet::parse(&facet_raw).ok_or_else(|| {
+                AppError::Repository(format!(
+                    "library scan unmatched item has invalid facet '{facet_raw}'"
+                ))
+            })?;
+            let library_id = row
+                .opt_text("library_id")?
+                .unwrap_or_else(|| scryer_domain::default_library_id_for_facet(&facet));
+            counts.push((library_id, facet, row.i64("count")?));
+        }
+        Ok(Some(counts))
     }
 }
 
@@ -330,4 +433,167 @@ async fn execute_write(
         Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use scryer_application::{
+        PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES, pending_import_item_requires_action,
+    };
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    async fn test_store() -> LibraryScanUnmatchedStore {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .expect("fresh migrations should apply");
+        LibraryScanUnmatchedStore::new(StoreDatastore::Sqlite {
+            pool,
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    async fn seed_row(
+        store: &LibraryScanUnmatchedStore,
+        id: &str,
+        library_id: Option<&str>,
+        facet: &str,
+        status: &str,
+        title_id: Option<&str>,
+        reason_code: &str,
+    ) {
+        execute_write(
+            &store.datastore,
+            "seed_library_scan_unmatched_item",
+            "INSERT INTO library_scan_unmatched_items
+             (id, library_id, facet, title_id, scan_session_id, scan_root, item_path,
+              display_name, query, reason_code, search_attempts_json, status,
+              created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text(id.to_string()),
+                SqlArg::OptText(library_id.map(str::to_string)),
+                SqlArg::Text(facet.to_string()),
+                SqlArg::OptText(title_id.map(str::to_string)),
+                SqlArg::Text("scan-session".to_string()),
+                SqlArg::Text("/library/root".to_string()),
+                SqlArg::Text(format!("/library/root/{id}")),
+                SqlArg::Text("Emberfall".to_string()),
+                SqlArg::Text("Emberfall".to_string()),
+                SqlArg::Text(reason_code.to_string()),
+                SqlArg::Text("[]".to_string()),
+                SqlArg::Text(status.to_string()),
+                SqlArg::Text("2026-01-01T00:00:00Z".to_string()),
+                SqlArg::Text("2026-01-01T00:00:00Z".to_string()),
+            ],
+        )
+        .await
+        .expect("seed unmatched item");
+    }
+
+    /// The previous badge path: list every pending item per facet and keep
+    /// the ones the Rust predicate says need a person.
+    async fn counts_via_rust_predicate(
+        store: &LibraryScanUnmatchedStore,
+    ) -> BTreeMap<(String, String), i64> {
+        let mut counts = BTreeMap::new();
+        for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+            let items = store
+                .list_library_scan_unmatched_items(
+                    Some(facet.clone()),
+                    None,
+                    Some(PendingImportStatus::Pending),
+                    i64::MAX,
+                    0,
+                )
+                .await
+                .expect("list pending items");
+            for item in items
+                .iter()
+                .filter(|item| pending_import_item_requires_action(item))
+            {
+                *counts
+                    .entry((item.library_id.clone(), facet.as_str().to_string()))
+                    .or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    async fn counts_via_sql(store: &LibraryScanUnmatchedStore) -> BTreeMap<(String, String), i64> {
+        let mut counts = BTreeMap::new();
+        for (library_id, facet, count) in store
+            .count_pending_library_scan_items_requiring_action(
+                &PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES,
+            )
+            .await
+            .expect("grouped count")
+            .expect("sql store counts in place")
+        {
+            *counts
+                .entry((library_id, facet.as_str().to_string()))
+                .or_insert(0) += count;
+        }
+        counts
+    }
+
+    #[tokio::test]
+    async fn grouped_requires_action_count_matches_rust_predicate() {
+        let store = test_store().await;
+        assert!(counts_via_sql(&store).await.is_empty());
+        assert_eq!(
+            counts_via_sql(&store).await,
+            counts_via_rust_predicate(&store).await
+        );
+
+        let ownership = PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES;
+        let mut n = 0;
+        for library in [Some("lib-cinderwake"), Some("lib-ashgrove"), None] {
+            for facet in ["movie", "series", "anime", "music"] {
+                for status in ["pending", "ignored"] {
+                    for title_id in [None, Some(""), Some("title-emberfall")] {
+                        for reason in [ownership[0], ownership[1], "no_match", ""] {
+                            n += 1;
+                            seed_row(
+                                &store,
+                                &format!("item-{n:04}"),
+                                library,
+                                facet,
+                                status,
+                                title_id,
+                                reason,
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+        }
+
+        let via_sql = counts_via_sql(&store).await;
+        let via_rust = counts_via_rust_predicate(&store).await;
+        assert_eq!(via_sql, via_rust);
+        // Every branch is represented: movies bound to a title only count
+        // for ownership codes, NULL libraries fall back to the default.
+        assert_eq!(
+            via_rust.get(&("lib-cinderwake".to_string(), "movie".to_string())),
+            Some(&(3 * 4 - 2 * 2))
+        );
+        assert_eq!(
+            via_rust.get(&("lib-cinderwake".to_string(), "series".to_string())),
+            Some(&12)
+        );
+        assert!(via_rust.keys().any(|(library_id, _)| library_id
+            == &scryer_domain::default_library_id_for_facet(&MediaFacet::Anime)));
+    }
 }

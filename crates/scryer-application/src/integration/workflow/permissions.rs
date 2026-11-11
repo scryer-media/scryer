@@ -80,10 +80,9 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .get_by_ids(&title_ids)
+            .list_library_ids_for_titles(&title_ids)
             .await?
             .into_iter()
-            .map(|title| (title.id, title.library_id))
             .collect::<HashMap<_, _>>();
         let mut visible = Vec::new();
         for item in items {
@@ -428,14 +427,14 @@ impl AppUseCase {
                 .into_iter()
                 .collect::<Vec<_>>();
             if !unknown_title_ids.is_empty() {
-                for title in self
+                for (title_id, library_id) in self
                     .services
                     .catalog
                     .titles
-                    .get_by_ids(&unknown_title_ids)
+                    .list_library_ids_for_titles(&unknown_title_ids)
                     .await?
                 {
-                    durable_title_library_ids.insert(title.id, title.library_id);
+                    durable_title_library_ids.insert(title_id, library_id);
                 }
             }
             items.extend(durable);

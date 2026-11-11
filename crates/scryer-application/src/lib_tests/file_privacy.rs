@@ -441,6 +441,80 @@ async fn episode_media_files_are_redacted_for_viewers_only() {
 }
 
 #[tokio::test]
+async fn episode_files_for_several_titles_match_per_title_reads_and_hide_unseen_libraries() {
+    let fixture = seed_fixture().await;
+    let movie = fixture.movie_library_id.as_str();
+    let series = fixture.series_library_id.as_str();
+    let episode_ids = vec![EPISODE_ID.to_string()];
+    let requests = vec![
+        (fixture.movie_title.id.clone(), episode_ids.clone()),
+        (fixture.series_title.id.clone(), episode_ids.clone()),
+        ("missing-title".to_string(), episode_ids.clone()),
+        (fixture.series_title.id.clone(), Vec::new()),
+    ];
+    let summary = |files: &[TitleMediaFile]| {
+        files
+            .iter()
+            .map(|file| {
+                (
+                    file.id.clone(),
+                    file.file_path.clone(),
+                    file.role,
+                    file.release_group.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for (label, actor) in [
+        ("viewer of the series", viewer_for(series)),
+        ("viewer of the movies only", viewer_for(movie)),
+        ("manager of the series", title_manager_for(series)),
+        ("mixed grants", mixed_actor(movie, series)),
+        ("full admin", fixture.admin.clone()),
+    ] {
+        let batched = fixture
+            .app
+            .list_episode_media_files_for_titles(&actor, &requests)
+            .await
+            .expect("batched episode files");
+        let mut expected = std::collections::HashMap::new();
+        for title_id in [&fixture.movie_title.id, &fixture.series_title.id] {
+            for (episode_id, files) in fixture
+                .app
+                .list_episode_media_files_for_title(&actor, title_id, &episode_ids)
+                .await
+                .expect("per-title episode files")
+            {
+                expected.insert((title_id.clone(), episode_id), files);
+            }
+        }
+        assert_eq!(
+            batched.keys().collect::<std::collections::BTreeSet<_>>(),
+            expected.keys().collect::<std::collections::BTreeSet<_>>(),
+            "{label}: keys"
+        );
+        for (key, files) in &expected {
+            assert_eq!(summary(&batched[key]), summary(files), "{label}: {key:?}");
+        }
+    }
+
+    let unseen = fixture
+        .app
+        .list_episode_media_files_for_titles(&viewer_for(movie), &requests)
+        .await
+        .expect("batched episode files for a movie viewer");
+    assert!(unseen.is_empty(), "a library without View stays hidden");
+    let seen = fixture
+        .app
+        .list_episode_media_files_for_titles(&viewer_for(series), &requests)
+        .await
+        .expect("batched episode files for a series viewer");
+    let key = (fixture.series_title.id.clone(), EPISODE_ID.to_string());
+    assert_redacted(&seen[&key][0], SERIES_FILE_NAME, "series viewer batch");
+}
+
+#[tokio::test]
 async fn batch_media_files_redact_per_library_for_mixed_grants() {
     let fixture = seed_fixture().await;
     let actor = mixed_actor(&fixture.movie_library_id, &fixture.series_library_id);

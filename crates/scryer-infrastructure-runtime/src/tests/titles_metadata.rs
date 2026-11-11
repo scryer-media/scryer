@@ -667,6 +667,7 @@ async fn title_catalog_scryer_rating_sort_uses_grouped_rating_summary() {
         TitleCatalogAggregates {
             total_count: true,
             filter_counts: true,
+            file_state_counts: true,
             managed_bytes: true,
         },
     )
@@ -791,6 +792,7 @@ async fn title_catalog_quality_sort_ranks_the_file_quality_the_catalog_shows() {
             TitleCatalogAggregates {
                 total_count: true,
                 filter_counts: true,
+                file_state_counts: true,
                 managed_bytes: true,
             },
         )
@@ -873,6 +875,7 @@ async fn title_catalog_profile_sort_orders_by_effective_profile_name() {
         TitleCatalogAggregates {
             total_count: true,
             filter_counts: true,
+            file_state_counts: true,
             managed_bytes: true,
         },
     )

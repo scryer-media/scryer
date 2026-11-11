@@ -729,6 +729,13 @@ async fn execute_wanted_upsert_tx(
     Ok(item.id.clone())
 }
 
+const UPDATE_ACQUISITION_SCOPE_STATUS_SQL: &str = "UPDATE wanted_items
+                SET status = {},
+                    last_search_at = {},
+                    grabbed_release = {},
+                    updated_at = {}
+              WHERE id = {}";
+
 async fn execute_datastore_write(
     datastore: &StoreDatastore,
     op_name: &'static str,
@@ -800,6 +807,132 @@ async fn fetch_seed_target_tx(
         .transpose()
 }
 
+/// A decision's bound arguments, built once so a batch and its per-row
+/// replay write exactly the same values.
+#[derive(Clone)]
+struct PreparedReleaseDecision {
+    identity: ReleaseDecisionIdentityArgs,
+    insert_args: Vec<SqlArg>,
+    update_args: Vec<SqlArg>,
+    record_id: String,
+}
+
+impl PreparedReleaseDecision {
+    fn of(datastore: &StoreDatastore, decision: &ReleaseDecision) -> AppResult<Self> {
+        let explanation_json =
+            match encode_release_decision_explanation(decision.explanation_json.as_deref()) {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    tracing::warn!(
+                        decision_id = %decision.id,
+                        error = %error,
+                        "release decision explanation could not be encoded"
+                    );
+                    None
+                }
+            };
+        // The same verdict, on the same release, for the same scope is one
+        // ledger row that ages forward — not a new row per re-evaluation.
+        // RSS re-sees the same feed every cadence, so an idle instance was
+        // appending thousands of byte-identical `queued_better_or_equal` rows
+        // (4,720 rows / 2.7 MB per 110 minutes on the 12k-title load test) for
+        // 19 scopes. A changed verdict still appends: `decision_code` is part
+        // of the identity, so the ledger keeps the history that means
+        // something and drops the history that repeats.
+        let identity = ReleaseDecisionIdentityArgs::of(decision);
+        let created_at = timestamp_arg_for_datastore(datastore, &decision.created_at)?;
+        let insert_args = vec![
+            SqlArg::Text(decision.id.clone()),
+            SqlArg::Text(decision.wanted_item_id.clone()),
+            SqlArg::Text(decision.title_id.clone()),
+            SqlArg::Text(decision.release_title.clone()),
+            SqlArg::OptText(stored_release_decision_url(decision)),
+            SqlArg::OptI64(decision.release_size_bytes),
+            SqlArg::Text(decision.decision_code.clone()),
+            SqlArg::I32(decision.candidate_score),
+            SqlArg::OptI32(decision.current_score),
+            SqlArg::OptI32(decision.score_delta),
+            SqlArg::OptBytes(explanation_json.clone()),
+            created_at.clone(),
+        ];
+        let update_args = vec![
+            SqlArg::Text(decision.title_id.clone()),
+            SqlArg::I32(decision.candidate_score),
+            SqlArg::OptI32(decision.current_score),
+            SqlArg::OptI32(decision.score_delta),
+            SqlArg::OptBytes(explanation_json),
+            created_at,
+        ];
+        Ok(Self {
+            identity,
+            insert_args,
+            update_args,
+            record_id: decision.id.clone(),
+        })
+    }
+}
+
+/// Insert the decision, or age the row already holding its identity forward.
+/// Returns the id of the row written.
+async fn write_release_decision_tx(
+    tx: &mut crate::queries::sql_runtime::SqlTx<'_>,
+    prepared: &PreparedReleaseDecision,
+) -> AppResult<String> {
+    let existing = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        RELEASE_DECISION_IDENTITY_SELECT_SQL,
+        &prepared.identity.args(),
+    )
+    .await?
+    .as_ref()
+    .map(|row| row.text("id"))
+    .transpose()?;
+
+    let Some(existing_id) = existing else {
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            "INSERT INTO release_decisions
+             (id, wanted_item_id, title_id, release_title, release_url,
+              release_size_bytes, decision_code, candidate_score, current_score,
+              score_delta, explanation_json, created_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            &prepared.insert_args,
+        )
+        .await?;
+        return Ok(prepared.record_id.clone());
+    };
+
+    let mut args = prepared.update_args.clone();
+    args.push(SqlArg::Text(existing_id.clone()));
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "UPDATE release_decisions
+            SET title_id = {},
+                candidate_score = {},
+                current_score = {},
+                score_delta = {},
+                explanation_json = {},
+                created_at = {}
+          WHERE id = {}",
+        &args,
+    )
+    .await?;
+    Ok(existing_id)
+}
+
+impl WantedStore {
+    async fn write_prepared_release_decision(
+        &self,
+        prepared: PreparedReleaseDecision,
+    ) -> AppResult<String> {
+        SqlRuntime::run_in_transaction(&self.datastore, "insert_release_decision", move |tx| {
+            let prepared = prepared.clone();
+            Box::pin(async move { write_release_decision_tx(tx, &prepared).await })
+        })
+        .await
+    }
+}
+
 #[async_trait]
 impl AcquisitionScopeStateRepository for WantedStore {
     async fn upsert_acquisition_scope_state(
@@ -844,6 +977,75 @@ impl AcquisitionScopeStateRepository for WantedStore {
         .await
     }
 
+    async fn ensure_acquisition_scopes_grabbed(
+        &self,
+        candidates: &[AcquisitionScopeState],
+        grabbed_release: &str,
+    ) -> AppResult<()> {
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let items = candidates.to_vec();
+        let release = grabbed_release.to_string();
+        let datastore = self.datastore.clone();
+        let batch = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "ensure_acquisition_scopes_grabbed",
+            move |tx| {
+                let datastore = datastore.clone();
+                let items = items.clone();
+                let grabbed_release = release.clone();
+                Box::pin(async move {
+                    for item in &items {
+                        let id = match fetch_seed_target_tx(tx, item).await? {
+                            Some(existing) => existing.id,
+                            None => execute_wanted_upsert_tx(tx, &datastore, item).await?,
+                        };
+                        let last_search_at = match SqlRuntime::fetch_optional(
+                            SqlExec::Tx(tx),
+                            "SELECT last_search_at FROM wanted_items WHERE id = {}",
+                            &[SqlArg::Text(id.clone())],
+                        )
+                        .await?
+                        {
+                            Some(row) => opt_timestamp_text(&row, "last_search_at")?,
+                            None => None,
+                        };
+                        let now = Utc::now().to_rfc3339();
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            UPDATE_ACQUISITION_SCOPE_STATUS_SQL,
+                            &[
+                                SqlArg::Text(AcquisitionScopeStatus::Grabbed.as_str().to_string()),
+                                opt_timestamp_arg_for_datastore(
+                                    &datastore,
+                                    last_search_at.as_deref(),
+                                )?,
+                                SqlArg::OptText(Some(grabbed_release.clone())),
+                                timestamp_arg_for_datastore(&datastore, &now)?,
+                                SqlArg::Text(id),
+                            ],
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        if batch.is_ok() {
+            return Ok(());
+        }
+        // Nothing from the failed batch was kept; replaying row by row stops
+        // at the same failing row with the earlier rows written.
+        scryer_application::ensure_acquisition_scopes_grabbed_per_row(
+            self,
+            candidates,
+            grabbed_release,
+        )
+        .await
+    }
+
     async fn update_acquisition_scope_status(
         &self,
         id: &str,
@@ -855,12 +1057,7 @@ impl AcquisitionScopeStateRepository for WantedStore {
         execute_datastore_write(
             &self.datastore,
             "update_acquisition_scope_status",
-            "UPDATE wanted_items
-                SET status = {},
-                    last_search_at = {},
-                    grabbed_release = {},
-                    updated_at = {}
-              WHERE id = {}",
+            UPDATE_ACQUISITION_SCOPE_STATUS_SQL,
             vec![
                 SqlArg::Text(status.to_string()),
                 opt_timestamp_arg_for_datastore(&self.datastore, last_search_at)?,
@@ -1009,6 +1206,61 @@ impl AcquisitionScopeStateRepository for WantedStore {
         Ok(rows > 0)
     }
 
+    async fn complete_acquisition_scopes_for_episodes(
+        &self,
+        title_id: &str,
+        episode_ids: &[String],
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<()> {
+        // Keeps the statement well under both engines' bind limits.
+        const MAX_COMPLETION_BATCH_EPISODES: usize = 1_000;
+        if episode_ids.is_empty() {
+            return Ok(());
+        }
+        if episode_ids.len() > MAX_COMPLETION_BATCH_EPISODES {
+            for episode_id in episode_ids {
+                self.complete_acquisition_scope_for_title(
+                    title_id,
+                    Some(episode_id),
+                    last_search_at,
+                    landed_import,
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+        // The per-episode statement applied to every episode at once.
+        let now = Utc::now().to_rfc3339();
+        let mut args = vec![
+            SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
+            opt_timestamp_arg_for_datastore(&self.datastore, last_search_at)?,
+            SqlArg::Bool(landed_import),
+            timestamp_arg_for_datastore(&self.datastore, &now)?,
+            SqlArg::Text(title_id.to_string()),
+        ];
+        args.extend(episode_ids.iter().cloned().map(SqlArg::Text));
+        let sql = format!(
+            "UPDATE wanted_items
+                SET status = {{}},
+                    last_search_at = {{}},
+                    grabbed_release = CASE WHEN {{}} THEN NULL ELSE grabbed_release END,
+                    updated_at = {{}}
+              WHERE title_id = {{}} AND episode_id IN ({})",
+            std::iter::repeat_n("{}", episode_ids.len())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        execute_datastore_write(
+            &self.datastore,
+            "complete_acquisition_scopes_for_episodes",
+            &sql,
+            args,
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()> {
         execute_datastore_write(
             &self.datastore,
@@ -1069,100 +1321,50 @@ impl AcquisitionScopeStateRepository for WantedStore {
     }
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String> {
-        let explanation_json =
-            match encode_release_decision_explanation(decision.explanation_json.as_deref()) {
-                Ok(encoded) => encoded,
-                Err(error) => {
-                    tracing::warn!(
-                        decision_id = %decision.id,
-                        error = %error,
-                        "release decision explanation could not be encoded"
-                    );
-                    None
-                }
-            };
-        // The same verdict, on the same release, for the same scope is one
-        // ledger row that ages forward — not a new row per re-evaluation.
-        // RSS re-sees the same feed every cadence, so an idle instance was
-        // appending thousands of byte-identical `queued_better_or_equal` rows
-        // (4,720 rows / 2.7 MB per 110 minutes on the 12k-title load test) for
-        // 19 scopes. A changed verdict still appends: `decision_code` is part
-        // of the identity, so the ledger keeps the history that means
-        // something and drops the history that repeats.
-        let identity = ReleaseDecisionIdentityArgs::of(decision);
-        let created_at = timestamp_arg_for_datastore(&self.datastore, &decision.created_at)?;
-        let insert_args = vec![
-            SqlArg::Text(decision.id.clone()),
-            SqlArg::Text(decision.wanted_item_id.clone()),
-            SqlArg::Text(decision.title_id.clone()),
-            SqlArg::Text(decision.release_title.clone()),
-            SqlArg::OptText(stored_release_decision_url(decision)),
-            SqlArg::OptI64(decision.release_size_bytes),
-            SqlArg::Text(decision.decision_code.clone()),
-            SqlArg::I32(decision.candidate_score),
-            SqlArg::OptI32(decision.current_score),
-            SqlArg::OptI32(decision.score_delta),
-            SqlArg::OptBytes(explanation_json.clone()),
-            created_at.clone(),
-        ];
-        let update_args = vec![
-            SqlArg::Text(decision.title_id.clone()),
-            SqlArg::I32(decision.candidate_score),
-            SqlArg::OptI32(decision.current_score),
-            SqlArg::OptI32(decision.score_delta),
-            SqlArg::OptBytes(explanation_json),
-            created_at,
-        ];
-        let fallback_id = decision.id.clone();
-        SqlRuntime::run_in_transaction(&self.datastore, "insert_release_decision", move |tx| {
-            let identity = identity.clone();
-            let insert_args = insert_args.clone();
-            let update_args = update_args.clone();
-            let fallback_id = fallback_id.clone();
-            Box::pin(async move {
-                let existing = SqlRuntime::fetch_optional(
-                    SqlExec::Tx(tx),
-                    RELEASE_DECISION_IDENTITY_SELECT_SQL,
-                    &identity.args(),
-                )
-                .await?
-                .as_ref()
-                .map(|row| row.text("id"))
-                .transpose()?;
+        let prepared = PreparedReleaseDecision::of(&self.datastore, decision)?;
+        self.write_prepared_release_decision(prepared).await
+    }
 
-                let Some(existing_id) = existing else {
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "INSERT INTO release_decisions
-                         (id, wanted_item_id, title_id, release_title, release_url,
-                          release_size_bytes, decision_code, candidate_score, current_score,
-                          score_delta, explanation_json, created_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                        &insert_args,
-                    )
-                    .await?;
-                    return Ok(fallback_id);
-                };
-
-                let mut args = update_args;
-                args.push(SqlArg::Text(existing_id.clone()));
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "UPDATE release_decisions
-                        SET title_id = {},
-                            candidate_score = {},
-                            current_score = {},
-                            score_delta = {},
-                            explanation_json = {},
-                            created_at = {}
-                      WHERE id = {}",
-                    &args,
-                )
-                .await?;
-                Ok(existing_id)
-            })
-        })
-        .await
+    async fn insert_release_decisions(
+        &self,
+        decisions: &[ReleaseDecision],
+    ) -> Vec<AppResult<String>> {
+        let prepared = decisions
+            .iter()
+            .map(|decision| PreparedReleaseDecision::of(&self.datastore, decision))
+            .collect::<Vec<_>>();
+        let batch = prepared
+            .iter()
+            .map(|prepared| prepared.as_ref().ok().cloned())
+            .collect::<Option<Vec<_>>>();
+        if let Some(batch) = batch.filter(|batch| batch.len() > 1) {
+            let written =
+                SqlRuntime::run_in_transaction(&self.datastore, "insert_release_decisions", {
+                    move |tx| {
+                        let batch = batch.clone();
+                        Box::pin(async move {
+                            let mut ids = Vec::with_capacity(batch.len());
+                            for prepared in &batch {
+                                ids.push(write_release_decision_tx(tx, prepared).await?);
+                            }
+                            Ok(ids)
+                        })
+                    }
+                })
+                .await;
+            if let Ok(ids) = written {
+                return ids.into_iter().map(Ok).collect();
+            }
+        }
+        // One transaction per decision, so each failure stays with its own row.
+        let mut results = Vec::with_capacity(prepared.len());
+        for prepared in prepared {
+            results.push(match prepared {
+                Ok(prepared) => self.write_prepared_release_decision(prepared).await,
+                Err(error) => Err(error),
+            });
+        }
+        results
     }
 
     async fn get_acquisition_scope_state_by_id(
@@ -1623,6 +1825,16 @@ impl HousekeepingRepository for HousekeepingStore {
             &self.datastore,
             "delete_rule_set_history_older_than",
             "DELETE FROM rule_set_history WHERE created_at < {}",
+            vec![housekeeping_cutoff_arg(days)],
+        )
+        .await
+    }
+
+    async fn delete_maintenance_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
+        execute_housekeeping_delete(
+            &self.datastore,
+            "delete_maintenance_evaluation_runs_older_than",
+            "DELETE FROM maintenance_evaluation_runs WHERE started_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await

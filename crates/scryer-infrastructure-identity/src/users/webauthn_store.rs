@@ -39,6 +39,28 @@ impl WebauthnRepository for WebauthnStore {
         rows.iter().map(row_to_credential_record).collect()
     }
 
+    async fn list_credentials_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<Vec<WebauthnCredentialRecord>> {
+        let mut credentials = Vec::new();
+        for chunk in user_ids.chunks(crate::users::USER_ID_BATCH) {
+            let placeholders = vec!["{}"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT id, user_id, credential_id, credential_json, friendly_name, created_at, last_used_at
+                 FROM webauthn_credentials
+                 WHERE user_id IN ({placeholders})
+                 ORDER BY user_id ASC, created_at ASC, id ASC"
+            );
+            let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            for row in &rows {
+                credentials.push(row_to_credential_record(row)?);
+            }
+        }
+        Ok(credentials)
+    }
+
     async fn passkey_enrollment_counts(&self) -> AppResult<PasskeyEnrollmentCounts> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),

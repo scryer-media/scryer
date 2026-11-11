@@ -21,6 +21,10 @@ const MEMBERSHIP_COLUMNS: &str = "subscription_id, item_key, rank, season, displ
 
 const MEMBERSHIP_WIDTH: usize = 19;
 
+/// The most subscription ids one membership read binds, well under the
+/// SQLite and Postgres bind limits.
+const MEMBERSHIP_SUBSCRIPTION_ID_CHUNK: usize = 900;
+
 /// `first_seen_at` is deliberately absent: a refreshed row is the same item.
 /// `left_at` and `left_handled` reset because the item is present again.
 const MEMBERSHIP_UPSERT_SUFFIX: &str = "ON CONFLICT (subscription_id, item_key) DO UPDATE SET
@@ -73,6 +77,59 @@ impl ListMembershipRepository for ListStore {
             vec![SqlArg::Text(subscription_id.to_string())],
         )
         .await
+    }
+
+    async fn list_active_by_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> AppResult<Vec<ListMembership>> {
+        self.fetch_memberships(
+            "subscription_id = {} AND left_at IS NULL",
+            vec![SqlArg::Text(subscription_id.to_string())],
+        )
+        .await
+    }
+
+    async fn list_active_by_subscriptions(
+        &self,
+        subscription_ids: &[String],
+    ) -> AppResult<Vec<ListMembership>> {
+        if subscription_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Each id's first position in the caller's order; a repeated id is
+        // read once, as an `IN` list would.
+        let mut position = std::collections::HashMap::with_capacity(subscription_ids.len());
+        let mut unique_ids = Vec::with_capacity(subscription_ids.len());
+        for (index, id) in subscription_ids.iter().enumerate() {
+            if !position.contains_key(id.as_str()) {
+                position.insert(id.as_str(), index);
+                unique_ids.push(id.clone());
+            }
+        }
+        let mut rows = Vec::new();
+        for chunk in unique_ids.chunks(MEMBERSHIP_SUBSCRIPTION_ID_CHUNK) {
+            rows.extend(
+                self.fetch_memberships(
+                    &format!(
+                        "subscription_id IN ({}) AND left_at IS NULL",
+                        placeholders(chunk.len())
+                    ),
+                    chunk.iter().cloned().map(SqlArg::Text).collect(),
+                )
+                .await?,
+            );
+        }
+        // Each subscription's rows keep their (rank, item_key) order (the
+        // sort is stable); the subscriptions follow the caller's order, as
+        // one read each would.
+        rows.sort_by_key(|row| {
+            position
+                .get(row.subscription_id.as_str())
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+        Ok(rows)
     }
 
     async fn list_by_title(&self, title_id: &str) -> AppResult<Vec<ListMembership>> {

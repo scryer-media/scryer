@@ -370,9 +370,8 @@ pub async fn sync_subscription(
     {
         let mut stored = context
             .memberships
-            .list_by_subscription(&subscription.id)
+            .list_active_by_subscription(&subscription.id)
             .await?;
-        stored.retain(|row| row.left_at.is_none());
         // Unresolved rows can carry a storage fallback kind rather than the
         // provider's original hint. Recover the provider item before routing it.
         if stored
@@ -647,15 +646,15 @@ pub async fn sync_subscription(
 
 /// The item keys whose membership says the list added a title that is no
 /// longer in the library. Only rows still on the list and marked `Added` are
-/// checked, and only when the item did not already match that same title. A
-/// lookup that fails counts as the title being present, so a passing storage
-/// error never re-adds anything.
+/// checked, and only when the item did not already match that same title.
+/// The titles are looked up in one read; a lookup that fails counts every
+/// title as present, so a passing storage error never re-adds anything.
 pub(super) async fn deleted_additions(
     actions: &dyn ListActions,
     items: &[super::resolve::ResolvedItem],
     existing: &HashMap<String, ListMembership>,
 ) -> HashSet<String> {
-    let mut deleted = HashSet::new();
+    let mut candidates = Vec::new();
     for item in items {
         let Some(row) = existing.get(&item.item.item_key) else {
             continue;
@@ -669,11 +668,31 @@ pub(super) async fn deleted_additions(
         if item.library_title_id.as_deref() == Some(title_id) {
             continue;
         }
-        if !actions.title_exists(title_id).await.unwrap_or(true) {
-            deleted.insert(row.item_key.clone());
-        }
+        candidates.push((row.item_key.clone(), title_id.to_string()));
     }
-    deleted
+    let Some(present) = titles_present(actions, candidates.iter().map(|(_, id)| id)).await else {
+        return HashSet::new();
+    };
+    candidates
+        .into_iter()
+        .filter(|(_, title_id)| !present.contains(title_id))
+        .map(|(item_key, _)| item_key)
+        .collect()
+}
+
+/// The titles among `title_ids` still in the library, read once for the
+/// distinct ids, or `None` when the read failed.
+async fn titles_present<'a>(
+    actions: &dyn ListActions,
+    title_ids: impl Iterator<Item = &'a String>,
+) -> Option<HashSet<String>> {
+    let mut ids = title_ids.cloned().collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return Some(HashSet::new());
+    }
+    actions.titles_present(&ids).await.ok()
 }
 
 /// `existing` without the rows named in `keys`.
@@ -804,15 +823,17 @@ async fn has_unfinished_work(
         return Ok(true);
     }
     // A title the list added was deleted from the library: the next sync
-    // weighs it again, so the list must be read.
-    for row in &rows {
-        if row.left_at.is_none()
-            && row.state == ListMembershipState::Added
-            && let Some(title_id) = row.title_id.as_deref()
-            && !context.actions.title_exists(title_id).await.unwrap_or(true)
-        {
-            return Ok(true);
-        }
+    // weighs it again, so the list must be read. A failed lookup counts
+    // every title as present.
+    let added = rows
+        .iter()
+        .filter(|row| row.left_at.is_none() && row.state == ListMembershipState::Added)
+        .filter_map(|row| row.title_id.as_ref())
+        .collect::<Vec<_>>();
+    if let Some(present) = titles_present(context.actions, added.iter().copied()).await
+        && added.iter().any(|title_id| !present.contains(*title_id))
+    {
+        return Ok(true);
     }
     has_runnable_leave_action(
         subscription,

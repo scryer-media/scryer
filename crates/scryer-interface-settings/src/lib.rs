@@ -1617,18 +1617,21 @@ impl SettingsQueries {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let users = app.list_users(&actor).await.map_err(to_gql_error)?;
-        let mut payloads = Vec::with_capacity(users.len());
-        for user in users {
-            let user = app
-                .attach_user_authorization(user)
-                .await
-                .map_err(to_gql_error)?;
-            let auth_factor_status = app
-                .user_auth_factor_status(&user.id)
-                .await
-                .map_err(to_gql_error)?;
-            payloads.push(from_user_with_auth_factor_status(user, auth_factor_status));
-        }
-        Ok(payloads)
+        let users = app
+            .attach_users_authorization(users)
+            .await
+            .map_err(to_gql_error)?;
+        let user_ids: Vec<String> = users.iter().map(|user| user.id.clone()).collect();
+        let statuses = app
+            .users_auth_factor_status(&user_ids)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(users
+            .into_iter()
+            .map(|user| {
+                let auth_factor_status = statuses.get(&user.id).cloned().unwrap_or_default();
+                from_user_with_auth_factor_status(user, auth_factor_status)
+            })
+            .collect())
     }
 }

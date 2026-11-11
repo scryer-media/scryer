@@ -175,7 +175,25 @@ struct LibraryScanRuntimeState {
     /// live session already but has not been written to the event log yet.
     /// See [`stage_library_scan_delta`].
     pending_deltas: HashMap<String, PendingLibraryScanDelta>,
+    /// Per-file progress folded into the live session since the session's
+    /// last persisted file-progress event. See
+    /// [`LibraryScanTracker::note_file_progress`].
+    file_progress_cadence: HashMap<String, FileProgressCadence>,
 }
+
+/// Files whose progress is live but not yet in the event log, and when the
+/// log last caught up.
+struct FileProgressCadence {
+    unpublished_files: usize,
+    last_published: tokio::time::Instant,
+}
+
+/// How many files' progress may be folded into the live session before a
+/// file-progress event is appended to the log.
+const LIBRARY_SCAN_FILE_PROGRESS_EVENT_FILES: usize = 256;
+
+/// How long file progress may stay live-only before an event is appended.
+const LIBRARY_SCAN_FILE_PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 
 /// A run of per-title deltas merged into one event-log record.
 struct PendingLibraryScanDelta {
@@ -668,6 +686,7 @@ impl LibraryScanTracker {
                 // A session id is never reused, but never let a stale record
                 // from an abandoned session leak into a new one.
                 state.pending_deltas.remove(&snapshot.session_id);
+                state.file_progress_cadence.remove(&snapshot.session_id);
                 state.next_sequence = state.next_sequence.saturating_add(1);
                 LibraryScanTrackerEvent {
                     sequence: state.next_sequence,
@@ -743,6 +762,44 @@ impl LibraryScanTracker {
             .pending_deltas
             .remove(session_id)
             .map(|pending| (pending.data, pending.facet))
+    }
+
+    /// Counts `files` whose progress the live session already holds and says
+    /// whether the event log is due a file-progress event: every
+    /// [`LIBRARY_SCAN_FILE_PROGRESS_EVENT_FILES`] files, once
+    /// [`LIBRARY_SCAN_FILE_PROGRESS_EVENT_INTERVAL`] has passed, or when
+    /// `force`d while any progress is unpublished. A due answer restarts the
+    /// count. An inactive session is always due, so the caller's publish
+    /// finds nothing, as before.
+    pub(crate) async fn note_file_progress(
+        &self,
+        session_id: &str,
+        files: usize,
+        force: bool,
+    ) -> bool {
+        let now = tokio::time::Instant::now();
+        let mut state = self.state.lock().await;
+        if !state.sessions.contains_key(session_id) {
+            return true;
+        }
+        let cadence = state
+            .file_progress_cadence
+            .entry(session_id.to_string())
+            .or_insert(FileProgressCadence {
+                unpublished_files: 0,
+                last_published: now,
+            });
+        cadence.unpublished_files = cadence.unpublished_files.saturating_add(files);
+        let due = cadence.unpublished_files > 0
+            && (force
+                || cadence.unpublished_files >= LIBRARY_SCAN_FILE_PROGRESS_EVENT_FILES
+                || now.duration_since(cadence.last_published)
+                    >= LIBRARY_SCAN_FILE_PROGRESS_EVENT_INTERVAL);
+        if due {
+            cadence.unpublished_files = 0;
+            cadence.last_published = now;
+        }
+        due
     }
 
     /// Per-delta append path, kept for the projection tests that assert the
@@ -906,6 +963,7 @@ impl LibraryScanTracker {
             // The completion path flushes before it gets here; this only keeps
             // an unflushed record from outliving its session.
             state.pending_deltas.remove(session_id);
+            state.file_progress_cadence.remove(session_id);
             session.updated_at = Utc::now();
             session.title_match_total_known = true;
             session.metadata_total_known = true;
@@ -938,6 +996,7 @@ impl LibraryScanTracker {
             session.metadata_total_known = true;
             session.file_total_known = true;
             state.pending_deltas.remove(session_id);
+            state.file_progress_cadence.remove(session_id);
             session.status = LibraryScanStatus::Failed;
             state.next_sequence = state.next_sequence.saturating_add(1);
             LibraryScanTrackerEvent {
@@ -958,6 +1017,7 @@ impl LibraryScanTracker {
             session.metadata_total_known = true;
             session.file_total_known = true;
             state.pending_deltas.remove(session_id);
+            state.file_progress_cadence.remove(session_id);
             session.status = LibraryScanStatus::Canceled;
             state.next_sequence = state.next_sequence.saturating_add(1);
             LibraryScanTrackerEvent {
@@ -1625,6 +1685,45 @@ mod tests {
             },
             payload,
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn file_progress_events_are_due_every_256_files_or_250_ms_and_when_forced() {
+        let tracker = LibraryScanTracker::new();
+        let session = tracker
+            .start_session(MediaFacet::Series)
+            .await
+            .expect("start session");
+        let id = session.session_id.as_str();
+
+        // Files short of the count, inside the interval, wait.
+        for _ in 0..255 {
+            assert!(!tracker.note_file_progress(id, 1, false).await);
+        }
+        // The 256th file makes the event due and restarts the count.
+        assert!(tracker.note_file_progress(id, 1, false).await);
+        assert!(!tracker.note_file_progress(id, 1, false).await);
+
+        // Elapsed time alone makes it due once 250 ms have passed.
+        tokio::time::advance(Duration::from_millis(249)).await;
+        assert!(!tracker.note_file_progress(id, 1, false).await);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(tracker.note_file_progress(id, 1, false).await);
+
+        // A forced flush is due whenever anything is unpublished, and never
+        // when nothing is.
+        assert!(tracker.note_file_progress(id, 1, true).await);
+        assert!(!tracker.note_file_progress(id, 0, true).await);
+
+        // A session the tracker no longer holds is always due, so its
+        // publish finds nothing to send, as before.
+        tracker.cancel_session(id).await;
+        assert!(tracker.note_file_progress(id, 1, false).await);
+        assert!(
+            tracker
+                .note_file_progress("scan-never-started", 0, false)
+                .await
+        );
     }
 
     #[tokio::test]

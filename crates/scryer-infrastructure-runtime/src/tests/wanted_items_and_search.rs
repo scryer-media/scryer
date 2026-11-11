@@ -103,6 +103,154 @@ async fn completing_a_scope_clears_the_grab_only_when_a_file_landed() {
     let _ = std::fs::remove_file(db);
 }
 
+/// Completing several episodes of one title in one write leaves every row as
+/// completing them one by one does, rows of other titles and other episodes
+/// untouched, and an episode with no row still without one.
+#[tokio::test]
+async fn completing_episode_scopes_together_matches_completing_them_one_by_one() {
+    let (services, db) = temp_services("scryer_complete_episode_scopes_batch").await;
+    let (catalog, workflow, _index_dir) = super::search_stores(&services).await;
+    let now = Utc::now().to_rfc3339();
+
+    for title_id in ["title-emberfall-batch", "title-emberfall-single"] {
+        TitleRepository::create(&catalog, make_test_title(title_id, None))
+            .await
+            .expect("title should insert");
+        sqlx::query(
+            "INSERT INTO collections
+             (id, title_id, collection_type, collection_index, created_at)
+             VALUES (?, ?, 'season', '1', ?)",
+        )
+        .bind(format!("{title_id}-season"))
+        .bind(title_id)
+        .bind(&now)
+        .execute(services.pool())
+        .await
+        .expect("collection should insert");
+        for number in 1..=4 {
+            let episode_id = format!("{title_id}-ep-{number}");
+            sqlx::query(
+                "INSERT INTO episodes
+                 (id, title_id, collection_id, episode_type, episode_number, season_number,
+                  created_at)
+                 VALUES (?, ?, ?, 'standard', ?, '1', ?)",
+            )
+            .bind(&episode_id)
+            .bind(title_id)
+            .bind(format!("{title_id}-season"))
+            .bind(number.to_string())
+            .bind(&now)
+            .execute(services.pool())
+            .await
+            .expect("episode should insert");
+            // Episode 3 has no row; the others start in different states.
+            let (status, grab) = match number {
+                1 => ("wanted", None),
+                2 => ("grabbed", Some("Emberfall.S01E02.Grab")),
+                4 => ("completed", Some("Emberfall.S01E04.Grab")),
+                _ => continue,
+            };
+            sqlx::query(
+                "INSERT INTO wanted_items
+                 (id, title_id, episode_id, media_type, status, grabbed_release,
+                  created_at, updated_at)
+                 VALUES (?, ?, ?, 'episode', ?, ?, ?, ?)",
+            )
+            .bind(format!("wanted-{episode_id}"))
+            .bind(title_id)
+            .bind(&episode_id)
+            .bind(status)
+            .bind(grab)
+            .bind(&now)
+            .bind(&now)
+            .execute(services.pool())
+            .await
+            .expect("wanted item should insert");
+        }
+    }
+
+    let episodes = |title_id: &str| {
+        [1, 2, 3]
+            .into_iter()
+            .map(|number| format!("{title_id}-ep-{number}"))
+            .collect::<Vec<_>>()
+    };
+    workflow
+        .complete_acquisition_scopes_for_episodes(
+            "title-emberfall-batch",
+            &episodes("title-emberfall-batch"),
+            Some("2026-04-20T00:00:00Z"),
+            true,
+        )
+        .await
+        .expect("batched completion should succeed");
+    for episode_id in episodes("title-emberfall-single") {
+        workflow
+            .complete_acquisition_scope_for_title(
+                "title-emberfall-single",
+                Some(&episode_id),
+                Some("2026-04-20T00:00:00Z"),
+                true,
+            )
+            .await
+            .expect("completion should succeed");
+    }
+
+    type ScopeRow = (String, String, Option<String>, Option<String>, bool);
+    async fn rows(pool: &sqlx::SqlitePool, now: &str, title_id: &str) -> Vec<ScopeRow> {
+        sqlx::query(
+            "SELECT episode_id, status, last_search_at, grabbed_release,
+                    updated_at = ? AS untouched
+               FROM wanted_items WHERE title_id = ? ORDER BY episode_id",
+        )
+        .bind(now)
+        .bind(title_id)
+        .fetch_all(pool)
+        .await
+        .expect("rows should load")
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("episode_id")
+                    .replace(title_id, "title"),
+                row.get::<String, _>("status"),
+                row.get::<Option<String>, _>("last_search_at"),
+                row.get::<Option<String>, _>("grabbed_release"),
+                row.get::<bool, _>("untouched"),
+            )
+        })
+        .collect()
+    }
+    let batched = rows(services.pool(), &now, "title-emberfall-batch").await;
+    assert_eq!(
+        batched,
+        rows(services.pool(), &now, "title-emberfall-single").await
+    );
+    let stamp = Some("2026-04-20T00:00:00Z".to_string());
+    assert_eq!(
+        batched,
+        vec![
+            (
+                "title-ep-1".into(),
+                "completed".into(),
+                stamp.clone(),
+                None,
+                false
+            ),
+            ("title-ep-2".into(), "completed".into(), stamp, None, false),
+            (
+                "title-ep-4".into(),
+                "completed".into(),
+                None,
+                Some("Emberfall.S01E04.Grab".into()),
+                true
+            ),
+        ]
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
 /// An unpersisted episode-scoped state view, shaped the way the acquisition
 /// paths build one: it carries the episode identity *and* the owning collection
 /// id, which is attribution rather than scope key.
@@ -774,6 +922,7 @@ pub(super) async fn assert_catalog_search(
                 TitleCatalogAggregates {
                     total_count: true,
                     filter_counts: true,
+                    file_state_counts: true,
                     managed_bytes: false,
                 },
             )
@@ -813,6 +962,7 @@ pub(super) async fn assert_catalog_search(
         TitleCatalogAggregates {
             total_count: true,
             filter_counts: true,
+            file_state_counts: true,
             managed_bytes: false,
         },
     )
@@ -1200,4 +1350,280 @@ async fn list_wanted_items_filters_with_fuzzy_title_search() {
     assert_eq!(short_title_hits[0].id, title.id);
 
     let _ = std::fs::remove_file(db);
+}
+
+async fn seed_grab_batch_fixture(
+    prefix: &str,
+) -> (SqliteServices, std::path::PathBuf, WantedStore) {
+    let (services, db) = temp_services(prefix).await;
+    let (catalog, workflow, _index_dir) = super::search_stores(&services).await;
+    let now = Utc::now().to_rfc3339();
+    TitleRepository::create(&catalog, make_test_title("emberfall", None))
+        .await
+        .expect("title should insert");
+    sqlx::query(
+        "INSERT INTO collections (id, title_id, collection_type, collection_index, created_at)
+         VALUES ('emberfall-s1', 'emberfall', 'season', '1', ?)",
+    )
+    .bind(&now)
+    .execute(services.pool())
+    .await
+    .expect("collection should insert");
+    for (episode_id, number) in [("ep-1", "1"), ("ep-2", "2"), ("ep-3", "3")] {
+        sqlx::query(
+            "INSERT INTO episodes
+             (id, title_id, collection_id, episode_type, episode_number, season_number, created_at)
+             VALUES (?, 'emberfall', 'emberfall-s1', 'standard', ?, '1', ?)",
+        )
+        .bind(episode_id)
+        .bind(number)
+        .bind(&now)
+        .execute(services.pool())
+        .await
+        .expect("episode should insert");
+    }
+    sqlx::query(
+        "INSERT INTO wanted_items
+         (id, title_id, episode_id, collection_id, media_type, last_search_at, status,
+          created_at, updated_at)
+         VALUES ('wanted-ep-1', 'emberfall', 'ep-1', 'emberfall-s1', 'episode',
+                 '2026-04-20T00:00:00Z', 'wanted', ?, ?)",
+    )
+    .bind(&now)
+    .bind(&now)
+    .execute(services.pool())
+    .await
+    .expect("existing wanted row should insert");
+    drop(workflow);
+    let store = WantedStore::new(services.datastore());
+    (services, db, store)
+}
+
+fn grab_batch_candidates() -> Vec<AcquisitionScopeState> {
+    ["ep-1", "ep-2", "ep-3", "ep-2"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, episode_id)| {
+            episode_scope_view(
+                "emberfall",
+                &format!("candidate-{index}-{episode_id}"),
+                episode_id,
+                "emberfall-s1",
+            )
+        })
+        .collect()
+}
+
+async fn grab_batch_rows(
+    services: &SqliteServices,
+) -> Vec<(
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+)> {
+    sqlx::query(
+        "SELECT id, episode_id, status, last_search_at, grabbed_release
+           FROM wanted_items ORDER BY id",
+    )
+    .fetch_all(services.pool())
+    .await
+    .expect("wanted rows should load")
+    .into_iter()
+    .map(|row| {
+        (
+            row.get("id"),
+            row.get("episode_id"),
+            row.get("status"),
+            row.get("last_search_at"),
+            row.get("grabbed_release"),
+        )
+    })
+    .collect()
+}
+
+#[tokio::test]
+async fn grab_batch_writes_the_same_rows_as_the_per_row_path() {
+    let (batch_services, batch_db, batch_store) =
+        seed_grab_batch_fixture("scryer_grab_batch_ok_batch").await;
+    let (row_services, row_db, row_store) =
+        seed_grab_batch_fixture("scryer_grab_batch_ok_rows").await;
+    let candidates = grab_batch_candidates();
+
+    batch_store
+        .ensure_acquisition_scopes_grabbed(&candidates, "{\"title\":\"Emberfall S01\"}")
+        .await
+        .expect("batch should apply");
+    scryer_application::ensure_acquisition_scopes_grabbed_per_row(
+        &row_store,
+        &candidates,
+        "{\"title\":\"Emberfall S01\"}",
+    )
+    .await
+    .expect("per-row path should apply");
+
+    let batch_rows = grab_batch_rows(&batch_services).await;
+    assert_eq!(batch_rows, grab_batch_rows(&row_services).await);
+    assert_eq!(batch_rows.len(), 3, "one row per episode, duplicate folded");
+    let existing = batch_rows
+        .iter()
+        .find(|row| row.0 == "wanted-ep-1")
+        .expect("existing row kept its id");
+    assert_eq!(existing.2, "grabbed");
+    assert_eq!(existing.3.as_deref(), Some("2026-04-20T00:00:00Z"));
+    assert!(batch_rows.iter().all(|row| row.2 == "grabbed"));
+
+    let _ = std::fs::remove_file(batch_db);
+    let _ = std::fs::remove_file(row_db);
+}
+
+#[tokio::test]
+async fn grab_batch_failure_leaves_the_per_row_partial_state() {
+    let (batch_services, batch_db, batch_store) =
+        seed_grab_batch_fixture("scryer_grab_batch_fail_batch").await;
+    let (row_services, row_db, row_store) =
+        seed_grab_batch_fixture("scryer_grab_batch_fail_rows").await;
+    for services in [&batch_services, &row_services] {
+        sqlx::query(
+            "CREATE TRIGGER fail_grab_ep_2 BEFORE UPDATE ON wanted_items
+             WHEN NEW.episode_id = 'ep-2' AND NEW.status = 'grabbed'
+             BEGIN SELECT RAISE(ABORT, 'synthetic grab failure'); END",
+        )
+        .execute(services.pool())
+        .await
+        .expect("failure trigger should install");
+    }
+    let candidates = grab_batch_candidates();
+
+    let batch_error = batch_store
+        .ensure_acquisition_scopes_grabbed(&candidates, "{\"title\":\"Emberfall S01\"}")
+        .await
+        .expect_err("batch should fail on the second row");
+    let row_error = scryer_application::ensure_acquisition_scopes_grabbed_per_row(
+        &row_store,
+        &candidates,
+        "{\"title\":\"Emberfall S01\"}",
+    )
+    .await
+    .expect_err("per-row path should fail on the second row");
+    assert_eq!(batch_error.to_string(), row_error.to_string());
+
+    let batch_rows = grab_batch_rows(&batch_services).await;
+    assert_eq!(batch_rows, grab_batch_rows(&row_services).await);
+    let statuses = batch_rows
+        .iter()
+        .map(|row| (row.1.clone().unwrap_or_default(), row.2.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statuses,
+        vec![
+            ("ep-2".to_string(), "wanted".to_string()),
+            ("ep-1".to_string(), "grabbed".to_string()),
+        ],
+        "first row grabbed, second row seeded but not grabbed, third untouched"
+    );
+
+    let _ = std::fs::remove_file(batch_db);
+    let _ = std::fs::remove_file(row_db);
+}
+
+fn decision_batch_fixture() -> Vec<scryer_application::ReleaseDecision> {
+    let decision =
+        |id: &str, release_title: &str, score: i32| scryer_application::ReleaseDecision {
+            id: id.to_string(),
+            wanted_item_id: "wanted-ep-1".to_string(),
+            title_id: "emberfall".to_string(),
+            release_title: release_title.to_string(),
+            release_url: Some(format!("https://indexer.invalid/{release_title}")),
+            release_size_bytes: Some(1_000),
+            decision_code: "quality_blocked".to_string(),
+            candidate_score: score,
+            current_score: None,
+            score_delta: None,
+            explanation_json: None,
+            created_at: "2026-04-20T00:00:00Z".to_string(),
+        };
+    vec![
+        decision("decision-a", "Emberfall.S01.1080p", 10),
+        decision("decision-b", "Emberfall.S01.720p", 20),
+        decision("decision-c", "Emberfall.S01.1080p", 30),
+        decision("decision-d", "Emberfall.S01.2160p", 40),
+    ]
+}
+
+async fn decision_batch_rows(services: &SqliteServices) -> Vec<(String, String, i64)> {
+    sqlx::query("SELECT id, release_title, candidate_score FROM release_decisions ORDER BY id")
+        .fetch_all(services.pool())
+        .await
+        .expect("decision rows should load")
+        .into_iter()
+        .map(|row| {
+            (
+                row.get("id"),
+                row.get("release_title"),
+                row.get("candidate_score"),
+            )
+        })
+        .collect()
+}
+
+fn decision_batch_results(results: Vec<AppResult<String>>) -> Vec<Result<String, String>> {
+    results
+        .into_iter()
+        .map(|result| result.map_err(|error| error.to_string()))
+        .collect()
+}
+
+async fn assert_decision_batch_matches_per_row(prefix: &str, fail_title: Option<&str>) {
+    let (batch_services, batch_db, batch_store) =
+        seed_grab_batch_fixture(&format!("{prefix}_batch")).await;
+    let (row_services, row_db, row_store) =
+        seed_grab_batch_fixture(&format!("{prefix}_rows")).await;
+    if let Some(fail_title) = fail_title {
+        for services in [&batch_services, &row_services] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "CREATE TRIGGER fail_decision BEFORE INSERT ON release_decisions
+                 WHEN NEW.release_title = '{fail_title}'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic decision failure'); END"
+            )))
+            .execute(services.pool())
+            .await
+            .expect("failure trigger should install");
+        }
+    }
+    let decisions = decision_batch_fixture();
+
+    let batch = decision_batch_results(batch_store.insert_release_decisions(&decisions).await);
+    let mut per_row = Vec::new();
+    for decision in &decisions {
+        per_row.push(row_store.insert_release_decision(decision).await);
+    }
+    let per_row = decision_batch_results(per_row);
+
+    assert_eq!(batch, per_row);
+    assert_eq!(
+        decision_batch_rows(&batch_services).await,
+        decision_batch_rows(&row_services).await
+    );
+    // The repeated verdict ages the first row forward instead of appending.
+    assert_eq!(batch[2], Ok("decision-a".to_string()));
+    if fail_title.is_some() {
+        assert!(batch[1].is_err(), "the failing row keeps its own error");
+        assert_eq!(batch[3], Ok("decision-d".to_string()));
+    }
+
+    let _ = std::fs::remove_file(batch_db);
+    let _ = std::fs::remove_file(row_db);
+}
+
+#[tokio::test]
+async fn release_decision_batch_matches_per_row_outcomes() {
+    assert_decision_batch_matches_per_row("scryer_decision_batch_ok", None).await;
+}
+
+#[tokio::test]
+async fn release_decision_batch_failure_keeps_per_row_outcomes() {
+    assert_decision_batch_matches_per_row("scryer_decision_batch_fail", Some("Emberfall.S01.720p"))
+        .await;
 }

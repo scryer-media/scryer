@@ -128,6 +128,30 @@ pub trait ListMembershipRepository: Send + Sync {
 
     async fn list_by_subscription(&self, subscription_id: &str) -> AppResult<Vec<ListMembership>>;
 
+    /// [`Self::list_by_subscription`] without departed rows (`left_at` set),
+    /// in the same order.
+    async fn list_active_by_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> AppResult<Vec<ListMembership>> {
+        let mut rows = self.list_by_subscription(subscription_id).await?;
+        rows.retain(|row| row.left_at.is_none());
+        Ok(rows)
+    }
+
+    /// [`Self::list_active_by_subscription`] for each subscription in turn,
+    /// concatenated in the order `subscription_ids` gives them.
+    async fn list_active_by_subscriptions(
+        &self,
+        subscription_ids: &[String],
+    ) -> AppResult<Vec<ListMembership>> {
+        let mut rows = Vec::new();
+        for subscription_id in subscription_ids {
+            rows.extend(self.list_active_by_subscription(subscription_id).await?);
+        }
+        Ok(rows)
+    }
+
     /// Every subscription's row for one title, across both scopes. This is the
     /// cross-list guard's read; it carries subscription ids only, so it reveals
     /// nothing a caller could not already see.

@@ -37,10 +37,9 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .get_by_ids(title_ids)
+            .list_library_ids_for_titles(title_ids)
             .await?
             .into_iter()
-            .map(|title| (title.id, title.library_id))
             .collect::<HashMap<_, _>>();
 
         let mut visible = Vec::with_capacity(title_ids.len());

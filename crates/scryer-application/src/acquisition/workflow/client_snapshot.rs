@@ -707,6 +707,11 @@ impl DownloadClientSnapshot {
         self.queue_listing_failed
     }
 
+    /// Whether [`Self::failed_item`] can answer `Some` for any item.
+    fn reports_failed_items(&self) -> bool {
+        !self.history_listing_failed && !self.failed_by_download_id.is_empty()
+    }
+
     /// If a download with this job ID failed in history with a blocklist-worthy
     /// reason, returns the failure snapshot.
     pub(crate) fn failed_item(
@@ -858,6 +863,11 @@ pub(crate) fn submission_is_live_claim(
 /// release has failed in the download client, blocklist it and re-queue the
 /// wanted item for immediate re-search.
 async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClientSnapshot) {
+    // No failed client item this cycle: no grabbed row can match one.
+    if !dl_snapshot.reports_failed_items() {
+        debug!("check_grabbed_for_failures: no failed download client items");
+        return;
+    }
     let grabbed_items = match app
         .services
         .workflow
@@ -3121,10 +3131,13 @@ mod client_snapshot_tests {
         // Even with a populated map, an unobservable history must not surface
         // failures (failure detection is skipped this cycle).
         assert!(snap.failed_item(Some("client-1"), "nzo_1").is_none());
+        assert!(!snap.reports_failed_items());
 
         // With history observable, the same entry is reported.
         snap.history_listing_failed = false;
         assert!(snap.failed_item(Some("client-1"), "nzo_1").is_some());
+        assert!(snap.reports_failed_items());
+        assert!(!snapshot(false, false).reports_failed_items());
     }
 
     /// **D18 liveness.** Which tracked states make a submission a queued

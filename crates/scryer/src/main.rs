@@ -1955,12 +1955,6 @@ async fn bootstrap_application(
     if let Err(error) = app_use_case.sync_image_cache_runtime_limit().await {
         tracing::warn!(error = %error, "failed to apply configured image cache limit");
     }
-    run_image_cache_maintenance(
-        &app_use_case,
-        image_proxy_runtime.clone(),
-        &restore_workers.shutdown_workers,
-    )
-    .await;
     {
         let source_repository = app_use_case.image_proxy_repository();
         let source_flush_shutdown = restore_workers.shutdown_workers.child_token();
@@ -1990,6 +1984,10 @@ async fn bootstrap_application(
         let maintenance_app = app_use_case.clone();
         let maintenance_shutdown = restore_workers.shutdown_workers.child_token();
         restore_workers.spawn_worker(async move {
+            // The boot pass runs here rather than ahead of serving; requests
+            // for cached images wait on the cache lock while it runs.
+            run_image_cache_maintenance(&maintenance_app, runtime.clone(), &maintenance_shutdown)
+                .await;
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await;

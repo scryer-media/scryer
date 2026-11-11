@@ -11,8 +11,9 @@ use super::catalog::{
     RULE_PACK_MANIFEST_FALLBACK_OUTPUT_LIMIT, RequiredSigner, artifact_encoding_from_url,
     blake3_digest, bound_uncompressed_bytes, catalog_v3_artifact_is_runnable,
     catalog_v3_artifact_preference, compress_zstd, decompress_brotli, decompress_zstd,
-    parse_and_validate_catalog_v3, parse_and_validate_catalog_v3_redirect, parse_digest_string,
-    redirect_bundle_url_for, verify_digest_set, verify_signed_blob, verify_split_digest,
+    parse_and_validate_catalog_v3, parse_and_validate_catalog_v3_memoized,
+    parse_and_validate_catalog_v3_redirect, parse_digest_string, redirect_bundle_url_for,
+    verify_digest_set, verify_signed_blob, verify_split_digest,
 };
 use super::*;
 use crate::ProviderCatalogFamily;

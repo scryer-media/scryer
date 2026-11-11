@@ -5456,6 +5456,97 @@ async fn the_import_mode_check_requires_fresh_client_evidence_even_with_a_releas
     assert_eq!(effective, ImportMode::HardlinkOrCopy);
 }
 
+#[tokio::test]
+async fn one_import_observes_the_client_once_and_the_next_import_observes_again() {
+    let item_id = "torrent-emberfall-pack-1";
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
+    let title = movie_title(&app, &user, "Emberfall").await;
+    app.update_media_settings(
+        &user,
+        MediaFacet::Movie,
+        UpdateMediaSettings {
+            import_mode: Some(ImportMode::Move),
+            ..empty_update_media_settings()
+        },
+    )
+    .await
+    .expect("configure move import mode");
+    let completed = completed_for(&config.id, "qbittorrent", item_id);
+    let resolve = || {
+        crate::seeding_gate::resolve_seeding_safe_import_mode(
+            &app,
+            Some(&title.library_id),
+            &title.facet,
+            Some(&completed),
+        )
+    };
+
+    // No fresh observation: the first file holds, and so does every later
+    // file of that import even once the client could answer.
+    crate::seeding_gate::with_import_seeding_observations(async {
+        assert_eq!(
+            resolve().await.expect("first file"),
+            ImportMode::HardlinkOrCopy
+        );
+        let mut tracked = tracked_for(
+            &config.id,
+            "qbittorrent",
+            item_id,
+            &title,
+            TrackedDownloadState::ImportedSeeding,
+            true,
+        );
+        observed(
+            DownloadSeedingSnapshot {
+                can_remove: Some(true),
+                can_move_files: Some(true),
+                seed_ratio: Some(5.0),
+                ..DownloadSeedingSnapshot::default()
+            },
+            &mut tracked,
+        );
+        client
+            .history_items
+            .lock()
+            .await
+            .push(tracked.client_item.clone());
+        assert_eq!(
+            resolve().await.expect("second file"),
+            ImportMode::HardlinkOrCopy
+        );
+    })
+    .await;
+
+    // The next import observes again: the client now says the data is done
+    // and stable, and that answer holds for the whole import even after the
+    // client changes its mind.
+    crate::seeding_gate::with_import_seeding_observations(async {
+        assert_eq!(resolve().await.expect("first file"), ImportMode::Move);
+        client.history_items.lock().await[0]
+            .seeding
+            .as_mut()
+            .unwrap()
+            .can_remove = Some(false);
+        assert_eq!(resolve().await.expect("second file"), ImportMode::Move);
+    })
+    .await;
+
+    // Outside an import every call observes, as before.
+    assert_eq!(
+        resolve().await.expect("unscoped call"),
+        ImportMode::HardlinkOrCopy
+    );
+    crate::seeding_gate::with_import_seeding_observations(async {
+        assert_eq!(
+            resolve().await.expect("third import"),
+            ImportMode::HardlinkOrCopy
+        );
+    })
+    .await;
+}
+
 // ── per-tick batching ─────────────────────────────────────────────────────
 
 /// The reconcile tick re-offers every settled row on every poll, so the reads

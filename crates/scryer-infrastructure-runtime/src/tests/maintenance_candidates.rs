@@ -1192,6 +1192,82 @@ async fn evaluation_runs_start_as_running_and_finish_with_their_counts() {
 }
 
 #[tokio::test]
+async fn housekeeping_prunes_only_evaluation_runs_older_than_retention() {
+    use scryer_application::HousekeepingRepository;
+
+    let (services, db) = temp_services("scryer_maintenance_evaluation_run_retention").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+    let run = |id: &str, age_days: i64| MaintenanceEvaluationRun {
+        id: id.to_string(),
+        rule_set_id: "rule-a".to_string(),
+        revision_number: 1,
+        matcher_content_hash: "hash-1".to_string(),
+        started_at: now - chrono::Duration::days(age_days),
+        finished_at: None,
+        status: MaintenanceEvaluationRunStatus::Succeeded,
+        evaluated_count: 0,
+        matched_count: 0,
+        no_match_count: 0,
+        unknown_count: 0,
+        error_count: 0,
+        canceled_candidates: 0,
+        superseded_candidates: 0,
+        duration_ms: None,
+        error: None,
+    };
+    for (id, age_days) in [("run-old", 400), ("run-edge", 181), ("run-recent", 179)] {
+        store
+            .start_evaluation_run(&run(id, age_days))
+            .await
+            .expect("start run");
+    }
+    store
+        .create_candidate(&candidate("cand-1", "rule-a", "title-1", 1))
+        .await
+        .expect("create candidate");
+    sqlx::query(
+        "INSERT INTO lifecycle_action_runs (id, candidate_id, rule_set_id, revision_number, title_id,
+                                           action_kind, match_generation, idempotency_key, attempt, status,
+                                           started_at)
+         VALUES ('action-run-old', 'cand-1', 'rule-a', 1, 'title-1', 'delete', 1, 'action-run-key', 1,
+                 'succeeded', '2020-01-01T00:00:00Z')",
+    )
+    .execute(&services.pool)
+    .await
+    .expect("seed old action run");
+
+    let deleted = housekeeping_store(&services)
+        .delete_maintenance_evaluation_runs_older_than(180)
+        .await
+        .expect("prune evaluation runs");
+    assert_eq!(deleted, 2);
+
+    let remaining = store
+        .list_evaluation_runs(None, None)
+        .await
+        .expect("list runs")
+        .into_iter()
+        .map(|run| run.id)
+        .collect::<Vec<_>>();
+    assert_eq!(remaining, vec!["run-recent".to_string()]);
+
+    let action_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lifecycle_action_runs")
+        .fetch_one(&services.pool)
+        .await
+        .expect("count action runs");
+    assert_eq!(action_runs, 1);
+    let candidates: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lifecycle_candidates")
+        .fetch_one(&services.pool)
+        .await
+        .expect("count candidates");
+    assert_eq!(candidates, 1);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn deleting_a_rule_set_takes_its_candidates_runs_and_exclusions_with_it() {
     let (services, db) = temp_services("scryer_maintenance_cascade").await;
     seed_rule_set(&services, "rule-a").await;

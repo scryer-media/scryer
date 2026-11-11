@@ -3936,6 +3936,23 @@ file = "postgres/migrations/0335_titles_folder_path_key_unique.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 336
+description = "query audit indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0336_query_audit_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0336_query_audit_indexes.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

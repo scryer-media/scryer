@@ -255,6 +255,7 @@ impl AppUseCase {
                 )
                 .await?
         };
+        self.runtime.acquisition.download_delete_wake.notify_one();
         self.emit_download_queue_item_command_issued_event(
             actor,
             download_client_item_id.to_string(),

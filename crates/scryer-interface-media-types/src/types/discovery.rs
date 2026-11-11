@@ -681,6 +681,8 @@ pub struct LibraryGraphInput {
     pub facet: MediaFacetValue,
     /// Library IDs to cover; omitted or empty covers every library of the facet the viewer can see. IDs the viewer cannot see are ignored.
     pub library_ids: Option<Vec<ID>>,
+    /// `viewKey` of the graph the client already holds. When the graph this read would return has that key, the answer has `unchanged` true and no nodes, edges or clusters.
+    pub known_view_key: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -727,6 +729,8 @@ pub struct LibraryGraphCluster {
 pub struct LibraryGraph {
     /// When the metadata gateway built the graph.
     pub generated_at: String,
+    /// Opaque key of exactly this graph as this viewer sees it: it changes when the graph is rebuilt, when the libraries the read covers change, or when a visible title changes its name or external IDs.
+    pub view_key: String,
     /// Owned titles in the graph.
     pub nodes: Vec<LibraryGraphNode>,
     /// Similarity links between visible titles.
@@ -737,4 +741,6 @@ pub struct LibraryGraph {
     pub subject_count: i32,
     /// True when the facet had more titles than one graph covers, so the newest were graphed and the rest left out.
     pub truncated: bool,
+    /// True when this graph is the one named by `knownViewKey`; nodes, edges and clusters are then empty, subjectCount is 0 and truncated is false, and the client keeps the graph it holds.
+    pub unchanged: bool,
 }

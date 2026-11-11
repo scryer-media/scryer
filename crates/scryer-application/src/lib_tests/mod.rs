@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, Instant, sleep, timeout};
 
 mod acquisition_recovery;
+mod activity_read_paths;
 mod bridge_cour_titles;
 mod consolidation;
 mod cross_library_transfer;
@@ -114,6 +115,7 @@ pub(crate) use support_bootstrap_fixtures::bootstrap_application_upgrade;
 use support_bootstrap_fixtures::*;
 pub(crate) use support_catalog::MockTitleRepo;
 use support_catalog::*;
+pub(crate) use support_events_requests::MockDomainEventRepo;
 use support_events_requests::*;
 pub(crate) use support_imports::MockMediaFileRepo;
 use support_imports::*;

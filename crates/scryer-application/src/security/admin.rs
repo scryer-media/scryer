@@ -776,6 +776,52 @@ impl AppUseCase {
         })
     }
 
+    /// [`Self::user_auth_factor_status`] for several users, in one read per
+    /// factor. Every listed user has an entry; one with no factors has neither.
+    pub async fn users_auth_factor_status(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, UserAuthFactorStatus>> {
+        let mut statuses: std::collections::HashMap<String, UserAuthFactorStatus> = user_ids
+            .iter()
+            .map(|user_id| {
+                (
+                    user_id.clone(),
+                    UserAuthFactorStatus {
+                        has_mfa: false,
+                        has_passkey: false,
+                    },
+                )
+            })
+            .collect();
+        if user_ids.is_empty() {
+            return Ok(statuses);
+        }
+        for credential in self
+            .services
+            .identity
+            .totp
+            .list_credentials_for_users(user_ids)
+            .await?
+        {
+            if let Some(status) = statuses.get_mut(&credential.user_id) {
+                status.has_mfa = true;
+            }
+        }
+        for credential in self
+            .services
+            .identity
+            .webauthn
+            .list_credentials_for_users(user_ids)
+            .await?
+        {
+            if let Some(status) = statuses.get_mut(&credential.user_id) {
+                status.has_passkey = true;
+            }
+        }
+        Ok(statuses)
+    }
+
     pub async fn get_user(&self, actor: &User, user_id: &str) -> AppResult<Option<User>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageUsers)
             .await?;

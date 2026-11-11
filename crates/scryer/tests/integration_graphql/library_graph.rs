@@ -294,6 +294,150 @@ async fn graphql_library_graph_serves_only_nodes_and_edges_of_visible_titles() {
 }
 
 #[tokio::test]
+async fn graphql_library_graph_answers_unchanged_only_for_the_same_view() {
+    const QUERY: &str = r#"
+        query LibraryGraph($input: LibraryGraphInput!) {
+          libraryGraph(input: $input) {
+            generatedAt
+            viewKey
+            unchanged
+            subjectCount
+            truncated
+            nodes { subjectKey targetKey clusterId }
+            edges { from to weight kinds }
+            clusters { id labelKey label medoid size }
+          }
+        }
+    "#;
+    let ctx = library_graph_context().await;
+
+    // Before any build, a held key still reads as "not built yet".
+    let body = gql(
+        &ctx,
+        QUERY,
+        json!({ "input": { "facet": "MOVIE", "knownViewKey": "v1:synthetic" } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert!(body["data"]["libraryGraph"].is_null(), "{body}");
+
+    let owned_title_id = add_test_title(&ctx, "Emberfall", "MOVIE").await;
+    seed_movie_graph(&ctx, &owned_title_id).await;
+    let full = gql(&ctx, QUERY, json!({ "input": { "facet": "MOVIE" } })).await;
+    assert_no_errors(&full);
+    assert_eq!(full["data"]["libraryGraph"]["unchanged"], false, "{full}");
+    let view_key = full["data"]["libraryGraph"]["viewKey"]
+        .as_str()
+        .expect("view key")
+        .to_string();
+    assert!(!view_key.is_empty());
+
+    // Another key gets the same full graph as a read without one.
+    let stale = gql(
+        &ctx,
+        QUERY,
+        json!({ "input": { "facet": "MOVIE", "knownViewKey": "v1:synthetic" } }),
+    )
+    .await;
+    assert_no_errors(&stale);
+    assert_eq!(stale["data"], full["data"]);
+
+    let unchanged = gql(
+        &ctx,
+        QUERY,
+        json!({ "input": { "facet": "MOVIE", "knownViewKey": view_key } }),
+    )
+    .await;
+    assert_no_errors(&unchanged);
+    assert_eq!(
+        unchanged["data"]["libraryGraph"],
+        json!({
+            "generatedAt": "2026-06-25T00:00:01Z",
+            "viewKey": view_key,
+            "unchanged": true,
+            "subjectCount": 0,
+            "truncated": false,
+            "nodes": [],
+            "edges": [],
+            "clusters": []
+        })
+    );
+}
+
+#[tokio::test]
+async fn graphql_library_graph_is_not_unchanged_when_the_viewers_libraries_change() {
+    const QUERY: &str = r#"
+        query LibraryGraph($input: LibraryGraphInput!) {
+          libraryGraph(input: $input) { viewKey unchanged subjectCount nodes { subjectKey } }
+        }
+    "#;
+    let ctx = library_graph_context().await;
+    let first_library =
+        create_graph_library(&ctx, "Synthetic Ashgrove Movies", "/library-graph-key/one").await;
+    let second_library =
+        create_graph_library(&ctx, "Synthetic Duskmere Movies", "/library-graph-key/two").await;
+    let first = add_graph_title(&ctx, "Synthetic Ashgrove", "9401", &first_library).await;
+    let second = add_graph_title(&ctx, "Synthetic Duskmere", "9402", &second_library).await;
+    seed_graph_run(
+        &ctx,
+        "graph-run-view-key",
+        &[
+            SeedNode {
+                key: "tmdb:movie:9401",
+                title_ids: &[&first],
+                cluster_id: -1,
+            },
+            SeedNode {
+                key: "tmdb:movie:9402",
+                title_ids: &[&second],
+                cluster_id: -1,
+            },
+        ],
+        &[],
+        &[],
+        &[],
+    )
+    .await;
+    let mut viewer = graph_viewer(&first_library.0);
+    let read = |viewer: User, known: Option<String>| {
+        let ctx = &ctx;
+        async move {
+            let mut input = json!({ "facet": "MOVIE" });
+            if let Some(known) = known {
+                input["knownViewKey"] = json!(known);
+            }
+            let request = async_graphql::Request::new(QUERY)
+                .variables(async_graphql::Variables::from_json(
+                    json!({ "input": input }),
+                ))
+                .data(viewer);
+            let body = serde_json::to_value(ctx.schema.execute(request).await).expect("json");
+            assert_no_errors(&body);
+            body["data"]["libraryGraph"].clone()
+        }
+    };
+
+    let narrow = read(viewer.clone(), None).await;
+    assert_eq!(narrow["subjectCount"], 1, "{narrow}");
+    let narrow_key = narrow["viewKey"].as_str().expect("view key").to_string();
+    assert_eq!(
+        read(viewer.clone(), Some(narrow_key.clone())).await["unchanged"],
+        true
+    );
+
+    // The viewer is given the second library; the graph is not rebuilt, but
+    // the held view is no longer what this viewer sees.
+    viewer.authorization.libraries.insert(
+        second_library.0.clone(),
+        LibraryPermissionMask::from_permissions([LibraryPermission::View]),
+    );
+    let wide = read(viewer.clone(), Some(narrow_key.clone())).await;
+    assert_eq!(wide["unchanged"], false, "{wide}");
+    assert_eq!(wide["subjectCount"], 2, "{wide}");
+    assert_ne!(wide["viewKey"], json!(narrow_key));
+}
+
+#[tokio::test]
 async fn graphql_library_graph_never_shows_a_scoped_viewer_another_librarys_titles() {
     let ctx = library_graph_context().await;
     let visible_library = create_graph_library(
@@ -602,6 +746,7 @@ async fn graphql_discovery_neighbors_serves_the_gateway_groups() {
                     },
                 ],
                 fetched_at,
+                regroup_attempted: false,
             },
             fetched_at - chrono::Duration::hours(24),
         )

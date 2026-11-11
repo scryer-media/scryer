@@ -7,8 +7,11 @@ use scryer_domain::{
 };
 use std::collections::{HashMap, HashSet};
 
+use crate::media::id_list_statements::{id_list_statements, max_binds_for_target};
 use crate::media::monitor_selections::delete_monitor_selections_for_library_tx;
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
+use crate::queries::sql_runtime::{
+    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTarget, SqlTx, StoreDatastore,
+};
 
 const LIBRARY_ROOT_COLUMNS: &str = "libraries.id, libraries.facet, libraries.name, libraries.slug,
     libraries.is_default, libraries.created_at, libraries.updated_at,
@@ -25,6 +28,33 @@ impl LibraryStore {
     pub fn new(datastore: StoreDatastore) -> Self {
         Self { datastore }
     }
+}
+
+/// Users bound into one statement once a list is split past the bind limit.
+const USER_ID_CHUNK: usize = 900;
+
+/// Runs `sql` for the given users, with `{user_ids}` replaced by the bind
+/// placeholders of each statement. A list that fits is one statement; each
+/// user's rows come from exactly one statement.
+async fn fetch_rows_for_user_ids(
+    datastore: &StoreDatastore,
+    user_ids: &[String],
+    sql: &str,
+) -> AppResult<Vec<SqlRow>> {
+    let target = match datastore {
+        StoreDatastore::Sqlite { pool, .. } => SqlTarget::Sqlite(pool),
+        StoreDatastore::Postgres { pool } => SqlTarget::Postgres(pool),
+    };
+    let (user_ids, per_statement) =
+        id_list_statements(user_ids, 1, 0, max_binds_for_target(target), USER_ID_CHUNK);
+    let mut rows = Vec::new();
+    for chunk in user_ids.chunks(per_statement) {
+        let placeholders = vec!["{}"; chunk.len()].join(", ");
+        let statement = sql.replace("{user_ids}", &placeholders);
+        let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+        rows.extend(SqlRuntime::fetch_all(SqlExec::Target(target), &statement, &args).await?);
+    }
+    Ok(rows)
 }
 
 /// Drop a library from every delay profile scope. A profile that was limited
@@ -239,6 +269,71 @@ impl LibraryRepository for LibraryStore {
         )
         .await?;
         rows.iter().map(row_to_library_grant).collect()
+    }
+
+    async fn app_permission_masks_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<HashMap<String, AppPermissionMask>> {
+        let wanted: HashSet<&str> = user_ids.iter().map(String::as_str).collect();
+        let mut masks: HashMap<String, AppPermissionMask> = user_ids
+            .iter()
+            .map(|user_id| (user_id.clone(), AppPermissionMask::from_bits_retain(0)))
+            .collect();
+        if wanted.is_empty() {
+            return Ok(masks);
+        }
+        let rows = fetch_rows_for_user_ids(
+            &self.datastore,
+            user_ids,
+            "SELECT user_id, permission_mask FROM user_app_permission_masks
+              WHERE user_id IN ({user_ids})",
+        )
+        .await?;
+        for row in &rows {
+            let user_id = row.text("user_id")?;
+            if !wanted.contains(user_id.as_str()) {
+                continue;
+            }
+            let mask = row.opt_i64("permission_mask")?.unwrap_or(0);
+            masks.insert(
+                user_id,
+                AppPermissionMask::from_bits_retain(mask_from_db_value(mask)),
+            );
+        }
+        Ok(masks)
+    }
+
+    async fn permission_masks_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<LibraryGrant>>> {
+        let wanted: HashSet<&str> = user_ids.iter().map(String::as_str).collect();
+        let mut grants: HashMap<String, Vec<LibraryGrant>> = user_ids
+            .iter()
+            .map(|user_id| (user_id.clone(), Vec::new()))
+            .collect();
+        if wanted.is_empty() {
+            return Ok(grants);
+        }
+        let rows = fetch_rows_for_user_ids(
+            &self.datastore,
+            user_ids,
+            "SELECT user_id, library_id, permission_mask
+             FROM user_library_permission_masks
+             WHERE user_id IN ({user_ids})
+             ORDER BY user_id ASC, library_id ASC",
+        )
+        .await?;
+        for row in &rows {
+            let user_id = row.text("user_id")?;
+            if !wanted.contains(user_id.as_str()) {
+                continue;
+            }
+            let grant = row_to_library_grant(row)?;
+            grants.entry(user_id).or_default().push(grant);
+        }
+        Ok(grants)
     }
 
     async fn set_grants_for_user(&self, user_id: &str, grants: Vec<LibraryGrant>) -> AppResult<()> {
@@ -749,6 +844,151 @@ mod tests {
             StoreDatastore::Sqlite { pool, .. } => pool.clone(),
             _ => unreachable!("library store tests run on SQLite"),
         }
+    }
+
+    /// The batched mask reads return exactly what one per-user read returns
+    /// for each requested user: absent users default to no mask and no
+    /// grants, other users' rows never leak in, and grants keep their order.
+    #[tokio::test]
+    async fn batched_permission_masks_match_the_per_user_reads() {
+        let store = test_store().await;
+        let pool = store_pool(&store);
+        for (id, username) in [
+            ("user-emberfall", "emberfall"),
+            ("user-cinderwake", "cinderwake"),
+            ("user-ashgrove", "ashgrove"),
+            ("user-unrequested", "unrequested"),
+        ] {
+            sqlx::query("INSERT INTO users (id, username) VALUES (?, ?)")
+                .bind(id)
+                .bind(username)
+                .execute(&pool)
+                .await
+                .expect("user should insert");
+        }
+        for library_id in ["lib-b", "lib-a", "lib-c"] {
+            create_movie_library(&store, library_id).await;
+        }
+        store
+            .set_app_permission_mask_for_user(
+                "user-emberfall",
+                AppPermissionMask::from_bits_retain(0b1011_0110),
+            )
+            .await
+            .expect("mask should save");
+        store
+            .set_app_permission_mask_for_user(
+                "user-cinderwake",
+                AppPermissionMask::from_bits_retain(1),
+            )
+            .await
+            .expect("mask should save");
+        store
+            .set_app_permission_mask_for_user(
+                "user-unrequested",
+                AppPermissionMask::from_bits_retain(3),
+            )
+            .await
+            .expect("mask should save");
+        let grant = |user_id: &str, library_id: &str, bits: u64| LibraryGrant {
+            user_id: user_id.to_string(),
+            library_id: library_id.to_string(),
+            permissions: LibraryPermissionMask::from_bits_retain(bits),
+        };
+        store
+            .set_grants_for_user(
+                "user-emberfall",
+                vec![
+                    grant("user-emberfall", "lib-c", 1),
+                    grant("user-emberfall", "lib-a", 3),
+                    grant("user-emberfall", "lib-b", 1),
+                ],
+            )
+            .await
+            .expect("grants should save");
+        store
+            .set_grants_for_user(
+                "user-unrequested",
+                vec![grant("user-unrequested", "lib-a", 1)],
+            )
+            .await
+            .expect("grants should save");
+
+        let requested = vec![
+            "user-ashgrove".to_string(),
+            "user-cinderwake".to_string(),
+            "user-emberfall".to_string(),
+            "user-missing".to_string(),
+        ];
+        let masks = store
+            .app_permission_masks_for_users(&requested)
+            .await
+            .expect("batched masks");
+        let grants = store
+            .permission_masks_for_users(&requested)
+            .await
+            .expect("batched grants");
+        assert_eq!(masks.len(), requested.len());
+        assert_eq!(grants.len(), requested.len());
+        for user_id in &requested {
+            assert_eq!(
+                masks[user_id],
+                store
+                    .app_permission_mask_for_user(user_id)
+                    .await
+                    .expect("per-user mask"),
+                "app mask for {user_id}"
+            );
+            assert_eq!(
+                grants[user_id],
+                store
+                    .permission_masks_for_user(user_id)
+                    .await
+                    .expect("per-user grants"),
+                "grants for {user_id}"
+            );
+        }
+        assert_eq!(
+            grants["user-emberfall"]
+                .iter()
+                .map(|grant| grant.library_id.as_str())
+                .collect::<Vec<_>>(),
+            ["lib-a", "lib-b", "lib-c"]
+        );
+        {
+            // Split across statements, with a repeated id, the answer is the same.
+            let _lowered = crate::media::id_list_statements::lower_max_binds_for_tests(2);
+            let mut split_request = requested.clone();
+            split_request.push("user-emberfall".to_string());
+            assert_eq!(
+                store
+                    .app_permission_masks_for_users(&split_request)
+                    .await
+                    .expect("split masks"),
+                masks
+            );
+            assert_eq!(
+                store
+                    .permission_masks_for_users(&split_request)
+                    .await
+                    .expect("split grants"),
+                grants
+            );
+        }
+        assert!(
+            store
+                .app_permission_masks_for_users(&[])
+                .await
+                .expect("empty masks")
+                .is_empty()
+        );
+        assert!(
+            store
+                .permission_masks_for_users(&[])
+                .await
+                .expect("empty grants")
+                .is_empty()
+        );
     }
 
     async fn create_movie_library(store: &LibraryStore, id: &str) {

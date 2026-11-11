@@ -41,6 +41,8 @@ pub mod notification_targets;
 mod pending_release_http_release_upgrade_tests;
 pub mod post_0_16_6_prerelease;
 pub mod post_processing_output;
+#[cfg(test)]
+mod query_audit_indexes_upgrade_tests;
 pub mod release_url_scrub;
 pub mod repair_root_title_folders;
 #[cfg(test)]

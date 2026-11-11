@@ -474,6 +474,38 @@ impl JobRunRepository for WorkflowOperationStore {
         .collect()
     }
 
+    async fn list_latest_job_run_per_job_key(
+        &self,
+        job_keys: &[JobKey],
+    ) -> AppResult<Vec<JobRunRecord>> {
+        if job_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Each arm is the single-key `list_job_runs(Some(key), 1)` read with
+        // its own ORDER BY and LIMIT; the arm number keeps the keys' order.
+        let arms = (0..job_keys.len())
+            .map(|arm| {
+                format!(
+                    "SELECT {arm} AS latest_arm, newest.* FROM (
+                         SELECT * FROM workflow_operations WHERE job_key = {{}}
+                         ORDER BY started_at DESC LIMIT 1
+                     ) newest"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        let sql = format!("SELECT * FROM ({arms}) latest ORDER BY latest_arm");
+        let args = job_keys
+            .iter()
+            .map(|job_key| SqlArg::Text(job_key.as_str().to_string()))
+            .collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .into_iter()
+            .map(|row| workflow_operation_from_row(&row).and_then(job_run_record_from_workflow))
+            .collect()
+    }
+
     async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>> {
         SqlRuntime::fetch_all(
             self.datastore.read_exec(),

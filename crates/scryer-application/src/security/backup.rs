@@ -650,7 +650,11 @@ impl AppUseCase {
             .await?;
 
         let backup_dir = self.effective_backup_dir().await?;
-        Ok(list_backup_files(&backup_dir))
+        // The directory scan blocks, so it runs off the async runtime.
+        Ok(crate::folder_ownership::run_folder_check_blocking(move || {
+            list_backup_files(&backup_dir)
+        })
+        .await)
     }
 
     pub async fn prepare_backup_download(
@@ -1353,5 +1357,59 @@ mod tests {
         cleanup_partial_backup_bundle(dir.path(), &filename);
 
         assert!(!path.exists(), "partial bundle should be removed");
+    }
+
+    #[tokio::test]
+    async fn backup_listing_off_the_runtime_matches_the_inline_scan() {
+        let dir = tempdir().expect("tempdir");
+        let entries = vec![
+            backup_info(
+                "emberfall.tar.zst",
+                "2026-05-14T06:00:00Z",
+                BackupTrigger::Auto,
+                BackupStatus::Ready,
+            ),
+            backup_info(
+                "cinderwake.tar.zst",
+                "2026-05-14T06:00:00Z",
+                BackupTrigger::Manual,
+                BackupStatus::Ready,
+            ),
+            backup_info(
+                "ashgrove.tar.zst",
+                "2026-05-14T05:00:00Z",
+                BackupTrigger::Auto,
+                BackupStatus::Failed,
+            ),
+        ];
+        for entry in &entries {
+            std::fs::write(dir.path().join(&entry.filename), b"backup").expect("write backup");
+            write_backup_metadata(dir.path(), entry).expect("write metadata");
+        }
+        std::fs::write(dir.path().join("unrelated.txt"), b"x").expect("write unrelated");
+
+        let inline = list_backup_files(dir.path());
+        let path = dir.path().to_path_buf();
+        let off_runtime =
+            crate::folder_ownership::run_folder_check_blocking(move || list_backup_files(&path))
+                .await;
+
+        let names = |list: &[BackupInfo]| {
+            list.iter()
+                .map(|info| (info.filename.clone(), info.size_bytes, info.status.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&off_runtime), names(&inline));
+        assert_eq!(
+            off_runtime
+                .iter()
+                .map(|info| info.filename.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "emberfall.tar.zst",
+                "cinderwake.tar.zst",
+                "ashgrove.tar.zst"
+            ]
+        );
     }
 }

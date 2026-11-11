@@ -4565,15 +4565,15 @@ async fn process_single_target(
                         .cloned(),
                 );
 
-                for candidate in pack_results
+                let pack_decisions = pack_results
                     .iter()
                     .filter(|candidate| candidate_is_season_pack_for_season(candidate, season_num))
-                {
-                    let decision_code = annotated_auto_decision_code(candidate);
-                    // Recorded before any gate ran for this pack, so there is no
-                    // bar to name.
-                    record_release_decision(app, item, title, candidate, decision_code, None, now)
-                        .await;
+                    // Recorded before any gate ran for these packs, so there is
+                    // no bar to name.
+                    .map(|candidate| (candidate, annotated_auto_decision_code(candidate), None))
+                    .collect::<Vec<_>>();
+                record_release_decisions(app, item, title, &pack_decisions, now).await;
+                for (_, decision_code, _) in pack_decisions {
                     // `AlreadyActive` only. That pack is already downloading,
                     // so searching its episodes would duplicate it. `PendingDelay`
                     // means the delay profile chose to *wait* — not that the pack
@@ -4951,22 +4951,39 @@ async fn process_single_target(
     let mut eligible: Vec<usize> = Vec::new();
     let mut next_pending_role = PendingReleaseRole::Primary;
 
-    for (candidate_index, candidate) in results.iter().enumerate() {
-        let is_allowed = candidate
-            .quality_profile_decision
-            .as_ref()
-            .map(|d| d.allowed)
-            .unwrap_or(false);
-        let decision_code = if is_allowed {
-            effective_auto_decision_code_for_route(candidate, &failed_routes, &db_blocklist)
-        } else {
-            ReleaseAutoDecisionCode::QualityBlocked
-        };
+    // Every candidate's decision row is written in one batch; the events, the
+    // review park and the pending holds then follow in ranked order.
+    let candidate_decisions = results
+        .iter()
+        .map(|candidate| {
+            if candidate_quality_allowed(candidate) {
+                (
+                    candidate,
+                    effective_auto_decision_code_for_route(
+                        candidate,
+                        &failed_routes,
+                        &db_blocklist,
+                    ),
+                    incumbent_bar,
+                )
+            } else {
+                // Blocked on quality alone: admission never looked at an incumbent.
+                (candidate, ReleaseAutoDecisionCode::QualityBlocked, None)
+            }
+        })
+        .collect::<Vec<_>>();
+    let decision_outcomes =
+        record_release_decisions(app, item, title, &candidate_decisions, now).await;
+
+    for (candidate_index, &(candidate, decision_code, _)) in
+        candidate_decisions.iter().enumerate()
+    {
+        let is_allowed = candidate_quality_allowed(candidate);
+        let recorded = decision_outcomes
+            .get(candidate_index)
+            .copied()
+            .unwrap_or(ReleaseDecisionOutcome::Unknown);
         if !is_allowed {
-            // Blocked on quality alone: admission never looked at an incumbent.
-            let recorded =
-                record_release_decision(app, item, title, candidate, decision_code, None, now)
-                    .await;
             // A feed that repeats the same release every cycle would otherwise
             // repeat its rejection every cycle too — 80 identical rows a
             // minute on the load test, all of them the same catalogue of
@@ -5013,17 +5030,6 @@ async fn process_single_target(
         if matches!(decision_code, ReleaseAutoDecisionCode::DbBlocklisted) {
             skipped_for_failed = true;
         }
-
-        let recorded = record_release_decision(
-            app,
-            item,
-            title,
-            candidate,
-            decision_code,
-            incumbent_bar,
-            now,
-        )
-        .await;
 
         if !decision_code.is_eligible() {
             // Same rule as the quality-blocked arm above: the rejection is

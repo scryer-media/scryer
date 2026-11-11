@@ -610,6 +610,15 @@ async fn upsert_keeps_first_seen_and_clears_departure_when_item_returns() {
         .expect("item-a");
     assert!(item_a.left_at.is_some());
     assert!(!item_a.left_handled);
+    // The active read is the full read without departed rows, in order.
+    let active = store
+        .list_active_by_subscription("sub-1")
+        .await
+        .expect("active rows");
+    let mut expected_active = rows.clone();
+    expected_active.retain(|row| row.left_at.is_none());
+    assert_eq!(active, expected_active);
+    assert_eq!(active.len(), 1);
 
     store
         .set_left_handled("sub-1", &["item-a".to_string()])
@@ -654,6 +663,79 @@ async fn upsert_keeps_first_seen_and_clears_departure_when_item_returns() {
             .map(|row| row.item_key.as_str())
             .collect::<Vec<_>>(),
         vec!["item-b"]
+    );
+}
+
+#[tokio::test]
+async fn batched_active_read_matches_per_subscription_reads_in_caller_order() {
+    let store = test_store(None).await;
+    for id in ["sub-1", "sub-2"] {
+        ListSubscriptionRepository::create(&store, subscription(id, ListScope::Public, OWNER))
+            .await
+            .expect("create");
+    }
+    let first_sync = Utc::now() - Duration::hours(2);
+    store
+        .upsert_many(&[
+            membership("sub-1", "emberfall", first_sync),
+            membership("sub-1", "cinderwake", first_sync),
+            membership("sub-2", "ashgrove", first_sync),
+            membership("sub-2", "duskmere", first_sync),
+        ])
+        .await
+        .expect("first upsert");
+    let second_sync = first_sync + Duration::hours(1);
+    store
+        .upsert_many(&[membership("sub-2", "duskmere", second_sync)])
+        .await
+        .expect("second upsert");
+    store
+        .mark_left("sub-2", second_sync, second_sync)
+        .await
+        .expect("mark left");
+
+    let order = [
+        "sub-2".to_string(),
+        "sub-missing".to_string(),
+        "sub-1".to_string(),
+    ];
+    let mut expected = Vec::new();
+    for id in &order {
+        expected.extend(
+            store
+                .list_active_by_subscription(id)
+                .await
+                .expect("active rows"),
+        );
+    }
+    let batched = store
+        .list_active_by_subscriptions(&order)
+        .await
+        .expect("batched active rows");
+    assert_eq!(batched, expected);
+    assert_eq!(batched.len(), 3, "the departed row is left out");
+
+    // Past one statement's worth of ids, with a repeated id: same rows, same
+    // order.
+    let mut long_order = (0..2000)
+        .map(|index| format!("sub-filler-{index}"))
+        .collect::<Vec<_>>();
+    long_order[950] = "sub-2".to_string();
+    long_order[1999] = "sub-1".to_string();
+    long_order.push("sub-2".to_string());
+    assert_eq!(
+        store
+            .list_active_by_subscriptions(&long_order)
+            .await
+            .expect("chunked active rows"),
+        expected
+    );
+    assert!(
+        store
+            .list_active_by_subscriptions(&[])
+            .await
+            .expect("no subscriptions")
+            .is_empty()
     );
 }
 

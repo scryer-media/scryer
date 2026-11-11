@@ -13370,6 +13370,100 @@ async fn queued_delete_poller_executes_client_delete() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn download_queue_commands_idle_poller_wakes_on_enqueue_and_recovers_on_its_own_cadence() {
+    use std::sync::atomic::Ordering;
+
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let (app, user) =
+        bootstrap_with_delete_queue(download_client.clone(), download_queue_commands.clone());
+    let token = tokio_util::sync::CancellationToken::new();
+    let started_at = tokio::time::Instant::now();
+    let handle = tokio::spawn(start_background_download_delete_poller(
+        app.clone(),
+        token.child_token(),
+    ));
+
+    // Startup pass: one recovery and one listing of persisted commands.
+    crate::test_wait::wait_until("startup delete poller pass", || async {
+        download_queue_commands
+            .list_pending_calls
+            .load(Ordering::SeqCst)
+            >= 1
+    })
+    .await;
+    assert_eq!(
+        download_queue_commands.recover_calls.load(Ordering::SeqCst),
+        1
+    );
+
+    // Idle: no reads while nothing is queued and recovery is not due. A sleep
+    // on the paused clock lets every timer due in the next 60 seconds fire
+    // and run to its next wait first, so a poller still ticking on the old
+    // 2-second cadence would list again here.
+    let idle_lists = download_queue_commands
+        .list_pending_calls
+        .load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(
+        download_queue_commands
+            .list_pending_calls
+            .load(Ordering::SeqCst),
+        idle_lists
+    );
+    assert_eq!(
+        download_queue_commands.recover_calls.load(Ordering::SeqCst),
+        1
+    );
+
+    // A queued delete runs on its wake, without waiting out a timer.
+    let enqueued_at = tokio::time::Instant::now();
+    let command = app
+        .delete_download_queue_item(
+            &user,
+            Some("client-emberfall"),
+            "nzbget",
+            "emberfall-job",
+            false,
+        )
+        .await
+        .expect("queue delete command");
+    crate::test_wait::within_deadline(
+        "woken delete completes",
+        download_queue_commands.wait_completed(&command.id),
+    )
+    .await;
+    assert!(enqueued_at.elapsed() < Duration::from_secs(2));
+    assert_eq!(
+        download_queue_commands.recover_calls.load(Ordering::SeqCst),
+        1,
+        "a wake does not run stale recovery"
+    );
+    assert_eq!(
+        download_client.deleted_items.lock().await.clone(),
+        vec![("emberfall-job".to_string(), false)]
+    );
+
+    // Stale recovery runs again once its 120-second interval elapses, and
+    // not before.
+    let interval = Duration::from_secs(120);
+    tokio::time::sleep(interval - started_at.elapsed() - Duration::from_secs(1)).await;
+    assert_eq!(
+        download_queue_commands.recover_calls.load(Ordering::SeqCst),
+        1
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    crate::test_wait::wait_until("periodic stale recovery", || async {
+        download_queue_commands.recover_calls.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+    assert!(started_at.elapsed() >= Duration::from_secs(120));
+
+    token.cancel();
+    handle.await.expect("delete poller should stop cleanly");
+}
+
 #[tokio::test]
 async fn queue_delete_ends_bound_download_when_client_is_unavailable() {
     let download_client = Arc::new(StubDownloadClient::default());

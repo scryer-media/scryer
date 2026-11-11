@@ -1764,6 +1764,76 @@ async fn a_title_deleted_without_an_exclusion_is_added_again_on_the_next_sync() 
 }
 
 #[tokio::test]
+async fn deleted_titles_are_found_with_one_batched_read_per_check() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness
+        .lists
+        .serve("list-a", &["emberfall", "cinderwake", "ashgrove"]);
+    harness.sync_at(at(0)).await;
+    assert_eq!(add_calls(&harness.actions), 3);
+    assert!(
+        harness
+            .actions
+            .title_batch_lookups
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+
+    harness
+        .actions
+        .missing_titles
+        .lock()
+        .unwrap()
+        .insert("title-cinderwake".to_string());
+    harness.sync_at(at(6 * 60)).await;
+
+    // One read for the unchanged list's check, one for the re-read list.
+    let lookups = harness.actions.title_batch_lookups.lock().unwrap().clone();
+    let mut expected = vec![
+        "title-ashgrove".to_string(),
+        "title-cinderwake".to_string(),
+        "title-emberfall".to_string(),
+    ];
+    expected.sort();
+    assert_eq!(lookups, vec![expected.clone(), expected]);
+    assert_eq!(*harness.actions.title_lookups.lock().unwrap(), 0);
+    let cinderwake_adds = harness
+        .actions
+        .calls()
+        .into_iter()
+        .filter(
+            |call| matches!(call, RecordedAction::Add { item_key, .. } if item_key == "cinderwake"),
+        )
+        .count();
+    assert_eq!(cinderwake_adds, 2, "the deleted title is added again");
+    assert_eq!(add_calls(&harness.actions), 4);
+}
+
+#[tokio::test]
+async fn a_failed_existence_read_counts_every_title_as_present() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["emberfall", "cinderwake"]);
+    harness.sync_at(at(0)).await;
+    harness
+        .actions
+        .missing_titles
+        .lock()
+        .unwrap()
+        .insert("title-cinderwake".to_string());
+    *harness.actions.fail_title_batch_lookups.lock().unwrap() = true;
+
+    // The unchanged list looks finished, so nothing is re-added this sync.
+    harness.sync_at(at(6 * 60)).await;
+    assert_eq!(add_calls(&harness.actions), 2);
+
+    // The next sync after the store recovers catches it.
+    *harness.actions.fail_title_batch_lookups.lock().unwrap() = false;
+    harness.sync_at(at(12 * 60)).await;
+    assert_eq!(add_calls(&harness.actions), 3);
+}
+
+#[tokio::test]
 async fn a_title_deleted_with_an_exclusion_stays_gone() {
     let harness = Harness::new(vec![subscription("list-a")]);
     harness.lists.serve("list-a", &["alpha"]);
