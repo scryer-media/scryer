@@ -1,6 +1,9 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "settings.defaultMonitorType": "Default monitoring for new titles",
+  "settings.defaultMonitorTypeHelp":
+    "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
   "settings.oauthClientIdCopied": "OAuth client ID copied.",
   "status.copyFailedSelected":
@@ -8524,6 +8527,7 @@ const en: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Category mismatch",
   "wanted.decision.ambiguousIdentity": "Ambiguous identity",
   "wanted.decision.qualityBlocked": "Quality blocked",
+  "wanted.decision.episodeAvailabilityBlocked": "Waiting for air date",
   "wanted.decision.minimumSeeders": "Too few seeders",
   "wanted.decision.packBelowMissingThreshold": "Pack below missing threshold",
   "wanted.decision.packForSingleEpisode": "Pack for a single episode",

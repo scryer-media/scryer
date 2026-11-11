@@ -1405,6 +1405,15 @@ async fn seed_library_settings_definitions(ctx: &TestContext) {
                 is_sensitive: false,
                 validation_json: None,
             },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "catalog.default_monitor_type".into(),
+                data_type: "string".into(),
+                default_value_json: "null".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
         ])
         .await
         .expect("seed library import settings definitions");
@@ -2088,6 +2097,15 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 key_name: "anime.inter_season_movies".into(),
                 data_type: "boolean".into(),
                 default_value_json: "true".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "catalog.default_monitor_type".into(),
+                data_type: "string".into(),
+                default_value_json: "null".into(),
                 is_sensitive: false,
                 validation_json: None,
             },

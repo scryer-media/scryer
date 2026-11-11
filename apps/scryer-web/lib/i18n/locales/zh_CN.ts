@@ -1951,6 +1951,7 @@ const zh_CN: LocaleDictionary = {
   "wanted.decision.eligible": "可接受",
   "wanted.decision.titleMismatch": "标题不匹配",
   "wanted.decision.qualityBlocked": "被质量规则阻止",
+  "wanted.decision.episodeAvailabilityBlocked": "等待播出日期",
   "wanted.decision.upgradeRejected": "升级被拒绝",
   "wanted.decision.pendingDelay": "等待延迟",
   "wanted.decision.alreadyActive": "已在活动中",

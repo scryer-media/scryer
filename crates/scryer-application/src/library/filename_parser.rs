@@ -2020,6 +2020,56 @@ mod tests {
         }
     }
 
+    /// A file whose episode title is a bare number reads, to the release
+    /// parser, like the far end of a spaced range, so the parse is flagged as
+    /// ambiguous. The library scan must still place it on the one episode it
+    /// names.
+    #[test]
+    fn title_scan_places_a_file_whose_episode_title_is_a_bare_number() {
+        let episodes: Vec<Episode> = (1..=20)
+            .map(|number| episode(&format!("ep-13-{number}"), "13", &number.to_string()))
+            .collect();
+
+        for facet in [MediaFacet::Series, MediaFacet::Anime] {
+            let title = title("Show A", facet);
+            let input = LibraryFilenameParseInput {
+                path: Path::new(
+                    "/library/Show A (2011)/Season 13/Show A (2011) - S13E01 - 13 [WEBDL-1080p].mkv",
+                ),
+                display_name: None,
+                library_root: Some(Path::new("/library")),
+                title: Some(&title),
+                facet: Some(&title.facet),
+                collections: &[],
+                series_movie_links: &[],
+                episodes: &episodes,
+                existing_record: None,
+                anime_numbering_bridge: None,
+                mode: LibraryFilenameParseMode::TitleScan,
+                fallback_policy: LibraryFilenameFallbackPolicy::NeedReleaseMetadata,
+            };
+
+            let parse = parse_library_filename(&input);
+
+            assert_eq!(
+                parse.unmatched_reason(),
+                None,
+                "{:?} was refused",
+                title.facet
+            );
+            assert_eq!(
+                parse
+                    .target_episodes()
+                    .iter()
+                    .map(|episode| episode.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["ep-13-1"],
+                "{:?} resolved to the wrong episodes",
+                title.facet
+            );
+        }
+    }
+
     #[test]
     fn title_scan_maps_a_community_numbered_anime_file_onto_the_official_episode() {
         let title = title("Lantern Verge", MediaFacet::Anime);

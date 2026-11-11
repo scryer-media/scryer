@@ -148,6 +148,7 @@ function formatWantedDecisionCode(code: string, t: Translate) {
     category_mismatch: "wanted.decision.categoryMismatch",
     ambiguous_identity: "wanted.decision.ambiguousIdentity",
     quality_blocked: "wanted.decision.qualityBlocked",
+    episode_availability_blocked: "wanted.decision.episodeAvailabilityBlocked",
     minimum_seeders: "wanted.decision.minimumSeeders",
     pack_below_missing_threshold: "wanted.decision.packBelowMissingThreshold",
     pack_for_single_episode: "wanted.decision.packForSingleEpisode",

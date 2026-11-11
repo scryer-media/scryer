@@ -214,3 +214,66 @@ test("media request input leaves external ratings undefined when the result has 
   assert.equal(input.externalRatings, undefined);
   assert.ok(!("externalRatings" in JSON.parse(JSON.stringify(input))));
 });
+
+test("a monitoring-only settings event refreshes catalog defaults without unrelated refetches", () => {
+  let onSettingsChanged: ((keys: string[]) => void) | undefined;
+  let configQueries = 0;
+  const { useGlobalSearch } = loadGlobalSearch({
+    react: {
+      useCallback: (callback: unknown) => callback,
+      useEffect: () => {},
+      useMemo: (factory: () => unknown) => factory(),
+      useRef: (value: unknown) => ({ current: value }),
+      useState: (initial: unknown) => [
+        typeof initial === "function" ? initial() : initial,
+        () => {},
+      ],
+    },
+    urql: {
+      useClient: () => ({
+        query: () => {
+          configQueries += 1;
+          // Keep the request pending: this test observes whether the real
+          // subscription dispatches a refresh, not how its results render.
+          return { toPromise: () => new Promise(() => {}) };
+        },
+      }),
+    },
+    "@/lib/hooks/use-settings-subscription": {
+      useSettingsSubscription: (callback: (keys: string[]) => void) => {
+        onSettingsChanged = callback;
+      },
+    },
+  });
+
+  useGlobalSearch({
+    authenticatedUser: {
+      id: "review-user",
+      username: "review-user",
+      appPermissions: [],
+      libraryPermissions: [
+        {
+          libraryId: "library-1",
+          permissions: ["VIEW", "MANAGE_TITLES", "REQUEST"],
+        },
+      ],
+    },
+    queueFacet: "SERIES",
+    uiLanguage: "eng",
+  });
+
+  assert.ok(onSettingsChanged, "the hook must subscribe to settings changes");
+  onSettingsChanged(["appearance.theme"]);
+  assert.equal(
+    configQueries,
+    0,
+    "unrelated settings must not refetch search configuration",
+  );
+
+  onSettingsChanged(["catalog.default_monitor_type"]);
+  assert.equal(
+    configQueries,
+    1,
+    "a monitoring-only change must reload the selected library defaults",
+  );
+});

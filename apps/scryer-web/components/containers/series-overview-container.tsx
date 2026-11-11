@@ -36,6 +36,7 @@ import type { TitleRatings } from "@/components/views/title-ratings-strip";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
 import {
+  isInteractiveReleaseSearchLifecycleError,
   runIterativeReleaseSearch,
   titleReleaseSearchInput,
   type InteractiveSearchIndexerProgress,
@@ -2179,6 +2180,11 @@ export const SeriesOverviewContainer = React.memo(
           }),
           {
             signal: abortController.signal,
+            onError: () => {
+              if (!abortController.signal.aborted) {
+                setGlobalStatus(t("nzb.searchFailed"), { level: "ERROR" });
+              }
+            },
             onUpdate: (snapshot) => {
               if (abortController.signal.aborted) return;
               setSeasonSearchResultsByCollection((prev) => ({
@@ -2195,7 +2201,9 @@ export const SeriesOverviewContainer = React.memo(
           .catch((error: unknown) => {
             if (isAbortError(error) || abortController.signal.aborted) return;
             setGlobalStatus(
-              userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+              isInteractiveReleaseSearchLifecycleError(error)
+                ? t("nzb.searchFailed")
+                : userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
               {
                 level: "ERROR",
               },

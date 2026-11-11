@@ -1,6 +1,9 @@
 import type { LocaleDictionary } from "../types";
 
 const ru: LocaleDictionary = {
+  "settings.defaultMonitorType": "Отслеживание новых тайтлов по умолчанию",
+  "settings.defaultMonitorTypeHelp":
+    "Начальный выбор при добавлении или запросе тайтла. Существующие тайтлы и подписки на списки не меняются.",
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Эта версия Prowlarr не поддерживается. Обновите Prowlarr до версии 2.0 или новее.",
   "error.reason.STANDBY_NOT_FOUND":
@@ -3769,6 +3772,7 @@ const ru: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Несоответствие категории",
   "wanted.decision.ambiguousIdentity": "Неоднозначное совпадение",
   "wanted.decision.qualityBlocked": "Заблокировано профилем качества",
+  "wanted.decision.episodeAvailabilityBlocked": "Ожидает даты выхода",
   "wanted.decision.upgradeRejected": "Обновление отклонено",
   "wanted.decision.pendingDelay": "Отложено",
   "wanted.decision.alreadyActive": "Уже активно",

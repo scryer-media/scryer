@@ -17,7 +17,10 @@ import {
   wantedItemsQuery,
   wantedNavigationCountsQuery,
 } from "@/lib/graphql/queries";
-import { runIterativeReleaseSearch } from "@/lib/graphql/release-search";
+import {
+  isInteractiveReleaseSearchLifecycleError,
+  runIterativeReleaseSearch,
+} from "@/lib/graphql/release-search";
 import {
   cancelAcquisitionSearchMutation,
   triggerAcquisitionSearchMutation,
@@ -888,6 +891,11 @@ export const WantedContainer = memo(function WantedContainer({
           setCutoffActiveInteractiveItemId(itemKey);
         }
       };
+      let searchFailed = false;
+      const onError = () => {
+        searchFailed = true;
+        setGlobalStatus(t("nzb.searchFailed"), { level: "ERROR" });
+      };
       try {
         if (item.episodeId) {
           const season = item.seasonNumber?.trim();
@@ -904,30 +912,36 @@ export const WantedContainer = memo(function WantedContainer({
               season,
               episode,
             },
-            { onUpdate },
+            { onUpdate, onError },
           );
           setCutoffSearchResultsByItemId((current) => ({
             ...current,
             [itemKey]: results,
           }));
           setCutoffActiveInteractiveItemId(itemKey);
-          setGlobalStatus(t("status.foundNzb", { count: results.length }));
+          if (!searchFailed) {
+            setGlobalStatus(t("status.foundNzb", { count: results.length }));
+          }
         } else {
           const results = await runIterativeReleaseSearch(
             client,
             { titleId: item.titleId },
-            { onUpdate },
+            { onUpdate, onError },
           );
           setCutoffSearchResultsByItemId((current) => ({
             ...current,
             [itemKey]: results,
           }));
           setCutoffActiveInteractiveItemId(itemKey);
-          setGlobalStatus(t("status.foundNzb", { count: results.length }));
+          if (!searchFailed) {
+            setGlobalStatus(t("status.foundNzb", { count: results.length }));
+          }
         }
       } catch (error) {
         setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          isInteractiveReleaseSearchLifecycleError(error)
+            ? t("nzb.searchFailed")
+            : userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
       } finally {

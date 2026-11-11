@@ -2065,6 +2065,7 @@ const ko: LocaleDictionary = {
   "wanted.decision.eligible": "적격",
   "wanted.decision.titleMismatch": "제목 불일치",
   "wanted.decision.qualityBlocked": "품질로 차단됨",
+  "wanted.decision.episodeAvailabilityBlocked": "방영일 대기 중",
   "wanted.decision.upgradeRejected": "업그레이드 거부됨",
   "wanted.decision.pendingDelay": "보류 중인 지연",
   "wanted.decision.alreadyActive": "이미 활성 상태",

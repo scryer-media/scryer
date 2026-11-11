@@ -3947,6 +3947,7 @@ const cs: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Neshoda kategorie",
   "wanted.decision.ambiguousIdentity": "Nejednoznačná identita",
   "wanted.decision.qualityBlocked": "Kvalita zablokována",
+  "wanted.decision.episodeAvailabilityBlocked": "Čeká na datum vysílání",
   "wanted.decision.minimumSeeders": "Málo seederů",
   "wanted.decision.packBelowMissingThreshold": "Balíček pod prahem chybějících",
   "wanted.decision.packForSingleEpisode": "Balíček pro jedinou epizodu",

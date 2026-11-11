@@ -77,7 +77,10 @@ import {
   catalogTitlesRefreshDetail,
 } from "@/lib/events/catalog-titles";
 import { isAbortError } from "@/lib/graphql/urql-client";
-import { runIterativeReleaseSearch } from "@/lib/graphql/release-search";
+import {
+  isInteractiveReleaseSearchLifecycleError,
+  runIterativeReleaseSearch,
+} from "@/lib/graphql/release-search";
 import type { InteractiveSearchProgress } from "@/lib/graphql/release-search";
 import { useClient } from "urql";
 import type {
@@ -121,6 +124,7 @@ import {
   releaseQueueScopeInput,
 } from "@/lib/utils/release-queue-scope";
 import { validateLibraryRootPaths } from "@/lib/utils/library-root-validation";
+import { librarySettingsInput } from "@/lib/utils/library-settings-input";
 import {
   catalogRootValidationState,
   configuredCatalogLibraries,
@@ -486,43 +490,6 @@ function libraryRootsInput(roots: RootFolderOption[]) {
       isDefault: root.isDefault,
     }))
     .filter((root) => root.path.length > 0);
-}
-
-function librarySettingsInput(
-  settings: LibrarySettingsDraft | undefined,
-): LibrarySettingsDraft | undefined {
-  if (!settings) {
-    return undefined;
-  }
-  return {
-    requiredAudioLanguages: settings.requiredAudioLanguages,
-    preferredAudioLanguages: settings.preferredAudioLanguages,
-    optionalAudioLanguages: settings.optionalAudioLanguages,
-    optionalAudioLanguagesKeepSearching:
-      settings.optionalAudioLanguagesKeepSearching,
-    metadataLanguage: settings.metadataLanguage,
-    useSeasonFolders: settings.useSeasonFolders,
-    qualityProfileId: settings.qualityProfileId,
-    requestQualityProfileIds: settings.requestQualityProfileIds,
-    scoringPersona: settings.scoringPersona,
-    fillerPolicy: settings.fillerPolicy,
-    recapPolicy: settings.recapPolicy,
-    monitorSpecials: settings.monitorSpecials,
-    interSeasonMovies: settings.interSeasonMovies,
-    monitorFillerMovies: settings.monitorFillerMovies,
-    nfoWriteOnImport: settings.nfoWriteOnImport,
-    plexmatchWriteOnImport: settings.plexmatchWriteOnImport,
-    importMode: settings.importMode,
-    setPermissionsLinux: settings.setPermissionsLinux,
-    fileChmod: settings.fileChmod,
-    folderChmod: settings.folderChmod,
-    chownGroup: settings.chownGroup,
-    defaultMovieAvailability: settings.defaultMovieAvailability ?? null,
-    movieReleaseMarket: settings.movieReleaseMarket ?? null,
-    movieAvailabilityDelayDays: settings.movieAvailabilityDelayDays ?? null,
-    indexerRouting: settings.indexerRouting,
-    downloadClientRouting: settings.downloadClientRouting,
-  };
 }
 
 function splitSucceededTitleIds(
@@ -3665,7 +3632,15 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         const results = await runIterativeReleaseSearch(
           client,
           { titleId: title.id },
-          { signal: abortController.signal, onUpdate },
+          {
+            signal: abortController.signal,
+            onUpdate,
+            onError: () => {
+              if (!abortController.signal.aborted) {
+                setGlobalStatus(t("nzb.searchFailed"), { level: "ERROR" });
+              }
+            },
+          },
         );
         if (abortController.signal.aborted) {
           return [];
@@ -3676,7 +3651,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           return [];
         }
         setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("nzb.searchFailed"), t),
+          isInteractiveReleaseSearchLifecycleError(error)
+            ? t("nzb.searchFailed")
+            : userFacingGraphQlErrorMessage(error, t("nzb.searchFailed"), t),
           { level: "ERROR" },
         );
         return [];

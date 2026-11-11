@@ -3391,6 +3391,7 @@ const zh_HK: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "分類不相符",
   "wanted.decision.ambiguousIdentity": "身分不明確",
   "wanted.decision.qualityBlocked": "被質素規則阻止",
+  "wanted.decision.episodeAvailabilityBlocked": "等待播出日期",
   "wanted.decision.minimumSeeders": "做種數過少",
   "wanted.decision.packBelowMissingThreshold": "合集低於缺失門檻",
   "wanted.decision.upgradeRejected": "升級被拒絕",

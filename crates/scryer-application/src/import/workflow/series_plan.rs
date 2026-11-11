@@ -1663,6 +1663,188 @@ mod series_plan_tests {
     }
 
     #[test]
+    fn issue_430_pack_members_accept_explicit_search_aliases_only() {
+        let mut title = scene_pack_title();
+        title.name = "Show C -Foo Bar Baz-".into();
+        title.facet = scryer_domain::MediaFacet::Anime;
+        title.tags = vec!["scryer:search-aliases:Show C".into()];
+        let catalog: Vec<_> = (1..=13)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let mut evidence = episode_scoped_pack_evidence(
+            "[Judas] Show C -Foo Bar Baz- (S01) [1080p][HEVC x265 10bit][Multi-Subs]v2 (Batch)",
+        );
+        if let ReleaseEvidence::ScryerSubmission { facet, .. } = &mut evidence {
+            *facet = "anime".into();
+        }
+        let EpisodePackVerification::Verified(pack) =
+            verified_episode_pack(&evidence, &title, &catalog, None, None, None)
+        else {
+            panic!("the submitted pack should verify");
+        };
+        for n in 1..=13 {
+            let filename = format!("[Judas] Show C - S01E{n:02}v2.mkv");
+            let path = Path::new(&filename);
+            let plan = |title: &scryer_domain::Title| {
+                plan_episode_pack_member(
+                    title,
+                    Path::new(""),
+                    path,
+                    &catalog,
+                    None,
+                    None,
+                    Some(&pack),
+                )
+            };
+            let PlannedMemberDraft::Resolved(episodes) = plan(&title) else {
+                panic!("explicit search alias should resolve {filename}");
+            };
+            assert_eq!(
+                episodes
+                    .iter()
+                    .map(|episode| &episode.id)
+                    .collect::<Vec<_>>(),
+                vec![&format!("ep-{n}")],
+                "{filename}"
+            );
+            let mut without_alias = title.clone();
+            without_alias.tags.clear();
+            assert!(matches!(
+                plan(&without_alias),
+                PlannedMemberDraft::Hold {
+                    reason_code: "member_title_mismatch",
+                    ..
+                }
+            ));
+        }
+        for filename in [
+            "[Judas] Show C Other - S01E01v2.mkv",
+            "[Judas] Other Show C - S01E01v2.mkv",
+            "[Judas] Show C 2 - S01E01v2.mkv",
+            "[Judas] Other Show - S01E01v2.mkv",
+        ] {
+            let draft = plan_episode_pack_member(
+                &title,
+                Path::new(""),
+                Path::new(filename),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            assert!(
+                matches!(
+                    draft,
+                    PlannedMemberDraft::Hold {
+                        reason_code: "member_title_mismatch",
+                        ..
+                    }
+                ),
+                "{filename}: {draft:?}"
+            );
+        }
+    }
+
+    /// A name the catalog itself carries keeps matching beside a second name
+    /// it does not know; only a match resting on a custom search alias must
+    /// cover the whole title zone.
+    #[test]
+    fn issue_430_catalog_names_beside_unknown_names_keep_matching() {
+        let catalog: Vec<_> = (1..=13)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let names = [
+            ("Known Name - S01E02", true),
+            ("[Grp] Known Name - Other Name - 01 [1080p]", true),
+            ("[Grp] Known Name - Other Name - S01E02 [1080p]", true),
+            ("Known Name / Other Name - S01E02", true),
+            ("Known Name AKA Other Name S01E02", true),
+            ("Known.Name.AKA.Other.Name.S01E02.1080p.WEB-DL-Grp", true),
+            ("Known Name (Other Name) - S01E02", true),
+            ("Known Name: Subtitle - S01E02", true),
+            ("Known Name (2024) - S01E02", true),
+            ("Known.Name.2024.S01E02.1080p.WEB-DL-Grp", true),
+            ("Known Name US - S01E02", true),
+            ("Known Name (US) - S01E02", true),
+            ("Known.Name.US.S01E02.1080p.WEB-DL-Grp", true),
+            ("Other Name - S01E02", false),
+        ];
+        for facet in [
+            scryer_domain::MediaFacet::Series,
+            scryer_domain::MediaFacet::Anime,
+        ] {
+            let mut title = scene_pack_title();
+            title.name = "Known Name".into();
+            title.facet = facet.clone();
+            let context = crate::build_release_parse_context_for_title(&title, &catalog, None);
+            for (name, expected) in names {
+                let parsed = crate::parse_release_metadata_for_target(name, &context);
+                assert_eq!(
+                    parsed_title_matches_catalog_title(&parsed, &title),
+                    expected,
+                    "{facet:?} {name}"
+                );
+            }
+            // A custom alias does not take away a match on the catalog name.
+            let mut with_alias = title.clone();
+            with_alias.tags = vec!["scryer:search-aliases:Alias Name".into()];
+            let context = crate::build_release_parse_context_for_title(&with_alias, &catalog, None);
+            for (name, expected) in names {
+                let parsed = crate::parse_release_metadata_for_target(name, &context);
+                assert_eq!(
+                    parsed_title_matches_catalog_title(&parsed, &with_alias),
+                    expected,
+                    "{facet:?} with alias: {name}"
+                );
+            }
+        }
+
+        let title = {
+            let mut title = scene_pack_title();
+            title.name = "Known Name".into();
+            title
+        };
+        let EpisodePackVerification::Verified(pack) = verified_episode_pack(
+            &episode_scoped_pack_evidence("Known.Name.S01.1080p.WEB-DL-Grp"),
+            &title,
+            &catalog,
+            None,
+            None,
+            None,
+        ) else {
+            panic!("the submitted pack should verify");
+        };
+        for filename in [
+            "Known Name AKA Other Name S01E02.mkv",
+            "Known Name (Other Name) - S01E02.mkv",
+            "Known Name: Subtitle - S01E02.mkv",
+            "Known Name US - S01E02.mkv",
+            "[Grp] Known Name - Other Name - S01E02 [1080p].mkv",
+        ] {
+            let draft = plan_episode_pack_member(
+                &title,
+                Path::new(""),
+                Path::new(filename),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            let PlannedMemberDraft::Resolved(episodes) = draft else {
+                panic!("{filename}: {draft:?}");
+            };
+            assert_eq!(
+                episodes
+                    .iter()
+                    .map(|episode| episode.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["ep-2"],
+                "{filename}"
+            );
+        }
+    }
+
+    #[test]
     fn issue_393_verified_pack_scope_is_bounded_by_release_not_initiating_episode() {
         let title = scene_pack_title();
         let catalog: Vec<_> = (1..=4)
