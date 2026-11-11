@@ -7950,6 +7950,49 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
     ) -> AppResult<Option<Vec<(String, MediaFacet, i64)>>> {
         Ok(None)
     }
+
+    /// One page of `facet` rows with `status` in `library_ids` that still
+    /// need a person (the predicate of
+    /// [`Self::count_pending_library_scan_items_requiring_action`]), in the
+    /// order of [`Self::list_library_scan_unmatched_items`], with the total
+    /// that matches before paging. A row without a library belongs to its
+    /// facet's default library. `None` when the store cannot page in place.
+    async fn page_library_scan_items_requiring_action(
+        &self,
+        _facet: MediaFacet,
+        _status: PendingImportStatus,
+        _library_ids: &[String],
+        _folder_ownership_reason_codes: &[&str],
+        _limit: i64,
+        _offset: i64,
+    ) -> AppResult<Option<(i64, Vec<LibraryScanUnmatchedItem>)>> {
+        Ok(None)
+    }
+
+    /// The rows among `ids` that exist, in no particular order.
+    async fn get_library_scan_unmatched_items(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<LibraryScanUnmatchedItem>> {
+        let mut items = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(item) = self.get_library_scan_unmatched_item(id).await? {
+                items.push(item);
+            }
+        }
+        Ok(items)
+    }
+
+    /// Mark each `(id, updated_at)` row ignored at its `updated_at`, skipping
+    /// rows already ignored. The SQL store writes them in one transaction, so
+    /// on an error nothing changed and a caller can replay the rows one by
+    /// one. `None` when the store cannot write them together.
+    async fn ignore_library_scan_unmatched_items(
+        &self,
+        _rows: &[(String, String)],
+    ) -> AppResult<Option<()>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -8569,6 +8612,28 @@ pub trait ImportRepository: Send + Sync {
         _limit: usize,
     ) -> AppResult<Vec<ImportRecord>> {
         Ok(Vec::new())
+    }
+
+    /// The ids [`Self::list_completed_manual_imports`] would return, in its
+    /// order, without reading or decoding the rows. `None` when the store
+    /// cannot read the ids alone.
+    async fn list_completed_manual_import_ids(
+        &self,
+        _updated_after: DateTime<Utc>,
+        _limit: usize,
+    ) -> AppResult<Option<Vec<String>>> {
+        Ok(None)
+    }
+
+    /// The imports among `ids` that exist, in no particular order.
+    async fn get_imports_by_ids(&self, ids: &[String]) -> AppResult<Vec<ImportRecord>> {
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(record) = self.get_import_by_id(id).await? {
+                records.push(record);
+            }
+        }
+        Ok(records)
     }
 
     /// Replaces the caller's previous unconsumed selection for the same source and title.

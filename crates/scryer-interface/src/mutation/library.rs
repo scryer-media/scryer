@@ -360,6 +360,60 @@ impl LibraryMutations {
         Ok(from_ignore_pending_import_result(result))
     }
 
+    /// Mark several pending imports ignored without importing their files.
+    /// Each id is answered on its own: ignored, or failed with the error
+    /// `ignorePendingImport` would have returned for it. A repeated id counts
+    /// once. At most 1000 distinct ids per request: a larger request is
+    /// refused whole with reason `LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE`
+    /// and the `maxPendingImportIds` and `requestedPendingImportIds`
+    /// extensions, and no pending import changes.
+    async fn ignore_pending_imports(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Pending-import identities to ignore.")] pending_import_ids: Vec<ID>,
+    ) -> GqlResult<IgnorePendingImportsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let pending_import_ids = pending_import_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>();
+        let result = app
+            .ignore_pending_imports(&actor, &pending_import_ids)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(IgnorePendingImportsPayload {
+            ignored: result
+                .ignored
+                .into_iter()
+                .map(from_ignore_pending_import_result)
+                .collect(),
+            failed: result
+                .failed
+                .into_iter()
+                .map(|(id, error)| {
+                    let error = to_gql_error(error);
+                    let extension = |name: &str| {
+                        error
+                            .extensions
+                            .as_ref()
+                            .and_then(|extensions| extensions.get(name))
+                            .and_then(|value| match value {
+                                async_graphql::Value::String(value) => Some(value.clone()),
+                                _ => None,
+                            })
+                    };
+                    IgnorePendingImportFailurePayload {
+                        id: ID::from(id),
+                        code: extension("code"),
+                        reason: extension("reason"),
+                        message: error.message.clone(),
+                    }
+                })
+                .collect(),
+        })
+    }
+
     /// Apply a title rename plan after validating its preview fingerprint and optional idempotency key.
     #[graphql(deprecation = "use renameTitles, which runs the work as a job")]
     async fn apply_media_rename(

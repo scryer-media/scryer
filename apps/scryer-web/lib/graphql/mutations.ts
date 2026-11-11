@@ -848,10 +848,17 @@ export const bindPendingImportMutation = `mutation BindPendingImport($input: Bin
   }
 }`;
 
-export const ignorePendingImportMutation = `mutation IgnorePendingImport($pendingImportId: ID!) {
-  ignorePendingImport(pendingImportId: $pendingImportId) {
-    id
-    status
+export const ignorePendingImportsMutation = `mutation IgnorePendingImports($pendingImportIds: [ID!]!) {
+  ignorePendingImports(pendingImportIds: $pendingImportIds) {
+    ignored {
+      id
+    }
+    failed {
+      id
+      message
+      code
+      reason
+    }
   }
 }`;
 

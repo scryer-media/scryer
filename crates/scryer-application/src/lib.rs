@@ -268,7 +268,8 @@ pub use integration::tracked_downloads;
 pub use library::filesystem_walk;
 pub use library::leftover_title_folders::EmptyDuplicateTitleFolderReport;
 pub use library::pending_imports::{
-    PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES, pending_import_item_requires_action,
+    PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES, PENDING_IMPORT_IGNORE_BATCH_MAX,
+    pending_import_item_requires_action,
 };
 pub use library::recycle_bin;
 pub use metrics_support::describe_freshness_and_health_metrics;
@@ -842,8 +843,8 @@ pub use types::{
     DownloadHistorySortKey, DownloadImportFilter, DownloadImportPage, DownloadQueueCommandRecord,
     DownloadQueuePage, DownloadSourceKind, EpisodeMediaAvailability, EpisodeMediaAvailabilityState,
     EpisodeMediaSizeSummary, EpisodeScopedMediaFile, FixTitleMatchResult, HealthCheckResult,
-    HealthCheckStatus, HousekeepingReport, IgnorePendingImportResult, IndexerQueryStats,
-    JwtAuthConfig, JwtSessionScope, LibraryRootDraft, LibraryScanUnmatchedItem,
+    HealthCheckStatus, HousekeepingReport, IgnorePendingImportResult, IgnorePendingImportsResult,
+    IndexerQueryStats, JwtAuthConfig, JwtSessionScope, LibraryRootDraft, LibraryScanUnmatchedItem,
     LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass, LoginVerificationChallengeRecord,
     LoginVerificationMethod, LoginVerificationRequirement, LoginVerificationSatisfied,
     ManualImportSelection, ManualImportSelectionCandidate, MdblistSummary, MediaFileAssociations,

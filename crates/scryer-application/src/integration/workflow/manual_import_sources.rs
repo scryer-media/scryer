@@ -206,24 +206,22 @@ impl AppUseCase {
             AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_FILES_UNAVAILABLE, "manual import files are no longer available".to_string())
         })?;
         let download_root = tokio::fs::canonicalize(&completed.dest_dir).await.ok();
-        for candidate in selection.candidates.iter().filter(|candidate| {
-            mappings
-                .iter()
-                .any(|mapping| mapping.candidate_id == candidate.id)
-        }) {
+        let mapped_candidate_ids = mappings
+            .iter()
+            .map(|mapping| mapping.candidate_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let mapped_candidates = selection
+            .candidates
+            .iter()
+            .filter(|candidate| mapped_candidate_ids.contains(candidate.id.as_str()))
+            .collect::<Vec<_>>();
+        drop(mapped_candidate_ids);
+        for candidate in mapped_candidates {
             let source = crate::stored_paths::stored_path_to_path_buf(&candidate.canonical_path);
-            let candidate_root = download_root
-                .as_deref()
-                .filter(|root| {
-                    crate::import_workflow::validate_manual_import_source_under_trusted_root(
-                        &source, root,
-                    )
-                    .is_ok()
-                })
-                .unwrap_or(&trusted_root);
-            let qualified = crate::import_workflow::qualify_manual_import_video_candidate(
+            let qualified = crate::import_workflow::qualify_manual_import_video_under_roots(
                 &source,
-                candidate_root,
+                download_root.as_deref(),
+                &trusted_root,
             )
             .await
             .map_err(|_| {

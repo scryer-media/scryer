@@ -88,11 +88,13 @@ test("page selection includes non-conflicts, retains other pages, and deduplicat
   );
 });
 
-test("bulk ignore is bounded, continues after failures, and returns only failed items for retry", async () => {
-  const calls: string[] = [];
-  const failure = new Error("provider failure");
+test("bulk ignore sends chunked requests in order, continues after failures, and returns only failed items for retry", async () => {
+  const calls: string[][] = [];
+  const failure = { graphQLErrors: [{ message: "denied" }] };
+  const chunkFailure = new Error("network failure");
   let active = 0;
   const last = { ...unmatched, id: "last" };
+  const fourth = { ...unmatched, id: "fourth" };
   const result = await ignorePendingImportBatch(
     [
       conflict,
@@ -100,28 +102,44 @@ test("bulk ignore is bounded, continues after failures, and returns only failed 
       conflict,
       last,
       { ...conflict, id: "ignored", status: "IGNORED" },
+      fourth,
     ],
-    async (id) => {
+    async (ids) => {
       assert.equal(active, 0);
       active++;
-      calls.push(id);
+      calls.push(ids);
       await Promise.resolve();
       active--;
-      if (id === unmatched.id) throw failure;
+      if (ids.includes(fourth.id)) throw chunkFailure;
+      return {
+        ignoredIds: ids.filter((id) => id !== unmatched.id),
+        failed: ids
+          .filter((id) => id === unmatched.id)
+          .map((id) => ({ id, error: failure })),
+      };
     },
+    2,
   );
-  assert.deepEqual(calls, [conflict.id, unmatched.id, last.id]);
-  assert.deepEqual(result.ignored, [conflict, last]);
-  assert.deepEqual(result.failed, [{ item: unmatched, error: failure }]);
-  const retried: string[] = [];
+  assert.deepEqual(calls, [
+    [conflict.id, unmatched.id],
+    [last.id, fourth.id],
+  ]);
+  assert.deepEqual(result.ignored, [conflict]);
+  assert.deepEqual(result.failed, [
+    { item: unmatched, error: failure },
+    { item: last, error: chunkFailure },
+    { item: fourth, error: chunkFailure },
+  ]);
+  const retried: string[][] = [];
   const retry = await ignorePendingImportBatch(
     result.failed.map(({ item }) => item),
-    async (id) => {
-      retried.push(id);
+    async (ids) => {
+      retried.push(ids);
+      return { ignoredIds: ids, failed: [] };
     },
   );
-  assert.deepEqual(retried, [unmatched.id]);
-  assert.deepEqual(retry, { ignored: [unmatched], failed: [] });
+  assert.deepEqual(retried, [[unmatched.id, last.id, fourth.id]]);
+  assert.deepEqual(retry, { ignored: [unmatched, last, fourth], failed: [] });
 });
 
 test("empty and all-failed batches report no successes", async () => {
@@ -140,4 +158,12 @@ test("empty and all-failed batches report no successes", async () => {
     result.failed.map(({ item }) => item.id),
     [conflict.id, unmatched.id],
   );
+  const unanswered = await ignorePendingImportBatch([conflict], async () => ({
+    ignoredIds: [],
+    failed: [],
+  }));
+  assert.deepEqual(unanswered, {
+    ignored: [],
+    failed: [{ item: conflict, error: undefined }],
+  });
 });
