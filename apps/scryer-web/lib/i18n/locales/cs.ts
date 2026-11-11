@@ -32,6 +32,8 @@ const cs: LocaleDictionary = {
     "Kopírování se nezdařilo. Text je vybraný; stiskněte Ctrl+C nebo ⌘C.",
   "status.copyFailed":
     "Kopírování se nezdařilo: prohlížeč odmítl přístup ke schránce.",
+  "error.reason.LIBRARY_DISABLED":
+    "Tato knihovna je zakázána. Povolte ji před použitím jako cíle pro přidávání titulů nebo spuštěním skenování.",
   "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
     "Médium se nepodařilo ověřit, a proto nemůže nahradit existující soubor v knihovně.",
   "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
@@ -817,6 +819,8 @@ const cs: LocaleDictionary = {
   "settings.librarySaved": "Knihovna uložena.",
   "settings.libraryDeleted": "Knihovna smazána.",
   "settings.librarySaveFailed": "Uložení knihovny se nezdařilo.",
+  "settings.libraryEnabled": "Knihovna povolena.",
+  "settings.libraryDisabled": "Knihovna zakázána.",
   "settings.libraryDeleteFailed": "Smazání knihovny se nezdařilo.",
   "settings.librarySettingsLoadFailed":
     "Načtení nastavení knihovny se nezdařilo.",

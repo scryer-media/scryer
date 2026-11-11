@@ -48,6 +48,8 @@ const ru: LocaleDictionary = {
     "Не удалось скопировать. Текст выделен; нажмите Ctrl+C или ⌘C.",
   "status.copyFailed":
     "Не удалось скопировать: браузер запретил доступ к буферу обмена.",
+  "error.reason.LIBRARY_DISABLED":
+    "Эта библиотека отключена. Включите её, прежде чем выбирать её для добавления тайтлов или запускать сканирование.",
   "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
     "Не удалось проверить медиафайл, поэтому он не может заменить существующий файл библиотеки.",
   "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
@@ -766,6 +768,8 @@ const ru: LocaleDictionary = {
   "settings.librarySaved": "Библиотека сохранена.",
   "settings.libraryDeleted": "Библиотека удалена.",
   "settings.librarySaveFailed": "Не удалось сохранить библиотеку.",
+  "settings.libraryEnabled": "Библиотека включена.",
+  "settings.libraryDisabled": "Библиотека отключена.",
   "settings.libraryDeleteFailed": "Не удалось удалить библиотеку.",
   "settings.librarySettingsLoadFailed":
     "Не удалось загрузить настройки библиотеки.",
