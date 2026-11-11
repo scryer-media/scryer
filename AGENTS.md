@@ -33,6 +33,15 @@
 - There is exactly one metadata gateway: SMG, a centrally operated SaaS service at `smg.scryer.media`. There is no self-hosted, operator-run, regional, or "custom" SMG, and there never will be: no operator setting or UI for an SMG URL, and no "their SMG". `SCRYER_METADATA_GATEWAY_GRAPHQL_URL` exists only so tests and development builds can point at a mock; it is not an operator feature. When an operator wants SMG out of a flow (for example a bring-your-own OAuth app), the alternative is their own Scryer instance or the provider directly, never another gateway. Operators do not self-host or pin their own SMG version, and SMG is deployed ahead of any Scryer release that depends on its schema. Do not add capability probes, legacy query retries, or other fallbacks for Scryer running against an older SMG. Compatibility runs the other way: SMG changes must keep serving the Scryer releases already in the field.
 - Keep updates concise: state the outcome, material evidence, and remaining work. At handoff, record the changed scope, checks actually run, deferred checks, and concrete blockers. Do not claim a performance improvement without measurements.
 
+## Operator skills stay current
+
+The skills in [skills/](skills/) are how other agents drive a running Scryer instance. They name exact GraphQL operations, fields, enum values, reason codes, endpoints, settings and UI paths, so a product change can make one wrong without breaking any build.
+
+- **Check the skills in the same change.** When a change adds, renames, removes or alters something an operator or API client can see, search `skills/` for it and update every skill that names it. This covers GraphQL operations and their inputs and outputs, reason codes, permissions, REST endpoints, settings and their defaults, environment variables, UI paths, what the Sonarr and Radarr import carries over, and what the diagnostics bundle contains.
+- **Keep operation files valid.** Every file under `skills/*/operations/` must validate against `api/graphql/schema.graphql`. A schema change that breaks one is not done until that file and the steps that use it are fixed.
+- **Close gaps the product closes.** When a change makes possible something a skill marks as manual or unsupported, replace that step with the real procedure.
+- **Report what you leave.** If a skill needs more than a direct correction, such as a new procedure or a new skill, say so at handoff instead of leaving it stale or guessing.
+
 ## Error reason codes
 
 An error's sentence is for people. Code never decides anything from it. Any condition a client, a caller or a later step needs to tell apart travels as a stable code beside the sentence. Lists is the reference implementation: `crates/scryer-application/src/lists/refusal.rs` on the server and `apps/scryer-web/lib/utils/list-error-message.ts` on the web.
@@ -73,7 +82,7 @@ When you touch code that breaks one of these rules, fix that site in the same ch
 ## Markdown files
 
 - Do not create, modify, rename, or delete any Markdown file without the operator's explicit approval in the current conversation. This covers every `.md` file in the repository, including this one, READMEs, docs, specs, fixture notes, and any plan, report, proposal, or handoff file.
-- The one exception is creating release notes under `release-notes/` as part of the release process.
+- There are two exceptions. Creating release notes under `release-notes/` as part of the release process is one. Correcting an existing file under `skills/` so it matches a product change made in the same task is the other; creating a new skill, or deleting or restructuring one, still needs approval.
 - Keep plans, reports, and handoffs in the conversation or outside the repository. They never belong in a commit.
 
 ## Validation cadence
