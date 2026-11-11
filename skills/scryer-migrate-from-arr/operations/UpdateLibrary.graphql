@@ -5,6 +5,8 @@
 # Variables: {"input": {"libraryId": "...", "roots": [{"id": "...", "path": "...",
 #   "isDefault": true}, {"path": "/new/root", "isDefault": false}],
 #   "settings": {...LibrarySettingsInput}}}
+# settings replaces every saved library override: a field left out (for example
+# defaultMonitorType) resets to inherit. Omit settings to keep them all.
 mutation UpdateLibrary($input: UpdateLibraryInput!) {
   updateLibrary(input: $input) {
     id

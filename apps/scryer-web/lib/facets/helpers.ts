@@ -23,7 +23,7 @@ export function defaultMonitorTypeForFacet(
     facetId,
     saved,
     facetById(facetId)?.defaultMonitorType ?? "MONITORED",
-  ) as MetadataCatalogMonitorType;
+  );
 }
 
 export function facetFromView(viewId: string): Facet | undefined {

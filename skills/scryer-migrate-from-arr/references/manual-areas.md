@@ -53,7 +53,12 @@ jq --arg from "<scryer profile id>" --arg id "hd-from-sonarr" --arg name "HD (fr
 
 Show `qp-vars.json`'s profile to the operator, then `SaveQualityProfileSettings.graphql`.
 Always `replaceExisting: false`. Assign it per library with `UpdateLibrary`
-`settings.qualityProfileId` (send no `roots` in that call).
+`settings.qualityProfileId` (send no `roots` in that call). `settings` replaces
+every saved override on that library: any field left out, such as
+`defaultMonitorType`, the languages or the routing, is reset to inherit. Send it
+only for a library this migration created and has not otherwise configured; for
+any other library, ask the operator to pick the profile in that library's
+settings instead.
 
 ## Delay profiles
 

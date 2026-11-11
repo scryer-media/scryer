@@ -49,6 +49,11 @@ import { METADATA_LANGUAGES } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
+  EPISODIC_DEFAULT_MONITOR_TYPES,
+  MONITOR_TYPE_LABEL_KEYS,
+  MOVIE_DEFAULT_MONITOR_TYPES,
+} from "@/lib/utils/default-monitor-type";
+import {
   resolveLibraryDiscardPrompt,
   shouldBlockLibraryNavigation,
 } from "@/lib/utils/library-navigation-guard";
@@ -1950,29 +1955,11 @@ export const MediaLibrarySettingsPanel = React.memo(
                         {t("settings.libraryInheritFacet")}
                       </SelectItem>
                       {(isMovieFacet
-                        ? ["MONITORED", "UNMONITORED"]
-                        : [
-                            "FUTURE_EPISODES",
-                            "MISSING_AND_FUTURE_EPISODES",
-                            "ALL_EPISODES",
-                            "NONE",
-                          ]
+                        ? MOVIE_DEFAULT_MONITOR_TYPES
+                        : EPISODIC_DEFAULT_MONITOR_TYPES
                       ).map((value) => (
                         <SelectItem key={value} value={value}>
-                          {t(
-                            (
-                              {
-                                MONITORED: "search.monitorType.monitored",
-                                UNMONITORED: "search.monitorType.unmonitored",
-                                FUTURE_EPISODES:
-                                  "search.monitorType.futureEpisodes",
-                                MISSING_AND_FUTURE_EPISODES:
-                                  "search.monitorType.missingAndFutureEpisodes",
-                                ALL_EPISODES: "search.monitorType.allEpisodes",
-                                NONE: "search.monitorType.none",
-                              } as Record<string, string>
-                            )[value],
-                          )}
+                          {t(MONITOR_TYPE_LABEL_KEYS[value])}
                         </SelectItem>
                       ))}
                     </SelectContent>

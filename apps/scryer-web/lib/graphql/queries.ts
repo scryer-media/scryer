@@ -1735,7 +1735,6 @@ export const mediaRequestAdminLibrariesQuery = `query MediaRequestAdminLibraries
     isDefault
     qualityProfileId
     requestQualityProfileIds
-    defaultMonitorType
     requestQualityProfileDefaultId
     roots {
       id
@@ -1753,7 +1752,6 @@ export const mediaRequestRequesterLibrariesQuery = `query MediaRequestRequesterL
     slug
     isDefault
     requestQualityProfileIds
-    defaultMonitorType
     requestQualityProfileDefaultId
     roots {
       id
@@ -5295,7 +5293,6 @@ export const dashboardPendingRequestsQuery = `query DashboardPendingRequests {
     name
     facet
     qualityProfileId
-    defaultMonitorType
     requestQualityProfileDefaultId
   }
 }`;

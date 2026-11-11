@@ -1,5 +1,7 @@
-fn validate_default_monitor_type(facet: &MediaFacet, value: &str) -> AppResult<()> {
-    let allowed: &[&str] = if *facet == MediaFacet::Movie {
+/// Monitoring choices a library of this facet may save as its default. The
+/// first entry is the built-in default used when nothing valid is saved.
+fn default_monitor_type_choices(facet: &MediaFacet) -> &'static [&'static str] {
+    if *facet == MediaFacet::Movie {
         &["MONITORED", "UNMONITORED"]
     } else {
         &[
@@ -8,14 +10,26 @@ fn validate_default_monitor_type(facet: &MediaFacet, value: &str) -> AppResult<(
             "ALL_EPISODES",
             "NONE",
         ]
-    };
-    if !allowed.contains(&value) {
+    }
+}
+
+fn validate_default_monitor_type(facet: &MediaFacet, value: &str) -> AppResult<()> {
+    if !default_monitor_type_choices(facet).contains(&value) {
         return Err(AppError::validation_refused(
-            super::library_refusal::DEFAULT_MONITOR_TYPE_INVALID,
+            crate::error_reasons::library::DEFAULT_MONITOR_TYPE_INVALID,
             "Choose a monitoring default supported by this library",
         ));
     }
     Ok(())
+}
+
+/// The saved choice when it is valid for the facet, else the facet's built-in default.
+fn effective_default_monitor_type(facet: &MediaFacet, saved: Option<&str>) -> String {
+    let choices = default_monitor_type_choices(facet);
+    saved
+        .filter(|value| choices.contains(value))
+        .unwrap_or(choices[0])
+        .to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -694,6 +708,20 @@ impl AppUseCase {
         library_id: &str,
     ) -> AppResult<RequestQualityProfileSettings> {
         let library = self
+            .library_for_request_defaults(actor, library_id)
+            .await?;
+        self.effective_request_quality_profile_settings_for_library(&library)
+            .await
+    }
+
+    /// Loads a library for reading its request defaults. Requesters, title
+    /// managers, catalog-settings managers and permission managers may read them.
+    async fn library_for_request_defaults(
+        &self,
+        actor: &User,
+        library_id: &str,
+    ) -> AppResult<Library> {
+        let library = self
             .services
             .catalog
             .libraries
@@ -724,9 +752,7 @@ impl AppUseCase {
         if !can_request && !can_manage && !can_manage_catalog && !can_manage_permissions {
             return Err(AppError::unauthorized_reason(crate::error_reasons::settings::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
         }
-
-        self.effective_request_quality_profile_settings_for_library(&library)
-            .await
+        Ok(library)
     }
 
     pub async fn default_monitor_type_for_library(
@@ -734,28 +760,13 @@ impl AppUseCase {
         actor: &User,
         library_id: &str,
     ) -> AppResult<String> {
-        self.request_quality_profile_settings_for_library(actor, library_id)
-            .await?;
         let library = self
-            .services
-            .catalog
-            .libraries
-            .get_by_id(library_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
-        let value = self
-            .read_setting_string_value_explicit("catalog.default_monitor_type", Some(library_id))
+            .library_for_request_defaults(actor, library_id)
             .await?;
-        Ok(value
-            .filter(|v| validate_default_monitor_type(&library.facet, v).is_ok())
-            .unwrap_or_else(|| {
-                if library.facet == MediaFacet::Movie {
-                    "MONITORED"
-                } else {
-                    "FUTURE_EPISODES"
-                }
-                .to_string()
-            }))
+        let saved = self
+            .read_setting_string_value_explicit(DEFAULT_MONITOR_TYPE_KEY, Some(&library.id))
+            .await?;
+        Ok(effective_default_monitor_type(&library.facet, saved.as_deref()))
     }
 
     pub async fn title_quality_profile_id_for_library(
@@ -847,19 +858,12 @@ impl AppUseCase {
             true
         };
         let default_monitor_type_override = self
-            .read_setting_string_value_explicit("catalog.default_monitor_type", Some(&library.id))
+            .read_setting_string_value_explicit(DEFAULT_MONITOR_TYPE_KEY, Some(&library.id))
             .await?;
-        let default_monitor_type = default_monitor_type_override
-            .clone()
-            .filter(|v| validate_default_monitor_type(&library.facet, v).is_ok())
-            .unwrap_or_else(|| {
-                if library.facet == MediaFacet::Movie {
-                    "MONITORED"
-                } else {
-                    "FUTURE_EPISODES"
-                }
-                .to_string()
-            });
+        let default_monitor_type = effective_default_monitor_type(
+            &library.facet,
+            default_monitor_type_override.as_deref(),
+        );
         let quality_profile_id_override = self
             .read_setting_string_value_explicit(QUALITY_PROFILE_ID_KEY, Some(&library.id))
             .await?
@@ -1696,14 +1700,14 @@ impl AppUseCase {
 
         if let Some(value) = &settings.default_monitor_type {
             self.upsert_scoped_system_setting_json(
-                "catalog.default_monitor_type",
+                DEFAULT_MONITOR_TYPE_KEY,
                 &library.id,
                 value,
                 Some(actor.id.clone()),
             )
             .await?;
         } else {
-            self.delete_scoped_system_setting("catalog.default_monitor_type", &library.id)
+            self.delete_scoped_system_setting(DEFAULT_MONITOR_TYPE_KEY, &library.id)
                 .await?;
         }
         if let Some(profile_id) = normalize_optional_string(settings.quality_profile_id) {
@@ -1981,7 +1985,7 @@ impl AppUseCase {
             crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY.to_string(),
             METADATA_LANGUAGE_KEY.to_string(),
             USE_SEASON_FOLDERS_KEY.to_string(),
-            "catalog.default_monitor_type".to_string(),
+            DEFAULT_MONITOR_TYPE_KEY.to_string(),
             QUALITY_PROFILE_ID_KEY.to_string(),
             REQUEST_QUALITY_PROFILE_IDS_KEY.to_string(),
             SCORING_PERSONA_KEY.to_string(),

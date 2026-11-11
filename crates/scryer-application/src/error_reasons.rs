@@ -359,6 +359,8 @@ pub mod library {
     pub const TEMPLATE_OPTIONAL_GROUP_INVALID: &str = "LIBRARY_TEMPLATE_OPTIONAL_GROUP_INVALID";
     /// The folder is not a valid title boundary for scanning.
     pub const SCAN_FOLDER_BOUNDARY_INVALID: &str = "LIBRARY_SCAN_FOLDER_BOUNDARY_INVALID";
+    /// The requested default monitoring choice is not supported for the library's facet.
+    pub const DEFAULT_MONITOR_TYPE_INVALID: &str = "LIBRARY_DEFAULT_MONITOR_TYPE_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         SCAN_ALREADY_RUNNING,
@@ -459,6 +461,7 @@ pub mod library {
         RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED,
         TEMPLATE_OPTIONAL_GROUP_INVALID,
         SCAN_FOLDER_BOUNDARY_INVALID,
+        DEFAULT_MONITOR_TYPE_INVALID,
     ];
 
     /// Ids of the stored roots an edit drops without listing them as removed.

@@ -3137,7 +3137,7 @@ async fn library_default_monitor_type_invalid_choice_writes_nothing() {
             .unwrap_err();
         assert_eq!(
             error.validation_reason(),
-            Some(crate::settings::library_refusal::DEFAULT_MONITOR_TYPE_INVALID)
+            Some(crate::error_reasons::library::DEFAULT_MONITOR_TYPE_INVALID)
         );
     }
     assert!(repo.write_log().is_empty());
