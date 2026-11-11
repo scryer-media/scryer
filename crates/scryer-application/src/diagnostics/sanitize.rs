@@ -342,6 +342,11 @@ const SECRET_KEY_WORDS: &[&str] = &[
 
 const EXACT_SECRET_KEYS: &[&str] = &["auth", "key", "pass", "pwd", "sid", "session", "jwt"];
 
+/// Field-name endings for stable identifiers of this installation: the SMG
+/// instance id and the request-signing key id (`instance_id`, `key_id`,
+/// `pq_key_id`, `old_key_id`, ...).
+const IDENTIFIER_SECRET_SUFFIXES: &[&str] = &["instanceid", "keyid"];
+
 const URL_KEYS: &[&str] = &["endpoint", "href", "link", "origin", "referer", "referrer"];
 
 const HOST_KEYS: &[&str] = &[
@@ -411,6 +416,9 @@ pub(crate) fn classify_field(key: &str) -> FieldClass {
     let key = normalized_key(key);
     if EXACT_SECRET_KEYS.contains(&key.as_str())
         || SECRET_KEY_WORDS.iter().any(|word| key.contains(word))
+        || IDENTIFIER_SECRET_SUFFIXES
+            .iter()
+            .any(|suffix| key.ends_with(suffix))
     {
         return FieldClass::Secret;
     }
@@ -835,15 +843,15 @@ impl Sanitizer {
         self.json_inner(None, value, &[]);
     }
 
-    /// Sanitizes a JSON document whose keys Scryer wrote: every key and
-    /// string value goes through the value layers, without field-name rules.
+    /// Sanitizes a JSON document whose keys Scryer wrote: every string value
+    /// goes through the value layers, without field-name rules. Keys are
+    /// code-defined and written as they are, so a known value that happens to
+    /// spell a key (`root`, `settings`) cannot rewrite the document's shape.
     pub fn json_values(&self, value: &mut Value) {
         match value {
             Value::Object(map) => {
-                let entries = std::mem::take(map);
-                for (key, mut child) in entries {
-                    self.json_values(&mut child);
-                    map.insert(self.value(&key), child);
+                for child in map.values_mut() {
+                    self.json_values(child);
                 }
             }
             Value::Array(items) => {

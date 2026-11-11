@@ -230,6 +230,35 @@ fn field_names_decide_their_values() {
     assert_eq!(classify_field("release_name"), FieldClass::Plain);
     assert_eq!(classify_field("root_path"), FieldClass::Path);
     assert_eq!(classify_field("decision_code"), FieldClass::Plain);
+    for key in [
+        "instance_id",
+        "key_id",
+        "pq_key_id",
+        "old_key_id",
+        "new_key_id",
+    ] {
+        assert_eq!(classify_field(key), FieldClass::Secret, "{key}");
+    }
+}
+
+#[test]
+fn generated_document_keys_survive_a_known_value_that_spells_them() {
+    let mut known = KnownValues::new();
+    known.secret("root");
+    known.secret("settings");
+    let s = known.into_sanitizer();
+    let mut document = json!({
+        "settings": { "root": "a root value", "general": { "root": 1 } },
+        "filesystems": { "roots": [{ "root": "x" }] },
+    });
+    s.json_values(&mut document);
+    assert_eq!(
+        document,
+        json!({
+            "settings": { "root": "a <redacted> value", "general": { "root": 1 } },
+            "filesystems": { "roots": [{ "root": "x" }] },
+        })
+    );
 }
 
 #[test]
@@ -362,7 +391,19 @@ const CANARIES: &[&str] = &[
     "CanaryWinUser",
     "canary-unc-server",
     "CanaryMetricIndexer",
+    CANARY_SMG_INSTANCE_ID,
+    CANARY_SMG_KEY_ID,
+    CANARY_UNHARVESTED_INSTANCE_ID,
+    CANARY_UNHARVESTED_KEY_ID,
 ];
+
+/// The SMG instance id and signing key id stored in settings, and a second
+/// pair that only appears in log fields, so field names alone must hide it.
+const CANARY_SMG_INSTANCE_ID: &str = "5ca1ab1e-0000-4000-8000-00000000c0de";
+const CANARY_SMG_KEY_ID: &str = "c0dec0dec0dec0dec0dec0dec0dec0dec0dec0dec0dec0dec0dec0dec0dec0de";
+const CANARY_UNHARVESTED_INSTANCE_ID: &str = "5ca1ab1e-1111-4000-8000-0000000beef1";
+const CANARY_UNHARVESTED_KEY_ID: &str =
+    "beef1beef1beef1beef1beef1beef1beef1beef1beef1beef1beef1beef1beef";
 
 fn indexer(
     id: &str,
@@ -501,6 +542,24 @@ async fn bundle_contains_no_canary_and_keeps_types_counts_and_correlation() {
         .create(scryer_domain::User::new_admin("canary-user-delta"))
         .await
         .expect("user");
+    for (key, value) in [
+        ("smg.instance_id", CANARY_SMG_INSTANCE_ID),
+        ("smg.pq_key_id", CANARY_SMG_KEY_ID),
+    ] {
+        app.services
+            .config
+            .settings
+            .upsert_setting_json(
+                crate::settings::keys::SETTINGS_SCOPE_SYSTEM,
+                key,
+                None,
+                json!(value).to_string(),
+                "test",
+                None,
+            )
+            .await
+            .expect("smg setting");
+    }
 
     let log_dir = tempfile::tempdir().expect("tempdir");
     let log_dir_path = log_dir.path().join("canary-logdir-theta");
@@ -535,15 +594,44 @@ async fn bundle_contains_no_canary_and_keeps_types_counts_and_correlation() {
         r"2026-11-10T12:00:04Z  INFO scryer: windows import C:\Users\CanaryWinUser\Downloads\Synthetic.Feature.2020.1080p.mkv share \\canary-unc-server\media\Other.File.mkv".to_string(),
         "2026-11-10T12:00:05Z  INFO scryer: upstream canary-unknown-host.example.com:443 reset".to_string(),
         "2026-11-10T12:00:06Z  INFO scryer: rooted /srv/canary-mount-alpha/movies/Feature/Synthetic.Feature.2020.1080p.mkv for CanaryLibraryGamma".to_string(),
+        json!({
+            "timestamp": "2026-11-10T12:00:07Z",
+            "level": "INFO",
+            "target": "scryer_infrastructure_metadata::metadata::enrollment",
+            "fields": {
+                "message": "enrolled with SMG using PQ request signing",
+                "instance_id": CANARY_SMG_INSTANCE_ID,
+                "key_id": CANARY_SMG_KEY_ID,
+            },
+        })
+        .to_string(),
+        json!({
+            "timestamp": "2026-11-10T12:00:08Z",
+            "level": "INFO",
+            "target": "scryer_infrastructure_metadata::metadata::enrollment",
+            "fields": {
+                "message": "rotated SMG PQ enrollment",
+                "instance_id": CANARY_UNHARVESTED_INSTANCE_ID,
+                "old_key_id": CANARY_UNHARVESTED_KEY_ID,
+            },
+        })
+        .to_string(),
+        format!("2026-11-10T12:00:09Z DEBUG scryer: using cached SMG PQ enrollment instance_id={CANARY_UNHARVESTED_INSTANCE_ID} pq_key_id={CANARY_UNHARVESTED_KEY_ID}"),
+        format!("2026-11-10T12:00:10Z  INFO scryer: gateway accepted {CANARY_SMG_INSTANCE_ID} signed by {CANARY_SMG_KEY_ID}"),
     ];
 
     let metrics = "# TYPE scryer_indexer_requests_total counter\n\
 scryer_indexer_requests_total{indexer=\"CanaryMetricIndexer\",result=\"ok\"} 4\n\
 scryer_indexer_requests_total{indexer=\"CanaryIndexerAlpha\",result=\"error\"} 2\n\
-scryer_download_client_up{client=\"CanaryClientBeta\",host=\"canary-client-host.synthetic.invalid:8080\"} 1\n";
+scryer_download_client_up{client=\"CanaryClientBeta\",host=\"canary-client-host.synthetic.invalid:8080\"} 1\n\
+scryer_smg_enrolled{instance=\"5ca1ab1e-0000-4000-8000-00000000c0de\"} 1\n";
 
     let mut environment = serde_json::Map::new();
     environment.insert("installation_kind".to_string(), json!("PORTABLE"));
+    environment.insert(
+        "smg_enrollment_note".to_string(),
+        json!(format!("enrolled as {CANARY_SMG_INSTANCE_ID}")),
+    );
     environment.insert(
         "scryer_env".to_string(),
         json!({ "SCRYER_SYNTHETIC": "<set>", "SCRYER_LOG_FORMAT": "json" }),

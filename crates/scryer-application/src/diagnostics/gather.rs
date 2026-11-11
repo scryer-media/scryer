@@ -29,6 +29,22 @@ const QUALITY_VOCABULARY: &[&str] = &[
     "standard", "best", "anime", "movies", "series", "tv",
 ];
 
+/// System settings that hold this installation's SMG instance id and its
+/// request-signing key id.
+const SMG_IDENTITY_SETTING_KEYS: &[&str] = &["smg.instance_id", "smg.pq_key_id"];
+
+/// A setting stored as a JSON string (or a bare value); `None` when unset.
+fn setting_string(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let value = match serde_json::from_str::<Value>(raw) {
+        Ok(Value::String(text)) => text,
+        Ok(Value::Null) => return None,
+        _ => raw.to_string(),
+    };
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
 /// The string a serde enum renders to, for type and state labels.
 pub(super) fn serde_label<T: Serialize>(value: &T) -> String {
     match serde_json::to_value(value) {
@@ -410,6 +426,21 @@ impl AppUseCase {
         );
         if let Some(secret) = &self.services.config.smg_registration_secret {
             known.secret(secret);
+        }
+        // The SMG instance id and request-signing key id identify this
+        // installation to the gateway.
+        for key in SMG_IDENTITY_SETTING_KEYS {
+            if let Some(Some(raw)) = source!(
+                "smg_enrollment",
+                self.services.config.settings.get_setting_json(
+                    crate::settings::keys::SETTINGS_SCOPE_SYSTEM,
+                    key,
+                    None
+                )
+            ) && let Some(value) = setting_string(&raw)
+            {
+                known.secret(&value);
+            }
         }
 
         incomplete.sort();

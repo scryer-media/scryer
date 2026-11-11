@@ -252,11 +252,15 @@ impl HostFacts {
         );
 
         self.container(variables);
+        let systemd_unit = systemd_unit(variables, std::process::id());
+        if systemd_unit.is_none() {
+            self.omit("launcher.systemd_unit", "systemd_exec_pid_not_set");
+        }
         self.environment.insert(
             "launcher".to_string(),
             json!({
-                "systemd_unit": variable("INVOCATION_ID").is_some(),
-                "launchd_job": cfg!(target_os = "macos") && variable("XPC_SERVICE_NAME").is_some_and(|name| name != "0"),
+                "systemd_unit": systemd_unit,
+                "launchd_job": cfg!(target_os = "macos") && launchd_job(variables, parent_process_id()),
                 "windows_tray_supervised": assessment.tray_supervised,
             }),
         );
@@ -524,18 +528,18 @@ impl HostFacts {
             "USERDOMAIN",
         ] {
             if let Some(value) = variable(name)
-                && identifying_value(value)
+                && identifying_account_name(value)
             {
                 self.sensitive_values.push(value.to_string());
             }
         }
         if let Some(name) = host_name()
-            && identifying_value(&name)
+            && identifying_account_name(&name)
             && !name.eq_ignore_ascii_case("localhost")
         {
             // The short name too: logs and prompts often print only that.
             if let Some((short, _)) = name.split_once('.')
-                && identifying_value(short)
+                && identifying_account_name(short)
             {
                 self.sensitive_values.push(short.to_string());
             }
@@ -582,6 +586,74 @@ fn identifying_value(value: &str) -> bool {
     value.chars().count() >= 3
         && value.parse::<f64>().is_err()
         && !COMMON.contains(&value.to_ascii_lowercase().as_str())
+}
+
+/// Whether this process is the main process of a systemd unit. Every process
+/// a unit starts inherits `INVOCATION_ID`, including a shell in a terminal
+/// that a user service opened, so only `SYSTEMD_EXEC_PID` (systemd 248 and
+/// later), compared with this process id, tells the unit's own process apart.
+/// `None` when a unit is present but systemd is too old to say.
+fn systemd_unit(variables: &[(String, String)], pid: u32) -> Option<bool> {
+    if let Some(exec_pid) = env_value(variables, "SYSTEMD_EXEC_PID") {
+        return Some(exec_pid.trim().parse::<u32>() == Ok(pid));
+    }
+    if env_value(variables, "INVOCATION_ID").is_some() {
+        return None;
+    }
+    Some(false)
+}
+
+/// Whether launchd started this process as its own job. Children of a GUI
+/// app or of another job inherit `XPC_SERVICE_NAME`, so the variable alone
+/// does not say; launchd (process 1) must also be the direct parent.
+fn launchd_job(variables: &[(String, String)], parent_pid: u32) -> bool {
+    parent_pid == 1 && env_value(variables, "XPC_SERVICE_NAME").is_some_and(|name| name != "0")
+}
+
+#[cfg(unix)]
+fn parent_process_id() -> u32 {
+    // SAFETY: `getppid` has no preconditions and cannot fail.
+    u32::try_from(unsafe { libc::getppid() }).unwrap_or(0)
+}
+
+#[cfg(not(unix))]
+fn parent_process_id() -> u32 {
+    0
+}
+
+/// Account, domain and host names that operating systems, images and
+/// installers hand out by default. They identify nobody, and replacing them
+/// would erase the same word everywhere in the bundle.
+const GENERIC_ACCOUNT_NAMES: &[&str] = &[
+    "root",
+    "admin",
+    "administrator",
+    "user",
+    "nobody",
+    "system",
+    "daemon",
+    "docker",
+    "scryer",
+    "abc",
+    "app",
+    "default",
+    "guest",
+    "ubuntu",
+    "debian",
+    "node",
+    "runner",
+    "container",
+    "www-data",
+    "workgroup",
+];
+
+/// An OS account, domain or host name worth replacing: identifying, and not
+/// one of the [`GENERIC_ACCOUNT_NAMES`].
+fn identifying_account_name(value: &str) -> bool {
+    identifying_value(value)
+        && !GENERIC_ACCOUNT_NAMES
+            .iter()
+            .any(|generic| generic.eq_ignore_ascii_case(value.trim()))
 }
 
 fn looks_absolute_path(value: &str) -> bool {
@@ -810,6 +882,146 @@ mod tests {
         for value in ["nas-box", "operator", "s3cr3t-value"] {
             assert!(identifying_value(value), "{value}");
         }
+    }
+
+    fn test_host(data_dir: &Path) -> DiagnosticsHost {
+        DiagnosticsHost {
+            process: DiagnosticsProcessFacts {
+                started_at: Utc::now(),
+                log_file: None,
+            },
+            log_ring_buffer: LogRingBuffer::new(16),
+            metrics: None,
+            installation: InstallationAssessment::default(),
+            data_dir: data_dir.to_path_buf(),
+            listening: SocketAddr::from((Ipv4Addr::LOCALHOST, 8080)),
+            base_path_configured: false,
+            sqlite_path: None,
+        }
+    }
+
+    fn account_variables(name: &str) -> Vec<(String, String)> {
+        ["USER", "LOGNAME", "USERNAME"]
+            .iter()
+            .map(|variable| (variable.to_string(), name.to_string()))
+            .collect()
+    }
+
+    fn sanitizer_for(facts: &HostFacts) -> scryer_application::diagnostics::Sanitizer {
+        let mut known = scryer_application::diagnostics::KnownValues::new();
+        for value in &facts.sensitive_values {
+            known.secret(value);
+        }
+        for (pseudonym, path) in &facts.sensitive_paths {
+            known.path(pseudonym, path);
+        }
+        known.into_sanitizer()
+    }
+
+    #[test]
+    fn generic_account_names_are_not_registered_and_leave_the_bundle_intact() {
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let host = test_host(data_dir.path());
+        for generic in ["root", "Docker", "abc"] {
+            let mut facts = HostFacts::default();
+            facts.identifying_values(&host, &account_variables(generic));
+            assert!(
+                !facts
+                    .sensitive_values
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(generic)),
+                "{generic} was registered"
+            );
+            let sanitizer = sanitizer_for(&facts);
+            let original = json!({
+                "filesystems": {
+                    "roots": [{ "root": "root-1", "role": "library_root" }],
+                    "same_filesystem_pairs": [["root-1", "download-root-1"]],
+                },
+                "container": { "docker_env_file": false, "cgroup_hints": ["docker"] },
+            });
+            let mut environment = original.clone();
+            sanitizer.json_values(&mut environment);
+            assert_eq!(environment, original, "{generic}");
+            let help = "# HELP scryer_rule_fields_total Rules that read the root field\n";
+            assert_eq!(sanitizer.metrics(help), help, "{generic}");
+        }
+    }
+
+    #[test]
+    fn a_distinctive_account_name_is_replaced_everywhere() {
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let host = test_host(data_dir.path());
+        let mut facts = HostFacts::default();
+        facts.identifying_values(&host, &account_variables("zephyrine_ops"));
+        assert!(
+            facts
+                .sensitive_values
+                .iter()
+                .any(|value| value == "zephyrine_ops")
+        );
+        let sanitizer = sanitizer_for(&facts);
+        let mut environment = json!({ "process": { "owner_hint": "zephyrine_ops" } });
+        sanitizer.json_values(&mut environment);
+        assert_eq!(environment["process"]["owner_hint"], "<redacted>");
+        let help = "# HELP scryer_synthetic_total Started by zephyrine_ops\n";
+        assert!(!sanitizer.metrics(help).contains("zephyrine_ops"));
+        for line in [
+            "2026-11-10T12:00:00Z  INFO scryer: started by Zephyrine_Ops in a shell".to_string(),
+            json!({
+                "timestamp": "2026-11-10T12:00:01Z",
+                "level": "INFO",
+                "fields": { "message": "running as zephyrine_ops", "account": "zephyrine_ops" },
+            })
+            .to_string(),
+        ] {
+            let sanitized = sanitizer.log_line(&line);
+            assert!(
+                !sanitized.to_lowercase().contains("zephyrine_ops"),
+                "{sanitized}"
+            );
+        }
+    }
+
+    #[test]
+    fn systemd_unit_needs_this_process_to_be_the_units_own() {
+        let vars = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(systemd_unit(&vars(&[]), 4242), Some(false));
+        assert_eq!(
+            systemd_unit(
+                &vars(&[("INVOCATION_ID", "0123abcd"), ("SYSTEMD_EXEC_PID", "4242")]),
+                4242
+            ),
+            Some(true)
+        );
+        // Inherited from a unit further up the process tree.
+        assert_eq!(
+            systemd_unit(
+                &vars(&[("INVOCATION_ID", "0123abcd"), ("SYSTEMD_EXEC_PID", "77")]),
+                4242
+            ),
+            Some(false)
+        );
+        // A unit, but a systemd too old to say whose.
+        assert_eq!(
+            systemd_unit(&vars(&[("INVOCATION_ID", "0123abcd")]), 4242),
+            None
+        );
+
+        let service = vars(&[("XPC_SERVICE_NAME", "synthetic.scryer.job")]);
+        assert!(launchd_job(&service, 1));
+        // A child of a desktop app inherits the app's service name.
+        assert!(!launchd_job(
+            &vars(&[("XPC_SERVICE_NAME", "application.synthetic.desktop.1.2")]),
+            5150
+        ));
+        assert!(!launchd_job(&vars(&[("XPC_SERVICE_NAME", "0")]), 1));
+        assert!(!launchd_job(&vars(&[]), 1));
     }
 
     #[test]
