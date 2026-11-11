@@ -1,0 +1,17 @@
+# Recent import attempts. Variables: {"limit": 25}
+# Paths are not selected. Branch on decision and skipReason.
+query ImportHistory($limit: Int) {
+  importHistory(limit: $limit) {
+    sourceSystem
+    sourceTitle
+    facet
+    importType
+    status
+    decision
+    skipReason
+    errorMessage
+    titleId
+    startedAt
+    finishedAt
+  }
+}

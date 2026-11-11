@@ -1,0 +1,13 @@
+# Give up on one failed item so the run can finish. Variables: {"runId": "...", "key": "..."}
+mutation SkipExternalImportSource($runId: ID!, $key: String!) {
+  skipExternalImportSource(runId: $runId, key: $key) {
+    runId
+    active
+    ready
+    items {
+      key
+      state
+      reason
+    }
+  }
+}

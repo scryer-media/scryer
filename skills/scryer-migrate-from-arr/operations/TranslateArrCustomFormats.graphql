@@ -1,0 +1,21 @@
+# Final pass: translate with the agreed scores and return the Rego module.
+# Saves nothing. Variables: {"input": {"sourceApplication": "SONARR"|"RADARR",
+#   "customFormatJson": "<JSON array as a string>",
+#   "scores": [{"formatId": "[0]:12", "score": 100}]}}
+mutation TranslateArrCustomFormats($input: TranslateArrCustomFormatsInput!) {
+  translateArrCustomFormats(input: $input) {
+    name
+    description
+    appliedFacets
+    regoSource
+    formats {
+      id
+      name
+      status
+      diagnostics {
+        code
+        severity
+      }
+    }
+  }
+}

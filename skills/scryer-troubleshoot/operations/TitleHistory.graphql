@@ -1,0 +1,21 @@
+# Grab, download and import events for one title.
+# Variables: {"titleIds": ["..."], "eventTypes": null, "limit": 25}
+# eventTypes example: ["GRABBED", "DOWNLOAD_FAILED", "IMPORT_FAILED", "IMPORT_SKIPPED"]
+query TitleHistory($titleIds: [ID!], $eventTypes: [TitleHistoryEventTypeValue!], $limit: Int) {
+  titleHistory(filter: { titleIds: $titleIds, eventTypes: $eventTypes, limit: $limit }) {
+    totalCount
+    hasMore
+    items {
+      eventType
+      occurredAt
+      sourceTitle
+      sourceProvider
+      clientName
+      quality
+      skipReason
+      failureReasonCode
+      failureReason
+      blocklistReason
+    }
+  }
+}

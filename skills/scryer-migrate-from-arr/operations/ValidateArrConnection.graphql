@@ -1,0 +1,11 @@
+# Check that Scryer can reach an arr app. Read-only.
+# Variables: {"input": {"kind": "SONARR"|"RADARR"|"PROWLARR", "connection": {"baseUrl": "...", "apiKey": "..."}}}
+mutation ValidateArrConnection($input: ValidateExternalImportConnectionInput!) {
+  validateExternalImportConnection(input: $input) {
+    kind
+    baseUrl
+    connected
+    version
+    error
+  }
+}

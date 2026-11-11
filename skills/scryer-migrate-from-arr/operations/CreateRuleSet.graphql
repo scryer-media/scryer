@@ -1,0 +1,11 @@
+# Save a rule set. Side effect: confirm first. Start disabled.
+# Variables: {"input": {"name": "...", "description": "...", "regoSource": "...",
+#   "appliedFacets": [...], "priority": 0, "enabled": false}}
+mutation CreateRuleSet($input: CreateRuleSetInput!) {
+  createRuleSet(input: $input) {
+    id
+    name
+    enabled
+    appliedFacets
+  }
+}

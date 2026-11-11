@@ -1,0 +1,15 @@
+# Download client state without config values or secrets.
+query DownloadClientStatus {
+  downloadClientConfigs {
+    id
+    name
+    clientType
+    isEnabled
+    status
+    lastError
+    lastSeenAt
+    disabledUntil
+    escalationLevel
+    proxyConfigId
+  }
+}

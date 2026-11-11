@@ -1,0 +1,16 @@
+# Retry failed items with corrected indexer API keys. Side effect: confirm first.
+# Variables: {"runId": "...", "corrections": [{"dedupKey": "...", "apiKey": "..."}]}
+mutation RetryExternalImportSources($runId: ID!, $corrections: [IndexerApiKeyOverrideInput!]!) {
+  retryExternalImportSources(runId: $runId, corrections: $corrections) {
+    runId
+    active
+    ready
+    items {
+      key
+      name
+      kind
+      state
+      reason
+    }
+  }
+}

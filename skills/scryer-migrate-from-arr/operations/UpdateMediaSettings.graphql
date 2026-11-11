@@ -1,0 +1,12 @@
+# Change naming or import settings for one scope; omitted fields stay as they are.
+# Side effect: confirm first. Variables: {"input": {"scope": "SERIES", "renameTemplate": "..."}}
+mutation UpdateMediaSettings($input: UpdateMediaSettingsInput!) {
+  updateMediaSettings(input: $input) {
+    scope
+    renameEnabled
+    renameTemplate
+    folderTemplate
+    seasonFolderTemplate
+    useSeasonFolders
+  }
+}

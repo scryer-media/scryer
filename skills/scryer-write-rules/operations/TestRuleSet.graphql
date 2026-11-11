@@ -1,0 +1,51 @@
+# Score one release name for one title with a draft rule set. Saves nothing.
+# Variables: {"input": {"draft": {name, description, regoSource, enabled, priority,
+#   appliedFacets}, "copyDisablesSource": false, "titleId": "...",
+#   "episodeId": "..." (series and anime only), "releaseName": "...", "sizeBytes": 0}}
+mutation TestRuleSet($input: TestRuleSetInput!) {
+  testRuleSet(input: $input) {
+    releaseName
+    score
+    allowed
+    blocked
+    minimumScoreMet
+    profileName
+    context {
+      titleName
+      facet
+      episodeLabel
+    }
+    parsed {
+      releaseGroup
+      quality
+      source
+      videoCodec
+      audio
+      audioLanguages
+      sizeBytes
+    }
+    draftContribution {
+      score
+      matched
+      applies
+      enabled
+      message
+    }
+    ruleSets {
+      ruleSetName
+      isDraft
+      score
+      blocked
+      entries {
+        code
+        delta
+        blocked
+      }
+    }
+    errors {
+      code
+      message
+      ruleSetId
+    }
+  }
+}

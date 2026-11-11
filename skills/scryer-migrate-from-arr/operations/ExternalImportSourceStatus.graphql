@@ -1,0 +1,15 @@
+# Progress of the client and indexer creation run. Variables: {"runId": "..."}
+mutation ExternalImportSourceStatus($runId: ID!) {
+  externalImportSourceStatus(runId: $runId) {
+    runId
+    active
+    ready
+    items {
+      key
+      name
+      kind
+      state
+      reason
+    }
+  }
+}

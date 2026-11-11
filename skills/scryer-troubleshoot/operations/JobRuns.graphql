@@ -1,0 +1,14 @@
+# Recent runs of one job. Variables: {"jobKey": "RSS_SYNC", "limit": 5}
+# jobKey is a JobKeyValue, for example RSS_SYNC, ACQUISITION_SEARCH,
+# PENDING_RELEASE_PROCESSING, HEALTH_CHECKS, LIBRARY_SCAN_MOVIES, APPLICATION_UPGRADE.
+query JobRuns($jobKey: JobKeyValue!, $limit: Int) {
+  jobRuns(jobKey: $jobKey, limit: $limit) {
+    status
+    triggerSource
+    startedAt
+    completedAt
+    summaryText
+    summaryJson
+    errorText
+  }
+}

@@ -1,0 +1,19 @@
+# Naming and import settings for one scope. Variables: {"scope": "MOVIE"|"SERIES"|"ANIME"}
+query MediaSettings($scope: ContentScopeValue!) {
+  mediaSettings(scope: $scope) {
+    scope
+    renameEnabled
+    renameTemplate
+    folderTemplate
+    seasonFolderTemplate
+    specialsFolderTemplate
+    useSeasonFolders
+    importMode
+    nfoWriteOnImport
+    plexmatchWriteOnImport
+    setPermissionsLinux
+    fileChmod
+    folderChmod
+    chownGroup
+  }
+}

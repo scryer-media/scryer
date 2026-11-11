@@ -1,0 +1,15 @@
+# Map every arr root folder to a Scryer library root and stage the monitored-state
+# snapshot. Side effect: confirm first. Variables: {"input": {
+#   "sourceImportRunId": "<runId or null>", "sourceWarmupSessionIds": [...],
+#   "mappings": [{"sourceWarmupSessionId", "sourceKey", "kind", "arrRootPath",
+#                 "scryerRootPath", "libraryId", "facet"}]}}
+mutation FinalizeExternalImport($input: FinalizeExternalImportInput!) {
+  finalizeExternalImport(input: $input) {
+    monitorWarmupSessionId
+    finalizeSessionId
+    progress {
+      status
+      phase
+    }
+  }
+}

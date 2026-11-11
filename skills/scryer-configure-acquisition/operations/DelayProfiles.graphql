@@ -1,0 +1,20 @@
+# Delay profiles.
+query DelayProfiles {
+  delayProfiles {
+    id
+    name
+    enabled
+    priority
+    usenetDelayMinutes
+    torrentDelayMinutes
+    enableUsenet
+    enableTorrent
+    preferredProtocol
+    minAgeMinutes
+    bypassScoreThreshold
+    bypassIfHighestQuality
+    appliesToFacets
+    tags
+    libraryIds
+  }
+}

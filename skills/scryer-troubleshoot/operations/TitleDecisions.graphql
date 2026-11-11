@@ -1,0 +1,30 @@
+# Why releases for one title were or were not grabbed. Variables: {"titleId": "..."}
+# decisionCode values are listed in references/codes.md.
+query TitleDecisions($titleId: ID!) {
+  titleAcquisitionDiagnostics(titleId: $titleId) {
+    latestDecisionAt
+    latestWantedSearchAt
+    mismatchRecoveryEligibleCount
+    decisionCounts {
+      code
+      count
+    }
+    wantedStatusCounts {
+      status
+      count
+    }
+    pendingReleaseCounts {
+      status
+      count
+    }
+    recentDecisions {
+      releaseTitle
+      decisionCode
+      candidateScore
+      currentScore
+      scoreDelta
+      decidedBy
+      createdAt
+    }
+  }
+}

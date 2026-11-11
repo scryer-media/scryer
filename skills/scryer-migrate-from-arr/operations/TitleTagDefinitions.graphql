@@ -1,0 +1,8 @@
+# Tag registry. Variables: none.
+query TitleTagDefinitions {
+  titleTagDefinitions {
+    id
+    label
+    titleCount
+  }
+}

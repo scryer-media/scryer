@@ -1,0 +1,13 @@
+# The latest run of each background job. summaryJson is omitted to keep the
+# response small; fetch one job's summary with JobRuns.graphql.
+query LatestJobRuns {
+  latestJobRuns {
+    jobKey
+    displayName
+    status
+    triggerSource
+    startedAt
+    completedAt
+    errorText
+  }
+}

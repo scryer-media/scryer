@@ -1,0 +1,15 @@
+# Find a title id by name. Variables: {"query": "Example Title", "limit": 5}
+query FindTitle($query: String!, $limit: Int) {
+  titles(query: $query, limit: $limit) {
+    totalCount
+    items {
+      id
+      name
+      facet
+      year
+      monitored
+      libraryId
+      qualityProfileId
+    }
+  }
+}

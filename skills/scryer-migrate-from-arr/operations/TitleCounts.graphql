@@ -1,0 +1,15 @@
+# Catalog counts for one facet, for the verification checklist. Variables: {"facet": "MOVIE"}
+query TitleCounts($facet: MediaFacetValue) {
+  titles(facet: $facet, limit: 1) {
+    totalCount
+    filterCounts {
+      all
+      monitored
+      unmonitored
+      missing
+      partial
+      complete
+      needsAttention
+    }
+  }
+}

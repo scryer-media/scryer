@@ -1,0 +1,20 @@
+# Change a library. When sending roots, send every existing root with its id plus
+# any new one. Leaving a root out is refused unless its id is also listed in
+# removedRootIds, which would take that root's titles out of the catalog: this
+# skill never sends removedRootIds and never drops a root. Side effect: confirm first.
+# Variables: {"input": {"libraryId": "...", "roots": [{"id": "...", "path": "...",
+#   "isDefault": true}, {"path": "/new/root", "isDefault": false}],
+#   "settings": {...LibrarySettingsInput}}}
+mutation UpdateLibrary($input: UpdateLibraryInput!) {
+  updateLibrary(input: $input) {
+    id
+    facet
+    name
+    qualityProfileId
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
+}

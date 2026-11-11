@@ -1,0 +1,17 @@
+# Recent indexer failures, newest first. Variables: {"indexerId": null, "first": 25}
+# Branch on classification and operation, not on message.
+query IndexerErrors($indexerId: ID, $first: Int, $after: String) {
+  indexerErrors(indexerId: $indexerId, first: $first, after: $after) {
+    items {
+      indexerId
+      indexerName
+      operation
+      occurredAt
+      httpStatus
+      classification
+      providerErrorCode
+      message
+    }
+    nextCursor
+  }
+}

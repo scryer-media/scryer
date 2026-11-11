@@ -1,0 +1,10 @@
+# Start reading one Sonarr or Radarr instance into an import session. Changes nothing
+# in Scryer's library yet. Variables: {"input": {"kind": "SONARR"|"RADARR",
+#   "connection": {"baseUrl": "...", "apiKey": "..."}}}
+mutation StartArrSourceWarmup($input: StartExternalImportArrSourceWarmupInput!) {
+  startExternalImportArrSourceWarmup(input: $input) {
+    sessionId
+    status
+    phase
+  }
+}

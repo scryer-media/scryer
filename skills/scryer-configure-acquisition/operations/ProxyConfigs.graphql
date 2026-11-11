@@ -1,0 +1,10 @@
+# Proxies that indexers and download clients can use.
+query ProxyConfigs {
+  proxyConfigs {
+    id
+    name
+    providerType
+    isEnabled
+    lastHealthStatus
+  }
+}

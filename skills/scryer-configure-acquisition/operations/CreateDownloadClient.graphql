@@ -1,0 +1,15 @@
+# Write. Does not test the connection; test first. Adds a routing entry.
+# Variables: {"input": CreateDownloadClientConfigInput}
+mutation CreateDownloadClient($input: CreateDownloadClientConfigInput!) {
+  createDownloadClientConfig(input: $input) {
+    id
+    name
+    clientType
+    baseUrl
+    isEnabled
+    status
+    lastError
+    proxyConfigId
+    storedSecretKeys
+  }
+}

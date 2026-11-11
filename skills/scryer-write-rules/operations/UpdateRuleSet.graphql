@@ -1,0 +1,13 @@
+# Change a saved rule set. Omitted fields stay as they are.
+# Side effect: confirm with the operator first.
+# Variables: {"input": {"id": "...", "regoSource": "...", "appliedFacets": [...]}}
+mutation UpdateRuleSet($input: UpdateRuleSetInput!) {
+  updateRuleSet(input: $input) {
+    id
+    name
+    enabled
+    priority
+    appliedFacets
+    disabledReason
+  }
+}

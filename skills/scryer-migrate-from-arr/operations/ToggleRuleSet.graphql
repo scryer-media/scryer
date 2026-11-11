@@ -1,0 +1,9 @@
+# Enable or disable a rule set. Side effect: confirm first.
+# Variables: {"input": {"id": "...", "enabled": true}}
+mutation ToggleRuleSet($input: ToggleRuleSetInput!) {
+  toggleRuleSet(input: $input) {
+    id
+    name
+    enabled
+  }
+}

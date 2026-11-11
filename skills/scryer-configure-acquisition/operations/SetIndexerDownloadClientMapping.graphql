@@ -1,0 +1,9 @@
+# Write. Pin an indexer's grabs to one download client, or null to clear.
+# Variables: {"input": {"indexerId": "...", "downloadClientId": null}}
+mutation SetIndexerDownloadClientMapping($input: SetIndexerDownloadClientMappingInput!) {
+  setIndexerDownloadClientMapping(input: $input) {
+    id
+    name
+    downloadClientId
+  }
+}

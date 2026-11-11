@@ -1,0 +1,20 @@
+# Progress of one scan. Variables: {"sessionId": "..."}
+query LibraryScanSession($sessionId: ID!) {
+  libraryScanSession(sessionId: $sessionId) {
+    sessionId
+    status
+    foundTitles
+    titleMatchProgress {
+      total
+      completed
+      failed
+    }
+    summary {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+  }
+}
