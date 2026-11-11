@@ -1187,7 +1187,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_budget_round_trips_through_create_and_update() {
+    async fn query_and_monthly_limits_round_trip_through_create_and_update() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -1210,6 +1210,8 @@ mod tests {
         .expect("config without a budget should deserialize");
         assert_eq!(config.max_queries_per_minute, None);
         config.max_queries_per_minute = Some(12);
+        config.max_requests_per_month = Some(120);
+        config.max_grabs_per_month = Some(30);
         store.create(config).await.expect("create should succeed");
         let created = store
             .get_by_id("budgeted")
@@ -1217,6 +1219,8 @@ mod tests {
             .expect("query should succeed")
             .expect("config should exist");
         assert_eq!(created.max_queries_per_minute, Some(12));
+        assert_eq!(created.max_requests_per_month, Some(120));
+        assert_eq!(created.max_grabs_per_month, Some(30));
 
         let preserved = store
             .update(IndexerConfigUpdate {
@@ -1227,18 +1231,22 @@ mod tests {
             .await
             .expect("unrelated update should succeed");
         assert_eq!(preserved.max_queries_per_minute, Some(12));
+        assert_eq!(preserved.max_requests_per_month, Some(120));
+        assert_eq!(preserved.max_grabs_per_month, Some(30));
 
         let replaced = store
             .update(IndexerConfigUpdate {
                 id: "budgeted".to_string(),
                 max_queries_per_minute: Some(Some(30)),
-                max_requests_per_month: None,
-                max_grabs_per_month: None,
+                max_requests_per_month: Some(Some(240)),
+                max_grabs_per_month: Some(Some(60)),
                 ..Default::default()
             })
             .await
             .expect("budget update should succeed");
         assert_eq!(replaced.max_queries_per_minute, Some(30));
+        assert_eq!(replaced.max_requests_per_month, Some(240));
+        assert_eq!(replaced.max_grabs_per_month, Some(60));
         assert_eq!(
             store
                 .get_by_id("budgeted")
@@ -1248,18 +1256,27 @@ mod tests {
                 .max_queries_per_minute,
             Some(30)
         );
+        let persisted = store
+            .get_by_id("budgeted")
+            .await
+            .expect("query should succeed")
+            .expect("config should exist");
+        assert_eq!(persisted.max_requests_per_month, Some(240));
+        assert_eq!(persisted.max_grabs_per_month, Some(60));
 
         let cleared = store
             .update(IndexerConfigUpdate {
                 id: "budgeted".to_string(),
                 max_queries_per_minute: Some(None),
-                max_requests_per_month: None,
-                max_grabs_per_month: None,
+                max_requests_per_month: Some(None),
+                max_grabs_per_month: Some(None),
                 ..Default::default()
             })
             .await
             .expect("budget clear should succeed");
         assert_eq!(cleared.max_queries_per_minute, None);
+        assert_eq!(cleared.max_requests_per_month, None);
+        assert_eq!(cleared.max_grabs_per_month, None);
     }
     #[tokio::test]
     async fn caps_health_compare_and_swap_preserves_newer_failures_and_settings() {
