@@ -62,9 +62,9 @@ fn severity_name(severity: ArrDiagnosticSeverity) -> &'static str {
     }
 }
 
-/// The server translator reproduces the checked-in output of the web
-/// translator it replaced: every status and diagnostic, and the Rego source
-/// byte for byte. Any source that differs must still pass Regorus.
+/// The server translator reproduces its checked-in corpus output: every
+/// status and diagnostic, and the Rego source byte for byte. Any source that
+/// differs must still pass Regorus.
 #[test]
 fn server_translator_reproduces_the_checked_in_corpus() {
     let source: SourceCorpus = serde_json::from_str(include_str!(

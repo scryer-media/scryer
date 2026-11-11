@@ -331,7 +331,13 @@ fn positional_lookarounds_use_source_position_relations() {
     assert_eq!(result.formats[0].status, ArrFormatStatus::Translated);
     let rego = &result.rego_source;
     assert!(rego.contains("numbers.range"), "{rego}");
-    assert!(rego.contains("not _arr_0_spec_0_position_1"), "{rego}");
+    // Regorus never satisfies a negated wildcard lookup, so the negation
+    // applies to a function call instead.
+    assert!(
+        rego.contains("not _arr_0_spec_0_position_2_anchored(_arr_0_spec_0_position_2_at)"),
+        "{rego}"
+    );
+    assert!(!rego.contains("not _arr_0_spec_0_position_1[["), "{rego}");
     assert!(!rego.contains("foo(?!bar)"), "{rego}");
 }
 
@@ -391,6 +397,7 @@ fn compile(
         .chain(compiled.alternatives.iter().cloned())
         .map(|body| Rule {
             name: "matches".to_string(),
+            args: vec![],
             key: None,
             value: None,
             body,
@@ -686,27 +693,6 @@ fn synthetic_input() -> scryer_rules::UserRuleInput {
     )
 }
 
-/// Cases where the generated Rego and the reference engine disagree under
-/// Regorus. Each needs a negated position relation to hold: the generated
-/// `not relation[[at, _]]` never succeeds in Regorus, although the same test
-/// through a function (`not starts_at(at)`) does. The source is kept identical
-/// to what the web translator generated, so this list pins the defect; a fix
-/// to the generated source empties it.
-const REGORUS_NEGATED_WILDCARD_DEFECT: &[(&str, &str)] = &[
-    ("foo(?!bar)", "foo"),
-    ("foo(?!bar|baz)", "fooqux"),
-    ("foo(?!bar|baz)", "foobar fooqux"),
-    ("foo(?!bar|baz)", "FOOqux"),
-    ("(?<!foo|xx)bar", "xbar"),
-    ("(?<!foo|xx)bar", "bar"),
-    ("(?<!foo|xx)bar", "foobar bar"),
-    ("(?<!foo.*)bar", "bar"),
-    ("(?<!foo.*)bar", "foo\nbar"),
-    ("(?<!foo.*)bar", "xxbar"),
-    ("foo(?=b(?!az))", "foobar"),
-    ("foo(?=b(?!az))", "foob"),
-];
-
 /// Expected results come from the JavaScript reference engine with the `iu`
 /// flags, where `$` reads as .NET's non-multiline end: a final LF is allowed,
 /// a CR before it is not.
@@ -824,6 +810,26 @@ fn translated_regexes_match_reference_regex_behavior() {
             ],
         ),
         (
+            "(?:x(?!y)|z)w",
+            &[
+                ("xw", true),
+                ("xyw", false),
+                ("zw", true),
+                ("xxw", true),
+                ("w", false),
+            ],
+        ),
+        (
+            "(?<!a(?!b))c",
+            &[
+                ("ac", false),
+                ("c", true),
+                ("abc", true),
+                ("bc", true),
+                ("aac", false),
+            ],
+        ),
+        (
             "(?:(?=foo)foo|bar)(?=x)",
             &[
                 ("foox", true),
@@ -837,10 +843,9 @@ fn translated_regexes_match_reference_regex_behavior() {
     for (pattern, titles) in cases {
         let mut rule = TitleRule::new(pattern);
         for (title, expected) in *titles {
-            let defect = REGORUS_NEGATED_WILDCARD_DEFECT.contains(&(*pattern, *title));
-            if (rule.matches(title) != *expected) != defect {
+            if rule.matches(title) != *expected {
                 mismatches.push(format!(
-                    "{pattern} on {title:?}: expected {expected}, known defect {defect}\n{}",
+                    "{pattern} on {title:?}: expected {expected}\n{}",
                     rule.rego_source
                 ));
             }

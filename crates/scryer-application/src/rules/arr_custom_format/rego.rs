@@ -42,6 +42,8 @@ impl Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Rule {
     pub(super) name: String,
+    /// Parameters of a function rule; empty for every other rule.
+    pub(super) args: Vec<Term>,
     pub(super) key: Option<Term>,
     pub(super) value: Option<Term>,
     pub(super) body: Vec<Expr>,
@@ -133,6 +135,11 @@ pub(super) fn print_module(rules: &[Rule]) -> String {
 
 fn print_rule(rule: &Rule) -> String {
     let mut out = rule.name.clone();
+    if !rule.args.is_empty() {
+        out.push('(');
+        out.push_str(&join_terms(&rule.args));
+        out.push(')');
+    }
     if let Some(key) = &rule.key {
         out.push('[');
         out.push_str(&print_term(key));

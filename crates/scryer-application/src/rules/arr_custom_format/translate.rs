@@ -265,6 +265,7 @@ struct Lowering<'a> {
 fn relation_rule(name: &str, start: Term, end: Term, body: Vec<Expr>) -> Rule {
     Rule {
         name: name.to_string(),
+        args: vec![],
         key: Some(array(vec![start, end])),
         value: Some(Term::Bool(true)),
         body,
@@ -467,27 +468,36 @@ impl Lowering<'_> {
         let name = self.make_name();
         let at = format!("{name}_at");
         let enumerate = self.enumerate(&name);
-        let anchored = |alternative: &str| {
+        let anchored = |alternative: &str, offset: &str| {
             if behind {
-                key(alternative, var("_"), var(&at))
+                key(alternative, var("_"), var(offset))
             } else {
-                key(alternative, var(&at), var("_"))
+                key(alternative, var(offset), var("_"))
             }
         };
         if negate {
-            // `(?!a|b)` succeeds only where neither alternative matches.
+            // `(?!a|b)` succeeds only where neither alternative matches. Regorus
+            // never satisfies `not relation[[at, _]]`, so the wildcard lookup
+            // sits in a function and the negation applies to its call.
+            let anchored_at = format!("{name}_anchored");
+            let offset = format!("{name}_offset");
+            for alternative in &alternatives {
+                self.rules.push(Rule {
+                    name: anchored_at.clone(),
+                    args: vec![var(&offset)],
+                    key: None,
+                    value: None,
+                    body: vec![anchored(alternative, &offset)],
+                });
+            }
             let mut rule_body = enumerate;
-            rule_body.extend(
-                alternatives
-                    .iter()
-                    .map(|alternative| anchored(alternative).negated(true)),
-            );
+            rule_body.push(call(&anchored_at, vec![var(&at)]).negated(true));
             self.rules
                 .push(relation_rule(&name, var(&at), var(&at), rule_body));
         } else {
             for alternative in &alternatives {
                 let mut rule_body = enumerate.clone();
-                rule_body.push(anchored(alternative));
+                rule_body.push(anchored(alternative, &at));
                 self.rules
                     .push(relation_rule(&name, var(&at), var(&at), rule_body));
             }
@@ -648,6 +658,7 @@ fn compile_specification(
 fn helper_rule(name: String, body: Vec<Expr>) -> Rule {
     Rule {
         name,
+        args: vec![],
         key: None,
         value: None,
         body,
@@ -752,6 +763,7 @@ pub(super) fn translate_formats(
             ));
             rules.push(Rule {
                 name: "score_entry".to_string(),
+                args: vec![],
                 key: Some(text(score_key)),
                 value: Some(number(f64::from(score.unwrap_or(0)))),
                 body: vec![single(Term::Bool(false))],
@@ -826,6 +838,7 @@ pub(super) fn translate_formats(
         ));
         rules.push(Rule {
             name: "score_entry".to_string(),
+            args: vec![],
             key: Some(text(score_key)),
             value: Some(number(f64::from(score.unwrap_or(0)))),
             body: vec![predicate(&format_name(format_index), false)],
