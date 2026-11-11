@@ -1,5 +1,11 @@
 # Repository instructions
 
+## Agents helping an operator
+
+- The rest of this file is for agents changing Scryer's code. If you are helping someone run, set up, migrate to, or troubleshoot their own Scryer instance, use the skills in [skills/](skills/) instead.
+- Each skill is a directory with a `SKILL.md` that states when it applies. Read the matching skill before acting, and follow its steps rather than exploring the source tree or the GraphQL schema from scratch.
+- Operator skills work through a running instance's API with a key the operator supplies. They do not require a checkout of this repository or changes to it.
+
 ## Task execution
 
 - Carry an implementation request through the authorized edits, relevant validation, and handoff. Resolve routine, reversible implementation choices from repository evidence without another approval round.
