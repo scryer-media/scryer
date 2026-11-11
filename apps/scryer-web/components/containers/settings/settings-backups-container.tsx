@@ -9,7 +9,12 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
-import { useBeforeUnload, useBlocker } from "react-router";
+import {
+  type BlockerFunction,
+  useBeforeUnload,
+  useBlocker,
+} from "react-router";
+import { isFolderBrowserHistoryStep } from "@/lib/utils/folder-browser-history";
 import { useClient } from "urql";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { InfoHelp } from "@/components/common/info-help";
@@ -423,7 +428,16 @@ export function SettingsBackupsContainer() {
     (autoBackupDirty || backupPathDirty) &&
     !autoBackupSaving &&
     !backupSettingsSaving;
-  const autoBackupNavigationBlocker = useBlocker(shouldBlockNavigation);
+  // Moving between an open folder browser's history entries stays on this
+  // page and keeps the edits, so it is never held.
+  const autoBackupNavigationBlocker = useBlocker(
+    React.useCallback<BlockerFunction>(
+      ({ currentLocation, nextLocation }) =>
+        shouldBlockNavigation &&
+        !isFolderBrowserHistoryStep(currentLocation, nextLocation),
+      [shouldBlockNavigation],
+    ),
+  );
 
   useBeforeUnload(
     React.useCallback(

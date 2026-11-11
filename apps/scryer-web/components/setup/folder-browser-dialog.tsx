@@ -26,6 +26,7 @@ import { browsePathQuery } from "@/lib/graphql/queries";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { useFolderBrowserHistory } from "@/lib/hooks/use-folder-browser-history";
 
 interface DirectoryEntry {
   name: string;
@@ -139,6 +140,26 @@ export function FolderBrowserDialog({
     }
   }, [open, initialPath, browse, closeNewFolder]);
 
+  const closeFromHistory = useCallback(
+    () => onOpenChange(false),
+    [onOpenChange],
+  );
+  const pushFolderHistory = useFolderBrowserHistory({
+    open,
+    initialPath: initialPath || "/",
+    onPopToFolder: browse,
+    onPopPastStart: closeFromHistory,
+  });
+  // A folder the user moves to gets its own history entry, so browser back
+  // and forward retrace the folders visited.
+  const navigateTo = useCallback(
+    (path: string) => {
+      pushFolderHistory(path.trim() || "/");
+      return browse(path);
+    },
+    [browse, pushFolderHistory],
+  );
+
   // Keep the deepest segment in view; the row scrolls but has no visible
   // affordance on platforms with overlay scrollbars.
   useEffect(() => {
@@ -181,7 +202,7 @@ export function FolderBrowserDialog({
       );
       return;
     }
-    void browse(created.path);
+    void navigateTo(created.path);
   };
 
   // A directory can hold hundreds of entries and each row carries its own icon,
@@ -252,7 +273,7 @@ export function FolderBrowserDialog({
             >
               <button
                 type="button"
-                onClick={() => browse("/")}
+                onClick={() => navigateTo("/")}
                 className={cn(
                   "shrink-0 rounded-[8px] border px-2 py-1 font-[family-name:var(--font-code)] transition-colors",
                   pathSegments.length === 0
@@ -273,7 +294,7 @@ export function FolderBrowserDialog({
                     <ChevronRight className="h-3 w-3 shrink-0 text-[var(--scry-muted3)]" />
                     <button
                       type="button"
-                      onClick={() => browse(segPath)}
+                      onClick={() => navigateTo(segPath)}
                       className={cn(
                         "max-w-[14rem] shrink-0 truncate rounded-[8px] border px-2 py-1 font-[family-name:var(--font-code)] transition-colors",
                         isLast
@@ -300,7 +321,7 @@ export function FolderBrowserDialog({
                   setBrowsedPath(null);
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") browse(currentPath);
+                  if (e.key === "Enter") navigateTo(currentPath);
                 }}
                 className="h-10 min-w-0 border-[var(--scry-border3)] bg-[var(--scry-inset)] font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]"
               />
@@ -309,7 +330,7 @@ export function FolderBrowserDialog({
                 variant="secondary"
                 size="sm"
                 className="h-10 shrink-0 border-[var(--scry-border3)]"
-                onClick={() => browse(currentPath)}
+                onClick={() => navigateTo(currentPath)}
               >
                 {t("folderBrowser.go")}
               </Button>
@@ -426,7 +447,7 @@ export function FolderBrowserDialog({
                     type="button"
                     variant="secondary"
                     size="sm"
-                    onClick={() => browse("/")}
+                    onClick={() => navigateTo("/")}
                   >
                     {t("folderBrowser.browseRoot")}
                   </Button>
@@ -451,7 +472,7 @@ export function FolderBrowserDialog({
                         id="folder-browser-up"
                         key={virtualRow.key}
                         type="button"
-                        onClick={() => browse(row.path)}
+                        onClick={() => navigateTo(row.path)}
                         className="mb-1 grid w-full min-w-0 max-w-full grid-cols-[2rem_minmax(0,1fr)] items-center gap-2.5 overflow-hidden rounded-[10px] border border-transparent px-3 py-2 text-left text-sm text-[var(--scry-muted3)] transition-colors hover:border-[var(--scry-border3)] hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
                       >
                         <span className="grid h-8 w-8 place-items-center rounded-[9px] bg-[var(--scry-inset)]">
@@ -469,7 +490,7 @@ export function FolderBrowserDialog({
                       type="button"
                       onClick={() => {
                         if (entry.isDirectory) {
-                          void browse(entry.path);
+                          void navigateTo(entry.path);
                           return;
                         }
                         onSelect(entry.path);
