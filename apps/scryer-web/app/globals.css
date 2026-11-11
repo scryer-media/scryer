@@ -640,8 +640,11 @@ body {
 [data-slot="card"][data-ui="series-episodes"]
   > [data-slot="card-header"][data-docked] {
   border-radius: 0;
-  background-color: color-mix(in srgb, var(--card) 94%, transparent);
-  backdrop-filter: blur(16px) saturate(130%);
+  border-bottom-color: var(--scry-border);
+  /* Follow the active palette's card surface so the bar reads as part of
+     the panel rather than a separate slab. */
+  background-color: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
   box-shadow:
     0 1px 0 var(--scry-border),
     0 14px 28px -18px rgba(2, 6, 23, 0.45);
@@ -650,8 +653,9 @@ body {
 .dark
   [data-slot="card"][data-ui="series-episodes"]
   > [data-slot="card-header"][data-docked] {
-  background-color: rgba(10, 15, 29, 0.94);
-  box-shadow: 0 16px 32px -18px rgba(2, 6, 23, 0.85);
+  box-shadow:
+    0 1px 0 var(--scry-border),
+    0 18px 32px -20px rgba(0, 0, 0, 0.7);
 }
 
 .dark [data-slot="sidebar-inner"] {
