@@ -6721,6 +6721,16 @@ fn parse_split_standard_episode_at(
 ) -> Option<(Option<u32>, Vec<u32>, Vec<usize>)> {
     let season = parse_season_token(tokens.get(index)?.normalized.as_str())?;
     let episode_token = tokens.get(index + 1)?;
+    // An explicit E marker belongs to the preceding season, not a second
+    // independent E-only parse (which defaults to season one). Consume the
+    // complete episode suffix so real multi-episode files retain their span.
+    if episode_token.separator_before == SeparatorKind::Dot
+        && episode_token.normalized.starts_with('E')
+    {
+        let (_, episodes, last_token) =
+            parse_hyphenated_standard_episode_range_at(tokens, index + 1)?;
+        return Some((Some(season), episodes, (index..=last_token).collect()));
+    }
     let episode = if episode_token.separator_before == SeparatorKind::Hyphen {
         let token = episode_token.normalized.as_str();
         parse_numeric_token(token).or_else(|| {
@@ -7508,6 +7518,9 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
             token.separator_before == SeparatorKind::Hyphen
                 && parse_numeric_token(token.normalized.as_str()).is_some()
         }) || dot_split_episode_after_season(tokens, index + 1).is_some()
+            || (tokens.get(index + 1).is_some_and(|token| {
+                token.separator_before == SeparatorKind::Dot && token.normalized.starts_with('E')
+            }) && parse_split_standard_episode_at(tokens, index).is_some())
         {
             return None;
         }
