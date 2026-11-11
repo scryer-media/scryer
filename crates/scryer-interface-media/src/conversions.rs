@@ -194,6 +194,7 @@ impl IntoApplication<scryer_application::DownloadActivityFilter> for DownloadAct
 impl IntoApplication<scryer_application::DownloadImportFilter> for DownloadImportFilterValue {
     fn into_application(self) -> scryer_application::DownloadImportFilter {
         match self {
+            Self::Dismissed => scryer_application::DownloadImportFilter::Dismissed,
             Self::All => scryer_application::DownloadImportFilter::All,
             Self::Attention => scryer_application::DownloadImportFilter::Attention,
             Self::Importing => scryer_application::DownloadImportFilter::Importing,

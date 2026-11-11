@@ -4528,6 +4528,15 @@ pub mod integration {
     pub const PROXY_TIMEOUT_OUT_OF_RANGE: &str = "INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE";
     /// Download already resolved as the selected value; nothing to ignore.
     pub const DOWNLOAD_ALREADY_RESOLVED: &str = "INTEGRATION_DOWNLOAD_ALREADY_RESOLVED";
+    /// Only blocked imports can be dismissed, and only dismissed imports can be resumed.
+    pub const IMPORT_TRACKING_STATE_NOT_ELIGIBLE: &str =
+        "INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE";
+    /// The client item named in a dismiss or resume request now belongs to another download.
+    pub const IMPORT_TRACKING_DOWNLOAD_CHANGED: &str =
+        "INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED";
+    /// The download was already imported, failed or ignored, so its warning cannot change.
+    pub const IMPORT_TRACKING_ALREADY_RESOLVED: &str =
+        "INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED";
     /// Tracked download was not found.
     pub const TRACKED_DOWNLOAD_NOT_FOUND: &str = "INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND";
     /// Tracked download the selected value is busy processing.
@@ -4725,6 +4734,9 @@ pub mod integration {
         DOWNLOAD_ALREADY_RESOLVED,
         TRACKED_DOWNLOAD_NOT_FOUND,
         TRACKED_DOWNLOAD_BUSY_PROCESSING,
+        IMPORT_TRACKING_STATE_NOT_ELIGIBLE,
+        IMPORT_TRACKING_DOWNLOAD_CHANGED,
+        IMPORT_TRACKING_ALREADY_RESOLVED,
         MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE,
         MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM,
         INDEXER_CONFIG_JSON_INVALID,

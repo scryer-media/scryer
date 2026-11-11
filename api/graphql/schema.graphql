@@ -5678,12 +5678,24 @@ type DownloadImportActionsPayload {
 	Whether the item can be marked failed.
 	"""
 	markFailed: Boolean!
+	"""
+	Whether this blocked warning can be dismissed without changing its client entry.
+	"""
+	dismissImportWarning: Boolean!
+	"""
+	Whether tracking can be explicitly resumed for this dismissed source.
+	"""
+	resumeImportTracking: Boolean!
 }
 
 """
 Filter for import activity.
 """
 enum DownloadImportFilterValue {
+	"""
+	Show dismissed import warnings for explicitly resuming their tracking.
+	"""
+	DISMISSED
 	"""
 	Include every import state.
 	"""
@@ -19711,6 +19723,16 @@ type MutationRoot {
 		streamId: ID!
 	): Boolean!
 	"""
+	Dismiss an import warning (or explicitly resume its tracking) without changing
+	the download client entry, seeding state, files, acquisition claims or quality rules.
+	"""
+	setTrackedDownloadImportDismissed(
+		"""
+		Exact download identity and requested import-tracking dismissal state.
+		"""
+		input: TrackedDownloadImportTrackingInput!
+	): Boolean!
+	"""
 	Mark a tracked download ignored without deleting it from the download client.
 	"""
 	ignoreTrackedDownload(
@@ -33322,6 +33344,32 @@ input TotpVerifyInput {
 }
 
 """
+The exact grab whose import warning is dismissed or whose tracking is resumed.
+"""
+input TrackedDownloadImportTrackingInput {
+	"""
+	Canonical grab identity; a re-added torrent must not inherit a stale action.
+	"""
+	downloadId: ID!
+	"""
+	Configured download client owning the item.
+	"""
+	clientId: ID
+	"""
+	Download client type.
+	"""
+	clientType: String!
+	"""
+	Native client-side item id.
+	"""
+	downloadClientItemId: String!
+	"""
+	True hides the warning and suppresses automatic import; false explicitly resumes tracking.
+	"""
+	dismissed: Boolean!
+}
+
+"""
 Lifecycle state of a tracked download.
 """
 enum TrackedDownloadStateValue {
@@ -33362,6 +33410,10 @@ enum TrackedDownloadStateValue {
 	Download or import failed.
 	"""
 	FAILED
+	"""
+	Import tracking was dismissed without changing the client entry or payload.
+	"""
+	IMPORT_DISMISSED
 	"""
 	Download was ignored.
 	"""

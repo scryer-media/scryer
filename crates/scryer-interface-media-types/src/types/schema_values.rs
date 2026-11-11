@@ -576,6 +576,8 @@ pub enum DownloadActivityFilterValue {
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum DownloadImportFilterValue {
+    /// Show dismissed import warnings for explicitly resuming their tracking.
+    Dismissed,
     /// Include every import state.
     All,
     /// Include imports awaiting attention rather than actively executing.
@@ -925,6 +927,8 @@ pub enum TrackedDownloadStateValue {
     FailedPending,
     /// Download or import failed.
     Failed,
+    /// Import tracking was dismissed without changing the client entry or payload.
+    ImportDismissed,
     /// Download was ignored.
     Ignored,
 }
@@ -941,6 +945,7 @@ impl TrackedDownloadStateValue {
             TrackedDownloadState::ImportBlocked => Self::ImportBlocked,
             TrackedDownloadState::FailedPending => Self::FailedPending,
             TrackedDownloadState::Failed => Self::Failed,
+            TrackedDownloadState::ImportDismissed => Self::ImportDismissed,
             TrackedDownloadState::Ignored => Self::Ignored,
         }
     }
