@@ -86,7 +86,7 @@ use scan_title_files::{
     title_media_file_matches_snapshot, title_media_file_quick_proof_changed,
 };
 use scan_title_finalize::finalize_movie_scan_file;
-pub(crate) use scan_title_finalize::finalize_title_scan_file;
+pub(crate) use scan_title_finalize::{ScannedEpisodeCompletions, finalize_title_scan_file};
 pub(crate) use scan_title_scan::{LibraryRootState, library_root_state};
 use scan_title_scan::{LibraryScanMediaAnalysisPolicy, LibraryScanMediaAnalysisPool};
 

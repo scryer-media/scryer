@@ -1213,52 +1213,54 @@ impl AcquisitionScopeStateRepository for WantedStore {
         last_search_at: Option<&str>,
         landed_import: bool,
     ) -> AppResult<()> {
-        // Keeps the statement well under both engines' bind limits.
+        // Keeps each statement well under both engines' bind limits.
         const MAX_COMPLETION_BATCH_EPISODES: usize = 1_000;
         if episode_ids.is_empty() {
             return Ok(());
         }
-        if episode_ids.len() > MAX_COMPLETION_BATCH_EPISODES {
-            for episode_id in episode_ids {
-                self.complete_acquisition_scope_for_title(
-                    title_id,
-                    Some(episode_id),
-                    last_search_at,
-                    landed_import,
-                )
-                .await?;
-            }
-            return Ok(());
-        }
-        // The per-episode statement applied to every episode at once.
+        // The per-episode statement applied to every episode at once, one
+        // statement per chunk, all in one transaction.
         let now = Utc::now().to_rfc3339();
-        let mut args = vec![
+        let head = vec![
             SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
             opt_timestamp_arg_for_datastore(&self.datastore, last_search_at)?,
             SqlArg::Bool(landed_import),
             timestamp_arg_for_datastore(&self.datastore, &now)?,
             SqlArg::Text(title_id.to_string()),
         ];
-        args.extend(episode_ids.iter().cloned().map(SqlArg::Text));
-        let sql = format!(
-            "UPDATE wanted_items
-                SET status = {{}},
-                    last_search_at = {{}},
-                    grabbed_release = CASE WHEN {{}} THEN NULL ELSE grabbed_release END,
-                    updated_at = {{}}
-              WHERE title_id = {{}} AND episode_id IN ({})",
-            std::iter::repeat_n("{}", episode_ids.len())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        execute_datastore_write(
+        let statements = episode_ids
+            .chunks(MAX_COMPLETION_BATCH_EPISODES)
+            .map(|chunk| {
+                let sql = format!(
+                    "UPDATE wanted_items
+                        SET status = {{}},
+                            last_search_at = {{}},
+                            grabbed_release = CASE WHEN {{}} THEN NULL ELSE grabbed_release END,
+                            updated_at = {{}}
+                      WHERE title_id = {{}} AND episode_id IN ({})",
+                    std::iter::repeat_n("{}", chunk.len())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let mut args = head.clone();
+                args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                (sql, args)
+            })
+            .collect::<Vec<_>>();
+        SqlRuntime::run_in_transaction(
             &self.datastore,
             "complete_acquisition_scopes_for_episodes",
-            &sql,
-            args,
+            move |tx| {
+                let statements = statements.clone();
+                Box::pin(async move {
+                    for (sql, args) in &statements {
+                        SqlRuntime::execute(SqlExec::Tx(tx), sql, args).await?;
+                    }
+                    Ok(())
+                })
+            },
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()> {

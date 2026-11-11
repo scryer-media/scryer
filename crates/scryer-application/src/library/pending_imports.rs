@@ -9,8 +9,8 @@ use tracing::warn;
 
 use super::*;
 use crate::library::library::{
-    PlannedTitleScanFile, PlannedTitleScanRecord, file_source_snapshot_from_path,
-    finalize_title_scan_file,
+    PlannedTitleScanFile, PlannedTitleScanRecord, ScannedEpisodeCompletions,
+    file_source_snapshot_from_path, finalize_title_scan_file,
 };
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 
@@ -1354,6 +1354,7 @@ impl AppUseCase {
         let mut db_elapsed = StdDuration::ZERO;
         let mut external_subtitle_cache =
             crate::subtitles::ExternalSubtitleDirectoryCache::default();
+        let mut episode_completions = ScannedEpisodeCompletions::default();
         finalize_title_scan_file(
             self,
             &title,
@@ -1376,8 +1377,10 @@ impl AppUseCase {
             &mut summary,
             &mut db_elapsed,
             &mut external_subtitle_cache,
+            &mut episode_completions,
         )
         .await;
+        episode_completions.complete(self, &title.id).await;
 
         if !library_scan_summary_has_pending_import_success(&summary) {
             return Err(AppError::validation_refused(

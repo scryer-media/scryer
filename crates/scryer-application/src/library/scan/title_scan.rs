@@ -1973,6 +1973,7 @@ struct TitleScanAnalysisFinalizeContext<'a> {
     summary: &'a mut LibraryScanSummary,
     db_elapsed: &'a mut Duration,
     external_subtitle_cache: &'a mut crate::subtitles::ExternalSubtitleDirectoryCache,
+    episode_completions: &'a mut super::ScannedEpisodeCompletions,
     pending_progress: &'a mut TitleScanProgressDelta,
     session_id: Option<&'a str>,
     title_updated_since_emit: &'a mut bool,
@@ -2026,6 +2027,7 @@ async fn finalize_title_scan_analysis_task_result(
         ctx.summary,
         ctx.db_elapsed,
         ctx.external_subtitle_cache,
+        ctx.episode_completions,
     )
     .await;
     if outcome.progress.failed == 0 {
@@ -2068,6 +2070,7 @@ async fn finalize_failed_title_scan_analysis(
         ctx.summary,
         ctx.db_elapsed,
         ctx.external_subtitle_cache,
+        ctx.episode_completions,
     )
     .await;
 
@@ -3067,6 +3070,7 @@ impl AppUseCase {
         let mut analyzed_files = 0usize;
         let mut external_subtitle_cache =
             crate::subtitles::ExternalSubtitleDirectoryCache::default();
+        let mut episode_completions = super::ScannedEpisodeCompletions::default();
         let actor_event = DomainEventActor::from(actor);
         let mut analysis_set = tokio::task::JoinSet::new();
         let mut pending_analysis_plans = std::collections::VecDeque::new();
@@ -3372,14 +3376,19 @@ impl AppUseCase {
                     if should_analyze
                         && let PlannedTitleScanRecord::Existing { file_id, .. } = &plan.record
                     {
-                        self.services
+                        if let Err(error) = self
+                            .services
                             .library
                             .media_files
                             .update_media_file_analysis(
                                 file_id,
                                 crate::MediaFileAnalysis::default(),
                             )
-                            .await?;
+                            .await
+                        {
+                            episode_completions.complete(self, &title.id).await;
+                            return Err(error);
+                        }
                     }
                     unchanged_file_skips += 1;
                     let file_path = plan.file.path.clone();
@@ -3393,6 +3402,7 @@ impl AppUseCase {
                         &mut summary,
                         &mut db_elapsed,
                         &mut external_subtitle_cache,
+                        &mut episode_completions,
                     )
                     .await;
                     if outcome.progress.failed == 0 {
@@ -3424,6 +3434,7 @@ impl AppUseCase {
                             summary: &mut summary,
                             db_elapsed: &mut db_elapsed,
                             external_subtitle_cache: &mut external_subtitle_cache,
+                            episode_completions: &mut episode_completions,
                             pending_progress: &mut *pending_progress,
                             session_id,
                             title_updated_since_emit: &mut title_updated_since_emit,
@@ -3432,7 +3443,14 @@ impl AppUseCase {
                         },
                         result,
                     )
-                    .await?;
+                    .await;
+                    let analysis_duration = match analysis_duration {
+                        Ok(duration) => duration,
+                        Err(error) => {
+                            episode_completions.complete(self, &title.id).await;
+                            return Err(error);
+                        }
+                    };
                     analyze_elapsed = analyze_elapsed.saturating_add(analysis_duration);
                 }
             }
@@ -3481,6 +3499,7 @@ impl AppUseCase {
                     summary: &mut summary,
                     db_elapsed: &mut db_elapsed,
                     external_subtitle_cache: &mut external_subtitle_cache,
+                    episode_completions: &mut episode_completions,
                     pending_progress: &mut *pending_progress,
                     session_id,
                     title_updated_since_emit: &mut title_updated_since_emit,
@@ -3489,7 +3508,14 @@ impl AppUseCase {
                 },
                 result,
             )
-            .await?;
+            .await;
+            let analysis_duration = match analysis_duration {
+                Ok(duration) => duration,
+                Err(error) => {
+                    episode_completions.complete(self, &title.id).await;
+                    return Err(error);
+                }
+            };
             analyze_elapsed = analyze_elapsed.saturating_add(analysis_duration);
 
             if title_updated_since_emit {
@@ -3499,6 +3525,9 @@ impl AppUseCase {
             }
         }
 
+        // The pass's covered episodes are completed before stale files are
+        // reconciled, as they were when each file completed its own.
+        episode_completions.complete(self, &title.id).await;
         flush_title_scan_progress_final(self, session_id, &mut *pending_progress).await;
         cleared_unmatched.clear().await;
 
