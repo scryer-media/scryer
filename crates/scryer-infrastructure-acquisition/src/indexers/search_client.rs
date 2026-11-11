@@ -453,6 +453,9 @@ struct ReusableStrategySelection {
     /// backoff has not yet run out.
     deferred_count: usize,
     replayed_result_count: usize,
+    /// Complete strategies whose finished paged read cannot be replayed: their
+    /// results were ranked by the passes that read them.
+    unreplayed_complete_count: usize,
     /// The earliest instant a held contained strategy becomes due, when any
     /// strategy was held for that reason.
     contained_retry_at: Option<DateTime<Utc>>,
@@ -488,6 +491,7 @@ async fn select_reusable_strategies(
         complete_count: 0,
         deferred_count: 0,
         replayed_result_count: 0,
+        unreplayed_complete_count: 0,
         contained_retry_at: None,
         deferred_open: false,
         page_chains: HashMap::new(),
@@ -538,6 +542,7 @@ async fn select_reusable_strategies(
         // cannot be replayed; it is read afresh once the reuse window ends.
         if replay_unavailable && finished_chain {
             selection.complete_count += 1;
+            selection.unreplayed_complete_count += 1;
             continue;
         }
         // A contained strategy waits out its backoff. The provider cannot
@@ -7983,6 +7988,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let mut primary_attempted;
                 let mut primary_had_error;
                 let mut primary_usable_result_count = 0_usize;
+                let mut primary_unreplayed_complete = false;
                 let mut batch_had_timeout = false;
                 let mut batch_health = StrategyBatchHealth::default();
                 let mut quota_observation = IndexerQuotaObservation::default();
@@ -8079,6 +8085,9 @@ impl IndexerClient for MultiIndexerSearchClient {
                 contained.note_selection(&primary_selection);
                 primary_usable_result_count = primary_usable_result_count
                     .saturating_add(primary_selection.replayed_result_count);
+                // A finished paged read that cannot be replayed answered the
+                // passes that read it; the title tier is not owed in its place.
+                primary_unreplayed_complete |= primary_selection.unreplayed_complete_count > 0;
                 let primary_live = primary_selection.live;
                 page_chains.extend(primary_selection.page_chains);
                 let mut primary_outcomes = if primary_live.is_empty() {
@@ -8417,6 +8426,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 // An indexer over its query budget is skipped for the rest of
                 // this search: its fallback would be refused the same way.
                 if query_budget_wait.is_none()
+                    && !primary_unreplayed_complete
                     && should_run_fallback_tier(
                         mode,
                         primary_usable_result_count,
@@ -22116,15 +22126,22 @@ mod tests {
 
     /// A search client over a four-page movie listing, one page per pass,
     /// whose first and third pages each hold a password-hinted result that no
-    /// replay can rebuild, backed by the real search learning store.
+    /// replay can rebuild, backed by the real search learning store. Once the
+    /// returned switch is set, every request is answered with nothing.
     async fn unreplayable_paged_client() -> (
         MultiIndexerSearchClient,
         StdArc<StdMutex<Vec<RecordedCall>>>,
         super::super::search_learning::IndexerSearchLearningStore,
         sqlx::SqlitePool,
+        StdArc<std::sync::atomic::AtomicBool>,
     ) {
         let (store, pool) = super::super::search_learning::tests::sqlite_store().await;
-        let (client, calls) = scripted_search_client(movie_caps(), |call| {
+        let answers_empty = StdArc::new(std::sync::atomic::AtomicBool::new(false));
+        let empty = answers_empty.clone();
+        let (client, calls) = scripted_search_client(movie_caps(), move |call| {
+            if empty.load(std::sync::atomic::Ordering::SeqCst) {
+                return response_with_titles(&[]);
+            }
             let (page, next_cursor) = match call.page_cursor.as_deref() {
                 None => (1, Some("offset:100")),
                 Some("offset:100") => (2, Some("offset:200")),
@@ -22148,7 +22165,7 @@ mod tests {
             Ok(response)
         });
         let client = client.with_search_learning_repository(StdArc::new(store.clone()));
-        (client, calls, store, pool)
+        (client, calls, store, pool, answers_empty)
     }
 
     async fn emberfall_background_pass(client: &MultiIndexerSearchClient, session: &str) {
@@ -22286,42 +22303,53 @@ mod tests {
 
     #[tokio::test]
     async fn a_paged_read_with_unreplayable_pages_advances_to_its_end_and_stops() {
-        let (client, calls, store, pool) = unreplayable_paged_client().await;
+        let (client, calls, store, pool, answers_empty) = unreplayable_paged_client().await;
         let primary = read_emberfall_to_its_end(&client, &calls, &store, &pool, true).await;
 
-        // The finished strategy is not asked again inside the reuse window.
-        // It answers nothing now, so the title tier is read, as it is when a
-        // finished strategy's replay serves nothing: one page per pass to its
-        // own end, after which nothing is asked.
+        // Inside the reuse window neither the finished strategy nor the title
+        // tier in its place is asked again.
         let asked = calls.lock().expect("calls").len();
-        for pass in 5..=10 {
+        for pass in 5..=7 {
             let session = format!("background-{pass}");
             emberfall_background_pass(&client, &session).await;
             finalize_pass(&store, &pool, &session).await;
         }
-        let later = calls_since(&calls, asked);
-        assert!(
-            later.iter().all(|call| !primary.contains(call)),
-            "the finished strategy is not asked again: {later:?}"
-        );
         assert_eq!(
-            later
-                .iter()
-                .map(|(_, _, cursor)| cursor.as_deref())
-                .collect::<Vec<_>>(),
-            vec![
-                None,
-                Some("offset:100"),
-                Some("offset:200"),
-                Some("offset:300")
-            ],
-            "the title tier reads its own pages once: {later:?}"
+            calls_since(&calls, asked),
+            Vec::new(),
+            "neither the finished strategy nor its title tier is asked again"
+        );
+
+        // Once the window has passed, the strategy is read live from its first
+        // page. It now answers nothing, so the title tier runs as usual.
+        let aged = (Utc::now() - Duration::hours(SEARCH_CANDIDATE_REUSE_HOURS + 1)).to_rfc3339();
+        sqlx::query("UPDATE indexer_search_runs SET created_at = ?")
+            .bind(aged)
+            .execute(&pool)
+            .await
+            .expect("age the stored runs");
+        answers_empty.store(true, std::sync::atomic::Ordering::SeqCst);
+        let asked = calls.lock().expect("calls").len();
+        emberfall_background_pass(&client, "background-8").await;
+        let after_window = calls_since(&calls, asked);
+        let first_page = primary
+            .iter()
+            .filter(|(_, _, cursor)| cursor.is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            first_page.iter().all(|call| after_window.contains(call)),
+            "the strategy is read live from its first page: {after_window:?}"
+        );
+        assert!(
+            after_window.iter().any(|call| !primary.contains(call)),
+            "the title tier runs for an empty strategy again: {after_window:?}"
         );
     }
 
     #[tokio::test]
     async fn an_unfinalized_last_page_is_read_again_from_the_first_page() {
-        let (client, calls, store, pool) = unreplayable_paged_client().await;
+        let (client, calls, store, pool, _) = unreplayable_paged_client().await;
         let primary = read_emberfall_to_its_end(&client, &calls, &store, &pool, false).await;
 
         // The pass that read the last page was never finalized, so its
