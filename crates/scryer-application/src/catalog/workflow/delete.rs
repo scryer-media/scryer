@@ -9,6 +9,64 @@ pub(crate) struct TitleLogicalDeleteOptions {
     pub(crate) deleted_paths: Vec<String>,
 }
 
+/// Titles a deletion job that keeps files on disk admits and deletes
+/// together. A multiple of the progress checkpoint interval, so every full
+/// chunk ends on a checkpoint.
+const TITLE_DELETE_CHUNK: usize = 64;
+
+/// Catalog-cleanup failures carry the deletion reason code.
+fn title_cleanup_error(error: AppError) -> AppError {
+    match error {
+        AppError::Repository(message)
+        | AppError::RepositoryFailure { message, .. }
+        | AppError::RepositoryFailed { message, .. } => AppError::RepositoryFailed {
+            message,
+            reason: deletion_reason::CATALOG_CLEANUP_FAILED,
+        },
+        other => crate::delete_refusal::classify_validation(
+            other,
+            deletion_reason::CATALOG_CLEANUP_FAILED,
+        ),
+    }
+}
+
+/// Files one title's result into a deletion job's summary.
+fn record_title_deletion_result(
+    title_id: String,
+    result: AppResult<crate::title_delete::RecyclePurgeOutcome>,
+    succeeded_title_ids: &mut Vec<String>,
+    failures: &mut Vec<TitleDeletionFailure>,
+    recycle_incomplete: &mut Vec<TitleRecycleIncomplete>,
+    recycle_outcomes: &mut std::collections::BTreeMap<
+        String,
+        crate::title_delete::RecyclePurgeOutcome,
+    >,
+) {
+    match result {
+        Ok(outcome) => {
+            recycle_outcomes.insert(title_id.clone(), outcome.clone());
+            if outcome.incomplete() {
+                recycle_incomplete.push(TitleRecycleIncomplete {
+                    title_id: title_id.clone(),
+                    reason: if outcome.busy > 0 {
+                        deletion_reason::RECYCLE_ENTRY_BUSY
+                    } else {
+                        deletion_reason::RECYCLE_PURGE_INCOMPLETE
+                    },
+                    preserved_count: outcome.preserved + outcome.busy + outcome.failed,
+                    outcome,
+                });
+            }
+            succeeded_title_ids.push(title_id);
+        }
+        Err(error) => failures.push(TitleDeletionFailure {
+            title_id,
+            reason: error.reason().map(str::to_owned),
+            error: error.to_string(),
+        }),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeleteTitlesJobItem {
     pub title_id: String,
@@ -320,6 +378,35 @@ impl AppUseCase {
             ));
         }
 
+        // One read for every title, and the actor's grants resolved once,
+        // instead of a title read and a grant read per item. Either falls
+        // back to the per-item read if it fails, so a failure surfaces at the
+        // same item it would have.
+        let prefetched_titles = self
+            .services
+            .catalog
+            .titles
+            .get_by_ids(
+                &request
+                    .items
+                    .iter()
+                    .map(|item| item.title_id.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .ok()
+            .map(|titles| {
+                titles
+                    .into_iter()
+                    .map(|title| (title.id.clone(), title))
+                    .collect::<std::collections::HashMap<_, _>>()
+            });
+        let mut checked_actor = actor.clone();
+        if !checked_actor.authorization.loaded
+            && let Ok(authorization) = self.load_user_authorization(actor).await
+        {
+            checked_actor.authorization = authorization;
+        }
         let mut seen = HashSet::new();
         for item in &request.items {
             if item.title_id.trim().is_empty() {
@@ -350,20 +437,24 @@ impl AppUseCase {
                     ),
                 ));
             }
-            let title = self
-                .services
-                .catalog
-                .titles
-                .get_by_id(&item.title_id)
-                .await?
-                .ok_or_else(|| {
-                    AppError::not_found_reason(
-                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
-                        format!("title {}", item.title_id),
-                    )
-                })?;
+            let title = match prefetched_titles.as_ref() {
+                Some(titles) => titles.get(&item.title_id).cloned(),
+                None => {
+                    self.services
+                        .catalog
+                        .titles
+                        .get_by_id(&item.title_id)
+                        .await?
+                }
+            }
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", item.title_id),
+                )
+            })?;
             self.require_library_permission(
-                actor,
+                &checked_actor,
                 &title.library_id,
                 scryer_domain::LibraryPermission::ManageTitles,
             )
@@ -457,7 +548,7 @@ impl AppUseCase {
         &self,
         mut run: JobRunRecord,
         actor: User,
-        request: DeleteTitlesJobRequest,
+        mut request: DeleteTitlesJobRequest,
         _deletion_guard: tokio::sync::OwnedMutexGuard<()>,
     ) {
         let total = request.items.len();
@@ -467,7 +558,59 @@ impl AppUseCase {
         let mut recycle_outcomes = std::collections::BTreeMap::new();
         let mut recycle_index = crate::recycle_bin::TitleRecycleEntryIndex::default();
 
-        for item in request.items {
+        if !request.delete_files_on_disk {
+            for chunk in request.items.chunks(TITLE_DELETE_CHUNK) {
+                let _ = self
+                    .update_title_deletion_progress(
+                        &mut run,
+                        TitleDeletionProgress {
+                            status: JobRunStatus::Running.as_str().to_string(),
+                            phase: "validating".to_string(),
+                            total,
+                            processed: succeeded_title_ids.len() + failures.len(),
+                            succeeded: succeeded_title_ids.len(),
+                            failed: failures.len(),
+                            current_title: Some(chunk[0].title_id.clone()),
+                        },
+                    )
+                    .await;
+                let results = self
+                    .delete_title_job_chunk(&actor, chunk, &mut recycle_index)
+                    .await;
+                for (item, result) in chunk.iter().zip(results) {
+                    record_title_deletion_result(
+                        item.title_id.clone(),
+                        result,
+                        &mut succeeded_title_ids,
+                        &mut failures,
+                        &mut recycle_incomplete,
+                        &mut recycle_outcomes,
+                    );
+                }
+                let _ = self
+                    .update_title_deletion_progress(
+                        &mut run,
+                        TitleDeletionProgress {
+                            status: JobRunStatus::Running.as_str().to_string(),
+                            phase: "running".to_string(),
+                            total,
+                            processed: succeeded_title_ids.len() + failures.len(),
+                            succeeded: succeeded_title_ids.len(),
+                            failed: failures.len(),
+                            current_title: None,
+                        },
+                    )
+                    .await;
+            }
+        }
+
+        // Deleting files from disk stays title by title.
+        let one_at_a_time = if request.delete_files_on_disk {
+            std::mem::take(&mut request.items)
+        } else {
+            Vec::new()
+        };
+        for item in one_at_a_time {
             let phase = "validating";
             let _ = self
                 .update_title_deletion_progress(
@@ -493,29 +636,14 @@ impl AppUseCase {
                     &mut recycle_index,
                 )
                 .await;
-            match result {
-                Ok(outcome) => {
-                    recycle_outcomes.insert(item.title_id.clone(), outcome.clone());
-                    if outcome.incomplete() {
-                        recycle_incomplete.push(TitleRecycleIncomplete {
-                            title_id: item.title_id.clone(),
-                            reason: if outcome.busy > 0 {
-                                deletion_reason::RECYCLE_ENTRY_BUSY
-                            } else {
-                                deletion_reason::RECYCLE_PURGE_INCOMPLETE
-                            },
-                            preserved_count: outcome.preserved + outcome.busy + outcome.failed,
-                            outcome,
-                        });
-                    }
-                    succeeded_title_ids.push(item.title_id);
-                }
-                Err(error) => failures.push(TitleDeletionFailure {
-                    title_id: item.title_id,
-                    reason: error.reason().map(str::to_owned),
-                    error: error.to_string(),
-                }),
-            }
+            record_title_deletion_result(
+                item.title_id,
+                result,
+                &mut succeeded_title_ids,
+                &mut failures,
+                &mut recycle_incomplete,
+                &mut recycle_outcomes,
+            );
 
             let _ = self
                 .update_title_deletion_progress(
@@ -654,19 +782,382 @@ impl AppUseCase {
             },
         )
         .await
-        .map_err(|error| match error {
-            AppError::Repository(message)
-            | AppError::RepositoryFailure { message, .. }
-            | AppError::RepositoryFailed { message, .. } => AppError::RepositoryFailed {
-                message,
-                reason: deletion_reason::CATALOG_CLEANUP_FAILED,
-            },
-            other => crate::delete_refusal::classify_validation(
-                other,
-                deletion_reason::CATALOG_CLEANUP_FAILED,
-            ),
-        })?;
+        .map_err(title_cleanup_error)?;
         Ok(outcome)
+    }
+
+    /// One chunk of a deletion job that keeps files on disk: the same checks,
+    /// guards, recycle purge and catalog cleanup as
+    /// [`Self::delete_title_job_item`] for each title, with the reads and
+    /// writes shared across the chunk. Results are in item order.
+    ///
+    /// Every title is admitted (delete guard, location lease and ownership,
+    /// existence, current grants) before any is changed, and the guards are
+    /// held until the chunk is done. A title with recorded downloads goes
+    /// through the title-by-title cleanup; the rest are deleted together in
+    /// one transaction, and title by title if that transaction fails.
+    async fn delete_title_job_chunk(
+        &self,
+        actor: &User,
+        items: &[DeleteTitlesJobItem],
+        recycle_index: &mut crate::recycle_bin::TitleRecycleEntryIndex,
+    ) -> Vec<AppResult<crate::title_delete::RecyclePurgeOutcome>> {
+        let mut results = (0..items.len()).map(|_| None).collect::<Vec<_>>();
+        let mut delete_guards = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            match self.acquire_title_delete_guard(&item.title_id).await {
+                Ok(guard) => delete_guards.push(Some(guard)),
+                Err(error) => {
+                    results[index] = Some(Err(error));
+                    delete_guards.push(None);
+                }
+            }
+        }
+
+        let open = |results: &[Option<AppResult<_>>]| {
+            (0..items.len())
+                .filter(|index| results[*index].is_none())
+                .collect::<Vec<_>>()
+        };
+        let admitted = open(&results);
+        let location = self
+            .acquire_location_title_mutations(
+                &crate::location::ownership_guard::TITLE_DELETE_ENTRY,
+                &admitted
+                    .iter()
+                    .map(|index| items[*index].title_id.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await;
+        let mut _location_guards = Vec::with_capacity(admitted.len());
+        for (index, lease) in admitted.into_iter().zip(location) {
+            match lease {
+                Ok(lease) => _location_guards.push(lease),
+                Err(error) => {
+                    results[index] = Some(Err(error));
+                    delete_guards[index] = None;
+                }
+            }
+        }
+
+        let admitted = open(&results);
+        let ids = admitted
+            .iter()
+            .map(|index| items[*index].title_id.clone())
+            .collect::<Vec<_>>();
+        let mut titles = match self.services.catalog.titles.get_by_ids(&ids).await {
+            Ok(titles) => titles
+                .into_iter()
+                .map(|title| (title.id.clone(), title))
+                .collect::<std::collections::HashMap<_, _>>(),
+            Err(_) => {
+                let mut titles = std::collections::HashMap::new();
+                for index in &admitted {
+                    match self
+                        .services
+                        .catalog
+                        .titles
+                        .get_by_id(&items[*index].title_id)
+                        .await
+                    {
+                        Ok(Some(title)) => {
+                            titles.insert(title.id.clone(), title);
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            results[*index] = Some(Err(error));
+                            delete_guards[*index] = None;
+                        }
+                    }
+                }
+                titles
+            }
+        };
+        // A job can outlive its admission permissions. Resolve current grants.
+        let mut current_actor = actor.clone();
+        let authorization = self.load_user_authorization(actor).await;
+        let mut ready = Vec::new();
+        for index in open(&results) {
+            let item = &items[index];
+            let Some(title) = titles.remove(&item.title_id) else {
+                results[index] = Some(Err(AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", item.title_id),
+                )));
+                delete_guards[index] = None;
+                continue;
+            };
+            // A failed shared read is retried for this title, as it would
+            // have been read on its own.
+            let title_authorization = match &authorization {
+                Ok(authorization) => Ok(authorization.clone()),
+                Err(_) => self.load_user_authorization(actor).await,
+            };
+            let permitted = match title_authorization {
+                Ok(authorization) => {
+                    current_actor.authorization = authorization;
+                    self.require_library_permission(
+                        &current_actor,
+                        &title.library_id,
+                        scryer_domain::LibraryPermission::ManageTitles,
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
+            if let Err(error) = permitted {
+                results[index] = Some(Err(error));
+                delete_guards[index] = None;
+                continue;
+            }
+            ready.push((index, title));
+        }
+        for (index, _) in &ready {
+            if let Some(guard) = delete_guards[*index].as_ref() {
+                guard.activate();
+            }
+        }
+
+        let mut bins = std::collections::HashMap::new();
+        let mut outcomes = Vec::with_capacity(ready.len());
+        for (_, title) in &ready {
+            let key = (title.facet.clone(), title.library_id.clone());
+            if !bins.contains_key(&key) {
+                let configs = self.title_recycle_bin_configs(title).await;
+                bins.insert(key.clone(), configs);
+            }
+            outcomes.push(
+                self.purge_explicit_title_recycle_entries_in(
+                    title,
+                    DomainEventActor::from(actor),
+                    bins[&key].as_deref(),
+                    recycle_index,
+                )
+                .await,
+            );
+        }
+
+        let ready_ids = ready
+            .iter()
+            .map(|(_, title)| title.id.clone())
+            .collect::<Vec<_>>();
+        // Every title after the chunk's first would, deleted at its own turn,
+        // have listed its bins after the titles before it were deleted.
+        let late = ready
+            .iter()
+            .skip(1)
+            .map(|(index, title)| {
+                (
+                    *index,
+                    title.id.clone(),
+                    (title.facet.clone(), title.library_id.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let with_downloads = self.titles_with_recorded_downloads(&ready_ids).await;
+        // Titles are deleted in item order, so their events keep that order: a
+        // run of titles without downloads is deleted together, and a title with
+        // downloads is deleted on its own between runs.
+        let mut runs: Vec<(
+            bool,
+            Vec<(
+                usize,
+                scryer_domain::Title,
+                crate::title_delete::RecyclePurgeOutcome,
+            )>,
+        )> = Vec::new();
+        for ((index, title), outcome) in ready.into_iter().zip(outcomes) {
+            let single = match &with_downloads {
+                Ok(with_downloads) => with_downloads.contains(&title.id),
+                Err(_) => true,
+            };
+            match runs.last_mut() {
+                Some((false, run)) if !single => run.push((index, title, outcome)),
+                _ => runs.push((single, vec![(index, title, outcome)])),
+            }
+        }
+        for (single, run) in runs {
+            let together = !single
+                && matches!(
+                    self.delete_titles_without_downloads(
+                        &run.iter().map(|(_, title, _)| title).collect::<Vec<_>>(),
+                        DomainEventActor::from(actor),
+                    )
+                    .await,
+                    Ok(true)
+                );
+            for (index, title, outcome) in run {
+                results[index] = Some(if together {
+                    Ok(outcome)
+                } else {
+                    self.delete_title_logical_cleanup(
+                        &title,
+                        actor,
+                        TitleLogicalDeleteOptions {
+                            purge_recycle_bin_entries: false,
+                            explicit_download_retirement: true,
+                            append_title_deleted_event: true,
+                            deleted_paths: Vec::new(),
+                        },
+                    )
+                    .await
+                    .map_err(title_cleanup_error)
+                    .map(|_| outcome)
+                });
+            }
+        }
+
+        // Entries that reached a deleted title's bin after its purge listed it.
+        let late = late
+            .into_iter()
+            .filter(|(index, _, _)| matches!(results[*index], Some(Ok(_))))
+            .filter_map(|(index, title_id, key)| {
+                bins[&key]
+                    .as_deref()
+                    .map(|configs| (index, title_id, configs))
+            })
+            .collect::<Vec<_>>();
+        if !late.is_empty() {
+            let mut swept = self
+                .purge_late_title_recycle_entries(
+                    &late
+                        .iter()
+                        .map(|(_, title_id, configs)| (title_id.as_str(), *configs))
+                        .collect::<Vec<_>>(),
+                    DomainEventActor::from(actor),
+                    recycle_index,
+                )
+                .await;
+            for (index, title_id, _) in &late {
+                if let (Some(found), Some(Ok(outcome))) =
+                    (swept.remove(title_id), results[*index].as_mut())
+                {
+                    outcome.purged += found.purged;
+                    outcome.preserved += found.preserved;
+                    outcome.busy += found.busy;
+                    outcome.failed += found.failed;
+                }
+            }
+        }
+        results
+            .into_iter()
+            .map(|result| {
+                result.unwrap_or_else(|| {
+                    Err(AppError::Repository(
+                        "title deletion produced no result".to_string(),
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    /// Titles among `title_ids` with any recorded download submission, bound
+    /// or not yet bound to a client job. Their cleanup retires downloads, which
+    /// stays title by title.
+    async fn titles_with_recorded_downloads(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashSet<String>> {
+        let submissions = &self.services.workflow.download_submissions;
+        let mut titles = submissions
+            .list_for_titles(title_ids)
+            .await?
+            .into_iter()
+            .map(|submission| submission.title_id)
+            .collect::<HashSet<_>>();
+        titles.extend(
+            submissions
+                .list_active_unbound_for_titles(title_ids)
+                .await?
+                .into_iter()
+                .map(|submission| submission.title_id),
+        );
+        Ok(titles)
+    }
+
+    /// The explicit-delete catalog cleanup of
+    /// [`Self::delete_title_logical_cleanup`] for titles with no recorded
+    /// downloads, shared across the titles: their unfinished imports, then
+    /// their rows in one transaction, then one batch of title-deleted events,
+    /// then their lifecycle claims. `Ok(false)` when the store has no batch
+    /// delete; nothing was changed and the caller cleans up title by title.
+    async fn delete_titles_without_downloads(
+        &self,
+        titles: &[&scryer_domain::Title],
+        actor: DomainEventActor,
+    ) -> AppResult<bool> {
+        let ids = titles
+            .iter()
+            .map(|title| title.id.clone())
+            .collect::<Vec<_>>();
+        let id_set = ids.iter().map(String::as_str).collect::<HashSet<_>>();
+        // With no downloads, a title's unfinished imports are the ones that
+        // name it.
+        let imports = &self.services.workflow.imports;
+        let pending = imports.list_pending_imports().await?;
+        let doomed = pending
+            .into_iter()
+            .filter_map(|record| {
+                crate::maintenance_rules::safety::queued_import_title_id(&record)
+                    .filter(|owner| id_set.contains(owner.as_str()))
+                    .map(|_| record.id)
+            })
+            .collect::<Vec<_>>();
+        let deleted = imports.delete_unfinished_imports(&doomed).await?;
+        if deleted > 0 {
+            info!(deleted, "deleted pending imports of deleted titles");
+        }
+        if !self
+            .services
+            .catalog
+            .titles
+            .delete_titles_with_records(&ids)
+            .await?
+        {
+            return Ok(false);
+        }
+        if let Some(handle) = self.runtime.acquisition.tracked_download_handle.as_ref() {
+            handle.forget_many(ids.clone(), Vec::new());
+        }
+        self.runtime
+            .acquisition
+            .invalidate_download_registry_observations();
+        self.invalidate_monitored_title_matcher().await;
+        let _ = self
+            .append_domain_events(
+                titles
+                    .iter()
+                    .map(|title| {
+                        new_title_domain_event(
+                            actor.clone(),
+                            title,
+                            DomainEventPayload::TitleDeleted(TitleDeletedEventData {
+                                title: title_context_snapshot(title),
+                                deleted_paths: Vec::new(),
+                            }),
+                        )
+                    })
+                    .collect(),
+            )
+            .await;
+        match self
+            .services
+            .catalog
+            .lifecycle_claims
+            .release_for_titles(
+                &ids,
+                crate::lifecycle_claims::CLAIM_RELEASE_TITLE_DELETED,
+                chrono::Utc::now(),
+            )
+            .await
+        {
+            Ok(0) => {}
+            Ok(released) => debug!(released, "released lifecycle claims for deleted titles"),
+            Err(error) => {
+                warn!(error = %error, "could not release lifecycle claims for deleted titles")
+            }
+        }
+        Ok(true)
     }
 
     async fn acquire_title_delete_guard(

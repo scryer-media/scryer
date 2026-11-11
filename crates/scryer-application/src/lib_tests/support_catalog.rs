@@ -28,6 +28,10 @@ pub(crate) struct MockTitleRepo {
     pub(super) title_tag_definitions: Arc<Mutex<Vec<scryer_domain::TitleTagDefinition>>>,
     pub(super) fail_tag_reads: AtomicBool,
     pub(crate) fail_get_by_id: AtomicBool,
+    /// `(title_id, id_list_reads_allowed)`: once that many id-list reads
+    /// naming the title have succeeded, every read of it fails, whether by
+    /// id list or on its own. Lets a fault start at a later read of a job.
+    pub(super) fail_reads_of_title_after: Mutex<Option<(String, usize)>>,
     pub(super) lose_folder_claim: AtomicBool,
     /// Make every pre-flight folder check refuse, as if another title owned
     /// the folder, while the write path itself is left alone.
@@ -963,6 +967,14 @@ impl TitleRepository for MockTitleRepo {
 
     async fn get_by_ids(&self, ids: &[String]) -> AppResult<Vec<Title>> {
         self.matching_reads.fetch_add(1, Ordering::SeqCst);
+        if let Some((title_id, allowed)) = self.fail_reads_of_title_after.lock().await.as_mut()
+            && ids.contains(title_id)
+        {
+            if *allowed == 0 {
+                return Err(AppError::Repository("synthetic title read failure".into()));
+            }
+            *allowed -= 1;
+        }
         let list = self.store.lock().await;
         Ok(ids
             .iter()
@@ -971,7 +983,12 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<Title>> {
-        if self.fail_get_by_id.load(Ordering::SeqCst) {
+        if self.fail_get_by_id.load(Ordering::SeqCst)
+            || matches!(
+                self.fail_reads_of_title_after.lock().await.as_ref(),
+                Some((title_id, 0)) if title_id == id
+            )
+        {
             return Err(AppError::Repository("synthetic title read failure".into()));
         }
         let list = self.store.lock().await;

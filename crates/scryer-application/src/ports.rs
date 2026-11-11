@@ -2759,6 +2759,18 @@ pub trait TitleRepository: Send + Sync {
         tags: Vec<String>,
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
+    /// Delete these titles, with the rows a title delete removes once the
+    /// titles' downloads have been dealt with, in one transaction: manual
+    /// import selections, pending releases, wanted items, download submissions,
+    /// blocklist entries, probe signatures, unmatched scan items, and then what
+    /// [`Self::delete`] removes for each title. Every title must exist, or
+    /// nothing is deleted and the call fails.
+    ///
+    /// `Ok(false)` means the store has no such batch and deleted nothing; the
+    /// caller then deletes title by title.
+    async fn delete_titles_with_records(&self, _ids: &[String]) -> AppResult<bool> {
+        Ok(false)
+    }
     /// The one write path for titles' recorded folders.
     ///
     /// Applies every write in one transaction or none of them. Each write is
@@ -8296,6 +8308,19 @@ pub trait LocationOperationRepository: Send + Sync {
     /// behind the guard (T016).
     async fn location_ownership_holder(&self, entity: &OwnedEntity) -> AppResult<Option<String>>;
 
+    /// [`Self::location_ownership_holder`] for each of `entities`, in order.
+    /// The default fans out; SQL stores override with one read.
+    async fn location_ownership_holders(
+        &self,
+        entities: &[OwnedEntity],
+    ) -> AppResult<Vec<Option<String>>> {
+        let mut holders = Vec::with_capacity(entities.len());
+        for entity in entities {
+            holders.push(self.location_ownership_holder(entity).await?);
+        }
+        Ok(holders)
+    }
+
     /// Every open claim, for the in-process guard cache and diagnostics.
     async fn list_location_ownership_claims(&self) -> AppResult<Vec<LocationOwnershipClaim>>;
 }
@@ -11095,6 +11120,21 @@ pub trait LifecycleClaimRepository: Send + Sync {
         reason: &str,
         now: DateTime<Utc>,
     ) -> AppResult<u64>;
+
+    /// [`Self::release_for_title`] for many titles. The default fans out; SQL
+    /// stores override with one statement.
+    async fn release_for_titles(
+        &self,
+        title_ids: &[String],
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let mut released = 0;
+        for title_id in title_ids {
+            released += self.release_for_title(title_id, reason, now).await?;
+        }
+        Ok(released)
+    }
 
     /// Push an active claim's expiry out. Only touches a live claim: extending
     /// an expired lease would resurrect a hold the operator already saw lapse.

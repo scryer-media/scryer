@@ -928,6 +928,49 @@ impl<'a> LocationOwnershipGuard<'a> {
         }
     }
 
+    /// [`Self::check`] for each entity on its own, in order, with one store
+    /// read for every entity the in-process registry does not answer.
+    pub async fn check_each(
+        &self,
+        entry: &'static GuardedEntry,
+        entities: &[OwnedEntity],
+    ) -> AppResult<Vec<Option<LocationOwnershipDenied>>> {
+        let mut holders = entities
+            .iter()
+            .map(|entity| self.registry.and_then(|registry| registry.holder(entity)))
+            .collect::<Vec<_>>();
+        let unanswered = holders
+            .iter()
+            .zip(entities)
+            .filter(|(holder, _)| holder.is_none())
+            .map(|(_, entity)| entity.clone())
+            .collect::<Vec<_>>();
+        if !unanswered.is_empty() {
+            let mut stored = self
+                .store
+                .location_ownership_holders(&unanswered)
+                .await?
+                .into_iter();
+            for holder in holders.iter_mut().filter(|holder| holder.is_none()) {
+                *holder = stored.next().flatten();
+            }
+        }
+        Ok(holders
+            .into_iter()
+            .zip(entities)
+            .map(|(holder, entity)| {
+                holder.map(|operation_id| LocationOwnershipDenied {
+                    entry,
+                    conflicts: vec![OwnershipConflict {
+                        operation_id,
+                        entity: entity.clone(),
+                        action: entry.action,
+                    }],
+                })
+            })
+            .collect())
+    }
+
     /// [`Self::check`] mapped onto the caller's error convention.
     pub async fn ensure_not_owned(
         &self,
@@ -1020,6 +1063,63 @@ impl crate::AppUseCase {
             return Err(AppError::LocationOperationBusy(denied.message()));
         }
         Ok(guard)
+    }
+
+    /// [`Self::acquire_location_title_mutation`] for each title, in order,
+    /// with one ownership read for all of them. Each title is admitted before
+    /// its ownership is checked, as there. If the shared read fails, every
+    /// title is retried on its own, so a title's result never depends on
+    /// which titles it was batched with.
+    pub(crate) async fn acquire_location_title_mutations(
+        &self,
+        entry: &'static GuardedEntry,
+        title_ids: &[String],
+    ) -> Vec<AppResult<tokio::sync::OwnedRwLockReadGuard<()>>> {
+        let mut admitted = title_ids
+            .iter()
+            .map(|title_id| {
+                if matches!(entry.action, GuardedAction::Import)
+                    && self.title_is_being_deleted(title_id)
+                {
+                    return Err(AppError::validation_refused(
+                        crate::title_delete::IN_PROGRESS,
+                        "title deletion is in progress; import was preserved",
+                    ));
+                }
+                self.runtime
+                    .library
+                    .location_ownership
+                    .admit_title_mutation(title_id)
+            })
+            .collect::<Vec<_>>();
+        let checked = title_ids
+            .iter()
+            .zip(&admitted)
+            .filter(|(_, guard)| guard.is_ok())
+            .map(|(title_id, _)| OwnedEntity::Title(title_id.clone()))
+            .collect::<Vec<_>>();
+        let denials = match self
+            .location_ownership_guard()
+            .check_each(entry, &checked)
+            .await
+        {
+            Ok(denials) => denials,
+            Err(_) => {
+                drop(admitted);
+                let mut results = Vec::with_capacity(title_ids.len());
+                for title_id in title_ids {
+                    results.push(self.acquire_location_title_mutation(entry, title_id).await);
+                }
+                return results;
+            }
+        };
+        let mut denials = denials.into_iter();
+        for guard in admitted.iter_mut().filter(|guard| guard.is_ok()) {
+            if let Some(denied) = denials.next().flatten() {
+                *guard = Err(AppError::LocationOperationBusy(denied.message()));
+            }
+        }
+        admitted
     }
 
     /// Title-scoped shorthand.

@@ -1184,6 +1184,53 @@ impl LocationOperationRepository for LocationOperationStore {
         }
     }
 
+    async fn location_ownership_holders(
+        &self,
+        entities: &[OwnedEntity],
+    ) -> AppResult<Vec<Option<String>>> {
+        let mut holders = std::collections::HashMap::<(String, String), String>::new();
+        let mut kinds = std::collections::BTreeMap::<&str, Vec<String>>::new();
+        for entity in entities {
+            kinds
+                .entry(entity.kind_str())
+                .or_default()
+                .push(entity.id().to_string());
+        }
+        for (kind, ids) in kinds {
+            // Well under either engine's bind limit per statement.
+            for chunk in ids.chunks(900) {
+                let placeholders = std::iter::repeat_n("{}", chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut args = vec![SqlArg::Text(kind.to_string())];
+                args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                let rows = SqlRuntime::fetch_all(
+                    self.datastore.read_exec(),
+                    &format!(
+                        "SELECT entity_id, operation_id FROM location_operation_owned_entities
+                         WHERE entity_type = {{}} AND entity_id IN ({placeholders})
+                           AND released_at IS NULL"
+                    ),
+                    &args,
+                )
+                .await?;
+                for row in rows {
+                    holders
+                        .entry((kind.to_string(), row.text("entity_id")?))
+                        .or_insert(row.text("operation_id")?);
+                }
+            }
+        }
+        Ok(entities
+            .iter()
+            .map(|entity| {
+                holders
+                    .get(&(entity.kind_str().to_string(), entity.id().to_string()))
+                    .cloned()
+            })
+            .collect())
+    }
+
     async fn list_location_ownership_claims(&self) -> AppResult<Vec<LocationOwnershipClaim>> {
         SqlRuntime::fetch_all(
             self.datastore.read_exec(),

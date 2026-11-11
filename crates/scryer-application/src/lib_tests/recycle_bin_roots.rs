@@ -1568,3 +1568,125 @@ async fn title_delete_bulk_matches_one_title_at_a_time() {
         "the refused title's entry stays"
     );
 }
+
+/// Entries that reach the bin while a deletion chunk deletes its titles are
+/// found by one more listing of that bin for the whole chunk. An entry of a
+/// title outside the job, in the same bin, stays.
+#[tokio::test]
+async fn title_delete_bulk_lists_each_bin_once_for_late_entries() {
+    crate::test_wait::within_deadline("late recycle entries are swept once per bin", async {
+        let fixture = TitleDeleteFixture::new().await;
+        let root_a = fixture.fixture.root_a();
+        let third_folder = root_a.join("Synthetic Third Feature (2004)");
+        let bystander_folder = root_a.join("Synthetic Bystander Feature (2005)");
+        std::fs::create_dir_all(&third_folder).unwrap();
+        std::fs::create_dir_all(&bystander_folder).unwrap();
+        let third = create_movie_title_with_folder(
+            &fixture.app,
+            &fixture.user,
+            "Synthetic Third Feature",
+            &third_folder,
+        )
+        .await;
+        let bystander = create_movie_title_with_folder(
+            &fixture.app,
+            &fixture.user,
+            "Synthetic Bystander Feature",
+            &bystander_folder,
+        )
+        .await;
+        let titles = Arc::new(MockTitleRepo::default());
+        for title in [&fixture.deleted, &fixture.kept, &third, &bystander] {
+            titles.create(title.clone()).await.unwrap();
+        }
+        let operations = Arc::new(Mutex::new(Vec::new()));
+        titles.set_delete_operation_log(operations.clone()).await;
+        let barrier = operations.lock().await;
+        let jobs = Arc::new(RecordingJobRunRepo::default());
+        let mut app = fixture
+            .with_bin_setting(None)
+            .with_test_overrides(|services| services.with_job_runs(jobs.clone()));
+        app.services.catalog.titles = titles.clone();
+        let deleted_ids = [&fixture.deleted.id, &fixture.kept.id, &third.id];
+        let accepted = app
+            .start_delete_titles_job(
+                &fixture.user,
+                DeleteTitlesJobRequest {
+                    items: deleted_ids
+                        .into_iter()
+                        .map(|id| DeleteTitlesJobItem {
+                            title_id: id.clone(),
+                            preview_fingerprint: None,
+                        })
+                        .collect(),
+                    delete_files_on_disk: false,
+                    typed_confirmation: None,
+                },
+            )
+            .await
+            .unwrap();
+        crate::test_wait::wait_until("the chunk reaches catalog deletion", || async {
+            titles
+                .delete_started
+                .lock()
+                .await
+                .contains(&fixture.deleted.id)
+        })
+        .await;
+        let config = crate::recycle_bin::RecycleBinConfig {
+            enabled: true,
+            base_path: root_a.join(".scryer-recycle"),
+            retention_days: 7,
+            cleanup_enabled: true,
+            validation_error: None,
+            source_roots: vec![root_a.clone()],
+        };
+        let mut recycled = Vec::new();
+        for (title, name) in [
+            (&fixture.kept, "late-synthetic-other"),
+            (&third, "late-synthetic-third"),
+            (&bystander, "late-synthetic-bystander"),
+        ] {
+            let source = root_a.join(format!("{name}.mkv"));
+            std::fs::write(&source, format!("{name} bytes")).unwrap();
+            let mut manifest = removal_manifest(&source);
+            manifest.title_id = Some(title.id.clone());
+            recycled.push(
+                crate::recycle_bin::recycle_file(&config, &source, manifest)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .recycled_path,
+            );
+        }
+        let listed_before = crate::recycle_bin::test_listings::count(&config.base_path);
+        drop(barrier);
+        let run = crate::test_wait::wait_for("the deletion job finishes", || async {
+            jobs.runs
+                .lock()
+                .await
+                .iter()
+                .find(|run| run.id == accepted.job_run.id && run.status.is_terminal())
+                .cloned()
+        })
+        .await;
+        let summary: serde_json::Value =
+            serde_json::from_str(run.summary_json.as_deref().unwrap()).unwrap();
+        assert_eq!(run.status, JobRunStatus::Completed);
+        assert_eq!(summary["succeededTitleIds"], serde_json::json!(deleted_ids));
+        assert_eq!(summary["recycleOutcomes"][&fixture.kept.id]["purged"], 1);
+        assert_eq!(summary["recycleOutcomes"][&third.id]["purged"], 1);
+        assert_eq!(
+            crate::recycle_bin::test_listings::count(&config.base_path) - listed_before,
+            1,
+            "one listing of the bin for the whole chunk"
+        );
+        assert!(!recycled[0].exists());
+        assert!(!recycled[1].exists());
+        assert_eq!(
+            std::fs::read(&recycled[2]).unwrap(),
+            b"late-synthetic-bystander bytes"
+        );
+    })
+    .await;
+}

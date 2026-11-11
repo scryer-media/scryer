@@ -1883,6 +1883,91 @@ pub(crate) async fn list_committed_entries_for_title(
     Ok(results)
 }
 
+/// The committed entries of any of `title_ids` that `index` has not seen in
+/// this root, read with one listing of the root.
+///
+/// A deletion job lists a root once per title before it deletes; this
+/// catches entries those listings could not see because they appeared later.
+/// Every directory the index already knows was inspected by an earlier
+/// listing and is passed over, so an entry is never offered twice. A new
+/// directory gets the same inspection [`list_committed_entries_for_title`]
+/// gives it.
+pub(crate) async fn list_new_committed_entries_for_titles(
+    config: &RecycleBinConfig,
+    title_ids: &std::collections::HashSet<&str>,
+    index: &mut TitleRecycleEntryIndex,
+) -> AppResult<Vec<CommittedRecycleEntry>> {
+    if !cleanup_ready(config) {
+        if let Some(error) = &config.validation_error {
+            warn!(error = %error, path = %config.base_path.display(), "recycle bin cleanup disabled");
+        }
+        return Ok(Vec::new());
+    }
+
+    #[cfg(test)]
+    test_listings::record(&config.base_path);
+    let known = index
+        .roots
+        .entry(normalize_path(&config.base_path))
+        .or_default();
+    let mut results = Vec::new();
+    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
+        AppError::Repository(format!(
+            "failed to read recycle bin directory {}: {}",
+            config.base_path.display(),
+            e
+        ))
+    })?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
+    {
+        let name = entry.file_name();
+        if known.contains_key(&name) {
+            continue;
+        }
+        let (owner, committed) = inspect_entry_dir(config, entry.path()).await;
+        if let Some(owner) = owner {
+            known.insert(name, owner);
+        }
+        if let Some(committed) = committed
+            && committed
+                .manifest
+                .title_id
+                .as_deref()
+                .is_some_and(|owner| title_ids.contains(owner))
+        {
+            results.push(committed);
+        }
+    }
+
+    Ok(results)
+}
+
+/// How many times each recycle root was listed for late title entries.
+#[cfg(test)]
+pub(crate) mod test_listings {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static LISTINGS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(super) fn record(root: &Path) {
+        LISTINGS.lock().unwrap().push(root.to_path_buf());
+    }
+
+    pub(crate) fn count(root: &Path) -> usize {
+        LISTINGS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|listed| listed.as_path() == root)
+            .count()
+    }
+}
+
 pub async fn list_committed_entries(
     config: &RecycleBinConfig,
 ) -> AppResult<Vec<CommittedRecycleEntry>> {
