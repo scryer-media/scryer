@@ -800,10 +800,11 @@ async fn resolve_title_history_title_ids(
             app.services
                 .catalog
                 .titles
-                .list_for_libraries(
+                .list_with_projection(
                     None,
-                    library_ids,
+                    Some(library_ids),
                     filter.title_search.as_deref().map(str::to_string),
+                    crate::TitleListProjection::without_canonical_tags(),
                 )
                 .await?,
         ),
@@ -811,7 +812,12 @@ async fn resolve_title_history_title_ids(
             app.services
                 .catalog
                 .titles
-                .list(None, filter.title_search.as_deref().map(str::to_string))
+                .list_with_projection(
+                    None,
+                    None,
+                    filter.title_search.as_deref().map(str::to_string),
+                    crate::TitleListProjection::without_canonical_tags(),
+                )
                 .await?,
         ),
         None => None,

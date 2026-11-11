@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::Utc;
 use scryer_application::{AppResult, TitleExternalRating, TitleRatingSummary};
@@ -236,56 +236,174 @@ pub async fn load_discovery_title_metadata_tags_in_category(
     .await
 }
 
+/// Owner ids bound into one tag read statement. Each statement binds one value
+/// per owner plus at most one category, which keeps every statement well under
+/// the sqlite and postgres bind ceilings.
+const METADATA_TAG_OWNER_CHUNK: usize = 900;
+
+/// Reads tags, their sources and their source keys as three statements per
+/// chunk of owners and merges them in Rust. Joining the three tables in one
+/// statement returns tags x sources x keys rows per tag.
+///
+/// The merged lists match what one joined read ordered by tag
+/// `(sort_index, category, name)`, then source `(sort_index, source)`, then
+/// source key `(sort_index, source_tag_key)` produces: tags in that order,
+/// sources and source keys each in their own order, trimmed, blank values
+/// dropped and repeats kept only at their first position.
 async fn load_metadata_tags(
-    exec: SqlExec<'_, '_>,
+    mut exec: SqlExec<'_, '_>,
     tables: MetadataTables,
     owner_ids: &[String],
     category: Option<&str>,
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
+    let category = category.map(|category| category.trim().to_ascii_lowercase());
+    let mut merged = BTreeMap::<String, OwnerTags>::new();
+    for chunk in owner_ids.chunks(METADATA_TAG_OWNER_CHUNK) {
+        load_metadata_tags_chunk(
+            reborrow_exec(&mut exec),
+            tables,
+            chunk,
+            category.as_deref(),
+            &mut merged,
+        )
+        .await?;
+    }
+    Ok(merged
+        .into_iter()
+        .map(|(owner_id, owner_tags)| (owner_id, owner_tags.tags))
+        .collect())
+}
+
+#[derive(Default)]
+struct OwnerTags {
+    tags: Vec<CanonicalMediaTag>,
+    index_by_key: HashMap<String, usize>,
+}
+
+fn reborrow_exec<'a, 'db>(exec: &'a mut SqlExec<'_, 'db>) -> SqlExec<'a, 'db> {
+    match exec {
+        SqlExec::Target(target) => SqlExec::Target(*target),
+        SqlExec::Tx(tx) => SqlExec::Tx(tx),
+    }
+}
+
+async fn load_metadata_tags_chunk(
+    mut exec: SqlExec<'_, '_>,
+    tables: MetadataTables,
+    owner_ids: &[String],
+    category: Option<&str>,
+    merged: &mut BTreeMap<String, OwnerTags>,
+) -> AppResult<()> {
     if owner_ids.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(());
     }
     let placeholders = bind_placeholders(owner_ids.len());
-    let category_clause = if category.is_some() {
-        " AND LOWER(TRIM(t.category)) = {}"
-    } else {
-        ""
-    };
-    let sql = format!(
-        "SELECT
-            t.{owner_column} AS owner_id,
-            t.tag_key AS tag_key,
-            t.category AS category,
-            t.name AS name,
-            t.confidence AS confidence,
-            t.affinity_signals_json AS affinity_signals_json,
-            t.is_adult AS is_adult,
-            t.is_spoiler AS is_spoiler,
-            ts.source AS source,
-            tsk.source_tag_key AS source_tag_key
-         FROM {tags} t
-         LEFT JOIN {tag_sources} ts
-            ON ts.{owner_column} = t.{owner_column} AND ts.tag_key = t.tag_key
-         LEFT JOIN {tag_source_keys} tsk
-            ON tsk.{owner_column} = t.{owner_column} AND tsk.tag_key = t.tag_key
-         WHERE t.{owner_column} IN ({placeholders}){category_clause}
-         ORDER BY t.{owner_column}, t.sort_index, t.category, t.name,
-                  ts.sort_index, ts.source, tsk.sort_index, tsk.source_tag_key",
-        owner_column = tables.owner_column,
-        tags = tables.tags,
-        tag_sources = tables.tag_sources,
-        tag_source_keys = tables.tag_source_keys,
-    );
     let mut args = owner_ids
         .iter()
         .cloned()
         .map(SqlArg::Text)
         .collect::<Vec<_>>();
     if let Some(category) = category {
-        args.push(SqlArg::Text(category.trim().to_ascii_lowercase()));
+        args.push(SqlArg::Text(category.to_string()));
     }
-    let rows = SqlRuntime::fetch_all(exec, &sql, &args).await?;
-    rows_to_tags_by_owner(&rows)
+    let category_clause = if category.is_some() {
+        " AND LOWER(TRIM(t.category)) = {}"
+    } else {
+        ""
+    };
+    let owner_column = tables.owner_column;
+
+    let tag_rows = SqlRuntime::fetch_all(
+        reborrow_exec(&mut exec),
+        &format!(
+            "SELECT
+                t.{owner_column} AS owner_id,
+                t.tag_key AS tag_key,
+                t.category AS category,
+                t.name AS name,
+                t.confidence AS confidence,
+                t.affinity_signals_json AS affinity_signals_json,
+                t.is_adult AS is_adult,
+                t.is_spoiler AS is_spoiler
+             FROM {tags} t
+             WHERE t.{owner_column} IN ({placeholders}){category_clause}
+             ORDER BY t.{owner_column}, t.sort_index, t.category, t.name, t.tag_key",
+            tags = tables.tags,
+        ),
+        &args,
+    )
+    .await?;
+    if tag_rows.is_empty() {
+        return Ok(());
+    }
+    for row in &tag_rows {
+        let owner_id = row.text("owner_id")?;
+        let tag_key = row.text("tag_key")?;
+        let owner_tags = merged.entry(owner_id).or_default();
+        if owner_tags.index_by_key.contains_key(&tag_key) {
+            continue;
+        }
+        owner_tags
+            .index_by_key
+            .insert(tag_key.clone(), owner_tags.tags.len());
+        owner_tags.tags.push(CanonicalMediaTag {
+            affinity_signals: serde_json::from_str(&row.text("affinity_signals_json")?)
+                .map_err(|error| scryer_application::AppError::Repository(error.to_string()))?,
+            key: tag_key,
+            category: row.text("category")?,
+            name: row.text("name")?,
+            confidence: row.opt_f64("confidence")?,
+            sources: Vec::new(),
+            source_tag_keys: Vec::new(),
+            is_adult: row.bool("is_adult")?,
+            is_spoiler: row.bool("is_spoiler")?,
+        });
+    }
+
+    // With a category, only values of tags in that category are wanted; the
+    // join is on the tag's primary key, so it adds no rows.
+    let category_join = if category.is_some() {
+        format!(
+            " JOIN {tags} t ON t.{owner_column} = v.{owner_column} AND t.tag_key = v.tag_key",
+            tags = tables.tags,
+        )
+    } else {
+        String::new()
+    };
+    let tag_values: [(&str, &str, fn(&mut CanonicalMediaTag) -> &mut Vec<String>); 2] = [
+        (tables.tag_sources, "source", |tag| &mut tag.sources),
+        (tables.tag_source_keys, "source_tag_key", |tag| {
+            &mut tag.source_tag_keys
+        }),
+    ];
+    for (table, column, values_of) in tag_values {
+        let rows = SqlRuntime::fetch_all(
+            reborrow_exec(&mut exec),
+            &format!(
+                "SELECT v.{owner_column} AS owner_id, v.tag_key AS tag_key, v.{column} AS tag_value
+                 FROM {table} v{category_join}
+                 WHERE v.{owner_column} IN ({placeholders}){category_clause}
+                 ORDER BY v.{owner_column}, v.tag_key, v.sort_index, v.{column}"
+            ),
+            &args,
+        )
+        .await?;
+        for row in &rows {
+            let owner_id = row.text("owner_id")?;
+            let tag_key = row.text("tag_key")?;
+            let Some(owner_tags) = merged.get_mut(&owner_id) else {
+                continue;
+            };
+            let Some(&index) = owner_tags.index_by_key.get(&tag_key) else {
+                continue;
+            };
+            push_unique_opt(
+                values_of(&mut owner_tags.tags[index]),
+                row.opt_text("tag_value")?,
+            );
+        }
+    }
+    Ok(())
 }
 
 pub async fn replace_title_metadata_ratings_tx(

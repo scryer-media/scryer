@@ -6987,6 +6987,7 @@ mod owned_probe_tests;
 mod tests {
     use super::*;
 
+    use scryer_domain::CanonicalMediaTag;
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[test]
@@ -7528,6 +7529,325 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// Tag tables for each `(prefix, owner column)` pair, without foreign keys
+    /// so a test can write any combination of rows.
+    async fn metadata_tag_store(prefixes: &[(&str, &str)]) -> (StoreDatastore, sqlx::SqlitePool) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for (prefix, owner) in prefixes {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "CREATE TABLE {prefix}_metadata_tags ({owner} TEXT NOT NULL, tag_key TEXT NOT NULL,
+                    category TEXT NOT NULL, name TEXT NOT NULL, confidence REAL,
+                    is_adult INTEGER NOT NULL DEFAULT 0, is_spoiler INTEGER NOT NULL DEFAULT 0,
+                    sort_index INTEGER NOT NULL DEFAULT 0, affinity_signals_json TEXT NOT NULL DEFAULT '[]',
+                    PRIMARY KEY ({owner}, tag_key));
+                 CREATE TABLE {prefix}_metadata_tag_sources ({owner} TEXT NOT NULL, tag_key TEXT NOT NULL,
+                    source TEXT NOT NULL, sort_index INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE ({owner}, tag_key, source));
+                 CREATE TABLE {prefix}_metadata_tag_source_keys ({owner} TEXT NOT NULL, tag_key TEXT NOT NULL,
+                    source_tag_key TEXT NOT NULL, sort_index INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE ({owner}, tag_key, source_tag_key));"
+            )))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        (datastore, pool)
+    }
+
+    /// The single joined statement tag reads used before they were split,
+    /// decoded by the same row mapper: the reference the split read must match.
+    async fn joined_reference_tags(
+        datastore: &StoreDatastore,
+        prefix: &str,
+        owner: &str,
+        ids: &[String],
+        category: Option<&str>,
+    ) -> BTreeMap<String, Vec<CanonicalMediaTag>> {
+        let placeholders = std::iter::repeat_n("{}", ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let category_clause = if category.is_some() {
+            " AND LOWER(TRIM(t.category)) = {}"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT t.{owner} AS owner_id, t.tag_key, t.category, t.name, t.confidence,
+                    t.affinity_signals_json, t.is_adult, t.is_spoiler,
+                    ts.source AS source, tsk.source_tag_key AS source_tag_key
+             FROM {prefix}_metadata_tags t
+             LEFT JOIN {prefix}_metadata_tag_sources ts
+                ON ts.{owner} = t.{owner} AND ts.tag_key = t.tag_key
+             LEFT JOIN {prefix}_metadata_tag_source_keys tsk
+                ON tsk.{owner} = t.{owner} AND tsk.tag_key = t.tag_key
+             WHERE t.{owner} IN ({placeholders}){category_clause}
+             ORDER BY t.{owner}, t.sort_index, t.category, t.name,
+                      ts.sort_index, ts.source, tsk.sort_index, tsk.source_tag_key"
+        );
+        let mut args = ids.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        if let Some(category) = category {
+            args.push(SqlArg::Text(category.trim().to_ascii_lowercase()));
+        }
+        let rows = SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args)
+            .await
+            .unwrap();
+        crate::media::canonical_tags::rows_to_tags_by_owner(&rows).unwrap()
+    }
+
+    async fn insert_tag_row(
+        pool: &sqlx::SqlitePool,
+        table: &str,
+        values: &[&str],
+        sort_index: i64,
+    ) {
+        let placeholders = std::iter::repeat_n("?", values.len() + 1)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let columns = match (table.ends_with("_tags"), table.ends_with("_sources")) {
+            (true, _) => "category, name, sort_index",
+            (_, true) => "source, sort_index",
+            _ => "source_tag_key, sort_index",
+        };
+        let owner = if table.starts_with("discovery_") {
+            "discovery_title_id"
+        } else {
+            "title_id"
+        };
+        let sql =
+            format!("INSERT INTO {table} ({owner}, tag_key, {columns}) VALUES ({placeholders})");
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for value in values {
+            query = query.bind(*value);
+        }
+        query.bind(sort_index).execute(pool).await.unwrap();
+    }
+
+    fn expected_tag(
+        key: &str,
+        category: &str,
+        name: &str,
+        sources: &[&str],
+        source_tag_keys: &[&str],
+    ) -> CanonicalMediaTag {
+        CanonicalMediaTag {
+            affinity_signals: Vec::new(),
+            key: key.to_string(),
+            category: category.to_string(),
+            name: name.to_string(),
+            confidence: None,
+            sources: sources.iter().map(|value| value.to_string()).collect(),
+            source_tag_keys: source_tag_keys
+                .iter()
+                .map(|value| value.to_string())
+                .collect(),
+            is_adult: false,
+            is_spoiler: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn split_tag_read_keeps_the_joined_order_and_dedup() {
+        let (datastore, pool) = metadata_tag_store(&[("title", "title_id")]).await;
+        let tags = "title_metadata_tags";
+        let sources = "title_metadata_tag_sources";
+        let keys = "title_metadata_tag_source_keys";
+        // Emberfall: three tags out of key order, two tied on sort index and
+        // category; sources and keys with sort index ties, a value that only
+        // differs by padding, a blank value, and a value present in both.
+        insert_tag_row(&pool, tags, &["emberfall", "drama", "genre", "Drama"], 1).await;
+        insert_tag_row(&pool, tags, &["emberfall", "action", "genre", "Action"], 0).await;
+        insert_tag_row(&pool, tags, &["emberfall", "comedy", "genre", "Comedy"], 1).await;
+        insert_tag_row(&pool, sources, &["emberfall", "action", "tmdb"], 1).await;
+        insert_tag_row(&pool, sources, &["emberfall", "action", "anilist"], 0).await;
+        insert_tag_row(&pool, sources, &["emberfall", "action", " tmdb "], 2).await;
+        insert_tag_row(&pool, sources, &["emberfall", "action", "  "], 3).await;
+        insert_tag_row(&pool, sources, &["emberfall", "comedy", "tvdb"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "action", "kb"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "action", "ka"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "action", "tmdb"], 1).await;
+        insert_tag_row(&pool, keys, &["emberfall", "drama", "kd"], 0).await;
+        // A source row for a tag the owner does not have is never attached.
+        insert_tag_row(&pool, sources, &["emberfall", "missing", "tmdb"], 0).await;
+        // Cinderwake: a tag with no sources and no keys.
+        insert_tag_row(
+            &pool,
+            tags,
+            &["cinderwake", "mystery", "theme", "Mystery"],
+            0,
+        )
+        .await;
+        // Ashgrove has no tags at all.
+
+        let ids = ["ashgrove", "cinderwake", "emberfall"].map(String::from);
+        let loaded = load_title_metadata_tags(datastore.read_exec(), &ids)
+            .await
+            .unwrap();
+        let expected = BTreeMap::from([
+            (
+                "cinderwake".to_string(),
+                vec![expected_tag("mystery", "theme", "Mystery", &[], &[])],
+            ),
+            (
+                "emberfall".to_string(),
+                vec![
+                    expected_tag(
+                        "action",
+                        "genre",
+                        "Action",
+                        &["anilist", "tmdb"],
+                        &["ka", "kb", "tmdb"],
+                    ),
+                    expected_tag("comedy", "genre", "Comedy", &["tvdb"], &[]),
+                    expected_tag("drama", "genre", "Drama", &[], &["kd"]),
+                ],
+            ),
+        ]);
+        assert_eq!(loaded, expected);
+        assert_eq!(
+            loaded,
+            joined_reference_tags(&datastore, "title", "title_id", &ids, None).await
+        );
+        assert!(
+            load_title_metadata_tags(datastore.read_exec(), &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn split_tag_read_merges_across_id_chunks_and_bind_limits() {
+        let (datastore, pool) = metadata_tag_store(&[("title", "title_id")]).await;
+        let owners = (0..950)
+            .map(|index| format!("emberfall-{index:04}"))
+            .collect::<Vec<_>>();
+        let mut tx = pool.begin().await.unwrap();
+        for (index, owner) in owners.iter().enumerate() {
+            let alternate = (index % 2) as i64;
+            for (key, name, sort_index) in [
+                ("ashgrove", "Ashgrove", 1 - alternate),
+                ("cinderwake", "Cinderwake", alternate),
+            ] {
+                sqlx::query(
+                    "INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                     VALUES (?, ?, 'genre', ?, ?)",
+                )
+                .bind(owner)
+                .bind(key)
+                .bind(name)
+                .bind(sort_index)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            }
+            for (source, sort_index) in [("tmdb", alternate), ("tvdb", 1 - alternate)] {
+                sqlx::query(
+                    "INSERT INTO title_metadata_tag_sources (title_id, tag_key, source, sort_index)
+                     VALUES (?, 'ashgrove', ?, ?)",
+                )
+                .bind(owner)
+                .bind(source)
+                .bind(sort_index)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            }
+            sqlx::query(
+                "INSERT INTO title_metadata_tag_source_keys (title_id, tag_key, source_tag_key)
+                 VALUES (?, 'cinderwake', ?)",
+            )
+            .bind(owner)
+            .bind(format!("key-{index}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        // More ids than one statement may bind on either engine; every owner
+        // past the first chunk still has to come back whole.
+        let mut ids = owners.clone();
+        ids.extend((0..33_000).map(|index| format!("ashgrove-absent-{index}")));
+        let loaded = load_title_metadata_tags(datastore.read_exec(), &ids)
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), owners.len());
+        for (index, owner) in owners.iter().enumerate() {
+            let ashgrove = if index % 2 == 0 {
+                expected_tag("ashgrove", "genre", "Ashgrove", &["tmdb", "tvdb"], &[])
+            } else {
+                expected_tag("ashgrove", "genre", "Ashgrove", &["tvdb", "tmdb"], &[])
+            };
+            let key = format!("key-{index}");
+            let cinderwake =
+                expected_tag("cinderwake", "genre", "Cinderwake", &[], &[key.as_str()]);
+            let expected = if index % 2 == 0 {
+                vec![cinderwake, ashgrove]
+            } else {
+                vec![ashgrove, cinderwake]
+            };
+            assert_eq!(loaded[owner], expected, "{owner}");
+        }
+        assert_eq!(
+            loaded,
+            joined_reference_tags(&datastore, "title", "title_id", &owners, None).await
+        );
+    }
+
+    #[tokio::test]
+    async fn split_tag_read_in_category_keeps_only_that_category() {
+        let (datastore, pool) =
+            metadata_tag_store(&[("discovery_title", "discovery_title_id")]).await;
+        let tags = "discovery_title_metadata_tags";
+        let sources = "discovery_title_metadata_tag_sources";
+        let keys = "discovery_title_metadata_tag_source_keys";
+        insert_tag_row(&pool, tags, &["emberfall", "drama", " GENRE ", "Drama"], 0).await;
+        insert_tag_row(&pool, tags, &["emberfall", "heist", "theme", "Heist"], 1).await;
+        insert_tag_row(&pool, sources, &["emberfall", "drama", "tmdb"], 0).await;
+        insert_tag_row(&pool, sources, &["emberfall", "heist", "anilist"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "drama", "tmdb"], 0).await;
+        insert_tag_row(&pool, keys, &["emberfall", "heist", "kh"], 0).await;
+        insert_tag_row(&pool, tags, &["cinderwake", "heist", "theme", "Heist"], 0).await;
+
+        let ids = ["ashgrove", "cinderwake", "emberfall"].map(String::from);
+        let loaded = crate::media::canonical_tags::load_discovery_title_metadata_tags_in_category(
+            datastore.read_exec(),
+            &ids,
+            " Genre ",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            loaded,
+            BTreeMap::from([(
+                "emberfall".to_string(),
+                vec![expected_tag(
+                    "drama",
+                    " GENRE ",
+                    "Drama",
+                    &["tmdb"],
+                    &["tmdb"]
+                )],
+            )])
+        );
+        assert_eq!(
+            loaded,
+            joined_reference_tags(
+                &datastore,
+                "discovery_title",
+                "discovery_title_id",
+                &ids,
+                Some(" Genre "),
+            )
+            .await
         );
     }
 
