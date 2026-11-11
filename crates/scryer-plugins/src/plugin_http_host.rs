@@ -27,12 +27,14 @@ pub(crate) enum HostHttpErrorKind {
     InvalidRequest,
     Timeout,
     ResponseTooLarge,
+    QuotaRefused,
     Transport,
 }
 
 #[derive(Debug)]
 pub(crate) struct HostHttpError {
     pub(crate) kind: HostHttpErrorKind,
+    pub(crate) reason: Option<&'static str>,
     message: String,
     solver_service_failure: bool,
 }
@@ -41,6 +43,7 @@ impl HostHttpError {
     pub(crate) fn new(kind: HostHttpErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
+            reason: None,
             message: message.into(),
             solver_service_failure: false,
         }
@@ -48,8 +51,18 @@ impl HostHttpError {
     fn solver(kind: HostHttpErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
+            reason: None,
             message: message.into(),
             solver_service_failure: true,
+        }
+    }
+
+    pub(crate) fn monthly_quota(error: scryer_application::AppError) -> Self {
+        Self {
+            kind: HostHttpErrorKind::QuotaRefused,
+            reason: error.reason(),
+            message: error.to_string(),
+            solver_service_failure: false,
         }
     }
 }
@@ -1431,7 +1444,7 @@ fn execute_single_request_with_extra_headers(
     };
     let observe_dispatch = || {
         if let Some(tally) = tally
-            && !tally.try_note_sent(&request.url)
+            && !tally.try_note_sent_blocking(&request.url)
         {
             return Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected);
         }
@@ -1472,6 +1485,14 @@ fn execute_single_request_with_extra_headers(
         }
     }
 
+    let quota_error = if matches!(
+        &result,
+        Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected)
+    ) {
+        tally.and_then(IndexerRequestTally::take_dispatch_error)
+    } else {
+        None
+    };
     result.map_err(|error| match error {
         scryer_outbound_http::BlockingOutboundHttpError::Request(error) if error.is_timeout() => {
             HostHttpError::new(HostHttpErrorKind::Timeout, "timeout")
@@ -1496,6 +1517,11 @@ fn execute_single_request_with_extra_headers(
         scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded => {
             HostHttpError::new(HostHttpErrorKind::Timeout, "HTTP deadline exhausted")
         }
+        scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected => quota_error
+            .map(HostHttpError::monthly_quota)
+            .unwrap_or_else(|| {
+                HostHttpError::new(HostHttpErrorKind::Transport, "dispatch rejected")
+            }),
         other => other.to_string().into(),
     })
 }
@@ -1675,7 +1701,7 @@ fn execute_challenge_solver_request(
             solver_deadline,
             || {
                 if let Some(tally) = tally
-                    && !tally.try_note_sent_call(CALL_SOLVER)
+                    && !tally.try_note_sent_call_blocking(CALL_SOLVER)
                 {
                     return Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected);
                 }
@@ -1695,6 +1721,14 @@ fn execute_challenge_solver_request(
             ) => {}
         }
     }
+    let quota_error = if matches!(
+        &solve_result,
+        Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected)
+    ) {
+        tally.and_then(IndexerRequestTally::take_dispatch_error)
+    } else {
+        None
+    };
     let response = solve_result.map_err(|error| match error {
         scryer_outbound_http::BlockingOutboundHttpError::Request(error) if error.is_timeout() => {
             HostHttpError::solver(
@@ -1716,10 +1750,14 @@ fn execute_challenge_solver_request(
             HostHttpErrorKind::Timeout,
             solver::solver_error_message(provider, solver::SolverErrorKind::Timeout),
         ),
-        scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected => HostHttpError::solver(
-            HostHttpErrorKind::Transport,
-            solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable),
-        ),
+        scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected => quota_error
+            .map(HostHttpError::monthly_quota)
+            .unwrap_or_else(|| {
+                HostHttpError::solver(
+                    HostHttpErrorKind::Transport,
+                    solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable),
+                )
+            }),
     })?;
 
     let solver_status = response.status();
@@ -2724,6 +2762,7 @@ mod tests {
     #[derive(Default)]
     struct CountingIndexerStatsTracker {
         sent: std::sync::atomic::AtomicU32,
+        deny_monthly_admission: bool,
     }
 
     impl CountingIndexerStatsTracker {
@@ -2747,9 +2786,76 @@ mod tests {
         fn record_api_request_sent(&self, _indexer_id: &str, _indexer_name: &str) {
             self.sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+        fn admit_monthly_request_blocking(
+            &self,
+            _indexer_id: &str,
+            _at: chrono::DateTime<chrono::Utc>,
+        ) -> scryer_application::AppResult<()> {
+            if self.deny_monthly_admission {
+                Err(scryer_application::AppError::validation_refused(
+                    scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+                    "monthly request limit reached",
+                ))
+            } else {
+                Ok(())
+            }
+        }
         fn all_stats(&self) -> Vec<scryer_application::IndexerQueryStats> {
             Vec::new()
         }
+    }
+
+    #[tokio::test]
+    async fn blocking_plugin_dispatch_preserves_monthly_quota_refusal_and_never_sends() {
+        let origin = RecordingHttpProxy::start("<html>should not be requested</html>").await;
+        let stats = Arc::new(CountingIndexerStatsTracker {
+            deny_monthly_admission: true,
+            ..Default::default()
+        });
+        let origin_url = origin.url.clone();
+        let worker_stats = stats.clone();
+        let error = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || {
+                let tally = IndexerRequestTally::new(
+                    "indexer-1".to_string(),
+                    "Test indexer".to_string(),
+                    IndexerErrorOperation::InteractiveSearch,
+                    worker_stats,
+                )
+                .with_indexer_origin(&origin_url);
+                let request = PluginHttpRequest {
+                    url: format!("{origin_url}/api?t=search"),
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                };
+                execute_single_request_with_extra_headers(
+                    &Client::new(),
+                    &request,
+                    None,
+                    None,
+                    &[],
+                    None,
+                    None,
+                    Some(&tally),
+                )
+                .expect_err("monthly quota admission must reject before dispatch")
+            }),
+        )
+        .await
+        .expect("blocking HTTP worker should finish")
+        .expect("blocking HTTP worker should join");
+
+        assert_eq!(error.kind, HostHttpErrorKind::QuotaRefused);
+        assert_eq!(
+            error.reason,
+            Some(scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED)
+        );
+        assert_eq!(stats.sent(), 0);
+        assert!(
+            origin.request_lines().is_empty(),
+            "a rejected blocking dispatch must not reach the indexer"
+        );
     }
 
     #[derive(Default)]

@@ -276,6 +276,7 @@ impl AppUseCase {
 
         self.require_request_submission_permission(actor, &library.id, input.admission)
             .await?;
+        crate::library::require_library_enabled(&library)?;
         let list_movie = input.origin.subscription_id().is_some()
             && input.requested_monitor_type.as_deref() == Some("advanced")
             && input

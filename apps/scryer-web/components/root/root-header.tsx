@@ -163,6 +163,7 @@ export const RootHeader = React.memo(function RootHeader({
     ensureCatalogConfigReady,
     isCatalogConfigReady,
     librariesByFacet,
+    viewableLibrariesByFacet,
     rootFoldersByFacet,
     requestableLibrariesByFacet,
     catalogSearchResults,
@@ -1269,9 +1270,10 @@ export const RootHeader = React.memo(function RootHeader({
           canAdd:
             catalogQualityProfileOptions.length > 0 &&
             (librariesByFacet[facet].length > 0 ||
-              rootFoldersByFacet[facet].some((rootFolder) =>
-                Boolean(rootFolder.path.trim()),
-              )),
+              (viewableLibrariesByFacet[facet].length > 0 &&
+                rootFoldersByFacet[facet].some((rootFolder) =>
+                  Boolean(rootFolder.path.trim()),
+                ))),
           canRequest: requestableLibrariesByFacet[facet].length > 0,
           resultName: result.name,
           t,
@@ -1325,6 +1327,7 @@ export const RootHeader = React.memo(function RootHeader({
       isMetadataSearchResultInCatalog,
       catalogQualityProfileOptions.length,
       librariesByFacet,
+      viewableLibrariesByFacet,
       rootFoldersByFacet,
       requestableLibrariesByFacet,
       t,

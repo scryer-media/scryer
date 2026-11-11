@@ -1820,6 +1820,8 @@ impl AppUseCase {
             .get("info_hash")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        self.admit_indexer_monthly_grab(result.indexer_id.as_deref())
+            .await?;
         let grab_indexer = self
             .grab_indexer_name(result.indexer_id.as_deref(), Some(result.source.as_str()))
             .await;
@@ -2052,6 +2054,8 @@ impl AppUseCase {
                 .get("info_hash")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string);
+            self.admit_indexer_monthly_grab(result.indexer_id.as_deref())
+                .await?;
             let artifact = self
                 .services
                 .integrations

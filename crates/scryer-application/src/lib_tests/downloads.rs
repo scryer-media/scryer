@@ -5608,6 +5608,7 @@ async fn register_import_fixture_root(app: &AppUseCase, facet: MediaFacet, root:
                 path: root.to_string_lossy().into_owned(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("register import fixture root");
@@ -14597,6 +14598,7 @@ async fn disposition_fixture(name: &str, release_title: &str) -> DispositionFixt
                 path: library_dir.path().to_string_lossy().into_owned(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("point the movie library at the fixture root");
@@ -16181,6 +16183,7 @@ async fn series_movie_link_upgrade_finds_its_incumbent_at_another_path() {
                 path: library_dir.path().to_string_lossy().into_owned(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("point the anime library at the fixture root");

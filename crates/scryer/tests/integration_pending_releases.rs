@@ -208,6 +208,7 @@ async fn direct_wanted_item_lookup_requires_access_to_item_library() {
             name: "Adult".to_string(),
             slug: "adult".to_string(),
             is_default: false,
+            enabled: true,
             roots: vec![],
             created_at: now,
             updated_at: now,

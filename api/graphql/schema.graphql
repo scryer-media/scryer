@@ -2205,6 +2205,14 @@ input CreateIndexerConfigInput {
 	"""
 	maxQueriesPerMinute: Int
 	"""
+	Monthly request limit; at least 1, or null for unlimited.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Monthly grab limit; at least 1, or null for unlimited.
+	"""
+	maxGrabsPerMonth: Long
+	"""
 	Whether the indexer is enabled.
 	"""
 	isEnabled: Boolean
@@ -8936,6 +8944,14 @@ type IndexerConfigPayload {
 	"""
 	maxQueriesPerMinute: Int
 	"""
+	Maximum Scryer-observed requests per UTC calendar month; null means unlimited.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Maximum Scryer-initiated grabs reserved in a UTC calendar month; null means unlimited.
+	"""
+	maxGrabsPerMonth: Long
+	"""
 	UTC time until which the indexer is disabled, or null when not disabled.
 	"""
 	disabledUntil: DateTime
@@ -10551,6 +10567,10 @@ type LibraryPayload {
 	Whether this is the configured default library for its facet.
 	"""
 	isDefault: Boolean!
+	"""
+	Whether the library is available for navigation, searches, and scans.
+	"""
+	enabled: Boolean!
 	"""
 	Whether the library was created by bootstrap root-folder setup.
 	"""
@@ -34168,6 +34188,14 @@ input UpdateIndexerConfigInput {
 	"""
 	maxQueriesPerMinute: Int
 	"""
+	Request limit per UTC calendar month: omission preserves it, null clears it.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Grab limit per UTC calendar month: omission preserves it, null clears it.
+	"""
+	maxGrabsPerMonth: Long
+	"""
 	Replacement enabled state; omission preserves it.
 	"""
 	isEnabled: Boolean
@@ -34211,6 +34239,10 @@ input UpdateLibraryInput {
 	Replacement display name; omission preserves it.
 	"""
 	name: String
+	"""
+	Whether this library is available for navigation, searches, and scans; omission preserves it.
+	"""
+	enabled: Boolean
 	"""
 	Replacement root list; omission preserves roots and an empty list clears them when valid.
 	"""

@@ -799,6 +799,17 @@ const cs: LocaleDictionary = {
   "settings.librarySaveAndScanButton": "Uložit a prohledat",
   "settings.librarySaveOnlyButton": "Jen uložit",
   "settings.libraryDeleteButton": "Smazat knihovnu",
+  "settings.libraryDisableButton": "Zakázat",
+  "settings.libraryDisableConfirmTitle": "Zakázat {{name}}?",
+  "settings.libraryDisableConfirm":
+    "Knihovna {{name}} zmizí z katalogů a nebude dostupná jako cíl pro přidávání titulů. Plánované skenování a obnovování se zastaví a právě probíhající skenování se zruší. Stávající tituly, soubory, kořenové složky a nastavení zůstanou zachovány. Znovu ji povolíte v Nastavení > Obecné > Výchozí knihovny.",
+  "settings.defaultLibrariesTitle": "Výchozí knihovny",
+  "settings.defaultLibrariesHelp":
+    "Výchozí knihovny nelze smazat. Zakázáním knihovnu odeberete z katalogů a nebude možné přes ni přidávat ani žádat o tituly. Plánované skenování a obnovování se zastaví a právě probíhající skenování se zruší. Stávající tituly, soubory, kořenové složky a nastavení zůstanou zachovány. Povolené knihovny lze upravit v Katalozích.",
+  "settings.defaultLibrariesEmpty": "Nejsou dostupné žádné výchozí knihovny.",
+  "settings.defaultLibrariesLoadFailed":
+    "Výchozí knihovny se nepodařilo načíst.",
+  "settings.defaultLibraryToggleLabel": "Knihovna {{name}} povolena",
   "settings.libraryDeleteConfirm":
     "Smazat {{name}}? Mediální soubory na disku nebudou odstraněny.",
   "settings.libraryEmpty": "Nejsou dostupné žádné knihovny.",
@@ -3142,6 +3153,15 @@ const cs: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "Bez limitu",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Max. počet dotazů za minutu musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
+  "form.indexerMaxRequestsPerMonth": "Max. požadavků za měsíc",
+  "form.indexerMaxGrabsPerMonth": "Max. stažení za měsíc",
+  "form.indexerMonthlyLimitPlaceholder": "Bez limitu",
+  "form.indexerMonthlyLimitHelp":
+    "Počítá se pouze provoz zaznamenaný touto instancí Scryeru. Stažení se započítá před načtením vydání a zůstane započítané, pokud je jeho výsledek nejistý. Limity se obnovují v 00:00 UTC prvního dne každého měsíce.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Měsíční limit požadavků musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Měsíční limit stažení musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
   "form.providerTypePlaceholder": "Typ poskytovatele",
   "form.subtitleProviderValidation": "Název a typ poskytovatele jsou povinné.",
   "form.subtitleProviderFacetsRequired":

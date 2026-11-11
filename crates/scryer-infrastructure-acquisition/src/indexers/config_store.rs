@@ -22,7 +22,8 @@ const INDEXER_COLUMNS: &str =
     managed_child_key,
     managed_metadata_json,
     caps_snapshot_json, last_health_status, last_error_message, last_error_code, last_error_at, config_json,
-    created_at, updated_at, max_queries_per_minute";
+    created_at, updated_at, max_queries_per_minute, max_requests_per_month,
+    max_grabs_per_month";
 
 const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
     id, name, provider_type, base_url, api_key_encrypted, rate_limit_seconds,
@@ -30,10 +31,12 @@ const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
     enable_auto_search, proxy_config_id, download_client_id, seeding_profile_id,
     managed_parent_config_id, managed_child_key,
     managed_metadata_json, caps_snapshot_json, last_health_status, last_error_message, last_error_code,
-    last_error_at, config_json, created_at, updated_at, max_queries_per_minute
+    last_error_at, config_json, created_at, updated_at, max_queries_per_minute,
+    max_requests_per_month, max_grabs_per_month
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+    {}, {}
 )";
 
 #[derive(Clone)]
@@ -199,6 +202,14 @@ impl IndexerConfigStore {
         if let Some(max_queries_per_minute) = update.max_queries_per_minute {
             assignments.push("max_queries_per_minute = {}".to_string());
             args.push(SqlArg::OptI64(max_queries_per_minute));
+        }
+        if let Some(max_requests_per_month) = update.max_requests_per_month {
+            assignments.push("max_requests_per_month = {}".to_string());
+            args.push(SqlArg::OptI64(max_requests_per_month));
+        }
+        if let Some(max_grabs_per_month) = update.max_grabs_per_month {
+            assignments.push("max_grabs_per_month = {}".to_string());
+            args.push(SqlArg::OptI64(max_grabs_per_month));
         }
         if let Some(is_enabled) = update.is_enabled {
             assignments.push("is_enabled = {}".to_string());
@@ -663,6 +674,8 @@ fn indexer_insert_args(
         SqlArg::Timestamp(config.created_at),
         SqlArg::Timestamp(config.updated_at),
         SqlArg::OptI64(config.max_queries_per_minute),
+        SqlArg::OptI64(config.max_requests_per_month),
+        SqlArg::OptI64(config.max_grabs_per_month),
     ])
 }
 
@@ -709,6 +722,8 @@ fn row_to_indexer_config(
         rate_limit_seconds: row.opt_i64("rate_limit_seconds")?,
         rate_limit_burst: row.opt_i64("rate_limit_burst")?,
         max_queries_per_minute: row.opt_i64("max_queries_per_minute")?,
+        max_requests_per_month: row.opt_i64("max_requests_per_month")?,
+        max_grabs_per_month: row.opt_i64("max_grabs_per_month")?,
         disabled_until: row.opt_timestamp("disabled_until")?,
         is_enabled: row.bool("is_enabled")?,
         enable_interactive_search: row.bool("enable_interactive_search")?,
@@ -787,7 +802,9 @@ mod tests {
                 config_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                max_queries_per_minute INTEGER
+                max_queries_per_minute INTEGER,
+                max_requests_per_month INTEGER,
+                max_grabs_per_month INTEGER
             )",
         )
         .execute(pool)
@@ -1215,6 +1232,8 @@ mod tests {
             .update(IndexerConfigUpdate {
                 id: "budgeted".to_string(),
                 max_queries_per_minute: Some(Some(30)),
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 ..Default::default()
             })
             .await
@@ -1234,6 +1253,8 @@ mod tests {
             .update(IndexerConfigUpdate {
                 id: "budgeted".to_string(),
                 max_queries_per_minute: Some(None),
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 ..Default::default()
             })
             .await

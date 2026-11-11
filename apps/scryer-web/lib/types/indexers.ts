@@ -28,6 +28,10 @@ export type IndexerRecord = {
   rateLimitBurst: number | null;
   /** Sustained query budget per minute, or null when the indexer has none. */
   maxQueriesPerMinute: number | null;
+  /** Locally observed request cap per UTC calendar month, or unlimited. */
+  maxRequestsPerMonth: number | null;
+  /** Locally accepted grab cap per UTC calendar month, or unlimited. */
+  maxGrabsPerMonth: number | null;
   disabledUntil: string | null;
   /**
    * When the indexer's rate-limit cooldown lifts, or null when it is not
@@ -72,6 +76,10 @@ export type IndexerDraft = {
   rateLimitSeconds: string;
   /** Query budget per minute as typed; blank means no budget. */
   maxQueriesPerMinute: string;
+  /** Monthly request cap as typed; blank means unlimited. */
+  maxRequestsPerMonth: string;
+  /** Monthly grab cap as typed; blank means unlimited. */
+  maxGrabsPerMonth: string;
   isEnabled: boolean;
   enableInteractiveSearch: boolean;
   enableAutoSearch: boolean;

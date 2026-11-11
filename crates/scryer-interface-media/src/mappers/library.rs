@@ -439,6 +439,7 @@ pub fn from_library(
         name: library.name,
         slug: library.slug,
         is_default: library.is_default,
+        enabled: library.enabled,
         is_bootstrap_default_root_set,
         roots: library
             .roots

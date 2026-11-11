@@ -44,6 +44,8 @@ const draft: IndexerDraft = {
   storedSecretKeys: [],
   rateLimitSeconds: "",
   maxQueriesPerMinute: "",
+  maxRequestsPerMonth: "",
+  maxGrabsPerMonth: "",
   isEnabled: true,
   enableInteractiveSearch: true,
   enableAutoSearch: true,

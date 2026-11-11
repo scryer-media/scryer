@@ -1246,6 +1246,7 @@ impl AppUseCase {
                     library.name.clone(),
                     library.slug.clone(),
                     desired,
+                    None,
                 )
                 .await?
         };

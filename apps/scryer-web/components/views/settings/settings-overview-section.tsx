@@ -45,6 +45,8 @@ import type {
   VerificationDepth,
 } from "@/lib/types/settings";
 import { LoadingMark } from "@/components/common/loading-mark";
+import type { LibraryRecord } from "@/lib/types/titles";
+import { defaultLibrariesInFacetOrder } from "@/lib/utils/library-filter";
 
 type SettingsOverviewSectionProps = {
   availableLanguages: LanguageOption[];
@@ -63,6 +65,11 @@ type SettingsOverviewSectionProps = {
   onClearImageCache: () => void;
   onExperimentalFeaturesChange: (enabled: boolean) => void;
   onGeneralSettingsCommit: (update: GeneralSettingsUpdate) => void;
+  defaultLibraries: LibraryRecord[];
+  defaultLibrariesLoading: boolean;
+  defaultLibrariesError: string | null;
+  savingDefaultLibraryId: string | null;
+  onDefaultLibraryEnabledChange: (libraryId: string, enabled: boolean) => void;
   verificationDepth: VerificationDepth;
   verificationLoading: boolean;
   verificationSaving: boolean;
@@ -86,11 +93,20 @@ export function SettingsOverviewSection({
   onExperimentalFeaturesChange,
   onGeneralSettingsCommit,
   verificationDepth,
+  defaultLibraries,
+  defaultLibrariesLoading,
+  defaultLibrariesError,
+  savingDefaultLibraryId,
+  onDefaultLibraryEnabledChange,
   verificationLoading,
   verificationSaving,
   onVerificationDepthChange,
 }: SettingsOverviewSectionProps) {
   const t = useTranslate();
+  const defaultLibraryEntries = React.useMemo(
+    () => defaultLibrariesInFacetOrder(defaultLibraries),
+    [defaultLibraries],
+  );
   const [advancedTrustOpen, setAdvancedTrustOpen] = React.useState(false);
   const [trustedCertUploadError, setTrustedCertUploadError] = React.useState<
     string | null
@@ -311,6 +327,59 @@ export function SettingsOverviewSection({
               />
             </div>
           </>
+        )}
+      </div>
+
+      <div
+        id="settings-general-default-libraries-section"
+        className="space-y-4 border-t border-border pt-6"
+      >
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold">
+            {t("settings.defaultLibrariesTitle")}
+          </h3>
+          <p className="text-muted-foreground">
+            {t("settings.defaultLibrariesHelp")}
+          </p>
+        </div>
+
+        {defaultLibrariesLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <LoadingMark className="h-4 w-4" />
+            {t("label.loading")}
+          </div>
+        ) : defaultLibrariesError ? (
+          <p className="text-sm text-destructive">{defaultLibrariesError}</p>
+        ) : defaultLibraryEntries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {t("settings.defaultLibrariesEmpty")}
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {defaultLibraryEntries.map((library) => {
+              const enabled = library.enabled !== false;
+              return (
+                <li
+                  id={`settings-general-default-library-${library.id}`}
+                  key={library.id}
+                  className="flex min-w-0 items-center gap-3"
+                >
+                  <span className="min-w-0 font-medium">{library.name}</span>
+                  <SettingsToggleSwitch
+                    id={`settings-general-default-library-${library.id}`}
+                    checked={enabled}
+                    ariaLabel={t("settings.defaultLibraryToggleLabel", {
+                      name: library.name,
+                    })}
+                    disabled={savingDefaultLibraryId !== null}
+                    onChange={(nextEnabled) =>
+                      onDefaultLibraryEnabledChange(library.id, nextEnabled)
+                    }
+                  />
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
 

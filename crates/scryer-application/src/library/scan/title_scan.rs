@@ -2375,6 +2375,19 @@ impl AppUseCase {
             })?;
         self.require_library_management_permission(actor, &title.library_id)
             .await?;
+        let library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&title.library_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {}", title.library_id),
+                )
+            })?;
+        crate::library::require_library_enabled(&library)?;
         let folder_was_missing = !title_has_recorded_folder(&title);
         self.record_missing_title_folder_for_rescan(&mut title)
             .await?;

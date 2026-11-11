@@ -3857,6 +3857,57 @@ file = "postgres/migrations/0330_quality_profile_min_upgrade_score_delta.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 331
+description = "normalize stored SMG title external id kinds"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0331_smg_title_external_id_kind.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0331_smg_title_external_id_kind.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 332
+description = "allow disabling libraries without removing their contents"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0332_library_enabled.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0332_library_enabled.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 333
+description = "persist monthly indexer request and grab limits"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0333_indexer_monthly_quotas.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0333_indexer_monthly_quotas.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

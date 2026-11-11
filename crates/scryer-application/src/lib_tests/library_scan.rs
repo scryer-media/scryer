@@ -18,6 +18,7 @@ fn current_media_source_signature_scheme() -> &'static str {
 #[derive(Clone, Default)]
 struct NotifyingLibraryScanner {
     library_files: Arc<Mutex<Vec<LibraryFile>>>,
+    scan_calls: Arc<AtomicUsize>,
     directory_scan_calls: Arc<AtomicUsize>,
     directory_scan_started: Arc<Notify>,
     block_directory_scans: Arc<AtomicUsize>,
@@ -59,10 +60,12 @@ impl NotifyingLibraryScanner {
 #[async_trait]
 impl LibraryScanner for NotifyingLibraryScanner {
     async fn scan_library(&self, _root: &str) -> AppResult<Vec<LibraryFile>> {
+        self.scan_calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.library_files.lock().await.clone())
     }
 
     async fn scan_directory(&self, _root: &str) -> AppResult<Vec<LibraryFile>> {
+        self.scan_calls.fetch_add(1, Ordering::SeqCst);
         self.directory_scan_calls.fetch_add(1, Ordering::SeqCst);
         self.directory_scan_started.notify_waiters();
         loop {
@@ -80,6 +83,7 @@ impl LibraryScanner for NotifyingLibraryScanner {
         _root: &str,
         _batch_size: usize,
     ) -> AppResult<LibraryFileBatchReceiver> {
+        self.scan_calls.fetch_add(1, Ordering::SeqCst);
         let files = self.library_files.lock().await.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         tx.send(Ok(files))
@@ -8312,6 +8316,7 @@ async fn reconcile_default_library_roots_backfills_legacy_root_folders_when_boot
                     is_default: true,
                 }],
             ),
+            None,
         )
         .await
         .expect("seed bootstrap root");
@@ -8361,6 +8366,7 @@ async fn reconcile_default_library_roots_keeps_non_bootstrap_canonical_roots() {
                 path: "/canonical/movies".to_string(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("seed canonical root");
@@ -12949,4 +12955,50 @@ async fn scheduled_library_refresh_waits_for_pending_import_after_setup() {
                 .expect("read consumed snapshot state")
         );
     }
+}
+
+#[tokio::test]
+async fn disabled_library_refuses_manual_scan_and_refresh_before_scanning() {
+    let (base_app, user) = bootstrap();
+    let scanner = Arc::new(NotifyingLibraryScanner::default());
+    let app = base_app.with_test_overrides(|builder| builder.with_library_scanner(scanner.clone()));
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    app.services
+        .catalog
+        .libraries
+        .set_enabled(&library_id, false)
+        .await
+        .expect("disable default movie library");
+
+    let errors = [
+        app.scan_library(&user, MediaFacet::Movie)
+            .await
+            .expect_err("facet scan must skip disabled library"),
+        app.trigger_library_scan(&user, MediaFacet::Movie)
+            .await
+            .expect_err("manual facet scan must skip disabled library"),
+        app.trigger_library_scan_by_id(&user, &library_id)
+            .await
+            .expect_err("manual library scan must skip disabled library"),
+        app.background_library_refresh_by_id_with_tracking(
+            &user,
+            &library_id,
+            "disabled-library-refresh",
+        )
+        .await
+        .expect_err("manual refresh must skip disabled library"),
+    ];
+
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.validation_reason() == Some(crate::error_reasons::library::DISABLED)),
+        "all disabled-library manual entry points should return the stable refusal: {errors:?}"
+    );
+    assert!(app.active_library_scan_sessions().await.is_empty());
+    assert_eq!(
+        scanner.scan_calls.load(Ordering::SeqCst),
+        0,
+        "disabled library entry points must not scan or discover files"
+    );
 }

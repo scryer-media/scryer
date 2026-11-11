@@ -32,6 +32,7 @@ impl LibraryRepository for UnreadableLibraryRepo {
         _name: String,
         _slug: String,
         _roots: Vec<LibraryRootDraft>,
+        _enabled: Option<bool>,
     ) -> AppResult<Library> {
         Err(unreadable())
     }
@@ -277,6 +278,7 @@ async fn upgrade_refuses_a_custom_bin_inside_another_library_root_and_keeps_the_
                 name: "Synthetic Library B".to_string(),
                 slug: "synthetic-library-b".to_string(),
                 is_default: false,
+                enabled: true,
                 roots: Vec::new(),
                 created_at: now,
                 updated_at: now,
@@ -372,8 +374,11 @@ impl LibraryRepository for LibraryReadFailsAfterFirstList {
         name: String,
         slug: String,
         roots: Vec<LibraryRootDraft>,
+        enabled: Option<bool>,
     ) -> AppResult<Library> {
-        self.inner.update(library_id, name, slug, roots).await
+        self.inner
+            .update(library_id, name, slug, roots, enabled)
+            .await
     }
     async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library> {
         self.inner.set_root_path(root_id, path).await
@@ -434,6 +439,7 @@ impl TitleDeleteFixture {
                     name: "Synthetic Library B".to_string(),
                     slug: "synthetic-library-b".to_string(),
                     is_default: false,
+                    enabled: true,
                     roots: Vec::new(),
                     created_at: now,
                     updated_at: now,
@@ -1101,6 +1107,7 @@ async fn updating_a_library_refuses_only_new_roots_that_conflict_with_the_custom
                 name: "Synthetic Library B".to_string(),
                 slug: "synthetic-library-b".to_string(),
                 is_default: false,
+                enabled: true,
                 roots: Vec::new(),
                 created_at: now,
                 updated_at: now,

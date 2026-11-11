@@ -1637,6 +1637,14 @@ const en: LocaleDictionary = {
     "Max queries per minute must be at least 1, or empty for no budget.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
     "Max queries per minute is set on each managed indexer, not on the indexer that syncs them.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "This indexer's locally configured monthly request limit has been reached.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "This indexer's locally configured monthly grab limit has been reached.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Monthly indexer usage could not be durably checked; the request was refused.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Monthly request and grab limits must be positive whole numbers, or empty for no limit.",
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Minimum seeders floor cannot be negative.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
@@ -2431,6 +2439,8 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_IMAGE_SOURCE_REJECTED":
     "The image source failed public HTTP URL validation.",
   "error.reason.MEDIA_LIBRARY_NOT_FOUND": "The library could not be found.",
+  "error.reason.LIBRARY_DISABLED":
+    "This library is disabled. Enable it before using it as a title target or starting a scan.",
   "error.reason.MEDIA_LIBRARY_PATH_NOT_DIRECTORY":
     "Library path must be a directory.",
   "error.reason.MEDIA_LIBRARY_PATH_UNAVAILABLE": "Library path error.",
@@ -5209,6 +5219,18 @@ const en: LocaleDictionary = {
   "settings.librarySaved": "Library saved.",
   "settings.libraryDeleted": "Library deleted.",
   "settings.librarySaveFailed": "Failed to save library.",
+  "settings.libraryEnabled": "Library enabled.",
+  "settings.libraryDisabled": "Library disabled.",
+  "settings.libraryDisableButton": "Disable",
+  "settings.libraryDisableConfirmTitle": "Disable {{name}}?",
+  "settings.libraryDisableConfirm":
+    "{{name}} will disappear from Catalogs and be unavailable as a title target. Scheduled scans and refreshes will stop, and any active scan will be canceled. Existing titles, files, roots, and settings are kept. To re-enable it, go to Settings > General > Default libraries.",
+  "settings.defaultLibrariesTitle": "Default libraries",
+  "settings.defaultLibrariesHelp":
+    "Default libraries cannot be deleted. Disabling one removes it from Catalogs and prevents adding or requesting titles from it. Scheduled scans and refreshes stop, and active scans are canceled. Existing titles, files, roots, and settings are kept. Enabled libraries can be configured under Catalogs.",
+  "settings.defaultLibrariesEmpty": "No default libraries are available.",
+  "settings.defaultLibrariesLoadFailed": "Failed to load default libraries.",
+  "settings.defaultLibraryToggleLabel": "{{name}} library enabled",
   "settings.libraryDeleteFailed": "Failed to delete library.",
   "settings.librarySettingsLoadFailed": "Failed to load library settings.",
   "settings.libraryRequiredAudioLabel": "Required audio",
@@ -7688,6 +7710,15 @@ const en: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "No limit",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Max queries per minute must be a whole number of at least 1, or empty for no limit.",
+  "form.indexerMaxRequestsPerMonth": "Max requests per month",
+  "form.indexerMaxGrabsPerMonth": "Max grabs per month",
+  "form.indexerMonthlyLimitPlaceholder": "No limit",
+  "form.indexerMonthlyLimitHelp":
+    "Counts traffic observed by this Scryer instance only. A grab is reserved before fetching the release and stays counted if its outcome is uncertain. Limits reset at 00:00 UTC on the first of each month.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Max requests per month must be a whole number of at least 1, or empty for no limit.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Max grabs per month must be a whole number of at least 1, or empty for no limit.",
   "form.providerTypePlaceholder": "Provider Type",
   "form.subtitleProviderValidation": "Name and provider type are required.",
   "form.subtitleProviderFacetsRequired":

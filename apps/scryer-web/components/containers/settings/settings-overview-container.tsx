@@ -4,17 +4,20 @@ import { SettingsOverviewSection } from "@/components/views/settings/settings-ov
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
   generalSettingsQuery,
+  librariesQuery,
   verificationSettingsQuery,
 } from "@/lib/graphql/queries";
 import {
   clearTitleImageCacheMutation,
   rehydrateAllMetadataMutation,
   updateGeneralSettingsMutation,
+  updateLibraryMutation,
   updateVerificationSettingsMutation,
 } from "@/lib/graphql/mutations";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useSearchContext } from "@/lib/context/search-context";
 import {
   uiSettingsInputFromSettings,
   useUiSettings,
@@ -28,6 +31,7 @@ import type {
   UiSettings,
   VerificationDepth,
 } from "@/lib/types/settings";
+import type { LibraryRecord } from "@/lib/types/titles";
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   apiExplorerEnabled: false,
@@ -60,6 +64,7 @@ export function SettingsOverviewContainer({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
+  const { refreshCatalogConfig } = useSearchContext();
   const {
     uiSettings,
     uiSettingsLoaded,
@@ -80,6 +85,17 @@ export function SettingsOverviewContainer({
   const [generalSettings, setGeneralSettings] = React.useState<GeneralSettings>(
     DEFAULT_GENERAL_SETTINGS,
   );
+  const [defaultLibraries, setDefaultLibraries] = React.useState<
+    LibraryRecord[]
+  >([]);
+  const [defaultLibrariesLoading, setDefaultLibrariesLoading] =
+    React.useState(true);
+  const [defaultLibrariesError, setDefaultLibrariesError] = React.useState<
+    string | null
+  >(null);
+  const [savingDefaultLibraryId, setSavingDefaultLibraryId] = React.useState<
+    string | null
+  >(null);
   const [generalLoading, setGeneralLoading] = React.useState(true);
   const [generalSaving, setGeneralSaving] = React.useState(false);
   const [imageCacheClearing, setImageCacheClearing] = React.useState(false);
@@ -116,6 +132,46 @@ export function SettingsOverviewContainer({
       cancelled = true;
     };
   }, [client]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await client
+          .query<{ libraries: LibraryRecord[] }>(
+            librariesQuery,
+            { facet: null, permission: "MANAGE_LIBRARY" },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (error) throw error;
+        if (!data) {
+          throw new Error(t("settings.defaultLibrariesLoadFailed"));
+        }
+        if (cancelled) return;
+        setDefaultLibraries(
+          data.libraries.filter((library) => library.isDefault),
+        );
+        setDefaultLibrariesError(null);
+      } catch (error) {
+        if (!cancelled) {
+          setDefaultLibrariesError(
+            userFacingGraphQlErrorMessage(
+              error,
+              t("settings.defaultLibrariesLoadFailed"),
+              t,
+            ),
+          );
+        }
+      } finally {
+        if (!cancelled) setDefaultLibrariesLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, t]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -374,6 +430,69 @@ export function SettingsOverviewContainer({
     }
   }, [client, imageCacheClearing, setGlobalStatus, t]);
 
+  const saveDefaultLibraryEnabled = React.useCallback(
+    async (library: LibraryRecord, enabled: boolean) => {
+      if (savingDefaultLibraryId !== null) {
+        return;
+      }
+
+      setSavingDefaultLibraryId(library.id);
+      try {
+        const { data, error } = await client
+          .mutation<{ updateLibrary: LibraryRecord }>(updateLibraryMutation, {
+            input: { libraryId: library.id, enabled },
+          })
+          .toPromise();
+        if (error) throw error;
+        const updatedLibrary = data?.updateLibrary;
+        if (!updatedLibrary || updatedLibrary.enabled !== enabled) {
+          throw new Error(t("settings.librarySaveFailed"));
+        }
+
+        setDefaultLibraries((current) =>
+          current.map((candidate) =>
+            candidate.id === updatedLibrary.id ? updatedLibrary : candidate,
+          ),
+        );
+        await refreshCatalogConfig();
+        setGlobalStatus(
+          t(enabled ? "settings.libraryEnabled" : "settings.libraryDisabled"),
+          { level: "SUCCESS" },
+        );
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(
+            error,
+            t("settings.librarySaveFailed"),
+            t,
+          ),
+          { level: "ERROR" },
+        );
+      } finally {
+        setSavingDefaultLibraryId(null);
+      }
+    },
+    [client, refreshCatalogConfig, savingDefaultLibraryId, setGlobalStatus, t],
+  );
+
+  const handleDefaultLibraryEnabledChange = React.useCallback(
+    (libraryId: string, enabled: boolean) => {
+      const library = defaultLibraries.find(
+        (candidate) => candidate.id === libraryId,
+      );
+      if (
+        !library?.isDefault ||
+        (library.enabled !== false) === enabled ||
+        savingDefaultLibraryId !== null
+      ) {
+        return;
+      }
+
+      void saveDefaultLibraryEnabled(library, enabled);
+    },
+    [defaultLibraries, saveDefaultLibraryEnabled, savingDefaultLibraryId],
+  );
+
   return (
     <>
       <SettingsOverviewSection
@@ -393,6 +512,11 @@ export function SettingsOverviewContainer({
         onExperimentalFeaturesChange={handleExperimentalFeaturesChange}
         onGeneralSettingsCommit={handleSaveGeneralSettings}
         onClearImageCache={handleClearImageCache}
+        defaultLibraries={defaultLibraries}
+        defaultLibrariesLoading={defaultLibrariesLoading}
+        defaultLibrariesError={defaultLibrariesError}
+        savingDefaultLibraryId={savingDefaultLibraryId}
+        onDefaultLibraryEnabledChange={handleDefaultLibraryEnabledChange}
         verificationDepth={verificationDepth}
         verificationLoading={verificationLoading}
         verificationSaving={verificationSaving}

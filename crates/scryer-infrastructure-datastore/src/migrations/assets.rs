@@ -702,6 +702,39 @@ mod tests {
     }
 
     #[test]
+    fn library_and_indexer_policy_migrations_are_registered_for_both_engines() {
+        let bundle = compile_source_bundle(&source_db_root()).expect("compile migration catalog");
+        for (version, name) in [
+            (331, "0331_smg_title_external_id_kind.sql"),
+            (332, "0332_library_enabled.sql"),
+            (333, "0333_indexer_monthly_quotas.sql"),
+        ] {
+            let migration = bundle
+                .catalog
+                .find_migration(version)
+                .expect("policy migration and its prerequisite must be registered");
+            for (engine, prefix) in [
+                (EngineScope::Sqlite, "migrations"),
+                (EngineScope::Postgres, "postgres/migrations"),
+            ] {
+                let expected_file = format!("{prefix}/{name}");
+                assert!(
+                    migration.steps.iter().any(|step| matches!(
+                        step,
+                        CompiledMigrationStep::Sql {
+                            engine: step_engine,
+                            file,
+                            scope: StepScope::All,
+                            ..
+                        } if *step_engine == engine && *file == expected_file
+                    )),
+                    "migration {version} must run on both fresh installs and upgrades for {engine:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn source_bundle_registers_latest_migration_and_engine_baselines() {
         let bundle =
             compile_source_bundle(&source_db_root()).expect("compile source migration bundle");

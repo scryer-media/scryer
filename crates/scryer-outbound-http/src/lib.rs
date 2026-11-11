@@ -2665,7 +2665,7 @@ impl OutboundHttpClient {
         &self.registry
     }
 
-    async fn send_builder_with_trusted_redirects<D>(
+    async fn send_builder_with_trusted_redirects<D, DFut>(
         &self,
         builder: RequestBuilder,
         request_label: &str,
@@ -2674,7 +2674,8 @@ impl OutboundHttpClient {
         observe_dispatch: &D,
     ) -> Result<Response, TrustedRedirectSendError>
     where
-        D: Fn(&reqwest::Url) -> Result<(), OutboundHttpError> + Send + Sync,
+        D: Fn(reqwest::Url) -> DFut + Send + Sync,
+        DFut: Future<Output = Result<(), OutboundHttpError>>,
     {
         let mut response = builder
             .send()
@@ -2703,7 +2704,9 @@ impl OutboundHttpClient {
                     "outbound HTTP redirect host RPS wait"
                 );
             }
-            observe_dispatch(&next_url).map_err(TrustedRedirectSendError::Rejected)?;
+            observe_dispatch(next_url.clone())
+                .await
+                .map_err(TrustedRedirectSendError::Rejected)?;
             response = self
                 .client
                 .get(next_url)
@@ -2820,6 +2823,35 @@ impl OutboundHttpClient {
         }
     }
 
+    /// Like [`Self::send_with_dispatch_observer`], but awaits a fallible
+    /// admission hook immediately before each actual request attempt. The hook
+    /// receives an owned URL so its future cannot borrow transport state.
+    pub async fn send_with_async_dispatch_observer<F, D, DFut>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundHttpError>
+    where
+        F: Fn() -> RequestBuilder,
+        D: Fn(reqwest::Url) -> DFut + Send + Sync,
+        DFut: Future<Output = Result<(), OutboundHttpError>>,
+    {
+        match self
+            .send_async_with_async_observers(
+                policy,
+                || async { Ok::<RequestBuilder, Infallible>(build_request()) },
+                |_| async {},
+                observe_dispatch,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(OutboundRequestError::Build(_)) => unreachable!("infallible builder"),
+            Err(OutboundRequestError::Http(error)) => Err(error),
+        }
+    }
+
     /// Combines the 429 response hook with an actual-dispatch hook. The latter
     /// is invoked after local gates and once per initial retry attempt.
     pub async fn send_with_rate_limit_and_dispatch_observer<F, O, OFut, D>(
@@ -2850,6 +2882,38 @@ impl OutboundHttpClient {
         }
     }
 
+    /// Combines the 429 response hook with an awaited fallible dispatch hook.
+    /// Admission runs after local pacing/cooldown gates and once for every
+    /// retry and trusted redirect hop.
+    pub async fn send_with_rate_limit_and_async_dispatch_observer<F, O, OFut, D, DFut>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_rate_limited_response: O,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundHttpError>
+    where
+        F: Fn() -> RequestBuilder,
+        O: Fn(Response) -> OFut,
+        OFut: Future<Output = ()>,
+        D: Fn(reqwest::Url) -> DFut + Send + Sync,
+        DFut: Future<Output = Result<(), OutboundHttpError>>,
+    {
+        match self
+            .send_async_with_async_observers(
+                policy,
+                || async { Ok::<RequestBuilder, Infallible>(build_request()) },
+                observe_rate_limited_response,
+                observe_dispatch,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(OutboundRequestError::Build(_)) => unreachable!("infallible builder"),
+            Err(OutboundRequestError::Http(error)) => Err(error),
+        }
+    }
+
     async fn send_async_with_observers<F, Fut, E, O, OFut, D>(
         &self,
         policy: RequestPolicy,
@@ -2863,6 +2927,30 @@ impl OutboundHttpClient {
         O: Fn(Response) -> OFut,
         OFut: Future<Output = ()>,
         D: Fn(&reqwest::Url) -> Result<(), OutboundHttpError> + Send + Sync,
+    {
+        self.send_async_with_async_observers(
+            policy,
+            build_request,
+            observe_rate_limited_response,
+            move |url| std::future::ready(observe_dispatch(&url)),
+        )
+        .await
+    }
+
+    async fn send_async_with_async_observers<F, Fut, E, O, OFut, D, DFut>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_rate_limited_response: O,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundRequestError<E>>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<RequestBuilder, E>>,
+        O: Fn(Response) -> OFut,
+        OFut: Future<Output = ()>,
+        D: Fn(reqwest::Url) -> DFut + Send + Sync,
+        DFut: Future<Output = Result<(), OutboundHttpError>>,
     {
         let mut attempt = 0u32;
 
@@ -2967,7 +3055,9 @@ impl OutboundHttpClient {
                 );
             }
 
-            observe_dispatch(&dispatch_url).map_err(OutboundRequestError::Http)?;
+            observe_dispatch(dispatch_url.clone())
+                .await
+                .map_err(OutboundRequestError::Http)?;
             let builder = RequestBuilder::from_parts(request_client, request);
             let send_result = match policy.redirect_mode {
                 RedirectMode::NoFollow => builder
@@ -4846,6 +4936,44 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(hits.load(Ordering::SeqCst), 2);
         assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn async_dispatch_observer_is_awaited_and_can_reject_a_retry() {
+        let (url, hits) = spawn_http_server(vec![
+            http_response(429, &[("Retry-After", "bogus")], ""),
+            http_response(200, &[], "must not be requested"),
+        ])
+        .await;
+        let client =
+            OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::isolated());
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let observer_dispatches = Arc::clone(&dispatches);
+
+        let error = client
+            .send_with_rate_limit_and_async_dispatch_observer(
+                RequestPolicy::safe_read("test-server", "async-retry-observer")
+                    .with_max_retries(1)
+                    .with_backoff(Duration::from_millis(5), Duration::from_millis(5)),
+                || client.client().get(&url),
+                |_| async {},
+                move |_| {
+                    let dispatch = observer_dispatches.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if dispatch == 0 {
+                            Ok(())
+                        } else {
+                            Err(OutboundHttpError::DispatchRejected)
+                        }
+                    }
+                },
+            )
+            .await
+            .expect_err("the second asynchronous admission should reject the retry");
+
+        assert!(matches!(error, OutboundHttpError::DispatchRejected));
+        assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 
     #[test]

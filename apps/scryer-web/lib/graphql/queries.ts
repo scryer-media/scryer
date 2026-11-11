@@ -1683,6 +1683,7 @@ export const librariesQuery = `query Libraries($facet: MediaFacetValue, $permiss
     name
     slug
     isDefault
+    enabled
     isBootstrapDefaultRootSet
     roots {
       id
@@ -1727,6 +1728,7 @@ export const mediaRequestAdminLibrariesQuery = `query MediaRequestAdminLibraries
     name
     slug
     isDefault
+    enabled
     qualityProfileId
     requestQualityProfileIds
     requestQualityProfileDefaultId
@@ -1745,6 +1747,7 @@ export const mediaRequestRequesterLibrariesQuery = `query MediaRequestRequesterL
     name
     slug
     isDefault
+    enabled
     requestQualityProfileIds
     requestQualityProfileDefaultId
     roots {
@@ -2523,6 +2526,8 @@ export const indexersQuery = `query Indexers($providerType: String) {
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     rateLimitedUntil
     isEnabled
@@ -2772,6 +2777,8 @@ const indexerFieldSelection = `
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     rateLimitedUntil
     isEnabled
@@ -3049,7 +3056,21 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     name
     slug
     isDefault
+    enabled
     qualityProfileId
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
+  viewableLibraries: libraries(permission: VIEW) {
+    id
+    facet
+    name
+    slug
+    isDefault
+    enabled
     roots {
       id
       path
@@ -3062,6 +3083,7 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     name
     slug
     isDefault
+    enabled
     requestQualityProfileIds
     requestQualityProfileDefaultId
     roots {
@@ -3087,8 +3109,22 @@ export const globalSearchRequesterInitQuery = `query GlobalSearchRequesterInit {
     name
     slug
     isDefault
+    enabled
     requestQualityProfileIds
     requestQualityProfileDefaultId
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
+  viewableLibraries: libraries(permission: VIEW) {
+    id
+    facet
+    name
+    slug
+    isDefault
+    enabled
     roots {
       id
       path
@@ -3098,14 +3134,42 @@ export const globalSearchRequesterInitQuery = `query GlobalSearchRequesterInit {
 }`;
 
 export const requestableLibrariesQuery = `query RequestableLibraries {
+  manageableLibraries: libraries(permission: MANAGE_TITLES) {
+    id
+    facet
+    name
+    slug
+    isDefault
+    enabled
+    qualityProfileId
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
   requestableLibraries: libraries(permission: REQUEST) {
     id
     facet
     name
     slug
     isDefault
+    enabled
     requestQualityProfileIds
     requestQualityProfileDefaultId
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
+  viewableLibraries: libraries(permission: VIEW) {
+    id
+    facet
+    name
+    slug
+    isDefault
+    enabled
     roots {
       id
       path
@@ -6102,6 +6166,7 @@ export const listRouteOptionsQuery = `query ListRouteOptions {
     name
     slug
     isDefault
+    enabled
     qualityProfileId
     roots {
       id

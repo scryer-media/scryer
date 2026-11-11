@@ -659,8 +659,9 @@ impl WasmIndexerClient {
             match self.initialize_component(&cancel_token).await {
                 Ok(initialized) => *actor = Some(initialized),
                 Err(error) => {
+                    let local_dispatch_refusal = indexer.host.captured_local_dispatch_refusal();
                     indexer.host.finish_indexer_error_capture(true);
-                    return Err(error);
+                    return Err(local_dispatch_refusal.unwrap_or(error));
                 }
             }
         }
@@ -717,7 +718,11 @@ impl WasmIndexerClient {
             }
         };
 
-        if let Some(error) = indexer.host.captured_host_policy_error() {
+        if let Some(error) = indexer
+            .host
+            .captured_host_policy_error()
+            .or_else(|| indexer.host.captured_local_dispatch_refusal())
+        {
             self.finish_actor_invocation(&mut actor, PLAN_OPERATION, operation, started, 0, true);
             indexer.host.finish_indexer_error_capture(true);
             return Err(error);
@@ -863,6 +868,7 @@ impl WasmIndexerClient {
         let result = indexer
             .host
             .captured_host_policy_error()
+            .or_else(|| indexer.host.captured_local_dispatch_refusal())
             .map_or(result, Err);
         indexer.host.finish_indexer_error_capture(result.is_err());
         result
@@ -910,6 +916,7 @@ impl WasmIndexerClient {
             Err(error) => match indexer
                 .host
                 .captured_host_policy_error()
+                .or_else(|| indexer.host.captured_local_dispatch_refusal())
                 .or_else(|| indexer.host.captured_newznab_quota_error())
             {
                 Some(quota_error) => Err(quota_error),
@@ -920,6 +927,7 @@ impl WasmIndexerClient {
         let result = indexer
             .host
             .captured_host_policy_error()
+            .or_else(|| indexer.host.captured_local_dispatch_refusal())
             .map_or(result, Err);
         indexer.host.finish_indexer_error_capture(result.is_err());
         result
@@ -1009,7 +1017,8 @@ fn image_too_large() -> AppError {
 fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
     match result {
         PluginResult::Ok(value) => Ok(value),
-        PluginResult::Err(error) => Err(AppError::plugin_failed(&error, context)),
+        PluginResult::Err(error) => Err(local_monthly_quota_error(&error)
+            .unwrap_or_else(|| AppError::plugin_failed(&error, context))),
     }
 }
 
@@ -1206,6 +1215,9 @@ fn decode_search_result(
 /// generic sentence and named the rejected key in their debug text; promote
 /// those to the same reason without relaying the untrusted detail itself.
 fn indexer_search_plugin_error(error: PluginError, context: &str) -> AppError {
+    if let Some(local_quota_error) = local_monthly_quota_error(&error) {
+        return local_quota_error;
+    }
     if is_legacy_api_key_rejection(&error) {
         let promoted = PluginError {
             code: PluginErrorCode::from("invalid_api_key"),
@@ -1214,6 +1226,27 @@ fn indexer_search_plugin_error(error: PluginError, context: &str) -> AppError {
         return AppError::plugin_failed(&promoted, context);
     }
     AppError::plugin_failed(&error, context)
+}
+
+fn local_monthly_quota_error(error: &PluginError) -> Option<AppError> {
+    use scryer_application::error_reasons::indexer_monthly_quota as reason;
+
+    match error.code.as_str() {
+        reason::REQUEST_LIMIT_REACHED => Some(AppError::validation_refused(
+            reason::REQUEST_LIMIT_REACHED,
+            "This indexer's locally configured monthly request limit has been reached.",
+        )),
+        reason::GRAB_LIMIT_REACHED => Some(AppError::validation_refused(
+            reason::GRAB_LIMIT_REACHED,
+            "This indexer's locally configured monthly grab limit has been reached.",
+        )),
+        reason::ACCOUNTING_UNAVAILABLE => Some(AppError::temporary_unavailable_reason(
+            reason::ACCOUNTING_UNAVAILABLE,
+            "Monthly indexer usage could not be durably checked; the request was refused.",
+            None,
+        )),
+        _ => None,
+    }
 }
 
 fn is_legacy_api_key_rejection(error: &PluginError) -> bool {
@@ -3079,6 +3112,29 @@ mod tests {
     }
 
     #[test]
+    fn local_monthly_quota_plugin_code_remains_a_local_refusal() {
+        let error = PluginError {
+            code: PluginErrorCode::from(
+                scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+            ),
+            public_message: "monthly limit reached".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        };
+        let mapped = local_monthly_quota_error(&error).expect("known local quota code");
+
+        assert_eq!(
+            mapped.reason(),
+            Some(scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED)
+        );
+        assert!(
+            mapped.plugin_failure().is_none(),
+            "a local quota refusal must not be surfaced as a plugin failure"
+        );
+    }
+
+    #[test]
     fn http_resolve_reply_decodes_a_release_and_treats_unsupported_as_none() {
         let release = scryer_plugin_sdk::PluginHttpRelease {
             provider: "mediathek".to_string(),
@@ -4627,6 +4683,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,

@@ -5,8 +5,11 @@ import type { IndexerDraft } from "@/lib/types/indexers";
 
 import {
   buildIndexerSavePayload,
+  indexerMonthlyGrabLimitDraftValue,
+  indexerMonthlyRequestLimitDraftValue,
   indexerQueryBudgetDraftValue,
   indexerRateLimitSecondsDraftValue,
+  parseIndexerMonthlyLimit,
   parseIndexerQueryBudget,
   parseIndexerRateLimitSeconds,
 } from "./indexer-payload.ts";
@@ -21,6 +24,8 @@ function draft(overrides: Partial<IndexerDraft> = {}): IndexerDraft {
     storedSecretKeys: [],
     rateLimitSeconds: "",
     maxQueriesPerMinute: "",
+    maxRequestsPerMonth: "",
+    maxGrabsPerMonth: "",
     isEnabled: true,
     enableInteractiveSearch: true,
     enableAutoSearch: true,
@@ -42,6 +47,43 @@ test("the save payload carries the typed query budget", () => {
 test("a blank query budget saves as null so an update clears it", () => {
   const payload = buildIndexerSavePayload(draft(), "newznab", undefined);
   assert.equal(payload.maxQueriesPerMinute, null);
+});
+
+test("monthly request and grab limits are included in the save payload", () => {
+  const payload = buildIndexerSavePayload(
+    draft({ maxRequestsPerMonth: "12", maxGrabsPerMonth: "4" }),
+    "newznab",
+    undefined,
+  );
+  assert.equal(payload.maxRequestsPerMonth, 12);
+  assert.equal(payload.maxGrabsPerMonth, 4);
+});
+
+test("blank monthly limits save as unlimited, and invalid values are rejected", () => {
+  const payload = buildIndexerSavePayload(draft(), "newznab", undefined);
+  assert.equal(payload.maxRequestsPerMonth, null);
+  assert.equal(payload.maxGrabsPerMonth, null);
+  assert.deepEqual(parseIndexerMonthlyLimit(""), { valid: true, value: null });
+  assert.deepEqual(parseIndexerMonthlyLimit("8"), { valid: true, value: 8 });
+  for (const raw of ["0", "-1", "1.5", "many"]) {
+    assert.deepEqual(parseIndexerMonthlyLimit(raw), { valid: false }, raw);
+  }
+});
+
+test("saved monthly limits seed their editor fields", () => {
+  assert.equal(
+    indexerMonthlyRequestLimitDraftValue({ maxRequestsPerMonth: 45 }),
+    "45",
+  );
+  assert.equal(
+    indexerMonthlyRequestLimitDraftValue({ maxRequestsPerMonth: null }),
+    "",
+  );
+  assert.equal(indexerMonthlyGrabLimitDraftValue({ maxGrabsPerMonth: 9 }), "9");
+  assert.equal(
+    indexerMonthlyGrabLimitDraftValue({ maxGrabsPerMonth: null }),
+    "",
+  );
 });
 
 test("only whole numbers of at least one are budgets", () => {

@@ -142,6 +142,8 @@ pub mod library {
     pub const ROOT_CANNOT_USED: &str = "LIBRARY_ROOT_CANNOT_USED";
     /// Library was not found.
     pub const RESOURCE_NOT_FOUND: &str = "LIBRARY_RESOURCE_NOT_FOUND";
+    /// The library is disabled and cannot be selected as an operation target.
+    pub const DISABLED: &str = "LIBRARY_DISABLED";
     /// Library name is required.
     pub const NAME_REQUIRED: &str = "LIBRARY_NAME_REQUIRED";
     /// Libraries require at least one root folder.
@@ -366,6 +368,7 @@ pub mod library {
         ROOT_ALREADY_ASSIGNED,
         ROOT_CANNOT_USED,
         RESOURCE_NOT_FOUND,
+        DISABLED,
         NAME_REQUIRED,
         ROOT_REQUIRED,
         ROOT_TITLES_BUSY,
@@ -4230,6 +4233,41 @@ pub mod indexer_caps {
             let mut unique = std::collections::HashSet::new();
             for reason in super::ALL {
                 assert!(reason.starts_with("INDEXER_CAPS_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
+pub mod indexer_monthly_quota {
+    /// The configured local monthly request limit has been reached.
+    pub const REQUEST_LIMIT_REACHED: &str = "INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED";
+    /// The configured local monthly grab limit has been reached.
+    pub const GRAB_LIMIT_REACHED: &str = "INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED";
+    /// Durable monthly usage could not be checked or recorded.
+    pub const ACCOUNTING_UNAVAILABLE: &str = "INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE";
+    /// A configured monthly request or grab limit is outside the supported range.
+    pub const CONFIGURATION_INVALID: &str = "INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID";
+    /// Every reason owned by local indexer monthly quota admission.
+    pub const ALL: &[&str] = &[
+        REQUEST_LIMIT_REACHED,
+        GRAB_LIMIT_REACHED,
+        ACCOUNTING_UNAVAILABLE,
+        CONFIGURATION_INVALID,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("INDEXER_MONTHLY_QUOTA_"));
                 assert!(
                     reason
                         .bytes()

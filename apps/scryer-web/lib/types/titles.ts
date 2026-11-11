@@ -307,6 +307,7 @@ export type LibraryRecord = {
   name: string;
   slug: string;
   isDefault: boolean;
+  enabled?: boolean;
   isBootstrapDefaultRootSet?: boolean;
   roots: LibraryRootRecord[];
   /** Titles the last `updateLibrary` took out of the catalog with a dropped root. */

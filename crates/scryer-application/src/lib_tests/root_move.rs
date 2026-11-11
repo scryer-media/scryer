@@ -61,6 +61,14 @@ impl RootMoveFixture {
         });
 
         let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+        let existing_library = app
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&library_id)
+            .await
+            .expect("library lookup")
+            .expect("library exists");
         let library = app
             .services
             .catalog
@@ -70,13 +78,7 @@ impl RootMoveFixture {
                 "Movies".to_string(),
                 "movies".to_string(),
                 crate::lib_tests::with_stored_root_ids(
-                    &app.services
-                        .catalog
-                        .libraries
-                        .get_by_id(&library_id)
-                        .await
-                        .expect("library lookup")
-                        .expect("library exists"),
+                    &existing_library,
                     vec![
                         LibraryRootDraft {
                             id: None,
@@ -90,6 +92,7 @@ impl RootMoveFixture {
                         },
                     ],
                 ),
+                None,
             )
             .await
             .expect("configure two roots");
@@ -127,6 +130,15 @@ impl RootMoveFixture {
     async fn add_third_root(&self) -> String {
         let root_c = self.root_c();
         std::fs::create_dir_all(&root_c).expect("create root c");
+        let existing_library = self
+            .app
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&self.library_id())
+            .await
+            .expect("load movie library")
+            .expect("movie library exists");
         let library = self
             .app
             .services
@@ -153,6 +165,7 @@ impl RootMoveFixture {
                         is_default: false,
                     },
                 ],
+                None,
             )
             .await
             .expect("configure a third root");

@@ -11,7 +11,7 @@ use crate::media::monitor_selections::delete_monitor_selections_for_library_tx;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
 const LIBRARY_ROOT_COLUMNS: &str = "libraries.id, libraries.facet, libraries.name, libraries.slug,
-    libraries.is_default, libraries.created_at, libraries.updated_at,
+    libraries.is_default, libraries.enabled, libraries.created_at, libraries.updated_at,
     library_roots.id AS root_id, library_roots.library_id,
     library_roots.path AS root_path, library_roots.is_default AS root_is_default,
     library_roots.created_at AS root_created_at, library_roots.updated_at AS root_updated_at";
@@ -121,6 +121,7 @@ impl LibraryRepository for LibraryStore {
         name: String,
         slug: String,
         roots: Vec<LibraryRootDraft>,
+        enabled: Option<bool>,
     ) -> AppResult<Library> {
         let library_id = library_id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "update_library", move |tx| {
@@ -129,7 +130,36 @@ impl LibraryRepository for LibraryStore {
             let slug = slug.clone();
             let roots = roots.clone();
             Box::pin(async move {
-                update_library_tx(tx, &library_id, name, slug, roots).await?;
+                update_library_tx(tx, &library_id, name, slug, roots, enabled).await?;
+                load_library_tx(tx, &library_id).await?.ok_or_else(|| {
+                    AppError::Repository("updated library was not found".to_string())
+                })
+            })
+        })
+        .await
+    }
+
+    async fn set_enabled(&self, library_id: &str, enabled: bool) -> AppResult<Library> {
+        let library_id = library_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "set_library_enabled", move |tx| {
+            let library_id = library_id.clone();
+            Box::pin(async move {
+                let updated = tx
+                    .execute(
+                        "UPDATE libraries SET enabled = {}, updated_at = {} WHERE id = {}",
+                        &[
+                            SqlArg::Bool(enabled),
+                            SqlArg::Timestamp(Utc::now()),
+                            SqlArg::Text(library_id.clone()),
+                        ],
+                    )
+                    .await?;
+                if updated == 0 {
+                    return Err(AppError::not_found_reason(
+                        scryer_application::error_reasons::library::RESOURCE_NOT_FOUND,
+                        format!("library {library_id}"),
+                    ));
+                }
                 load_library_tx(tx, &library_id).await?.ok_or_else(|| {
                     AppError::Repository("updated library was not found".to_string())
                 })
@@ -338,14 +368,15 @@ async fn insert_library_tx(
     roots: Vec<LibraryRootDraft>,
 ) -> AppResult<()> {
     tx.execute(
-        "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
-         VALUES ({}, {}, {}, {}, {}, {}, {})",
+        "INSERT INTO libraries (id, facet, name, slug, is_default, enabled, created_at, updated_at)
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
         &[
             SqlArg::Text(library.id.clone()),
             SqlArg::Text(library.facet.as_str().to_string()),
             SqlArg::Text(library.name.clone()),
             SqlArg::Text(library.slug.clone()),
             SqlArg::Bool(library.is_default),
+            SqlArg::Bool(library.enabled),
             SqlArg::Timestamp(library.created_at),
             SqlArg::Timestamp(library.updated_at),
         ],
@@ -363,18 +394,37 @@ async fn update_library_tx(
     name: String,
     slug: String,
     roots: Vec<LibraryRootDraft>,
+    enabled: Option<bool>,
 ) -> AppResult<()> {
-    let rows = tx
-        .execute(
-            "UPDATE libraries SET name = {}, slug = {}, updated_at = {} WHERE id = {}",
-            &[
-                SqlArg::Text(name),
-                SqlArg::Text(slug),
-                SqlArg::Timestamp(Utc::now()),
-                SqlArg::Text(library_id.to_string()),
-            ],
-        )
-        .await?;
+    let updated_at = SqlArg::Timestamp(Utc::now());
+    let library_id_arg = SqlArg::Text(library_id.to_string());
+    let rows = match enabled {
+        Some(enabled) => {
+            tx.execute(
+                "UPDATE libraries SET name = {}, slug = {}, enabled = {}, updated_at = {} WHERE id = {}",
+                &[
+                    SqlArg::Text(name),
+                    SqlArg::Text(slug),
+                    SqlArg::Bool(enabled),
+                    updated_at,
+                    library_id_arg,
+                ],
+            )
+            .await?
+        }
+        None => {
+            tx.execute(
+                "UPDATE libraries SET name = {}, slug = {}, updated_at = {} WHERE id = {}",
+                &[
+                    SqlArg::Text(name),
+                    SqlArg::Text(slug),
+                    updated_at,
+                    library_id_arg,
+                ],
+            )
+            .await?
+        }
+    };
     if rows == 0 {
         return Err(AppError::not_found_reason(
             crate::error_reasons::MEDIA_LIBRARY_NOT_FOUND,
@@ -686,6 +736,7 @@ fn row_to_library(row: &SqlRow, id: String) -> AppResult<Library> {
         name: row.text("name")?,
         slug: row.text("slug")?,
         is_default: row.bool("is_default")?,
+        enabled: row.bool("enabled")?,
         roots: Vec::new(),
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,
@@ -761,6 +812,7 @@ mod tests {
                     name: id.to_string(),
                     slug: id.to_string(),
                     is_default: false,
+                    enabled: true,
                     roots: Vec::new(),
                     created_at: now,
                     updated_at: now,
@@ -769,6 +821,137 @@ mod tests {
             )
             .await
             .expect("library should create");
+    }
+
+    #[tokio::test]
+    async fn creating_a_disabled_library_preserves_its_enabled_state() {
+        let store = test_store().await;
+        let now = Utc::now();
+        let created = store
+            .create(
+                Library {
+                    id: "disabled-library".to_string(),
+                    facet: MediaFacet::Movie,
+                    name: "Disabled".to_string(),
+                    slug: "disabled".to_string(),
+                    is_default: false,
+                    enabled: false,
+                    roots: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                },
+                vec![draft("/mnt/disabled", true)],
+            )
+            .await
+            .expect("disabled library should create");
+
+        assert!(!created.enabled);
+        assert!(
+            !store
+                .get_by_id(&created.id)
+                .await
+                .expect("library lookup should succeed")
+                .expect("disabled library should remain stored")
+                .enabled
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_root_update_does_not_reenable_a_library_disabled_after_its_snapshot() {
+        let store = test_store().await;
+        let id = "stale-root-update";
+        create_movie_library(&store, id).await;
+        let snapshot = store
+            .get_by_id(id)
+            .await
+            .expect("snapshot lookup should succeed")
+            .expect("library should exist");
+        assert!(snapshot.enabled);
+
+        store
+            .set_enabled(id, false)
+            .await
+            .expect("library should disable after the snapshot");
+
+        let roots = snapshot
+            .roots
+            .iter()
+            .map(|root| LibraryRootDraft {
+                id: Some(root.id.clone()),
+                path: root.path.clone(),
+                is_default: root.is_default,
+            })
+            .collect();
+        let updated = store
+            .update(id, snapshot.name, snapshot.slug, roots, None)
+            .await
+            .expect("unrelated root edit should succeed");
+
+        assert!(
+            !updated.enabled,
+            "an update without enabled intent must not overwrite a later disable"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabling_a_default_library_preserves_its_id_and_roots() {
+        let store = test_store().await;
+        let id = default_library_id_for_facet(&MediaFacet::Movie);
+        let existing = store
+            .default_for_facet(MediaFacet::Movie)
+            .await
+            .expect("default lookup should succeed")
+            .expect("migrations should seed the default library");
+        let created = store
+            .update(
+                &id,
+                existing.name,
+                existing.slug,
+                vec![draft("/mnt/movies", true)],
+                None,
+            )
+            .await
+            .expect("default library root should be configured");
+        assert!(created.enabled);
+        let root_id = created.roots[0].id.clone();
+
+        let disabled = store
+            .set_enabled(&id, false)
+            .await
+            .expect("library should disable");
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.id, id);
+        assert_eq!(disabled.roots.len(), 1);
+        assert_eq!(disabled.roots[0].id, root_id);
+        assert_eq!(disabled.roots[0].path, "/mnt/movies");
+        assert!(disabled.roots[0].is_default);
+        assert!(
+            store
+                .list(Some(MediaFacet::Movie))
+                .await
+                .expect("library list should succeed")
+                .iter()
+                .any(|library| library.id == id && !library.enabled),
+            "disabled libraries remain visible to repository reads"
+        );
+        assert_eq!(
+            store
+                .default_for_facet(MediaFacet::Movie)
+                .await
+                .expect("default lookup should succeed")
+                .expect("disabled default row should remain resolvable")
+                .id,
+            id
+        );
+
+        let reenabled = store
+            .set_enabled(&id, true)
+            .await
+            .expect("library should re-enable");
+        assert!(reenabled.enabled);
+        assert_eq!(reenabled.roots.len(), 1);
+        assert_eq!(reenabled.roots[0].id, root_id);
+        assert_eq!(reenabled.roots[0].path, "/mnt/movies");
     }
 
     async fn insert_delay_profile(pool: &sqlx::SqlitePool, id: &str, library_ids: &[&str]) {
@@ -877,6 +1060,7 @@ mod tests {
                     name: "Allocated".to_string(),
                     slug: "allocated".to_string(),
                     is_default: false,
+                    enabled: true,
                     roots: Vec::new(),
                     created_at: now,
                     updated_at: now,
@@ -911,6 +1095,7 @@ mod tests {
                     name: "Stable".to_string(),
                     slug: "stable".to_string(),
                     is_default: false,
+                    enabled: true,
                     roots: Vec::new(),
                     created_at: now,
                     updated_at: now,
@@ -937,6 +1122,7 @@ mod tests {
                     draft("/mnt/stable", true),
                     draft("/mnt/stable-extra", false),
                 ],
+                None,
             )
             .await
             .expect_err("a stored root resubmitted by path alone must be refused");
@@ -960,6 +1146,7 @@ mod tests {
                     },
                     draft("/mnt/stable-extra", false),
                 ],
+                None,
             )
             .await
             .expect("library should update");
@@ -1003,6 +1190,7 @@ mod tests {
                     name: "Repointed".to_string(),
                     slug: "repointed".to_string(),
                     is_default: false,
+                    enabled: true,
                     roots: Vec::new(),
                     created_at: now,
                     updated_at: now,
@@ -1033,6 +1221,7 @@ mod tests {
                 "Repointed".to_string(),
                 "repointed".to_string(),
                 vec![draft("/mnt/new-shows", true)],
+                None,
             )
             .await
             .expect_err("dropping a referenced root must be refused");
@@ -1054,6 +1243,7 @@ mod tests {
                     path: "/mnt/new-shows".to_string(),
                     is_default: true,
                 }],
+                None,
             )
             .await
             .expect("repointing a referenced root by id should succeed");
@@ -1101,6 +1291,7 @@ mod tests {
                         is_default: false,
                     },
                 ],
+                None,
             )
             .await
             .expect_err("one root id twice must be refused");
@@ -1170,6 +1361,7 @@ mod tests {
                 default_library.name.clone(),
                 default_library.slug.clone(),
                 default_drafts,
+                None,
             )
             .await
             .expect("default library root should add")
@@ -1233,6 +1425,7 @@ mod tests {
                     name: "Relocating".to_string(),
                     slug: "relocating".to_string(),
                     is_default: false,
+                    enabled: true,
                     roots: Vec::new(),
                     created_at: now,
                     updated_at: now,
@@ -1310,6 +1503,7 @@ mod tests {
                     name: "Colliding".to_string(),
                     slug: "colliding".to_string(),
                     is_default: false,
+                    enabled: true,
                     roots: Vec::new(),
                     created_at: now,
                     updated_at: now,
