@@ -491,8 +491,8 @@ pub use media_requests::{
     SubmitMediaRequestOutcome, UpdateMediaRequestInput,
 };
 pub use media_servers::{
-    EmbyConnectionMode, EmbyLocalSetupMethod, MediaServerConnectionDraft,
-    MediaServerConnectionPatch, MediaServerPlaybackLink,
+    EmbyConnectionMode, EmbyLocalSetupMethod, MediaServerConnectionAccount,
+    MediaServerConnectionDraft, MediaServerConnectionPatch, MediaServerPlaybackLink,
     start_background_media_server_playback_reconciliation_loop,
 };
 pub use plugins::plugins::{

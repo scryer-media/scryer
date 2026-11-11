@@ -3810,6 +3810,8 @@ const cs: LocaleDictionary = {
   "profile.linkPlexAccount": "Propojit s Plex",
   "profile.linkAccountConnection": "Připojení",
   "profile.linkAccountUsername": "Uživatelské jméno",
+  "profile.linkAccountChooseAccount": "Vyberte účet",
+  "profile.linkAccountAlreadyLinked": "{{username}} (již propojeno)",
   "profile.linkAccountPassword": "Heslo",
   "profile.linkAccountPasswordlessHint":
     "Ponechte prázdné, pokud tento účet Jellyfin nemá heslo. Účty bez hesla lze propojit, ale nelze je použít k přihlášení do Scryeru.",

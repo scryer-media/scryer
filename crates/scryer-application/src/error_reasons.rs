@@ -4142,6 +4142,10 @@ pub mod media_servers {
     /// Emby user listing requires a saved integration API key.
     pub const EMBY_USER_LISTING_REQUIRES_SAVED_INTEGRATION_API_KEY: &str =
         "MEDIA_SERVER_EMBY_USER_LISTING_REQUIRES_SAVED_INTEGRATION_API_KEY";
+    /// Choosing an account from the server's list needs a Jellyfin or Emby
+    /// connection; Plex accounts are linked by signing in with Plex.
+    pub const ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION: &str =
+        "MEDIA_SERVER_ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION";
     /// Emby avatar was not found.
     pub const EMBY_AVATAR_NOT_FOUND: &str = "MEDIA_SERVER_EMBY_AVATAR_NOT_FOUND";
     /// Local Emby setup does not accept Emby Connect credentials.
@@ -4205,6 +4209,7 @@ pub mod media_servers {
         EMBY_CONNECTION_NO_VERIFIED_SERVER_IDENTITY,
         EMBY_USER_LISTING_REQUIRES_EMBY_CONNECTION,
         EMBY_USER_LISTING_REQUIRES_SAVED_INTEGRATION_API_KEY,
+        ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION,
         EMBY_AVATAR_NOT_FOUND,
         LOCAL_EMBY_SETUP_DOES_NOT_ACCEPT_EMBY_CONNECT_CREDENTIALS,
         CHOOSE_EITHER_EMBY_API_KEY_LOCAL_ADMINISTRATOR_CREDENTIALS_NOT_BOTH,

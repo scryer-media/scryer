@@ -688,9 +688,14 @@ impl AppUseCase {
             .await?;
 
         if let Some(mut existing) = existing {
-            return self
+            let was_active = existing.status == scryer_domain::ExternalAccountStatus::Active;
+            let account = self
                 .refresh_verified_external_account(actor, &mut existing, verified)
-                .await;
+                .await?;
+            if !was_active {
+                self.read_watch_signals_for_new_link(actor).await;
+            }
+            return Ok(account);
         }
 
         let now = Utc::now();
@@ -717,10 +722,69 @@ impl AppUseCase {
             .create_or_get_by_provider_identity(account)
             .await?;
         if account.id == created_account_id {
+            self.read_watch_signals_for_new_link(actor).await;
             return Ok(account);
         }
-        self.refresh_verified_external_account(actor, &mut account, verified)
+        let was_active = account.status == scryer_domain::ExternalAccountStatus::Active;
+        let account = self
+            .refresh_verified_external_account(actor, &mut account, verified)
+            .await?;
+        if !was_active {
+            self.read_watch_signals_for_new_link(actor).await;
+        }
+        Ok(account)
+    }
+
+    /// Start the watch-signal sweep for a link that just became active, rather
+    /// than leave its history unread until the next scheduled sweep. The link
+    /// is already stored, and the sweep runs on its own task, so it neither
+    /// delays nor fails the link.
+    ///
+    /// The sweep reads the active links when its run begins. A run that begins
+    /// from here on reads this one; a run already active may have read them
+    /// before this link was stored, so it is asked to run once more when it
+    /// ends. The tracker checks for the active run and records the request
+    /// under the same lock that ends a run and takes its request, so the two
+    /// cannot pass each other, and requests made during one run collapse into
+    /// one follow-up run.
+    async fn read_watch_signals_for_new_link(&self, requester: &User) {
+        let job_key = crate::jobs::JobKey::MediaServerSignalSync;
+        if self
+            .runtime
+            .jobs
+            .job_run_tracker
+            .request_rerun_if_active(job_key, requester)
             .await
+        {
+            return;
+        }
+        let app = self.clone();
+        self.restore_coordinator().spawn_task(async move {
+            match app
+                .run_scheduled_job_now(job_key, crate::jobs::JobTriggerSource::SystemInternal)
+                .await
+            {
+                Ok(()) => {}
+                // A run admitted after the request above started after the
+                // link was stored, so it reads the link.
+                Err(error)
+                    if error.validation_reason()
+                        == Some(crate::error_reasons::jobs::ALREADY_RUNNING) =>
+                {
+                    tracing::debug!(
+                        job_key = job_key.as_str(),
+                        "watch-signal sweep for a new link joined the run already started"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        job_key = job_key.as_str(),
+                        error = %error,
+                        "watch-signal sweep for a new link failed; the link is unaffected"
+                    );
+                }
+            }
+        });
     }
 
     async fn refresh_verified_external_account(
@@ -1143,7 +1207,7 @@ impl AppUseCase {
             ));
         }
 
-        match account.status {
+        let claimed = match account.status {
             scryer_domain::ExternalAccountStatus::Disabled => {
                 return Err(AppError::unauthorized_reason(
                     crate::error_reasons::security::EXTERNAL_ACCOUNT_DISABLED,
@@ -1152,9 +1216,10 @@ impl AppUseCase {
             }
             scryer_domain::ExternalAccountStatus::PendingClaim => {
                 account.status = scryer_domain::ExternalAccountStatus::Active;
+                true
             }
-            scryer_domain::ExternalAccountStatus::Active => {}
-        }
+            scryer_domain::ExternalAccountStatus::Active => false,
+        };
         account.external_user_id = Some(verified.external_user_id);
         account.username = verified.username;
         account.display_name = verified.display_name;
@@ -1168,6 +1233,9 @@ impl AppUseCase {
             .external_accounts
             .update(account.clone())
             .await?;
+        if claimed {
+            self.read_watch_signals_for_new_link(&user).await;
+        }
 
         let auth_session_version = self
             .services

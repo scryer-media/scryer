@@ -3188,6 +3188,8 @@ const nl: LocaleDictionary = {
   "profile.linkPlexAccount": "Plex koppelen",
   "profile.linkAccountConnection": "Verbinding",
   "profile.linkAccountUsername": "Gebruikersnaam",
+  "profile.linkAccountChooseAccount": "Kies een account",
+  "profile.linkAccountAlreadyLinked": "{{username}} (al gekoppeld)",
   "profile.linkAccountPassword": "Wachtwoord",
   "profile.linkAccountPasswordlessHint":
     "Laat leeg als dit Jellyfin-account geen wachtwoord heeft. Accounts zonder wachtwoord kunnen worden gekoppeld, maar niet gebruikt om in te loggen op Scryer.",

@@ -3634,6 +3634,8 @@ const ru: LocaleDictionary = {
   "profile.linkPlexAccount": "Подключить Plex",
   "profile.linkAccountConnection": "Подключение",
   "profile.linkAccountUsername": "Имя пользователя",
+  "profile.linkAccountChooseAccount": "Выберите учётную запись",
+  "profile.linkAccountAlreadyLinked": "{{username}} (уже привязана)",
   "profile.linkAccountPassword": "Пароль",
   "profile.linkAccountPasswordlessHint":
     "Оставьте поле пустым, если для этой учётной записи Jellyfin пароль не используется. Учётные записи без пароля можно привязать, но их нельзя использовать для входа в Scryer.",
@@ -8900,6 +8902,8 @@ const ru: LocaleDictionary = {
     "Выбранный корневой каталог изменился.",
   "error.reason.MEDIA_SERIES_MOVIE_LINK_NOT_FOUND":
     "Связь с фильмом сериала не найдена.",
+  "error.reason.MEDIA_SERVER_ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION":
+    "Выбрать учётную запись из списка можно только на сервере Jellyfin или Emby; учётные записи Plex привязываются через вход в Plex.",
   "error.reason.MEDIA_SERVER_BASE_URL_INVALID":
     "Базовый URL медиасервера должен использовать HTTP или HTTPS.",
   "error.reason.MEDIA_SERVER_BASE_URL_QUERY_OR_FRAGMENT":

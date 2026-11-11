@@ -18297,6 +18297,30 @@ enum MediaRequestStatusValue {
 }
 
 """
+An account one media-server connection's server knows, offered when a user
+links theirs. Choosing it does not prove ownership; the link still signs in
+as the account.
+"""
+type MediaServerConnectionAccountPayload {
+	"""
+	Server-side user identity.
+	"""
+	id: String!
+	"""
+	Username on the server, the name the link signs in with.
+	"""
+	username: String!
+	"""
+	Optional display name.
+	"""
+	displayName: String
+	"""
+	Whether a Scryer user already holds a verified link to this account.
+	"""
+	linked: Boolean!
+}
+
+"""
 Configured media-server connection with secrets represented by presence flags.
 """
 type MediaServerConnectionPayload {
@@ -26207,6 +26231,19 @@ type QueryRoot {
 		"""
 		search: String
 	): [JellyfinServerUserPayload!]!
+	"""
+	Lists the accounts a Jellyfin or Emby connection's server knows, read
+	with the connection's stored API key, so a user linking theirs can pick
+	it instead of typing it. Requires the permission that manages
+	media-server connections. Picking an account proves nothing; linking
+	still signs in as it.
+	"""
+	mediaServerConnectionAccounts(
+		"""
+		ID of the Jellyfin or Emby media-server connection to list.
+		"""
+		connectionId: ID!
+	): [MediaServerConnectionAccountPayload!]!
 	"""
 	Lists grouped media-server users, optionally filtered by search text.
 	"""

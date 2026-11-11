@@ -52,6 +52,7 @@ use scryer_infrastructure_crypto::EncryptionKey;
 use scryer_infrastructure_datastore::{SqliteServices, keystore};
 use scryer_infrastructure_identity::{
     external_identity::HttpExternalIdentityVerifier,
+    media_server_signals::HttpMediaServerSignalSource,
     oauth::store::OAuthStore,
     users::{store::UserStore, totp_store::TotpStore, webauthn_store::WebauthnStore},
 };
@@ -829,6 +830,20 @@ impl TestContext {
         .await
     }
 
+    /// A context whose watch-signal sweep reads media servers over HTTP, the
+    /// way an installed instance does. The default context reads none, so a
+    /// sweep never reaches a server a test did not stand up for it.
+    #[allow(dead_code)]
+    pub async fn new_with_http_media_server_signals() -> Self {
+        Self::new_with_database(
+            Arc::new(HttpExternalIdentityVerifier::new()),
+            None,
+            ":memory:",
+            true,
+        )
+        .await
+    }
+
     /// A context whose SQLite database lives in a file at `database_path`
     /// instead of memory, so a measurement sees WAL, a multi-connection pool
     /// and per-connection page caches the way an installed instance does.
@@ -838,6 +853,7 @@ impl TestContext {
             Arc::new(HttpExternalIdentityVerifier::new()),
             None,
             database_path,
+            false,
         )
         .await
     }
@@ -846,13 +862,20 @@ impl TestContext {
         external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
         indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
     ) -> Self {
-        Self::new_with_database(external_identity_verifier, indexer_provider, ":memory:").await
+        Self::new_with_database(
+            external_identity_verifier,
+            indexer_provider,
+            ":memory:",
+            false,
+        )
+        .await
     }
 
     async fn new_with_database(
         external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
         indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
         database: &str,
+        http_media_server_signals: bool,
     ) -> Self {
         disable_platform_keystore_for_tests();
         initialize_wasm_runtime_for_tests();
@@ -1102,7 +1125,12 @@ impl TestContext {
         // so the test host declares what the real one does.
         .with_supported_plugin_required_features(
             scryer_plugins::detect_plugin_runtime_capabilities(),
-        )
+        );
+        let services = if http_media_server_signals {
+            services.with_media_server_signal_source(Arc::new(HttpMediaServerSignalSource::new()))
+        } else {
+            services
+        }
         .build();
 
         let plugin_install_orchestrator =

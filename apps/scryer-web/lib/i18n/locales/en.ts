@@ -2581,6 +2581,8 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_SELECTED_ROOT_CHANGED": "Selected root changed.",
   "error.reason.MEDIA_SERIES_MOVIE_LINK_NOT_FOUND":
     "The series movie link could not be found.",
+  "error.reason.MEDIA_SERVER_ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION":
+    "Accounts can only be chosen from a Jellyfin or Emby server; Plex accounts are linked by signing in with Plex.",
   "error.reason.MEDIA_SERVER_BASE_URL_INVALID":
     "Media server base URL must be an HTTP or HTTPS URL.",
   "error.reason.MEDIA_SERVER_BASE_URL_QUERY_OR_FRAGMENT":
@@ -8384,6 +8386,8 @@ const en: LocaleDictionary = {
   "profile.linkPlexAccount": "Link Plex",
   "profile.linkAccountConnection": "Connection",
   "profile.linkAccountUsername": "Username",
+  "profile.linkAccountChooseAccount": "Choose an account",
+  "profile.linkAccountAlreadyLinked": "{{username}} (already linked)",
   "profile.linkAccountPassword": "Password",
   "profile.linkAccountPasswordlessHint":
     "Leave blank if this Jellyfin account has no password. Passwordless accounts can be linked, but cannot be used to sign in to Scryer.",

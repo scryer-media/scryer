@@ -75,6 +75,109 @@ impl AppUseCase {
 
         Ok(groups)
     }
+
+    /// The accounts one Jellyfin or Emby connection's server knows, read with
+    /// the connection's stored API key, for choosing which account to link.
+    ///
+    /// Choosing a name proves nothing: the link itself still signs in as that
+    /// account. Listing a server's accounts is for whoever manages the
+    /// connection, so it needs the same permission the connection mutations
+    /// do. `include_linked` reads which accounts already carry a verified
+    /// link; without it every account reports `linked: false`.
+    pub async fn list_media_server_connection_accounts(
+        &self,
+        actor: &User,
+        connection_id: &str,
+        include_linked: bool,
+    ) -> AppResult<Vec<MediaServerConnectionAccount>> {
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
+            .await?;
+        let connection_id = connection_id.trim();
+        let connection = self
+            .services
+            .integrations
+            .media_server_connections
+            .get_by_id(connection_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_servers::CONNECTION_NOT_FOUND,
+                    format!("media server connection {connection_id}"),
+                )
+            })?;
+        let api_key = connection
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let verifier = &self.services.integrations.external_identity_verifier;
+        let mut users: Vec<MediaServerUser> = match connection.provider {
+            MediaServerProvider::Jellyfin => {
+                let api_key = api_key.ok_or_else(|| {
+                    AppError::validation_refused(
+                        crate::error_reasons::media_servers::JELLYFIN_USER_LISTING_REQUIRES_SAVED_API_KEY,
+                        "Jellyfin user listing requires a saved API key; save an API key to load Jellyfin users",
+                    )
+                })?;
+                verifier
+                    .list_jellyfin_users(&connection.base_url, api_key, None)
+                    .await?
+                    .into_iter()
+                    .map(MediaServerUser::from)
+                    .collect()
+            }
+            MediaServerProvider::Emby => {
+                let api_key = api_key.ok_or_else(|| {
+                    AppError::validation_refused(
+                        crate::error_reasons::media_servers::EMBY_USER_LISTING_REQUIRES_SAVED_INTEGRATION_API_KEY,
+                        "Emby user listing requires a saved integration API key",
+                    )
+                })?;
+                verifier
+                    .list_emby_users(&connection.id, &connection.base_url, api_key, None)
+                    .await?
+                    .into_iter()
+                    .map(MediaServerUser::from)
+                    .collect()
+            }
+            MediaServerProvider::Plex => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media_servers::ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION,
+                    "choosing an account from the server's list needs a Jellyfin or Emby connection",
+                ));
+            }
+        };
+        users.sort_by(|left, right| {
+            left.username
+                .to_ascii_lowercase()
+                .cmp(&right.username.to_ascii_lowercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let linked: std::collections::HashSet<String> = match (
+            include_linked,
+            connection.provider.external_account_provider(),
+        ) {
+            (true, Some(provider)) => self
+                .services
+                .identity
+                .external_accounts
+                .list_verified_by_connection(provider, &connection.id)
+                .await?
+                .into_iter()
+                .filter_map(|account| account.external_user_id)
+                .map(|id| id.trim().to_string())
+                .collect(),
+            _ => std::collections::HashSet::new(),
+        };
+        Ok(users
+            .into_iter()
+            .map(|user| MediaServerConnectionAccount {
+                linked: linked.contains(user.id.trim()),
+                user,
+            })
+            .collect())
+    }
 }
 
 pub(super) async fn list_media_server_user_group_with_timeout(
