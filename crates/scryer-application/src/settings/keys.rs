@@ -42,6 +42,8 @@ pub(crate) const INDEXER_ROUTING_ANIME_DEFAULT_CATEGORIES: &[&str] = &["5070"];
 pub const METADATA_LANGUAGE_KEY: &str = "metadata_language";
 pub const TITLE_METADATA_LANGUAGE_OVERRIDE_KEY: &str = "metadata_language.title_override";
 pub const USE_SEASON_FOLDERS_KEY: &str = "rename.use_season_folders";
+/// Per-library initial monitoring choice in the Add and Request dialogs.
+pub const DEFAULT_MONITOR_TYPE_KEY: &str = "catalog.default_monitor_type";
 // Discovery region seam. Read like metadata_language; a future
 // preferences UI only has to write this key (defaults to "US" -> unchanged).
 pub const DISCOVERY_REGION_KEY: &str = "discovery.region";

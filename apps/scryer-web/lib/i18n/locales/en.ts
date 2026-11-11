@@ -1860,6 +1860,8 @@ const en: LocaleDictionary = {
     "Default libraries cannot be deleted.",
   "error.reason.LIBRARY_DEFAULT_LIBRARY_NOT_FOUND":
     "Default  library was not found.",
+  "error.reason.LIBRARY_DEFAULT_MONITOR_TYPE_INVALID":
+    "Choose a monitoring default supported by this library.",
   "error.reason.LIBRARY_DELETE_TARGET_NOT_FILE":
     "Refusing to delete directory path the selected value from a single-file delete flow.",
   "error.reason.LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS":

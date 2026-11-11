@@ -15,6 +15,10 @@ import {
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { defaultMonitorTypeForFacet } from "@/lib/facets/helpers";
+import {
+  MONITOR_TYPE_LABEL_KEYS,
+  defaultMonitorTypesForFacet,
+} from "@/lib/utils/default-monitor-type";
 import { previewMyRequestDecisionQuery } from "@/lib/graphql/queries";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import {
@@ -227,25 +231,10 @@ export function RequestMediaDialog({
   const monitorOptions: Array<{
     value: MetadataCatalogMonitorType;
     label: string;
-  }> =
-    facet === "MOVIE"
-      ? [
-          { value: "MONITORED", label: t("search.monitorType.monitored") },
-          { value: "UNMONITORED", label: t("search.monitorType.unmonitored") },
-        ]
-      : [
-          {
-            value: "FUTURE_EPISODES",
-            label: t("search.monitorType.futureEpisodes"),
-          },
-          {
-            value: "MISSING_AND_FUTURE_EPISODES",
-            label: t("search.monitorType.missingAndFutureEpisodes"),
-          },
-          { value: "ALL_EPISODES", label: t("search.monitorType.allEpisodes") },
-          { value: "NONE", label: t("search.monitorType.none") },
-          { value: "ADVANCED", label: t("search.monitorType.advanced") },
-        ];
+  }> = [
+    ...defaultMonitorTypesForFacet(facet),
+    ...(facet === "MOVIE" ? [] : (["ADVANCED"] as const)),
+  ].map((value) => ({ value, label: t(MONITOR_TYPE_LABEL_KEYS[value]) }));
   // Same rule as the add dialog: the picker (and its one metadata query) only
   // exists while ADVANCED is the live choice.
   const advancedSelected = canRequestMonitorType && monitorType === "ADVANCED";
