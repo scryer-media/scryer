@@ -701,7 +701,7 @@ fn plan_episode_pack_member(
         };
     }
 
-    if member_names_different_title(title, source_root, source_path, &parsed_stem) {
+    if member_names_different_title(title, source_root, source_path, &parsed_stem, pack) {
         return PlannedMemberDraft::Hold {
             episodes: Vec::new(),
             reason_code: "member_title_mismatch",
@@ -1564,15 +1564,148 @@ fn single_season_folder_number(folder_name: &str) -> Option<u32> {
     .then_some(season)
 }
 
+/// A submission already identifies the series. Romanization may corroborate a
+/// physical member of its exact episode set, never discover another title or
+/// turn season-only evidence into a physical episode identity.
+fn scoped_russian_romanized_member(
+    title: &scryer_domain::Title,
+    parsed: &crate::ParsedReleaseMetadata,
+    pack: Option<&VerifiedEpisodePack>,
+) -> bool {
+    let Some(pack) = pack else { return false };
+    let Some(identity) = parsed.episode.as_ref() else {
+        return false;
+    };
+    title.facet == scryer_domain::MediaFacet::Series
+        && title.year.is_some()
+        && parsed.year == title.year
+        && !pack.is_extras_release
+        && pack
+            .exact_episode_ids
+            .as_ref()
+            .is_some_and(|ids| !ids.is_empty())
+        && pack.declared_seasons.as_ref().is_some_and(|seasons| {
+            seasons.len() == 1
+                && identity
+                    .season
+                    .is_some_and(|season| seasons.contains(&season))
+        })
+        && !identity.episode_numbers.is_empty()
+        && identity.air_date.is_none()
+        && identity.absolute_episode.is_none()
+        && identity.absolute_episode_numbers.is_empty()
+        && identity.special_kind.is_none()
+        && !identity.full_season
+        && !identity.is_series_pack
+        && !identity.is_multi_season
+        && !identity.is_season_extra
+        && identity.release_type != crate::ParsedEpisodeReleaseType::SeasonPack
+        && russian_romanized_catalog_name_matches(&parsed.normalized_title, title)
+}
+
+fn russian_romanized_catalog_name_matches(candidate: &str, title: &scryer_domain::Title) -> bool {
+    let Some((candidate, candidate_is_russian)) = russian_romanization_key(candidate) else {
+        return false;
+    };
+    std::iter::once(title.name.as_str())
+        .chain(title.aliases.iter().map(String::as_str))
+        .chain(title.tagged_aliases.iter().map(|alias| alias.name.as_str()))
+        .any(|name| {
+            russian_romanization_key(name).is_some_and(|(name, name_is_russian)| {
+                candidate_is_russian != name_is_russian && candidate == name
+            })
+        })
+}
+
+/// One deterministic Russian romanization, not edit-distance or phonetic
+/// matching. Preserve repeated letters and word boundaries; reject mixed
+/// scripts and unsupported identity characters instead of discarding them.
+fn russian_romanization_key(name: &str) -> Option<(String, bool)> {
+    let mut key = String::with_capacity(name.len());
+    let (mut russian, mut latin) = (false, false);
+    for ch in name.chars().flat_map(char::to_lowercase) {
+        let mapped = match ch {
+            'а' => "a",
+            'б' => "b",
+            'в' => "v",
+            'г' => "g",
+            'д' => "d",
+            'е' => "e",
+            'ё' => "yo",
+            'ж' => "zh",
+            'з' => "z",
+            'и' => "i",
+            'й' => "y",
+            'к' => "k",
+            'л' => "l",
+            'м' => "m",
+            'н' => "n",
+            'о' => "o",
+            'п' => "p",
+            'р' => "r",
+            'с' => "s",
+            'т' => "t",
+            'у' => "u",
+            'ф' => "f",
+            'х' => "kh",
+            'ц' => "ts",
+            'ч' => "ch",
+            'ш' => "sh",
+            'щ' => "shch",
+            'ъ' | 'ь' => "",
+            'ы' => "y",
+            'э' => "e",
+            'ю' => "yu",
+            'я' => "ya",
+            _ if ch.is_ascii_alphanumeric() => {
+                latin |= ch.is_ascii_alphabetic();
+                key.push(ch);
+                continue;
+            }
+            _ if ch.is_ascii_punctuation() || ch.is_whitespace() => {
+                key.push(' ');
+                continue;
+            }
+            _ => return None,
+        };
+        russian = true;
+        key.push_str(mapped);
+    }
+    if russian == latin {
+        return None;
+    }
+    let key = key.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!key.is_empty()).then_some((key, russian))
+}
+
 fn member_names_different_title(
     title: &scryer_domain::Title,
     source_root: &Path,
     source_path: &Path,
     parsed_stem: &crate::ParsedReleaseMetadata,
+    pack: Option<&VerifiedEpisodePack>,
 ) -> bool {
+    // Identity resolution can fall back to an unhinted parse when target
+    // context found no episode. Check the title from that same physical-file
+    // parse as well; otherwise a contradictory name can skip this guard.
+    // Do not promote ordinal/absolute members into this standard-episode lane.
+    let fallback = parsed_stem
+        .episode
+        .is_none()
+        .then(|| parsed_release_from_file_stem(source_path));
+    let parsed_stem = fallback
+        .as_ref()
+        .filter(|parsed| {
+            parsed.episode.as_ref().is_some_and(|identity| {
+                identity.season.is_some() && !identity.episode_numbers.is_empty()
+            })
+        })
+        .unwrap_or(parsed_stem);
+    let romanized_member = scoped_russian_romanized_member(title, parsed_stem, pack);
     if parsed_stem.episode.is_some()
         && has_usable_release_title_signal(parsed_stem)
         && !parsed_title_matches_catalog_title(parsed_stem, title)
+        && !romanized_member
     {
         return true;
     }
@@ -1660,6 +1793,164 @@ mod series_plan_tests {
                 episode_id: "ep-1".into(),
             },
         }
+    }
+
+    #[test]
+    fn russian_romanized_members_keep_individual_episode_identity() {
+        for (catalog_name, member_name) in [
+            ("ИИскра", "IIskra"),
+            ("IIskra", "ИИскра"),
+            ("Живая Искра", "Zhivaya Iskra"),
+        ] {
+            let mut title = scene_pack_title();
+            title.name = catalog_name.into();
+            title.year = Some(2026);
+            title.aliases.clear();
+            title.tagged_aliases.clear();
+            let catalog: Vec<_> = (1..=10)
+                .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+                .collect();
+            let evidence = episode_scoped_pack_evidence(&format!(
+                "{catalog_name} [S1E1-10 of 17] (2026) WEBRip 1080p RUS",
+            ));
+            let EpisodePackVerification::Verified(pack) =
+                verified_episode_pack(&evidence, &title, &catalog, None, None, None)
+            else {
+                panic!("the same-title submission must establish the pack");
+            };
+            for n in 1..=10 {
+                let member = format!("{member_name}.S01E{n:02}.2026.WEB-DL.1080p.Group.mkv");
+                let draft = plan_episode_pack_member(
+                    &title,
+                    Path::new(""),
+                    Path::new(&member),
+                    &catalog,
+                    None,
+                    None,
+                    Some(&pack),
+                );
+                let PlannedEpisodeMemberDisposition::Import { episodes } =
+                    finalize_pack_member_disposition(draft, &pack)
+                else {
+                    panic!("the complete romanized name must identify {member}");
+                };
+                assert_eq!(episodes.len(), 1, "{member}");
+                assert_eq!(episodes[0].id, format!("ep-{n}"), "{member}");
+            }
+        }
+    }
+
+    #[test]
+    fn russian_romanization_refuses_unsupported_identity_characters() {
+        for name in [
+            "ИИскра①",
+            "IIskra①",
+            "IIskra\u{0301}",
+            "ИИскра東京",
+            "ИИskra",
+            "IΙskra",
+            "123",
+            "---",
+        ] {
+            assert!(russian_romanization_key(name).is_none(), "accepted {name}");
+        }
+    }
+
+    #[test]
+    fn russian_romanized_members_preserve_identity_and_scope_guards() {
+        let mut title = scene_pack_title();
+        title.name = "ИИскра".into();
+        title.year = Some(2026);
+        title.aliases.clear();
+        title.tagged_aliases.clear();
+        let catalog: Vec<_> = (1..=11)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let evidence =
+            episode_scoped_pack_evidence("ИИскра [S1E1-10 of 17] (2026) WEBRip 1080p RUS");
+        let EpisodePackVerification::Verified(pack) =
+            verified_episode_pack(&evidence, &title, &catalog, None, None, None)
+        else {
+            panic!("the declared range must verify")
+        };
+        for member in [
+            "IIskra.Returns.S01E01.2026.WEB-DL.1080p-Group.mkv",
+            "New.IIskra.S01E01.2026.WEB-DL.1080p-Group.mkv",
+            "IIskra.2.S01E01.2026.WEB-DL.1080p-Group.mkv",
+            "Other.Show.S01E01.2026.WEB-DL.1080p-Group.mkv",
+            "IIskra.S01E01.2025.WEB-DL.1080p-Group.mkv",
+            "IIskra.S01E01.WEB-DL.1080p-Group.mkv",
+            "IIskra.S02E01.2026.WEB-DL.1080p-Group.mkv",
+            "IIskra.S01E11.2026.WEB-DL.1080p-Group.mkv",
+            "IIskra.S01.2026.WEB-DL.1080p-Group.mkv",
+            "IIskra.2026.WEB-DL.1080p-Group.mkv",
+            "IИskra.S01E01.2026.WEB-DL.1080p-Group.mkv",
+            "Unrelated Show/Season 1/IIskra.S01E01.2026.WEB-DL.1080p-Group.mkv",
+            "Season 2/IIskra.S01E01.2026.WEB-DL.1080p-Group.mkv",
+        ] {
+            let draft = plan_episode_pack_member(
+                &title,
+                Path::new(""),
+                Path::new(member),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            assert!(
+                !matches!(
+                    finalize_pack_member_disposition(draft, &pack),
+                    PlannedEpisodeMemberDisposition::Import { .. }
+                ),
+                "imported {member}",
+            );
+        }
+        let member = Path::new("IIskra.S01E01.2026.WEB-DL.1080p-Group.mkv");
+        assert!(matches!(
+            plan_episode_pack_member(&title, Path::new(""), member, &catalog, None, None, None),
+            PlannedMemberDraft::Hold { .. }
+        ));
+        for invalid_pack in [
+            VerifiedEpisodePack {
+                exact_episode_ids: None,
+                ..declared_season_pack(Some(1))
+            },
+            VerifiedEpisodePack {
+                is_extras_release: true,
+                ..declared_season_pack(Some(1))
+            },
+        ] {
+            assert!(matches!(
+                plan_episode_pack_member(
+                    &title,
+                    Path::new(""),
+                    member,
+                    &catalog,
+                    None,
+                    None,
+                    Some(&invalid_pack)
+                ),
+                PlannedMemberDraft::Hold { .. }
+            ));
+        }
+        let mut drafts = (0..2)
+            .map(|_| {
+                plan_episode_pack_member(
+                    &title,
+                    Path::new(""),
+                    member,
+                    &catalog,
+                    None,
+                    None,
+                    Some(&pack),
+                )
+            })
+            .collect::<Vec<_>>();
+        hold_duplicate_pack_episode_mappings(&mut drafts);
+        assert!(drafts.into_iter().all(|draft| !matches!(
+            finalize_pack_member_disposition(draft, &pack),
+            PlannedEpisodeMemberDisposition::Import { .. }
+        )));
     }
 
     #[test]
