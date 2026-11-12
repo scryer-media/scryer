@@ -185,11 +185,13 @@ impl LibraryMutations {
             .update_library_with_enabled_outcome(
                 &actor,
                 input.library_id.as_ref(),
-                input.name,
-                roots,
-                removed_root_ids,
-                input.enabled,
-                input.settings.map(library_settings_draft).transpose()?,
+                scryer_application::LibraryUpdateDraft {
+                    name: input.name,
+                    roots,
+                    removed_root_ids,
+                    enabled: input.enabled,
+                    settings: input.settings.map(library_settings_draft).transpose()?,
+                },
             )
             .await
             .map_err(to_gql_error)?;

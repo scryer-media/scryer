@@ -130,15 +130,6 @@ impl RootMoveFixture {
     async fn add_third_root(&self) -> String {
         let root_c = self.root_c();
         std::fs::create_dir_all(&root_c).expect("create root c");
-        let existing_library = self
-            .app
-            .services
-            .catalog
-            .libraries
-            .get_by_id(&self.library_id())
-            .await
-            .expect("load movie library")
-            .expect("movie library exists");
         let library = self
             .app
             .services

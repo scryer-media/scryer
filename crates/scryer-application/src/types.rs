@@ -26,6 +26,15 @@ pub struct LibraryRootDraft {
     pub is_default: bool,
 }
 
+#[derive(Default)]
+pub struct LibraryUpdateDraft {
+    pub name: Option<String>,
+    pub roots: Option<Vec<LibraryRootDraft>>,
+    pub removed_root_ids: Option<Vec<String>>,
+    pub enabled: Option<bool>,
+    pub settings: Option<crate::LibrarySettingsOverrideDraft>,
+}
+
 /// A library after an update, with what the update took out of the catalog.
 #[derive(Clone, Debug)]
 pub struct UpdatedLibrary {

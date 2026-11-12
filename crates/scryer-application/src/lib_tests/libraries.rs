@@ -3855,11 +3855,10 @@ async fn disabling_and_reenabling_library_preserves_roots_settings_titles_and_fi
             .update_library_with_enabled_outcome(
                 &fixture.user,
                 &fixture.library_id,
-                None,
-                None,
-                None,
-                Some(enabled),
-                None,
+                crate::LibraryUpdateDraft {
+                    enabled: Some(enabled),
+                    ..Default::default()
+                },
             )
             .await
             .expect("toggle library enabled state");
@@ -3893,7 +3892,7 @@ async fn disabling_and_reenabling_library_preserves_roots_settings_titles_and_fi
                 .expect("load title after toggle")
                 .expect("toggle must retain catalog titles");
             assert_eq!(title.library_id.as_str(), library_id.as_str());
-            assert_eq!(title.root_folder_id.as_deref(), root_folder_id.as_deref());
+            assert_eq!(title.root_folder_id.as_str(), root_folder_id.as_str());
             assert_eq!(title.folder_path.as_deref(), folder_path.as_deref());
         }
         assert_eq!(

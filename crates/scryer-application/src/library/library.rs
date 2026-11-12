@@ -824,11 +824,13 @@ impl AppUseCase {
         self.update_library_with_enabled_outcome(
             actor,
             library_id,
-            name,
-            roots,
-            removed_root_ids,
-            None,
-            settings,
+            LibraryUpdateDraft {
+                name,
+                roots,
+                removed_root_ids,
+                enabled: None,
+                settings,
+            },
         )
         .await
     }
@@ -837,12 +839,15 @@ impl AppUseCase {
         &self,
         actor: &User,
         library_id: &str,
-        name: Option<String>,
-        roots: Option<Vec<LibraryRootDraft>>,
-        removed_root_ids: Option<Vec<String>>,
-        enabled: Option<bool>,
-        settings: Option<LibrarySettingsOverrideDraft>,
+        update: LibraryUpdateDraft,
     ) -> AppResult<UpdatedLibrary> {
+        let LibraryUpdateDraft {
+            name,
+            roots,
+            removed_root_ids,
+            enabled,
+            settings,
+        } = update;
         let existing = self
             .services
             .catalog
