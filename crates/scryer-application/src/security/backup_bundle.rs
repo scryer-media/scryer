@@ -1332,6 +1332,13 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "title_recommendation_cards",
         classification: BackupTableClassification::ResetOnRestore,
     },
+    // Pending cleanup work, like `download_cleanup`: the deletes it records
+    // are already in the exported catalog, and only these rows lead
+    // housekeeping to their recycle-bin entries.
+    BackupTableCatalogEntry {
+        table: "title_recycle_purges",
+        classification: BackupTableClassification::Export,
+    },
     BackupTableCatalogEntry {
         table: "titles",
         classification: BackupTableClassification::Export,

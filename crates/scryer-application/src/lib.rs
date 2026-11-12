@@ -825,6 +825,7 @@ pub use settings::keys::{
     VERIFICATION_DEPTH_KEY,
 };
 pub use settings::runtime::is_bootstrap_default_library_root_set;
+pub use types::DeleteLibraryJobAccepted;
 pub(crate) use types::JwtClaims;
 pub use types::MetadataFieldUpdate;
 pub use types::PasskeyEnrollmentCounts;
@@ -1482,4 +1483,5 @@ pub(crate) mod lib_tests;
 pub(crate) mod test_wait;
 
 pub use ports::TitleCounts;
+pub use ports::TitleRecyclePurge;
 pub use types::{DashboardImportEvidence, DashboardImportKind, DashboardRecentImport};

@@ -3684,13 +3684,18 @@ type DeleteIndexerConfigPayload {
 }
 
 """
-Identity returned after deleting a library.
+A library delete accepted to run in the background.
 """
 type DeleteLibraryPayload {
 	"""
-	Deleted library identity.
+	Identity of the library being deleted.
 	"""
 	id: ID!
+	"""
+	Background job that deletes the library and its titles' catalog
+	records. The library stays listed until the job finishes.
+	"""
+	jobRun: JobRunPayload!
 }
 
 """
@@ -3981,22 +3986,6 @@ type DeleteTitlePayload {
 	Deleted title identity.
 	"""
 	id: ID!
-	"""
-	Recycle entries purged during this deletion.
-	"""
-	recyclePurged: Int!
-	"""
-	Recycle entries preserved after revalidation.
-	"""
-	recyclePreserved: Int!
-	"""
-	Recycle entries held by another operation.
-	"""
-	recycleBusy: Int!
-	"""
-	Recycle cleanup failures; catalog deletion still succeeded.
-	"""
-	recycleFailed: Int!
 }
 
 """
@@ -10436,6 +10425,10 @@ enum JobKeyValue {
 	Title deletion.
 	"""
 	TITLE_DELETION
+	"""
+	Library deletion: the library and its titles' catalog records.
+	"""
+	LIBRARY_DELETION
 	"""
 	Title rename.
 	"""
@@ -20985,7 +20978,9 @@ type MutationRoot {
 		input: UpdateLibraryInput!
 	): LibraryPayload!
 	"""
-	Delete the library configuration identified by the supplied ID.
+	Accept a background job that deletes the library identified by the
+	supplied ID and removes its titles from the catalog. Files on disk are
+	left alone.
 	"""
 	deleteLibrary(
 		"""

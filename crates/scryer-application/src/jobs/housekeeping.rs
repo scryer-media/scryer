@@ -25,6 +25,14 @@ const TITLE_IMAGE_BLOB_GC_BATCH_SIZE: u32 = 100;
 const TITLE_IMAGE_BLOB_GC_MAX_BATCHES: usize = 10;
 const RECYCLE_BIN_BATCH_MAX_ITEMS: usize = 250;
 
+/// How long a deleted title's recycle-cleanup record is kept: the history
+/// retention period, or forever when history is kept forever.
+pub(crate) fn recycle_purge_record_retention_days(
+    settings: &crate::GeneralSettings,
+) -> Option<i64> {
+    (!settings.keep_history_forever).then_some(i64::from(settings.history_retention_days))
+}
+
 fn normalize_recycle_batch_ids(entry_ids: Vec<String>) -> AppResult<Vec<String>> {
     if entry_ids.is_empty() {
         return Err(AppError::validation_refused(
@@ -219,26 +227,74 @@ impl AppUseCase {
     async fn resolve_all_recycle_configs(
         &self,
     ) -> Vec<(String, crate::recycle_bin::RecycleBinConfig)> {
+        self.resolve_all_recycle_configs_with_libraries()
+            .await
+            .0
+            .into_iter()
+            .map(|(media_root, config, _)| (media_root, config))
+            .collect()
+    }
+
+    /// [`Self::resolve_all_recycle_configs`], with the libraries whose roots
+    /// each bin serves: every library for a custom bin, the libraries of its
+    /// root otherwise. The flag is false when the roots could not be read.
+    async fn resolve_all_recycle_configs_with_libraries(
+        &self,
+    ) -> (
+        Vec<(
+            String,
+            crate::recycle_bin::RecycleBinConfig,
+            HashSet<String>,
+        )>,
+        bool,
+    ) {
         let mut media_roots = Vec::new();
         let mut seen_roots = HashSet::new();
+        let mut libraries_by_root = HashMap::<String, HashSet<String>>::new();
+        let mut all_libraries = HashSet::new();
 
-        match self.recycle_root_libraries().await {
+        let resolved = match self.recycle_root_libraries().await {
             Ok(roots) => {
                 for root in roots {
+                    all_libraries.insert(root.library.id.clone());
+                    libraries_by_root
+                        .entry(root.normalized_media_root.clone())
+                        .or_default()
+                        .insert(root.library.id);
                     if seen_roots.insert(root.normalized_media_root) {
                         media_roots.push(root.media_root);
                     }
                 }
+                true
             }
             Err(error) => {
                 warn!(
                     error = %error,
                     "failed to resolve library roots for recycle bin housekeeping"
                 );
+                false
             }
-        }
+        };
 
-        self.recycle_bin_configs_for_media_roots(media_roots).await
+        let configs = self
+            .recycle_bin_configs_for_media_roots(media_roots)
+            .await
+            .into_iter()
+            .map(|(media_root, config)| {
+                let libraries = if media_root.is_empty() {
+                    all_libraries.clone()
+                } else {
+                    libraries_by_root
+                        .get(&crate::catalog_workflow::normalize_library_root_path(
+                            &media_root,
+                        ))
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                (media_root, config, libraries)
+            })
+            .collect();
+        (configs, resolved)
     }
 
     async fn recycle_root_libraries(&self) -> AppResult<Vec<RecycleRootLibrary>> {
@@ -388,13 +444,52 @@ impl AppUseCase {
             .collect())
     }
 
+    /// Purge the expired entries of one bin, and every entry of a recorded
+    /// deleted title whose library the bin serves. The bin is listed once.
     async fn purge_expired_recycle_entries(
         &self,
         media_root: &str,
         config: &crate::recycle_bin::RecycleBinConfig,
+        bin_libraries: &HashSet<String>,
+        recorded: &mut crate::title_delete::RecordedTitleRecyclePurges,
     ) -> AppResult<u32> {
+        if config.validation_error.is_some() {
+            recorded.keep_libraries(bin_libraries);
+        }
+        let cutoff = crate::recycle_bin::expiry_cutoff(config);
+        let (entries, withheld) =
+            crate::recycle_bin::list_committed_entries_reporting_withheld(config).await?;
+        for title_id in &withheld {
+            if recorded.claims(title_id, bin_libraries) {
+                recorded.keep(title_id);
+            }
+        }
         let mut purged = 0u32;
-        for entry in crate::recycle_bin::list_expired_committed_entries(config).await? {
+        for entry in entries {
+            if let Some(title_id) = entry
+                .manifest
+                .title_id
+                .clone()
+                .filter(|title_id| recorded.claims(title_id, bin_libraries))
+            {
+                let mut outcome = crate::title_delete::RecyclePurgeOutcome::default();
+                self.purge_listed_title_recycle_entry(
+                    config,
+                    &title_id,
+                    entry,
+                    DomainEventActor::system(),
+                    &mut outcome,
+                )
+                .await;
+                purged += outcome.purged as u32;
+                if outcome.incomplete() {
+                    recorded.keep(&title_id);
+                }
+                continue;
+            }
+            if !crate::recycle_bin::recycled_before(&entry, cutoff) {
+                continue;
+            }
             let Some(entry_id) = entry.manifest.entry_id.as_deref() else {
                 warn!(
                     path = %entry.entry_dir.display(),
@@ -429,6 +524,55 @@ impl AppUseCase {
             }
         }
         Ok(purged)
+    }
+
+    /// [`Self::purge_recycle_bins_with_record_retention`] with the history
+    /// retention the general settings give, as the scheduled pass runs it.
+    #[cfg(test)]
+    pub(crate) async fn purge_recycle_bins_for_housekeeping(&self) -> u32 {
+        let settings = self
+            .general_settings()
+            .await
+            .expect("general settings should load");
+        self.purge_recycle_bins_with_record_retention(recycle_purge_record_retention_days(
+            &settings,
+        ))
+        .await
+    }
+
+    /// The housekeeping recycle pass: each bin is listed once, its expired
+    /// entries are purged, and so is every entry of a deleted title recorded
+    /// for cleanup. First, records older than `record_retention_days` are
+    /// dropped and their entries left to the bin's own retention; with `None`
+    /// (history kept forever) no record is dropped that way. Returns how many
+    /// entries were purged.
+    pub(crate) async fn purge_recycle_bins_with_record_retention(
+        &self,
+        record_retention_days: Option<i64>,
+    ) -> u32 {
+        if let Some(days) = record_retention_days {
+            self.drop_expired_title_recycle_purges(days).await;
+        }
+        let mut recycled_purged = 0u32;
+        let mut recorded = self.load_recorded_title_recycle_purges().await;
+        let (recycle_bins, bins_resolved) = self.resolve_all_recycle_configs_with_libraries().await;
+        recorded.set_bins_resolved(bins_resolved);
+        for (media_root, config, bin_libraries) in recycle_bins {
+            match self
+                .purge_expired_recycle_entries(&media_root, &config, &bin_libraries, &mut recorded)
+                .await
+            {
+                Ok(n) => recycled_purged += n,
+                Err(e) => {
+                    recorded.keep_libraries(&bin_libraries);
+                    info!(error = %e, media_root = %media_root, "recycle bin purge failed")
+                }
+            }
+        }
+        if !recorded.is_empty() {
+            self.finish_recorded_title_recycle_purges(recorded).await;
+        }
+        recycled_purged
     }
 
     pub(crate) async fn purge_recycle_entry_after_validation(
@@ -896,17 +1040,13 @@ impl AppUseCase {
             .prune_staged_nzbs_older_than(now - chrono::Duration::hours(1))
             .await?;
 
-        // 4. Purge expired recycle bin entries (per media root)
-        let mut recycled_purged = 0u32;
-        for (media_root, config) in self.resolve_all_recycle_configs().await {
-            match self
-                .purge_expired_recycle_entries(&media_root, &config)
-                .await
-            {
-                Ok(n) => recycled_purged += n,
-                Err(e) => info!(error = %e, media_root = %media_root, "recycle bin purge failed"),
-            }
-        }
+        // 4. Purge expired recycle bin entries, and the entries of deleted
+        // titles (per media root)
+        let recycled_purged = self
+            .purge_recycle_bins_with_record_retention(recycle_purge_record_retention_days(
+                &general_settings,
+            ))
+            .await;
 
         // 5. Commit stale pending recycle entries orphaned by interrupted move
         // transactions (per media root). This deliberately runs after the

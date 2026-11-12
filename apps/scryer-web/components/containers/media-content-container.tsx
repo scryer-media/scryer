@@ -173,7 +173,11 @@ import { DeletePreviewSummary } from "@/components/common/delete-preview-summary
 import { BulkRenamePreviewSummary } from "@/components/common/bulk-rename-preview-summary";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { metadataResultExternalIds } from "@/lib/utils/metadata-result-external-ids";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import {
+  ERROR_REASON_KEYS,
+  userFacingGraphQlErrorMessage,
+} from "@/lib/graphql/error-message";
+import { libraryDeletionFailureReason } from "@/lib/utils/job-runs";
 import { dispatchNavigationBadgesRefresh } from "@/lib/events/navigation-badges";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
 import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
@@ -190,6 +194,7 @@ import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { useOverviewWindowScrollRestoration } from "@/lib/hooks/use-overview-window-scroll-restoration";
 import { useJobRunToasts } from "@/components/root/job-run-provider";
+import { useTrackedJobRuns } from "@/lib/hooks/use-tracked-job-runs";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import { titleMatchesOptionUpdates } from "@/lib/utils/title-edit-dialog";
 import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
@@ -635,6 +640,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
   const [alsoExcludeFromLists, setAlsoExcludeFromLists] = React.useState(false);
   const { registerInteractiveJobRun } = useJobRunToasts();
+  const trackJobRun = useTrackedJobRuns();
   const { confirmReplaceConflict, replaceConflictDialog } =
     useDownloadConflictConfirmation();
   const { queueCatalogTitleRefresh, registerReactiveRefresh } =
@@ -4863,24 +4869,60 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       setLibrarySettingsSaving(true);
       try {
         const { data, error } = await client
-          .mutation<{ deleteLibrary: { id: string } }>(deleteLibraryMutation, {
+          .mutation<{
+            deleteLibrary?: { id?: string; jobRun?: unknown };
+          }>(deleteLibraryMutation, {
             id: libraryId,
           })
           .toPromise();
         if (error) throw error;
-        if (!data?.deleteLibrary?.id) {
+        const run = normalizeJobRun(data?.deleteLibrary?.jobRun);
+        if (!data?.deleteLibrary?.id || !run) {
           throw new Error(t("settings.libraryDeleteFailed"));
         }
-        // The library list and its roots scope the pending import badge.
-        dispatchNavigationBadgesRefresh();
-        setSelectedLibraryIds((current) =>
-          current.filter(
-            (selectedLibraryId) => selectedLibraryId !== libraryId,
-          ),
-        );
-        await refreshLibraries();
-        await refreshRootValidationLibraries();
-        setGlobalStatus(t("settings.libraryDeleted"), { level: "SUCCESS" });
+        trackJobRun(run, (terminalRun) => {
+          const completed = terminalRun.status === "COMPLETED";
+          void Promise.resolve()
+            .then(async () => {
+              if (completed) {
+                // The library list and its roots scope the pending import badge.
+                dispatchNavigationBadgesRefresh();
+                setSelectedLibraryIds((current) =>
+                  current.filter(
+                    (selectedLibraryId) => selectedLibraryId !== libraryId,
+                  ),
+                );
+              }
+              await refreshLibraries();
+              await refreshRootValidationLibraries();
+            })
+            .catch((refreshError: unknown) => {
+              console.error(
+                "[library-settings] refresh after library deletion failed:",
+                refreshError,
+              );
+            })
+            .finally(() => {
+              if (completed) {
+                setGlobalStatus(t("settings.libraryDeleted"), {
+                  level: "SUCCESS",
+                });
+                return;
+              }
+              const reason = libraryDeletionFailureReason(terminalRun);
+              const reasonKey = reason ? ERROR_REASON_KEYS[reason] : undefined;
+              setGlobalStatus(
+                reasonKey
+                  ? t(reasonKey)
+                  : (terminalRun.errorText ??
+                      t("settings.libraryDeleteFailed")),
+                { level: "ERROR" },
+              );
+            });
+        });
+        setGlobalStatus(t("settings.libraryDeleteQueued"), {
+          level: "SUCCESS",
+        });
         return true;
       } catch (error) {
         setGlobalStatus(
@@ -4903,6 +4945,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       setGlobalStatus,
       setSelectedLibraryIds,
       t,
+      trackJobRun,
     ],
   );
 

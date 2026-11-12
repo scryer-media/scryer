@@ -700,8 +700,7 @@ impl TitleMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let title_id = input.title_id.to_string();
-        let recycle = app
-            .delete_title_with_outcome(
+        app.delete_title(
                 &actor,
                 &title_id,
                 input.delete_files_on_disk.unwrap_or(false),
@@ -716,10 +715,6 @@ impl TitleMutations {
             .map_err(to_gql_error)?;
         Ok(DeleteTitlePayload {
             id: ID::from(title_id),
-            recycle_purged: recycle.purged as i32,
-            recycle_preserved: recycle.preserved as i32,
-            recycle_busy: recycle.busy as i32,
-            recycle_failed: recycle.failed as i32,
         })
     }
 

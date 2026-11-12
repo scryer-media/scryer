@@ -1793,6 +1793,8 @@ const en: LocaleDictionary = {
     "Full-hash backfill is shutting down.",
   "error.reason.JOB_LIBRARY_ACCESS_DENIED":
     "You do not have access to this library.",
+  "error.reason.JOB_LIBRARY_DELETION_JOBS_INVALID":
+    "Library deletion jobs must be started by deleting the library.",
   "error.reason.JOB_LOCATION_OPERATIONS_INVALID":
     "Location operations must be started from the location operation mutation.",
   "error.reason.JOB_MEDIA_FILE_DELETION_JOBS_INVALID":
@@ -1868,6 +1870,8 @@ const en: LocaleDictionary = {
     "Refusing to delete the selected value the selected value because it is outside the configured root folders.",
   "error.reason.LIBRARY_DELETE_TARGET_PARENT_REQUIRED":
     "Refusing to delete the selected value the selected value because it has no parent directory.",
+  "error.reason.LIBRARY_DELETION_ALREADY_RUNNING":
+    "This library is already being deleted.",
   "error.reason.LIBRARY_DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY":
     "Destination folder contains an independent or unresolved title boundary.",
   "error.reason.LIBRARY_DESTINATION_OCCUPIED":
@@ -5223,6 +5227,12 @@ const en: LocaleDictionary = {
   "settings.libraryDeleted": "Library deleted.",
   "settings.librarySaveFailed": "Failed to save library.",
   "settings.libraryDeleteFailed": "Failed to delete library.",
+  "settings.libraryDeleteQueued":
+    "Deleting the library. It stays listed until its titles are removed.",
+  "settings.libraryDeleteProgressClearing":
+    "Clearing title records: {{processed}} of {{total}}",
+  "settings.libraryDeleteProgressDeleting":
+    "Removing titles: {{processed}} of {{total}}",
   "settings.librarySettingsLoadFailed": "Failed to load library settings.",
   "settings.libraryRequiredAudioLabel": "Required audio",
   "settings.libraryEffectiveAudio": "Effective: {{value}}",
@@ -12374,6 +12384,9 @@ const en: LocaleDictionary = {
   "jobs.builtin.TitleDeletion.name": "Title Deletion",
   "jobs.builtin.TitleDeletion.description":
     "Delete selected titles from the catalog.",
+  "jobs.builtin.LibraryDeletion.name": "Library Deletion",
+  "jobs.builtin.LibraryDeletion.description":
+    "Delete a library and remove its titles from the catalog, leaving files on disk.",
   "jobs.builtin.TitleRename.name": "Title Rename",
   "jobs.builtin.TitleRename.description": "Rename files for selected titles.",
   "jobs.builtin.MediaFileRescore.name": "Refresh File Scores",

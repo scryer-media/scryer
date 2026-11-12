@@ -1202,14 +1202,6 @@ pub struct DeleteTitleInput {
 pub struct DeleteTitlePayload {
     /// Deleted title identity.
     pub id: async_graphql::ID,
-    /// Recycle entries purged during this deletion.
-    pub recycle_purged: i32,
-    /// Recycle entries preserved after revalidation.
-    pub recycle_preserved: i32,
-    /// Recycle entries held by another operation.
-    pub recycle_busy: i32,
-    /// Recycle cleanup failures; catalog deletion still succeeded.
-    pub recycle_failed: i32,
 }
 
 #[derive(InputObject)]
@@ -1480,10 +1472,13 @@ pub struct LibrarySettingsInput {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Identity returned after deleting a library.
+/// A library delete accepted to run in the background.
 pub struct DeleteLibraryPayload {
-    /// Deleted library identity.
+    /// Identity of the library being deleted.
     pub id: async_graphql::ID,
+    /// Background job that deletes the library and its titles' catalog
+    /// records. The library stays listed until the job finishes.
+    pub job_run: JobRunPayload,
 }
 
 #[derive(InputObject)]

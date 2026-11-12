@@ -794,6 +794,21 @@ export const updateLibraryMutation = `mutation UpdateLibrary($input: UpdateLibra
 export const deleteLibraryMutation = `mutation DeleteLibrary($id: ID!) {
   deleteLibrary(id: $id) {
     id
+    jobRun {
+      id
+      jobKey
+      displayName
+      category
+      section
+      status
+      triggerSource
+      startedAt
+      completedAt
+      summaryJson
+      summaryText
+      errorText
+      progressJson
+    }
   }
 }`;
 

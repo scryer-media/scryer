@@ -1736,6 +1736,16 @@ pub struct DiscoveryAffinityTitle {
     pub canonical_tags: Vec<CanonicalMediaTag>,
 }
 
+/// A deleted title whose recycle-bin entries housekeeping still has to remove
+/// for good, with the library whose bins hold them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleRecyclePurge {
+    pub title_id: String,
+    pub library_id: String,
+    /// When the title's delete recorded it.
+    pub recorded_at: DateTime<Utc>,
+}
+
 #[async_trait]
 pub trait TitleRepository: Send + Sync {
     /// SQL implementations join the submitted generation without hydrating titles.
@@ -2768,8 +2778,50 @@ pub trait TitleRepository: Send + Sync {
     ///
     /// `Ok(false)` means the store has no such batch and deleted nothing; the
     /// caller then deletes title by title.
-    async fn delete_titles_with_records(&self, _ids: &[String]) -> AppResult<bool> {
+    ///
+    /// With `recycle_purge_recorded_at`, the same transaction records every
+    /// title with its library as a [`TitleRecyclePurge`] recorded then.
+    async fn delete_titles_with_records(
+        &self,
+        _ids: &[String],
+        _recycle_purge_recorded_at: Option<DateTime<Utc>>,
+    ) -> AppResult<bool> {
         Ok(false)
+    }
+    /// [`Self::delete`], recording the title with its library as a
+    /// [`TitleRecyclePurge`] recorded at `recorded_at`, in the same
+    /// transaction.
+    async fn delete_recording_recycle_purge(
+        &self,
+        id: &str,
+        recorded_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let _ = (id, recorded_at);
+        Err(AppError::Repository(
+            "this title repository cannot record recycle purges".into(),
+        ))
+    }
+    /// Recorded [`TitleRecyclePurge`]s, oldest first (then by title id), at
+    /// most `limit`.
+    async fn list_recycle_purges(&self, limit: usize) -> AppResult<Vec<TitleRecyclePurge>> {
+        let _ = limit;
+        Ok(Vec::new())
+    }
+    /// Forget at most `limit` recorded titles recorded before `cutoff`,
+    /// oldest first, whether or not entries of theirs remain. Writes nothing
+    /// when none is that old. Returns how many were forgotten.
+    async fn drop_recycle_purges_recorded_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<u32> {
+        let _ = (cutoff, limit);
+        Ok(0)
+    }
+    /// Forget these recorded titles: housekeeping has finished their entries.
+    async fn clear_recycle_purges(&self, title_ids: &[String]) -> AppResult<()> {
+        let _ = title_ids;
+        Ok(())
     }
     /// The one write path for titles' recorded folders.
     ///
