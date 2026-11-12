@@ -10,10 +10,8 @@
 -- copied as their plain UTF-8 bytes; readers accept both forms. A payload row
 -- goes with its owner through the foreign key.
 --
--- A completed operation is never resumed, retried or reopened, so its plan is
--- not carried over, the same as completing one drops it from now on. One that
--- names no single source library keeps it: its permission check reads the
--- libraries from the plan.
+-- Every stored plan is carried over, completed operations included: the
+-- activity detail of a finished operation lists its files from the plan.
 
 CREATE TABLE location_operation_plans (
     operation_id TEXT PRIMARY KEY NOT NULL REFERENCES location_operations(id) ON DELETE CASCADE,
@@ -23,9 +21,7 @@ CREATE TABLE location_operation_plans (
 INSERT INTO location_operation_plans (operation_id, plan)
 SELECT id, CAST(plan_json AS BLOB)
   FROM location_operations
- WHERE plan_json IS NOT NULL
-   AND NOT (state IN ('completed', 'completed_with_warnings')
-            AND source_library_id IS NOT NULL);
+ WHERE plan_json IS NOT NULL;
 
 ALTER TABLE location_operations DROP COLUMN plan_json;
 
