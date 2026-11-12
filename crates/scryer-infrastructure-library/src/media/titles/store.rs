@@ -5987,7 +5987,7 @@ async fn list_existing_title_ids_for_external_ids_tx(
         .collect()
 }
 
-async fn find_existing_title_for_create_tx(
+pub(crate) async fn find_existing_title_for_create_tx(
     tx: &mut SqlTx<'_>,
     title: &Title,
 ) -> AppResult<Option<Title>> {

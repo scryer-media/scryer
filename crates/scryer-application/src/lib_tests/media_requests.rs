@@ -711,7 +711,7 @@ async fn media_request_activity_is_visible_to_library_viewers() {
 }
 
 #[tokio::test]
-async fn submit_media_request_duplicate_same_user_creates_separate_submission_and_event() {
+async fn submit_media_request_duplicate_same_user_reuses_pending_submission_and_event() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let input = media_request_input(library_id, 9011);
@@ -723,28 +723,38 @@ async fn submit_media_request_duplicate_same_user_creates_separate_submission_an
         .expect("first request should succeed");
     let second = harness
         .app
+        .submit_media_request(&harness.user, input.clone())
+        .await
+        .expect("retry should return the existing pending request");
+    harness
+        .titles
+        .store
+        .lock()
+        .await
+        .push(make_due_hydration_title(
+            "catalog-after-request",
+            MediaFacet::Movie,
+            9011,
+        ));
+    let after_catalog_add = harness
+        .app
         .submit_media_request(&harness.user, input)
         .await
-        .expect("duplicate request should succeed opaquely");
+        .expect("a pending retry should survive a separate catalog addition");
 
-    assert_ne!(first.request_id, second.request_id);
+    assert_eq!(first.request_id, second.request_id);
+    assert_eq!(first.request_id, after_catalog_add.request_id);
     let requests = harness.media_requests.requests.lock().await;
-    assert_eq!(requests.len(), 2);
-    assert!(requests.iter().all(|request| request.requesters.len() == 1));
-    let request_ids = requests
-        .iter()
-        .map(|request| request.id.clone())
-        .collect::<HashSet<_>>();
-    assert_eq!(request_ids.len(), 2);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].requesters.len(), 1);
     drop(requests);
 
     let events = harness.domain_events.events.lock().await;
-    assert_eq!(events.len(), 2);
-    assert!(
-        events
-            .iter()
-            .all(|event| matches!(event.payload, DomainEventPayload::MediaRequestSubmitted(_)))
-    );
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0].payload,
+        DomainEventPayload::MediaRequestSubmitted(_)
+    ));
 }
 
 #[tokio::test]
@@ -1641,6 +1651,11 @@ async fn requester_can_update_pending_request_preferences() {
 async fn requester_can_cancel_pending_request_without_resolving_overlapping_requests() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let second_user = library_permission_user(
+        "cancel-other-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
     let input = media_request_input(library_id, 9034);
 
     harness
@@ -1650,9 +1665,9 @@ async fn requester_can_cancel_pending_request_without_resolving_overlapping_requ
         .expect("first request should succeed");
     harness
         .app
-        .submit_media_request(&harness.user, input)
+        .submit_media_request(&second_user, input)
         .await
-        .expect("duplicate request should succeed");
+        .expect("another requester's request should succeed");
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
 
     let canceled = harness
@@ -1969,6 +1984,11 @@ async fn approval_waits_for_destructive_title_ownership() {
 async fn approve_media_request_creates_title_and_resolves_overlapping_pending_requests() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let second_user = library_permission_user(
+        "approve-other-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
     let input = media_request_input(library_id.clone(), 9022);
 
     harness
@@ -1978,9 +1998,9 @@ async fn approve_media_request_creates_title_and_resolves_overlapping_pending_re
         .expect("first request should succeed");
     harness
         .app
-        .submit_media_request(&harness.user, input)
+        .submit_media_request(&second_user, input)
         .await
-        .expect("duplicate request should succeed");
+        .expect("another requester's request should succeed");
 
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
     let outcome = harness
@@ -2188,6 +2208,11 @@ async fn approve_series_media_request_can_override_requested_monitor_type() {
 async fn dismiss_media_request_resolves_overlapping_pending_requests_without_title() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let second_user = library_permission_user(
+        "dismiss-other-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
     let input = media_request_input(library_id, 9023);
 
     harness
@@ -2197,9 +2222,9 @@ async fn dismiss_media_request_resolves_overlapping_pending_requests_without_tit
         .expect("first request should succeed");
     harness
         .app
-        .submit_media_request(&harness.user, input)
+        .submit_media_request(&second_user, input)
         .await
-        .expect("duplicate request should succeed");
+        .expect("another requester's request should succeed");
 
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
     let mut notification_wakes = harness
@@ -2240,6 +2265,11 @@ async fn dismiss_media_request_resolves_overlapping_pending_requests_without_tit
 async fn pending_media_request_counts_deduplicate_duplicate_identity_requests() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let second_user = library_permission_user(
+        "count-other-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
     let input = media_request_input(library_id, 9024);
 
     harness
@@ -2249,9 +2279,9 @@ async fn pending_media_request_counts_deduplicate_duplicate_identity_requests() 
         .expect("first request should succeed");
     harness
         .app
-        .submit_media_request(&harness.user, input)
+        .submit_media_request(&second_user, input)
         .await
-        .expect("duplicate request should succeed");
+        .expect("another requester's request should succeed");
 
     let counts = harness
         .app
@@ -2365,6 +2395,184 @@ async fn submit_advanced_series_request_persists_the_monitor_selection() {
     assert_eq!(selection.seasons, vec![1, 2]);
     assert_eq!(selection.series_movies.len(), 1);
     assert_eq!(selection.series_movies[0].name, "Harbor Movie");
+}
+
+#[tokio::test]
+async fn submit_advanced_series_request_reuses_only_the_same_scope() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id, 9065);
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("advanced".to_string());
+    input.requested_monitor_selection = Some(advanced_monitor_selection());
+
+    let first = harness
+        .app
+        .submit_media_request(&harness.user, input.clone())
+        .await
+        .unwrap();
+    let selection = input.requested_monitor_selection.as_mut().unwrap();
+    selection.seasons = vec![1, 2, 1];
+    selection.series_movies[0].name = "Renamed Harbor Movie".into();
+    let retry = harness
+        .app
+        .submit_media_request(&harness.user, input.clone())
+        .await
+        .unwrap();
+    input.requested_monitor_selection.as_mut().unwrap().seasons = vec![3];
+    let different = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .unwrap();
+
+    assert_eq!(first.request_id, retry.request_id);
+    assert_ne!(first.request_id, different.request_id);
+    assert_eq!(harness.media_requests.requests.lock().await.len(), 2);
+    assert_eq!(harness.domain_events.events.lock().await.len(), 2);
+}
+
+#[tokio::test]
+async fn existing_series_season_requests_require_new_coverage_and_keep_the_title_profile() {
+    let harness = bootstrap_media_request_app();
+    let title_id = "catalog-series";
+    let mut title = make_due_hydration_title(title_id, MediaFacet::Series, 9066);
+    title.tags.push("scryer:quality-profile:1080p".into());
+    harness.titles.store.lock().await.push(title);
+    for (season, monitored) in [(2, true), (3, false)] {
+        let id = format!("season-{season}");
+        harness.shows.collections.lock().await.push(Collection {
+            id: id.clone(),
+            title_id: title_id.into(),
+            collection_type: CollectionType::Season,
+            collection_index: season.to_string(),
+            label: None,
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored,
+            created_at: chrono::Utc::now(),
+        });
+        harness.shows.episodes.lock().await.push(Episode {
+            id: format!("episode-{season}"),
+            title_id: title_id.into(),
+            collection_id: Some(id),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".into()),
+            season_number: Some(season.to_string()),
+            episode_label: None,
+            title: None,
+            air_date: None,
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored,
+            created_at: chrono::Utc::now(),
+        });
+    }
+    let mut input = media_request_input(
+        scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+        9066,
+    );
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("advanced".into());
+    for season in [0, 2, 99] {
+        input.requested_monitor_selection = Some(scryer_domain::MonitorSelection {
+            seasons: vec![season],
+            series_movies: vec![],
+        });
+        let error = harness
+            .app
+            .submit_media_request(&harness.user, input.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::media_requests::TITLE_ALREADY_EXISTS_TARGET_LIBRARY)
+        );
+    }
+    input.requested_monitor_selection.as_mut().unwrap().seasons = vec![3];
+    input.requested_quality_profile_id = Some("4k".into());
+    let error = harness
+        .app
+        .submit_media_request(&harness.user, input.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::media_requests::REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY)
+    );
+    input.requested_quality_profile_id = None;
+    let outcome = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("a known season with inactive episodes can be requested");
+    let request = harness.media_requests.requests.lock().await[0].clone();
+    assert_eq!(request.id, outcome.request_id);
+    assert_eq!(
+        request.requested_quality_profile_id.as_deref(),
+        Some("1080p")
+    );
+    let error = harness
+        .app
+        .approve_media_request(&harness.manager, &request.id, "4k", None, None, None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::media_requests::REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY)
+    );
+    let error = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request.id,
+            "1080p",
+            Some("allEpisodes".into()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::media_requests::TITLE_ALREADY_EXISTS_TARGET_LIBRARY)
+    );
+    harness.app.runtime.library.location_ownership.claim_all(
+        "test-move",
+        &[crate::location::ownership_guard::OwnedEntity::Title(
+            title_id.into(),
+        )],
+    );
+    let error = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request.id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, AppError::LocationOperationBusy(_)));
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Pending
+    );
 }
 
 #[tokio::test]

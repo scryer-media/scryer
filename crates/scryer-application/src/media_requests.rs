@@ -6,10 +6,10 @@ use crate::domain_events::{
 };
 use crate::ports::MediaRequestResolution;
 use scryer_domain::{
-    DomainEvent, DomainEventFilter, DomainEventPayload, DomainEventType, LibraryPermission,
-    LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    MONITOR_TYPE_ADVANCED, MediaRequestOrigin, MediaRequestResolvedEventData, MediaRequestStatus,
-    MediaRequestSubmittedEventData, MonitorSelection, RequestDecisionOutcome,
+    CollectionType, DomainEvent, DomainEventFilter, DomainEventPayload, DomainEventType,
+    LibraryPermission, LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer,
+    LifecycleClaimState, MONITOR_TYPE_ADVANCED, MediaRequestOrigin, MediaRequestResolvedEventData,
+    MediaRequestStatus, MediaRequestSubmittedEventData, MonitorSelection, RequestDecisionOutcome,
 };
 use snapshot::{MediaRequestMetadataSnapshot, MediaRequestMetadataSnapshotExt};
 use std::collections::BTreeSet;
@@ -23,33 +23,14 @@ impl AppUseCase {
         actor: &User,
         request: NewTitle,
         library_id: String,
-    ) -> AppResult<(Title, tokio::sync::OwnedMutexGuard<()>)> {
+    ) -> AppResult<(Title, Option<Title>, tokio::sync::OwnedMutexGuard<()>)> {
         let mut title = self
             .new_title_for_library(actor, request, library_id)
             .await?;
-        let mut existing_id = None;
-        for id in &title.external_ids {
-            if let Some(existing) = self
-                .services
-                .catalog
-                .titles
-                .find_by_external_id_in_library_and_facet(
-                    &title.library_id,
-                    title.facet.clone(),
-                    &id.source,
-                    &id.value,
-                )
-                .await?
-            {
-                if existing_id.as_ref().is_some_and(|id| id != &existing.id) {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::media_requests::EXTERNAL_IDS_MAP_MULTIPLE_TITLES,
-                        "external ids map to multiple titles",
-                    ));
-                }
-                existing_id = Some(existing.id);
-            }
-        }
+        let existing_id = self
+            .find_request_subject_in_library(&title.library_id, &title.facet, &title.external_ids)
+            .await?
+            .map(|existing| existing.id);
         if let Some(id) = &existing_id {
             title.id = id.clone();
         }
@@ -65,21 +46,24 @@ impl AppUseCase {
                     "title is being modified; retry approval",
                 )
             })?;
-        if existing_id.is_some()
-            && self
-                .services
-                .catalog
-                .titles
-                .get_by_id(&title.id)
-                .await?
-                .is_none()
-        {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::media_requests::TITLE_CHANGED_DURING_APPROVAL,
-                "title changed during approval; retry",
-            ));
-        }
-        Ok((title, guard))
+        let existing = if existing_id.is_some() {
+            Some(
+                self.services
+                    .catalog
+                    .titles
+                    .get_by_id(&title.id)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::validation_refused(
+                            crate::error_reasons::media_requests::TITLE_CHANGED_DURING_APPROVAL,
+                            "title changed during approval; retry",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        Ok((title, existing, guard))
     }
 }
 
@@ -299,26 +283,12 @@ impl AppUseCase {
         if !list_movie {
             external_ids = metadata_enrichment.external_ids;
         }
-        if !list_movie {
-            self.ensure_request_subject_is_not_in_library(
-                &library.id,
-                library.facet.clone(),
-                &external_ids,
-            )
-            .await?;
-        }
         let profile_reference_guard = self
             .runtime
             .catalog
             .quality_profile_reference_lock
             .lock()
             .await;
-        let (requested_quality_profile_id, requested_quality_profile_name) = self
-            .request_quality_profile_snapshot_for_submission(
-                &library,
-                input.requested_quality_profile_id,
-            )
-            .await?;
         let requested_monitor_type =
             normalize_requested_monitor_type(&input.facet, input.requested_monitor_type)?;
         let requested_monitor_selection = normalize_requested_monitor_selection(
@@ -327,6 +297,25 @@ impl AppUseCase {
         )?;
         let requested_lease_days =
             crate::request_rules::validate_lease_days(input.requested_lease_days)?;
+        let existing = if list_movie {
+            None
+        } else {
+            self.find_request_subject_in_library(&library.id, &input.facet, &external_ids)
+                .await?
+        };
+        let season_scope = regular_season_request(
+            &input.facet,
+            &input.origin,
+            requested_monitor_type.as_deref(),
+            requested_monitor_selection.as_ref(),
+        );
+        let (requested_quality_profile_id, requested_quality_profile_name) = self
+            .request_profile_for_subject(
+                &library,
+                input.requested_quality_profile_id,
+                existing.as_ref().filter(|_| season_scope.is_some()),
+            )
+            .await?;
         let poster_url = metadata_enrichment.poster_url;
         let background_url = metadata_enrichment.background_url;
         // Kept, not consumed: the same snapshot that is persisted on the row is
@@ -384,6 +373,44 @@ impl AppUseCase {
             created_by_user_id: actor.id.clone(),
             origin: input.origin,
         };
+        if request.origin == MediaRequestOrigin::Manual {
+            let pending = self
+                .services
+                .catalog
+                .media_requests
+                .list(MediaRequestQuery {
+                    facet: Some(request.facet.clone()),
+                    library_ids: Some(vec![request.library_id.clone()]),
+                    status: Some(MediaRequestStatus::Pending),
+                    requester_user_id: Some(actor.id.clone()),
+                })
+                .await?;
+            if let Some(previous) = pending
+                .into_iter()
+                .filter(|pending| request.matches_pending_manual_retry(pending))
+                .min_by(|left, right| {
+                    (left.created_at, &left.id).cmp(&(right.created_at, &right.id))
+                })
+            {
+                return Ok(CommittedMediaRequest {
+                    request_id: previous.id,
+                    decision: Ok(()),
+                });
+            }
+        }
+        if let Some(existing) = &existing {
+            self.validate_existing_season_request(
+                existing,
+                regular_season_request(
+                    &request.facet,
+                    &request.origin,
+                    request.requested_monitor_type.as_deref(),
+                    request.requested_monitor_selection.as_ref(),
+                ),
+                requested_lease_days,
+            )
+            .await?;
+        }
         let submitted_event = new_global_domain_event(
             actor,
             DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
@@ -432,7 +459,13 @@ impl AppUseCase {
             .submit(request, actor, submitted_event)
             .await?;
         drop(profile_reference_guard);
-        self.publish_stored_domain_event(&submission.event).await;
+        let Some(event) = submission.event else {
+            return Ok(CommittedMediaRequest {
+                request_id: submission.request.id,
+                decision: Ok(()),
+            });
+        };
+        self.publish_stored_domain_event(&event).await;
         let submitted_request = submission.request;
         self.stamp_request_decision(&request_id, &evaluation).await;
         let decision = self
@@ -689,9 +722,22 @@ impl AppUseCase {
         );
         self.apply_list_route_to_request_title(&request, &mut new_title)
             .await;
-        let (title, _title_guard) = self
+        let (title, existing, _title_guard) = self
             .prepare_request_approval_title(actor, new_title, request.library_id.clone())
             .await?;
+        let season_location_guard = self
+            .validate_existing_season_approval(
+                &request,
+                existing.as_ref(),
+                approved_monitor_type.as_deref(),
+                approved_monitor_selection.as_ref(),
+                approved_lease_days,
+                &approved_quality_profile_id,
+            )
+            .await?;
+        let existing_season_request = existing
+            .as_ref()
+            .filter(|_| season_location_guard.is_some());
         let provenance = RequestDecisionProvenance {
             decision_id: request.decision_id.clone(),
             decided_by_rule_set_ids: request.decided_by_rule_set_ids.clone(),
@@ -707,13 +753,23 @@ impl AppUseCase {
         apply_decision_provenance(&mut event_data, &provenance, approved_lease_days);
         let resolved_event =
             new_global_domain_event(actor, DomainEventPayload::MediaRequestApproved(event_data));
-        let added_event = new_title_domain_event(
-            actor,
-            &title,
-            DomainEventPayload::TitleAdded(scryer_domain::TitleAddedEventData {
-                title: title_context_snapshot(&title),
-            }),
-        );
+        let title_event = if let Some(existing) = existing_season_request {
+            new_title_domain_event(
+                actor,
+                existing,
+                DomainEventPayload::TitleUpdated(scryer_domain::TitleUpdatedEventData {
+                    title: title_context_snapshot(existing),
+                }),
+            )
+        } else {
+            new_title_domain_event(
+                actor,
+                &title,
+                DomainEventPayload::TitleAdded(scryer_domain::TitleAddedEventData {
+                    title: title_context_snapshot(&title),
+                }),
+            )
+        };
         let (created, resolution, added_event) = self
             .services
             .catalog
@@ -738,7 +794,7 @@ impl AppUseCase {
                     policy_tags: provenance.policy_tags.clone(),
                     event: resolved_event,
                 },
-                added_event,
+                title_event,
             )
             .await?;
         drop(profile_reference_guard);
@@ -755,6 +811,15 @@ impl AppUseCase {
         }
         let outcome = self.finish_add_title_with_outcome(created).await?;
         let title_id = outcome.title.id.clone();
+        if existing_season_request.is_some() {
+            self.runtime.acquisition.target_cache.mark_title(&title_id);
+            return Ok(ApproveMediaRequestOutcome {
+                title_id,
+                wanted_search: None,
+                search_error: None,
+                claim_error: None,
+            });
+        }
         if request.is_list_series_movie() {
             self.services
                 .catalog
@@ -894,12 +959,30 @@ impl AppUseCase {
         }
         // A pending request for something the library already holds is
         // refused at submission; a reopened one is held to the same bar.
-        self.ensure_request_subject_is_not_in_library(
-            &request.library_id,
-            request.facet.clone(),
-            &request.external_ids,
-        )
-        .await?;
+        if let Some(existing) = self
+            .find_request_subject_in_library(
+                &request.library_id,
+                &request.facet,
+                &request.external_ids,
+            )
+            .await?
+        {
+            self.validate_existing_season_request(
+                &existing,
+                regular_season_request(
+                    &request.facet,
+                    &request.origin,
+                    request.requested_monitor_type.as_deref(),
+                    request.requested_monitor_selection.as_ref(),
+                ),
+                request.requested_lease_days,
+            )
+            .await?;
+            if let Some(profile) = &request.requested_quality_profile_id {
+                self.validate_existing_season_profile(&existing, profile)
+                    .await?;
+            }
+        }
 
         let reopened_event = new_global_domain_event(
             actor,
@@ -972,6 +1055,29 @@ impl AppUseCase {
                 .requested_lease_days
                 .unwrap_or(request.requested_lease_days),
         )?;
+        if !request.is_list_series_movie()
+            && let Some(existing) = self
+                .find_request_subject_in_library(
+                    &request.library_id,
+                    &request.facet,
+                    &request.external_ids,
+                )
+                .await?
+        {
+            self.validate_existing_season_request(
+                &existing,
+                regular_season_request(
+                    &request.facet,
+                    &request.origin,
+                    requested_monitor_type.as_deref(),
+                    requested_monitor_selection.as_ref(),
+                ),
+                requested_lease_days,
+            )
+            .await?;
+            self.validate_existing_season_profile(&existing, &requested_quality_profile_id)
+                .await?;
+        }
         let mut submitted_event_data = media_request_submitted_event_data(
             &request,
             Some(requested_quality_profile_id.clone()),
@@ -1149,9 +1255,22 @@ impl AppUseCase {
         );
         self.apply_list_route_to_request_title(&request, &mut new_title)
             .await;
-        let (title, _title_guard) = self
+        let (title, existing, _title_guard) = self
             .prepare_request_approval_title(actor, new_title, request.library_id.clone())
             .await?;
+        let season_location_guard = self
+            .validate_existing_season_approval(
+                &request,
+                existing.as_ref(),
+                approved_monitor_type.as_deref(),
+                approved_monitor_selection.as_ref(),
+                approved_lease_days,
+                &approved_quality_profile_id,
+            )
+            .await?;
+        let existing_season_request = existing
+            .as_ref()
+            .filter(|_| season_location_guard.is_some());
         let mut event_data = media_request_resolved_event_data(
             &request,
             Some(title.id.clone()),
@@ -1161,13 +1280,23 @@ impl AppUseCase {
         apply_decision_provenance(&mut event_data, &provenance, approved_lease_days);
         let resolved_event =
             new_global_domain_event(actor, DomainEventPayload::MediaRequestApproved(event_data));
-        let added_event = new_title_domain_event(
-            actor,
-            &title,
-            DomainEventPayload::TitleAdded(scryer_domain::TitleAddedEventData {
-                title: title_context_snapshot(&title),
-            }),
-        );
+        let title_event = if let Some(existing) = existing_season_request {
+            new_title_domain_event(
+                actor,
+                existing,
+                DomainEventPayload::TitleUpdated(scryer_domain::TitleUpdatedEventData {
+                    title: title_context_snapshot(existing),
+                }),
+            )
+        } else {
+            new_title_domain_event(
+                actor,
+                &title,
+                DomainEventPayload::TitleAdded(scryer_domain::TitleAddedEventData {
+                    title: title_context_snapshot(&title),
+                }),
+            )
+        };
         let (created, resolution, added_event) = self
             .services
             .catalog
@@ -1192,7 +1321,7 @@ impl AppUseCase {
                     policy_tags: provenance.policy_tags.clone(),
                     event: resolved_event,
                 },
-                added_event,
+                title_event,
             )
             .await?;
         drop(profile_reference_guard);
@@ -1207,6 +1336,13 @@ impl AppUseCase {
         let outcome = self.finish_add_title_with_outcome(created).await?;
         if let Some(event) = &resolution.event {
             self.publish_stored_domain_event(event).await;
+        }
+        if existing_season_request.is_some() {
+            self.runtime
+                .acquisition
+                .target_cache
+                .mark_title(&outcome.title.id);
+            return Ok(());
         }
         // SQL approval already committed every resolved request's hold. This
         // fills the compatibility fallback for non-transactional repositories.
@@ -1861,32 +1997,174 @@ impl AppUseCase {
             .any(|requester| requester.user_id == actor.id))
     }
 
-    async fn ensure_request_subject_is_not_in_library(
+    pub(crate) async fn find_request_subject_in_library(
         &self,
         library_id: &str,
-        facet: MediaFacet,
+        facet: &MediaFacet,
         external_ids: &[ExternalId],
-    ) -> AppResult<()> {
-        for (source, values) in group_external_id_values_by_source(external_ids) {
-            let existing = self
+    ) -> AppResult<Option<Title>> {
+        let mut existing: Option<Title> = None;
+        for id in external_ids {
+            if let Some(title) = self
                 .services
                 .catalog
                 .titles
-                .list_existing_external_ids_in_library_and_facet(
+                .find_by_external_id_in_library_and_facet(
                     library_id,
                     facet.clone(),
-                    &source,
-                    &values,
+                    &id.source,
+                    &id.value,
                 )
-                .await?;
-            if !existing.is_empty() {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::media_requests::TITLE_ALREADY_EXISTS_TARGET_LIBRARY,
-                    "title already exists in the target library",
-                ));
+                .await?
+            {
+                if existing.as_ref().is_some_and(|prior| prior.id != title.id) {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::media_requests::EXTERNAL_IDS_MAP_MULTIPLE_TITLES,
+                        "external ids map to multiple titles",
+                    ));
+                }
+                existing = Some(title);
             }
         }
+        Ok(existing)
+    }
+
+    async fn validate_existing_season_request(
+        &self,
+        title: &Title,
+        scope: Option<&MonitorSelection>,
+        lease_days: Option<i64>,
+    ) -> AppResult<()> {
+        let Some(scope) = scope.filter(|_| title.monitored) else {
+            return Err(existing_title_request_refusal());
+        };
+        if lease_days.is_some() {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::MEDIA_REQUESTS_INVALID,
+                "an additional season request cannot set a lease for the existing title",
+            ));
+        }
+        let collections = self
+            .services
+            .catalog
+            .shows
+            .list_collections_for_title(&title.id)
+            .await?;
+        let mut needs_monitoring = false;
+        for season in &scope.seasons {
+            let mut matching = collections.iter().filter(|collection| {
+                collection.collection_type == CollectionType::Season
+                    && collection.collection_index.parse::<i32>().ok() == Some(*season)
+            });
+            let Some(collection) = matching.next().filter(|_| matching.next().is_none()) else {
+                return Err(existing_title_request_refusal());
+            };
+            let episodes = self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_collection(&collection.id)
+                .await?;
+            if episodes.is_empty() {
+                return Err(existing_title_request_refusal());
+            }
+            needs_monitoring |=
+                !collection.monitored || episodes.iter().any(|episode| !episode.monitored);
+        }
+        if !needs_monitoring {
+            return Err(existing_title_request_refusal());
+        }
         Ok(())
+    }
+
+    async fn validate_existing_season_approval(
+        &self,
+        request: &MediaRequest,
+        title: Option<&Title>,
+        approved_monitor_type: Option<&str>,
+        approved_selection: Option<&MonitorSelection>,
+        approved_lease_days: Option<i64>,
+        approved_profile: &str,
+    ) -> AppResult<Option<tokio::sync::OwnedRwLockReadGuard<()>>> {
+        let Some(title) = title else {
+            return Ok(None);
+        };
+        let requested = regular_season_request(
+            &request.facet,
+            &request.origin,
+            request.requested_monitor_type.as_deref(),
+            request.requested_monitor_selection.as_ref(),
+        );
+        let approved = regular_season_request(
+            &request.facet,
+            &request.origin,
+            approved_monitor_type,
+            approved_selection,
+        );
+        if let Some(requested) = requested
+            && !approved.is_some_and(|scope| {
+                scope
+                    .seasons
+                    .iter()
+                    .all(|season| requested.monitors_season(*season))
+            })
+        {
+            return Err(existing_title_request_refusal());
+        }
+        let Some(approved) = approved else {
+            return Ok(None);
+        };
+        let location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::REQUEST_SEASON_APPROVAL_ENTRY,
+                &title.id,
+            )
+            .await?;
+        self.validate_existing_season_request(title, Some(approved), approved_lease_days)
+            .await?;
+        self.validate_existing_season_profile(title, approved_profile)
+            .await?;
+        Ok(Some(location_guard))
+    }
+
+    async fn validate_existing_season_profile(
+        &self,
+        title: &Title,
+        profile_id: &str,
+    ) -> AppResult<()> {
+        let profile = self.resolve_quality_profile_for_title(title).await?;
+        if !profile.id.eq_ignore_ascii_case(profile_id) {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY,
+                "an additional season request must use the existing title's quality profile",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn request_profile_for_subject(
+        &self,
+        library: &Library,
+        requested: Option<String>,
+        existing_season_title: Option<&Title>,
+    ) -> AppResult<(String, String)> {
+        let requested = if let Some(title) = existing_season_title {
+            let current = self.resolve_quality_profile_for_title(title).await?;
+            if requested
+                .as_ref()
+                .is_some_and(|id| !current.id.eq_ignore_ascii_case(id.trim()))
+            {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media_requests::REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY,
+                    "an additional season request must use the existing title's quality profile",
+                ));
+            }
+            Some(current.id)
+        } else {
+            requested
+        };
+        self.request_quality_profile_snapshot_for_submission(library, requested)
+            .await
     }
 
     pub(crate) async fn request_quality_profile_snapshot_for_submission(
@@ -2098,18 +2376,7 @@ fn media_request_lifecycle_event_library_id(event: &DomainEvent) -> Option<&str>
     }
 }
 
-fn group_external_id_values_by_source(external_ids: &[ExternalId]) -> Vec<(String, Vec<String>)> {
-    let mut grouped = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for external_id in external_ids {
-        grouped
-            .entry(external_id.source.clone())
-            .or_default()
-            .push(external_id.value.clone());
-    }
-    grouped.into_iter().collect()
-}
-
-fn is_smg_request_correlation_external_id(external_id: &ExternalId) -> bool {
+pub(crate) fn is_smg_request_correlation_external_id(external_id: &ExternalId) -> bool {
     matches!(external_id.source.as_str(), "tvdb" | "imdb" | "tmdb")
 }
 
@@ -2501,6 +2768,28 @@ fn media_request_to_new_title(
         language: request.language.clone(),
         content_status: request.content_status.clone(),
     }
+}
+
+pub(crate) fn regular_season_request<'a>(
+    facet: &MediaFacet,
+    origin: &MediaRequestOrigin,
+    monitor_type: Option<&str>,
+    selection: Option<&'a MonitorSelection>,
+) -> Option<&'a MonitorSelection> {
+    if *facet != MediaFacet::Series
+        || *origin != MediaRequestOrigin::Manual
+        || monitor_type != Some(MONITOR_TYPE_ADVANCED)
+    {
+        return None;
+    }
+    selection.filter(|scope| scope.has_only_regular_seasons())
+}
+
+fn existing_title_request_refusal() -> AppError {
+    AppError::validation_refused(
+        crate::error_reasons::media_requests::TITLE_ALREADY_EXISTS_TARGET_LIBRARY,
+        "title already exists in the target library or has no eligible requested seasons",
+    )
 }
 
 pub(crate) fn normalize_requested_monitor_type(

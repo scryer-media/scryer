@@ -25,7 +25,7 @@ fn approval(request: &MediaRequest) -> MediaRequestResolution {
             actor_user_id: None,
             actor_display_name: "System".into(),
             title_id: None,
-            facet: Some(MediaFacet::Movie),
+            facet: Some(request.facet.clone()),
             correlation_id: None,
             causation_id: None,
             schema_version: 1,
@@ -192,6 +192,94 @@ async fn overlapping_request_resolution_preserves_each_lease_and_provenance() {
             .unwrap()
             .updated,
         0
+    );
+}
+
+#[tokio::test]
+async fn overlapping_approval_leaves_other_seasons_and_quality_profiles_pending() {
+    let store = test_store().await;
+    seed_resolution_requests(&store).await;
+    SqlRuntime::run_in_transaction(&store.datastore, "seed_approval_scopes", |tx| {
+        Box::pin(async move {
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "UPDATE libraries SET facet = 'series' WHERE id = 'library-under-test'",
+                &[],
+            )
+            .await?;
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "UPDATE titles SET facet = 'series' WHERE id = 'approved-title'",
+                &[],
+            )
+            .await?;
+            for (id, season, profile) in [
+                ("primary", 2, "hd"),
+                ("sibling", 3, "hd"),
+                ("forever", 2, "uhd"),
+            ] {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE media_requests
+                        SET facet = 'series', requested_monitor_type = 'advanced',
+                            requested_quality_profile_id = {}
+                      WHERE id = {}",
+                    &[SqlArg::Text(profile.into()), SqlArg::Text(id.into())],
+                )
+                .await?;
+                replace_monitor_selection_tx(
+                    tx,
+                    OWNER_KIND_MEDIA_REQUEST,
+                    id,
+                    Some(&MonitorSelection {
+                        seasons: vec![season],
+                        series_movies: Vec::new(),
+                    }),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+
+    let request = store.get("primary").await.unwrap().unwrap();
+    let mut resolution = approval(&request);
+    resolution.approved_quality_profile_id = Some("hd".into());
+    let result = store
+        .resolve_pending_overlapping(&request, resolution.clone())
+        .await
+        .unwrap();
+    assert_eq!(result.updated, 1);
+    assert_eq!(
+        store.get("primary").await.unwrap().unwrap().status,
+        MediaRequestStatus::Approved
+    );
+    for id in ["sibling", "forever"] {
+        let row = store.get(id).await.unwrap().unwrap();
+        assert_eq!(row.status, MediaRequestStatus::Pending);
+        assert_eq!(row.created_title_id, None);
+    }
+
+    // A stale retry cannot resolve a new sibling even if its scope now
+    // matches the primary request that has already left the pending state.
+    SqlRuntime::execute_write(
+        &store.datastore,
+        "match_previous_approval_scope",
+        "UPDATE media_requests SET requested_quality_profile_id = 'hd' WHERE id = 'forever'",
+        vec![],
+    )
+    .await
+    .unwrap();
+    let result = store
+        .resolve_pending_overlapping(&request, resolution)
+        .await
+        .unwrap();
+    assert_eq!(result.updated, 0);
+    assert_eq!(
+        store.get("forever").await.unwrap().unwrap().status,
+        MediaRequestStatus::Pending
     );
 }
 
@@ -506,4 +594,134 @@ async fn reopening_a_rejected_request_clears_only_its_resolution() {
         1,
         "a refused reopen records nothing"
     );
+}
+
+#[tokio::test]
+async fn existing_season_approval_preserves_old_scope_and_monitors_the_new_season() {
+    use scryer_application::{TitleOptionsPatch, TitleRepository};
+    use scryer_domain::{TitleContextSnapshot, TitleUpdatedEventData};
+
+    let store = test_store().await;
+    seed_resolution_requests(&store).await;
+    SqlRuntime::run_in_transaction(&store.datastore, "seed_existing_series_season_request", |tx| {
+        Box::pin(async move {
+            tx.execute("UPDATE libraries SET facet = 'series' WHERE id = 'library-under-test'", &[]).await?;
+            tx.execute(
+                "UPDATE titles SET facet = 'series', monitored = {}, tags = {} WHERE id = 'approved-title'",
+                &[SqlArg::Bool(true), SqlArg::Text(r#"["scryer:monitor-type:advanced","scryer:quality-profile:hd","keep-tag"]"#.into())],
+            ).await?;
+            tx.execute(
+                "INSERT INTO title_external_ids (id,title_id,library_id,facet,source,external_kind,external_id,external_key,created_at,updated_at)
+                 VALUES ('existing-id','approved-title','library-under-test','series','tvdb','','9000','tvdb:9000',{},{})",
+                &[SqlArg::Timestamp(Utc::now()), SqlArg::Timestamp(Utc::now())],
+            ).await?;
+            for (number, monitored) in [(2, true), (3, false), (4, false)] {
+                let id = format!("season-{number}");
+                tx.execute(
+                    "INSERT INTO collections (id,title_id,collection_type,collection_index,created_at,monitored)
+                     VALUES ({},'approved-title','season',{},{},{})",
+                    &[SqlArg::Text(id.clone()), SqlArg::Text(number.to_string()),
+                      SqlArg::Timestamp(Utc::now()), SqlArg::Bool(monitored)],
+                ).await?;
+                tx.execute(
+                    "INSERT INTO episodes (id,title_id,collection_id,episode_type,season_number,episode_number,created_at,monitored)
+                     VALUES ({},'approved-title',{},'standard',{},'1',{},{})",
+                    &[SqlArg::Text(format!("episode-{number}")), SqlArg::Text(id),
+                      SqlArg::Text(number.to_string()), SqlArg::Timestamp(Utc::now()), SqlArg::Bool(monitored)],
+                ).await?;
+            }
+            replace_monitor_selection_tx(
+                tx, OWNER_KIND_TITLE, "approved-title",
+                Some(&MonitorSelection { seasons: vec![2], series_movies: vec![] }),
+            ).await?;
+            for (id, season, profile) in [("primary", 3, "hd"), ("sibling", 4, "hd"), ("forever", 3, "uhd")] {
+                tx.execute(
+                    "UPDATE media_requests SET facet = 'series', requested_monitor_type = 'advanced',
+                     requested_lease_days = NULL, requested_quality_profile_id = {} WHERE id = {}",
+                    &[SqlArg::Text(profile.into()), SqlArg::Text(id.into())],
+                ).await?;
+                replace_monitor_selection_tx(
+                    tx, OWNER_KIND_MEDIA_REQUEST, id,
+                    Some(&MonitorSelection { seasons: vec![season], series_movies: vec![] }),
+                ).await?;
+            }
+            Ok(())
+        })
+    }).await.unwrap();
+    let request = store.get("primary").await.unwrap().unwrap();
+    let titles = crate::media::titles::store::TitleStore::new(store.datastore.clone());
+    let mut candidate = titles.get_by_id("approved-title").await.unwrap().unwrap();
+    let initial_tags = candidate.tags.clone();
+    candidate.external_ids = request.external_ids.clone();
+    candidate.tags.retain(|tag| tag != "keep-tag");
+    let mut resolution = approval(&request);
+    resolution.approved_lease_days = None;
+    resolution.approved_quality_profile_id = Some("hd".into());
+    let mut title_event = resolution.event.clone();
+    title_event.event_id = scryer_domain::Id::new().0;
+    title_event.title_id = Some(candidate.id.clone());
+    title_event.stream = DomainEventStream::Title {
+        title_id: candidate.id.clone(),
+    };
+    title_event.payload = DomainEventPayload::TitleUpdated(TitleUpdatedEventData {
+        title: TitleContextSnapshot {
+            title_name: candidate.name.clone(),
+            facet: MediaFacet::Series,
+            external_ids: Default::default(),
+            poster_url: None,
+            year: None,
+        },
+    });
+    let (created, resolved, event) = store
+        .approve_with_title(
+            &request,
+            candidate,
+            TitleOptionsPatch {
+                monitor_selection: Some(request.requested_monitor_selection.clone()),
+                ..Default::default()
+            },
+            resolution,
+            title_event,
+        )
+        .await
+        .unwrap();
+    assert!(created.reused_existing);
+    assert_eq!(created.title.tags, initial_tags);
+    assert_eq!(resolved.updated, 1);
+    assert!(matches!(
+        event.unwrap().payload,
+        DomainEventPayload::TitleUpdated(_)
+    ));
+    assert_eq!(
+        titles
+            .get_title_monitor_selection("approved-title")
+            .await
+            .unwrap()
+            .unwrap()
+            .seasons,
+        vec![2, 3],
+    );
+    for (season, monitored) in [(2, true), (3, true), (4, false)] {
+        let row = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT c.monitored AS collection_monitored,e.monitored AS episode_monitored
+               FROM collections c JOIN episodes e ON e.collection_id = c.id WHERE c.id = {}",
+            &[SqlArg::Text(format!("season-{season}"))],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(row.bool("collection_monitored").unwrap(), monitored);
+        assert_eq!(row.bool("episode_monitored").unwrap(), monitored);
+    }
+    assert_eq!(
+        store.get("primary").await.unwrap().unwrap().status,
+        MediaRequestStatus::Approved
+    );
+    for id in ["sibling", "forever"] {
+        assert_eq!(
+            store.get(id).await.unwrap().unwrap().status,
+            MediaRequestStatus::Pending
+        );
+    }
 }

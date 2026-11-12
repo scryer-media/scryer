@@ -341,8 +341,30 @@ impl MonitorSelection {
         }
     }
 
+    pub fn has_only_regular_seasons(&self) -> bool {
+        !self.seasons.is_empty()
+            && self.seasons.iter().all(|season| *season > 0)
+            && self.series_movies.is_empty()
+    }
+
     pub fn monitors_season(&self, season_number: i32) -> bool {
         self.seasons.contains(&season_number)
+    }
+
+    /// Compare the selected media without depending on movie labels or
+    /// additional external IDs returned by metadata enrichment.
+    pub fn has_same_scope(&self, other: &Self) -> bool {
+        let left = self.normalized();
+        let right = other.normalized();
+        left.seasons == right.seasons
+            && left
+                .series_movies
+                .iter()
+                .filter_map(MonitorSelectionMovie::canonical_key)
+                .eq(right
+                    .series_movies
+                    .iter()
+                    .filter_map(MonitorSelectionMovie::canonical_key))
     }
 
     /// True when any selected movie shares an external id with the candidate.

@@ -7,11 +7,305 @@ use super::media_request_requesters::{
 };
 use super::*;
 use scryer_application::{MediaRequestRepository, MediaRequestResolution};
-use scryer_domain::MediaRequestStatus;
+use scryer_domain::{
+    MediaRequestResolvedEventData, MediaRequestStatus, MonitorSelection, MonitorSelectionMovie,
+};
+use scryer_infrastructure_sql::runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+type RejectionFixture = (&'static str, Option<MonitorSelection>, MediaRequestStatus);
+
+#[tokio::test]
+async fn media_request_rejection_keeps_distinct_series_seasons_pending() {
+    assert_rejection_scope(
+        "series_season_rejection",
+        MediaFacet::Series,
+        &series_rejection_fixtures(),
+    )
+    .await;
+}
+
+fn series_rejection_fixtures() -> [RejectionFixture; 5] {
+    let seasons = |seasons| {
+        Some(MonitorSelection {
+            seasons,
+            series_movies: Vec::new(),
+        })
+    };
+    [
+        ("season-one", seasons(vec![1]), MediaRequestStatus::Rejected),
+        (
+            "season-one-duplicate",
+            seasons(vec![1, 1]),
+            MediaRequestStatus::Rejected,
+        ),
+        ("season-five", seasons(vec![5]), MediaRequestStatus::Pending),
+        (
+            "seasons-one-and-five",
+            seasons(vec![5, 1]),
+            MediaRequestStatus::Pending,
+        ),
+        ("whole-series", None, MediaRequestStatus::Pending),
+    ]
+}
+
+#[tokio::test]
+async fn media_request_rejection_keeps_distinct_anime_series_movies_pending() {
+    assert_rejection_scope(
+        "anime_series_movie_rejection",
+        MediaFacet::Anime,
+        &anime_rejection_fixtures(),
+    )
+    .await;
+}
+
+fn anime_rejection_fixtures() -> [RejectionFixture; 4] {
+    let movie = |name: &str, id: &str| {
+        Some(MonitorSelection {
+            seasons: vec![1],
+            series_movies: vec![MonitorSelectionMovie {
+                name: name.into(),
+                external_ids: vec![ExternalId::new("tmdb", id)],
+            }],
+        })
+    };
+    [
+        (
+            "first-movie",
+            movie("First movie", "802401"),
+            MediaRequestStatus::Rejected,
+        ),
+        (
+            "same-movie-renamed",
+            movie("First movie after refresh", "802401"),
+            MediaRequestStatus::Rejected,
+        ),
+        (
+            "second-movie",
+            movie("Second movie", "802402"),
+            MediaRequestStatus::Pending,
+        ),
+        (
+            "season-only",
+            Some(MonitorSelection {
+                seasons: vec![1],
+                series_movies: Vec::new(),
+            }),
+            MediaRequestStatus::Pending,
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn media_request_rejection_keeps_scoped_requests_pending_when_dismissing_whole_series() {
+    assert_rejection_scope(
+        "whole_series_rejection",
+        MediaFacet::Series,
+        &[
+            ("whole-series", None, MediaRequestStatus::Rejected),
+            ("whole-series-duplicate", None, MediaRequestStatus::Rejected),
+            (
+                "season-five",
+                Some(MonitorSelection {
+                    seasons: vec![5],
+                    series_movies: Vec::new(),
+                }),
+                MediaRequestStatus::Pending,
+            ),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn media_request_rejection_still_resolves_duplicate_movie_requests() {
+    assert_rejection_scope(
+        "movie_duplicate_rejection",
+        MediaFacet::Movie,
+        &[
+            ("movie", None, MediaRequestStatus::Rejected),
+            ("movie-duplicate", None, MediaRequestStatus::Rejected),
+        ],
+    )
+    .await;
+}
+
+async fn assert_rejection_scope(db_prefix: &str, facet: MediaFacet, fixtures: &[RejectionFixture]) {
+    let (services, db) = temp_services(db_prefix).await;
+    let result = assert_rejection_scope_in_store(services.datastore(), facet, fixtures).await;
+    services.pool().close().await;
+    let _ = std::fs::remove_file(db);
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn media_request_rejection_keeps_distinct_scopes_pending_on_postgres() -> AppResult<()> {
+    let Ok(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL") else {
+        eprintln!("skipping PostgreSQL rejection test; SCRYER_TEST_POSTGRES_URL is not set");
+        return Ok(());
+    };
+    if raw_url.trim().is_empty() {
+        return Ok(());
+    }
+
+    let admin_pool = sqlx::PgPool::connect(raw_url.trim())
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!("scryer_test_{}", Id::new().0.replace('-', "_"));
+    let mut url = url::Url::parse(raw_url.trim())
+        .map_err(|error| AppError::Validation(format!("invalid postgres test URL: {error}")))?;
+    url.query_pairs_mut()
+        .append_pair("options", &format!("-csearch_path={schema}"));
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to create schema: {error}")))?;
+
+    let result = async {
+        let services =
+            crate::PostgresServices::new_with_mode(url.to_string(), crate::MigrationMode::Apply)
+                .await?;
+        let result = async {
+            assert_rejection_scope_in_store(
+                services.datastore(),
+                MediaFacet::Series,
+                &series_rejection_fixtures(),
+            )
+            .await?;
+            assert_rejection_scope_in_store(
+                services.datastore(),
+                MediaFacet::Anime,
+                &anime_rejection_fixtures(),
+            )
+            .await
+        }
+        .await;
+        services.pool().close().await;
+        result
+    }
+    .await;
+
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    admin_pool.close().await;
+    cleanup.map_err(|error| AppError::Repository(format!("failed to drop schema: {error}")))?;
+    result
+}
+
+async fn assert_rejection_scope_in_store(
+    datastore: StoreDatastore,
+    facet: MediaFacet,
+    fixtures: &[RejectionFixture],
+) -> AppResult<()> {
+    let library = format!("rejection-{}", facet.as_str());
+    SqlRuntime::execute_write(
+        &datastore,
+        "seed_rejection_library",
+        "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+         VALUES ({}, {}, {}, {}, {}, {}, {})",
+        vec![
+            SqlArg::Text(library.clone()),
+            SqlArg::Text(facet.as_str().into()),
+            SqlArg::Text(library.clone()),
+            SqlArg::Text(library.clone()),
+            SqlArg::Bool(false),
+            SqlArg::Timestamp(Utc::now()),
+            SqlArg::Timestamp(Utc::now()),
+        ],
+    )
+    .await?;
+    let users = UserStore::new(datastore.clone());
+    let store = crate::MediaRequestStore::new(datastore.clone());
+    let resolver = format!("{library}-resolver");
+    users.create(user(&resolver)).await?;
+    for (index, (id, selection, _)) in fixtures.iter().enumerate() {
+        let requester = user(&format!("{library}-requester-{index}"));
+        users.create(requester.clone()).await?;
+        let mut request = new_request(id, &library, &requester.id);
+        request.facet = facet.clone();
+        request.external_ids = vec![ExternalId::new("tvdb", "9000001")];
+        request.requested_monitor_type = selection.as_ref().map(|_| "advanced".into());
+        request.requested_monitor_selection = selection.clone();
+        let mut event = request_event(id);
+        event.facet = Some(facet.clone());
+        if let DomainEventPayload::MediaRequestSubmitted(data) = &mut event.payload {
+            data.library_id = library.clone();
+            data.facet = facet.clone();
+        }
+        let stored = store.submit(request, &requester, event).await?.request;
+        assert_eq!(stored.id, *id, "expected an independent pending request");
+    }
+
+    let target = store.get(fixtures[0].0).await?.unwrap();
+    let mut event = request_event(&target.id);
+    event.facet = Some(facet.clone());
+    event.payload = DomainEventPayload::MediaRequestRejected(MediaRequestResolvedEventData {
+        request_id: target.id.clone(),
+        library_id: target.library_id.clone(),
+        facet: facet.clone(),
+        title_name: target.title.clone(),
+        external_ids: target.external_ids.clone(),
+        created_title_id: None,
+        requested_quality_profile_id: None,
+        requested_quality_profile_name: None,
+        requested_monitor_type: target.requested_monitor_type.clone(),
+        approved_quality_profile_id: None,
+        approved_quality_profile_name: None,
+        decided_by_rule_set_ids: Vec::new(),
+        decision_reason_codes: Vec::new(),
+        approved_lease_days: None,
+        policy_tags: Vec::new(),
+    });
+    let expected_count = fixtures
+        .iter()
+        .filter(|(_, _, status)| *status == MediaRequestStatus::Rejected)
+        .count();
+    let resolution = store
+        .resolve_pending_overlapping(
+            &target,
+            MediaRequestResolution {
+                status: MediaRequestStatus::Rejected,
+                resolved_by_user_id: Some(resolver.clone()),
+                resolved_at: Utc::now(),
+                created_title_id: None,
+                approved_quality_profile_id: None,
+                approved_quality_profile_name: None,
+                approved_lease_days: None,
+                decision_id: None,
+                decided_by_rule_set_ids: Vec::new(),
+                policy_tags: Vec::new(),
+                event,
+            },
+        )
+        .await?;
+    for &(id, _, status) in fixtures {
+        let request = store.get(id).await?.unwrap();
+        assert_eq!(request.status, status, "unexpected state for {id}");
+        let rejected = status == MediaRequestStatus::Rejected;
+        assert_eq!(request.resolved_at.is_some(), rejected);
+        assert_eq!(
+            request.resolved_by_user_id.as_deref(),
+            rejected.then_some(resolver.as_str())
+        );
+        assert!(request.created_title_id.is_none());
+    }
+    assert_eq!(resolution.updated, expected_count as u64);
+    let emitted = SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        "SELECT COUNT(*) AS count FROM domain_events
+         WHERE event_type = 'media_request_rejected' AND facet = {}",
+        &[SqlArg::Text(facet.as_str().into())],
+    )
+    .await?
+    .unwrap()
+    .i64("count")?;
+    assert_eq!(emitted, expected_count as i64);
+    Ok(())
+}
 
 #[tokio::test]
 async fn list_movie_approval_preserves_parent_and_scopes_request_ownership() {
-    use scryer_domain::{MediaRequestOrigin, MonitorSelection, MonitorSelectionMovie};
+    use scryer_domain::MediaRequestOrigin;
     for existing in [false, true] {
         let (services, _db) = temp_services("list_movie_approval").await;
         seed_library(&services, "library-1").await;

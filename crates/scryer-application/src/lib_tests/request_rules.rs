@@ -804,6 +804,53 @@ async fn an_enforced_denial_rejects_the_request_with_no_human_resolver() {
 }
 
 #[tokio::test]
+async fn an_enforced_denial_keeps_a_different_pending_season() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let season_request = |season| {
+        let mut input = media_request_input(library_id.clone(), 9047);
+        input.facet = MediaFacet::Series;
+        input.requested_monitor_type = Some("advanced".into());
+        input.requested_monitor_selection = Some(scryer_domain::MonitorSelection {
+            seasons: vec![season],
+            series_movies: Vec::new(),
+        });
+        input
+    };
+
+    let pending = harness
+        .app
+        .submit_media_request(&harness.user, season_request(5))
+        .await
+        .unwrap()
+        .request_id;
+    let detail = create_rule(&harness, "Deny everything", DENY_EVERYTHING).await;
+    enable(&harness, &detail.rule_set.id).await;
+    let denied = harness
+        .app
+        .submit_media_request(&harness.user, season_request(1))
+        .await
+        .unwrap()
+        .request_id;
+    assert_ne!(pending, denied);
+
+    let requests = harness.media_requests.requests.lock().await;
+    let untouched = requests
+        .iter()
+        .find(|request| request.id == pending)
+        .unwrap();
+    let rejected = requests
+        .iter()
+        .find(|request| request.id == denied)
+        .unwrap();
+    assert_eq!(untouched.status, MediaRequestStatus::Pending);
+    assert!(untouched.resolved_at.is_none());
+    assert_eq!(rejected.status, MediaRequestStatus::Rejected);
+    assert_eq!(rejected.decided_by_rule_set_ids, vec![detail.rule_set.id]);
+    assert!(rejected.resolved_by_user_id.is_none());
+}
+
+#[tokio::test]
 async fn trace_write_failure_does_not_disarm_an_enforced_denial() {
     let harness = bootstrap_media_request_app();
     let detail = create_rule(&harness, "Deny everything", DENY_EVERYTHING).await;

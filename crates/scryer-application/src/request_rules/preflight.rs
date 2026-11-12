@@ -94,13 +94,26 @@ impl AppUseCase {
         let enrichment = self.enrich_request_draft(&input.facet, external_ids).await;
         let external_ids = enrichment.external_ids.clone();
 
-        // The profile is resolved exactly as submit resolves it, including the
-        // library's default when the draft names none — otherwise a preview of
-        // "whatever the default is" would evaluate with no profile facts at all.
+        let existing = if crate::media_requests::regular_season_request(
+            &input.facet,
+            &input.origin,
+            input.requested_monitor_type.as_deref(),
+            input.requested_monitor_selection.as_ref(),
+        )
+        .is_some()
+        {
+            self.find_request_subject_in_library(&library.id, &input.facet, &external_ids)
+                .await?
+        } else {
+            None
+        };
+        // Preview uses the existing title's effective profile for a season expansion,
+        // and the library default when a new-title request leaves the profile blank.
         let (quality_profile_id, quality_profile_name) = match self
-            .request_quality_profile_snapshot_for_submission(
+            .request_profile_for_subject(
                 &library,
                 input.requested_quality_profile_id.clone(),
+                existing.as_ref(),
             )
             .await
         {
@@ -146,7 +159,11 @@ impl AppUseCase {
             // approval path. `evaluation.tags` is already narrowed to labels the
             // tag registry defines, so the banner cannot promise one that the
             // approval would drop.
-            tags: evaluation.tags,
+            tags: if existing.is_some() {
+                Vec::new()
+            } else {
+                evaluation.tags
+            },
             metadata_partial: evaluation.metadata_partial,
             evaluation_mode: evaluation.evaluation_mode,
             policy_outcome: evaluation.policy_outcome,

@@ -729,6 +729,13 @@ pub const COLLECTION_MONITOR_EDIT_ENTRY: GuardedEntry = GuardedEntry {
     constant: "COLLECTION_MONITOR_EDIT_ENTRY",
 };
 
+pub const REQUEST_SEASON_APPROVAL_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "media_requests.rs",
+    function: "validate_existing_season_approval",
+    constant: "REQUEST_SEASON_APPROVAL_ENTRY",
+};
+
 pub const EPISODE_MONITOR_EDIT_ENTRY: GuardedEntry = GuardedEntry {
     action: GuardedAction::TitleEdit,
     module: "catalog/workflow/monitoring.rs",
@@ -816,6 +823,7 @@ pub const GUARDED_ENTRIES: &[&GuardedEntry] = &[
     &TITLE_REMATCH_ENTRY,
     &TITLE_MONITOR_EDIT_ENTRY,
     &COLLECTION_MONITOR_EDIT_ENTRY,
+    &REQUEST_SEASON_APPROVAL_ENTRY,
     &EPISODE_MONITOR_EDIT_ENTRY,
     &COLLECTION_EDIT_ENTRY,
     &EPISODE_EDIT_ENTRY,
@@ -1399,6 +1407,7 @@ mod tests {
     /// Source of every module that registers a guarded entry point. The audit
     /// test reads these to prove a declared entry is actually wired.
     const GUARDED_ENTRY_SOURCES: &[(&str, &str)] = &[
+        ("media_requests.rs", include_str!("../media_requests.rs")),
         (
             "catalog/workflow/collections.rs",
             include_str!("../catalog/workflow/collections.rs"),
