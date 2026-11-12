@@ -2875,6 +2875,7 @@ mod seed_goal_tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+    use crate::workflow::stores::writer_transaction_recorder::WriterTransactionRecorder;
 
     async fn store() -> DownloadSubmissionStore {
         let pool = SqlitePoolOptions::new()
@@ -7051,37 +7052,66 @@ mod seed_goal_tests {
         assert!(store.cleanup_seed_watermark().await.unwrap().is_some());
     }
 
-    #[tokio::test]
-    async fn cleanup_seed_idle_narrowed_pass_advances_its_change_bound() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn cleanup_seed_idle_narrowed_pass_takes_no_writer_transaction() {
         let store = store().await;
         let watermark = Utc::now() - chrono::Duration::minutes(1);
         set_cleanup_seed_watermark(&store, watermark, watermark).await;
+        let stored = store.cleanup_seed_watermark().await.unwrap().unwrap();
 
-        store.seed_download_cleanup(100).await.unwrap();
-        let idle = store.cleanup_seed_watermark().await.unwrap().unwrap();
+        let recorder = WriterTransactionRecorder::default();
+        {
+            let _recording = metrics::set_default_local_recorder(&recorder);
+            store.seed_download_cleanup(100).await.unwrap();
+            store.seed_download_cleanup(100).await.unwrap();
+        }
         assert!(seeded_cleanup_ids(&store).await.is_empty());
-        assert!(
-            idle.changed_through > watermark,
-            "a narrowed pass that seeds nothing still advances its change bound"
+        assert_eq!(recorder.count("advance_download_cleanup_seed"), 0);
+        assert_eq!(recorder.count("seed_download_cleanup"), 0);
+        let idle = store.cleanup_seed_watermark().await.unwrap().unwrap();
+        assert_eq!(
+            idle.changed_through, stored.changed_through,
+            "a narrowed pass that seeds nothing leaves its change bound alone"
         );
-        assert_eq!(idle.full_scan_at, watermark);
+        assert_eq!(idle.full_scan_at, stored.full_scan_at);
 
-        // A full pass records itself even when it seeds nothing.
+        // A pass with work seeds and records its advance as before.
+        let changed = missed_terminal_download(&store, "emberfall", Utc::now()).await;
+        let before_work = Utc::now();
+        let recorder = WriterTransactionRecorder::default();
+        {
+            let _recording = metrics::set_default_local_recorder(&recorder);
+            store.seed_download_cleanup(100).await.unwrap();
+        }
+        assert_eq!(seeded_cleanup_ids(&store).await, vec![changed]);
+        assert_eq!(recorder.count("seed_download_cleanup"), 1);
+        assert_eq!(recorder.count("advance_download_cleanup_seed"), 1);
+        let advanced = store.cleanup_seed_watermark().await.unwrap().unwrap();
+        assert!(
+            advanced.changed_through >= before_work,
+            "a narrowed pass that seeds records the instant it started"
+        );
+        assert_eq!(advanced.full_scan_at, stored.full_scan_at);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cleanup_seed_full_pass_records_itself_even_when_it_seeds_nothing() {
+        let store = store().await;
+        let watermark = Utc::now() - chrono::Duration::minutes(1);
         let stale_full =
             Utc::now() - CLEANUP_SEED_FULL_SCAN_INTERVAL - chrono::Duration::minutes(1);
         set_cleanup_seed_watermark(&store, watermark, stale_full).await;
-        store.seed_download_cleanup(100).await.unwrap();
-        let full = store.cleanup_seed_watermark().await.unwrap().unwrap();
-        assert!(full.full_scan_at > stale_full);
-        assert!(full.changed_through > watermark);
-        set_cleanup_seed_watermark(&store, watermark, watermark).await;
+        let before = Utc::now();
 
-        let changed = missed_terminal_download(&store, "emberfall", Utc::now()).await;
-        store.seed_download_cleanup(100).await.unwrap();
-        assert_eq!(seeded_cleanup_ids(&store).await, vec![changed]);
-        let advanced = store.cleanup_seed_watermark().await.unwrap().unwrap();
-        assert!(advanced.changed_through > watermark);
-        assert_eq!(advanced.full_scan_at, watermark);
+        let recorder = WriterTransactionRecorder::default();
+        {
+            let _recording = metrics::set_default_local_recorder(&recorder);
+            store.seed_download_cleanup(100).await.unwrap();
+        }
+        assert_eq!(recorder.count("advance_download_cleanup_seed"), 1);
+        let full = store.cleanup_seed_watermark().await.unwrap().unwrap();
+        assert!(full.full_scan_at >= before);
+        assert_eq!(full.changed_through, full.full_scan_at);
     }
 
     #[test]

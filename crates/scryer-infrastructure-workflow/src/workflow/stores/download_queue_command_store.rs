@@ -198,6 +198,22 @@ impl DownloadQueueCommandRepository for DownloadQueueCommandStore {
     async fn recover_stale_running_delete_commands(&self, stale_seconds: i64) -> AppResult<u64> {
         let now = Utc::now();
         let cutoff = now - chrono::Duration::seconds(stale_seconds);
+        // Nearly every pass finds nothing stale; probing on the read pool
+        // first keeps that pass off the single writer.
+        let any_stale = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS stale FROM download_queue_commands
+             WHERE action = 'delete'
+               AND status = 'running'
+               AND updated_at <= {}
+             LIMIT 1",
+            &[SqlArg::Timestamp(cutoff)],
+        )
+        .await?
+        .is_some();
+        if !any_stale {
+            return Ok(0);
+        }
         let rows = execute_write(
             &self.datastore,
             "recover_stale_running_delete_download_commands",
@@ -337,6 +353,7 @@ impl DownloadQueueCommandRepository for DownloadQueueCommandStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::stores::writer_transaction_recorder::WriterTransactionRecorder;
     use sqlx::sqlite::SqlitePoolOptions;
     use std::sync::Arc;
 
@@ -380,6 +397,115 @@ mod tests {
             pool,
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
         })
+    }
+
+    async fn command_status(store: &DownloadQueueCommandStore, id: &str) -> (String, String) {
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("fixture store should be sqlite");
+        };
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT status, updated_at FROM download_queue_commands WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("load fixture command status")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stale_delete_recovery_with_nothing_stale_takes_no_writer_transaction() {
+        let store = store().await;
+        let fresh = store
+            .queue_delete_command(Some("client-1"), "weaver", "fresh-job", false, None)
+            .await
+            .expect("queue fresh command");
+        store
+            .mark_delete_command_running(&fresh.id)
+            .await
+            .expect("mark fresh command running");
+        let before = command_status(&store, &fresh.id).await;
+
+        let recorder = WriterTransactionRecorder::default();
+        let recovered = {
+            let _recording = metrics::set_default_local_recorder(&recorder);
+            store
+                .recover_stale_running_delete_commands(3_600)
+                .await
+                .expect("recover stale commands")
+        };
+
+        assert_eq!(recovered, 0);
+        assert_eq!(
+            recorder.count("recover_stale_running_delete_download_commands"),
+            0
+        );
+        assert_eq!(command_status(&store, &fresh.id).await, before);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stale_delete_recovery_requeues_only_stale_running_commands() {
+        let store = store().await;
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("fixture store should be sqlite");
+        };
+        let mut ids = Vec::new();
+        for item in ["stale-running", "fresh-running", "stale-queued"] {
+            let command = store
+                .queue_delete_command(Some("client-1"), "weaver", item, false, None)
+                .await
+                .expect("queue command");
+            ids.push(command.id);
+        }
+        for id in &ids[..2] {
+            store
+                .mark_delete_command_running(id)
+                .await
+                .expect("mark command running");
+        }
+        let long_ago = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        for id in [&ids[0], &ids[2]] {
+            sqlx::query(
+                "UPDATE download_queue_commands SET updated_at = ?, error_text = 'fixture' WHERE id = ?",
+            )
+            .bind(&long_ago)
+            .bind(id)
+            .execute(pool)
+            .await
+            .expect("age fixture command");
+        }
+        let fresh_before = command_status(&store, &ids[1]).await;
+        let queued_before = command_status(&store, &ids[2]).await;
+
+        let recorder = WriterTransactionRecorder::default();
+        let recovered = {
+            let _recording = metrics::set_default_local_recorder(&recorder);
+            store
+                .recover_stale_running_delete_commands(3_600)
+                .await
+                .expect("recover stale commands")
+        };
+
+        assert_eq!(recovered, 1);
+        assert_eq!(
+            recorder.count("recover_stale_running_delete_download_commands"),
+            1
+        );
+        let (status, updated_at) = command_status(&store, &ids[0]).await;
+        assert_eq!(status, "queued");
+        assert!(updated_at > long_ago);
+        let (error_text, started_at, finished_at) = sqlx::query_as::<
+            _,
+            (Option<String>, Option<String>, Option<String>),
+        >(
+            "SELECT error_text, started_at, finished_at FROM download_queue_commands WHERE id = ?",
+        )
+        .bind(&ids[0])
+        .fetch_one(pool)
+        .await
+        .expect("load recovered command");
+        assert_eq!((error_text, started_at, finished_at), (None, None, None));
+        assert_eq!(command_status(&store, &ids[1]).await, fresh_before);
+        assert_eq!(command_status(&store, &ids[2]).await, queued_before);
     }
 
     #[tokio::test]

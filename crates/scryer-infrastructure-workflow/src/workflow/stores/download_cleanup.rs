@@ -297,8 +297,12 @@ impl DownloadSubmissionStore {
         }
         // A full page may have left eligible rows behind, so the bound stays
         // where it was until a pass drains its candidate set; every seed
-        // transaction above has committed by now.
-        if drained {
+        // transaction above has committed by now. A narrowed pass that seeded
+        // nothing leaves the stored bound where it is: the next narrowed pass
+        // then rereads a wider window, never a narrower one, and the full pass
+        // that the stale `full_scan_at` forces records the advance.
+        let idle_narrowed_pass = since.is_some() && seeds.is_empty();
+        if drained && !idle_narrowed_pass {
             let full_scan_at = match (&since, &watermark) {
                 (Some(_), Some(watermark)) => watermark.full_scan_at,
                 _ => started,

@@ -11,6 +11,8 @@ mod import_space_store;
 pub mod import_store;
 mod unique_violation;
 pub mod workflow_operation_store;
+#[cfg(test)]
+mod writer_transaction_recorder;
 
 pub use acquisition_store::AcquisitionStore;
 pub use domain_event_store::DomainEventStore;
