@@ -2159,7 +2159,7 @@ async fn automatic_subtitle_search_waits_longer_after_each_empty_search_up_to_th
         assert_eq!(fixture.backoffs_for(&file).await, rows);
 
         // Once it has passed, the next tick searches again and records one write.
-        searched_at = searched_at + delay;
+        searched_at += delay;
         fixture.at(searched_at);
         app.run_subtitle_search_job().await.unwrap();
         searches += 1;

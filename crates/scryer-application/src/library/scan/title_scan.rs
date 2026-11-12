@@ -3375,8 +3375,7 @@ impl AppUseCase {
                 if !should_analyze || mode == LibraryScanTitleWalkMode::FolderReconciliation {
                     if should_analyze
                         && let PlannedTitleScanRecord::Existing { file_id, .. } = &plan.record
-                    {
-                        if let Err(error) = self
+                        && let Err(error) = self
                             .services
                             .library
                             .media_files
@@ -3385,10 +3384,9 @@ impl AppUseCase {
                                 crate::MediaFileAnalysis::default(),
                             )
                             .await
-                        {
-                            episode_completions.complete(self, &title.id).await;
-                            return Err(error);
-                        }
+                    {
+                        episode_completions.complete(self, &title.id).await;
+                        return Err(error);
                     }
                     unchanged_file_skips += 1;
                     let file_path = plan.file.path.clone();

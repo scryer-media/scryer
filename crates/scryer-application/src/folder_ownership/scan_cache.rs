@@ -102,8 +102,11 @@ struct HeldList {
     owners: BTreeMap<String, HeldOwner>,
     /// The roots every owner's prefilter was prepared for, and the index of
     /// the owners under them.
-    prepared: Option<(Vec<(String, Option<String>)>, OwnerIndex)>,
+    prepared: Option<(PreparedRoots, OwnerIndex)>,
 }
+
+/// The roots a held list was prepared for.
+type PreparedRoots = Vec<(String, Option<String>)>;
 
 impl HeldList {
     /// Whether the owners are still what a fresh read would return, given the
@@ -1485,7 +1488,7 @@ mod tests {
         let mut gloamridge = emberfall.clone();
         gloamridge.id = "synthetic-gloamridge".into();
         gloamridge.name = "Gloamridge".into();
-        gloamridge.folder_path = Some(path_to_stored_string(&root.join("Gloamridge")));
+        gloamridge.folder_path = Some(path_to_stored_string(root.join("Gloamridge")));
         titles.create(gloamridge).await.unwrap();
         let decisions = held_matches_fresh(&app, &context, &probe, &candidates).await;
         assert_eq!(decisions[6], overlap);
@@ -1496,7 +1499,7 @@ mod tests {
         titles
             .assign_title_folders(&[crate::TitleFolderWrite::assign(
                 &cinderwake.id,
-                path_to_stored_string(&root.join("Cinderwake Moved")),
+                path_to_stored_string(root.join("Cinderwake Moved")),
             )
             .expecting(cinderwake.folder_path.clone())])
             .await
@@ -1707,7 +1710,7 @@ mod tests {
                     path_to_stored_string(&path)
                 })
                 .collect();
-            let candidate = path_to_stored_string(&root.join("Cinderwake"));
+            let candidate = path_to_stored_string(root.join("Cinderwake"));
             let claims = 16u32;
 
             // Whole claims through the scan context: the catalog read anew per
