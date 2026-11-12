@@ -20,6 +20,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use scryer_application::application_upgrade::InstallationAssessment;
 use scryer_application::diagnostics::{DiagnosticsHostInputs, DiagnosticsMetrics};
 use scryer_application::{AppError, JwtSessionScope};
+use scryer_domain::AppPermission;
 use serde_json::{Map, Value, json};
 
 use crate::error_reasons::{
@@ -91,6 +92,24 @@ pub(crate) async fn download_diagnostics_bundle_handler(
         );
     }
 
+    // Collecting the host facts snapshots logs, the environment and metrics,
+    // so the permission is settled before any of it is read.
+    match state
+        .auth
+        .app
+        .require_app_permission(&actor.user, AppPermission::ManageSystemSettings)
+        .await
+    {
+        Ok(()) => {}
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+            return permission_denied();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "diagnostics permission check failed");
+            return bundle_failed();
+        }
+    }
+
     let host = state.host.clone();
     let auth = state.auth.auth_runtime.snapshot();
     let inputs = match tokio::task::spawn_blocking(move || host_inputs(&host, &auth)).await {
@@ -122,16 +141,20 @@ pub(crate) async fn download_diagnostics_bundle_handler(
         }
         // A permission refusal is not an authentication failure; a 401 would
         // read as an expired session to the web client.
-        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => refusal(
-            StatusCode::FORBIDDEN,
-            HTTP_DIAGNOSTICS_PERMISSION_DENIED,
-            "downloading diagnostics requires the system settings permission",
-        ),
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => permission_denied(),
         Err(error) => {
             tracing::warn!(%error, "diagnostics bundle failed");
             bundle_failed()
         }
     }
+}
+
+fn permission_denied() -> Response {
+    refusal(
+        StatusCode::FORBIDDEN,
+        HTTP_DIAGNOSTICS_PERMISSION_DENIED,
+        "downloading diagnostics requires the system settings permission",
+    )
 }
 
 fn bundle_failed() -> Response {
