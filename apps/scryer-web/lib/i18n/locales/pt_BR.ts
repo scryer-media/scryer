@@ -1584,11 +1584,16 @@ const pt_BR: LocaleDictionary = {
   "system.title": "Saúde do sistema",
   "system.diagnosticsBundle.download": "Baixar pacote de diagnóstico",
   "system.diagnosticsBundle.preparing": "Preparando o diagnóstico…",
-  "system.diagnosticsBundle.helper": "Logs, métricas e um resumo das configurações em um único arquivo para o mantenedor. Nomes, endereços, caminhos e segredos são removidos na medida do possível; revise o pacote antes de compartilhá-lo.",
-  "system.diagnosticsBundle.failed": "Não foi possível baixar o pacote de diagnóstico.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Entre novamente para baixar o diagnóstico.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Baixar o diagnóstico exige a permissão de configurações do sistema.",
-  "system.diagnosticsBundle.refusal.failed": "Não foi possível gerar o pacote de diagnóstico. Consulte o log do servidor para mais detalhes.",
+  "system.diagnosticsBundle.helper":
+    "Logs, métricas e um resumo das configurações em um único arquivo para o mantenedor. Nomes, endereços, caminhos e segredos são removidos na medida do possível; revise o pacote antes de compartilhá-lo.",
+  "system.diagnosticsBundle.failed":
+    "Não foi possível baixar o pacote de diagnóstico.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Entre novamente para baixar o diagnóstico.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Baixar o diagnóstico exige a permissão de configurações do sistema.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Não foi possível gerar o pacote de diagnóstico. Consulte o log do servidor para mais detalhes.",
   "system.jobsTitle": "Empregos",
   "system.notLoaded": "Saúde do sistema não carregada.",
   "system.refreshing": "Atualizando",

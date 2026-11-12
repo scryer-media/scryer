@@ -247,6 +247,7 @@ pub(super) fn bootstrap_with_user_repo(users: Arc<MockUserRepo>) -> (AppUseCase,
 }
 
 /// Same app as [`bootstrap`], with its title repository handed back.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn bootstrap_with_title_repo() -> (AppUseCase, User, Arc<MockTitleRepo>) {
     bootstrap_with_services(Arc::new(MockUserRepo::default()), None)
 }

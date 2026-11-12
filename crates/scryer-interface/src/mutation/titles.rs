@@ -701,18 +701,18 @@ impl TitleMutations {
         let actor = actor_from_ctx(ctx)?;
         let title_id = input.title_id.to_string();
         app.delete_title(
-                &actor,
-                &title_id,
-                input.delete_files_on_disk.unwrap_or(false),
-                input
-                    .preview_fingerprint
-                    .map(|preview_fingerprint| DeleteExecutionConfirmation {
-                        preview_fingerprint,
-                        typed_confirmation: input.typed_confirmation,
-                    }),
-            )
-            .await
-            .map_err(to_gql_error)?;
+            &actor,
+            &title_id,
+            input.delete_files_on_disk.unwrap_or(false),
+            input
+                .preview_fingerprint
+                .map(|preview_fingerprint| DeleteExecutionConfirmation {
+                    preview_fingerprint,
+                    typed_confirmation: input.typed_confirmation,
+                }),
+        )
+        .await
+        .map_err(to_gql_error)?;
         Ok(DeleteTitlePayload {
             id: ID::from(title_id),
         })

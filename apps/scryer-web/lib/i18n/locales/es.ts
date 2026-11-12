@@ -1595,11 +1595,16 @@ const es: LocaleDictionary = {
   "system.title": "Estado del sistema",
   "system.diagnosticsBundle.download": "Descargar paquete de diagnóstico",
   "system.diagnosticsBundle.preparing": "Preparando el diagnóstico…",
-  "system.diagnosticsBundle.helper": "Registros, métricas y un resumen de la configuración en un solo archivo para el mantenedor. Los nombres, direcciones, rutas y secretos se eliminan en la medida de lo posible; revisa el paquete antes de compartirlo.",
-  "system.diagnosticsBundle.failed": "No se pudo descargar el paquete de diagnóstico.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Vuelve a iniciar sesión para descargar el diagnóstico.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Descargar el diagnóstico requiere el permiso de configuración del sistema.",
-  "system.diagnosticsBundle.refusal.failed": "No se pudo generar el paquete de diagnóstico. Consulta el registro del servidor para más detalles.",
+  "system.diagnosticsBundle.helper":
+    "Registros, métricas y un resumen de la configuración en un solo archivo para el mantenedor. Los nombres, direcciones, rutas y secretos se eliminan en la medida de lo posible; revisa el paquete antes de compartirlo.",
+  "system.diagnosticsBundle.failed":
+    "No se pudo descargar el paquete de diagnóstico.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Vuelve a iniciar sesión para descargar el diagnóstico.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Descargar el diagnóstico requiere el permiso de configuración del sistema.",
+  "system.diagnosticsBundle.refusal.failed":
+    "No se pudo generar el paquete de diagnóstico. Consulta el registro del servidor para más detalles.",
   "system.jobsTitle": "Empleos",
   "system.notLoaded": "Estado del sistema no cargado.",
   "system.refreshing": "Actualizando",

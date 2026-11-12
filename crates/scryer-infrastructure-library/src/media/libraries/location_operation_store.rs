@@ -787,54 +787,16 @@ impl LocationOperationRepository for LocationOperationStore {
             SqlArg::Text(progress.operation_id.clone()),
         ];
 
-        let updated = if matches!(
-            progress.state,
-            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
-        ) {
-            // A completed operation is never resumed, retried or reopened, so
-            // its plan goes with the write that completes it. An operation that
-            // names no single source library keeps it: its permission check
-            // reads the libraries from the plan.
-            let operation_id = progress.operation_id.clone();
-            SqlRuntime::run_in_transaction(
-                &self.datastore,
-                "update_location_operation_progress",
-                move |tx| {
-                    let sql = sql.clone();
-                    let args = args.clone();
-                    let operation_id = operation_id.clone();
-                    Box::pin(async move {
-                        let updated = SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
-                        if updated > 0 {
-                            SqlRuntime::execute(
-                                SqlExec::Tx(tx),
-                                "DELETE FROM location_operation_plans
-                                  WHERE operation_id = {}
-                                    AND EXISTS (SELECT 1 FROM location_operations
-                                                 WHERE id = {}
-                                                   AND state IN ('completed', 'completed_with_warnings')
-                                                   AND source_library_id IS NOT NULL)",
-                                &[
-                                    SqlArg::Text(operation_id.clone()),
-                                    SqlArg::Text(operation_id),
-                                ],
-                            )
-                            .await?;
-                        }
-                        Ok(updated)
-                    })
-                },
-            )
-            .await?
-        } else {
-            SqlRuntime::execute_write(
-                &self.datastore,
-                "update_location_operation_progress",
-                &sql,
-                args,
-            )
-            .await?
-        };
+        // The plan row is left alone: it lives as long as the operation row,
+        // which the foreign key cascade removes it with. A completed
+        // operation's activity detail still lists its files from the plan.
+        let updated = SqlRuntime::execute_write(
+            &self.datastore,
+            "update_location_operation_progress",
+            &sql,
+            args,
+        )
+        .await?;
 
         if updated == 0 {
             return Err(AppError::not_found_reason(
@@ -3325,7 +3287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completing_an_operation_drops_its_plan_and_keeps_the_row() {
+    async fn completing_an_operation_keeps_its_plan_and_its_row() {
         for state in [
             LocationOperationState::Completed,
             LocationOperationState::CompletedWithWarnings,
@@ -3344,7 +3306,7 @@ mod tests {
                 .await
                 .expect("the terminal write should succeed");
 
-            assert_eq!(stored_plan(&store, "op-1").await, None, "{state:?}");
+            assert!(stored_plan(&store, "op-1").await.is_some(), "{state:?}");
             let operation = store
                 .get_location_operation("op-1")
                 .await
@@ -3356,14 +3318,16 @@ mod tests {
                 store
                     .get_location_operation_plan_json("op-1")
                     .await
-                    .expect("the plan read should succeed"),
-                None
+                    .expect("the plan read should succeed")
+                    .as_deref(),
+                Some("{\"titles\":[]}"),
+                "{state:?}"
             );
         }
     }
 
     #[tokio::test]
-    async fn only_a_completion_naming_its_source_library_drops_the_plan() {
+    async fn no_terminal_or_progress_write_drops_the_plan() {
         let store = test_store().await;
         let mut multi_source = operation("op-multi-source", LocationOperationState::Moving);
         multi_source.source_library_id = None;

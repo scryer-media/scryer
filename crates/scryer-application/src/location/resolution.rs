@@ -728,7 +728,7 @@ async fn file_version_from_metadata(
     #[cfg(not(unix))]
     {
         let signature =
-            crate::file_source_signature::file_source_signature_from_metadata(&metadata)?;
+            crate::file_source_signature::file_source_signature_from_metadata(metadata)?;
         Ok(format!(
             "{}:{}:{}",
             metadata.len(),

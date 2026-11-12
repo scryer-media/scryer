@@ -2377,11 +2377,16 @@ const cs: LocaleDictionary = {
   "system.title": "Stav systému",
   "system.diagnosticsBundle.download": "Stáhnout diagnostický balíček",
   "system.diagnosticsBundle.preparing": "Připravuje se diagnostika…",
-  "system.diagnosticsBundle.helper": "Protokoly, metriky a přehled nastavení v jednom souboru pro správce projektu. Jména, adresy, cesty a tajné údaje se odstraňují podle možností; před sdílením balíček zkontrolujte.",
-  "system.diagnosticsBundle.failed": "Diagnostický balíček se nepodařilo stáhnout.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Pro stažení diagnostiky se znovu přihlaste.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Stažení diagnostiky vyžaduje oprávnění k systémovým nastavením.",
-  "system.diagnosticsBundle.refusal.failed": "Diagnostický balíček se nepodařilo vytvořit. Podrobnosti najdete v protokolu serveru.",
+  "system.diagnosticsBundle.helper":
+    "Protokoly, metriky a přehled nastavení v jednom souboru pro správce projektu. Jména, adresy, cesty a tajné údaje se odstraňují podle možností; před sdílením balíček zkontrolujte.",
+  "system.diagnosticsBundle.failed":
+    "Diagnostický balíček se nepodařilo stáhnout.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Pro stažení diagnostiky se znovu přihlaste.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Stažení diagnostiky vyžaduje oprávnění k systémovým nastavením.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Diagnostický balíček se nepodařilo vytvořit. Podrobnosti najdete v protokolu serveru.",
   "system.jobsTitle": "Úlohy",
   "system.auditTitle": "Audit",
   "system.auditLoaded": "Protokol auditu načten.",

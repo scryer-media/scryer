@@ -554,7 +554,10 @@ function SeriesOverviewViewImpl({
     };
     measure();
     // Capture so scrolls of the inner main scroller are seen as well.
-    window.addEventListener("scroll", schedule, { capture: true, passive: true });
+    window.addEventListener("scroll", schedule, {
+      capture: true,
+      passive: true,
+    });
     window.addEventListener("resize", schedule, { passive: true });
     return () => {
       if (frame) cancelAnimationFrame(frame);

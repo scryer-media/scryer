@@ -1512,11 +1512,15 @@ const ko: LocaleDictionary = {
   "system.title": "시스템 상태",
   "system.diagnosticsBundle.download": "진단 번들 다운로드",
   "system.diagnosticsBundle.preparing": "진단 준비 중…",
-  "system.diagnosticsBundle.helper": "로그, 메트릭, 설정 요약을 관리자에게 보낼 하나의 파일로 묶습니다. 이름, 주소, 경로, 비밀 값은 최선을 다해 제거되지만 공유하기 전에 번들을 검토하세요.",
+  "system.diagnosticsBundle.helper":
+    "로그, 메트릭, 설정 요약을 관리자에게 보낼 하나의 파일로 묶습니다. 이름, 주소, 경로, 비밀 값은 최선을 다해 제거되지만 공유하기 전에 번들을 검토하세요.",
   "system.diagnosticsBundle.failed": "진단 번들을 다운로드하지 못했습니다.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "진단을 다운로드하려면 다시 로그인하세요.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "진단을 다운로드하려면 시스템 설정 권한이 필요합니다.",
-  "system.diagnosticsBundle.refusal.failed": "진단 번들을 만들 수 없습니다. 자세한 내용은 서버 로그를 확인하세요.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "진단을 다운로드하려면 다시 로그인하세요.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "진단을 다운로드하려면 시스템 설정 권한이 필요합니다.",
+  "system.diagnosticsBundle.refusal.failed":
+    "진단 번들을 만들 수 없습니다. 자세한 내용은 서버 로그를 확인하세요.",
   "system.jobsTitle": "채용 정보",
   "system.notLoaded": "시스템 상태가 로드되지 않았습니다.",
   "system.refreshing": "새로고침 중",

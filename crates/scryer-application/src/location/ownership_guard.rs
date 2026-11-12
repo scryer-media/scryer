@@ -651,7 +651,7 @@ pub const LIBRARY_ROOTS_UPDATE_ENTRY: GuardedEntry = GuardedEntry {
 pub const LIBRARY_DELETE_ENTRY: GuardedEntry = GuardedEntry {
     action: GuardedAction::RootConfiguration,
     module: "library/library.rs",
-    function: "delete_library",
+    function: "admit_library_delete",
     constant: "LIBRARY_DELETE_ENTRY",
 };
 

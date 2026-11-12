@@ -7700,8 +7700,8 @@ async fn migration_0331_folds_facet_kinded_smg_ids_onto_title() {
 
 /// Migration 0338 moves `location_operations.plan_json` and
 /// `media_files.analysis_json` into keyed blob tables, copying each stored
-/// value as its plain UTF-8 bytes and leaving no row for an absent value or
-/// for the plan of a completed operation that names its source library.
+/// value as its plain UTF-8 bytes and leaving no row for an absent value. A
+/// completed operation's plan is carried over like any other.
 #[tokio::test]
 async fn migration_0338_moves_plans_and_analyses_into_blob_tables() {
     let directory = tempfile::tempdir().expect("synthetic schema fixture");
@@ -7738,9 +7738,8 @@ async fn migration_0338_moves_plans_and_analyses_into_blob_tables() {
     .execute(&mut *conn)
     .await
     .expect("restore the pre-0338 shape");
-    // A completed operation that names its source library leaves its plan
-    // behind; every other state, and a completion with no single source
-    // library, keeps it.
+    // Every finished operation keeps its plan, whatever its state and whether
+    // or not it names a single source library.
     for (id, state, source_library_id) in [
         ("op-completed", "completed", Some(library_id.as_str())),
         (
@@ -7805,6 +7804,7 @@ async fn migration_0338_moves_plans_and_analyses_into_blob_tables() {
         plans,
         vec![
             ("op-canceled".to_string(), br#"{"titles":[]}"#.to_vec()),
+            ("op-completed".to_string(), br#"{"titles":[]}"#.to_vec()),
             (
                 "op-completed-multi-source".to_string(),
                 br#"{"titles":[]}"#.to_vec()
@@ -7814,6 +7814,7 @@ async fn migration_0338_moves_plans_and_analyses_into_blob_tables() {
                 "op-planned".to_string(),
                 br#"{"titles":["synthetic"]}"#.to_vec()
             ),
+            ("op-warnings".to_string(), br#"{"titles":[]}"#.to_vec()),
         ]
     );
     let analyses: Vec<(String, Vec<u8>)> =

@@ -12,16 +12,18 @@ export const EPISODIC_DEFAULT_MONITOR_TYPES: readonly MetadataCatalogMonitorType
   ["FUTURE_EPISODES", "MISSING_AND_FUTURE_EPISODES", "ALL_EPISODES", "NONE"];
 
 /** Translation key for each monitoring choice's label. */
-export const MONITOR_TYPE_LABEL_KEYS: Record<MetadataCatalogMonitorType, string> =
-  {
-    MONITORED: "search.monitorType.monitored",
-    UNMONITORED: "search.monitorType.unmonitored",
-    FUTURE_EPISODES: "search.monitorType.futureEpisodes",
-    MISSING_AND_FUTURE_EPISODES: "search.monitorType.missingAndFutureEpisodes",
-    ALL_EPISODES: "search.monitorType.allEpisodes",
-    NONE: "search.monitorType.none",
-    ADVANCED: "search.monitorType.advanced",
-  };
+export const MONITOR_TYPE_LABEL_KEYS: Record<
+  MetadataCatalogMonitorType,
+  string
+> = {
+  MONITORED: "search.monitorType.monitored",
+  UNMONITORED: "search.monitorType.unmonitored",
+  FUTURE_EPISODES: "search.monitorType.futureEpisodes",
+  MISSING_AND_FUTURE_EPISODES: "search.monitorType.missingAndFutureEpisodes",
+  ALL_EPISODES: "search.monitorType.allEpisodes",
+  NONE: "search.monitorType.none",
+  ADVANCED: "search.monitorType.advanced",
+};
 
 export function defaultMonitorTypesForFacet(
   facet: string,

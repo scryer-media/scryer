@@ -1608,10 +1608,7 @@ async fn library_movie_scan_keeps_media_of_a_title_recorded_at_the_library_root(
         false,
     )
     .await;
-    ctx.titles
-        .set_folder_path(&title.id, media_root.path().to_string_lossy().as_ref())
-        .await
-        .expect("record the library root as the title folder");
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
 
     let movie_dir = media_root.path().join("Rooted Movie (2024)");
     std::fs::create_dir_all(&movie_dir).expect("create movie dir");
@@ -1684,10 +1681,7 @@ async fn library_movie_scan_leaves_an_ambiguous_root_record_and_keeps_all_its_me
         false,
     )
     .await;
-    ctx.titles
-        .set_folder_path(&title.id, &media_root_path)
-        .await
-        .expect("record the library root as the title folder");
+    seed_unchecked_title_folder_path(&ctx, &title.id, std::path::Path::new(&media_root_path)).await;
 
     let mut movie_paths = Vec::new();
     for (folder, file) in [
@@ -1762,10 +1756,7 @@ async fn title_scan_refuses_a_title_recorded_at_the_library_root() {
     let media_root = tempfile::tempdir().expect("media root tempdir");
     let (title, _collection) =
         create_series_scan_title(&ctx, media_root.path(), "Rooted Show", vec![]).await;
-    ctx.titles
-        .set_folder_path(&title.id, media_root.path().to_string_lossy().as_ref())
-        .await
-        .expect("record the library root as the title folder");
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
     let other_show = media_root.path().join("Unrelated Show").join("Season 01");
     std::fs::create_dir_all(&other_show).expect("create unrelated show");
     std::fs::write(
