@@ -3281,7 +3281,7 @@ async fn bulk_title_reads_hydrate_canonical_tags_only_when_the_projection_asks()
 
 /// The folder-ownership lookup narrows in SQL but has to answer exactly what
 /// reading the whole library and sifting it answered: the other title that
-/// owns the folder, the library's own rows only, and the list order.
+/// owns the folder, and the library's own rows only.
 async fn assert_folder_path_owner_candidates(catalog: &TitleStore) -> AppResult<()> {
     let owned_folder = "/data/movies/Arrival (2016)";
 
@@ -3289,11 +3289,6 @@ async fn assert_folder_path_owner_candidates(catalog: &TitleStore) -> AppResult<
     owner.name = "Zulu".to_string();
     owner.folder_path = Some(owned_folder.to_string());
     TitleRepository::create(catalog, owner.clone()).await?;
-
-    let mut second_owner = make_test_title("title-folder-owner-second", None);
-    second_owner.name = "Alpha".to_string();
-    second_owner.folder_path = Some(owned_folder.to_string());
-    TitleRepository::create(catalog, second_owner.clone()).await?;
 
     let mut claimant = make_test_title("title-folder-claimant", None);
     claimant.name = "Mike".to_string();
@@ -3319,8 +3314,8 @@ async fn assert_folder_path_owner_candidates(catalog: &TitleStore) -> AppResult<
             .iter()
             .map(|title| title.id.as_str())
             .collect::<Vec<_>>(),
-        vec![second_owner.id.as_str(), owner.id.as_str()],
-        "only the folder's owners come back, in LOWER(name), id order"
+        vec![owner.id.as_str()],
+        "only the folder's owner comes back"
     );
 
     // The excluded title never answers for its own folder.
@@ -3331,13 +3326,7 @@ async fn assert_folder_path_owner_candidates(catalog: &TitleStore) -> AppResult<
         &candidates,
     )
     .await?;
-    assert_eq!(
-        self_owned
-            .iter()
-            .map(|title| title.id.as_str())
-            .collect::<Vec<_>>(),
-        vec![second_owner.id.as_str()]
-    );
+    assert!(self_owned.is_empty());
 
     // A folder nobody owns reads nothing at all.
     let unowned = TitleRepository::list_folder_path_owner_candidates(

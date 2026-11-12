@@ -873,7 +873,7 @@ mod tests {
                         let (total, items) = store
                             .page_library_scan_items_requiring_action(
                                 facet.clone(),
-                                status.clone(),
+                                status,
                                 library_ids,
                                 &PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES,
                                 limit,
@@ -886,7 +886,7 @@ mod tests {
                         let via_rust = page_via_rust(
                             &store,
                             facet.clone(),
-                            status.clone(),
+                            status,
                             library_ids,
                             limit,
                             offset,
