@@ -3031,6 +3031,7 @@ fn tracked_movie_download(
         facet: Some("movie".to_string()),
         source_title: None,
         indexer: None,
+        job_protocol: scryer_application::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,

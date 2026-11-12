@@ -883,6 +883,7 @@ async fn reconcile_unclaimed_terminal_cleanup(
         &tracked.client_id,
         &tracked.client_type,
         &tracked.client_item.download_client_item_id,
+        tracked.job_protocol,
         library_id.as_deref(),
         facet.as_ref(),
         state,
@@ -1126,11 +1127,19 @@ pub(crate) async fn run_claimed_download_cleanup(
         // the client accepted was not kept) still names the client's own item
         // id, which a hash-addressed client sets to the torrent hash. Item ids
         // that are not a hash (a numeric id) leave identity to the name check.
+        // On a client carrying both protocols, a submission recorded as usenet
+        // has no torrent identity to compare, so it too is left to the name
+        // check.
         let torrent_hash_matches = if crate::seeding_gate::client_type_is_torrent(app, &record.client_type)
             && let Some(observed) = crate::normalize_torrent_info_hash(Some(&item.download_client_item_id))
         {
             app.services.workflow.download_submissions
                 .find_by_canonical_download_id(&record.download_id).await?
+                .filter(|submission| crate::seeding_gate::download_job_is_torrent(
+                    app,
+                    &record.client_type,
+                    crate::seeding_gate::DownloadJobProtocol::from_submission(submission),
+                ))
                 .and_then(|submission| crate::normalize_torrent_info_hash(submission.info_hash.as_deref())
                     .or_else(|| crate::normalize_torrent_info_hash(Some(&submission.download_client_item_id))))
                 .map(|expected| expected == observed)

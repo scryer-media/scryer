@@ -559,6 +559,9 @@ async fn reconcile_terminal_download_cleanup(
     client_id: &str,
     client_type: &str,
     download_client_item_id: &str,
+    // What the job's grab record says it is; decides only on a client that
+    // carries both usenet and torrent jobs.
+    job_protocol: crate::seeding_gate::DownloadJobProtocol,
     library_id: Option<&str>,
     facet: Option<&MediaFacet>,
     state: TrackedDownloadState,
@@ -622,7 +625,7 @@ async fn reconcile_terminal_download_cleanup(
         seed_time_seconds: observed_seed_time_seconds,
     };
 
-    let is_torrent = crate::seeding_gate::client_type_is_torrent(app, client_type);
+    let is_torrent = crate::seeding_gate::download_job_is_torrent(app, client_type, job_protocol);
     if state == TrackedDownloadState::Failed
         && is_torrent
         && failure_origin == TerminalFailureOrigin::ClientFailure
@@ -638,6 +641,7 @@ async fn reconcile_terminal_download_cleanup(
             client_type: client_type.trim().to_string(),
             client_item_id: download_client_item_id.trim().to_string(),
             info_hash: crate::normalize_torrent_info_hash(Some(download_client_item_id)),
+            job_protocol,
         };
         let decision = crate::seeding_gate::evaluate_seeding_gate_with(
             app,

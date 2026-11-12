@@ -87,6 +87,7 @@ async fn check_emits_manual_interaction_notification_once() {
         facet: Some("series".to_string()),
         source_title: None,
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: TitleMatchType::Unmatched,

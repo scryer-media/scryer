@@ -1103,7 +1103,7 @@ pub(crate) fn warning_timeout_applies(
     {
         return true;
     }
-    !crate::seeding_gate::client_type_is_torrent(app, &td.client_type)
+    !crate::seeding_gate::download_job_is_torrent(app, &td.client_type, td.job_protocol)
 }
 
 #[expect(
@@ -4107,7 +4107,7 @@ async fn apply_terminal_cleanup_outcome(
         // a timer and churn the identity rows behind them.
         if crate::import::import::terminal_download_cleanup_leaves_entry_in_client(cleanup.outcome)
             && let Some(td) = tracker.get_mut_by_download_id(download_id)
-            && crate::seeding_gate::client_type_is_torrent(app, &td.client_type)
+            && crate::seeding_gate::download_job_is_torrent(app, &td.client_type, td.job_protocol)
         {
             td.completed_source = None;
             td.retained_in_client_after_cleanup = true;

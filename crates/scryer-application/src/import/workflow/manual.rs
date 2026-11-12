@@ -504,12 +504,14 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
     // the seeding gate decides on the client's own evidence. A torrent still
     // working off its goal is left alone; the tracked poller picks it up and
     // parks it in `ImportedSeeding`.
+    let job_protocol = crate::seeding_gate::job_protocol_for_client_item(app, None, &locator).await;
     let _ = reconcile_terminal_download_cleanup(
         app,
         None,
         &completed.client_id,
         &completed.client_type,
         &completed.download_client_item_id,
+        job_protocol,
         library_id.as_deref(),
         Some(&facet),
         TrackedDownloadState::Imported,
