@@ -2829,8 +2829,10 @@ mod tests {
                     method: Some("GET".to_string()),
                     headers: BTreeMap::new(),
                 };
+                let client = scryer_outbound_http::blocking_plugin_host_client("")
+                    .expect("plugin HTTP client should build");
                 execute_single_request_with_extra_headers(
-                    &Client::new(),
+                    &client,
                     &request,
                     None,
                     None,

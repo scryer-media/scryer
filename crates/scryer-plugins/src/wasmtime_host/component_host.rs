@@ -1886,7 +1886,12 @@ mod tests {
         };
         let result = tokio::time::timeout(
             Duration::from_secs(60),
-            host.send_direct_request(&reqwest::Client::new(), &url, &request, &[]),
+            host.send_direct_request(
+                &scryer_outbound_http::no_redirect_reqwest_client(),
+                &url,
+                &request,
+                &[],
+            ),
         )
         .await
         .expect("local quota admission should finish");
