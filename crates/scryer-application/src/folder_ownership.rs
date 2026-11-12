@@ -732,20 +732,6 @@ impl OwnerOverlapPrefilter {
             .count();
         Self::Keys { keys, path, chain }
     }
-
-    /// Bytes this prefilter holds, for memory accounting.
-    pub(crate) fn estimated_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + match self {
-                Self::Exact => 0,
-                Self::Keys { keys, path, .. } => {
-                    keys.iter()
-                        .map(|key| key.capacity() + std::mem::size_of::<String>())
-                        .sum::<usize>()
-                        + path.as_os_str().len()
-                }
-            }
-    }
 }
 
 /// [`ensure_folder_move_available_to_title`] ahead of recording the folder
