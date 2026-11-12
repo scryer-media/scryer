@@ -21,6 +21,7 @@ pub mod orchestration;
 pub mod provider;
 pub mod scoring;
 pub mod search;
+pub mod search_backoff;
 #[cfg(feature = "runtime-media-analysis")]
 pub mod sync;
 #[cfg(not(feature = "runtime-media-analysis"))]
@@ -40,3 +41,4 @@ pub use provider::{
 };
 pub use scoring::{MovieScore, SeriesScore};
 pub use search::SubtitleSearchOrchestrator;
+pub use search_backoff::{SubtitleSearchBackoff, SubtitleSearchBackoffKey};

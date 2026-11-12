@@ -778,6 +778,26 @@ impl SubtitleDownloadRepository for TestLibraryStateStore {
             .blocklist(media_file_id, provider, provider_file_id, language, reason)
             .await
     }
+
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        media_file_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::subtitles::SubtitleSearchBackoff>> {
+        self.subtitle_downloads
+            .list_search_backoffs_for_media_files(media_file_ids)
+            .await
+    }
+
+    async fn apply_search_backoffs(
+        &self,
+        media_file_id: &str,
+        upserts: &[scryer_application::subtitles::SubtitleSearchBackoff],
+        cleared: &[scryer_application::subtitles::SubtitleSearchBackoffKey],
+    ) -> AppResult<()> {
+        self.subtitle_downloads
+            .apply_search_backoffs(media_file_id, upserts, cleared)
+            .await
+    }
 }
 
 pub async fn test_title_index(

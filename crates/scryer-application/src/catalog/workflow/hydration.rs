@@ -487,12 +487,6 @@ mod title_recommendation_refresh_queue_tests {
     }
 }
 impl AppUseCase {
-    async fn emit_hydration_completed(&self, title: &Title) {
-        self.emit_metadata_hydration_updated_event(title, MetadataHydrationState::Completed, None)
-            .await;
-    }
-}
-impl AppUseCase {
     async fn emit_hydration_failed(&self, title: &Title, reason: &str) {
         self.emit_metadata_hydration_updated_event(
             title,
@@ -760,8 +754,16 @@ impl AppUseCase {
 
         if title.metadata_fetched_at.is_some() {
             self.notify_title_image_wakes(title);
-            self.emit_hydration_completed(title).await;
-            self.emit_title_updated_activity(None, title).await;
+            // Completed and TitleUpdated land in one commit, in that order.
+            self.emit_title_activity_events(vec![
+                crate::events::activity_api::metadata_hydration_updated_domain_event(
+                    title,
+                    MetadataHydrationState::Completed,
+                    None,
+                ),
+                crate::events::activity_api::title_updated_domain_event(None, title),
+            ])
+            .await;
             if options.sync_wanted_after_completion {
                 sync_wanted_after_hydration(self, title).await;
             }
@@ -1068,8 +1070,23 @@ impl AppUseCase {
                 let mut movie_targets = Vec::new();
                 let mut series_targets = Vec::new();
 
+                // The chunk's Started rows land in one commit, in chunk order,
+                // before any other event for these titles.
+                self.emit_title_activity_events(
+                    chunk
+                        .iter()
+                        .map(|target| {
+                            crate::events::activity_api::metadata_hydration_updated_domain_event(
+                                &target.title,
+                                MetadataHydrationState::Started,
+                                None,
+                            )
+                        })
+                        .collect(),
+                )
+                .await;
+
                 for target in chunk.iter().cloned() {
-                    self.emit_hydration_started(&target.title).await;
                     match target.title.facet {
                         MediaFacet::Movie => {
                             let movie_ref = target

@@ -13609,6 +13609,19 @@ pub trait SubtitleDownloadRepository: Send + Sync {
         language: &str,
         reason: Option<&str>,
     ) -> AppResult<()>;
+    /// The "nothing found" backoff rows of these media files.
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        media_file_ids: &[String],
+    ) -> AppResult<Vec<crate::subtitles::SubtitleSearchBackoff>>;
+    /// Write `upserts` and remove `cleared` (languages of `media_file_id`) in
+    /// one transaction.
+    async fn apply_search_backoffs(
+        &self,
+        media_file_id: &str,
+        upserts: &[crate::subtitles::SubtitleSearchBackoff],
+        cleared: &[crate::subtitles::SubtitleSearchBackoffKey],
+    ) -> AppResult<()>;
 }
 
 // ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────

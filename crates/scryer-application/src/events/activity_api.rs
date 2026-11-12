@@ -1111,6 +1111,38 @@ async fn project_episode_title_history(
     Ok(records)
 }
 
+/// The `TitleUpdated` event `emit_title_updated_activity` appends.
+pub(crate) fn title_updated_domain_event(
+    actor: impl Into<DomainEventActor>,
+    title: &Title,
+) -> NewDomainEvent {
+    new_title_domain_event(
+        actor.into(),
+        title,
+        DomainEventPayload::TitleUpdated(TitleUpdatedEventData {
+            title: title_context_snapshot(title),
+        }),
+    )
+}
+
+/// The `MetadataHydrationUpdated` event
+/// `emit_metadata_hydration_updated_event` appends.
+pub(crate) fn metadata_hydration_updated_domain_event(
+    title: &Title,
+    state: MetadataHydrationState,
+    reason: Option<String>,
+) -> NewDomainEvent {
+    new_title_domain_event(
+        None,
+        title,
+        DomainEventPayload::MetadataHydrationUpdated(MetadataHydrationUpdatedEventData {
+            title: title_context_snapshot(title),
+            state,
+            reason,
+        }),
+    )
+}
+
 impl AppUseCase {
     /// Canonical reactive bus event for title-list/detail refresh. Flows that
     /// change title-visible UI state should emit this instead of open-coding
@@ -1120,15 +1152,8 @@ impl AppUseCase {
         actor: impl Into<DomainEventActor>,
         title: &Title,
     ) {
-        let actor = actor.into();
         if let Err(error) = self
-            .append_domain_event(new_title_domain_event(
-                actor,
-                title,
-                DomainEventPayload::TitleUpdated(TitleUpdatedEventData {
-                    title: title_context_snapshot(title),
-                }),
-            ))
+            .append_domain_event(title_updated_domain_event(actor, title))
             .await
         {
             tracing::warn!(
@@ -1169,14 +1194,8 @@ impl AppUseCase {
         reason: Option<String>,
     ) {
         if let Err(error) = self
-            .append_domain_event(new_title_domain_event(
-                None,
-                title,
-                DomainEventPayload::MetadataHydrationUpdated(MetadataHydrationUpdatedEventData {
-                    title: title_context_snapshot(title),
-                    state,
-                    reason,
-                }),
+            .append_domain_event(metadata_hydration_updated_domain_event(
+                title, state, reason,
             ))
             .await
         {
@@ -1184,6 +1203,23 @@ impl AppUseCase {
                 title_id = %title.id,
                 error = %error,
                 "failed to append metadata hydration domain event"
+            );
+        }
+    }
+
+    /// Append hydration-related history events in one commit. The rows,
+    /// their order and their payloads are the ones the single-event
+    /// emitters would write; only the number of commits differs.
+    pub(crate) async fn emit_title_activity_events(&self, events: Vec<NewDomainEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        let event_count = events.len();
+        if let Err(error) = self.append_domain_events(events).await {
+            tracing::warn!(
+                event_count,
+                error = %error,
+                "failed to append metadata hydration domain events"
             );
         }
     }
