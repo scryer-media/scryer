@@ -5345,6 +5345,7 @@ mod tests {
         let entry_is_file = base.join("entry-is-file");
         std::fs::write(&entry_is_file, b"synthetic").unwrap();
         let absent_entry = base.join("absent-entry");
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut cases = vec![
             (valid, "valid"),
             (missing, "none"),
