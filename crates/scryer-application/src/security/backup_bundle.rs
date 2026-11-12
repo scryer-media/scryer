@@ -1295,6 +1295,11 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "subtitle_downloads",
         classification: BackupTableClassification::Export,
     },
+    // Automatic-search delays only; a restore starts every file fresh.
+    BackupTableCatalogEntry {
+        table: "subtitle_search_backoffs",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "subtitle_provider_configs",
         classification: BackupTableClassification::Export,

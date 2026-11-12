@@ -24,6 +24,9 @@ use scryer_domain::{
 struct StubSubtitleDownloadRepo {
     rows: Mutex<Vec<SubtitleDownload>>,
     blocklist: Mutex<Vec<SubtitleBlocklistEntry>>,
+    search_backoffs: Mutex<Vec<crate::subtitles::SubtitleSearchBackoff>>,
+    /// One per `apply_search_backoffs` call: the backoff write transactions.
+    search_backoff_writes: std::sync::atomic::AtomicUsize,
 }
 
 impl StubSubtitleDownloadRepo {
@@ -151,6 +154,55 @@ impl crate::SubtitleDownloadRepository for StubSubtitleDownloadRepo {
         });
         Ok(())
     }
+
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        media_file_ids: &[String],
+    ) -> AppResult<Vec<crate::subtitles::SubtitleSearchBackoff>> {
+        Ok(self
+            .search_backoffs
+            .lock()
+            .await
+            .iter()
+            .filter(|row| media_file_ids.contains(&row.media_file_id))
+            .cloned()
+            .collect())
+    }
+
+    async fn apply_search_backoffs(
+        &self,
+        media_file_id: &str,
+        upserts: &[crate::subtitles::SubtitleSearchBackoff],
+        cleared: &[crate::subtitles::SubtitleSearchBackoffKey],
+    ) -> AppResult<()> {
+        self.search_backoff_writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let same = |row: &crate::subtitles::SubtitleSearchBackoff,
+                    language: &str,
+                    hearing_impaired: bool,
+                    forced: bool| {
+            row.media_file_id == media_file_id
+                && row.language == language
+                && row.hearing_impaired == hearing_impaired
+                && row.forced == forced
+        };
+        let mut rows = self.search_backoffs.lock().await;
+        for key in cleared {
+            rows.retain(|row| !same(row, &key.language, key.hearing_impaired, key.forced));
+        }
+        for upsert in upserts {
+            rows.retain(|row| {
+                !same(
+                    row,
+                    &upsert.language,
+                    upsert.hearing_impaired,
+                    upsert.forced,
+                )
+            });
+            rows.push(upsert.clone());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -220,7 +272,34 @@ impl crate::SubtitleProviderConfigRepository for StubSubtitleProviderConfigRepo 
     }
 }
 
-struct StubSubtitleProviderClient;
+/// What the stub provider answers, and a record of what it was asked.
+#[derive(Clone, Default)]
+struct StubSearchControl {
+    /// `(title, language)` of every search, in order.
+    searches: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    /// When set, only these languages have a subtitle; the default finds every
+    /// language.
+    found_languages: Arc<std::sync::Mutex<Option<HashSet<String>>>>,
+}
+
+impl StubSearchControl {
+    fn searches(&self) -> Vec<(String, String)> {
+        self.searches.lock().unwrap().clone()
+    }
+
+    fn find_only(&self, languages: &[&str]) {
+        *self.found_languages.lock().unwrap() = Some(
+            languages
+                .iter()
+                .map(|language| language.to_string())
+                .collect(),
+        );
+    }
+}
+
+struct StubSubtitleProviderClient {
+    control: StubSearchControl,
+}
 
 #[async_trait]
 impl crate::SubtitleProviderClient for StubSubtitleProviderClient {
@@ -228,14 +307,30 @@ impl crate::SubtitleProviderClient for StubSubtitleProviderClient {
         &self,
         query: &SubtitleQuery,
     ) -> AppResult<Vec<crate::subtitles::SubtitleMatch>> {
+        let language = query
+            .languages
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "eng".to_string());
+        self.control
+            .searches
+            .lock()
+            .unwrap()
+            .push((query.title.clone(), language.clone()));
+        if self
+            .control
+            .found_languages
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|found| !found.contains(&language))
+        {
+            return Ok(Vec::new());
+        }
         Ok(vec![crate::subtitles::SubtitleMatch {
             provider: STUB_PROVIDER_TYPE.to_string(),
             provider_file_id: "stub-file-1".to_string(),
-            language: query
-                .languages
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "eng".to_string()),
+            language,
             release_info: Some("Synthetic.Release.Group".to_string()),
             score: 90,
             score_percent: 90,
@@ -275,6 +370,7 @@ const STUB_PROVIDER_TYPE: &str = "stubtitles";
 /// configured and enabled but cannot be built (for example a missing API key).
 struct StubSubtitlePluginProvider {
     instantiates: bool,
+    control: StubSearchControl,
 }
 
 impl crate::SubtitlePluginProvider for StubSubtitlePluginProvider {
@@ -283,8 +379,11 @@ impl crate::SubtitlePluginProvider for StubSubtitlePluginProvider {
         _config: &SubtitleProviderConfig,
         _host_bindings: &HashMap<PluginHostBindingId, String>,
     ) -> Option<Arc<dyn crate::SubtitleProviderClient>> {
-        self.instantiates
-            .then(|| Arc::new(StubSubtitleProviderClient) as Arc<dyn crate::SubtitleProviderClient>)
+        self.instantiates.then(|| {
+            Arc::new(StubSubtitleProviderClient {
+                control: self.control.clone(),
+            }) as Arc<dyn crate::SubtitleProviderClient>
+        })
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -439,6 +538,8 @@ struct SubtitleFixture {
     series_media_file_id: String,
     series_subtitle_id: String,
     subtitle_downloads: Arc<StubSubtitleDownloadRepo>,
+    /// What the ready stub provider finds, and what it was asked.
+    search_control: StubSearchControl,
     _tempdir: tempfile::TempDir,
 }
 
@@ -457,6 +558,7 @@ async fn seed_fixture(subtitles_enabled: bool, providers: StubProviders) -> Subt
     );
 
     let subtitle_downloads = Arc::new(StubSubtitleDownloadRepo::default());
+    let search_control = StubSearchControl::default();
     let app = app.with_test_overrides(|services| {
         let services = services.with_subtitle_downloads(subtitle_downloads.clone());
         match providers {
@@ -465,6 +567,7 @@ async fn seed_fixture(subtitles_enabled: bool, providers: StubProviders) -> Subt
                 .with_subtitle_provider_configs(Arc::new(StubSubtitleProviderConfigRepo::default()))
                 .with_subtitle_plugin_provider(Arc::new(StubSubtitlePluginProvider {
                     instantiates: true,
+                    control: Default::default(),
                 })),
             StubProviders::InstantiationFails => services
                 .with_subtitle_provider_configs(Arc::new(
@@ -472,6 +575,7 @@ async fn seed_fixture(subtitles_enabled: bool, providers: StubProviders) -> Subt
                 ))
                 .with_subtitle_plugin_provider(Arc::new(StubSubtitlePluginProvider {
                     instantiates: false,
+                    control: Default::default(),
                 })),
             StubProviders::Ready => services
                 .with_subtitle_provider_configs(Arc::new(
@@ -479,6 +583,7 @@ async fn seed_fixture(subtitles_enabled: bool, providers: StubProviders) -> Subt
                 ))
                 .with_subtitle_plugin_provider(Arc::new(StubSubtitlePluginProvider {
                     instantiates: true,
+                    control: search_control.clone(),
                 })),
         }
     });
@@ -621,6 +726,7 @@ async fn seed_fixture(subtitles_enabled: bool, providers: StubProviders) -> Subt
         series_media_file_id,
         series_subtitle_id,
         subtitle_downloads,
+        search_control,
         _tempdir: tempdir,
     }
 }
@@ -1568,6 +1674,7 @@ async fn subtitle_batch_reports_no_match_and_provider_failure_without_touching_o
     let app = app.with_test_overrides(|services| {
         services.with_subtitle_plugin_provider(Arc::new(StubSubtitlePluginProvider {
             instantiates: false,
+            control: Default::default(),
         }))
     });
     let run = app
@@ -1929,4 +2036,471 @@ async fn subtitle_batch_reloads_provider_facets_between_files() {
     assert!(summary["items"][0]["downloaded"].as_u64().unwrap() > 0);
     assert_eq!(summary["items"][1]["downloaded"], 0);
     assert_eq!(summary["items"][1]["status"], "no_match");
+}
+
+// ── "Nothing found" backoff ───────────────────────────────────────────────
+
+fn backoff_epoch() -> chrono::DateTime<Utc> {
+    "2026-01-05T12:00:00Z".parse().unwrap()
+}
+
+fn wanted(code: &str) -> crate::subtitles::wanted::SubtitleLanguagePref {
+    crate::subtitles::wanted::SubtitleLanguagePref {
+        code: code.to_string(),
+        hearing_impaired: false,
+        forced: false,
+    }
+}
+
+/// The ready fixture with only the movie walked by the periodic cycle; its file
+/// has English and is missing Swedish.
+async fn seed_backoff_fixture() -> SubtitleFixture {
+    let fixture = seed_fixture(true, StubProviders::Ready).await;
+    let series = fixture
+        .app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&fixture.series_media_file_id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .update_monitored(&series.title_id, false)
+        .await
+        .unwrap();
+    fixture
+}
+
+impl SubtitleFixture {
+    fn at(&self, offset: chrono::Duration) {
+        self.app
+            .runtime
+            .environment
+            .set_fixed_now_for_tests(Some(backoff_epoch() + offset));
+    }
+
+    async fn backoffs_for(
+        &self,
+        media_file_id: &str,
+    ) -> Vec<crate::subtitles::SubtitleSearchBackoff> {
+        let mut rows = self
+            .subtitle_downloads
+            .search_backoffs
+            .lock()
+            .await
+            .iter()
+            .filter(|row| row.media_file_id == media_file_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.language.cmp(&right.language));
+        rows
+    }
+
+    fn backoff_writes(&self) -> usize {
+        self.subtitle_downloads
+            .search_backoff_writes
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn set_languages(&self, codes: &[&str]) {
+        self.app
+            .upsert_system_setting_json(
+                "subtitles.languages",
+                &codes.iter().map(|code| wanted(code)).collect::<Vec<_>>(),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+}
+
+fn retry_after(row: &crate::subtitles::SubtitleSearchBackoff) -> chrono::DateTime<Utc> {
+    chrono::DateTime::parse_from_rfc3339(&row.retry_after)
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+#[tokio::test]
+async fn automatic_subtitle_search_waits_longer_after_each_empty_search_up_to_thirty_days() {
+    let fixture = seed_backoff_fixture().await;
+    let app = &fixture.app;
+    let file = fixture.movie_media_file_id.clone();
+    fixture.search_control.find_only(&[]);
+
+    fixture.at(chrono::Duration::zero());
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(
+        fixture.search_control.searches(),
+        vec![("Lumen Drift".to_string(), "swe".to_string())]
+    );
+
+    let mut searched_at = chrono::Duration::zero();
+    let mut searches = 1;
+    for (empty_searches, delay_days) in [(1, 1), (2, 3), (3, 7), (4, 14), (5, 30), (6, 30), (7, 30)]
+    {
+        let rows = fixture.backoffs_for(&file).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].language, "swe");
+        assert_eq!(rows[0].empty_searches, empty_searches);
+        let delay = chrono::Duration::days(delay_days);
+        assert_eq!(retry_after(&rows[0]), backoff_epoch() + searched_at + delay);
+
+        // A tick before the delay passes searches nothing and writes nothing.
+        let writes = fixture.backoff_writes();
+        fixture.at(searched_at + delay - chrono::Duration::minutes(1));
+        app.run_subtitle_search_job().await.unwrap();
+        assert_eq!(fixture.search_control.searches().len(), searches);
+        assert_eq!(fixture.backoff_writes(), writes);
+        assert_eq!(fixture.backoffs_for(&file).await, rows);
+
+        // Once it has passed, the next tick searches again and records one write.
+        searched_at = searched_at + delay;
+        fixture.at(searched_at);
+        app.run_subtitle_search_job().await.unwrap();
+        searches += 1;
+        assert_eq!(fixture.search_control.searches().len(), searches);
+        assert_eq!(fixture.backoff_writes(), writes + 1);
+    }
+    assert!(
+        fixture
+            .subtitle_downloads
+            .rows
+            .lock()
+            .await
+            .iter()
+            .all(|row| row.language == "eng")
+    );
+}
+
+#[tokio::test]
+async fn subtitle_backoff_is_per_file_and_per_language_and_resets_when_found() {
+    let fixture = seed_backoff_fixture().await;
+    fixture.set_languages(&["swe", "fin", "eng"]).await;
+    fixture.search_control.find_only(&[]);
+    let first = fixture.movie_media_file_id.clone();
+
+    fixture.at(chrono::Duration::zero());
+    fixture.app.run_subtitle_search_job().await.unwrap();
+    let rows = fixture.backoffs_for(&first).await;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.language.as_str(), row.empty_searches))
+            .collect::<Vec<_>>(),
+        vec![("fin", 1), ("swe", 1)]
+    );
+    assert_eq!(
+        fixture.backoff_writes(),
+        1,
+        "one write for the file's languages"
+    );
+
+    // A new file of the same title is searched while the first one waits.
+    let movie = fixture
+        .app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&first)
+        .await
+        .unwrap()
+        .unwrap();
+    let second_path =
+        std::path::Path::new(&movie.file_path).with_file_name("Lumen Drift Part Two.mkv");
+    std::fs::write(&second_path, b"video").unwrap();
+    let second = fixture
+        .app
+        .services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: movie.title_id.clone(),
+            file_path: second_path.to_string_lossy().into_owned(),
+            size_bytes: 5,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    fixture.at(chrono::Duration::hours(12));
+    fixture.app.run_subtitle_search_job().await.unwrap();
+    let mut asked = fixture.search_control.searches()[2..]
+        .iter()
+        .map(|(_, language)| language.clone())
+        .collect::<Vec<_>>();
+    asked.sort();
+    assert_eq!(
+        asked,
+        vec!["eng", "fin", "swe"],
+        "only the new file is searched, for every language it lacks"
+    );
+    assert_eq!(fixture.backoffs_for(&first).await, rows);
+    assert_eq!(fixture.backoffs_for(&second).await.len(), 3);
+    // Keep the rest of the test on the first file.
+    fixture
+        .subtitle_downloads
+        .search_backoffs
+        .lock()
+        .await
+        .iter_mut()
+        .filter(|row| row.media_file_id == second)
+        .for_each(|row| {
+            row.retry_after = (backoff_epoch() + chrono::Duration::days(365)).to_rfc3339()
+        });
+
+    // A day later Finnish turns up: it downloads and its row goes; Swedish waits longer.
+    fixture.search_control.find_only(&["fin"]);
+    fixture.at(chrono::Duration::days(1));
+    fixture.app.run_subtitle_search_job().await.unwrap();
+    let rows = fixture.backoffs_for(&first).await;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.language.as_str(), row.empty_searches))
+            .collect::<Vec<_>>(),
+        vec![("swe", 2)]
+    );
+    assert_eq!(
+        retry_after(&rows[0]),
+        backoff_epoch() + chrono::Duration::days(1 + 3)
+    );
+    assert!(
+        fixture
+            .subtitle_downloads
+            .rows
+            .lock()
+            .await
+            .iter()
+            .any(|row| row.media_file_id == first && row.language == "fin")
+    );
+
+    // Finnish goes missing again: the next empty search starts the count over.
+    fixture
+        .subtitle_downloads
+        .rows
+        .lock()
+        .await
+        .retain(|row| !(row.media_file_id == first && row.language == "fin"));
+    fixture.search_control.find_only(&[]);
+    fixture.at(chrono::Duration::days(2));
+    fixture.app.run_subtitle_search_job().await.unwrap();
+    let rows = fixture.backoffs_for(&first).await;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.language.as_str(), row.empty_searches))
+            .collect::<Vec<_>>(),
+        vec![("fin", 1), ("swe", 2)]
+    );
+    assert_eq!(
+        retry_after(&rows[0]),
+        backoff_epoch() + chrono::Duration::days(2 + 1)
+    );
+}
+
+#[tokio::test]
+async fn subtitle_backoff_stops_applying_when_the_file_or_wanted_languages_change() {
+    let fixture = seed_backoff_fixture().await;
+    let app = &fixture.app;
+    let file = fixture.movie_media_file_id.clone();
+    fixture.search_control.find_only(&[]);
+
+    fixture.at(chrono::Duration::zero());
+    app.run_subtitle_search_job().await.unwrap();
+    fixture.at(chrono::Duration::days(1));
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(fixture.backoffs_for(&file).await[0].empty_searches, 2);
+
+    // The wanted-language list changes: the old row no longer holds Swedish back.
+    fixture.set_languages(&["eng", "swe", "fin"]).await;
+    fixture.at(chrono::Duration::days(1) + chrono::Duration::hours(1));
+    app.run_subtitle_search_job().await.unwrap();
+    let rows = fixture.backoffs_for(&file).await;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.language.as_str(), row.empty_searches))
+            .collect::<Vec<_>>(),
+        vec![("fin", 1), ("swe", 1)]
+    );
+    assert_eq!(fixture.search_control.searches().len(), 4);
+
+    // The file is replaced at another path: both languages are searched again.
+    let movie = app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&file)
+        .await
+        .unwrap()
+        .unwrap();
+    let replaced = std::path::Path::new(&movie.file_path).with_file_name("Lumen Drift Remux.mkv");
+    app.services
+        .library
+        .media_files
+        .update_media_file_path(&file, &replaced.to_string_lossy())
+        .await
+        .unwrap();
+    fixture.at(chrono::Duration::days(1) + chrono::Duration::hours(2));
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(fixture.search_control.searches().len(), 6);
+    let rows = fixture.backoffs_for(&file).await;
+    assert!(
+        rows.iter()
+            .all(|row| row.empty_searches == 1 && row.file_path == replaced.to_string_lossy())
+    );
+}
+
+#[tokio::test]
+async fn operator_subtitle_search_ignores_the_backoff_and_clears_it_on_download() {
+    let (fixture, title_id, episodes) = seed_subtitle_batch().await;
+    let app = &fixture.app;
+    let movie = app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&fixture.movie_media_file_id)
+        .await
+        .unwrap()
+        .unwrap();
+    app.services
+        .catalog
+        .titles
+        .update_monitored(&movie.title_id, false)
+        .await
+        .unwrap();
+    app.services
+        .catalog
+        .titles
+        .update_monitored(&title_id, true)
+        .await
+        .unwrap();
+    let series_file = app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_id(&fixture.series_media_file_id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture.at(chrono::Duration::zero());
+    let key =
+        crate::subtitles::search_backoff::wanted_languages_key(&[wanted("swe"), wanted("eng")]);
+    let mut held = crate::subtitles::SubtitleSearchBackoff::after_empty_search(
+        None,
+        &series_file,
+        &wanted("swe"),
+        &key,
+        &crate::subtitles::search_backoff::enabled_providers_key(["stub-config"]),
+        backoff_epoch(),
+    );
+    held.empty_searches = 4;
+    held.retry_after = (backoff_epoch() + chrono::Duration::days(14)).to_rfc3339();
+    fixture
+        .subtitle_downloads
+        .search_backoffs
+        .lock()
+        .await
+        .push(held);
+
+    // The periodic cycle leaves the file alone.
+    app.run_subtitle_search_job().await.unwrap();
+    assert!(fixture.search_control.searches().is_empty());
+
+    let mut events = app.runtime.jobs.job_run_tracker.subscribe();
+    let run = app
+        .start_episode_subtitle_search(&fixture.admin, &title_id, episodes[..2].to_vec())
+        .await
+        .unwrap();
+    let done = wait_subtitle_batch(&mut events, &run.id).await;
+    assert_eq!(done.status, crate::JobRunStatus::Completed);
+    assert_eq!(
+        fixture
+            .search_control
+            .searches()
+            .iter()
+            .filter(|(_, language)| language == "swe")
+            .count(),
+        1
+    );
+    assert!(
+        fixture
+            .backoffs_for(&fixture.series_media_file_id)
+            .await
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .subtitle_downloads
+            .rows
+            .lock()
+            .await
+            .iter()
+            .any(|row| row.media_file_id == fixture.series_media_file_id && row.language == "swe")
+    );
+}
+
+#[tokio::test]
+async fn subtitle_backoff_resets_when_the_providers_asked_change_but_not_the_minimum_score() {
+    let mut fixture = seed_backoff_fixture().await;
+    let configs = Arc::new(StubSubtitleProviderConfigRepo::with_configs(vec![
+        stub_provider_config(),
+    ]));
+    fixture.app = fixture
+        .app
+        .with_test_overrides(|services| services.with_subtitle_provider_configs(configs.clone()));
+    let app = &fixture.app;
+    let file = fixture.movie_media_file_id.clone();
+    fixture.search_control.find_only(&[]);
+
+    fixture.at(chrono::Duration::zero());
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(fixture.search_control.searches().len(), 1);
+    let held = fixture.backoffs_for(&file).await;
+    assert_eq!(held[0].empty_searches, 1);
+
+    // Only the minimum score changes: the file stays backed off, and the tick
+    // searches nothing and writes nothing.
+    app.upsert_system_setting_json("subtitles.minimum_score_movie", &10, None)
+        .await
+        .unwrap();
+    let writes = fixture.backoff_writes();
+    fixture.at(chrono::Duration::hours(1));
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(fixture.search_control.searches().len(), 1);
+    assert_eq!(fixture.backoff_writes(), writes);
+    assert_eq!(fixture.backoffs_for(&file).await, held);
+
+    // A provider is added: the next tick asks both providers again.
+    let mut ashgrove = stub_provider_config();
+    ashgrove.id = "ashgrove-config".to_string();
+    ashgrove.name = "Ashgrove subtitles".to_string();
+    configs.configs.lock().await.push(ashgrove);
+    fixture.at(chrono::Duration::hours(2));
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(fixture.search_control.searches().len(), 3);
+    let rows = fixture.backoffs_for(&file).await;
+    assert_eq!(rows[0].empty_searches, 1);
+    assert_eq!(rows[0].enabled_providers, "ashgrove-config,stub-config");
+
+    // Held again under the new set: an idle tick does nothing.
+    let writes = fixture.backoff_writes();
+    fixture.at(chrono::Duration::hours(3));
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(fixture.search_control.searches().len(), 3);
+    assert_eq!(fixture.backoff_writes(), writes);
+
+    // A provider is removed: the next tick searches again.
+    configs
+        .configs
+        .lock()
+        .await
+        .retain(|config| config.id != "ashgrove-config");
+    fixture.at(chrono::Duration::hours(4));
+    app.run_subtitle_search_job().await.unwrap();
+    assert_eq!(fixture.search_control.searches().len(), 4);
+    let rows = fixture.backoffs_for(&file).await;
+    assert_eq!(rows[0].empty_searches, 1);
+    assert_eq!(rows[0].enabled_providers, "stub-config");
 }

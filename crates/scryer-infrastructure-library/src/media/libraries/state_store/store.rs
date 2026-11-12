@@ -12,7 +12,10 @@ use scryer_application::{
     PendingReleasePageSort, PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus,
     PendingReleasesPageQuery, ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository,
     normalize_release_name,
-    subtitles::{ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry},
+    subtitles::{
+        ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry, SubtitleSearchBackoff,
+        SubtitleSearchBackoffKey,
+    },
 };
 use scryer_domain::{
     BlocklistEntry, DomainEventType, ExternalSubtitleSourceKind, Id, SubtitleBlocklistEntry,
@@ -22,6 +25,7 @@ use scryer_plugin_sdk::torrent::normalize_info_hash;
 
 use crate::config_store::{current_encryption_key, decrypt_optional_value, encrypt_optional_value};
 use crate::encryption::{EncryptionKey, is_encrypted};
+use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::repo_err;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
@@ -3616,6 +3620,132 @@ impl SubtitleDownloadRepository for SubtitleDownloadStore {
         .await?;
         Ok(())
     }
+
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        media_file_ids: &[String],
+    ) -> AppResult<Vec<SubtitleSearchBackoff>> {
+        if media_file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let exec = self.datastore.read_exec();
+        let (ids, per_statement) = id_list_statements(
+            media_file_ids,
+            1,
+            0,
+            max_binds(&exec),
+            SEARCH_BACKOFF_ID_CHUNK,
+        );
+        let mut rows = Vec::new();
+        for chunk in ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT {SUBTITLE_SEARCH_BACKOFF_COLUMNS}
+                   FROM subtitle_search_backoffs
+                  WHERE media_file_id IN ({})",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                rows.push(subtitle_search_backoff_row_to_entry(&row)?);
+            }
+        }
+        Ok(rows)
+    }
+
+    async fn apply_search_backoffs(
+        &self,
+        media_file_id: &str,
+        upserts: &[SubtitleSearchBackoff],
+        cleared: &[SubtitleSearchBackoffKey],
+    ) -> AppResult<()> {
+        if upserts.is_empty() && cleared.is_empty() {
+            return Ok(());
+        }
+        let mut statements = Vec::with_capacity(upserts.len() + cleared.len());
+        for key in cleared {
+            statements.push((
+                "DELETE FROM subtitle_search_backoffs
+                  WHERE media_file_id = {} AND language = {}
+                    AND hearing_impaired = {} AND forced = {}",
+                vec![
+                    SqlArg::Text(media_file_id.to_string()),
+                    SqlArg::Text(key.language.clone()),
+                    SqlArg::Bool(key.hearing_impaired),
+                    SqlArg::Bool(key.forced),
+                ],
+            ));
+        }
+        for row in upserts
+            .iter()
+            .filter(|row| row.media_file_id == media_file_id)
+        {
+            statements.push((
+                "INSERT INTO subtitle_search_backoffs
+                 (media_file_id, language, hearing_impaired, forced, file_path, size_bytes,
+                  wanted_languages, enabled_providers, empty_searches, searched_at, retry_after)
+                 VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                 ON CONFLICT (media_file_id, language, hearing_impaired, forced) DO UPDATE SET
+                    file_path = excluded.file_path,
+                    size_bytes = excluded.size_bytes,
+                    wanted_languages = excluded.wanted_languages,
+                    enabled_providers = excluded.enabled_providers,
+                    empty_searches = excluded.empty_searches,
+                    searched_at = excluded.searched_at,
+                    retry_after = excluded.retry_after",
+                vec![
+                    SqlArg::Text(row.media_file_id.clone()),
+                    SqlArg::Text(row.language.clone()),
+                    SqlArg::Bool(row.hearing_impaired),
+                    SqlArg::Bool(row.forced),
+                    SqlArg::Text(row.file_path.clone()),
+                    SqlArg::I64(row.size_bytes),
+                    SqlArg::Text(row.wanted_languages.clone()),
+                    SqlArg::Text(row.enabled_providers.clone()),
+                    SqlArg::I32(row.empty_searches),
+                    timestamp_arg_for_datastore(&self.datastore, &row.searched_at)?,
+                    timestamp_arg_for_datastore(&self.datastore, &row.retry_after)?,
+                ],
+            ));
+        }
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "apply_subtitle_search_backoffs",
+            move |tx| {
+                let statements = statements.clone();
+                Box::pin(async move {
+                    for (sql, args) in statements {
+                        SqlRuntime::execute(SqlExec::Tx(tx), sql, &args).await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+}
+
+/// Media file ids per `IN (...)` read of the search backoff table, used only
+/// when one statement could not bind the whole list.
+const SEARCH_BACKOFF_ID_CHUNK: usize = 900;
+
+const SUBTITLE_SEARCH_BACKOFF_COLUMNS: &str =
+    "media_file_id, language, hearing_impaired, forced, file_path, size_bytes,
+    wanted_languages, enabled_providers, empty_searches, searched_at, retry_after";
+
+fn subtitle_search_backoff_row_to_entry(row: &SqlRow) -> AppResult<SubtitleSearchBackoff> {
+    Ok(SubtitleSearchBackoff {
+        media_file_id: row.text("media_file_id")?,
+        language: row.text("language")?,
+        hearing_impaired: row.bool("hearing_impaired")?,
+        forced: row.bool("forced")?,
+        file_path: row.text("file_path")?,
+        size_bytes: row.i64("size_bytes")?,
+        wanted_languages: row.text("wanted_languages")?,
+        enabled_providers: row.text("enabled_providers")?,
+        empty_searches: row.i32("empty_searches")?,
+        searched_at: required_timestamp_text(row, "searched_at")?,
+        retry_after: required_timestamp_text(row, "retry_after")?,
+    })
 }
 
 #[cfg(test)]
@@ -3693,5 +3823,180 @@ mod title_id_delete_tests {
         assert_eq!(chunked_count, single_count);
         assert_eq!(remaining(&chunked).await, remaining(&single).await);
         assert_eq!(remaining(&single).await, vec!["t-b", "t-d"]);
+    }
+}
+
+#[cfg(test)]
+mod subtitle_search_backoff_tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::{SubtitleDownloadStore, SubtitleSearchBackoff, SubtitleSearchBackoffKey};
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+    use scryer_application::SubtitleDownloadRepository;
+
+    async fn store() -> (SubtitleDownloadStore, StoreDatastore) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("PRAGMA foreign_keys = ON")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        let datastore = StoreDatastore::Sqlite {
+            pool,
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        };
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "CREATE TABLE media_files (id TEXT PRIMARY KEY)",
+            &[],
+        )
+        .await
+        .expect("create media files");
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            include_str!(
+                "../../../../../scryer/src/db/migrations/0340_subtitle_search_backoffs.sql"
+            ),
+            &[],
+        )
+        .await
+        .expect("apply backoff migration");
+        for id in ["mf-emberfall", "mf-cinderwake"] {
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "INSERT INTO media_files (id) VALUES ({})",
+                &[SqlArg::Text(id.to_string())],
+            )
+            .await
+            .expect("seed media file");
+        }
+        (SubtitleDownloadStore::new(datastore.clone()), datastore)
+    }
+
+    fn row(media_file_id: &str, language: &str, empty_searches: i32) -> SubtitleSearchBackoff {
+        SubtitleSearchBackoff {
+            media_file_id: media_file_id.to_string(),
+            language: language.to_string(),
+            hearing_impaired: false,
+            forced: false,
+            file_path: format!("/library/{media_file_id}.mkv"),
+            size_bytes: 5,
+            wanted_languages: "eng:0:0,swe:0:0".to_string(),
+            enabled_providers: "cinderwake-subtitles".to_string(),
+            empty_searches,
+            searched_at: "2026-01-01T00:00:00+00:00".to_string(),
+            retry_after: "2026-01-02T00:00:00+00:00".to_string(),
+        }
+    }
+
+    fn sorted(mut rows: Vec<SubtitleSearchBackoff>) -> Vec<SubtitleSearchBackoff> {
+        rows.sort_by(|a, b| (&a.media_file_id, &a.language).cmp(&(&b.media_file_id, &b.language)));
+        rows
+    }
+
+    #[tokio::test]
+    async fn backoff_rows_upsert_clear_and_follow_their_media_file() {
+        let (store, datastore) = store().await;
+        let ids = vec!["mf-emberfall".to_string(), "mf-cinderwake".to_string()];
+        store
+            .apply_search_backoffs(
+                "mf-emberfall",
+                &[row("mf-emberfall", "eng", 1), row("mf-emberfall", "swe", 1)],
+                &[],
+            )
+            .await
+            .unwrap();
+        store
+            .apply_search_backoffs("mf-cinderwake", &[row("mf-cinderwake", "eng", 1)], &[])
+            .await
+            .unwrap();
+
+        // An upsert replaces the row for the same file and language.
+        store
+            .apply_search_backoffs("mf-emberfall", &[row("mf-emberfall", "eng", 2)], &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            sorted(
+                store
+                    .list_search_backoffs_for_media_files(&ids)
+                    .await
+                    .unwrap()
+            ),
+            vec![
+                row("mf-cinderwake", "eng", 1),
+                row("mf-emberfall", "eng", 2),
+                row("mf-emberfall", "swe", 1),
+            ]
+        );
+
+        // A list past the bind limit reads the same rows as one statement.
+        let one_statement = sorted(
+            store
+                .list_search_backoffs_for_media_files(&ids)
+                .await
+                .unwrap(),
+        );
+        {
+            let _limit = crate::media::id_list_statements::lower_max_binds_for_tests(1);
+            assert_eq!(
+                sorted(
+                    store
+                        .list_search_backoffs_for_media_files(&ids)
+                        .await
+                        .unwrap()
+                ),
+                one_statement
+            );
+        }
+
+        // Clearing removes only that file's language.
+        store
+            .apply_search_backoffs(
+                "mf-emberfall",
+                &[],
+                &[SubtitleSearchBackoffKey {
+                    language: "eng".to_string(),
+                    hearing_impaired: false,
+                    forced: false,
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sorted(
+                store
+                    .list_search_backoffs_for_media_files(&ids)
+                    .await
+                    .unwrap()
+            ),
+            vec![
+                row("mf-cinderwake", "eng", 1),
+                row("mf-emberfall", "swe", 1)
+            ]
+        );
+
+        // Removing the media file removes its rows and no other file's.
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "DELETE FROM media_files WHERE id = {}",
+            &[SqlArg::Text("mf-emberfall".to_string())],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store
+                .list_search_backoffs_for_media_files(&ids)
+                .await
+                .unwrap(),
+            vec![row("mf-cinderwake", "eng", 1)]
+        );
     }
 }
