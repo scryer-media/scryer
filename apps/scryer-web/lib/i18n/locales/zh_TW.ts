@@ -2072,11 +2072,15 @@ const zh_TW: LocaleDictionary = {
   "system.title": "系統健康",
   "system.diagnosticsBundle.download": "下載診斷套件",
   "system.diagnosticsBundle.preparing": "正在準備診斷…",
-  "system.diagnosticsBundle.helper": "將記錄、指標和設定摘要打包成一個檔案給維護者。名稱、位址、路徑和密鑰會盡力移除；分享前請檢查診斷套件。",
+  "system.diagnosticsBundle.helper":
+    "將記錄、指標和設定摘要打包成一個檔案給維護者。名稱、位址、路徑和密鑰會盡力移除；分享前請檢查診斷套件。",
   "system.diagnosticsBundle.failed": "無法下載診斷套件。",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "請重新登入後下載診斷。",
-  "system.diagnosticsBundle.refusal.permissionDenied": "下載診斷需要系統設定權限。",
-  "system.diagnosticsBundle.refusal.failed": "無法建立診斷套件。詳情請查看伺服器記錄。",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "請重新登入後下載診斷。",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "下載診斷需要系統設定權限。",
+  "system.diagnosticsBundle.refusal.failed":
+    "無法建立診斷套件。詳情請查看伺服器記錄。",
   "system.jobsTitle": "工作機會",
   "system.auditTitle": "稽核",
   "system.auditLoaded": "已載入稽核記錄。",

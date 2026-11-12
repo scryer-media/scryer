@@ -1589,11 +1589,16 @@ const it: LocaleDictionary = {
   "system.title": "Stato del sistema",
   "system.diagnosticsBundle.download": "Scarica pacchetto diagnostico",
   "system.diagnosticsBundle.preparing": "Preparazione della diagnostica…",
-  "system.diagnosticsBundle.helper": "Log, metriche e un riepilogo delle impostazioni in un unico file per il manutentore. Nomi, indirizzi, percorsi e segreti vengono rimossi al meglio delle possibilità; controlla il pacchetto prima di condividerlo.",
-  "system.diagnosticsBundle.failed": "Impossibile scaricare il pacchetto diagnostico.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Accedi di nuovo per scaricare la diagnostica.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Per scaricare la diagnostica serve il permesso delle impostazioni di sistema.",
-  "system.diagnosticsBundle.refusal.failed": "Impossibile creare il pacchetto diagnostico. Controlla il log del server per i dettagli.",
+  "system.diagnosticsBundle.helper":
+    "Log, metriche e un riepilogo delle impostazioni in un unico file per il manutentore. Nomi, indirizzi, percorsi e segreti vengono rimossi al meglio delle possibilità; controlla il pacchetto prima di condividerlo.",
+  "system.diagnosticsBundle.failed":
+    "Impossibile scaricare il pacchetto diagnostico.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Accedi di nuovo per scaricare la diagnostica.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Per scaricare la diagnostica serve il permesso delle impostazioni di sistema.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Impossibile creare il pacchetto diagnostico. Controlla il log del server per i dettagli.",
   "system.jobsTitle": "Lavori",
   "system.notLoaded": "Stato del sistema non caricato.",
   "system.refreshing": "Aggiornamento",

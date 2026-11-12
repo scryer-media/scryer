@@ -2713,7 +2713,7 @@ export const translateArrCustomFormatsMutation = `mutation TranslateArrCustomFor
   }
 }`;
 
-export const testRuleSetMutation =`mutation TestRuleSet($input: TestRuleSetInput!) {
+export const testRuleSetMutation = `mutation TestRuleSet($input: TestRuleSetInput!) {
   testRuleSet(input: $input) {
     score
     releaseName

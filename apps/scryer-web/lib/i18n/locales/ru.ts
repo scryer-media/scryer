@@ -2325,11 +2325,16 @@ const ru: LocaleDictionary = {
   "system.title": "Состояние системы",
   "system.diagnosticsBundle.download": "Скачать диагностический пакет",
   "system.diagnosticsBundle.preparing": "Подготовка диагностики…",
-  "system.diagnosticsBundle.helper": "Журналы, метрики и сводка настроек в одном файле для разработчика. Имена, адреса, пути и секреты удаляются по мере возможности; проверьте пакет перед отправкой.",
-  "system.diagnosticsBundle.failed": "Не удалось скачать диагностический пакет.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Войдите снова, чтобы скачать диагностику.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Для скачивания диагностики нужно разрешение на системные настройки.",
-  "system.diagnosticsBundle.refusal.failed": "Не удалось собрать диагностический пакет. Подробности в журнале сервера.",
+  "system.diagnosticsBundle.helper":
+    "Журналы, метрики и сводка настроек в одном файле для разработчика. Имена, адреса, пути и секреты удаляются по мере возможности; проверьте пакет перед отправкой.",
+  "system.diagnosticsBundle.failed":
+    "Не удалось скачать диагностический пакет.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Войдите снова, чтобы скачать диагностику.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Для скачивания диагностики нужно разрешение на системные настройки.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Не удалось собрать диагностический пакет. Подробности в журнале сервера.",
   "system.jobsTitle": "Задания",
   "system.auditTitle": "Аудит",
   "system.auditLoaded": "Журнал аудита загружен.",
@@ -11320,7 +11325,8 @@ const ru: LocaleDictionary = {
     "Вставьте корректный JSON, экспортированный из Sonarr или Radarr.",
   "settings.arrImportRefusalTooLarge":
     "Вставьте не более {{maxBytes}} байт JSON.",
-  "settings.arrImportRefusalEmpty": "Вставьте хотя бы один пользовательский формат.",
+  "settings.arrImportRefusalEmpty":
+    "Вставьте хотя бы один пользовательский формат.",
   "settings.arrImportRefusalTooMany":
     "Вставьте не более {{maxFormats}} пользовательских форматов за раз.",
   "settings.arrImportReviewFailed":

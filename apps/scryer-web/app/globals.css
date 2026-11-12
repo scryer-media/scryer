@@ -597,7 +597,9 @@ body {
     border-radius 180ms ease;
 }
 
-.dark [data-slot="card"][data-ui="series-episodes"] > [data-slot="card-header"] {
+.dark
+  [data-slot="card"][data-ui="series-episodes"]
+  > [data-slot="card-header"] {
   padding-bottom: 0.9rem;
   margin-bottom: 0.9rem;
 }

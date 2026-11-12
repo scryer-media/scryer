@@ -1660,11 +1660,16 @@ const fr: LocaleDictionary = {
   "system.title": "Santé du système",
   "system.diagnosticsBundle.download": "Télécharger le paquet de diagnostic",
   "system.diagnosticsBundle.preparing": "Préparation du diagnostic…",
-  "system.diagnosticsBundle.helper": "Journaux, métriques et un résumé des paramètres dans un seul fichier pour le mainteneur. Les noms, adresses, chemins et secrets sont retirés au mieux ; vérifiez le paquet avant de le partager.",
-  "system.diagnosticsBundle.failed": "Impossible de télécharger le paquet de diagnostic.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Reconnectez-vous pour télécharger le diagnostic.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Le téléchargement du diagnostic nécessite l'autorisation des paramètres système.",
-  "system.diagnosticsBundle.refusal.failed": "Le paquet de diagnostic n'a pas pu être créé. Consultez le journal du serveur pour plus de détails.",
+  "system.diagnosticsBundle.helper":
+    "Journaux, métriques et un résumé des paramètres dans un seul fichier pour le mainteneur. Les noms, adresses, chemins et secrets sont retirés au mieux ; vérifiez le paquet avant de le partager.",
+  "system.diagnosticsBundle.failed":
+    "Impossible de télécharger le paquet de diagnostic.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Reconnectez-vous pour télécharger le diagnostic.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Le téléchargement du diagnostic nécessite l'autorisation des paramètres système.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Le paquet de diagnostic n'a pas pu être créé. Consultez le journal du serveur pour plus de détails.",
   "system.jobsTitle": "Emplois",
   "system.notLoaded": "État du système non chargé.",
   "system.refreshing": "Actualisation",
