@@ -797,8 +797,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // expands any graph node, owned or not: 199->201.
     assert!(query_field_names.contains(&"libraryGraph"));
     assert!(query_field_names.contains(&"discoveryNeighbors"));
+    // Linking a media server account adds `mediaServerConnectionAccounts`,
+    // the accounts a connection offers to link: 201->202.
+    assert!(query_field_names.contains(&"mediaServerConnectionAccounts"));
     assert_eq!(
-        query_field_count, 201,
+        query_field_count, 202,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -913,8 +916,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Import-warning dismissal adds one mutation and one exact-identity
     // input: 293->294.
     assert!(mutation_field_names.contains(&"setTrackedDownloadImportDismissed"));
+    // Ignoring pending imports in bulk adds `ignorePendingImports`, one call
+    // for a selection instead of one per row: 294->295.
+    assert!(mutation_field_names.contains(&"ignorePendingImports"));
     assert_eq!(
-        mutation_field_count, 294,
+        mutation_field_count, 295,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1422,12 +1428,23 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     }
     // The dismissal command's TrackedDownloadImportTrackingInput: +1.
     assert!(public_type_names.contains(&"TrackedDownloadImportTrackingInput"));
+    // The media-server account list and the bulk pending-import ignore each
+    // add result objects: MediaServerConnectionAccountPayload,
+    // IgnorePendingImportsPayload and IgnorePendingImportFailurePayload.
+    // Public types 1033->1036, OBJECT 557->560.
+    for name in [
+        "MediaServerConnectionAccountPayload",
+        "IgnorePendingImportsPayload",
+        "IgnorePendingImportFailurePayload",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1033,
+        1036,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 557);
+    assert_eq!(kind_count("OBJECT"), 560);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
