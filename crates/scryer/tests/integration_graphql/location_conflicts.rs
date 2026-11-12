@@ -104,6 +104,27 @@ impl ConflictFixture {
         }
     }
 
+    /// Completing an operation drops its plan. A test that recreates a crash
+    /// during cleanup keeps the exact bytes that write removed, so the
+    /// recreated row holds the plan a real crash would have left stored.
+    async fn keep_plans_dropped_at_completion(&self) {
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS conflict_test_dropped_plans (
+                 operation_id TEXT PRIMARY KEY NOT NULL,
+                 plan BLOB NOT NULL
+             );
+             CREATE TRIGGER IF NOT EXISTS conflict_test_keep_dropped_plan
+             BEFORE DELETE ON location_operation_plans
+             BEGIN
+                 INSERT OR REPLACE INTO conflict_test_dropped_plans (operation_id, plan)
+                 VALUES (OLD.operation_id, OLD.plan);
+             END;",
+        )
+        .execute(self.ctx.db.pool())
+        .await
+        .unwrap();
+    }
+
     fn request(&self, policy: ConflictPolicy, leftovers: ConflictLeftovers) -> ConflictRequest {
         ConflictRequest {
             pending_import_ids: vec![self.pending_id.clone()],
@@ -1050,6 +1071,7 @@ async fn conflict_disposal_hardlinks_preserve_external_aliases_and_recover_owned
     for enabled in [false, true] {
         for shared_survivor in [false, true] {
             let fixture = ConflictFixture::new().await;
+            fixture.keep_plans_dropped_at_completion().await;
             fixture
                 .ctx
                 .app
@@ -1255,6 +1277,7 @@ async fn conflict_native_paths_preserve_distinct_names_collisions_companions_and
     use scryer_application::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
     use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
     let mut fixture = ConflictFixture::new().await;
+    fixture.keep_plans_dropped_at_completion().await;
     let folder = fixture
         .root
         .join(OsString::from_vec(b"ADEG78\xff".to_vec()));
@@ -1409,6 +1432,7 @@ async fn conflict_native_paths_recycle_and_restore_exact_catalog_paths_after_res
     use scryer_application::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     let fixture = ConflictFixture::new().await;
+    fixture.keep_plans_dropped_at_completion().await;
     let original = fixture
         .ctx
         .media_files
@@ -1497,6 +1521,7 @@ async fn conflict_native_paths_recycle_and_restore_exact_catalog_paths_after_res
 async fn conflict_keep_one_identical_collision_always_retains_the_resolved_primary() {
     for enabled in [false, true] {
         let fixture = ConflictFixture::new().await;
+        fixture.keep_plans_dropped_at_completion().await;
         fixture
             .ctx
             .app
@@ -1609,9 +1634,7 @@ async fn retry_cleanup_state(
     operation_id: &str,
 ) -> scryer_application::location::model::LocationOperationState {
     use scryer_application::LocationOperationRepository;
-    use scryer_application::location::model::{
-        LocationOperationState, LocationReasonCode, TitleCheckpointState,
-    };
+    use scryer_application::location::model::TitleCheckpointState;
     use scryer_application::location::operations::LocationResumeDecision;
     use scryer_infrastructure_library::media::libraries::location_operation_store::LocationOperationStore;
     let store = LocationOperationStore::new(fixture.ctx.db.datastore());
@@ -1627,25 +1650,31 @@ async fn retry_cleanup_state(
         .upsert_location_title_checkpoint(&checkpoint)
         .await
         .unwrap();
-    let operation = store
-        .get_location_operation(operation_id)
-        .await
-        .unwrap()
-        .unwrap();
-    store
-        .update_location_operation_progress(&scryer_application::LocationOperationProgress {
-            operation_id: operation_id.into(),
-            state: LocationOperationState::Failed,
-            counters: operation.counters,
-            verification_fallback_count: operation.verification_fallback_count,
-            detail: Some("synthetic interruption after source cleanup".into()),
-            clear_detail: false,
-            reason_code: Some(LocationReasonCode::SourceCleanupFailed),
-            started_at: operation.started_at,
-            completed_at: Some(Utc::now()),
-        })
-        .await
-        .unwrap();
+    // ...and the run never reached its terminal write: the row is still
+    // cleaning up and still holds the plan the completing write dropped.
+    let restored = sqlx::query(
+        "INSERT INTO location_operation_plans (operation_id, plan)
+         SELECT operation_id, plan FROM conflict_test_dropped_plans WHERE operation_id = ?",
+    )
+    .bind(operation_id)
+    .execute(fixture.ctx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        restored.rows_affected(),
+        1,
+        "the completed run's plan was kept aside"
+    );
+    let reverted = sqlx::query(
+        "UPDATE location_operations
+            SET state = 'cleaning_up', completed_at = NULL, failure_reason = NULL, reason_code = NULL
+          WHERE id = ? AND state IN ('completed', 'completed_with_warnings')",
+    )
+    .bind(operation_id)
+    .execute(fixture.ctx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(reverted.rows_affected(), 1, "the run had completed");
     let decision = fixture
         .ctx
         .app
@@ -1669,6 +1698,7 @@ async fn retry_cleanup_state(
 #[tokio::test]
 async fn conflict_adopt_hardlink_dedup_resumes_after_its_own_cleanup_changed_ctime() {
     let fixture = ConflictFixture::new().await;
+    fixture.keep_plans_dropped_at_completion().await;
     let primary = fixture.named.join("Emberfall.2024.720p.WEB-DL.mkv");
     std::fs::remove_file(fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap();
     std::fs::hard_link(
@@ -2563,4 +2593,88 @@ async fn conflict_keep_one_moves_nothing_when_the_survivor_already_holds_the_bes
             .contains(&loser.to_string_lossy().into_owned())
     );
     assert!(!fixture.junk.exists());
+}
+
+#[tokio::test]
+async fn a_completed_operation_drops_its_plan_and_every_reader_answers_without_it() {
+    use scryer_application::location::model::LocationOperationState;
+    use scryer_application::location::operations::LocationResumeDecision;
+    let fixture = ConflictFixture::new().await;
+    let task = fixture
+        .settle(
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll),
+            false,
+        )
+        .await;
+    assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+    let operation_id = task.operation_ids[0].clone();
+    let app = &fixture.ctx.app;
+
+    let operation = app
+        .location_operation(&operation_id)
+        .await
+        .unwrap()
+        .expect("the operation row stays");
+    assert!(
+        matches!(
+            operation.state,
+            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+        ),
+        "{operation:?}"
+    );
+    assert!(operation.source_library_id.is_some());
+    let (plans,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM location_operation_plans WHERE operation_id = ?")
+            .bind(&operation_id)
+            .fetch_one(fixture.ctx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(plans, 0, "completing the operation drops its plan");
+
+    // The operation names its source library, so it still authorizes.
+    app.require_location_operation_permission(&fixture.actor, &operation)
+        .await
+        .expect("a completed operation authorizes without its plan");
+    assert!(
+        app.location_operation_retry_selection(&operation_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let listing = app
+        .location_operation_asset_listing(&operation_id)
+        .await
+        .unwrap();
+    assert!(listing.titles.is_empty());
+    assert_eq!((listing.renames_total, listing.dedups_total), (0, 0));
+    let decision = app.resume_location_operation(&operation_id).await.unwrap();
+    assert!(
+        matches!(decision, LocationResumeDecision::NotResumable(_)),
+        "{decision:?}"
+    );
+
+    // The live read model was written during the run and never needs the plan.
+    let snapshot = app
+        .location_transfer_snapshot(&fixture.actor, &operation_id, Some(0), 50)
+        .await
+        .unwrap()
+        .expect("the transfer snapshot reads");
+    assert_eq!(snapshot.operation.state, operation.state);
+    assert_eq!(snapshot.total_count, 1);
+    assert_eq!(snapshot.titles.len(), 1);
+    assert_eq!(snapshot.titles[0].title_id, fixture.title.id);
+    assert!(
+        snapshot.titles[0].state.is_settled(),
+        "{:?}",
+        snapshot.titles
+    );
+    let files = app
+        .location_transfer_files_snapshot(&fixture.actor, &operation_id, &fixture.title.id, 0)
+        .await
+        .unwrap()
+        .expect("the per-file snapshot reads");
+    assert!(
+        files.files.is_empty(),
+        "the per-file listing came from the plan"
+    );
 }

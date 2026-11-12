@@ -154,6 +154,12 @@ const MIGRATIONS: &[MigrationSpec] = &[
         phase: MigrationPhase::ApplicationReady,
         legacy_state_key: None,
     },
+    MigrationSpec {
+        id: super::_0020_payload_blob_compression::ID,
+        description: super::_0020_payload_blob_compression::DESCRIPTION,
+        phase: MigrationPhase::ApplicationReady,
+        legacy_state_key: None,
+    },
 ];
 
 #[derive(Clone)]
@@ -487,6 +493,11 @@ impl ApplicationMigrator {
                         super::_0019_show_tmdb_refresh::migrate(&datastore).await
                     }));
                 }
+                super::_0020_payload_blob_compression::ID => {
+                    std::mem::drop(
+                        self.spawn_payload_blob_compression(app.restore_coordinator().clone()),
+                    );
+                }
                 // Starts from `spawn_empty_duplicate_title_folder_cleanup`, once
                 // the library roots are reconciled.
                 migration_0017::ID | super::_0018_title_folder_recovery::ID => {}
@@ -494,6 +505,26 @@ impl ApplicationMigrator {
             }
         }
         Ok(())
+    }
+
+    /// Starts the background compression of payloads stored as plain bytes,
+    /// unless an earlier start already completed it. The receiver resolves
+    /// when the pass ends, whether or not it finished.
+    fn spawn_payload_blob_compression(
+        &self,
+        restore: Arc<scryer_application::RestoreCoordinator>,
+    ) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        let spec = *MIGRATIONS
+            .iter()
+            .find(|spec| spec.id == super::_0020_payload_blob_compression::ID)
+            .unwrap();
+        if self.applied.contains(spec.id) {
+            return None;
+        }
+        let datastore = self.ledger.datastore.clone();
+        Some(self.spawn_retryable(restore, spec, async move {
+            super::_0020_payload_blob_compression::migrate(&datastore).await
+        }))
     }
 
     pub(crate) fn spawn_title_folder_recovery(&self, app: &AppUseCase) {
@@ -1041,6 +1072,44 @@ mod tests {
                 .unwrap()
                 .contains(MIGRATIONS[0].id)
         );
+    }
+
+    #[tokio::test]
+    async fn payload_compression_records_completion_and_never_runs_again() {
+        use super::super::_0020_payload_blob_compression::{ID, tests as pass};
+
+        let (_temp, services, expected) = pass::seeded().await;
+        let settings = Arc::new(SettingsStore::new(
+            services.datastore(),
+            services.encryption_key_state(),
+        ));
+        seed_service_setting_definitions(settings.clone())
+            .await
+            .expect("seed setting definitions");
+        let migrator = ApplicationMigrator::load(services.datastore(), settings.clone())
+            .await
+            .expect("load application migrator");
+        let restore = Arc::new(scryer_application::RestoreCoordinator::default());
+        let completion = migrator
+            .spawn_payload_blob_compression(restore.clone())
+            .expect("an unrecorded pass starts");
+        tokio::time::timeout(std::time::Duration::from_secs(60), completion)
+            .await
+            .expect("pass completion must be bounded")
+            .expect("pass completion signal");
+        assert_eq!(pass::stored(&services).await, (expected, 0));
+        assert!(migrator.ledger.applied_ids().await.unwrap().contains(ID));
+
+        // With the tables gone, any statement the pass issued would fail; a
+        // recorded pass starts nothing at all.
+        sqlx::raw_sql("DROP TABLE location_operation_plans; DROP TABLE media_file_analyses;")
+            .execute(services.pool())
+            .await
+            .expect("drop payload tables");
+        let restarted = ApplicationMigrator::load(services.datastore(), settings)
+            .await
+            .expect("reload application migrator");
+        assert!(restarted.spawn_payload_blob_compression(restore).is_none());
     }
 
     #[tokio::test]

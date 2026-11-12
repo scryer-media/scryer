@@ -23,7 +23,7 @@ use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
 };
-use crate::storage::sql::json::{canonical_json_text, json_text_or};
+use crate::storage::sql::json::canonical_json_text;
 
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
 /// Same-path upgrades stage the verified replacement beside the final file
@@ -1984,8 +1984,12 @@ impl MediaFileRepository for MediaFileStore {
         file_id: &str,
         analysis: MediaFileAnalysis,
     ) -> AppResult<()> {
-        let (sql, args) = media_analysis_update(file_id, analysis)?;
-        execute_write(&self.datastore, "update_media_file_analysis", sql, args).await?;
+        let update = media_analysis_update(file_id, analysis)?;
+        SqlRuntime::run_in_transaction(&self.datastore, "update_media_file_analysis", move |tx| {
+            let update = update.clone();
+            Box::pin(async move { apply_media_analysis_update_tx(tx, &update).await })
+        })
+        .await?;
         Ok(())
     }
 
@@ -2025,7 +2029,7 @@ impl MediaFileRepository for MediaFileStore {
                 Ok(ids.into_iter().collect::<Vec<_>>())
             })
             .transpose()?;
-        let (sql, args) = media_analysis_update(&expected.id, analysis)?;
+        let update = media_analysis_update(&expected.id, analysis)?;
         let dialect = dialect_for_datastore(&self.datastore);
         let query = format!(
             "SELECT {} FROM media_files mf WHERE mf.id = {{}}{}",
@@ -2038,7 +2042,7 @@ impl MediaFileRepository for MediaFileStore {
         );
         let expected = expected.clone();
         SqlRuntime::run_in_transaction(&self.datastore, "publish_unchanged_media_analysis", move |tx| {
-            let (query, expected, sql, args) = (query.clone(), expected.clone(), sql.clone(), args.clone());
+            let (query, expected, update) = (query.clone(), expected.clone(), update.clone());
             let disc_links = disc_links.clone();
             Box::pin(async move {
                 let Some(current) = fetch_optional_media_file(SqlExec::Tx(tx), &query, &[SqlArg::Text(expected.id.clone())]).await? else { return Ok(false); };
@@ -2068,7 +2072,7 @@ impl MediaFileRepository for MediaFileStore {
                             &[SqlArg::Text(expected.id.clone()), SqlArg::Text(episode_id)]).await?;
                     }
                 }
-                Ok(SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await? > 0)
+                apply_media_analysis_update_tx(tx, &update).await
             })
         }).await
     }
@@ -3245,14 +3249,51 @@ fn quality_rank_expression(alias: &str) -> String {
     )
 }
 
+/// An analysis write: the summary columns on the media file row and the
+/// analysis document in its own table.
+#[derive(Clone)]
+struct MediaAnalysisUpdate {
+    sql: String,
+    args: Vec<SqlArg>,
+    analysis_args: Vec<SqlArg>,
+}
+
+const MEDIA_ANALYSIS_UPSERT: &str =
+    "INSERT INTO media_file_analyses (media_file_id, analysis) VALUES ({}, {})
+     ON CONFLICT(media_file_id) DO UPDATE SET analysis = excluded.analysis";
+
+/// Applies an analysis write inside `tx`. The document is stored only when
+/// the file row still exists, so a vanished file leaves nothing behind.
+async fn apply_media_analysis_update_tx(
+    tx: &mut SqlTx<'_>,
+    update: &MediaAnalysisUpdate,
+) -> AppResult<bool> {
+    if SqlRuntime::execute(SqlExec::Tx(tx), &update.sql, &update.args).await? == 0 {
+        return Ok(false);
+    }
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        MEDIA_ANALYSIS_UPSERT,
+        &update.analysis_args,
+    )
+    .await?;
+    Ok(true)
+}
+
 fn media_analysis_update(
     file_id: &str,
     analysis: MediaFileAnalysis,
-) -> AppResult<(String, Vec<SqlArg>)> {
-    let analysis_json = serialized_media_analysis(&analysis)?;
+) -> AppResult<MediaAnalysisUpdate> {
+    let analysis_args = vec![
+        SqlArg::Text(file_id.to_string()),
+        SqlArg::OptBytes(Some(encode_media_analysis(&serialized_media_analysis(
+            &analysis,
+        )?)?)),
+    ];
     let labels = analysis.derived_labels();
-    Ok((
-        "UPDATE media_files SET
+    Ok(MediaAnalysisUpdate {
+        analysis_args,
+        sql: "UPDATE media_files SET
                 resolution = COALESCE({}, resolution),
                 video_codec_parsed = COALESCE({}, video_codec_parsed),
                 audio_codec_parsed = {},
@@ -3272,7 +3313,6 @@ fn media_analysis_update(
                 duration_seconds = {},
                 num_chapters = {},
                 container_format = {},
-                analysis_json = {},
                 analysis_revision = {},
                 analysis_attempt_revision = {},
                 analysis_attempted_at = {},
@@ -3283,7 +3323,7 @@ fn media_analysis_update(
                 scan_status = 'scanned'
              WHERE id = {}"
             .to_string(),
-        vec![
+        args: vec![
             SqlArg::OptText(labels.resolution),
             SqlArg::OptText(labels.video_codec.as_ref().map(ToString::to_string)),
             SqlArg::OptText(labels.audio_codec),
@@ -3303,14 +3343,13 @@ fn media_analysis_update(
             SqlArg::OptI32(analysis.duration_seconds),
             SqlArg::OptI32(analysis.num_chapters),
             SqlArg::OptText(analysis.container_format),
-            SqlArg::Text(analysis_json),
             SqlArg::I64(i64::from(analysis.details.revision)),
             SqlArg::I64(i64::from(analysis.details.revision)),
             SqlArg::Text(chrono::Utc::now().to_rfc3339()),
             SqlArg::Bool(analysis.has_multiaudio),
             SqlArg::Text(file_id.to_string()),
         ],
-    ))
+    })
 }
 
 fn serialized_media_analysis(analysis: &MediaFileAnalysis) -> AppResult<String> {
@@ -3331,7 +3370,9 @@ fn media_file_select_columns(dialect: SqlDialect, episode_expr: &str, role_expr:
             mf.video_bitrate_kbps, mf.video_bit_depth,
             mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,
             mf.audio_codec, mf.audio_profile, mf.audio_channels, mf.audio_bitrate_kbps,
-            mf.duration_seconds, mf.num_chapters, mf.container_format, mf.analysis_json,
+            mf.duration_seconds, mf.num_chapters, mf.container_format,
+            (SELECT mfa.analysis FROM media_file_analyses mfa WHERE mfa.media_file_id = mf.id)
+                AS analysis,
             mf.analysis_attempt_revision, mf.analysis_attempted_at, mf.analysis_attempt_status, mf.analysis_attempt_json,
             mf.has_multiaudio,
             mf.scene_name, mf.release_group, mf.source_type, mf.resolution,
@@ -3679,11 +3720,26 @@ fn row_to_episode_scoped_media_file(row: &SqlRow) -> AppResult<EpisodeScopedMedi
     })
 }
 
+use scryer_infrastructure_sql::compressed_blob::MEDIA_ANALYSIS_MAX_BYTES as ANALYSIS_MAX_BYTES;
+
+/// Stores an analysis document as one zstd frame.
+fn encode_media_analysis(analysis_json: &str) -> AppResult<Vec<u8>> {
+    scryer_infrastructure_sql::compressed_blob::compress_text(analysis_json, ANALYSIS_MAX_BYTES)
+}
+
+/// A file without a stored analysis reads as the empty document, as a blank
+/// one always did; an unreadable one reads as null.
 fn analysis_json_from_row(row: &SqlRow) -> JsonValue {
-    json_text_or(row, "analysis_json", "{}")
-        .ok()
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or(JsonValue::Null)
+    let stored = match row.opt_bytes("analysis") {
+        Ok(Some(stored)) => stored,
+        Ok(None) => return JsonValue::Object(Default::default()),
+        Err(_) => return JsonValue::Null,
+    };
+    match scryer_infrastructure_sql::compressed_blob::decompress_text(&stored, ANALYSIS_MAX_BYTES) {
+        Ok(json) if json.trim().is_empty() => JsonValue::Object(Default::default()),
+        Ok(json) => serde_json::from_str(&json).unwrap_or(JsonValue::Null),
+        Err(_) => JsonValue::Null,
+    }
 }
 
 fn analysis_u8_field(analysis: &JsonValue, field: &str) -> Option<u8> {
@@ -8421,5 +8477,183 @@ mod tests {
         };
         assert_eq!(normalize(single.clone()), normalize(expected.clone()));
         assert_eq!(normalize(chunked), normalize(expected));
+    }
+
+    fn stream_analysis(language: &str) -> MediaFileAnalysis {
+        MediaFileAnalysis {
+            details: Default::default(),
+            video_codec: None,
+            video_width: Some(1920),
+            video_height: Some(1080),
+            video_bitrate_kbps: None,
+            video_bit_depth: None,
+            video_hdr_format: None,
+            dovi_profile: None,
+            dovi_bl_compat_id: None,
+            video_frame_rate: None,
+            video_profile: None,
+            audio_codec: Some("aac".to_string()),
+            audio_profile: None,
+            audio_channels: Some(2),
+            audio_bitrate_kbps: None,
+            audio_languages: vec![language.to_string()],
+            audio_streams: vec![AudioStreamDetail {
+                codec: Some("aac".to_string()),
+                profile: None,
+                channels: Some(2),
+                language: Some(language.to_string()),
+                name: None,
+                bitrate_kbps: None,
+            }],
+            subtitle_languages: vec![],
+            subtitle_codecs: vec![],
+            subtitle_streams: vec![],
+            has_multiaudio: false,
+            duration_seconds: Some(60),
+            num_chapters: None,
+            container_format: Some("matroska".to_string()),
+        }
+    }
+
+    async fn stored_analysis(services: &SqliteServices, file_id: &str) -> Option<Vec<u8>> {
+        sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT analysis FROM media_file_analyses WHERE media_file_id = ?",
+        )
+        .bind(file_id)
+        .fetch_optional(services.pool())
+        .await
+        .unwrap()
+    }
+
+    async fn analysis_fixture(name: &str) -> (tempfile::TempDir, SqliteServices, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join(format!("{name}.db")).to_string_lossy())
+            .await
+            .unwrap();
+        let title = make_test_series_title(&format!("{name}-title"));
+        title_store(&services).create(title.clone()).await.unwrap();
+        let file_id = media_file_store(&services)
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id,
+                file_path: format!("/synthetic/{name}/Episode 01.mkv"),
+                size_bytes: 1_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        (dir, services, file_id)
+    }
+
+    #[tokio::test]
+    async fn analysis_is_stored_as_a_zstd_frame_and_reads_back() {
+        let (_dir, services, file_id) = analysis_fixture("analysis-frame").await;
+        let files = media_file_store(&services);
+        files
+            .update_media_file_analysis(&file_id, stream_analysis("eng"))
+            .await
+            .unwrap();
+
+        let stored = stored_analysis(&services, &file_id)
+            .await
+            .expect("blob row");
+        assert_eq!(&stored[..4], &[0x28, 0xB5, 0x2F, 0xFD]);
+        let file = files.get_media_file_by_id(&file_id).await.unwrap().unwrap();
+        assert_eq!(file.audio_languages, vec!["eng".to_string()]);
+        assert_eq!(file.audio_streams.len(), 1);
+        assert_eq!(file.audio_streams[0].language.as_deref(), Some("eng"));
+
+        // A second analysis replaces the one row in place.
+        files
+            .update_media_file_analysis(&file_id, stream_analysis("fra"))
+            .await
+            .unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_file_analyses")
+            .fetch_one(services.pool())
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+        let file = files.get_media_file_by_id(&file_id).await.unwrap().unwrap();
+        assert_eq!(file.audio_languages, vec!["fra".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn analysis_copied_as_plain_bytes_by_the_migration_reads_back() {
+        let (_dir, services, file_id) = analysis_fixture("analysis-legacy").await;
+        let legacy = serde_json::json!({
+            "audio_languages": ["deu"],
+            "audio_streams": [{"codec": "ac3", "channels": 6, "language": "deu"}],
+        })
+        .to_string();
+        sqlx::query("INSERT INTO media_file_analyses (media_file_id, analysis) VALUES (?, ?)")
+            .bind(&file_id)
+            .bind(legacy.as_bytes())
+            .execute(services.pool())
+            .await
+            .unwrap();
+
+        let file = media_file_store(&services)
+            .get_media_file_by_id(&file_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.audio_languages, vec!["deu".to_string()]);
+        assert_eq!(file.audio_streams[0].codec.as_deref(), Some("ac3"));
+        assert_eq!(file.audio_streams[0].channels, Some(6));
+    }
+
+    #[tokio::test]
+    async fn a_file_without_analysis_has_no_blob_row_and_reads_the_old_default() {
+        let (_dir, services, file_id) = analysis_fixture("analysis-absent").await;
+        assert!(stored_analysis(&services, &file_id).await.is_none());
+        let file = media_file_store(&services)
+            .get_media_file_by_id(&file_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(file.audio_languages.is_empty());
+        assert!(file.audio_streams.is_empty());
+        assert!(file.subtitle_streams.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_analysis_for_a_missing_file_writes_no_blob_row() {
+        let (_dir, services, _file_id) = analysis_fixture("analysis-missing").await;
+        let _ = media_file_store(&services)
+            .update_media_file_analysis("missing-file", stream_analysis("eng"))
+            .await;
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_file_analyses")
+            .fetch_one(services.pool())
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    #[tokio::test]
+    async fn path_writes_leave_the_analysis_row_alone_and_delete_takes_it() {
+        let (_dir, services, file_id) = analysis_fixture("analysis-owner").await;
+        let files = media_file_store(&services);
+        let sentinel = b"sentinel-analysis-bytes".to_vec();
+        sqlx::query("INSERT INTO media_file_analyses (media_file_id, analysis) VALUES (?, ?)")
+            .bind(&file_id)
+            .bind(&sentinel)
+            .execute(services.pool())
+            .await
+            .unwrap();
+
+        files
+            .update_media_file_path(&file_id, "/synthetic/analysis-owner/Renamed.mkv")
+            .await
+            .unwrap();
+        files
+            .update_media_file_paths(&[(
+                file_id.clone(),
+                "/synthetic/analysis-owner/Moved.mkv".to_string(),
+            )])
+            .await
+            .unwrap();
+        assert_eq!(stored_analysis(&services, &file_id).await, Some(sentinel));
+
+        files.delete_media_file(&file_id).await.unwrap();
+        assert!(stored_analysis(&services, &file_id).await.is_none());
     }
 }

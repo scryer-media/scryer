@@ -7697,3 +7697,177 @@ async fn migration_0331_folds_facet_kinded_smg_ids_onto_title() {
         ]
     );
 }
+
+/// Migration 0338 moves `location_operations.plan_json` and
+/// `media_files.analysis_json` into keyed blob tables, copying each stored
+/// value as its plain UTF-8 bytes and leaving no row for an absent value or
+/// for the plan of a completed operation that names its source library.
+#[tokio::test]
+async fn migration_0338_moves_plans_and_analyses_into_blob_tables() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("payload-blobs-0338.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("payload blob connection");
+
+    let library_id =
+        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Series);
+    let (root_folder_id,): (String,) =
+        sqlx::query_as("SELECT id FROM library_roots WHERE library_id = ?1 LIMIT 1")
+            .bind(&library_id)
+            .fetch_one(&mut *conn)
+            .await
+            .expect("default series root should exist");
+
+    // Return both owners to their pre-0338 shape, then seed legacy values.
+    sqlx::raw_sql(
+        "DROP TABLE location_operation_plans;
+         DROP TABLE media_file_analyses;
+         ALTER TABLE location_operations ADD COLUMN plan_json TEXT;
+         ALTER TABLE media_files ADD COLUMN analysis_json TEXT;
+         INSERT INTO location_operations (id, operation_type, execution_mode, plan_json)
+         VALUES ('op-planned', 'root_move', 'catalog_only', '{\"titles\":[\"synthetic\"]}'),
+                ('op-unplanned', 'root_move', 'catalog_only', NULL);",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("restore the pre-0338 shape");
+    // A completed operation that names its source library leaves its plan
+    // behind; every other state, and a completion with no single source
+    // library, keeps it.
+    for (id, state, source_library_id) in [
+        ("op-completed", "completed", Some(library_id.as_str())),
+        (
+            "op-warnings",
+            "completed_with_warnings",
+            Some(library_id.as_str()),
+        ),
+        ("op-completed-multi-source", "completed", None),
+        ("op-failed", "failed", Some(library_id.as_str())),
+        ("op-canceled", "canceled", Some(library_id.as_str())),
+    ] {
+        sqlx::query(
+            "INSERT INTO location_operations
+                 (id, operation_type, execution_mode, state, source_library_id, plan_json)
+             VALUES (?1, 'root_move', 'catalog_only', ?2, ?3, '{\"titles\":[]}')",
+        )
+        .bind(id)
+        .bind(state)
+        .bind(source_library_id)
+        .execute(&mut *conn)
+        .await
+        .expect("finished operation fixture should insert");
+    }
+    sqlx::query(
+        "INSERT INTO titles (id, name, name_normalized, library_id, root_folder_id, facet, created_at)
+         VALUES ('blob-title', 'Blob Fixture', 'blob fixture', ?1, ?2, 'series', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&library_id)
+    .bind(&root_folder_id)
+    .execute(&mut *conn)
+    .await
+    .expect("title fixture should insert");
+    for (id, analysis) in [
+        ("media-analysed", Some(r#"{"audio_languages":["eng"]}"#)),
+        ("media-null", None),
+        ("media-blank", Some("  ")),
+    ] {
+        sqlx::query(
+            "INSERT INTO media_files (id, title_id, file_path, size_bytes, scan_status, created_at, analysis_json)
+             VALUES (?1, 'blob-title', '/synthetic/' || ?1 || '.mkv', 100, 'complete', '2026-01-01T00:00:00Z', ?2)",
+        )
+        .bind(id)
+        .bind(analysis)
+        .execute(&mut *conn)
+        .await
+        .expect("media file fixture should insert");
+    }
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0338_payload_blob_tables.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0338 should apply");
+
+    let plans: Vec<(String, Vec<u8>)> =
+        sqlx::query_as("SELECT operation_id, plan FROM location_operation_plans ORDER BY 1")
+            .fetch_all(&mut *conn)
+            .await
+            .expect("read plans");
+    assert_eq!(
+        plans,
+        vec![
+            ("op-canceled".to_string(), br#"{"titles":[]}"#.to_vec()),
+            (
+                "op-completed-multi-source".to_string(),
+                br#"{"titles":[]}"#.to_vec()
+            ),
+            ("op-failed".to_string(), br#"{"titles":[]}"#.to_vec()),
+            (
+                "op-planned".to_string(),
+                br#"{"titles":["synthetic"]}"#.to_vec()
+            ),
+        ]
+    );
+    let analyses: Vec<(String, Vec<u8>)> =
+        sqlx::query_as("SELECT media_file_id, analysis FROM media_file_analyses ORDER BY 1")
+            .fetch_all(&mut *conn)
+            .await
+            .expect("read analyses");
+    assert_eq!(
+        analyses,
+        vec![(
+            "media-analysed".to_string(),
+            br#"{"audio_languages":["eng"]}"#.to_vec()
+        )]
+    );
+    let (old_columns,): (i64,) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM pragma_table_info('location_operations') WHERE name = 'plan_json')
+              + (SELECT COUNT(*) FROM pragma_table_info('media_files') WHERE name = 'analysis_json')",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .expect("list columns");
+    assert_eq!(old_columns, 0);
+    let (owners,): (i64,) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM location_operations) + (SELECT COUNT(*) FROM media_files)",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .expect("count owners");
+    assert_eq!(owners, 10, "no operation row is dropped with its plan");
+
+    sqlx::query(
+        "INSERT INTO media_file_analyses (media_file_id, analysis) VALUES ('missing', x'00')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect_err("an analysis belongs to a stored media file");
+    sqlx::query(
+        "INSERT INTO location_operation_plans (operation_id, plan) VALUES ('missing', x'00')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect_err("a plan belongs to a stored operation");
+    sqlx::raw_sql(
+        "DELETE FROM media_files WHERE id = 'media-analysed';
+         DELETE FROM location_operations;",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("owners delete");
+    let (left,): (i64,) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM media_file_analyses) + (SELECT COUNT(*) FROM location_operation_plans)",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .expect("count blobs");
+    assert_eq!(left, 0);
+}

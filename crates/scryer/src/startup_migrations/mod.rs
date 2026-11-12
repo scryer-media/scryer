@@ -16,6 +16,7 @@ pub(crate) mod _0016_maintenance_show_fact_rearm;
 pub(crate) mod _0017_empty_duplicate_title_folders;
 pub(crate) mod _0018_title_folder_recovery;
 pub(crate) mod _0019_show_tmdb_refresh;
+pub(crate) mod _0020_payload_blob_compression;
 pub(crate) mod compatibility_journal;
 pub(crate) mod runner;
 pub(crate) mod versioning;
