@@ -134,6 +134,40 @@ impl FileSystemStagedNzbStore {
         }
     }
 
+    /// The path of one directory entry when a prune with `older_than` would
+    /// remove it: a file, not in use, last written before the cutoff.
+    fn prunable_entry(
+        &self,
+        entry: std::io::Result<std::fs::DirEntry>,
+        older_than: DateTime<Utc>,
+    ) -> AppResult<Option<PathBuf>> {
+        let entry = entry.map_err(|error| {
+            AppError::Repository(format!("failed to read staged nzb entry: {error}"))
+        })?;
+        let path = entry.path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        if self.with_active_artifacts(|active| active.contains_key(&path))? {
+            return Ok(None);
+        }
+
+        let metadata = entry.metadata().map_err(|error| {
+            AppError::Repository(format!(
+                "failed to read staged nzb metadata {}: {error}",
+                path.display()
+            ))
+        })?;
+        let modified = metadata.modified().map_err(|error| {
+            AppError::Repository(format!(
+                "failed to read staged nzb mtime {}: {error}",
+                path.display()
+            ))
+        })?;
+        let modified = DateTime::<Utc>::from(modified);
+        Ok((modified < older_than).then_some(path))
+    }
+
     fn with_active_artifacts<T>(
         &self,
         mut f: impl FnMut(&mut HashMap<PathBuf, usize>) -> T,
@@ -205,42 +239,43 @@ impl StagedNzbStore for FileSystemStagedNzbStore {
         };
 
         for entry in entries {
-            let entry = entry.map_err(|error| {
-                AppError::Repository(format!("failed to read staged nzb entry: {error}"))
-            })?;
-            let path = entry.path();
-            if !path.is_file() {
+            let Some(path) = self.prunable_entry(entry, older_than)? else {
                 continue;
-            }
-            if self.with_active_artifacts(|active| active.contains_key(&path))? {
-                continue;
-            }
-
-            let metadata = entry.metadata().map_err(|error| {
+            };
+            std::fs::remove_file(&path).map_err(|error| {
                 AppError::Repository(format!(
-                    "failed to read staged nzb metadata {}: {error}",
+                    "failed to prune staged nzb artifact {}: {error}",
                     path.display()
                 ))
             })?;
-            let modified = metadata.modified().map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to read staged nzb mtime {}: {error}",
-                    path.display()
-                ))
-            })?;
-            let modified = DateTime::<Utc>::from(modified);
-            if modified < older_than {
-                std::fs::remove_file(&path).map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to prune staged nzb artifact {}: {error}",
-                        path.display()
-                    ))
-                })?;
-                pruned += 1;
-            }
+            pruned += 1;
         }
 
         Ok(pruned)
+    }
+
+    async fn has_staged_nzbs_older_than(&self, older_than: DateTime<Utc>) -> AppResult<bool> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let entries = match std::fs::read_dir(&store.root_dir) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => {
+                    return Err(AppError::Repository(format!(
+                        "failed to list staged nzb directory {}: {error}",
+                        store.root_dir.display()
+                    )));
+                }
+            };
+            for entry in entries {
+                if store.prunable_entry(entry, older_than)?.is_some() {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("staged nzb listing task failed: {error}")))?
     }
 
     fn mark_artifact_active(&self, path: &Path) -> AppResult<()> {
@@ -333,6 +368,52 @@ mod tests {
 
         assert_eq!(pruned, 1);
         assert_eq!(store.count_staged_artifacts().await.expect("count"), 1);
+    }
+
+    #[tokio::test]
+    async fn has_old_artifacts_answers_what_prune_would_remove() {
+        let dir = temp_store_dir();
+        let store = FileSystemStagedNzbStore::new(dir.path())
+            .await
+            .expect("store should initialize");
+        let cutoff = || Utc::now() - Duration::hours(1);
+        assert!(!store.has_staged_nzbs_older_than(cutoff()).await.unwrap());
+
+        let _fresh = store
+            .stage_nzb_bytes_for_test(b"<?xml version=\"1.0\"?><nzb></nzb>")
+            .await
+            .expect("fresh artifact should stage");
+        assert!(!store.has_staged_nzbs_older_than(cutoff()).await.unwrap());
+
+        let old = store
+            .stage_nzb_bytes_for_test(b"<?xml version=\"1.0\"?><nzb></nzb>")
+            .await
+            .expect("old artifact should stage");
+        store
+            .set_staged_nzb_updated_at(&old, Utc::now() - Duration::hours(2))
+            .await
+            .expect("mtime update should succeed");
+        store
+            .mark_artifact_active(&old.compressed_path)
+            .expect("active mark should succeed");
+        assert!(
+            !store.has_staged_nzbs_older_than(cutoff()).await.unwrap(),
+            "an artifact in use is never pruned"
+        );
+        assert_eq!(
+            store.prune_staged_nzbs_older_than(cutoff()).await.unwrap(),
+            0
+        );
+
+        store
+            .mark_artifact_inactive(&old.compressed_path)
+            .expect("inactive mark should succeed");
+        assert!(store.has_staged_nzbs_older_than(cutoff()).await.unwrap());
+        assert_eq!(
+            store.prune_staged_nzbs_older_than(cutoff()).await.unwrap(),
+            1
+        );
+        assert!(!store.has_staged_nzbs_older_than(cutoff()).await.unwrap());
     }
 
     #[tokio::test]

@@ -253,6 +253,24 @@ impl ListSubscriptionRepository for ListStore {
         self.hydrate_subscriptions(rows).await
     }
 
+    async fn has_due(&self, now: DateTime<Utc>) -> AppResult<bool> {
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS due FROM list_subscriptions
+              WHERE enabled = {}
+                AND (next_sync_at IS NULL OR next_sync_at <= {})
+                AND (paused_until IS NULL OR paused_until <= {})
+              LIMIT 1",
+            &[
+                SqlArg::Bool(true),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?
+        .is_some())
+    }
+
     async fn record_sync(
         &self,
         id: &str,

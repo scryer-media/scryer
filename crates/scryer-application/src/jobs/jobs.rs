@@ -849,7 +849,11 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         let next_runs = self.runtime.jobs.job_run_tracker.all_next_runs().await;
+        let idle_checks = self.runtime.jobs.job_run_tracker.all_idle_checks().await;
         let mut definitions = crate::jobs::all_job_definitions(&next_runs);
+        for job in &mut definitions {
+            job.schedule.last_idle_check_at = idle_checks.get(&job.key).copied();
+        }
         if let Some(job) = definitions
             .iter_mut()
             .find(|job| job.key == JobKey::ArtworkEncoding)
@@ -1361,11 +1365,68 @@ impl AppUseCase {
         if trigger_source == JobTriggerSource::Manual {
             return true;
         }
-        match job_key {
+        let has_work = match job_key {
             JobKey::RssSync => self.rss_sync_tick_has_work().await,
             JobKey::PendingReleaseProcessing => self.pending_release_tick_has_work().await,
-            _ => true,
+            JobKey::ProwlarrSync => self.prowlarr_sync_tick_has_work().await,
+            JobKey::StagedNzbPrune => self.staged_nzb_prune_tick_has_work().await,
+            JobKey::ListSync => self.list_sync_tick_has_work().await,
+            _ => return true,
+        };
+        if !has_work {
+            // The jobs view shows this visit in place of a recorded run.
+            self.runtime
+                .jobs
+                .job_run_tracker
+                .record_idle_check(job_key, self.runtime.environment.now())
+                .await;
         }
+        has_work
+    }
+
+    /// Whether a Prowlarr sync would sync anything: the same parents the job
+    /// body selects. A failed read says yes, so the run records the failure.
+    async fn prowlarr_sync_tick_has_work(&self) -> bool {
+        match self
+            .services
+            .integrations
+            .indexer_configs
+            .list(Some("prowlarr".to_string()))
+            .await
+        {
+            Ok(configs) => configs
+                .iter()
+                .any(|config| config.managed_parent_config_id.is_none() && config.is_enabled),
+            Err(_) => true,
+        }
+    }
+
+    /// Whether the staged-NZB prune would remove anything, with the job
+    /// body's cutoff. A failed read says yes, so the run records the failure.
+    async fn staged_nzb_prune_tick_has_work(&self) -> bool {
+        self.services
+            .workflow
+            .staged_nzb_store
+            .has_staged_nzbs_older_than(Utc::now() - chrono::Duration::hours(1))
+            .await
+            .unwrap_or(true)
+    }
+
+    /// Whether a list sync has a due subscription. Expired account links are
+    /// pruned here as well as in the job body, because an idle tick no longer
+    /// reaches the body and the prune must not wait for a due list. A failed
+    /// read says yes, so the run records the failure.
+    async fn list_sync_tick_has_work(&self) -> bool {
+        self.services
+            .lists
+            .account_runtime
+            .prune_expired_links(Utc::now());
+        self.services
+            .lists
+            .subscriptions
+            .has_due(Utc::now())
+            .await
+            .unwrap_or(true)
     }
 
     pub async fn run_scheduled_job_now(

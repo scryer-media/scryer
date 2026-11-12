@@ -72,6 +72,7 @@ fn custom_job_schedule_info(entry: &crate::scripts::scheduler::CustomJobEntry) -
         interval_seconds,
         initial_delay_seconds: None,
         next_run_at: entry.next_run_at(),
+        last_idle_check_at: None,
     }
 }
 

@@ -343,6 +343,82 @@ async fn due_selection_respects_enabled_next_and_pause() {
     assert_eq!(due, vec!["due", "never-synced"]);
 }
 
+/// The scheduler's existence check answers exactly what the due listing
+/// would: nothing due while every subscription waits, paused or disabled,
+/// and due as soon as one is.
+#[tokio::test]
+async fn has_due_agrees_with_the_due_listing() {
+    let store = test_store(None).await;
+    let now = Utc::now();
+    assert!(!store.has_due(now).await.expect("has due on empty"));
+    for (id, enabled, next_at, paused_until) in [
+        ("not-yet", true, Some(now + Duration::hours(1)), None),
+        (
+            "paused",
+            true,
+            Some(now - Duration::minutes(1)),
+            Some(now + Duration::hours(1)),
+        ),
+        ("disabled", false, Some(now - Duration::minutes(1)), None),
+    ] {
+        let mut subscription = subscription(id, ListScope::Public, OWNER);
+        subscription.enabled = enabled;
+        ListSubscriptionRepository::create(&store, subscription)
+            .await
+            .expect("create");
+        store
+            .record_sync(
+                id,
+                &ListSyncStatus {
+                    state: ListSyncState::Ok,
+                    next_at,
+                    paused_until,
+                    ..ListSyncStatus::default()
+                },
+                &ListCounts::default(),
+            )
+            .await
+            .expect("record sync");
+    }
+    assert!(store.list_due(now, 50).await.expect("list due").is_empty());
+    assert!(!store.has_due(now).await.expect("has due while waiting"));
+    assert!(
+        store
+            .has_due(now + Duration::hours(2))
+            .await
+            .expect("has due later"),
+        "a waiting subscription becomes due once its time passes"
+    );
+    assert!(
+        !store
+            .list_due(now + Duration::hours(2), 50)
+            .await
+            .expect("list due later")
+            .is_empty()
+    );
+
+    ListSubscriptionRepository::create(
+        &store,
+        subscription("never-synced", ListScope::Public, OWNER),
+    )
+    .await
+    .expect("create never-synced");
+    store
+        .record_sync(
+            "never-synced",
+            &ListSyncStatus {
+                state: ListSyncState::Ok,
+                next_at: None,
+                ..ListSyncStatus::default()
+            },
+            &ListCounts::default(),
+        )
+        .await
+        .expect("record sync never-synced");
+    assert_eq!(store.list_due(now, 50).await.expect("list due").len(), 1);
+    assert!(store.has_due(now).await.expect("has due once one is due"));
+}
+
 #[tokio::test]
 async fn record_sync_persists_counts_and_runs_are_newest_first() {
     let store = test_store(None).await;

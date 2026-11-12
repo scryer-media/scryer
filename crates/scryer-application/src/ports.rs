@@ -5853,6 +5853,12 @@ pub trait HousekeepingRepository: Send + Sync {
     async fn delete_maintenance_evaluation_runs_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
+    /// Held maintenance action runs that finished more than `days` ago. The
+    /// newest run of each candidate generation, every run that is not held,
+    /// and every run carrying a scoped-deletion resume journal are kept.
+    async fn delete_held_lifecycle_action_runs_older_than(&self, _days: i64) -> AppResult<u32> {
+        Ok(0)
+    }
     async fn delete_history_events_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32>;
     async fn delete_download_import_artifacts_for_title_ids(
         &self,
@@ -8024,6 +8030,13 @@ pub trait StagedNzbStore: Send + Sync {
     async fn delete_staged_nzb(&self, staged_nzb: &StagedNzbRef) -> AppResult<bool>;
 
     async fn prune_staged_nzbs_older_than(&self, older_than: DateTime<Utc>) -> AppResult<u32>;
+
+    /// Whether [`Self::prune_staged_nzbs_older_than`] with the same cutoff
+    /// would remove anything. Answering `true` is always safe: it only means
+    /// the prune runs and finds out.
+    async fn has_staged_nzbs_older_than(&self, _older_than: DateTime<Utc>) -> AppResult<bool> {
+        Ok(true)
+    }
 
     fn mark_artifact_active(&self, path: &Path) -> AppResult<()>;
 
