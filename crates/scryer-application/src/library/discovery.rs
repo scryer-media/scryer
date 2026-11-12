@@ -305,6 +305,8 @@ async fn listed_boundary_stamps(
     None
 }
 
+// Only Unix refuses a link and stamps the metadata.
+#[cfg_attr(not(unix), allow(dead_code))]
 enum ListedSidecarStamp {
     Missing,
     Linked,
@@ -1039,7 +1041,10 @@ impl BoundaryFrame {
             None
         };
         #[cfg(not(unix))]
-        let directory_stamp: Option<BoundaryStamp> = None;
+        let directory_stamp: Option<BoundaryStamp> = {
+            let _ = reusable;
+            None
+        };
         let mut leaf = !folded;
         note_boundary_probe(&path, BoundaryProbe::ReadDir);
         let mut listing = tokio::fs::read_dir(&path)

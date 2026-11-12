@@ -113,6 +113,7 @@ use support_acquisition_downloads::*;
 #[cfg(unix)]
 pub(crate) use support_bootstrap_fixtures::bootstrap_application_upgrade;
 use support_bootstrap_fixtures::*;
+#[cfg_attr(not(unix), allow(unused_imports))]
 pub(crate) use support_bootstrap_fixtures::{
     bootstrap, bootstrap_import_tracking_spy, bootstrap_with_title_repo,
 };
