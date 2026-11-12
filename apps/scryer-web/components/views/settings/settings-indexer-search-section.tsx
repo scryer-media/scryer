@@ -1159,7 +1159,6 @@ export function SettingsIndexerSearchSection(
     hasSearched,
     searching,
     indexers,
-    matchedCount,
     rows,
     sort,
     onSortChange,
@@ -1196,7 +1195,7 @@ export function SettingsIndexerSearchSection(
               id="indexer-search-totals"
               className="text-[13px] text-[var(--scry-text3)]"
             >
-              {t("indexerSearch.results.matched", { count: matchedCount })}
+              {t("indexerSearch.results.matched", { count: rows.length })}
             </span>
             {props.deadlineReached ? (
               <span
