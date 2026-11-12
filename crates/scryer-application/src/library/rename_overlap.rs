@@ -139,9 +139,9 @@ impl RenameOverlapContext {
             let mut facts = facts;
             let mut spellings = HashMap::with_capacity(planned.len() + recorded.len());
             for raw in planned {
-                if !spellings.contains_key(&raw) {
-                    let spelling = facts.planned_spelling(&raw, &roots);
-                    spellings.insert(raw, spelling);
+                if let std::collections::hash_map::Entry::Vacant(slot) = spellings.entry(raw) {
+                    let spelling = facts.planned_spelling(slot.key(), &roots);
+                    slot.insert(spelling);
                 }
             }
             for folder in recorded.iter() {
