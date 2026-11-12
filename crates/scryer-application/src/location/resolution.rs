@@ -454,6 +454,7 @@ impl ConflictResolver {
             {
                 clear_own_abandoned_partial(row, &destination).await?;
             }
+            let placed_by_mover = existing.is_none();
             let mut verified = match existing {
                 Some(proof) => proof,
                 None => {
@@ -487,11 +488,56 @@ impl ConflictResolver {
                 } else {
                     ResolutionDisposition::Hardlink
                 };
-            } else if record.source_version != Some(file_version(source).await?) {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::location::SOURCE_CHANGED_DURING_TRANSFER,
-                    "The source changed during transfer. It was preserved; try again when the file is no longer changing.",
-                ));
+            } else {
+                let probed = file_version_and_metadata(source).await;
+                // At full depth the bytes the copy streamed also have to agree
+                // with the full hash the catalog already holds for this source,
+                // while the source still carries the signature that hash was
+                // recorded against. Nothing is read for this: both hashes are
+                // already in hand.
+                let disagrees_with_stored_hash = match probed.as_ref() {
+                    Ok((version, metadata)) => {
+                        record.source_version.as_deref() == Some(version.as_str())
+                            && copy_disagrees_with_stored_hash(
+                                request.depth,
+                                request.file.source_content.as_ref(),
+                                verified.hashes.as_ref(),
+                                metadata,
+                            )
+                    }
+                    Err(_) => false,
+                };
+                // The mover held the copy's hashes back for this decision: a
+                // copy refused here must leave the catalog's stored hash as it
+                // was, so a retry over the same files is refused again. Every
+                // other outcome persists them, as the mover always has.
+                if placed_by_mover && !disagrees_with_stored_hash {
+                    mover
+                        .persist_deferred_hashes(
+                            FileMoveRequest {
+                                file: &file,
+                                ..request
+                            },
+                            &verified,
+                        )
+                        .await;
+                }
+                let (source_version, _) = probed?;
+                if record.source_version != Some(source_version) {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::SOURCE_CHANGED_DURING_TRANSFER,
+                        "The source changed during transfer. It was preserved; try again when the file is no longer changing.",
+                    ));
+                }
+                if disagrees_with_stored_hash {
+                    verified.outcome = FileVerificationOutcome::Mismatch;
+                    verified.detail = Some(format!(
+                        "{} does not match the content recorded for {}. The source was preserved.",
+                        destination.display(),
+                        source.display()
+                    ));
+                    return Ok(verified);
+                }
             }
             record.source_version = Some(file_version(source).await?);
             record.destination_version = Some(file_version(&destination).await?);
@@ -618,9 +664,40 @@ fn file_error(path: &Path, error: impl std::fmt::Display) -> AppError {
 }
 
 pub async fn file_version(path: &Path) -> AppResult<String> {
+    Ok(file_version_and_metadata(path).await?.0)
+}
+
+/// Whether a full-depth copy's streamed hash contradicts the full hash the
+/// catalog holds for its source, while `metadata` still carries the signature
+/// that stored hash was recorded against.
+fn copy_disagrees_with_stored_hash(
+    depth: VerificationDepth,
+    known: Option<&KnownSourceContent>,
+    hashes: Option<&super::model::StreamedContentHashes>,
+    metadata: &std::fs::Metadata,
+) -> bool {
+    let (Some(known), Some(hashes)) = (known, hashes) else {
+        return false;
+    };
+    depth == VerificationDepth::Full
+        && known.matches(metadata)
+        && (hashes.full_blake3 != known.full_blake3 || hashes.size_bytes != known.size_bytes)
+}
+
+/// [`file_version`] together with the metadata it was read from, for a caller
+/// that needs both from the one probe.
+async fn file_version_and_metadata(path: &Path) -> AppResult<(String, std::fs::Metadata)> {
     let metadata = tokio::fs::symlink_metadata(path)
         .await
         .map_err(|error| file_error(path, error))?;
+    let version = file_version_from_metadata(path, &metadata).await?;
+    Ok((version, metadata))
+}
+
+async fn file_version_from_metadata(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> AppResult<String> {
     if metadata.file_type().is_symlink() {
         let target = tokio::fs::read_link(path)
             .await

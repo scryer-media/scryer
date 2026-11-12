@@ -381,6 +381,10 @@ pub struct RootMoveFileMover {
     /// interrupted-destination proof on it. This is the only way to exercise
     /// those against real files; production never sets it.
     force_copies: bool,
+    /// Set on the placement handed to the resolver: the resolver may still
+    /// refuse a copy after it lands, so it persists the hashes itself once it
+    /// has decided, through [`TitleFileMover::persist_deferred_hashes`].
+    defer_hash_persist: bool,
 }
 
 impl RootMoveFileMover {
@@ -395,6 +399,7 @@ impl RootMoveFileMover {
             resolver: None,
             catalog: None,
             force_copies: false,
+            defer_hash_persist: false,
         }
     }
 
@@ -477,6 +482,7 @@ impl TitleFileMover for RootMoveFileMover {
         if let Some(resolver) = &self.resolver {
             let mut placement = self.clone();
             placement.resolver = None;
+            placement.defer_hash_persist = true;
             return resolver.resolve(&placement, request).await;
         }
         let source = &request.file.source_path;
@@ -535,8 +541,16 @@ impl TitleFileMover for RootMoveFileMover {
         if verified.permits_source_removal() {
             self.permissions.apply_to_file(destination).await?;
         }
-        self.persist_content_hashes(&request, &verified).await;
+        if !self.defer_hash_persist {
+            self.persist_content_hashes(&request, &verified).await;
+        }
         Ok(verified)
+    }
+
+    async fn persist_deferred_hashes(&self, request: FileMoveRequest<'_>, verified: &VerifiedFile) {
+        if self.defer_hash_persist {
+            self.persist_content_hashes(&request, verified).await;
+        }
     }
 }
 
@@ -1320,14 +1334,39 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             let source_version = super::resolution::file_version(&source).await?;
             let destination = file.destination();
             let destination_version = super::resolution::file_version(&destination).await?;
-            let source_hashes = super::verify::hash_existing_file(&source).await?;
-            let destination_proof = super::verify::VerifiedCopier::default()
-                .verify(&source, &destination, &source_hashes, record.depth.applied)
-                .await?;
+            // The content proof was made once, at copy time, at the chosen
+            // depth, and the resolution row recorded both files' versions right
+            // after it. While both files still carry those versions the proof
+            // stands, so only the quick check is repeated. Without a row holding
+            // both versions there is nothing tying the proof to these files, and
+            // the source is re-read and the destination proven again.
+            let recorded_proof = resolution
+                .and_then(|row| {
+                    row.source_version
+                        .as_deref()
+                        .zip(row.destination_version.as_deref())
+                })
+                .zip(record.hashes.as_ref());
+            let content_proven = match recorded_proof {
+                Some(((row_source_version, row_destination_version), recorded_hashes)) => {
+                    row_source_version == source_version
+                        && row_destination_version == destination_version
+                        && super::verify::quick_recheck(&source, &destination, recorded_hashes)
+                            .await?
+                            .permits_source_removal()
+                }
+                None => {
+                    let source_hashes = super::verify::hash_existing_file(&source).await?;
+                    let destination_proof = super::verify::VerifiedCopier::default()
+                        .verify(&source, &destination, &source_hashes, record.depth.applied)
+                        .await?;
+                    record.hashes.as_ref() == Some(&source_hashes)
+                        && destination_proof.outcome.permits_source_removal()
+                        && destination_proof.depth.applied == record.depth.applied
+                }
+            };
             if record.source_path != file.source_path
-                || record.hashes.as_ref() != Some(&source_hashes)
-                || !destination_proof.outcome.permits_source_removal()
-                || destination_proof.depth.applied != record.depth.applied
+                || !content_proven
                 || super::resolution::file_version(&source).await? != source_version
                 || super::resolution::file_version(&destination).await? != destination_version
             {

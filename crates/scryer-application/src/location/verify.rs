@@ -748,6 +748,8 @@ impl VerifiedCopier {
                 quick_floor_fallback(source, destination, hashes, &reason)
             }
             ReadBackHandle::Ready { file, bypass } => {
+                #[cfg(test)]
+                whole_file_reads::note(destination);
                 match full_read_back(file, hashes, &self.progress) {
                     Ok((outcome, detail)) => VerificationAssessment {
                         depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
@@ -776,6 +778,48 @@ pub async fn hash_existing_file_with_progress(
 ) -> AppResult<StreamedContentHashes> {
     let path = path.to_path_buf();
     spawn_verify_blocking(move || hash_source_with_progress(&path, &progress)).await?
+}
+
+/// The quick check alone, against the hashes a copy already recorded: the
+/// destination's size against the copied size, then the sampled head and tail
+/// of both files against each other. Never reads either file end to end.
+pub async fn quick_recheck(
+    source: &Path,
+    destination: &Path,
+    hashes: &StreamedContentHashes,
+) -> AppResult<FileVerificationOutcome> {
+    let source = source.to_path_buf();
+    let destination = destination.to_path_buf();
+    let hashes = hashes.clone();
+    spawn_verify_blocking(move || Ok(quick_check(&source, &destination, &hashes).0)).await?
+}
+
+/// Test seam: how many times each path was read end to end by a hash or a
+/// full read-back, so a test can prove a step read nothing whole.
+#[cfg(test)]
+pub(crate) mod whole_file_reads {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static READS: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
+
+    pub(crate) fn note(path: &Path) {
+        *READS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .entry(path.to_path_buf())
+            .or_default() += 1;
+    }
+
+    pub(crate) fn count(path: &Path) -> usize {
+        READS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(path)
+            .copied()
+            .unwrap_or(0)
+    }
 }
 
 /// Runs one blocking filesystem step off the async runtime, the way
@@ -852,6 +896,8 @@ fn hash_source_with_progress(
     source: &Path,
     progress: &CopyProgress,
 ) -> AppResult<StreamedContentHashes> {
+    #[cfg(test)]
+    whole_file_reads::note(source);
     let mut input = File::open(source).map_err(|error| {
         AppError::Repository(format!(
             "failed to open copy source: {}: {error}",
