@@ -1196,8 +1196,8 @@ const POOL_BOUNDED_ENDPOINTS: [Endpoint; 5] = [
     Endpoint::SectionPage,
 ];
 
-/// The library affinity read: the one read that summarizes the whole
-/// readable catalog, and the one the affinity cache keeps off later calls.
+/// The library affinity read's statements: the one read that summarizes the
+/// whole readable catalog, and the one the affinity cache keeps off later calls.
 fn is_affinity_read(sql: &str) -> bool {
     sql.trim_start()
         .starts_with("WITH scoped AS (SELECT id, facet FROM titles")
@@ -1292,6 +1292,11 @@ async fn affinity_revision(pool: &sqlx::SqlitePool) -> String {
         .expect("a migrated database keeps an affinity revision")
 }
 
+/// Statements one affinity fill issues: the selected titles, then their tags,
+/// tag sources and tag source keys, each restating the same selection. The
+/// count does not follow the catalog.
+const AFFINITY_FILL_READS: usize = 4;
+
 async fn affinity_reads(seeded: &SeededDiscovery) -> usize {
     let sample = call(seeded, Endpoint::HomeCards).await;
     assert!(sample.error.is_none(), "home failed: {:?}", sample.error);
@@ -1308,7 +1313,7 @@ async fn the_affinity_profile_is_reused_until_one_of_its_inputs_changes() {
     let pool = &seeded.ctx.db.pool;
     assert_eq!(
         affinity_reads(&seeded).await,
-        1,
+        AFFINITY_FILL_READS,
         "the first home call fills"
     );
     assert_eq!(
@@ -1389,7 +1394,7 @@ async fn the_affinity_profile_is_reused_until_one_of_its_inputs_changes() {
     .await;
     assert_eq!(
         affinity_reads(&seeded).await,
-        1,
+        AFFINITY_FILL_READS,
         "a generation change must refill"
     );
 }

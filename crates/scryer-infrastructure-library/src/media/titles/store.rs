@@ -848,11 +848,19 @@ impl TitleRepository for TitleStore {
                 .entry(row.text("id")?)
                 .or_insert(row.text("facet")?);
         }
-        let ids = identities.keys().cloned().collect::<Vec<_>>();
+        if identities.is_empty() {
+            return Ok(Vec::new());
+        }
+        // The tag reads restate the selection instead of binding its ids, so
+        // the read is at most four statements at any catalog size.
         let mut tags =
-            crate::media::canonical_tags::load_title_metadata_tags_in_lowered_categories(
+            crate::media::canonical_tags::load_selected_title_metadata_tags_in_lowered_categories(
                 self.datastore.read_exec(),
-                &ids,
+                crate::media::canonical_tags::OwnerSelection {
+                    with_clause: &scope,
+                    cte: "selected",
+                    args: &args,
+                },
                 &["genre", "theme"],
             )
             .await?;
@@ -8299,6 +8307,153 @@ mod tests {
                 expected_tag("action", "genre", "Action", &[], &[]),
             ]
         );
+    }
+
+    /// The affinity read as it was when its tag reads bound the selected ids,
+    /// in chunks of owner ids.
+    async fn id_list_reference_affinity_titles(
+        datastore: &StoreDatastore,
+        library_ids: &[String],
+        run_id: Option<&str>,
+    ) -> Vec<(String, MediaFacet, Vec<CanonicalMediaTag>)> {
+        let libraries = std::iter::repeat_n("{}", library_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut args = library_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        args.push(SqlArg::OptText(run_id.map(str::to_owned)));
+        args.extend(library_ids.iter().cloned().map(SqlArg::Text));
+        let sql = format!(
+            "WITH scoped AS (SELECT id, facet FROM titles WHERE library_id IN ({libraries})),
+             submitted AS (SELECT DISTINCT t.id, t.facet FROM scoped t
+                 JOIN discovery_submitted_subjects s ON s.title_id = t.id
+                 WHERE s.run_id = {{}} AND s.library_id IN ({libraries})),
+             selected AS (SELECT * FROM submitted UNION ALL
+                 SELECT * FROM scoped WHERE NOT EXISTS (SELECT 1 FROM submitted))
+             SELECT s.id, s.facet FROM selected s"
+        );
+        let rows = SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args)
+            .await
+            .unwrap();
+        let mut identities = BTreeMap::new();
+        for row in &rows {
+            identities
+                .entry(row.text("id").unwrap())
+                .or_insert(row.text("facet").unwrap());
+        }
+        let ids = identities.keys().cloned().collect::<Vec<_>>();
+        let mut tags =
+            crate::media::canonical_tags::load_title_metadata_tags_in_lowered_categories(
+                datastore.read_exec(),
+                &ids,
+                &["genre", "theme"],
+            )
+            .await
+            .unwrap();
+        identities
+            .into_iter()
+            .map(|(id, facet)| {
+                let canonical_tags = tags.remove(&id).unwrap_or_default();
+                (id, parse_facet(&facet), canonical_tags)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn discovery_affinity_selection_tag_read_matches_the_id_list_read() {
+        let (datastore, pool) = metadata_tag_store(&[("title", "title_id")]).await;
+        // 1,950 titles: every fifth in the private library, every seventh
+        // without tags. The run submits about 1,200 visible titles (some twice)
+        // and a few private ones, so every selection spans several id chunks.
+        sqlx::raw_sql(
+            "CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT, facet TEXT);
+             CREATE TABLE discovery_submitted_subjects (run_id TEXT, title_id TEXT, library_id TEXT);
+             INSERT INTO titles (id, library_id, facet)
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1950)
+                 SELECT printf('emberfall-%04d', i),
+                        CASE WHEN i % 5 = 0 THEN 'private' ELSE 'visible' END,
+                        CASE i % 3 WHEN 0 THEN 'movie' WHEN 1 THEN 'series' ELSE 'anime' END
+                 FROM n;
+             INSERT INTO discovery_submitted_subjects (run_id, title_id, library_id)
+                 SELECT 'run', id, library_id FROM titles
+                 WHERE CAST(substr(id, 11) AS INTEGER) <= 1500
+                   AND (library_id = 'visible' OR CAST(substr(id, 11) AS INTEGER) % 50 = 0);
+             INSERT INTO discovery_submitted_subjects (run_id, title_id, library_id)
+                 SELECT 'run', id, library_id FROM titles
+                 WHERE CAST(substr(id, 11) AS INTEGER) % 11 = 0 AND library_id = 'visible';
+             CREATE TABLE tagged AS
+                 SELECT id, CAST(substr(id, 11) AS INTEGER) AS i FROM titles
+                 WHERE CAST(substr(id, 11) AS INTEGER) % 7 <> 0;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'drama',
+                        CASE i % 4 WHEN 0 THEN 'Genre' WHEN 1 THEN 'genre' WHEN 2 THEN 'THEME' ELSE 'studio' END,
+                        'Drama', i % 3 FROM tagged;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'action', 'genre', 'Action', i % 2 FROM tagged;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'heist', 'theme', 'Heist', 0 FROM tagged WHERE i % 2 = 0;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'padded', ' genre', 'Padded', 0 FROM tagged;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'cinderwake', 'studio', 'Cinderwake', 0 FROM tagged WHERE i % 3 = 0;
+             INSERT INTO title_metadata_tag_sources (title_id, tag_key, source, sort_index)
+                 SELECT id, 'drama', 'tmdb', 1 FROM tagged
+                 UNION ALL SELECT id, 'drama', 'anilist', i % 2 FROM tagged
+                 UNION ALL SELECT id, 'drama', ' tmdb ', 2 FROM tagged
+                 UNION ALL SELECT id, 'drama', ' ', 3 FROM tagged
+                 UNION ALL SELECT id, 'heist', 'tvdb', 0 FROM tagged WHERE i % 2 = 0
+                 UNION ALL SELECT id, 'padded', 'tmdb', 0 FROM tagged
+                 UNION ALL SELECT id, 'cinderwake', 'tmdb', 0 FROM tagged WHERE i % 3 = 0
+                 UNION ALL SELECT id, 'ashgrove', 'tmdb', 0 FROM tagged WHERE i % 4 = 0;
+             INSERT INTO title_metadata_tag_source_keys (title_id, tag_key, source_tag_key, sort_index)
+                 SELECT id, 'drama', 'kb', 0 FROM tagged
+                 UNION ALL SELECT id, 'drama', 'ka', 0 FROM tagged
+                 UNION ALL SELECT id, 'drama', ' ka', 1 FROM tagged
+                 UNION ALL SELECT id, 'action', 'tmdb', i % 2 FROM tagged
+                 UNION ALL SELECT id, 'action', '', 0 FROM tagged WHERE i % 5 = 1
+                 UNION ALL SELECT id, 'cinderwake', 'kc', 0 FROM tagged WHERE i % 3 = 0;
+             DROP TABLE tagged;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let visible = vec!["visible".to_string()];
+        let both = vec!["visible".to_string(), "private".to_string()];
+        let nowhere = vec!["ashgrove".to_string()];
+        let store = TitleStore::new(datastore.clone());
+        for (libraries, run_id, min_titles) in [
+            (&visible, Some("run"), 1_000),
+            (&visible, Some("missing"), 1_500),
+            (&visible, None, 1_500),
+            (&both, Some("run"), 1_000),
+            (&both, Some("missing"), 1_900),
+            (&nowhere, Some("run"), 0),
+        ] {
+            let loaded = store
+                .list_discovery_affinity_titles(libraries, run_id, &[])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|title| (title.id, title.facet, title.canonical_tags))
+                .collect::<Vec<_>>();
+            let reference = id_list_reference_affinity_titles(&datastore, libraries, run_id).await;
+            assert!(
+                loaded.len() >= min_titles,
+                "{libraries:?} {run_id:?} selected {}",
+                loaded.len()
+            );
+            assert!(
+                min_titles == 0
+                    || loaded.iter().any(|(_, _, tags)| tags.is_empty())
+                        && loaded.iter().any(|(_, _, tags)| tags.len() == 3),
+                "{libraries:?} {run_id:?} covers titles with and without tags"
+            );
+            assert_eq!(loaded, reference, "{libraries:?} {run_id:?}");
+        }
     }
 
     /// Tag tables for each `(prefix, owner column)` pair, without foreign keys
