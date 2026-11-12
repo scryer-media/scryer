@@ -1497,6 +1497,7 @@ impl TorboxDownloadClient {
             engine_job_id: None,
             seed_goal_ratio: request.seed_goal_ratio,
             seed_goal_seconds: request.seed_goal_seconds,
+            never_remove: request.seed_never_remove,
             created_at: now,
             updated_at: now,
             remote_finished_at: None,
@@ -1545,6 +1546,7 @@ impl TorboxDownloadClient {
 
         let record_id = record.id.clone();
         let info_hash = record.info_hash.clone();
+        let seeds = record.asks_to_seed();
         {
             let mut state = runtime.state.lock().await;
             state.in_flight.insert(record_id.clone());
@@ -1560,7 +1562,6 @@ impl TorboxDownloadClient {
             return Err(error);
         }
 
-        let seeds = request.seed_goal_ratio.is_some() || request.seed_goal_seconds.is_some();
         let outcome = match source {
             SubmissionSource::Torrent { source, .. } => {
                 api.create_torrent(TorboxTorrentCreate {
@@ -2082,6 +2083,10 @@ fn seeding_snapshot(
     let never_finished = record.phase == TorboxJobPhase::Failed && !record.torbox_finished();
     let can_remove = if seeding_ended || never_finished {
         Some(true)
+    } else if record.never_remove && !record.has_seed_goal() {
+        // TorBox was asked to seed with no goal to reach: it keeps seeding,
+        // so nothing TorBox reports would make it removable.
+        downloaded.then_some(false)
     } else if !record.has_seed_goal() {
         is_private.and(downloaded.then_some(true))
     } else {

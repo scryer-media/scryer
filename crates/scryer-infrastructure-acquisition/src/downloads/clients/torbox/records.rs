@@ -88,6 +88,9 @@ pub(crate) struct TorboxJobRecord {
     pub seed_goal_ratio: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed_goal_seconds: Option<i64>,
+    /// The grab's seeding profile never lets the torrent be removed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub never_remove: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// When the poller first saw TorBox holding the whole item.
@@ -103,6 +106,13 @@ impl TorboxJobRecord {
     /// Whether Scryer asked for this torrent to seed to a goal.
     pub(crate) fn has_seed_goal(&self) -> bool {
         self.seed_goal_ratio.is_some() || self.seed_goal_seconds.is_some()
+    }
+
+    /// Whether TorBox is asked to seed: a numeric goal, or a profile that
+    /// never removes the torrent. Only a numeric goal is watched: with
+    /// never-remove alone, nothing TorBox reports changes the outcome.
+    pub(crate) fn asks_to_seed(&self) -> bool {
+        self.has_seed_goal() || self.never_remove
     }
 
     /// TorBox holds the whole item: the fetch started, or the job failed

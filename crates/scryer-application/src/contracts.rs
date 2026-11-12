@@ -1473,6 +1473,10 @@ pub struct DownloadClientAddRequest {
     pub info_hash_hint: Option<String>,
     pub seed_goal_ratio: Option<f64>,
     pub seed_goal_seconds: Option<i64>,
+    /// The resolved seeding profile never lets the torrent be removed. Set by
+    /// the router beside the goals; `false` when no profile resolved. Host
+    /// side only: it is not sent to plugin download clients.
+    pub seed_never_remove: bool,
     /// Tracker-declared minimums carried by the release (`minimum_seed_ratio` /
     /// `minimum_seed_time_minutes` and the season-pack twins in the indexer
     /// `extra` map). The grab-time resolver clamps profile goals up to these
@@ -1581,6 +1585,7 @@ impl DownloadClientAddRequest {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,

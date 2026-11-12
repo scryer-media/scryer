@@ -753,6 +753,7 @@ fn orphan(kind: TorboxItemKind, name: &str, info_hash: Option<&str>) -> TorboxJo
         engine_job_id: None,
         seed_goal_ratio: None,
         seed_goal_seconds: None,
+        never_remove: false,
         created_at: long_ago,
         updated_at: long_ago,
         remote_finished_at: None,
@@ -1836,7 +1837,7 @@ async fn records_written_without_privacy_still_load() {
         101,
     ))
     .unwrap();
-    for field in ["private", "preexisting_ids", "cancelled"] {
+    for field in ["private", "preexisting_ids", "cancelled", "never_remove"] {
         record.as_object_mut().unwrap().remove(field);
     }
     std::fs::write(
@@ -1851,6 +1852,7 @@ async fn records_written_without_privacy_still_load() {
     assert_eq!(loaded[0].private, None);
     assert!(loaded[0].preexisting_ids.is_empty());
     assert!(!loaded[0].cancelled);
+    assert!(!loaded[0].never_remove);
 }
 
 // ---------------------------------------------------------------------------
@@ -2838,4 +2840,56 @@ async fn a_dropped_submit_is_reconciled_by_the_poller() {
     let record = record_of(&runtime, &job_id).await;
     assert_eq!(record.torbox_id, Some(101));
     assert_eq!(record.phase, TorboxJobPhase::Remote);
+}
+
+// ---------------------------------------------------------------------------
+// never-remove profiles
+
+#[tokio::test]
+async fn never_remove_without_a_goal_asks_torbox_to_seed_and_is_not_watched() {
+    let fixture = Fixture::new().await;
+    fixture.mount_torrent_create(101).await;
+    fixture
+        .mount_list(
+            "torrents",
+            vec![item(101, "uploading", true, season_files())],
+        )
+        .await;
+    fixture.mount_links("torrents").await;
+    let runtime = fixture.runtime();
+    let mut request = magnet_request("Synthetic.Show.S01.WEB");
+    request.seed_never_remove = true;
+    let job_id = run_torrent_to_completion(&fixture, &runtime, &request).await;
+    let create = fixture
+        .requests_to("/v1/api/torrents/createtorrent")
+        .await
+        .remove(0);
+    assert_eq!(form_text(&create, "seed").as_deref(), Some("2"));
+    let record = record_of(&runtime, &job_id).await;
+    assert!(record.never_remove);
+    assert!(!record.watches_seeding(), "no goal TorBox could reach");
+    // Privacy was read with the item; nothing is left to read.
+    assert_eq!(record.private, Some(false));
+    let seeding = seeding_of(&runtime, &job_id).await;
+    assert_eq!(seeding.can_remove, Some(false), "TorBox keeps seeding it");
+
+    // After a restart the flag is still there, and the poller parks
+    // without a seeding watch.
+    fixture.server.reset().await;
+    let restarted = fixture.restarted_with(runtime, true);
+    let mut parked = restarted.parked();
+    assert_eq!(
+        seeding_of(&restarted, &job_id).await.can_remove,
+        Some(false)
+    );
+    assert!(record_of(&restarted, &job_id).await.never_remove);
+    tokio::time::timeout(WAIT_BOUND, parked.wait_for(|parked| *parked))
+        .await
+        .expect("the poller parks")
+        .unwrap();
+    restarted.poll_once().await.unwrap();
+    assert!(
+        fixture.server.received_requests().await.unwrap().is_empty(),
+        "nothing TorBox reports changes a never-remove torrent"
+    );
 }

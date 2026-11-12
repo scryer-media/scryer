@@ -1833,6 +1833,7 @@ impl PrioritizedDownloadClientRouter {
         if seed_goals.is_resolved() {
             effective_request.seed_goal_ratio = seed_goals.seed_goal_ratio;
             effective_request.seed_goal_seconds = seed_goals.seed_goal_seconds;
+            effective_request.seed_never_remove = seed_goals.never_remove;
         }
 
         Ok((effective_request, seed_goals))
@@ -4476,6 +4477,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -6735,6 +6737,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -6816,6 +6819,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -6916,6 +6920,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7104,6 +7109,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7217,6 +7223,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7286,6 +7293,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7357,6 +7365,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7428,6 +7437,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7503,6 +7513,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7585,6 +7596,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7618,6 +7630,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7685,6 +7698,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7752,6 +7766,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7897,6 +7912,7 @@ mod tests {
             info_hash_hint: Some("ABCDEF0123456789ABCDEF0123456789ABCDEF01".to_string()),
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7943,6 +7959,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn submit_download_carries_never_remove_without_a_numeric_goal() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let router = seeding_router(
+            primary.clone(),
+            "qbittorrent",
+            vec!["torrent_file".to_string()],
+            r#"{"primary": {"enabled": true}}"#,
+        )
+        .with_seed_goal_resolution(Arc::new(MockSeedingProfileRepository {
+            profiles: vec![scryer_domain::SeedingProfile {
+                ratio: None,
+                seed_time_minutes: None,
+                never_remove: true,
+                ..test_seeding_profile("indexer-profile")
+            }],
+        }));
+        let grab = router
+            .submit_download(&torrent_add_request(Some("indexer-1")))
+            .await
+            .expect("routes");
+        let sent = primary.submissions.lock().unwrap();
+        assert!(sent[0].seed_never_remove);
+        assert_eq!(sent[0].seed_goal_ratio, None);
+        assert_eq!(sent[0].seed_goal_seconds, None);
+        assert!(grab.seed_goals.expect("resolved").never_remove);
+    }
+
+    #[tokio::test]
     async fn submit_download_resolves_and_persists_seeding_goals_for_torrents() {
         let primary = Arc::new(MockDownloadClient::default());
         let router = seeding_router(
@@ -7968,6 +8012,7 @@ mod tests {
         // clamps the ratio up.
         assert_eq!(sent.seed_goal_ratio, Some(3.0));
         assert_eq!(sent.seed_goal_seconds, Some(3600));
+        assert!(!sent.seed_never_remove);
 
         let recorded = grab.seed_goals.as_ref().expect("goals should be returned");
         assert_eq!(
@@ -8134,6 +8179,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8196,6 +8242,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8283,6 +8330,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8364,6 +8412,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8433,6 +8482,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8497,6 +8547,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
