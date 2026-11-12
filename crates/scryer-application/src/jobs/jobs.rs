@@ -903,7 +903,9 @@ impl AppUseCase {
                 }
             }
 
-            JobKey::TitleDeletion | JobKey::TitleRename => Ok(true),
+            // The library is gone once the run finishes, so a library grant
+            // cannot be checked again; the run's own actor passed it at start.
+            JobKey::TitleDeletion | JobKey::LibraryDeletion | JobKey::TitleRename => Ok(true),
             JobKey::MediaFileRescore
             | JobKey::MediaFileDeletion
             | JobKey::RecycleBinRestore
@@ -1011,6 +1013,7 @@ impl AppUseCase {
                 job_key,
                 JobKey::SubtitleSearch
                     | JobKey::TitleDeletion
+                    | JobKey::LibraryDeletion
                     | JobKey::TitleRename
                     | JobKey::MediaFileDeletion
                     | JobKey::MediaFileRescore
@@ -2246,6 +2249,10 @@ impl AppUseCase {
             JobKey::TitleDeletion => Err(AppError::validation_refused(
                 crate::error_reasons::jobs::TITLE_DELETION_JOBS_INVALID,
                 "title deletion jobs must be started from the title deletion mutation",
+            )),
+            JobKey::LibraryDeletion => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::LIBRARY_DELETION_JOBS_INVALID,
+                "library deletion jobs must be started from the library deletion mutation",
             )),
             JobKey::TitleRename => Err(AppError::validation_refused(
                 crate::error_reasons::jobs::TITLE_RENAME_JOBS_INVALID,

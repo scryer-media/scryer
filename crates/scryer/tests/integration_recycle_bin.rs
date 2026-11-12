@@ -1653,7 +1653,7 @@ async fn custom_recycle_bin_path_lists_entries_once_across_libraries() {
 }
 
 #[tokio::test]
-async fn delete_title_purges_recycle_entries_from_all_library_roots() {
+async fn housekeeping_purges_a_deleted_titles_recycle_entries_from_all_library_roots() {
     let ctx = TestContext::new().await;
     seed_recycle_bin_setting_definition(&ctx).await;
     let root_a = tempfile::tempdir().expect("library root a");
@@ -1691,6 +1691,41 @@ async fn delete_title_purges_recycle_entries_from_all_library_roots() {
         .delete_title(&manager, "title-multi-root-delete", false, None)
         .await
         .expect("delete title");
+    let entry_a_dir = root_a.path().join(".scryer-recycle").join(&entry_a);
+    let entry_b_dir = root_b.path().join(".scryer-recycle").join(&entry_b);
+    assert!(
+        entry_a_dir.exists() && entry_b_dir.exists(),
+        "deletion leaves the entries to housekeeping"
+    );
+    let recorded = ctx
+        .titles
+        .list_recycle_purges(10)
+        .await
+        .expect("read records");
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].title_id, "title-multi-root-delete");
+    assert_eq!(recorded[0].library_id, library.id);
+
+    let report = ctx
+        .app
+        .run_housekeeping(&config_actor())
+        .await
+        .expect("run housekeeping");
+    assert_eq!(report.recycled_purged, 2);
+    assert!(
+        ctx.titles
+            .list_recycle_purges(10)
+            .await
+            .expect("read records")
+            .is_empty(),
+        "the finished title's record is cleared"
+    );
+    let second = ctx
+        .app
+        .run_housekeeping(&config_actor())
+        .await
+        .expect("run housekeeping again");
+    assert_eq!(second.recycled_purged, 0, "the record was cleared");
 
     assert!(
         !root_a.path().join(".scryer-recycle").join(entry_a).exists(),
@@ -1699,6 +1734,69 @@ async fn delete_title_purges_recycle_entries_from_all_library_roots() {
     assert!(
         !root_b.path().join(".scryer-recycle").join(entry_b).exists(),
         "new-root recycle entry should be purged"
+    );
+}
+
+#[tokio::test]
+async fn recycle_cleanup_records_are_read_oldest_first_and_dropped_by_age() {
+    let ctx = TestContext::new().await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library_in_store(&ctx, "Movies Record Age", root.path()).await;
+    let base = chrono::DateTime::parse_from_rfc3339("2026-03-01T12:00:00Z")
+        .expect("base time")
+        .with_timezone(&Utc);
+    // Ids sort opposite to their age, so title-id order would read them backwards.
+    for (id, days) in [("ashgrove", 2), ("cinderwake", 1), ("emberfall", 0)] {
+        seed_title(&ctx, id, &library).await;
+        ctx.titles
+            .delete_recording_recycle_purge(id, base + chrono::Duration::days(days))
+            .await
+            .expect("delete and record");
+    }
+
+    let oldest_two: Vec<String> = ctx
+        .titles
+        .list_recycle_purges(2)
+        .await
+        .expect("read records")
+        .into_iter()
+        .map(|record| record.title_id)
+        .collect();
+    assert_eq!(oldest_two, ["emberfall", "cinderwake"]);
+
+    let none_expired = ctx
+        .titles
+        .drop_recycle_purges_recorded_before(base, 10)
+        .await
+        .expect("probe");
+    assert_eq!(
+        none_expired, 0,
+        "a record at the cutoff is not older than it"
+    );
+
+    let dropped = ctx
+        .titles
+        .drop_recycle_purges_recorded_before(base + chrono::Duration::days(2), 1)
+        .await
+        .expect("drop");
+    assert_eq!(dropped, 1, "the drop stays within its batch bound");
+    let remaining: Vec<String> = ctx
+        .titles
+        .list_recycle_purges(10)
+        .await
+        .expect("read records")
+        .into_iter()
+        .map(|record| record.title_id)
+        .collect();
+    assert_eq!(
+        remaining,
+        ["cinderwake", "ashgrove"],
+        "the oldest goes first"
+    );
+    let remaining_at = ctx.titles.list_recycle_purges(10).await.expect("read");
+    assert_eq!(
+        remaining_at[0].recorded_at,
+        base + chrono::Duration::days(1)
     );
 }
 

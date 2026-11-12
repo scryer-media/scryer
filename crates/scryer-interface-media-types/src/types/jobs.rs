@@ -54,6 +54,8 @@ pub enum JobKeyValue {
     ListSync,
     /// Title deletion.
     TitleDeletion,
+    /// Library deletion: the library and its titles' catalog records.
+    LibraryDeletion,
     /// Title rename.
     TitleRename,
     /// Media-file deletion.

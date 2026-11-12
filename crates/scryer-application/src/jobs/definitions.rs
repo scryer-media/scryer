@@ -190,6 +190,7 @@ pub enum JobKey {
     ArtworkEncoding,
     TitleImageCacheRefresh,
     TitleDeletion,
+    LibraryDeletion,
     TitleRename,
     MediaFileDeletion,
     MediaFileRescore,
@@ -247,6 +248,7 @@ impl JobKey {
             Self::ArtworkEncoding => "artwork_encoding",
             Self::TitleImageCacheRefresh => "title_image_cache_refresh",
             Self::TitleDeletion => "title_deletion",
+            Self::LibraryDeletion => "library_deletion",
             Self::TitleRename => "title_rename",
             Self::MediaFileRescore => "media_file_rescore",
             Self::MediaFileDeletion => "media_file_deletion",
@@ -286,6 +288,7 @@ impl JobKey {
             "artwork_encoding" => Some(Self::ArtworkEncoding),
             "title_image_cache_refresh" => Some(Self::TitleImageCacheRefresh),
             "title_deletion" => Some(Self::TitleDeletion),
+            "library_deletion" => Some(Self::LibraryDeletion),
             "title_rename" => Some(Self::TitleRename),
             "media_file_rescore" => Some(Self::MediaFileRescore),
             "media_file_deletion" => Some(Self::MediaFileDeletion),
@@ -326,6 +329,7 @@ impl JobKey {
             Self::ArtworkEncoding => "Artwork Encoding",
             Self::TitleImageCacheRefresh => "Title Image Cache Refresh",
             Self::TitleDeletion => "Title Deletion",
+            Self::LibraryDeletion => "Library Deletion",
             Self::TitleRename => "Title Rename",
             Self::MediaFileRescore => "Refresh File Scores",
             Self::MediaFileDeletion => "Media File Deletion",
@@ -385,6 +389,9 @@ impl JobKey {
                 "Refresh remote artwork URLs from SMG and rebuild locally processed title images."
             }
             Self::TitleDeletion => "Delete selected titles from the catalog.",
+            Self::LibraryDeletion => {
+                "Delete a library and remove its titles from the catalog, leaving files on disk."
+            }
             Self::TitleRename => "Rename files for selected titles.",
             Self::MediaFileRescore => "Evaluate selected files under current scoring rules.",
             Self::MediaFileDeletion => "Delete a media file from disk and the catalog.",
@@ -433,6 +440,7 @@ impl JobKey {
             | Self::DiscoverySync
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
+            | Self::LibraryDeletion
             | Self::TitleRename
             | Self::MediaFileDeletion
             | Self::MediaFileRescore
@@ -486,6 +494,7 @@ impl JobKey {
             | Self::LibraryScanAnime
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
+            | Self::LibraryDeletion
             | Self::TitleRename
             | Self::MediaFileDeletion
             | Self::MediaFileRescore
@@ -526,6 +535,7 @@ impl JobKey {
             | Self::LibraryScanAnime
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
+            | Self::LibraryDeletion
             | Self::TitleRename
             | Self::MediaFileDeletion
             | Self::MediaFileRescore
@@ -579,6 +589,7 @@ impl JobKey {
             self,
             Self::AutoBackup
                 | Self::TitleDeletion
+                | Self::LibraryDeletion
                 | Self::TitleRename
                 | Self::MediaFileDeletion
                 | Self::MediaFileRescore

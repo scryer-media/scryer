@@ -1852,6 +1852,8 @@ pub(crate) async fn list_committed_entries_for_title(
         return Ok(Vec::new());
     }
 
+    #[cfg(test)]
+    test_bin_calls::record(test_bin_calls::LIST_FOR_TITLE, &config.base_path);
     let known = index
         .roots
         .entry(normalize_path(&config.base_path))
@@ -1895,87 +1897,45 @@ pub(crate) async fn list_committed_entries_for_title(
     Ok(results)
 }
 
-/// The committed entries of any of `title_ids` that `index` has not seen in
-/// this root, read with one listing of the root.
-///
-/// A deletion job lists a root once per title before it deletes; this
-/// catches entries those listings could not see because they appeared later.
-/// Every directory the index already knows was inspected by an earlier
-/// listing and is passed over, so an entry is never offered twice. A new
-/// directory gets the same inspection [`list_committed_entries_for_title`]
-/// gives it.
-pub(crate) async fn list_new_committed_entries_for_titles(
-    config: &RecycleBinConfig,
-    title_ids: &std::collections::HashSet<&str>,
-    index: &mut TitleRecycleEntryIndex,
-) -> AppResult<Vec<CommittedRecycleEntry>> {
-    if !cleanup_ready(config) {
-        if let Some(error) = &config.validation_error {
-            warn!(error = %error, path = %config.base_path.display(), "recycle bin cleanup disabled");
-        }
-        return Ok(Vec::new());
-    }
-
-    #[cfg(test)]
-    test_listings::record(&config.base_path);
-    let known = index
-        .roots
-        .entry(normalize_path(&config.base_path))
-        .or_default();
-    let mut results = Vec::new();
-    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
-        AppError::Repository(format!(
-            "failed to read recycle bin directory {}: {}",
-            config.base_path.display(),
-            e
-        ))
-    })?;
-
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
-    {
-        let name = entry.file_name();
-        if known.contains_key(&name) {
-            continue;
-        }
-        let (owner, committed) = inspect_entry_dir(config, entry.path()).await;
-        if let Some(owner) = owner {
-            known.insert(name, owner);
-        }
-        if let Some(committed) = committed
-            && committed
-                .manifest
-                .title_id
-                .as_deref()
-                .is_some_and(|owner| title_ids.contains(owner))
-        {
-            results.push(committed);
-        }
-    }
-
-    Ok(results)
-}
-
-/// How many times each recycle root was listed for late title entries.
+/// Each listing, lookup and purge of a recycle root's entries, so tests can
+/// assert which operations touch a bin and how often.
 #[cfg(test)]
-pub(crate) mod test_listings {
+pub(crate) mod test_bin_calls {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
-    static LISTINGS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    /// A full listing of the root's entries.
+    pub(crate) const LIST: &str = "list";
+    /// A listing of the root for one title's entries.
+    pub(crate) const LIST_FOR_TITLE: &str = "list_for_title";
+    /// A lookup of one entry by id.
+    pub(crate) const FIND: &str = "find";
+    /// A purge of one entry.
+    pub(crate) const PURGE: &str = "purge";
 
-    pub(super) fn record(root: &Path) {
-        LISTINGS.lock().unwrap().push(root.to_path_buf());
+    static CALLS: Mutex<Vec<(&'static str, PathBuf)>> = Mutex::new(Vec::new());
+
+    pub(super) fn record(kind: &'static str, root: &Path) {
+        CALLS.lock().unwrap().push((kind, root.to_path_buf()));
     }
 
+    /// Every call on `root`, of any kind.
     pub(crate) fn count(root: &Path) -> usize {
-        LISTINGS
+        CALLS
             .lock()
             .unwrap()
             .iter()
-            .filter(|listed| listed.as_path() == root)
+            .filter(|(_, called)| called.as_path() == root)
+            .count()
+    }
+
+    /// The calls of one kind on `root`.
+    pub(crate) fn count_kind(root: &Path, kind: &str) -> usize {
+        CALLS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(called_kind, called)| *called_kind == kind && called.as_path() == root)
             .count()
     }
 }
@@ -1983,14 +1943,26 @@ pub(crate) mod test_listings {
 pub async fn list_committed_entries(
     config: &RecycleBinConfig,
 ) -> AppResult<Vec<CommittedRecycleEntry>> {
+    Ok(list_committed_entries_reporting_withheld(config).await?.0)
+}
+
+/// [`list_committed_entries`], plus the title of every entry directory under
+/// the root it withheld (pending, quarantined or untrusted) whose manifest
+/// names one. The listing and the inspection of each entry are the same.
+pub(crate) async fn list_committed_entries_reporting_withheld(
+    config: &RecycleBinConfig,
+) -> AppResult<(Vec<CommittedRecycleEntry>, Vec<String>)> {
     if !cleanup_ready(config) {
         if let Some(error) = &config.validation_error {
             warn!(error = %error, path = %config.base_path.display(), "recycle bin cleanup disabled");
         }
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
+    #[cfg(test)]
+    test_bin_calls::record(test_bin_calls::LIST, &config.base_path);
     let mut results = Vec::new();
+    let mut withheld = Vec::new();
     let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
         AppError::Repository(format!(
             "failed to read recycle bin directory {}: {}",
@@ -2004,32 +1976,40 @@ pub async fn list_committed_entries(
         .await
         .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
     {
-        if let Some(entry) = trusted_committed_entry_from_dir(config, entry.path()).await? {
-            results.push(entry);
+        match inspect_entry_dir(config, entry.path()).await {
+            (_, Some(committed)) => results.push(committed),
+            (Some(Some(title_id)), None) => withheld.push(title_id),
+            _ => {}
         }
     }
 
-    Ok(results)
+    Ok((results, withheld))
+}
+
+/// The moment before which an entry of `config` has expired.
+pub(crate) fn expiry_cutoff(config: &RecycleBinConfig) -> chrono::DateTime<Utc> {
+    Utc::now() - chrono::Duration::days(config.retention_days as i64)
+}
+
+/// Whether `entry` was recycled before `cutoff`. An unreadable time never
+/// expires.
+pub(crate) fn recycled_before(
+    entry: &CommittedRecycleEntry,
+    cutoff: chrono::DateTime<Utc>,
+) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&entry.manifest.recycled_at)
+        .is_ok_and(|recycled_at| recycled_at.with_timezone(&Utc) < cutoff)
 }
 
 pub async fn list_expired_committed_entries(
     config: &RecycleBinConfig,
 ) -> AppResult<Vec<CommittedRecycleEntry>> {
-    let cutoff = Utc::now() - chrono::Duration::days(config.retention_days as i64);
-    let mut results = Vec::new();
-
-    for entry in list_committed_entries(config).await? {
-        let recycled_at = match chrono::DateTime::parse_from_rfc3339(&entry.manifest.recycled_at) {
-            Ok(dt) => dt.with_timezone(&Utc),
-            Err(_) => continue,
-        };
-
-        if recycled_at < cutoff {
-            results.push(entry);
-        }
-    }
-
-    Ok(results)
+    let cutoff = expiry_cutoff(config);
+    Ok(list_committed_entries(config)
+        .await?
+        .into_iter()
+        .filter(|entry| recycled_before(entry, cutoff))
+        .collect())
 }
 
 /// Pending entries older than this are leftovers from an interrupted move
@@ -2125,6 +2105,8 @@ pub(crate) async fn purge_committed_entry(
     config: &RecycleBinConfig,
     entry: &CommittedRecycleEntry,
 ) -> AppResult<bool> {
+    #[cfg(test)]
+    test_bin_calls::record(test_bin_calls::PURGE, &config.base_path);
     if let Err(reason) = trusted_committed_entry(config, &entry.entry_dir, &entry.manifest) {
         warn!(path = %entry.entry_dir.display(), reason = %reason, "skipping untrusted recycle entry purge");
         if let Err(error) =
@@ -2235,6 +2217,8 @@ pub async fn find_committed_entry(
         return Ok(None);
     }
 
+    #[cfg(test)]
+    test_bin_calls::record(test_bin_calls::FIND, &config.base_path);
     let entry_dir = config.base_path.join(entry_id);
     trusted_committed_entry_from_dir(config, entry_dir).await
 }
