@@ -218,10 +218,17 @@ impl ReleaseEvidence {
         }
     }
 
-    /// Whether a completed download was selected by an operator. Client-only
-    /// observations have no such durable intent and remain automatic.
+    /// Who put this download in the client: an automatic Scryer grab, an
+    /// operator's Scryer grab, or nobody Scryer knows of.
     pub(crate) fn import_origin(&self) -> crate::import_decide::ImportOrigin {
-        crate::import_decide::ImportOrigin::from_submission_purpose(self.purpose())
+        match self {
+            Self::ScryerSubmission { purpose, .. } => {
+                crate::import_decide::ImportOrigin::from_submission_purpose(*purpose)
+            }
+            Self::DownloaderObservation { .. } => {
+                crate::import_decide::ImportOrigin::DownloaderObservation
+            }
+        }
     }
 
     /// The release name to parse and score: the persisted indexer title for a
