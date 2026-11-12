@@ -1009,7 +1009,7 @@ impl PathEvidence {
         let verified = std::fs::symlink_metadata(path)
             .ok()
             .is_some_and(|metadata| metadata.is_dir());
-        if verified && self.directories.len() < 65_536 {
+        if verified && self.directories.len() < 1_000_000 {
             self.directories.insert(path.to_path_buf(), current);
         }
         verified
