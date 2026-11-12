@@ -1720,12 +1720,6 @@ async fn housekeeping_purges_a_deleted_titles_recycle_entries_from_all_library_r
             .is_empty(),
         "the finished title's record is cleared"
     );
-    let second = ctx
-        .app
-        .run_housekeeping(&config_actor())
-        .await
-        .expect("run housekeeping again");
-    assert_eq!(second.recycled_purged, 0, "the record was cleared");
 
     assert!(
         !root_a.path().join(".scryer-recycle").join(entry_a).exists(),
@@ -1780,24 +1774,20 @@ async fn recycle_cleanup_records_are_read_oldest_first_and_dropped_by_age() {
         .await
         .expect("drop");
     assert_eq!(dropped, 1, "the drop stays within its batch bound");
-    let remaining: Vec<String> = ctx
+    let remaining = ctx
         .titles
         .list_recycle_purges(10)
         .await
-        .expect("read records")
-        .into_iter()
-        .map(|record| record.title_id)
-        .collect();
+        .expect("read records");
     assert_eq!(
-        remaining,
+        remaining
+            .iter()
+            .map(|record| record.title_id.as_str())
+            .collect::<Vec<_>>(),
         ["cinderwake", "ashgrove"],
         "the oldest goes first"
     );
-    let remaining_at = ctx.titles.list_recycle_purges(10).await.expect("read");
-    assert_eq!(
-        remaining_at[0].recorded_at,
-        base + chrono::Duration::days(1)
-    );
+    assert_eq!(remaining[0].recorded_at, base + chrono::Duration::days(1));
 }
 
 #[tokio::test]

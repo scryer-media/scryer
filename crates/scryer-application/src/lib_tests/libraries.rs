@@ -244,20 +244,19 @@ async fn update_library_rejects_root_used_by_other_facet_library() {
     }
 }
 
-#[tokio::test]
-async fn delete_library_rejects_default_library() {
-    let (app, user) = bootstrap();
-    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
-
-    let error = app
-        .delete_library(&user, &movie_library_id)
+/// Run a library deletion job to its end. A refused delete returns the
+/// refusal and starts no job.
+async fn delete_library_through_job(
+    app: &AppUseCase,
+    user: &User,
+    library_id: &str,
+) -> AppResult<()> {
+    let (_, job) = app.start_delete_library_job_task(user, library_id).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), job)
         .await
-        .expect_err("default library delete should be rejected");
-
-    assert!(
-        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("default libraries cannot be deleted")),
-        "unexpected delete error: {error:?}"
-    );
+        .expect("the library deletion job should finish")
+        .expect("the library deletion job should not panic");
+    Ok(())
 }
 
 #[tokio::test]
@@ -340,11 +339,9 @@ async fn delete_library_purges_library_state_for_non_default_library() {
         .await
         .expect("pending import should be stored");
 
-    let deleted = app
-        .delete_library(&user, &library.id)
+    delete_library_through_job(&app, &user, &library.id)
         .await
-        .expect("library delete should succeed");
-    assert!(deleted);
+        .expect("library delete should start");
 
     assert!(
         app.services
@@ -463,11 +460,9 @@ async fn delete_library_purges_history_before_deleting_title_rows() {
     .await
     .expect("title should be created");
 
-    let deleted = app
-        .delete_library(&user, &library.id)
+    delete_library_through_job(&app, &user, &library.id)
         .await
-        .expect("library delete should succeed");
-    assert!(deleted);
+        .expect("library delete should start");
 
     let operations = operation_log.lock().await.clone();
     let delete_title_index = operations
@@ -483,120 +478,12 @@ async fn delete_library_purges_history_before_deleting_title_rows() {
     assert!(operations[..delete_title_index].contains(&"delete_release_attempts".to_string()));
 }
 
-#[tokio::test]
-async fn delete_library_returns_error_when_title_dependency_cleanup_fails() {
-    let settings = Arc::new(StoredSettingsRepo::default());
-    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
-    let titles = Arc::new(MockTitleRepo::default());
-    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
-    pending_releases
-        .fail_delete_for_title("pending release cleanup failed")
-        .await;
-
-    let (app, mut user) = bootstrap_with_library_delete_repositories(
-        titles,
-        settings.clone(),
-        unmatched_items,
-        Arc::new(MockDomainEventRepo::default()),
-        Arc::new(TrackingHousekeepingRepo::default()),
-        pending_releases,
-    );
-
-    let library = app
-        .create_library(
-            &user,
-            MediaFacet::Movie,
-            "Kids".to_string(),
-            vec![LibraryRootDraft {
-                id: None,
-                path: "/Volumes/Media/Kids".to_string(),
-                is_default: true,
-            }],
-            None,
-        )
-        .await
-        .expect("library should be created");
-
-    app.services
-        .catalog
-        .libraries
-        .set_grants_for_user(
-            &user.id,
-            vec![scryer_domain::LibraryGrant {
-                user_id: user.id.clone(),
-                library_id: library.id.clone(),
-                permissions: scryer_domain::LibraryPermissionMask::from_permissions([
-                    scryer_domain::LibraryPermission::View,
-                    scryer_domain::LibraryPermission::ManageTitles,
-                    scryer_domain::LibraryPermission::ManageLibrary,
-                ]),
-            }],
-        )
-        .await
-        .expect("library grants should be stored");
-    user.authorization.loaded = false;
-
-    settings
-        .set_scoped_value("system", "quality.profile", &library.id, "\"kids\"")
-        .await;
-
-    let created = app
-        .create_title_without_hydration_in_library(
-            &user,
-            NewTitle {
-                name: "Delete Me".into(),
-                facet: MediaFacet::Movie,
-                monitored: false,
-                tags: vec![],
-                external_ids: vec![],
-                min_availability: None,
-                ..Default::default()
-            },
-            library.id.clone(),
-        )
-        .await
-        .expect("title should be created");
-
-    let error = app
-        .delete_library(&user, &library.id)
-        .await
-        .expect_err("library delete should fail");
-
-    assert!(
-        matches!(error, AppError::Repository(ref message) | AppError::RepositoryFailure { ref message, .. } | AppError::RepositoryFailed { ref message, .. } if message.contains("pending release cleanup failed")),
-        "unexpected delete error: {error:?}"
-    );
-    assert!(
-        app.services
-            .catalog
-            .libraries
-            .get_by_id(&library.id)
-            .await
-            .expect("library lookup should succeed")
-            .is_some()
-    );
-    assert!(
-        app.services
-            .catalog
-            .titles
-            .get_by_id(&created.title.id)
-            .await
-            .expect("title lookup should succeed")
-            .is_some()
-    );
-    assert!(
-        settings
-            .get_scoped_value("system", "quality.profile", &library.id)
-            .await
-            .is_some()
-    );
-}
-
 /// A library-delete harness: a non-default movie library holding `titles`
 /// titles, with job runs recorded.
 async fn library_delete_job_harness(
     titles: usize,
     pending_releases: Arc<TrackingPendingReleaseRepo>,
+    settings: Arc<StoredSettingsRepo>,
 ) -> (
     AppUseCase,
     User,
@@ -609,7 +496,7 @@ async fn library_delete_job_harness(
     let job_runs = Arc::new(RecordingJobRunRepo::default());
     let (base_app, mut user) = bootstrap_with_library_delete_repositories(
         title_repo.clone(),
-        Arc::new(StoredSettingsRepo::default()),
+        settings,
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
         Arc::new(MockDomainEventRepo::default()),
         Arc::new(TrackingHousekeepingRepo::default()),
@@ -691,8 +578,12 @@ async fn surviving_titles(app: &AppUseCase, title_ids: &[String]) -> Vec<String>
 
 #[tokio::test]
 async fn library_delete_job_stopped_partway_leaves_the_library_listed_and_can_be_rerun() {
-    let (app, user, library, title_ids, title_repo, job_runs) =
-        library_delete_job_harness(5, Arc::new(TrackingPendingReleaseRepo::default())).await;
+    let (app, user, library, title_ids, title_repo, job_runs) = library_delete_job_harness(
+        5,
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        Arc::new(StoredSettingsRepo::default()),
+    )
+    .await;
     let reached = Arc::new(tokio::sync::Notify::new());
     *title_repo.halt_deletes_after.lock().await = Some((2, reached.clone()));
 
@@ -791,14 +682,12 @@ async fn library_delete_job_failure_keeps_the_library_and_records_the_reason() {
     pending_releases
         .fail_delete_for_title("pending release cleanup failed")
         .await;
+    let settings = Arc::new(StoredSettingsRepo::default());
     let (app, user, library, title_ids, _titles, job_runs) =
-        library_delete_job_harness(2, pending_releases).await;
-
-    // The same failure in the request form.
-    let in_request = app
-        .delete_library(&user, &library.id)
-        .await
-        .expect_err("library delete should fail");
+        library_delete_job_harness(2, pending_releases, settings.clone()).await;
+    settings
+        .set_scoped_value("system", "quality.profile", &library.id, "\"kids\"")
+        .await;
 
     let (accepted, job) = app
         .start_delete_library_job_task(&user, &library.id)
@@ -819,6 +708,13 @@ async fn library_delete_job_failure_keeps_the_library_and_records_the_reason() {
             .is_some()
     );
     assert_eq!(surviving_titles(&app, &title_ids).await, title_ids);
+    assert!(
+        settings
+            .get_scoped_value("system", "quality.profile", &library.id)
+            .await
+            .is_some(),
+        "the library's settings stay with it"
+    );
     let finished = job_runs
         .runs
         .lock()
@@ -828,24 +724,31 @@ async fn library_delete_job_failure_keeps_the_library_and_records_the_reason() {
         .cloned()
         .expect("the run should be recorded");
     assert_eq!(finished.status, JobRunStatus::Failed);
-    assert_eq!(
-        finished.error_text.as_deref(),
-        Some(in_request.to_string().as_str())
+    assert!(
+        finished
+            .error_text
+            .as_deref()
+            .is_some_and(|error| error.contains("pending release cleanup failed")),
+        "{:?}",
+        finished.error_text
     );
     let summary: serde_json::Value =
         serde_json::from_str(finished.summary_json.as_deref().expect("summary")).expect("json");
     assert_eq!(summary["deleted"], false);
-    assert_eq!(
-        summary["reason"].as_str(),
-        in_request.reason(),
-        "the job records the reason the request form returns"
+    assert!(
+        summary["reason"].is_null(),
+        "a repository failure has no reason code"
     );
 }
 
 #[tokio::test]
-async fn library_delete_job_refuses_what_the_request_form_refuses() {
-    let (app, user, library, _title_ids, _titles, job_runs) =
-        library_delete_job_harness(1, Arc::new(TrackingPendingReleaseRepo::default())).await;
+async fn library_delete_job_refuses_before_starting_a_job() {
+    let (app, user, library, _title_ids, _titles, job_runs) = library_delete_job_harness(
+        1,
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        Arc::new(StoredSettingsRepo::default()),
+    )
+    .await;
     let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let mut viewer = User::new_admin("emberfall-viewer");
     viewer.authorization = scryer_domain::UserAuthorization::default();
@@ -857,27 +760,39 @@ async fn library_delete_job_refuses_what_the_request_form_refuses() {
         ]),
     );
 
-    for (actor, library_id) in [
-        (&user, movie_library_id.as_str()),
-        (&user, "cinderwake-missing-library"),
-        (&viewer, library.id.as_str()),
+    for (actor, library_id, reason) in [
+        // Permission is checked before the default-library rule.
+        (
+            &user,
+            movie_library_id.as_str(),
+            crate::error_reasons::authorization::ACTION_PERMISSION_DENIED,
+        ),
+        (
+            &user,
+            "cinderwake-missing-library",
+            crate::error_reasons::library::RESOURCE_NOT_FOUND,
+        ),
+        (
+            &viewer,
+            library.id.as_str(),
+            crate::error_reasons::authorization::ACTION_PERMISSION_DENIED,
+        ),
     ] {
-        let in_request = app
-            .delete_library(actor, library_id)
-            .await
-            .expect_err("the request form should refuse");
-        let as_job = app
+        let error = app
             .start_delete_library_job(actor, library_id)
             .await
-            .expect_err("the job form should refuse");
-        assert_eq!(
-            std::mem::discriminant(&as_job),
-            std::mem::discriminant(&in_request),
-            "{library_id}: {as_job:?} vs {in_request:?}"
-        );
-        assert_eq!(as_job.reason(), in_request.reason(), "{library_id}");
-        assert_eq!(as_job.to_string(), in_request.to_string(), "{library_id}");
+            .expect_err("the delete should be refused");
+        assert_eq!(error.reason(), Some(reason), "{library_id}: {error:?}");
     }
+    let (admin_app, admin) = bootstrap();
+    let error = admin_app
+        .start_delete_library_job(&admin, &movie_library_id)
+        .await
+        .expect_err("a default library delete should be refused");
+    assert_eq!(
+        error.reason(),
+        Some(crate::error_reasons::library::DEFAULT_LIBRARIES_CANNOT_DELETED)
+    );
     assert!(
         job_runs.runs.lock().await.is_empty(),
         "a refusal starts no job"

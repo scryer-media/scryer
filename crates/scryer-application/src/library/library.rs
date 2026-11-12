@@ -1014,15 +1014,6 @@ impl AppUseCase {
         })
     }
 
-    /// Delete a library in the caller's own task, title by title. The
-    /// deletion job runs the same checks and leaves the same rows, deleting
-    /// the titles in chunks; the API starts that job instead, and no product
-    /// path calls this form.
-    pub async fn delete_library(&self, actor: &User, library_id: &str) -> AppResult<bool> {
-        let library = self.admit_library_delete(actor, library_id).await?;
-        self.delete_admitted_library(&library, actor, None).await
-    }
-
     /// The checks a library delete makes before it changes anything: the
     /// library exists, the actor may manage it, it is not a default library,
     /// and no location operation holds its roots.
@@ -1065,7 +1056,7 @@ impl AppUseCase {
         &self,
         library: &Library,
         actor: &User,
-        progress: Option<&mut LibraryDeletionTracker>,
+        tracker: &mut LibraryDeletionTracker,
     ) -> AppResult<bool> {
         self.cancel_library_scan_sessions(&library.id).await;
 
@@ -1085,21 +1076,8 @@ impl AppUseCase {
                 None,
             )
             .await?;
-        // The same rows either way; the job's chunks share their writes.
-        match progress {
-            Some(tracker) => {
-                self.delete_library_titles_in_chunks(
-                    &titles,
-                    DomainEventActor::from(actor),
-                    tracker,
-                )
-                .await?;
-            }
-            None => {
-                self.delete_titles_logically(&titles, DomainEventActor::from(actor), false)
-                    .await?;
-            }
-        }
+        self.delete_library_titles_in_chunks(&titles, DomainEventActor::from(actor), tracker)
+            .await?;
 
         self.services
             .config
@@ -1232,7 +1210,7 @@ impl AppUseCase {
             total: 0,
         };
         let result = self
-            .delete_admitted_library(&library, &actor, Some(&mut tracker))
+            .delete_admitted_library(&library, &actor, &mut tracker)
             .await;
         let LibraryDeletionTracker { mut run, total, .. } = tracker;
         let completed_at = chrono::Utc::now();
@@ -1405,11 +1383,6 @@ impl AppUseCase {
     /// Remove titles from the catalog: their dependents, history, events and
     /// rows. Catalog rows only; files on disk are never touched, and the
     /// recycle bin is left alone unless `clear_recycle_bin` is set.
-    ///
-    /// Title by title, in two passes: every title's dependents, then the
-    /// shared history, then every title row. A library deletion job deletes
-    /// its titles in chunks instead; see
-    /// [`Self::delete_library_title_chunk`].
     pub(crate) async fn delete_titles_logically(
         &self,
         titles: &[scryer_domain::Title],
