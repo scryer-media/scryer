@@ -433,18 +433,28 @@ async fn list_without_paging_sends_only_bypass_cache() {
 }
 
 #[tokio::test]
-async fn an_item_without_an_id_fails_the_list_rather_than_vanishing() {
+async fn an_unreadable_item_is_skipped_and_the_rest_of_the_list_is_read() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/api/usenet/mylist"))
-        .respond_with(ok(json!([{"id": 1}, {"name": "Synthetic.Fixture.Four"}])))
+        .respond_with(ok(json!([
+            {"id": 1},
+            {"name": "Synthetic.Fixture.Four"},
+            {"id": "not-a-number"},
+            {"id": 3, "private": true}
+        ])))
         .mount(&server)
         .await;
-    let error = api(&server)
+    let items = api(&server)
         .list(TorboxItemKind::Usenet, TorboxListQuery::default())
         .await
-        .expect_err("an unaddressable item");
-    assert!(matches!(error, TorboxError::Decode { .. }), "{error:?}");
+        .expect("the readable items");
+    assert_eq!(
+        items.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![1, 3]
+    );
+    assert_eq!(items[0].private, None, "an answer that says nothing");
+    assert_eq!(items[1].private, Some(true));
 }
 
 #[tokio::test]
@@ -828,7 +838,7 @@ async fn every_documented_code_maps_to_its_reason() {
 }
 
 #[tokio::test]
-async fn a_duplicate_create_is_typed_for_reconciliation() {
+async fn a_duplicate_create_is_a_typed_refusal() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/api/usenet/createusenetdownload"))
@@ -839,7 +849,7 @@ async fn a_duplicate_create_is_typed_for_reconciliation() {
         .create_usenet(nzb_create())
         .await
         .expect_err("duplicate");
-    assert!(error.is_duplicate_item());
+    assert_eq!(error.code(), Some(&TorboxErrorCode::DuplicateItem));
     assert!(!error.outcome_unknown());
     assert_eq!(
         AppError::from(error).reason(),

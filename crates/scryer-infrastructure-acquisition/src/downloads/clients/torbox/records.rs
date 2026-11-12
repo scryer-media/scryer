@@ -64,6 +64,18 @@ pub(crate) struct TorboxJobRecord {
     /// The name sent with the create, which identifies a usenet item when
     /// TorBox's answer was lost.
     pub submitted_name: String,
+    /// Items of the account that already matched this job before its create
+    /// was sent. A lost answer is never matched to one of them: they are
+    /// not this job's to adopt or delete.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preexisting_ids: Vec<i64>,
+    /// Whether TorBox reports the torrent as private, once it has said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private: Option<bool>,
+    /// The job was removed while its create was still in flight. The item
+    /// that create made is deleted once its id is known.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled: bool,
     pub phase: TorboxJobPhase,
     /// The job folder chosen for the fetch, recorded before the engine job
     /// is added so a restart can find that job again.
@@ -100,6 +112,17 @@ impl TorboxJobRecord {
             && self.phase == TorboxJobPhase::Fetching
             && self.torbox_id.is_some()
             && self.has_seed_goal()
+    }
+
+    /// A fetched torrent with no seed goal whose privacy TorBox has not
+    /// reported: until it has, the torrent is held, since a private one
+    /// must keep seeding.
+    pub(crate) fn awaits_privacy(&self) -> bool {
+        self.kind == super::api::TorboxItemKind::Torrent
+            && self.phase == TorboxJobPhase::Fetching
+            && self.torbox_id.is_some()
+            && !self.has_seed_goal()
+            && self.private.is_none()
     }
 
     pub(crate) fn fail(&mut self, reason: &'static str, message: String, now: DateTime<Utc>) {

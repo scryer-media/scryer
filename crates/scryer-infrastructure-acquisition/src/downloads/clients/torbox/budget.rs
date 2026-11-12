@@ -1,9 +1,9 @@
 //! The hourly create allowances TorBox enforces on top of its per-minute
 //! limit: 60 uncached torrents and 60 usenet downloads per hour per token.
 //!
-//! The tracker lives in memory only. It does no work of its own: it is
-//! consulted before a create and told about each create that counted, and it
-//! forgets sends older than the window as it is asked.
+//! The tracker lives in memory only. It does no work of its own: a create
+//! reserves its slot before it is sent and gives it back when it did not
+//! count, and the tracker forgets sends older than the window as it is asked.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -104,6 +104,7 @@ impl TorboxHourlyBudget {
 
     /// `None` when a create on `lane` may be sent now, otherwise how long
     /// until the oldest counted create leaves the window.
+    #[cfg(test)]
     pub fn wait_before_send(&self, lane: TorboxBudgetLane) -> Option<Duration> {
         let now = self.clock.now();
         let mut lanes = self.lanes.lock().unwrap_or_else(|p| p.into_inner());
@@ -116,40 +117,51 @@ impl TorboxHourlyBudget {
         Some((oldest + self.window).saturating_duration_since(now))
     }
 
-    /// [`Self::wait_before_send`] as the refusal a caller hands on.
-    pub fn check(&self, lane: TorboxBudgetLane) -> Result<(), AppError> {
-        match self.wait_before_send(lane) {
-            None => Ok(()),
-            Some(wait) => Err(AppError::temporary_unavailable_reason(
-                torbox_refusal::HOURLY_LIMIT,
-                format!(
-                    "TorBox allows {} {} creates an hour; the next may be sent in {}s",
-                    self.limit,
-                    lane.label(),
-                    wait.as_secs().max(1)
-                ),
-                Some(wait),
-            )),
-        }
-    }
-
-    /// Count one create on `lane` sent now.
-    pub fn record(&self, lane: TorboxBudgetLane) {
+    /// Take one create on `lane` now, or refuse with how long until one is
+    /// free. The check and the count happen under one lock, so two creates
+    /// racing for the last slot cannot both take it.
+    pub fn reserve(&self, lane: TorboxBudgetLane) -> Result<TorboxReservation, AppError> {
         let now = self.clock.now();
         let mut lanes = self.lanes.lock().unwrap_or_else(|p| p.into_inner());
         let sends = lanes.lane_mut(lane);
         prune(sends, now, self.window);
-        sends.push_back(now);
+        if sends.len() < self.limit {
+            sends.push_back(now);
+            return Ok(TorboxReservation { lane, at: now });
+        }
+        let wait = sends
+            .front()
+            .map(|oldest| (*oldest + self.window).saturating_duration_since(now))
+            .unwrap_or_default();
+        Err(AppError::temporary_unavailable_reason(
+            torbox_refusal::HOURLY_LIMIT,
+            format!(
+                "TorBox allows {} {} creates an hour; the next may be sent in {}s",
+                self.limit,
+                lane.label(),
+                wait.as_secs().max(1)
+            ),
+            Some(wait),
+        ))
     }
 
-    /// Count a torrent create against the uncached allowance unless its answer
-    /// shows TorBox already had it cached. The create answer documents no
-    /// cached flag, so an answer that says nothing counts.
-    pub fn record_torrent_create(&self, cached: Option<bool>) {
-        if cached != Some(true) {
-            self.record(TorboxBudgetLane::UncachedTorrent);
+    /// Give back a reservation for a create that did not count: one TorBox
+    /// refused before accepting anything, or a torrent it already had cached.
+    pub fn release(&self, reservation: TorboxReservation) {
+        let mut lanes = self.lanes.lock().unwrap_or_else(|p| p.into_inner());
+        let sends = lanes.lane_mut(reservation.lane);
+        if let Some(index) = sends.iter().position(|at| *at == reservation.at) {
+            sends.remove(index);
         }
     }
+}
+
+/// One create taken from a lane, to be given back if it did not count.
+#[derive(Debug)]
+#[must_use = "a reservation that did not count is released"]
+pub struct TorboxReservation {
+    lane: TorboxBudgetLane,
+    at: Instant,
 }
 
 fn prune(sends: &mut VecDeque<Instant>, now: Instant, window: Duration) {
@@ -199,7 +211,7 @@ mod tests {
                 budget.wait_before_send(TorboxBudgetLane::UsenetCreate),
                 None
             );
-            budget.record(TorboxBudgetLane::UsenetCreate);
+            let _counted = budget.reserve(TorboxBudgetLane::UsenetCreate).unwrap();
             clock.advance(Duration::from_secs(10));
         }
         // Sixty sends ten seconds apart: the first left 600s ago, so it leaves
@@ -224,8 +236,8 @@ mod tests {
     fn lanes_are_counted_apart() {
         let clock = ManualClock::new();
         let budget = TorboxHourlyBudget::with_limit(clock.clone(), 2, TORBOX_CREATE_WINDOW);
-        budget.record(TorboxBudgetLane::UsenetCreate);
-        budget.record(TorboxBudgetLane::UsenetCreate);
+        let _first = budget.reserve(TorboxBudgetLane::UsenetCreate).unwrap();
+        let _second = budget.reserve(TorboxBudgetLane::UsenetCreate).unwrap();
         assert!(
             budget
                 .wait_before_send(TorboxBudgetLane::UsenetCreate)
@@ -238,38 +250,56 @@ mod tests {
     }
 
     #[test]
-    fn a_cached_torrent_create_does_not_count_and_an_unknown_one_does() {
+    fn a_released_reservation_frees_its_slot_and_only_its_own() {
         let clock = ManualClock::new();
-        let budget = TorboxHourlyBudget::with_limit(clock.clone(), 1, TORBOX_CREATE_WINDOW);
-        budget.record_torrent_create(Some(true));
+        let budget = TorboxHourlyBudget::with_limit(clock.clone(), 2, TORBOX_CREATE_WINDOW);
+        let kept = budget.reserve(TorboxBudgetLane::UncachedTorrent).unwrap();
+        clock.advance(Duration::from_secs(5));
+        let refused = budget.reserve(TorboxBudgetLane::UncachedTorrent).unwrap();
+        assert!(budget.reserve(TorboxBudgetLane::UncachedTorrent).is_err());
+        budget.release(refused);
         assert_eq!(
             budget.wait_before_send(TorboxBudgetLane::UncachedTorrent),
             None
         );
-        budget.record_torrent_create(None);
+        let _again = budget.reserve(TorboxBudgetLane::UncachedTorrent).unwrap();
+        // The kept reservation still counts: it is the oldest send.
         assert_eq!(
             budget.wait_before_send(TorboxBudgetLane::UncachedTorrent),
-            Some(TORBOX_CREATE_WINDOW)
+            Some(TORBOX_CREATE_WINDOW - Duration::from_secs(5))
         );
+        drop(kept);
+    }
 
-        let budget = TorboxHourlyBudget::with_limit(clock, 1, TORBOX_CREATE_WINDOW);
-        budget.record_torrent_create(Some(false));
-        assert!(
-            budget
-                .wait_before_send(TorboxBudgetLane::UncachedTorrent)
-                .is_some()
-        );
+    #[test]
+    fn concurrent_reservations_never_exceed_the_limit() {
+        let budget = Arc::new(TorboxHourlyBudget::with_limit(
+            Arc::new(SystemTorboxClock),
+            3,
+            TORBOX_CREATE_WINDOW,
+        ));
+        let threads: Vec<_> = (0..16)
+            .map(|_| {
+                let budget = Arc::clone(&budget);
+                std::thread::spawn(move || budget.reserve(TorboxBudgetLane::UsenetCreate).is_ok())
+            })
+            .collect();
+        let granted = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .filter(|granted| *granted)
+            .count();
+        assert_eq!(granted, 3);
     }
 
     #[test]
     fn an_exhausted_lane_refuses_with_the_hourly_reason_and_delay() {
         let clock = ManualClock::new();
         let budget = TorboxHourlyBudget::with_limit(clock.clone(), 1, TORBOX_CREATE_WINDOW);
-        assert!(budget.check(TorboxBudgetLane::UsenetCreate).is_ok());
-        budget.record(TorboxBudgetLane::UsenetCreate);
+        let _counted = budget.reserve(TorboxBudgetLane::UsenetCreate).unwrap();
         clock.advance(Duration::from_secs(600));
         let error = budget
-            .check(TorboxBudgetLane::UsenetCreate)
+            .reserve(TorboxBudgetLane::UsenetCreate)
             .expect_err("lane is full");
         assert_eq!(error.reason(), Some(torbox_refusal::HOURLY_LIMIT));
         match error {

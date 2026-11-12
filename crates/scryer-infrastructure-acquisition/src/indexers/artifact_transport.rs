@@ -1358,7 +1358,7 @@ fn looks_nzb(bytes: &[u8]) -> bool {
 }
 // BitTorrent fixes the info hash: SHA-1 for v1 metadata, SHA-256 for v2.
 #[allow(clippy::disallowed_methods)]
-fn torrent_hash(bytes: &[u8]) -> Option<String> {
+pub(crate) fn torrent_hash(bytes: &[u8]) -> Option<String> {
     if bytes.len() > ARTIFACT_MAX_BYTES || !bytes.starts_with(b"d") {
         return None;
     }

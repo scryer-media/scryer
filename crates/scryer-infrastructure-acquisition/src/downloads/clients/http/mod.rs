@@ -32,7 +32,7 @@ mod tests;
 /// [`linked::LinkSource`], and report them with [`queue_item_for`] and
 /// [`completed_download_for`].
 pub(crate) mod owned {
-    pub(crate) use super::engine::{HttpEngine, LiveSnapshot};
+    pub(crate) use super::engine::{HttpEngine, LiveSnapshot, MAX_RETAINED_FINISHED_JOBS};
     pub(crate) use super::linked::{
         CONNECTIONS_PER_LINK, LinkOutcome, LinkRequest, LinkSource, LinkedFile, LinkedJobRequest,
         ResolvedLink,

@@ -340,12 +340,6 @@ impl TorboxError {
         }
     }
 
-    /// TorBox already holds what a create sent. A caller reconciling after a
-    /// lost answer looks the item up instead of failing the grab.
-    pub fn is_duplicate_item(&self) -> bool {
-        self.code() == Some(&TorboxErrorCode::DuplicateItem)
-    }
-
     pub fn is_item_not_found(&self) -> bool {
         self.code() == Some(&TorboxErrorCode::ItemNotFound)
     }
@@ -540,8 +534,9 @@ pub struct TorboxItem {
     pub seed_torrent: bool,
     #[serde(default, deserialize_with = "lenient_flag")]
     pub long_term_seeding: bool,
-    #[serde(default, deserialize_with = "lenient_flag")]
-    pub private: bool,
+    /// `None` when the answer did not say.
+    #[serde(default, deserialize_with = "lenient_bool")]
+    pub private: Option<bool>,
     #[serde(default, deserialize_with = "lenient_string")]
     pub tracker_message: Option<String>,
     #[serde(default, deserialize_with = "lenient_string")]
@@ -883,10 +878,25 @@ impl TorboxApi {
         let answer = self.execute(operation, request).await?;
         match answer.data {
             Value::Null => Ok(Vec::new()),
-            Value::Array(items) => items
+            // One unreadable item is skipped rather than failing the whole
+            // read: a job whose item is missing from a list is confirmed by
+            // a single-item read before anything is concluded about it.
+            Value::Array(items) => Ok(items
                 .into_iter()
-                .map(|item| decode_value(operation, answer.status, item))
-                .collect(),
+                .filter_map(|item| {
+                    let id = item.get("id").and_then(value_i64);
+                    match decode_value::<TorboxItem>(operation, answer.status, item) {
+                        Ok(item) => Some(item),
+                        Err(_) => {
+                            tracing::debug!(
+                                item_id = ?id,
+                                "skipping a TorBox list item that could not be read"
+                            );
+                            None
+                        }
+                    }
+                })
+                .collect()),
             // A single object where a list was expected is read as a list
             // of one.
             item @ Value::Object(_) => Ok(vec![decode_value(operation, answer.status, item)?]),
