@@ -654,6 +654,26 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         resolution: MediaRequestResolution,
     ) -> AppResult<MediaRequestResolutionResult> {
         let mut requests = self.requests.lock().await;
+        let rejection_scope = if resolution.status == MediaRequestStatus::Rejected
+            && request.facet != MediaFacet::Movie
+            && !request.is_list_series_movie()
+        {
+            let Some(primary) = requests.iter().find(|candidate| {
+                candidate.id == request.id && candidate.status == MediaRequestStatus::Pending
+            }) else {
+                return Ok(MediaRequestResolutionResult {
+                    updated: 0,
+                    event: None,
+                });
+            };
+            Some((
+                primary.requested_monitor_type.as_deref()
+                    == Some(scryer_domain::MONITOR_TYPE_ADVANCED),
+                primary.requested_monitor_selection.clone(),
+            ))
+        } else {
+            None
+        };
         let mut updated = 0;
         for candidate in requests.iter_mut().filter(|candidate| {
             candidate.status == MediaRequestStatus::Pending
@@ -665,6 +685,21 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                             && candidate_id.value == request_id.value
                     })
                 })
+                && rejection_scope
+                    .as_ref()
+                    .is_none_or(|(is_advanced, selection)| {
+                        let candidate_is_advanced = candidate.requested_monitor_type.as_deref()
+                            == Some(scryer_domain::MONITOR_TYPE_ADVANCED);
+                        candidate.id == request.id
+                            || (*is_advanced == candidate_is_advanced
+                                && (!is_advanced
+                                    || selection
+                                        .as_ref()
+                                        .zip(candidate.requested_monitor_selection.as_ref())
+                                        .is_some_and(|(primary, sibling)| {
+                                            primary.has_same_scope(sibling)
+                                        })))
+                    })
         }) {
             candidate.status = resolution.status;
             candidate.resolved_by_user_id = resolution.resolved_by_user_id.clone();

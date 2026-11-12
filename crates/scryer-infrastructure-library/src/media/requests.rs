@@ -1088,29 +1088,47 @@ async fn resolve_pending_overlapping_tx(
         )
     };
 
-    let where_clause = if resolution.status == MediaRequestStatus::Approved {
-        let approved_ids = matching_approval_request_ids(
-            tx,
-            &where_clause,
-            &args[resolution_arg_count..],
-            &request.id,
-            resolution.approved_quality_profile_id.as_deref(),
-            approved_monitor_type,
-            approved_monitor_selection,
-            expands_existing,
-        )
-        .await?;
-        if approved_ids.is_empty() {
+    let matching_ids = match resolution.status {
+        MediaRequestStatus::Approved => Some(
+            matching_approval_request_ids(
+                tx,
+                &where_clause,
+                &args[resolution_arg_count..],
+                &request.id,
+                resolution.approved_quality_profile_id.as_deref(),
+                approved_monitor_type,
+                approved_monitor_selection,
+                expands_existing,
+            )
+            .await?,
+        ),
+        MediaRequestStatus::Rejected
+            if request.facet != MediaFacet::Movie && !request.is_list_series_movie() =>
+        {
+            Some(
+                matching_rejection_request_ids(
+                    tx,
+                    &where_clause,
+                    &args[resolution_arg_count..],
+                    &request.id,
+                )
+                .await?,
+            )
+        }
+        _ => None,
+    };
+    let where_clause = if let Some(matching_ids) = matching_ids {
+        if matching_ids.is_empty() {
             return Ok(MediaRequestResolutionResult {
                 updated: 0,
                 event: None,
             });
         }
-        let placeholders = std::iter::repeat_n("{}", approved_ids.len())
+        let placeholders = std::iter::repeat_n("{}", matching_ids.len())
             .collect::<Vec<_>>()
             .join(", ");
         args.truncate(resolution_arg_count);
-        args.extend(approved_ids.into_iter().map(SqlArg::Text));
+        args.extend(matching_ids.into_iter().map(SqlArg::Text));
         format!("status = 'pending' AND id IN ({placeholders})")
     } else {
         where_clause
@@ -1171,6 +1189,31 @@ async fn resolve_pending_overlapping_tx(
     })
 }
 
+async fn lock_matching_pending_requests(
+    tx: &mut SqlTx<'_>,
+    where_clause: &str,
+    scope_args: &[SqlArg],
+) -> AppResult<Vec<SqlRow>> {
+    // SQLite holds the writer gate. On PostgreSQL, lock the request rows in
+    // order so preference edits and cancellations cannot race the resolution.
+    let lock_clause = if matches!(&*tx, SqlTx::Postgres(_)) {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
+    SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT id, requested_quality_profile_id, requested_monitor_type, requested_lease_days
+               FROM media_requests
+              WHERE {where_clause}
+              ORDER BY id{lock_clause}"
+        ),
+        scope_args,
+    )
+    .await
+}
+
 async fn matching_approval_request_ids(
     tx: &mut SqlTx<'_>,
     where_clause: &str,
@@ -1181,24 +1224,7 @@ async fn matching_approval_request_ids(
     approved_monitor_selection: Option<&MonitorSelection>,
     expands_existing: bool,
 ) -> AppResult<Vec<String>> {
-    // SQLite holds the writer gate. On PostgreSQL, lock the request rows in
-    // order so preference edits and cancellations cannot race the resolution.
-    let lock_clause = if matches!(&*tx, SqlTx::Postgres(_)) {
-        " FOR UPDATE"
-    } else {
-        ""
-    };
-    let rows = SqlRuntime::fetch_all(
-        SqlExec::Tx(tx),
-        &format!(
-            "SELECT id, requested_quality_profile_id, requested_monitor_type, requested_lease_days
-               FROM media_requests
-              WHERE {where_clause}
-              ORDER BY id{lock_clause}"
-        ),
-        scope_args,
-    )
-    .await?;
+    let rows = lock_matching_pending_requests(tx, where_clause, scope_args).await?;
     let mut primary_pending = false;
     let mut siblings = Vec::new();
     for row in rows {
@@ -1235,6 +1261,51 @@ async fn matching_approval_request_ids(
     );
     siblings.push(primary_id.to_string());
     Ok(siblings)
+}
+
+async fn matching_rejection_request_ids(
+    tx: &mut SqlTx<'_>,
+    where_clause: &str,
+    scope_args: &[SqlArg],
+    primary_id: &str,
+) -> AppResult<Vec<String>> {
+    let rows = lock_matching_pending_requests(tx, where_clause, scope_args).await?;
+    let mut primary_is_advanced = None;
+    let mut advanced = Vec::new();
+    let mut unscoped = Vec::new();
+    for row in rows {
+        let id = row.text("id")?;
+        let is_advanced =
+            row.opt_text("requested_monitor_type")?.as_deref() == Some(MONITOR_TYPE_ADVANCED);
+        if id == primary_id {
+            primary_is_advanced = Some(is_advanced);
+        }
+        if is_advanced {
+            advanced.push(id);
+        } else {
+            unscoped.push(id);
+        }
+    }
+    match primary_is_advanced {
+        None => Ok(Vec::new()),
+        Some(false) => Ok(unscoped),
+        Some(true) => {
+            let selections = load_monitor_selections_for_owners(
+                SqlExec::Tx(tx),
+                OWNER_KIND_MEDIA_REQUEST,
+                &advanced,
+            )
+            .await?;
+            let primary_selection = selections.get(primary_id);
+            advanced.retain(|id| {
+                id == primary_id
+                    || primary_selection
+                        .zip(selections.get(id))
+                        .is_some_and(|(primary, sibling)| primary.has_same_scope(sibling))
+            });
+            Ok(advanced)
+        }
+    }
 }
 
 /// The approval and its lease commit together. If claim persistence fails, the
