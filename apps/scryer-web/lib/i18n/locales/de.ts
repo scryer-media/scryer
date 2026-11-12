@@ -108,6 +108,67 @@ const de: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Bandbreitenlimit (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Gilt gemeinsam für alle Downloads dieses Clients. Leer oder 0 bedeutet unbegrenzt.",
+  "settings.downloadClientTorboxApiKey": "API-Token",
+  "settings.downloadClientTorboxApiKeyHelp": "Das API-Token des TorBox-Kontos.",
+  "settings.downloadClientTorboxCachedOnly": "Nur zwischengespeicherte",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Downloads ablehnen, die TorBox nicht bereits im Cache hat.",
+  "httpRelease.refusal.filePathInvalid":
+    "Eine Datei dieses Downloads hat einen Pfad, der nicht in ihrem Download-Ordner gespeichert werden kann.",
+  "httpRelease.refusal.tooManyFiles":
+    "Dieser Download hat mehr Dateien, als ein Download enthalten darf.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "Eine Datei dieses Downloads hat keinen verwendbaren Link-Verweis.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Eine Datei dieses Downloads braucht einen Link, den dieser Downloader nicht beschaffen kann.",
+  "httpRelease.refusal.linkRefused":
+    "Der Server hat die Download-Links für eine Datei wiederholt abgelehnt.",
+  "httpRelease.refusal.linkUnavailable":
+    "Für eine Datei wurde kein Download-Link verfügbar.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox hat das API-Token abgelehnt.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "Der TorBox-Tarif enthält diese Funktion nicht.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "Das TorBox-Konto hat sein Limit aktiver Downloads erreicht.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "Das TorBox-Konto befindet sich in einer Wartezeit und nimmt noch keine neuen Downloads an.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "Das TorBox-Konto hat sein monatliches Download-Limit erreicht.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "Das stündliche Limit neuer TorBox-Downloads ist erreicht.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Dieser Download ist größer, als der TorBox-Tarif erlaubt.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox hat diesen Download nicht im Cache, und dieser Client nimmt nur zwischengespeicherte Downloads an.",
+  "error.reason.TORBOX_INVALID_TORRENT":
+    "TorBox konnte den Torrent nicht lesen.",
+  "error.reason.TORBOX_INVALID_NZB": "Die NZB konnte nicht gelesen werden.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Dieser Download ist bereits im TorBox-Konto.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox hat dieses Element nicht.",
+  "error.reason.TORBOX_LINK_OFFLINE": "Der TorBox-Download-Link ist offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox begrenzt, wie oft es Anfragen annimmt.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox ist nicht verfügbar.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox hat eine Datei dieses Downloads als infiziert markiert.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox bietet eine Datei dieses Downloads nur als ZIP-Archiv an.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "Dieser TorBox-Download enthält keine Videodatei.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox meldet, dass dieser Download fehlgeschlagen ist.",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox hat diesen Download nicht mehr.",
+  "error.reason.TORBOX_STALLED": "Dieser Download stockt bei TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "Die Dateinamen dieses TorBox-Downloads können auf diesem System nicht gespeichert werden.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "Dieses Release hat keinen Magnet-Link, keine Torrent-Datei und keine NZB, die an TorBox gesendet werden könnte.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox unterstützt diese Aktion für diesen Download nicht.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "Dieser TorBox-Client hat keinen solchen Download.",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "Der TorBox-Client hat kein API-Token.",
   "settings.publicUrlTitle": "Öffentliche URL",
   "settings.publicUrlHelp":
     "Die Adresse, über die Personen und Dienste Scryer erreichen, etwa https://scryer.example.com. Kontoverknüpfung und OAuth übernehmen eine Änderung sofort; Passkeys erst nach einem Neustart von Scryer.",

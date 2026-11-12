@@ -19,7 +19,7 @@ The list order is the client priority order.
 | field | type | notes |
 |---|---|---|
 | `name` | string | required on create |
-| `clientType` | string | `providerType` from `DownloadClientProviderTypes`; required on create |
+| `clientType` | string | a built-in type (`weaver`, `sabnzbd`, `nzbget`, `http`, `torbox`) or a `providerType` from `DownloadClientProviderTypes`, which lists only plugin providers; required on create |
 | `isEnabled` | bool | |
 | `proxyConfigId` | id | must be an enabled proxy |
 | `config` | [ProviderConfigValueInput] | connection keys below plus the provider's own fields |
@@ -39,6 +39,21 @@ provider's declared fields:
 
 Empty values are left out. A provider that declares its own credential
 fields owns them; send those keys instead.
+
+`http` and `torbox` are Scryer's own downloader, not a server: they take no
+`host`, `port`, `use_ssl` or `url_base`, and a test needs no address. Their
+keys:
+
+| key | input | clients | meaning |
+|---|---|---|---|
+| `api_key` | secretValue | `torbox` | TorBox API token; required |
+| `download_dir` | stringValue | both | absolute download folder; required |
+| `cached_only` | boolValue | `torbox` | refuse downloads TorBox does not already have cached; default false |
+| `max_concurrent_downloads` | intValue | both | default 2 |
+| `max_connections_per_host` | intValue | both | default 2 |
+| `bandwidth_limit_kbps` | intValue | both | empty or 0 means no limit |
+
+`torbox` accepts both torrents and NZBs.
 
 ### Remote path mappings
 

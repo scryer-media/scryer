@@ -107,6 +107,72 @@ const ja: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "帯域制限（KB/s）",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "このクライアントのすべてのダウンロードで共有されます。空欄または 0 で無制限。",
+  "settings.downloadClientTorboxApiKey": "API トークン",
+  "settings.downloadClientTorboxApiKeyHelp":
+    "TorBox アカウントの API トークンです。",
+  "settings.downloadClientTorboxCachedOnly": "キャッシュ済みのみ",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "TorBox にまだキャッシュされていないダウンロードを拒否します。",
+  "httpRelease.refusal.filePathInvalid":
+    "このダウンロードのファイルに、ダウンロードフォルダー内に保存できないパスがあります。",
+  "httpRelease.refusal.tooManyFiles":
+    "このダウンロードのファイル数が、1 つのダウンロードで扱える上限を超えています。",
+  "httpRelease.refusal.linkKeyInvalid":
+    "このダウンロードのファイルに、使用できるリンク参照がありません。",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "このダウンロードのファイルには、このダウンローダーが取得できないリンクが必要です。",
+  "httpRelease.refusal.linkRefused":
+    "サーバーがファイルのダウンロードリンクを拒否し続けました。",
+  "httpRelease.refusal.linkUnavailable":
+    "ファイルのダウンロードリンクが利用可能になりませんでした。",
+  "error.reason.TORBOX_TOKEN_REJECTED":
+    "TorBox が API トークンを拒否しました。",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "TorBox のプランにはこの機能が含まれていません。",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "TorBox アカウントがアクティブなダウンロード数の上限に達しました。",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "TorBox アカウントは待機期間中のため、まだ新しいダウンロードを受け付けません。",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "TorBox アカウントが月間ダウンロード上限に達しました。",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "TorBox の新規ダウンロードの 1 時間あたりの上限に達しました。",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "このダウンロードは TorBox のプランで許可されたサイズを超えています。",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox にこのダウンロードのキャッシュがなく、このクライアントはキャッシュ済みのダウンロードのみ受け付けます。",
+  "error.reason.TORBOX_INVALID_TORRENT":
+    "TorBox が torrent を読み取れませんでした。",
+  "error.reason.TORBOX_INVALID_NZB": "NZB を読み取れませんでした。",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "このダウンロードはすでに TorBox アカウントにあります。",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox にこの項目はありません。",
+  "error.reason.TORBOX_LINK_OFFLINE":
+    "TorBox のダウンロードリンクがオフラインです。",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox がリクエストの受け付け頻度を制限しています。",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox を利用できません。",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox がこのダウンロードのファイルを感染ありと判定しました。",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox はこのダウンロードのファイルを zip アーカイブとしてのみ提供しています。",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "この TorBox ダウンロードには動画ファイルがありません。",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox はこのダウンロードが失敗したと報告しています。",
+  "error.reason.TORBOX_ITEM_MISSING":
+    "TorBox にこのダウンロードはもうありません。",
+  "error.reason.TORBOX_STALLED": "このダウンロードは TorBox で停滞しています。",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "この TorBox ダウンロードのファイル名は、このシステムに保存できません。",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "このリリースには、TorBox に送れる magnet リンク、torrent ファイル、NZB がありません。",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox はこのダウンロードに対するこの操作に対応していません。",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "この TorBox クライアントにそのダウンロードはありません。",
+  "error.reason.TORBOX_TOKEN_REQUIRED":
+    "TorBox クライアントに API トークンがありません。",
   "settings.publicUrlTitle": "公開 URL",
   "settings.publicUrlHelp":
     "ユーザーやサービスが Scryer にアクセスするアドレスです（例: https://scryer.example.com）。アカウント連携と OAuth には変更がすぐに反映され、パスキーには Scryer の再起動後に反映されます。",

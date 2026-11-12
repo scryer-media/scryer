@@ -156,6 +156,19 @@ test("media queue refusals translate the code and suppress duplicated server pro
   );
 });
 
+test("TorBox queue reasons translate the code instead of the client's status lines", () => {
+  const item = queueItem({
+    clientType: "torbox",
+    attentionReasonCode: "TORBOX_STALLED",
+    attentionReason: "changed server wording",
+    trackedStatusMessages: ["changed server wording"],
+  });
+  assert.equal(
+    downloadQueue.buildQueueStatusDetail(item, (key) => key),
+    "error.reason.TORBOX_STALLED",
+  );
+});
+
 test("unknown queue codes preserve explanations and code changes invalidate equality", () => {
   const item = queueItem({
     attentionReasonCode: "HTTP_FUTURE",

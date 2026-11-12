@@ -158,6 +158,69 @@ const fr: LocaleDictionary = {
     "Limite de bande passante (Ko/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Partagée par tous les téléchargements de ce client. Vide ou 0 signifie illimitée.",
+  "settings.downloadClientTorboxApiKey": "Jeton d'API",
+  "settings.downloadClientTorboxApiKeyHelp": "Le jeton d'API du compte TorBox.",
+  "settings.downloadClientTorboxCachedOnly": "En cache uniquement",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Refuser les téléchargements que TorBox n'a pas déjà en cache.",
+  "httpRelease.refusal.filePathInvalid":
+    "Un fichier de ce téléchargement a un chemin qui ne peut pas être enregistré dans son dossier de téléchargement.",
+  "httpRelease.refusal.tooManyFiles":
+    "Ce téléchargement contient plus de fichiers qu'un téléchargement ne peut en contenir.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "Un fichier de ce téléchargement n'a pas de référence de lien utilisable.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Un fichier de ce téléchargement nécessite un lien que ce téléchargeur ne peut pas obtenir.",
+  "httpRelease.refusal.linkRefused":
+    "Le serveur a refusé à plusieurs reprises les liens de téléchargement d'un fichier.",
+  "httpRelease.refusal.linkUnavailable":
+    "Aucun lien de téléchargement n'est devenu disponible pour un fichier.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox a refusé le jeton d'API.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "L'abonnement TorBox n'inclut pas cette fonctionnalité.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "Le compte TorBox a atteint sa limite de téléchargements actifs.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "Le compte TorBox est en période d'attente et n'accepte pas encore de nouveaux téléchargements.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "Le compte TorBox a atteint sa limite mensuelle de téléchargement.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "La limite horaire de nouveaux téléchargements TorBox est atteinte.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Ce téléchargement dépasse la taille autorisée par l'abonnement TorBox.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox n'a pas ce téléchargement en cache, et ce client n'accepte que les téléchargements en cache.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox n'a pas pu lire le torrent.",
+  "error.reason.TORBOX_INVALID_NZB": "Le NZB n'a pas pu être lu.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Ce téléchargement est déjà dans le compte TorBox.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox ne détient pas cet élément.",
+  "error.reason.TORBOX_LINK_OFFLINE":
+    "Le lien de téléchargement TorBox est hors ligne.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox limite la fréquence à laquelle il accepte des requêtes.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox est indisponible.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox a signalé un fichier de ce téléchargement comme infecté.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox ne propose un fichier de ce téléchargement que sous forme d'archive zip.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "Ce téléchargement TorBox ne contient aucun fichier vidéo.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox indique que ce téléchargement a échoué.",
+  "error.reason.TORBOX_ITEM_MISSING":
+    "TorBox ne détient plus ce téléchargement.",
+  "error.reason.TORBOX_STALLED": "Ce téléchargement est bloqué sur TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "Les noms de fichiers de ce téléchargement TorBox ne peuvent pas être enregistrés sur ce système.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "Cette release n'a ni lien magnet, ni fichier torrent, ni NZB à envoyer à TorBox.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox ne prend pas en charge cette action pour ce téléchargement.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "Ce client TorBox n'a pas ce téléchargement.",
+  "error.reason.TORBOX_TOKEN_REQUIRED":
+    "Le client TorBox n'a pas de jeton d'API.",
   "settings.publicUrlTitle": "URL publique",
   "settings.publicUrlHelp":
     "L’adresse que les personnes et les services utilisent pour joindre Scryer, par exemple https://scryer.example.com. La liaison de comptes et OAuth appliquent un changement immédiatement ; les passkeys, après le redémarrage de Scryer.",

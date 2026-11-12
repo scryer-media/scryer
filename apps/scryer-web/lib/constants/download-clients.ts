@@ -6,11 +6,13 @@ export const BUILT_IN_DOWNLOAD_CLIENT_TYPES = [
   "sabnzbd",
   "nzbget",
   "http",
+  "torbox",
 ] as const;
 
 /// Built-in clients that are not a server: no host, port or URL to set.
 export const HOSTLESS_DOWNLOAD_CLIENT_TYPES: ReadonlySet<string> = new Set([
   "http",
+  "torbox",
 ]);
 
 export const DEFAULT_DOWNLOAD_CLIENT_TYPE = "weaver";
@@ -21,6 +23,7 @@ export const BUILT_IN_DOWNLOAD_CLIENT_TYPE_LABELS: Record<string, string> = {
   weaver: "Weaver",
   qbittorrent: "qBittorrent",
   http: "HTTP",
+  torbox: "TorBox",
 };
 
 function builtInField(
@@ -41,45 +44,70 @@ function builtInField(
   };
 }
 
+/// The download folder of Scryer's own downloader, which every built-in
+/// client that fetches files itself writes to.
+const DOWNLOAD_DIR_FIELD = builtInField({
+  key: "download_dir",
+  label: "settings.downloadClientHttpDownloadDir",
+  helpText: "settings.downloadClientHttpDownloadDirHelp",
+  fieldType: "PATH",
+  required: true,
+});
+
+/// The transfer limits of Scryer's own downloader.
+const DOWNLOADER_LIMIT_FIELDS: ConfigFieldDef[] = [
+  builtInField({
+    key: "max_concurrent_downloads",
+    label: "settings.downloadClientHttpMaxConcurrentDownloads",
+    helpText: "settings.downloadClientHttpMaxConcurrentDownloadsHelp",
+    fieldType: "NUMBER",
+    required: false,
+    defaultValue: "2",
+  }),
+  builtInField({
+    key: "max_connections_per_host",
+    label: "settings.downloadClientHttpMaxConnectionsPerHost",
+    helpText: "settings.downloadClientHttpMaxConnectionsPerHostHelp",
+    fieldType: "NUMBER",
+    required: false,
+    defaultValue: "2",
+    advanced: true,
+  }),
+  builtInField({
+    key: "bandwidth_limit_kbps",
+    label: "settings.downloadClientHttpBandwidthLimit",
+    helpText: "settings.downloadClientHttpBandwidthLimitHelp",
+    fieldType: "NUMBER",
+    required: false,
+    advanced: true,
+  }),
+];
+
 /// Settings of built-in clients whose form is not host/port/credentials.
 /// Labels and help texts are translation keys.
 export const BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS: Record<
   string,
   ConfigFieldDef[]
 > = {
-  http: [
+  http: [DOWNLOAD_DIR_FIELD, ...DOWNLOADER_LIMIT_FIELDS],
+  torbox: [
     builtInField({
-      key: "download_dir",
-      label: "settings.downloadClientHttpDownloadDir",
-      helpText: "settings.downloadClientHttpDownloadDirHelp",
-      fieldType: "PATH",
+      key: "api_key",
+      label: "settings.downloadClientTorboxApiKey",
+      helpText: "settings.downloadClientTorboxApiKeyHelp",
+      fieldType: "PASSWORD",
       required: true,
     }),
+    DOWNLOAD_DIR_FIELD,
     builtInField({
-      key: "max_concurrent_downloads",
-      label: "settings.downloadClientHttpMaxConcurrentDownloads",
-      helpText: "settings.downloadClientHttpMaxConcurrentDownloadsHelp",
-      fieldType: "NUMBER",
+      key: "cached_only",
+      label: "settings.downloadClientTorboxCachedOnly",
+      helpText: "settings.downloadClientTorboxCachedOnlyHelp",
+      fieldType: "BOOL",
       required: false,
-      defaultValue: "2",
+      defaultValue: "false",
     }),
-    builtInField({
-      key: "max_connections_per_host",
-      label: "settings.downloadClientHttpMaxConnectionsPerHost",
-      helpText: "settings.downloadClientHttpMaxConnectionsPerHostHelp",
-      fieldType: "NUMBER",
-      required: false,
-      defaultValue: "2",
-      advanced: true,
-    }),
-    builtInField({
-      key: "bandwidth_limit_kbps",
-      label: "settings.downloadClientHttpBandwidthLimit",
-      helpText: "settings.downloadClientHttpBandwidthLimitHelp",
-      fieldType: "NUMBER",
-      required: false,
-      advanced: true,
-    }),
+    ...DOWNLOADER_LIMIT_FIELDS,
   ],
 };
 

@@ -1,4 +1,5 @@
 import { MEDIA_REFUSAL_KEYS } from "../utils/media-error-message.ts";
+import { TORBOX_REFUSAL_CODES } from "../utils/torbox-error-message.ts";
 
 /** Coarse error families from current producer and inventory metadata. */
 const GROUPS: readonly {
@@ -32,6 +33,10 @@ const GROUPS: readonly {
     ],
   },
   { codes: ["VALIDATION_ERROR"], reasons: Object.keys(MEDIA_REFUSAL_KEYS) },
+  ...Object.entries(TORBOX_REFUSAL_CODES).map(([reason, code]) => ({
+    codes: [code],
+    reasons: [reason],
+  })),
   { codes: ["VALIDATION_ERROR"], reasons: ["METADATA_GATEWAY_CLOCK_SKEW"] },
   { codes: ["NOT_FOUND"], reasons: ["STANDBY_NOT_FOUND"] },
   {

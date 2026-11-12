@@ -95,6 +95,68 @@ const nl: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Bandbreedtelimiet (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Gedeeld door alle downloads van deze client. Leeg of 0 betekent onbeperkt.",
+  "settings.downloadClientTorboxApiKey": "API-token",
+  "settings.downloadClientTorboxApiKeyHelp":
+    "Het API-token van het TorBox-account.",
+  "settings.downloadClientTorboxCachedOnly": "Alleen gecachet",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Downloads weigeren die TorBox nog niet in de cache heeft.",
+  "httpRelease.refusal.filePathInvalid":
+    "Een bestand in deze download heeft een pad dat niet in de downloadmap kan worden opgeslagen.",
+  "httpRelease.refusal.tooManyFiles":
+    "Deze download bevat meer bestanden dan één download mag bevatten.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "Een bestand in deze download heeft geen bruikbare linkverwijzing.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Een bestand in deze download heeft een link nodig die deze downloader niet kan verkrijgen.",
+  "httpRelease.refusal.linkRefused":
+    "De server bleef de downloadlinks voor een bestand weigeren.",
+  "httpRelease.refusal.linkUnavailable":
+    "Er kwam geen downloadlink beschikbaar voor een bestand.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox heeft het API-token geweigerd.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "Het TorBox-abonnement bevat deze functie niet.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "Het TorBox-account heeft zijn limiet van actieve downloads bereikt.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "Het TorBox-account zit in een wachtperiode en accepteert nog geen nieuwe downloads.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "Het TorBox-account heeft zijn maandelijkse downloadlimiet bereikt.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "De limiet per uur voor nieuwe TorBox-downloads is bereikt.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Deze download is groter dan het TorBox-abonnement toestaat.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox heeft deze download niet in de cache, en deze client accepteert alleen gecachete downloads.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox kon de torrent niet lezen.",
+  "error.reason.TORBOX_INVALID_NZB": "De NZB kon niet worden gelezen.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Deze download staat al in het TorBox-account.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox heeft dit item niet.",
+  "error.reason.TORBOX_LINK_OFFLINE": "De TorBox-downloadlink is offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox beperkt hoe vaak het verzoeken accepteert.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox is niet beschikbaar.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox heeft een bestand in deze download als geïnfecteerd gemarkeerd.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox biedt een bestand in deze download alleen als zip-archief aan.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "Deze TorBox-download bevat geen videobestand.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox meldt dat deze download is mislukt.",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox heeft deze download niet meer.",
+  "error.reason.TORBOX_STALLED": "Deze download staat stil bij TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "De bestandsnamen in deze TorBox-download kunnen op dit systeem niet worden opgeslagen.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "Deze release heeft geen magnetlink, torrentbestand of NZB om naar TorBox te sturen.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox ondersteunt deze actie niet voor deze download.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "Deze TorBox-client heeft zo'n download niet.",
+  "error.reason.TORBOX_TOKEN_REQUIRED":
+    "De TorBox-client heeft geen API-token.",
   "settings.publicUrlTitle": "Openbare URL",
   "settings.publicUrlHelp":
     "Het adres waarmee mensen en diensten Scryer bereiken, zoals https://scryer.example.com. Accountkoppeling en OAuth gebruiken een wijziging meteen; passkeys pas nadat Scryer opnieuw is gestart.",

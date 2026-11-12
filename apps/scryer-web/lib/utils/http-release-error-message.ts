@@ -24,6 +24,13 @@ export const HTTP_RELEASE_REFUSAL_KEYS: Readonly<Record<string, string>> = {
   HTTP_RELEASE_DESTINATION_EXISTS: "httpRelease.refusal.destinationExists",
   HTTP_RELEASE_PUBLICATION_FAILED: "httpRelease.refusal.publicationFailed",
   HTTP_RELEASE_RECOVERY_UNVERIFIED: "httpRelease.refusal.recoveryUnverified",
+  HTTP_RELEASE_FILE_PATH_INVALID: "httpRelease.refusal.filePathInvalid",
+  HTTP_RELEASE_TOO_MANY_FILES: "httpRelease.refusal.tooManyFiles",
+  HTTP_RELEASE_LINK_KEY_INVALID: "httpRelease.refusal.linkKeyInvalid",
+  HTTP_RELEASE_LINK_SOURCE_UNAVAILABLE:
+    "httpRelease.refusal.linkSourceUnavailable",
+  HTTP_RELEASE_LINK_REFUSED: "httpRelease.refusal.linkRefused",
+  HTTP_RELEASE_LINK_UNAVAILABLE: "httpRelease.refusal.linkUnavailable",
 };
 
 /** The translation key for an HTTP release refusal, if the error is one this client knows. */

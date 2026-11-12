@@ -112,6 +112,65 @@ const ru: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Ограничение скорости (КБ/с)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Общее для всех загрузок этого клиента. Пусто или 0 — без ограничения.",
+  "settings.downloadClientTorboxApiKey": "API-токен",
+  "settings.downloadClientTorboxApiKeyHelp": "API-токен учётной записи TorBox.",
+  "settings.downloadClientTorboxCachedOnly": "Только из кэша",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Отклонять загрузки, которых ещё нет в кэше TorBox.",
+  "httpRelease.refusal.filePathInvalid":
+    "У файла этой загрузки путь, который нельзя сохранить в её папке загрузки.",
+  "httpRelease.refusal.tooManyFiles":
+    "В этой загрузке больше файлов, чем может содержать одна загрузка.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "У файла этой загрузки нет пригодной ссылки.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Файлу этой загрузки нужна ссылка, которую этот загрузчик не может получить.",
+  "httpRelease.refusal.linkRefused":
+    "Сервер раз за разом отклонял ссылки на загрузку файла.",
+  "httpRelease.refusal.linkUnavailable":
+    "Для файла так и не появилась ссылка на загрузку.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox отклонил API-токен.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "Тариф TorBox не включает эту функцию.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "Учётная запись TorBox достигла предела активных загрузок.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "Учётная запись TorBox находится в периоде ожидания и пока не принимает новые загрузки.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "Учётная запись TorBox достигла месячного предела загрузок.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "Достигнут почасовой предел новых загрузок TorBox.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Эта загрузка больше, чем позволяет тариф TorBox.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "Этой загрузки нет в кэше TorBox, а этот клиент принимает только загрузки из кэша.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox не смог прочитать торрент.",
+  "error.reason.TORBOX_INVALID_NZB": "Не удалось прочитать NZB.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Эта загрузка уже есть в учётной записи TorBox.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "У TorBox нет этого элемента.",
+  "error.reason.TORBOX_LINK_OFFLINE": "Ссылка на загрузку TorBox недоступна.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox ограничивает частоту приёма запросов.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox недоступен.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox пометил файл этой загрузки как заражённый.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox предлагает файл этой загрузки только в виде zip-архива.",
+  "error.reason.TORBOX_NO_VIDEO_FILE": "В этой загрузке TorBox нет видеофайла.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox сообщает, что эта загрузка завершилась ошибкой.",
+  "error.reason.TORBOX_ITEM_MISSING": "У TorBox больше нет этой загрузки.",
+  "error.reason.TORBOX_STALLED": "Эта загрузка остановилась на TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "Имена файлов этой загрузки TorBox нельзя сохранить в этой системе.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "У этого релиза нет magnet-ссылки, торрент-файла или NZB для отправки в TorBox.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox не поддерживает это действие для этой загрузки.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "У этого клиента TorBox нет такой загрузки.",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "У клиента TorBox нет API-токена.",
   "settings.publicUrlTitle": "Публичный URL",
   "settings.publicUrlHelp":
     "Адрес, по которому люди и сервисы обращаются к Scryer, например https://scryer.example.com. Привязка аккаунтов и OAuth применяют изменение сразу, а ключи доступа — после перезапуска Scryer.",

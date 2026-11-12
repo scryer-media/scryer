@@ -109,6 +109,64 @@ const cs: LocaleDictionary = {
     "Limit přenosové rychlosti (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Sdílí ho všechna stahování tohoto klienta. Prázdné nebo 0 znamená bez omezení.",
+  "settings.downloadClientTorboxApiKey": "API token",
+  "settings.downloadClientTorboxApiKeyHelp": "API token účtu TorBox.",
+  "settings.downloadClientTorboxCachedOnly": "Jen z mezipaměti",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Odmítat stahování, která TorBox ještě nemá v mezipaměti.",
+  "httpRelease.refusal.filePathInvalid":
+    "Soubor tohoto stahování má cestu, kterou nelze uložit do jeho složky stahování.",
+  "httpRelease.refusal.tooManyFiles":
+    "Toto stahování má více souborů, než může jedno stahování obsahovat.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "Soubor tohoto stahování nemá použitelný odkaz.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Soubor tohoto stahování potřebuje odkaz, který tento stahovač nedokáže získat.",
+  "httpRelease.refusal.linkRefused":
+    "Server opakovaně odmítal odkazy ke stažení souboru.",
+  "httpRelease.refusal.linkUnavailable":
+    "Pro soubor nebyl dostupný žádný odkaz ke stažení.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox odmítl API token.",
+  "error.reason.TORBOX_PLAN_RESTRICTED": "Tarif TorBox tuto funkci nezahrnuje.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "Účet TorBox dosáhl limitu aktivních stahování.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "Účet TorBox je v čekací době a zatím nepřijímá nová stahování.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "Účet TorBox dosáhl měsíčního limitu stahování.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "Byl dosažen hodinový limit nových stahování TorBox.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Toto stahování je větší, než tarif TorBox dovoluje.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox nemá toto stahování v mezipaměti a tento klient přijímá jen stahování z mezipaměti.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox nedokázal přečíst torrent.",
+  "error.reason.TORBOX_INVALID_NZB": "NZB nelze přečíst.",
+  "error.reason.TORBOX_DUPLICATE_ITEM": "Toto stahování už v účtu TorBox je.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox tuto položku nemá.",
+  "error.reason.TORBOX_LINK_OFFLINE": "Odkaz ke stažení TorBox je offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox omezuje, jak často přijímá požadavky.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox není dostupný.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox označil soubor tohoto stahování jako infikovaný.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox nabízí soubor tohoto stahování jen jako archiv zip.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "Toto stahování TorBox neobsahuje žádný video soubor.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox hlásí, že toto stahování selhalo.",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox už toto stahování nemá.",
+  "error.reason.TORBOX_STALLED": "Toto stahování na TorBoxu uvázlo.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "Názvy souborů tohoto stahování TorBox nelze v tomto systému uložit.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "Toto vydání nemá magnet odkaz, torrent soubor ani NZB, které by šlo poslat do TorBoxu.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox tuto akci pro toto stahování nepodporuje.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "Tento klient TorBox takové stahování nemá.",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "Klient TorBox nemá API token.",
   "settings.publicUrlTitle": "Veřejná URL",
   "settings.publicUrlHelp":
     "Adresa, na které lidé a služby dosáhnou Scryeru, například https://scryer.example.com. Propojování účtů a OAuth používají změnu okamžitě, přístupové klíče (passkey) ji použijí až po restartu Scryeru.",

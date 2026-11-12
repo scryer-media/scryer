@@ -4362,6 +4362,67 @@ const en: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Bandwidth limit (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Shared by all downloads of this client. Empty or 0 means unlimited.",
+  "settings.downloadClientTorboxApiKey": "API token",
+  "settings.downloadClientTorboxApiKeyHelp":
+    "The API token of the TorBox account.",
+  "settings.downloadClientTorboxCachedOnly": "Cached only",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Refuse downloads that TorBox does not already have cached.",
+  "httpRelease.refusal.filePathInvalid":
+    "A file in this download has a path that cannot be saved inside its download folder.",
+  "httpRelease.refusal.tooManyFiles":
+    "This download has more files than one download may hold.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "A file in this download has no usable link reference.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "A file in this download needs a link that this downloader cannot obtain.",
+  "httpRelease.refusal.linkRefused":
+    "The server kept refusing the download links for a file.",
+  "httpRelease.refusal.linkUnavailable":
+    "No download link became available for a file.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox rejected the API token.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "The TorBox plan does not include this feature.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "The TorBox account has reached its limit of active downloads.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "The TorBox account is in a cooldown period and accepts no new downloads yet.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "The TorBox account has reached its monthly download limit.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "The hourly limit of new TorBox downloads has been reached.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "This download is larger than the TorBox plan allows.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox does not have this download cached, and this client accepts only cached downloads.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox could not read the torrent.",
+  "error.reason.TORBOX_INVALID_NZB": "The NZB could not be read.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "This download is already in the TorBox account.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox does not hold this item.",
+  "error.reason.TORBOX_LINK_OFFLINE": "The TorBox download link is offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox is limiting how often it accepts requests.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox is unavailable.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox flagged a file in this download as infected.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox offers a file in this download only as a zip archive.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "This TorBox download has no video file.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox reports that this download failed.",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox no longer holds this download.",
+  "error.reason.TORBOX_STALLED": "This download is stalled on TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "The file names in this TorBox download cannot be saved on this system.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "This release has no magnet link, torrent file or NZB to send to TorBox.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox does not support this action for this download.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "This TorBox client has no such download.",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "The TorBox client has no API token.",
   "settings.publicUrlTitle": "Public URL",
   "settings.publicUrlHelp":
     "The address people and services use to reach Scryer, such as https://scryer.example.com. Account linking and OAuth use a change immediately; passkeys use it after Scryer restarts.",
