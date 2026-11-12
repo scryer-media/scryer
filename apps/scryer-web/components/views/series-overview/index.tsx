@@ -147,6 +147,7 @@ function compareEpisodeQueueItems(
 
 type Props = {
   canManageTitle: boolean;
+  seasonRequestAction?: React.ReactNode;
   fullBleedHero?: boolean;
   /** Sits in the top left corner of the hero. */
   heroLeadingAction?: React.ReactNode;
@@ -247,6 +248,7 @@ type Props = {
 
 function SeriesOverviewViewImpl({
   canManageTitle,
+  seasonRequestAction,
   fullBleedHero = false,
   heroLeadingAction,
   loading,
@@ -1563,6 +1565,7 @@ function SeriesOverviewViewImpl({
                   {t("title.seasonsAndEpisodes")}
                 </CardTitle>
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end [&_button]:h-9">
+                  {seasonRequestAction}
                   {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
                     <>
                       {canManageTitle ? (

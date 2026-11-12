@@ -341,6 +341,12 @@ impl MonitorSelection {
         }
     }
 
+    pub fn has_only_regular_seasons(&self) -> bool {
+        !self.seasons.is_empty()
+            && self.seasons.iter().all(|season| *season > 0)
+            && self.series_movies.is_empty()
+    }
+
     pub fn monitors_season(&self, season_number: i32) -> bool {
         self.seasons.contains(&season_number)
     }

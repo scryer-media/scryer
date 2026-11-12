@@ -290,6 +290,7 @@ pub(super) struct MediaRequestTestHarness {
     pub(super) user: User,
     pub(super) manager: User,
     pub(super) titles: Arc<MockTitleRepo>,
+    pub(super) shows: Arc<MockShowRepo>,
     pub(super) libraries: Arc<MockLibraryRepo>,
     pub(super) quality_profiles: Arc<StoredQualityProfileRepo>,
     pub(super) media_requests: Arc<MockMediaRequestRepo>,
@@ -359,7 +360,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
 
     let services = AppServices::builder(
         titles.clone(),
-        shows,
+        shows.clone(),
         users.clone(),
         indexer_configs,
         indexer_client,
@@ -420,6 +421,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
         user: requester,
         manager: test_admin_user(),
         titles,
+        shows,
         libraries,
         quality_profiles,
         media_requests,

@@ -687,6 +687,7 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     }
     externalIds {
       source
+      kind
       value
     }
     year

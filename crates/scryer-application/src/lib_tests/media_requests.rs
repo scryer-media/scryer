@@ -2433,6 +2433,149 @@ async fn submit_advanced_series_request_reuses_only_the_same_scope() {
 }
 
 #[tokio::test]
+async fn existing_series_season_requests_require_new_coverage_and_keep_the_title_profile() {
+    let harness = bootstrap_media_request_app();
+    let title_id = "catalog-series";
+    let mut title = make_due_hydration_title(title_id, MediaFacet::Series, 9066);
+    title.tags.push("scryer:quality-profile:1080p".into());
+    harness.titles.store.lock().await.push(title);
+    for (season, monitored) in [(2, true), (3, false)] {
+        let id = format!("season-{season}");
+        harness.shows.collections.lock().await.push(Collection {
+            id: id.clone(),
+            title_id: title_id.into(),
+            collection_type: CollectionType::Season,
+            collection_index: season.to_string(),
+            label: None,
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored,
+            created_at: chrono::Utc::now(),
+        });
+        harness.shows.episodes.lock().await.push(Episode {
+            id: format!("episode-{season}"),
+            title_id: title_id.into(),
+            collection_id: Some(id),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".into()),
+            season_number: Some(season.to_string()),
+            episode_label: None,
+            title: None,
+            air_date: None,
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored,
+            created_at: chrono::Utc::now(),
+        });
+    }
+    let mut input = media_request_input(
+        scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+        9066,
+    );
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("advanced".into());
+    for season in [0, 2, 99] {
+        input.requested_monitor_selection = Some(scryer_domain::MonitorSelection {
+            seasons: vec![season],
+            series_movies: vec![],
+        });
+        let error = harness
+            .app
+            .submit_media_request(&harness.user, input.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::media_requests::TITLE_ALREADY_EXISTS_TARGET_LIBRARY)
+        );
+    }
+    input.requested_monitor_selection.as_mut().unwrap().seasons = vec![3];
+    input.requested_quality_profile_id = Some("4k".into());
+    let error = harness
+        .app
+        .submit_media_request(&harness.user, input.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::media_requests::REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY)
+    );
+    input.requested_quality_profile_id = None;
+    let outcome = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("a known season with inactive episodes can be requested");
+    let request = harness.media_requests.requests.lock().await[0].clone();
+    assert_eq!(request.id, outcome.request_id);
+    assert_eq!(
+        request.requested_quality_profile_id.as_deref(),
+        Some("1080p")
+    );
+    let error = harness
+        .app
+        .approve_media_request(&harness.manager, &request.id, "4k", None, None, None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::media_requests::REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY)
+    );
+    let error = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request.id,
+            "1080p",
+            Some("allEpisodes".into()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::media_requests::TITLE_ALREADY_EXISTS_TARGET_LIBRARY)
+    );
+    harness.app.runtime.library.location_ownership.claim_all(
+        "test-move",
+        &[crate::location::ownership_guard::OwnedEntity::Title(
+            title_id.into(),
+        )],
+    );
+    let error = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request.id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, AppError::LocationOperationBusy(_)));
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Pending
+    );
+}
+
+#[tokio::test]
 async fn submit_advanced_series_request_without_a_selection_is_rejected() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);

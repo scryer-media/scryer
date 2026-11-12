@@ -1687,7 +1687,7 @@ async fn persist_collection_tx(tx: &mut SqlTx<'_>, collection: &Collection) -> A
     Ok(())
 }
 
-async fn set_collection_episodes_monitored_tx(
+pub(crate) async fn set_collection_episodes_monitored_tx(
     tx: &mut SqlTx<'_>,
     collection_id: &str,
     monitored: bool,
@@ -1703,7 +1703,7 @@ async fn set_collection_episodes_monitored_tx(
     Ok(())
 }
 
-async fn set_collections_monitored_tx(
+pub(crate) async fn set_collections_monitored_tx(
     tx: &mut SqlTx<'_>,
     collection_ids: &[String],
     monitored: bool,

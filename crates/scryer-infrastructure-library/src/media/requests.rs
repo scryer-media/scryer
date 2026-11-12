@@ -7,13 +7,13 @@ use scryer_application::{
     NewMediaRequest,
 };
 use scryer_domain::{
-    ExternalId, MediaFacet, MediaRequest, MediaRequestOrigin, MediaRequestRequester,
-    MediaRequestStatus, MonitorSelection, NewDomainEvent, User,
+    ExternalId, MONITOR_TYPE_ADVANCED, MediaFacet, MediaRequest, MediaRequestOrigin,
+    MediaRequestRequester, MediaRequestStatus, MonitorSelection, NewDomainEvent, Title, User,
 };
 
 use crate::media::monitor_selections::{
-    OWNER_KIND_MEDIA_REQUEST, load_monitor_selection, load_monitor_selections_for_owners,
-    replace_monitor_selection_tx,
+    OWNER_KIND_MEDIA_REQUEST, OWNER_KIND_TITLE, load_monitor_selection,
+    load_monitor_selections_for_owners, replace_monitor_selection_tx,
 };
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use crate::storage::sql::json::{canonical_json_text, json_text_or};
@@ -271,7 +271,48 @@ impl MediaRequestRepository for MediaRequestStore {
             );
             Box::pin(async move {
                 let movie_only = request.is_list_series_movie();
-                let created = if movie_only {
+                let monitor_type = title
+                    .tags
+                    .iter()
+                    .find_map(|tag| tag.strip_prefix("scryer:monitor-type:"));
+                let monitor_selection = options.monitor_selection.as_ref().and_then(Option::as_ref);
+                let requested_scope = regular_season_scope(
+                    &request, request.requested_monitor_type.as_deref(),
+                    request.requested_monitor_selection.as_ref(),
+                );
+                let approved_scope = regular_season_scope(&request, monitor_type, monitor_selection);
+                let existing_season = if (requested_scope.is_some() || approved_scope.is_some())
+                    && let Some(existing) = crate::media::titles::store::find_existing_title_for_create_tx(tx, &title).await?
+                {
+                    if existing.id != title.id {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::MEDIA_REQUEST_APPROVAL_TITLE_CHANGED,
+                            "request title changed during approval; retry",
+                        ));
+                    }
+                    let scope = approved_scope.filter(|scope| {
+                        requested_scope.is_none_or(|requested| {
+                            scope.seasons.iter().all(|season| requested.monitors_season(*season))
+                        })
+                    }).ok_or_else(existing_season_approval_refusal)?;
+                    if resolution.approved_lease_days.is_some() {
+                        return Err(AppError::validation_refused(
+                            scryer_application::error_reasons::media_requests::MEDIA_REQUESTS_INVALID,
+                            "an additional season request cannot set a lease for the existing title",
+                        ));
+                    }
+                    approve_existing_season_scope_tx(tx, &existing, scope).await?;
+                    Some(existing)
+                } else {
+                    None
+                };
+                let expands_existing = existing_season.is_some();
+                let created = if let Some(existing) = existing_season {
+                    scryer_application::CreateTitleOutcome {
+                        title: existing,
+                        reused_existing: true,
+                    }
+                } else if movie_only {
                     let selection =
                         request
                             .requested_monitor_selection
@@ -303,10 +344,10 @@ impl MediaRequestRepository for MediaRequestStore {
                     .tags
                     .iter()
                     .any(|tag| tag == "scryer:monitor-type:advanced");
-                if !movie_only && (!advanced || options.monitor_selection.is_some()) {
+                if !movie_only && !expands_existing && (!advanced || options.monitor_selection.is_some()) {
                     replace_monitor_selection_tx(
                         tx,
-                        crate::media::monitor_selections::OWNER_KIND_TITLE,
+                        OWNER_KIND_TITLE,
                         &title.id,
                         if advanced {
                             options.monitor_selection.as_ref().and_then(Option::as_ref)
@@ -316,22 +357,18 @@ impl MediaRequestRepository for MediaRequestStore {
                     )
                     .await?;
                 }
-                let event = if created.reused_existing {
+                let event = if created.reused_existing && !expands_existing {
                     None
                 } else {
                     Some(append_domain_event_tx(tx, added_event).await?)
                 };
-                let monitor_type = title
-                    .tags
-                    .iter()
-                    .find_map(|tag| tag.strip_prefix("scryer:monitor-type:"));
-                let monitor_selection = options.monitor_selection.as_ref().and_then(Option::as_ref);
                 let result = resolve_pending_overlapping_tx(
                     tx,
                     &request,
                     resolution,
                     monitor_type,
                     monitor_selection,
+                    expands_existing,
                 )
                 .await?;
                 if result.updated == 0 {
@@ -366,6 +403,7 @@ impl MediaRequestRepository for MediaRequestStore {
                         resolution,
                         request.requested_monitor_type.as_deref(),
                         request.requested_monitor_selection.as_ref(),
+                        false,
                     )
                     .await
                 })
@@ -888,12 +926,105 @@ async fn insert_media_request_requester_tx(
     Ok(rows > 0)
 }
 
+fn regular_season_scope<'a>(
+    request: &MediaRequest,
+    monitor_type: Option<&str>,
+    selection: Option<&'a MonitorSelection>,
+) -> Option<&'a MonitorSelection> {
+    if request.facet != MediaFacet::Series
+        || request.origin != MediaRequestOrigin::Manual
+        || monitor_type != Some(MONITOR_TYPE_ADVANCED)
+    {
+        return None;
+    }
+    selection.filter(|scope| scope.has_only_regular_seasons())
+}
+
+fn existing_season_approval_refusal() -> AppError {
+    AppError::validation_refused(
+        scryer_application::error_reasons::media_requests::TITLE_ALREADY_EXISTS_TARGET_LIBRARY,
+        "title already exists in the target library or has no eligible requested seasons",
+    )
+}
+
+/// The title already exists, so approval only expands the selected seasons.
+async fn approve_existing_season_scope_tx(
+    tx: &mut SqlTx<'_>,
+    title: &Title,
+    scope: &MonitorSelection,
+) -> AppResult<()> {
+    // Lock the title on Postgres as well as the SQLite writer transaction.
+    // Recheck the current parent state before applying the approval.
+    let rows = tx
+        .execute(
+            "UPDATE titles SET id = id WHERE id = {} AND monitored = {}",
+            &[SqlArg::Text(title.id.clone()), SqlArg::Bool(true)],
+        )
+        .await?;
+    if rows != 1 {
+        return Err(existing_season_approval_refusal());
+    }
+    let rows = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        "SELECT c.id, c.collection_index, c.monitored,
+                EXISTS(SELECT 1 FROM episodes e WHERE e.collection_id = c.id) AS has_episodes,
+                EXISTS(SELECT 1 FROM episodes e
+                       WHERE e.collection_id = c.id AND e.monitored = {}) AS has_unmonitored_episodes
+           FROM collections c WHERE c.title_id = {} AND c.collection_type = 'season'",
+        &[SqlArg::Bool(false), SqlArg::Text(title.id.clone())],
+    ).await?;
+    let mut collections = std::collections::BTreeMap::new();
+    for row in rows {
+        let Ok(season) = row.text("collection_index")?.parse::<i32>() else {
+            continue;
+        };
+        if !scope.monitors_season(season) {
+            continue;
+        }
+        let has_episodes = row.bool("has_episodes")?;
+        let needs_monitoring = !row.bool("monitored")? || row.bool("has_unmonitored_episodes")?;
+        if !has_episodes
+            || collections
+                .insert(season, (row.text("id")?, needs_monitoring))
+                .is_some()
+        {
+            return Err(existing_season_approval_refusal());
+        }
+    }
+    if collections.len() != scope.seasons.len() || !collections.values().any(|(_, needed)| *needed)
+    {
+        return Err(existing_season_approval_refusal());
+    }
+    let changed_ids: Vec<_> = collections
+        .into_values()
+        .filter_map(|(id, needed)| needed.then_some(id))
+        .collect();
+    crate::media::shows::store::set_collections_monitored_tx(tx, &changed_ids, true).await?;
+    for id in &changed_ids {
+        crate::media::shows::store::set_collection_episodes_monitored_tx(tx, id, true).await?;
+    }
+    if title
+        .tags
+        .iter()
+        .any(|tag| tag == "scryer:monitor-type:advanced")
+    {
+        let mut merged = load_monitor_selection(SqlExec::Tx(tx), OWNER_KIND_TITLE, &title.id)
+            .await?
+            .unwrap_or_default();
+        merged.seasons.extend_from_slice(&scope.seasons);
+        let merged = merged.normalized();
+        replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &title.id, Some(&merged)).await?;
+    }
+    Ok(())
+}
+
 async fn resolve_pending_overlapping_tx(
     tx: &mut SqlTx<'_>,
     request: &MediaRequest,
     resolution: MediaRequestResolution,
     approved_monitor_type: Option<&str>,
     approved_monitor_selection: Option<&MonitorSelection>,
+    expands_existing: bool,
 ) -> AppResult<MediaRequestResolutionResult> {
     let resolved_at = resolution.resolved_at;
     let mut args = vec![
@@ -966,6 +1097,7 @@ async fn resolve_pending_overlapping_tx(
             resolution.approved_quality_profile_id.as_deref(),
             approved_monitor_type,
             approved_monitor_selection,
+            expands_existing,
         )
         .await?;
         if approved_ids.is_empty() {
@@ -1047,6 +1179,7 @@ async fn matching_approval_request_ids(
     approved_profile: Option<&str>,
     approved_monitor_type: Option<&str>,
     approved_monitor_selection: Option<&MonitorSelection>,
+    expands_existing: bool,
 ) -> AppResult<Vec<String>> {
     // SQLite holds the writer gate. On PostgreSQL, lock the request rows in
     // order so preference edits and cancellations cannot race the resolution.
@@ -1058,7 +1191,7 @@ async fn matching_approval_request_ids(
     let rows = SqlRuntime::fetch_all(
         SqlExec::Tx(tx),
         &format!(
-            "SELECT id, requested_quality_profile_id, requested_monitor_type
+            "SELECT id, requested_quality_profile_id, requested_monitor_type, requested_lease_days
                FROM media_requests
               WHERE {where_clause}
               ORDER BY id{lock_clause}"
@@ -1082,6 +1215,7 @@ async fn matching_approval_request_ids(
         };
         if same_profile
             && row.opt_text("requested_monitor_type")?.as_deref() == approved_monitor_type
+            && (!expands_existing || row.opt_i64("requested_lease_days")?.is_none())
         {
             siblings.push(id);
         }

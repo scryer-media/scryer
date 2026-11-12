@@ -65,6 +65,7 @@ import {
   fetchTitleSidePanelOverviewSnapshot,
 } from "@/lib/title-overview-loader";
 import { SeriesOverviewView } from "@/components/views/series-overview";
+import { SeriesSeasonRequest } from "@/components/containers/series-season-request";
 import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
 import {
   useEpisodeFileAssignment,
@@ -80,6 +81,7 @@ import type { OverviewTitleTarget } from "@/components/root/types";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import type {
   CanonicalMediaTag,
+  ExternalId,
   LibraryRecord,
   MediaFileReleaseListing,
   TitleCreditRecord,
@@ -109,6 +111,7 @@ import {
   LIBRARY_PERMISSIONS,
   hasAnyLibraryPermission,
   hasAppPermission,
+  hasLibraryPermission,
 } from "@/lib/utils/permissions";
 import { exclusionInputFromTitle } from "@/lib/utils/lists";
 import type { Facet } from "@/lib/types/titles";
@@ -136,7 +139,7 @@ export type TitleDetail = {
   librarySlug?: string | null;
   monitored: boolean;
   tags: string[];
-  externalIds: { source: string; value: string }[];
+  externalIds: ExternalId[];
   year: number | null;
   overview: string | null;
   posterUrl: string | null;
@@ -2329,6 +2332,21 @@ export const SeriesOverviewContainer = React.memo(
       <>
         <SeriesOverviewView
           canManageTitle={canManageTitle}
+          seasonRequestAction={
+            title?.monitored &&
+            facetById(title.facet)?.id === "SERIES" &&
+            hasLibraryPermission(
+              auth.user,
+              title.libraryId,
+              LIBRARY_PERMISSIONS.request,
+            ) ? (
+              <SeriesSeasonRequest
+                key={title.id}
+                title={title}
+                collections={collections}
+              />
+            ) : null
+          }
           fullBleedHero={fullBleedHero}
           heroLeadingAction={heroLeadingAction}
           loading={loading}
