@@ -23,6 +23,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
 
+use super::linked::{
+    LinkOutcome, LinkPurpose, LinkRequest, LinkSource, LinkedJobRequest, ResolvedLink,
+    plan_linked_job,
+};
 use super::selection::media_final_path;
 use super::state::{
     HttpFileRole, HttpJob, HttpJobFile, HttpJobProgress, HttpJobState, HttpQueueDocument,
@@ -31,7 +35,7 @@ use super::state::{
 use super::transfer::{
     BandwidthLimiter, CHECKPOINT_BYTES, CHECKPOINT_INTERVAL, Checkpoint, CheckpointCadence, Clock,
     Egress, MediaCheck, MediaProbe, NativeMediaProbe, TransferContext, TransferError, system_clock,
-    transfer_file,
+    transfer_file, transfer_file_from,
 };
 
 /// Jobs that may wait or run at once. Submissions past this are refused.
@@ -41,6 +45,13 @@ pub(crate) const MAX_ACTIVE_JOBS: usize = 1000;
 pub(crate) const MAX_RETAINED_FINISHED_JOBS: usize = 2000;
 /// The first retry's wait; later retries double it.
 const DEFAULT_BACKOFF_UNIT: Duration = Duration::from_secs(1);
+/// New links asked for one file, in one run of its job, after the server
+/// refused the link in use.
+pub(crate) const MAX_LINK_REFRESHES: u32 = 2;
+/// Waits a link source may ask for in a row before the file is given up on.
+pub(crate) const MAX_LINK_WAITS: u32 = 12;
+/// The longest one such wait lasts, whatever the source asked for.
+pub(crate) const MAX_LINK_WAIT: Duration = Duration::from_secs(600);
 
 /// Operator-tunable limits, adjustable without restarting transfers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +119,12 @@ pub(crate) struct HttpEngine {
     shutdown: CancellationToken,
     tasks: TaskTracker,
     revision: watch::Sender<u64>,
+    /// Resolves the links of files planned with a link key. The `http`
+    /// client has none.
+    link_source: Option<Arc<dyn LinkSource>>,
+    /// The waits link sources asked for, as the engine waited them.
+    #[cfg(test)]
+    link_waits: std::sync::Mutex<Vec<Duration>>,
 }
 
 impl HttpEngine {
@@ -118,6 +135,28 @@ impl HttpEngine {
         egress: Egress,
         egress_key: String,
         predecessor: Option<TaskTracker>,
+    ) -> Arc<Self> {
+        Self::new_with_link_source(
+            client_id,
+            download_dir,
+            limits,
+            egress,
+            egress_key,
+            predecessor,
+            None,
+        )
+    }
+
+    /// An engine whose owner resolves the links of the jobs it plans with
+    /// [`Self::add_linked_job`].
+    pub(crate) fn new_with_link_source(
+        client_id: String,
+        download_dir: PathBuf,
+        limits: HttpEngineLimits,
+        egress: Egress,
+        egress_key: String,
+        predecessor: Option<TaskTracker>,
+        link_source: Option<Arc<dyn LinkSource>>,
     ) -> Arc<Self> {
         let store = HttpStateStore::for_client(&download_dir, &client_id);
         Arc::new(Self {
@@ -153,7 +192,19 @@ impl HttpEngine {
             shutdown: CancellationToken::new(),
             tasks: TaskTracker::new(),
             revision: watch::channel(0).0,
+            link_source,
+            #[cfg(test)]
+            link_waits: std::sync::Mutex::new(Vec::new()),
         })
+    }
+
+    /// The link-source waits this engine has waited so far.
+    #[cfg(test)]
+    pub(crate) fn link_waits(&self) -> Vec<Duration> {
+        self.link_waits
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     /// Apply new limits to transfers that start from now on.
@@ -398,6 +449,30 @@ impl HttpEngine {
         self.persist().await?;
         self.schedule().await;
         Ok(())
+    }
+
+    /// Queue a job its owner planned: files at relative paths under one job
+    /// folder, each fetched from a link the engine's link source resolves.
+    /// Returns the job's client item id.
+    ///
+    /// Nothing is probed per file: publication never replaces a file
+    /// already under a final name, so an occupied destination fails that
+    /// file when it finishes instead.
+    pub(crate) async fn add_linked_job(
+        self: &Arc<Self>,
+        request: LinkedJobRequest,
+    ) -> AppResult<String> {
+        if self.link_source.is_none() {
+            return Err(AppError::validation_refused(
+                scryer_application::http_release_refusal::LINK_SOURCE_UNAVAILABLE,
+                "this downloader cannot resolve download links",
+            ));
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let job = plan_linked_job(request, &self.download_dir, id.clone(), Utc::now())?;
+        super::check_download_dir(&self.download_dir).await?;
+        self.add_job(job).await?;
+        Ok(id)
     }
 
     /// One job and, while it runs, its live progress. Only that job is cloned.
@@ -734,7 +809,11 @@ impl HttpEngine {
                     verify,
                 }),
             };
-            match transfer_file(&context, &mut file).await {
+            let transferred = match file.link_key.clone() {
+                None => transfer_file(&context, &mut file).await,
+                Some(key) => self.transfer_linked(&context, id, &key, &mut file).await,
+            };
+            match transferred {
                 Ok(()) => index += 1,
                 Err(error @ (TransferError::Forbidden(_) | TransferError::Rejected(_)))
                     if file.role == HttpFileRole::Media =>
@@ -770,6 +849,115 @@ impl HttpEngine {
             }
         }
         Ok(())
+    }
+
+    /// Fetch one file whose link the link source resolves: a link for the
+    /// start or resume, and a new one each time the server refuses the link
+    /// in use, a bounded number of times. The link lives only in this call.
+    async fn transfer_linked(
+        &self,
+        context: &TransferContext<'_>,
+        job_id: &str,
+        key: &str,
+        file: &mut HttpJobFile,
+    ) -> Result<(), TransferError> {
+        let Some(source) = self.link_source.clone() else {
+            return Err(TransferError::Refused(
+                scryer_application::http_release_refusal::LINK_SOURCE_UNAVAILABLE,
+                "this downloader cannot resolve the file's download link".into(),
+            ));
+        };
+        let mut purpose = if file.bytes_done > 0 {
+            LinkPurpose::Resume
+        } else {
+            LinkPurpose::Start
+        };
+        let mut refreshes = 0u32;
+        loop {
+            let link = self
+                .resolve_link(source.as_ref(), context.cancel, job_id, key, purpose)
+                .await?;
+            match transfer_file_from(context, file, Some(link.url())).await {
+                Err(error @ (TransferError::Forbidden(_) | TransferError::Rejected(_))) => {
+                    drop(link);
+                    refreshes += 1;
+                    if refreshes > MAX_LINK_REFRESHES {
+                        return Err(TransferError::Refused(
+                            scryer_application::http_release_refusal::LINK_REFUSED,
+                            format!(
+                                "the server refused {} links in a row for this file; the last one: {}",
+                                refreshes,
+                                error.message()
+                            ),
+                        ));
+                    }
+                    info!(
+                        item_id = job_id,
+                        refreshes,
+                        reason = error.message().as_str(),
+                        "HTTP download asking for a new link after a refusal"
+                    );
+                    purpose = LinkPurpose::Refused;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// Ask the link source for a link, waiting out each "not yet" answer up
+    /// to a bound. Waiting writes nothing.
+    async fn resolve_link(
+        &self,
+        source: &dyn LinkSource,
+        cancel: &CancellationToken,
+        job_id: &str,
+        key: &str,
+        purpose: LinkPurpose,
+    ) -> Result<ResolvedLink, TransferError> {
+        let request = LinkRequest {
+            job_id,
+            key,
+            purpose,
+        };
+        let mut waits = 0u32;
+        loop {
+            let outcome = tokio::select! {
+                () = cancel.cancelled() => return Err(TransferError::Cancelled),
+                outcome = source.resolve(&request) => outcome,
+            };
+            match outcome {
+                LinkOutcome::Ready(link) => return Ok(link),
+                LinkOutcome::Refused { reason, message } => {
+                    return Err(TransferError::Refused(reason, message));
+                }
+                LinkOutcome::RetryAfter { wait, message } => {
+                    waits += 1;
+                    if waits > MAX_LINK_WAITS {
+                        return Err(TransferError::Refused(
+                            scryer_application::http_release_refusal::LINK_UNAVAILABLE,
+                            format!("no download link after {MAX_LINK_WAITS} waits: {message}"),
+                        ));
+                    }
+                    let wait = wait.min(MAX_LINK_WAIT);
+                    warn!(
+                        item_id = job_id,
+                        retry_in_secs = wait.as_secs(),
+                        waits,
+                        reason = message.as_str(),
+                        "HTTP download waiting for a download link"
+                    );
+                    #[cfg(test)]
+                    self.link_waits
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .push(wait);
+                    tokio::select! {
+                        () = cancel.cancelled() => return Err(TransferError::Cancelled),
+                        () = tokio::time::sleep(wait) => {}
+                    }
+                }
+            }
+        }
     }
 
     /// Put a job that stopped early back in the queue, unless a control
@@ -863,6 +1051,7 @@ impl HttpEngine {
                         forbidden_answers: 0,
                         skipped_error: None,
                         skipped_reason: None,
+                        link_key: None,
                     };
                     info!(
                         item_id = id,

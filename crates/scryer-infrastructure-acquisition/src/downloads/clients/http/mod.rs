@@ -17,12 +17,30 @@
 //! on disk and the next attempt writes a fresh `.part` name.
 
 mod engine;
+mod linked;
 mod selection;
 mod state;
 mod transfer;
 
 #[cfg(test)]
+mod linked_tests;
+#[cfg(test)]
 mod tests;
+
+/// What another client needs to run its own jobs on this engine: plan them
+/// with [`linked::LinkedJobRequest`], resolve their links with a
+/// [`linked::LinkSource`], and report them with [`queue_item_for`] and
+/// [`completed_download_for`].
+pub(crate) mod owned {
+    pub(crate) use super::engine::{HttpEngine, HttpEngineLimits, LiveSnapshot};
+    pub(crate) use super::linked::{
+        CONNECTIONS_PER_LINK, LinkOutcome, LinkPurpose, LinkRequest, LinkSource, LinkedFile,
+        LinkedJobRequest, ResolvedLink,
+    };
+    pub(crate) use super::state::{HttpFileRole, HttpJob, HttpJobState};
+    pub(crate) use super::transfer::Egress;
+    pub(crate) use super::{completed_download_for, queue_item_for};
+}
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -502,6 +520,7 @@ impl DownloadClient for HttpDownloadClient {
                     forbidden_answers: 0,
                     skipped_error: None,
                     skipped_reason: None,
+                    link_key: None,
                 })
                 .collect(),
             state: HttpJobState::Queued,
@@ -654,6 +673,15 @@ fn map_state(state: HttpJobState) -> DownloadQueueState {
 }
 
 fn job_to_queue_item(job: &HttpJob, live: Option<LiveSnapshot>) -> DownloadQueueItem {
+    queue_item_for(job, live, CLIENT_TYPE)
+}
+
+/// A job as a queue item of the client `client_type`.
+pub(crate) fn queue_item_for(
+    job: &HttpJob,
+    live: Option<LiveSnapshot>,
+    client_type: &str,
+) -> DownloadQueueItem {
     let state = map_state(job.state);
     let total = job.known_total_bytes();
     let done = live
@@ -687,7 +715,7 @@ fn job_to_queue_item(job: &HttpJob, live: Option<LiveSnapshot>) -> DownloadQueue
         category: job.category.clone(),
         client_id: String::new(),
         client_name: String::new(),
-        client_type: CLIENT_TYPE.to_string(),
+        client_type: client_type.to_string(),
         state,
         progress_percent,
         import_transfer_phase: None,
@@ -725,7 +753,22 @@ fn job_to_queue_item(job: &HttpJob, live: Option<LiveSnapshot>) -> DownloadQueue
 }
 
 fn job_to_completed_download(job: &HttpJob) -> Option<CompletedDownload> {
+    completed_download_for(job, CLIENT_TYPE)
+}
+
+/// A finished job as a completed download of the client `client_type`. A
+/// single-file job is reported as its media file; a job that reports a
+/// folder ([`HttpJob::reports_folder`]) is reported as its job folder.
+pub(crate) fn completed_download_for(
+    job: &HttpJob,
+    client_type: &str,
+) -> Option<CompletedDownload> {
     let media = job.media_file()?;
+    let dest_dir = if job.reports_folder() {
+        &job.output_dir
+    } else {
+        &media.final_path
+    };
     let mut parameters = vec![
         ("*scryer_title_id".to_string(), job.title_id.clone()),
         ("*scryer_facet".to_string(), job.facet.clone()),
@@ -739,13 +782,13 @@ fn job_to_completed_download(job: &HttpJob) -> Option<CompletedDownload> {
         .map(|file| file.total_bytes.unwrap_or(file.bytes_done))
         .sum::<u64>();
     Some(CompletedDownload {
-        client_type: CLIENT_TYPE.to_string(),
+        client_type: client_type.to_string(),
         client_id: String::new(),
         download_client_item_id: job.id.clone(),
         download_id: job.download_id.clone(),
         name: job.output_basename.clone(),
         release_name: Some(job.release_name.clone()),
-        dest_dir: media.final_path.to_string_lossy().into_owned(),
+        dest_dir: dest_dir.to_string_lossy().into_owned(),
         category: job.category.clone(),
         size_bytes: i64::try_from(size).ok(),
         completed_at: job.completed_at,
