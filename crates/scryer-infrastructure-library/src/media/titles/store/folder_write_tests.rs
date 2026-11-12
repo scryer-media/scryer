@@ -507,7 +507,7 @@ async fn every_folder_and_title_set_write_advances_the_counter() {
     watch.advanced(&store, "delete");
     assert!(
         store
-            .delete_titles_with_records(&["cinderwake".to_string()])
+            .delete_titles_with_records(&["cinderwake".to_string()], None)
             .await
             .unwrap()
     );
