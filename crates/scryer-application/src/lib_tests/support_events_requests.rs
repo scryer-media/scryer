@@ -576,6 +576,15 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         submitted_event: NewDomainEvent,
     ) -> AppResult<MediaRequestSubmissionResult> {
         let mut requests = self.requests.lock().await;
+        if let Some(pending) = requests
+            .iter()
+            .find(|pending| request.matches_pending_manual_retry(pending))
+        {
+            return Ok(MediaRequestSubmissionResult {
+                request: pending.clone(),
+                event: None,
+            });
+        }
         let now = Utc::now();
         let stored = MediaRequest {
             id: request.id,
@@ -627,7 +636,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             append_mock_media_request_event(self.domain_events.as_ref(), submitted_event).await?;
         Ok(MediaRequestSubmissionResult {
             request: stored,
-            event,
+            event: Some(event),
         })
     }
 

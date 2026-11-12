@@ -299,14 +299,6 @@ impl AppUseCase {
         if !list_movie {
             external_ids = metadata_enrichment.external_ids;
         }
-        if !list_movie {
-            self.ensure_request_subject_is_not_in_library(
-                &library.id,
-                library.facet.clone(),
-                &external_ids,
-            )
-            .await?;
-        }
         let profile_reference_guard = self
             .runtime
             .catalog
@@ -384,6 +376,39 @@ impl AppUseCase {
             created_by_user_id: actor.id.clone(),
             origin: input.origin,
         };
+        if request.origin == MediaRequestOrigin::Manual {
+            let pending = self
+                .services
+                .catalog
+                .media_requests
+                .list(MediaRequestQuery {
+                    facet: Some(request.facet.clone()),
+                    library_ids: Some(vec![request.library_id.clone()]),
+                    status: Some(MediaRequestStatus::Pending),
+                    requester_user_id: Some(actor.id.clone()),
+                })
+                .await?;
+            if let Some(previous) = pending
+                .into_iter()
+                .filter(|pending| request.matches_pending_manual_retry(pending))
+                .min_by(|left, right| {
+                    (left.created_at, &left.id).cmp(&(right.created_at, &right.id))
+                })
+            {
+                return Ok(CommittedMediaRequest {
+                    request_id: previous.id,
+                    decision: Ok(()),
+                });
+            }
+        }
+        if !list_movie {
+            self.ensure_request_subject_is_not_in_library(
+                &library.id,
+                library.facet.clone(),
+                &request.external_ids,
+            )
+            .await?;
+        }
         let submitted_event = new_global_domain_event(
             actor,
             DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
@@ -432,7 +457,13 @@ impl AppUseCase {
             .submit(request, actor, submitted_event)
             .await?;
         drop(profile_reference_guard);
-        self.publish_stored_domain_event(&submission.event).await;
+        let Some(event) = submission.event else {
+            return Ok(CommittedMediaRequest {
+                request_id: submission.request.id,
+                decision: Ok(()),
+            });
+        };
+        self.publish_stored_domain_event(&event).await;
         let submitted_request = submission.request;
         self.stamp_request_decision(&request_id, &evaluation).await;
         let decision = self
@@ -2109,7 +2140,7 @@ fn group_external_id_values_by_source(external_ids: &[ExternalId]) -> Vec<(Strin
     grouped.into_iter().collect()
 }
 
-fn is_smg_request_correlation_external_id(external_id: &ExternalId) -> bool {
+pub(crate) fn is_smg_request_correlation_external_id(external_id: &ExternalId) -> bool {
     matches!(external_id.source.as_str(), "tvdb" | "imdb" | "tmdb")
 }
 

@@ -3155,6 +3155,44 @@ pub struct NewMediaRequest {
     pub origin: scryer_domain::MediaRequestOrigin,
 }
 
+impl NewMediaRequest {
+    /// A repeat by the same requester while their identical intent is pending.
+    /// A different requester or an automated list owns a separate submission.
+    pub fn matches_pending_manual_retry(&self, pending: &MediaRequest) -> bool {
+        use scryer_domain::{MediaRequestOrigin, MediaRequestStatus};
+
+        self.origin == MediaRequestOrigin::Manual
+            && pending.origin == MediaRequestOrigin::Manual
+            && pending.status == MediaRequestStatus::Pending
+            && pending.created_by_user_id == self.created_by_user_id
+            && pending.library_id == self.library_id
+            && pending.facet == self.facet
+            && (pending.identity_fingerprint == self.identity_fingerprint
+                || self.external_ids.iter().any(|identity| {
+                    crate::media_requests::is_smg_request_correlation_external_id(identity)
+                        && pending.external_ids.iter().any(|existing| {
+                            existing.source == identity.source && existing.value == identity.value
+                        })
+                }))
+            && (pending.requested_quality_profile_id == self.requested_quality_profile_id
+                || pending
+                    .requested_quality_profile_id
+                    .as_deref()
+                    .zip(self.requested_quality_profile_id.as_deref())
+                    .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right)))
+            && pending.requested_monitor_type == self.requested_monitor_type
+            && pending.requested_lease_days == self.requested_lease_days
+            && match (
+                pending.requested_monitor_selection.as_ref(),
+                self.requested_monitor_selection.as_ref(),
+            ) {
+                (Some(left), Some(right)) => left.has_same_scope(right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MediaRequestResolution {
     pub status: scryer_domain::MediaRequestStatus,
@@ -3183,7 +3221,8 @@ pub struct MediaRequestResolution {
 #[derive(Clone, Debug)]
 pub struct MediaRequestSubmissionResult {
     pub request: MediaRequest,
-    pub event: DomainEvent,
+    /// Absent when a manual retry returned an existing pending request.
+    pub event: Option<DomainEvent>,
 }
 
 #[derive(Clone, Debug)]

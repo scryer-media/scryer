@@ -711,7 +711,7 @@ async fn media_request_activity_is_visible_to_library_viewers() {
 }
 
 #[tokio::test]
-async fn submit_media_request_duplicate_same_user_creates_separate_submission_and_event() {
+async fn submit_media_request_duplicate_same_user_reuses_pending_submission_and_event() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let input = media_request_input(library_id, 9011);
@@ -723,28 +723,38 @@ async fn submit_media_request_duplicate_same_user_creates_separate_submission_an
         .expect("first request should succeed");
     let second = harness
         .app
+        .submit_media_request(&harness.user, input.clone())
+        .await
+        .expect("retry should return the existing pending request");
+    harness
+        .titles
+        .store
+        .lock()
+        .await
+        .push(make_due_hydration_title(
+            "catalog-after-request",
+            MediaFacet::Movie,
+            9011,
+        ));
+    let after_catalog_add = harness
+        .app
         .submit_media_request(&harness.user, input)
         .await
-        .expect("duplicate request should succeed opaquely");
+        .expect("a pending retry should survive a separate catalog addition");
 
-    assert_ne!(first.request_id, second.request_id);
+    assert_eq!(first.request_id, second.request_id);
+    assert_eq!(first.request_id, after_catalog_add.request_id);
     let requests = harness.media_requests.requests.lock().await;
-    assert_eq!(requests.len(), 2);
-    assert!(requests.iter().all(|request| request.requesters.len() == 1));
-    let request_ids = requests
-        .iter()
-        .map(|request| request.id.clone())
-        .collect::<HashSet<_>>();
-    assert_eq!(request_ids.len(), 2);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].requesters.len(), 1);
     drop(requests);
 
     let events = harness.domain_events.events.lock().await;
-    assert_eq!(events.len(), 2);
-    assert!(
-        events
-            .iter()
-            .all(|event| matches!(event.payload, DomainEventPayload::MediaRequestSubmitted(_)))
-    );
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0].payload,
+        DomainEventPayload::MediaRequestSubmitted(_)
+    ));
 }
 
 #[tokio::test]
@@ -1641,6 +1651,11 @@ async fn requester_can_update_pending_request_preferences() {
 async fn requester_can_cancel_pending_request_without_resolving_overlapping_requests() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let second_user = library_permission_user(
+        "cancel-other-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
     let input = media_request_input(library_id, 9034);
 
     harness
@@ -1650,9 +1665,9 @@ async fn requester_can_cancel_pending_request_without_resolving_overlapping_requ
         .expect("first request should succeed");
     harness
         .app
-        .submit_media_request(&harness.user, input)
+        .submit_media_request(&second_user, input)
         .await
-        .expect("duplicate request should succeed");
+        .expect("another requester's request should succeed");
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
 
     let canceled = harness
@@ -1969,6 +1984,11 @@ async fn approval_waits_for_destructive_title_ownership() {
 async fn approve_media_request_creates_title_and_resolves_overlapping_pending_requests() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let second_user = library_permission_user(
+        "approve-other-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
     let input = media_request_input(library_id.clone(), 9022);
 
     harness
@@ -1978,9 +1998,9 @@ async fn approve_media_request_creates_title_and_resolves_overlapping_pending_re
         .expect("first request should succeed");
     harness
         .app
-        .submit_media_request(&harness.user, input)
+        .submit_media_request(&second_user, input)
         .await
-        .expect("duplicate request should succeed");
+        .expect("another requester's request should succeed");
 
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
     let outcome = harness
@@ -2188,6 +2208,11 @@ async fn approve_series_media_request_can_override_requested_monitor_type() {
 async fn dismiss_media_request_resolves_overlapping_pending_requests_without_title() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let second_user = library_permission_user(
+        "dismiss-other-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
     let input = media_request_input(library_id, 9023);
 
     harness
@@ -2197,9 +2222,9 @@ async fn dismiss_media_request_resolves_overlapping_pending_requests_without_tit
         .expect("first request should succeed");
     harness
         .app
-        .submit_media_request(&harness.user, input)
+        .submit_media_request(&second_user, input)
         .await
-        .expect("duplicate request should succeed");
+        .expect("another requester's request should succeed");
 
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
     let mut notification_wakes = harness
@@ -2240,6 +2265,11 @@ async fn dismiss_media_request_resolves_overlapping_pending_requests_without_tit
 async fn pending_media_request_counts_deduplicate_duplicate_identity_requests() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let second_user = library_permission_user(
+        "count-other-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
     let input = media_request_input(library_id, 9024);
 
     harness
@@ -2249,9 +2279,9 @@ async fn pending_media_request_counts_deduplicate_duplicate_identity_requests() 
         .expect("first request should succeed");
     harness
         .app
-        .submit_media_request(&harness.user, input)
+        .submit_media_request(&second_user, input)
         .await
-        .expect("duplicate request should succeed");
+        .expect("another requester's request should succeed");
 
     let counts = harness
         .app
@@ -2365,6 +2395,41 @@ async fn submit_advanced_series_request_persists_the_monitor_selection() {
     assert_eq!(selection.seasons, vec![1, 2]);
     assert_eq!(selection.series_movies.len(), 1);
     assert_eq!(selection.series_movies[0].name, "Harbor Movie");
+}
+
+#[tokio::test]
+async fn submit_advanced_series_request_reuses_only_the_same_scope() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id, 9065);
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("advanced".to_string());
+    input.requested_monitor_selection = Some(advanced_monitor_selection());
+
+    let first = harness
+        .app
+        .submit_media_request(&harness.user, input.clone())
+        .await
+        .unwrap();
+    let selection = input.requested_monitor_selection.as_mut().unwrap();
+    selection.seasons = vec![1, 2, 1];
+    selection.series_movies[0].name = "Renamed Harbor Movie".into();
+    let retry = harness
+        .app
+        .submit_media_request(&harness.user, input.clone())
+        .await
+        .unwrap();
+    input.requested_monitor_selection.as_mut().unwrap().seasons = vec![3];
+    let different = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .unwrap();
+
+    assert_eq!(first.request_id, retry.request_id);
+    assert_ne!(first.request_id, different.request_id);
+    assert_eq!(harness.media_requests.requests.lock().await.len(), 2);
+    assert_eq!(harness.domain_events.events.lock().await.len(), 2);
 }
 
 #[tokio::test]

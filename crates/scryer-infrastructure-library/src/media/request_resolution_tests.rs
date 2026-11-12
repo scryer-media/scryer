@@ -25,7 +25,7 @@ fn approval(request: &MediaRequest) -> MediaRequestResolution {
             actor_user_id: None,
             actor_display_name: "System".into(),
             title_id: None,
-            facet: Some(MediaFacet::Movie),
+            facet: Some(request.facet.clone()),
             correlation_id: None,
             causation_id: None,
             schema_version: 1,

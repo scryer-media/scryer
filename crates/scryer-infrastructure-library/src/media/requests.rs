@@ -69,6 +69,14 @@ impl MediaRequestRepository for MediaRequestStore {
             let requester = requester.clone();
             let submitted_event = submitted_event.clone();
             Box::pin(async move {
+                if request.origin == MediaRequestOrigin::Manual
+                    && let Some(pending) = find_pending_manual_retry_tx(tx, &request).await?
+                {
+                    return Ok(MediaRequestSubmissionResult {
+                        request: pending,
+                        event: None,
+                    });
+                }
                 let now = Utc::now();
                 insert_media_request_tx(tx, &request, now).await?;
                 insert_media_request_external_ids_tx(
@@ -97,7 +105,10 @@ impl MediaRequestRepository for MediaRequestStore {
                             format!("media request {}", request.id),
                         )
                     })?;
-                Ok(MediaRequestSubmissionResult { request, event })
+                Ok(MediaRequestSubmissionResult {
+                    request,
+                    event: Some(event),
+                })
             })
         })
         .await
@@ -723,6 +734,45 @@ const REQUEST_COLUMNS: &str = "id, library_id, facet, status, identity_fingerpri
         policy_tags_json, metadata_snapshot_json, origin_kind, origin_subscription_id,
         created_by_user_id, created_at, updated_at";
 
+/// The SQLite writer gate covers this transaction. Postgres uses a transaction
+/// lock so separate app processes cannot both observe an empty pending set.
+async fn find_pending_manual_retry_tx(
+    tx: &mut SqlTx<'_>,
+    request: &NewMediaRequest,
+) -> AppResult<Option<MediaRequest>> {
+    const MEDIA_REQUEST_SUBMIT_LOCK_KEY: i64 = 0x6d72_6571_7375_626d;
+    if let SqlTx::Postgres(_) = tx {
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            "SELECT pg_advisory_xact_lock({})",
+            &[SqlArg::I64(MEDIA_REQUEST_SUBMIT_LOCK_KEY)],
+        )
+        .await?;
+    }
+    let rows = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        "SELECT id FROM media_requests
+          WHERE status = 'pending' AND origin_kind = 'manual'
+            AND created_by_user_id = {} AND library_id = {} AND facet = {}
+          ORDER BY created_at ASC, id ASC",
+        &[
+            SqlArg::Text(request.created_by_user_id.clone()),
+            SqlArg::Text(request.library_id.clone()),
+            SqlArg::Text(request.facet.as_str().to_string()),
+        ],
+    )
+    .await?;
+    for row in rows {
+        let id = row.text("id")?;
+        if let Some(pending) = load_media_request_tx(tx, &id).await?
+            && request.matches_pending_manual_retry(&pending)
+        {
+            return Ok(Some(pending));
+        }
+    }
+    Ok(None)
+}
+
 async fn insert_media_request_tx(
     tx: &mut SqlTx<'_>,
     request: &NewMediaRequest,
@@ -1022,7 +1072,15 @@ async fn matching_approval_request_ids(
         let id = row.text("id")?;
         if id == primary_id {
             primary_pending = true;
-        } else if row.opt_text("requested_quality_profile_id")?.as_deref() == approved_profile
+            continue;
+        }
+        let requested_profile = row.opt_text("requested_quality_profile_id")?;
+        let same_profile = match (requested_profile.as_deref(), approved_profile) {
+            (Some(requested), Some(approved)) => requested.eq_ignore_ascii_case(approved),
+            (None, None) => true,
+            _ => false,
+        };
+        if same_profile
             && row.opt_text("requested_monitor_type")?.as_deref() == approved_monitor_type
         {
             siblings.push(id);
@@ -1508,6 +1566,108 @@ mod tests {
         )
         .await
         .expect("seed the request row");
+    }
+
+    #[tokio::test]
+    async fn concurrent_manual_retries_store_only_one_pending_request_and_event() {
+        use scryer_domain::{
+            DomainEventActorKind, DomainEventPayload, DomainEventStream,
+            MediaRequestSubmittedEventData,
+        };
+
+        let store = test_store().await;
+        seed_owners(&store).await;
+        let user = User {
+            id: "requester-under-test".into(),
+            username: "Requester".into(),
+            password_hash: None,
+            password_change_required: false,
+            account_kind: Default::default(),
+            authorization: Default::default(),
+        };
+        let make_request = |id: &str| {
+            let request = NewMediaRequest {
+                id: id.into(),
+                library_id: "library-under-test".into(),
+                facet: MediaFacet::Movie,
+                identity_fingerprint: "pending-movie-identity".into(),
+                title: "Pending Movie".into(),
+                sort_title: None,
+                slug: None,
+                poster_url: None,
+                background_url: None,
+                year: None,
+                overview: None,
+                runtime_minutes: None,
+                language: None,
+                content_status: None,
+                rating_summary: Default::default(),
+                requested_quality_profile_id: None,
+                requested_quality_profile_name: None,
+                requested_monitor_type: None,
+                requested_monitor_selection: None,
+                requested_lease_days: None,
+                metadata_snapshot_json: "{}".into(),
+                external_ids: vec![ExternalId::new("tmdb", "1010")],
+                created_by_user_id: user.id.clone(),
+                origin: MediaRequestOrigin::Manual,
+            };
+            let event = NewDomainEvent {
+                event_id: scryer_domain::Id::new().0,
+                occurred_at: Utc::now(),
+                actor_kind: DomainEventActorKind::User,
+                actor_user_id: Some(user.id.clone()),
+                actor_display_name: user.username.clone(),
+                title_id: None,
+                facet: Some(MediaFacet::Movie),
+                correlation_id: None,
+                causation_id: None,
+                schema_version: 1,
+                stream: DomainEventStream::Global,
+                payload: DomainEventPayload::MediaRequestSubmitted(
+                    MediaRequestSubmittedEventData {
+                        request_id: request.id.clone(),
+                        library_id: request.library_id.clone(),
+                        facet: request.facet.clone(),
+                        title_name: request.title.clone(),
+                        external_ids: request.external_ids.clone(),
+                        poster_url: None,
+                        year: None,
+                        requested_quality_profile_id: None,
+                        requested_quality_profile_name: None,
+                        requested_monitor_type: None,
+                        requested_lease_days: None,
+                    },
+                ),
+            };
+            (request, event)
+        };
+        let (first_request, first_event) = make_request("retry-first");
+        let (second_request, second_event) = make_request("retry-second");
+        let (first, second) = tokio::join!(
+            store.submit(first_request, &user, first_event),
+            store.submit(second_request, &user, second_event),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_eq!(first.request.id, second.request.id);
+        assert_ne!(first.event.is_some(), second.event.is_some());
+        assert_eq!(
+            store
+                .list(MediaRequestQuery::default())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let events = SqlRuntime::fetch_all(
+            store.datastore.read_exec(),
+            "SELECT event_id FROM domain_events WHERE event_type = 'media_request_submitted'",
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(events.len(), 1);
     }
 
     async fn policy_tags_of(store: &MediaRequestStore, id: &str) -> Vec<String> {
