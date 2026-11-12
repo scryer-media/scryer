@@ -235,10 +235,13 @@ impl LocationOperationRepository for LocationOperationStore {
         let operation_id = operation_id.to_owned();
         let plan = plan.clone();
         let event = event.clone();
-        SqlRuntime::run_in_transaction(&self.datastore, "commit_title_folder_recovery", move |tx| {
+        let scope = crate::media::titles::store::TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let result = SqlRuntime::run_in_transaction(&self.datastore, "commit_title_folder_recovery", move |tx| {
             let operation_id = operation_id.clone();
             let plan = plan.clone();
             let event = event.clone();
+            let proof = proof.clone();
             Box::pin(async move {
                 // Acquire the write lock before taking the validation snapshot.
                 SqlRuntime::execute(SqlExec::Tx(tx),
@@ -296,7 +299,7 @@ impl LocationOperationRepository for LocationOperationStore {
                     Some(destination) => scryer_application::TitleFolderWrite::assign(&plan.title.id, destination),
                     None => scryer_application::TitleFolderWrite::clear(&plan.title.id),
                 };
-                crate::media::titles::store::assign_title_folders_tx(tx, &[folder_write]).await?;
+                crate::media::titles::store::assign_title_folders_tx(tx, &proof, &[folder_write]).await?;
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE titles SET root_folder_id = {}, updated_at = {} WHERE id = {}",
                     &[SqlArg::Text(root.id.clone()), SqlArg::Timestamp(Utc::now()), SqlArg::Text(plan.title.id.clone())]).await?;
@@ -311,7 +314,9 @@ impl LocationOperationRepository for LocationOperationStore {
                     &[SqlArg::Timestamp(Utc::now()), SqlArg::Text(operation_id)]).await?;
                 Ok(Some(stored))
             })
-        }).await
+        }).await;
+        drop(scope);
+        result
     }
 
     async fn save_file_resolution(

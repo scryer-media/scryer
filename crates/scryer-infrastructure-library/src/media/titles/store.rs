@@ -142,6 +142,101 @@ const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
 const STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT: &str = "/.scryer-upgrade-replacement-";
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
+/// Advances once after every transaction that wrote a title's folder, gave a
+/// new title a folder, or deleted a title. One counter for the process, shared
+/// by every store over the catalog: an advance caused by another datastore
+/// only makes a reader read again.
+static TITLE_FOLDER_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Marked scopes whose counter advance has not happened yet. A transaction
+/// can commit before its scope ends, so while one is open the counter alone
+/// cannot say the catalog is unchanged.
+static TITLE_FOLDER_WRITES_IN_FLIGHT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn advance_title_folder_writes() -> u64 {
+    TITLE_FOLDER_WRITES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
+/// The counter, or `None` while a marked scope is open. Every write that
+/// committed before this call has either advanced the value returned or is
+/// still in flight: a scope is counted in flight from its first mark, which
+/// precedes its statements, until after its advance.
+pub(crate) fn title_folder_write_generation() -> Option<u64> {
+    if TITLE_FOLDER_WRITES_IN_FLIGHT.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        return None;
+    }
+    Some(TITLE_FOLDER_WRITES.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+/// Brackets one transaction that may write a title's folder or the set of
+/// titles. Opened before the transaction and ended after it, so the counter
+/// advances only once the transaction is over, committed or not. Dropping it
+/// unended advances the counter too, so an early return or a cancelled call
+/// never skips the advance.
+pub(crate) struct TitleFolderWriteScope {
+    marked: Arc<std::sync::atomic::AtomicBool>,
+    ended: bool,
+}
+
+/// What a statement sequence that writes folders or titles requires, so it
+/// can only run inside a [`TitleFolderWriteScope`]. Marking it makes the
+/// scope advance the counter.
+#[derive(Clone)]
+pub(crate) struct TitleFolderWriteProof(Arc<std::sync::atomic::AtomicBool>);
+
+impl TitleFolderWriteProof {
+    pub(crate) fn mark(&self) {
+        if !self.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            TITLE_FOLDER_WRITES_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+impl TitleFolderWriteScope {
+    /// A scope that advances the counter only if a write marks it.
+    pub(crate) fn open() -> Self {
+        Self {
+            marked: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ended: false,
+        }
+    }
+
+    /// A scope that always advances the counter.
+    pub(crate) fn marked() -> Self {
+        let scope = Self::open();
+        scope.proof().mark();
+        scope
+    }
+
+    pub(crate) fn proof(&self) -> TitleFolderWriteProof {
+        TitleFolderWriteProof(self.marked.clone())
+    }
+
+    /// End the scope after its transaction: the value its own advance
+    /// produced, or `None` when nothing marked it.
+    pub(crate) fn end(mut self) -> Option<u64> {
+        self.finish()
+    }
+
+    fn finish(&mut self) -> Option<u64> {
+        if std::mem::replace(&mut self.ended, true)
+            || !self.marked.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return None;
+        }
+        let generation = advance_title_folder_writes();
+        TITLE_FOLDER_WRITES_IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        Some(generation)
+    }
+}
+
+impl Drop for TitleFolderWriteScope {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 #[derive(Clone, Copy)]
 enum TitleCatalogSqlDialect {
     Sqlite,
@@ -2602,19 +2697,23 @@ impl TitleRepository for TitleStore {
         let external_ids = normalized_external_ids(&title.external_ids);
         let library_id = title.library_id.clone();
         let fallback_selection = selection.clone();
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let fallback_proof = proof.clone();
         let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "create_title_preserving_existing",
             move |tx| {
                 let title = title.clone();
                 let selection = selection.clone();
+                let proof = proof.clone();
                 Box::pin(async move {
-                    create_or_get_title_preserving_options_tx(tx, &title, &selection).await
+                    create_or_get_title_preserving_options_tx(tx, &proof, &title, &selection).await
                 })
             },
         )
         .await;
-        match result {
+        let result = match result {
             Err(error) if is_title_external_id_conflict_error(&error) => {
                 match self
                     .find_existing_title_after_unique_conflict(&library_id, &external_ids)
@@ -2627,9 +2726,10 @@ impl TitleRepository for TitleStore {
                             move |tx| {
                                 let title = title.clone();
                                 let selection = fallback_selection.clone();
+                                let proof = fallback_proof.clone();
                                 Box::pin(async move {
                                     create_or_get_title_preserving_options_tx(
-                                        tx, &title, &selection,
+                                        tx, &proof, &title, &selection,
                                     )
                                     .await
                                 })
@@ -2641,7 +2741,9 @@ impl TitleRepository for TitleStore {
                 }
             }
             result => result,
-        }
+        };
+        drop(scope);
+        result
     }
 
     async fn create_or_get_existing(&self, title: Title) -> AppResult<CreateTitleOutcome> {
@@ -2658,16 +2760,22 @@ impl TitleRepository for TitleStore {
         let library_id = title.library_id.clone();
         let fallback_options_patch = options_patch.clone();
         let fallback_root_folder_id = title.root_folder_id.clone();
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
         let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "create_or_get_existing_title",
             move |tx| {
                 let title = title.clone();
                 let options_patch = options_patch.clone();
-                Box::pin(async move { create_or_get_title_tx(tx, &title, &options_patch).await })
+                let proof = proof.clone();
+                Box::pin(
+                    async move { create_or_get_title_tx(tx, &proof, &title, &options_patch).await },
+                )
             },
         )
         .await;
+        drop(scope);
 
         match result {
             Ok(outcome) => Ok(outcome),
@@ -2699,12 +2807,15 @@ impl TitleRepository for TitleStore {
         let external_ids = normalized_external_ids(&title.external_ids);
         let library_id = title.library_id.clone();
         let pending_import_id = pending_import_id.to_string();
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
         let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "create_or_get_existing_title_and_bind_pending_import",
             move |tx| {
                 let title = title.clone();
                 let pending_import_id = pending_import_id.clone();
+                let proof = proof.clone();
                 Box::pin(async move {
                     if let Some(existing) = find_existing_title_for_create_tx(tx, &title).await? {
                         return Ok(CreateTitleOutcome {
@@ -2713,7 +2824,7 @@ impl TitleRepository for TitleStore {
                         });
                     }
 
-                    create_title_tx(tx, &title).await?;
+                    create_title_tx(tx, &proof, &title).await?;
                     let title = load_title_tx_or_not_found(tx, &title.id, true).await?;
                     resolve_pending_import_for_created_title_tx(tx, &pending_import_id, &title)
                         .await?;
@@ -2725,6 +2836,7 @@ impl TitleRepository for TitleStore {
             },
         )
         .await;
+        drop(scope);
 
         match result {
             Ok(outcome) => Ok(outcome),
@@ -2745,15 +2857,20 @@ impl TitleRepository for TitleStore {
     }
 
     async fn create(&self, title: Title) -> AppResult<Title> {
-        SqlRuntime::run_in_transaction(&self.datastore, "create_title", move |tx| {
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let result = SqlRuntime::run_in_transaction(&self.datastore, "create_title", move |tx| {
             let title = title.clone();
+            let proof = proof.clone();
             Box::pin(async move {
-                create_title_tx(tx, &title).await?;
+                create_title_tx(tx, &proof, &title).await?;
                 let title = load_title_tx_or_not_found(tx, &title.id, true).await?;
                 Ok(title)
             })
         })
-        .await
+        .await;
+        drop(scope);
+        result
     }
 
     async fn list_titles_due_for_hydration(
@@ -3305,6 +3422,7 @@ impl TitleRepository for TitleStore {
     async fn delete(&self, id: &str) -> AppResult<()> {
         let cache_key = id.to_string();
         let id = id.to_string();
+        let scope = TitleFolderWriteScope::marked();
         let result = SqlRuntime::run_in_transaction(&self.datastore, "delete_title", move |tx| {
             let id = id.clone();
             Box::pin(async move {
@@ -3329,6 +3447,7 @@ impl TitleRepository for TitleStore {
             })
         })
         .await;
+        drop(scope);
         // `title_anime_numbering_bridges` cascades with the title row.
         self.invalidate_anime_numbering_bridge(&cache_key);
         result
@@ -3340,6 +3459,7 @@ impl TitleRepository for TitleStore {
         }
         let ids = ids.to_vec();
         let cache_keys = ids.clone();
+        let scope = TitleFolderWriteScope::marked();
         let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "delete_titles_with_records",
@@ -3418,6 +3538,7 @@ impl TitleRepository for TitleStore {
             },
         )
         .await;
+        drop(scope);
         // `title_anime_numbering_bridges` cascades with the title rows.
         for key in &cache_keys {
             self.invalidate_anime_numbering_bridge(key);
@@ -3426,15 +3547,46 @@ impl TitleRepository for TitleStore {
     }
 
     async fn assign_title_folders(&self, writes: &[TitleFolderWrite]) -> AppResult<()> {
+        self.assign_title_folders_with_generation(writes).await.0
+    }
+
+    async fn assign_title_folders_with_generation(
+        &self,
+        writes: &[TitleFolderWrite],
+    ) -> (AppResult<()>, Option<u64>) {
         if writes.is_empty() {
-            return Ok(());
+            return (Ok(()), None);
         }
         let writes = writes.to_vec();
-        SqlRuntime::run_in_transaction(&self.datastore, "assign_title_folders", move |tx| {
-            let writes = writes.clone();
-            Box::pin(async move { assign_title_folders_tx(tx, &writes).await })
-        })
-        .await
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let result =
+            SqlRuntime::run_in_transaction(&self.datastore, "assign_title_folders", move |tx| {
+                let writes = writes.clone();
+                let proof = proof.clone();
+                Box::pin(async move { assign_title_folders_tx(tx, &proof, &writes).await })
+            })
+            .await;
+        (result, scope.end())
+    }
+
+    fn title_folder_write_generation(&self) -> Option<u64> {
+        title_folder_write_generation()
+    }
+
+    async fn list_title_folder_owners(&self) -> AppResult<Vec<(String, String)>> {
+        // The order and the filter of `list_delete_preview_info` and its
+        // callers' empty-folder filter, with only the two columns used.
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, folder_path FROM titles \
+             WHERE folder_path IS NOT NULL AND folder_path <> '' ORDER BY id",
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.text("id")?, row.text("folder_path")?)))
+        .collect()
     }
 
     async fn check_title_folder_writes(&self, writes: &[TitleFolderWrite]) -> AppResult<()> {
@@ -6388,6 +6540,7 @@ async fn find_existing_title_for_create_tx(
 
 pub(crate) async fn create_or_get_title_preserving_options_tx(
     tx: &mut SqlTx<'_>,
+    proof: &TitleFolderWriteProof,
     title: &Title,
     selection: &MonitorSelection,
 ) -> AppResult<CreateTitleOutcome> {
@@ -6464,7 +6617,7 @@ pub(crate) async fn create_or_get_title_preserving_options_tx(
             reused_existing: true,
         });
     }
-    create_title_tx(tx, title).await?;
+    create_title_tx(tx, proof, title).await?;
     replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &title.id, Some(selection)).await?;
     Ok(CreateTitleOutcome {
         title: load_title_tx_or_not_found(tx, &title.id, true).await?,
@@ -6474,6 +6627,7 @@ pub(crate) async fn create_or_get_title_preserving_options_tx(
 
 pub(crate) async fn create_or_get_title_tx(
     tx: &mut SqlTx<'_>,
+    proof: &TitleFolderWriteProof,
     title: &Title,
     options_patch: &TitleOptionsPatch,
 ) -> AppResult<CreateTitleOutcome> {
@@ -6492,14 +6646,20 @@ pub(crate) async fn create_or_get_title_tx(
             reused_existing: true,
         });
     }
-    create_title_tx(tx, title).await?;
+    create_title_tx(tx, proof, title).await?;
     Ok(CreateTitleOutcome {
         title: load_title_tx_or_not_found(tx, &title.id, true).await?,
         reused_existing: false,
     })
 }
 
-async fn create_title_tx(tx: &mut SqlTx<'_>, title: &Title) -> AppResult<()> {
+/// A title created without a folder changes no title's folder, so only a
+/// title created with one marks `proof`.
+async fn create_title_tx(
+    tx: &mut SqlTx<'_>,
+    proof: &TitleFolderWriteProof,
+    title: &Title,
+) -> AppResult<()> {
     let library = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
         "SELECT id FROM libraries WHERE id = {} AND facet = {}",
@@ -6532,7 +6692,7 @@ async fn create_title_tx(tx: &mut SqlTx<'_>, title: &Title) -> AppResult<()> {
     let args = title_write_args(title, scheduled_hydration_attempt(title), 0);
     SqlRuntime::execute(SqlExec::Tx(tx), TITLE_INSERT_SQL, &args).await?;
     if let Some(folder) = folder {
-        assign_title_folders_tx(tx, &[TitleFolderWrite::assign(&title.id, folder)]).await?;
+        assign_title_folders_tx(tx, proof, &[TitleFolderWrite::assign(&title.id, folder)]).await?;
     }
     replace_title_search_projection_sql_tx(tx, title).await?;
     replace_title_external_ids_projection_sql_tx(tx, title).await?;
@@ -6581,11 +6741,13 @@ pub(crate) async fn lock_title_folder_writes_tx(
 /// halfway through.
 pub(crate) async fn assign_title_folders_tx(
     tx: &mut SqlTx<'_>,
+    proof: &TitleFolderWriteProof,
     writes: &[TitleFolderWrite],
 ) -> AppResult<()> {
     let Some(first) = writes.first() else {
         return Ok(());
     };
+    proof.mark();
     lock_title_folder_writes_tx(tx, &first.title_id).await?;
 
     let planned = read_title_folder_write_plan(&mut TitleFolderPlanSource::Tx(tx), writes).await?;

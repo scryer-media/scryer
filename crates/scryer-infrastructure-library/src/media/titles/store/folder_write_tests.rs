@@ -384,3 +384,181 @@ async fn two_claims_of_one_folder_leave_exactly_one_owner() {
             .unwrap();
     assert_eq!(owners, 1);
 }
+
+/// Asserts that each step advanced the store's folder-write counter, or left
+/// it alone.
+struct CounterWatch(u64);
+
+impl CounterWatch {
+    fn new(store: &TitleStore) -> Self {
+        Self(
+            store
+                .title_folder_write_generation()
+                .expect("the store keeps a counter while no write is open"),
+        )
+    }
+
+    fn advanced(&mut self, store: &TitleStore, step: &str) {
+        let now = store.title_folder_write_generation().expect(step);
+        assert!(now > self.0, "{step} must advance the counter");
+        self.0 = now;
+    }
+
+    fn unchanged(&self, store: &TitleStore, step: &str) {
+        assert_eq!(
+            store.title_folder_write_generation(),
+            Some(self.0),
+            "{step}"
+        );
+    }
+}
+
+fn titled(id: &str, folder: Option<&str>) -> scryer_domain::Title {
+    let mut title = super::catalog_order_tests::fixture_title(id, id, Some(2001));
+    title.root_folder_id = "root-fixture".into();
+    title.folder_path = folder.map(str::to_owned);
+    title
+}
+
+#[tokio::test]
+async fn every_folder_and_title_set_write_advances_the_counter() {
+    let (store, _pool) = store_with_titles(&["emberfall", "cinderwake", "ashgrove"]).await;
+    let mut watch = CounterWatch::new(&store);
+
+    store
+        .assign_title_folders(&[TitleFolderWrite::assign(
+            "emberfall",
+            "/srv/fixture-root/Emberfall",
+        )])
+        .await
+        .unwrap();
+    watch.advanced(&store, "assign");
+    let (result, generation) = store
+        .assign_title_folders_with_generation(&[TitleFolderWrite::assign(
+            "cinderwake",
+            "/srv/fixture-root/Cinderwake",
+        )])
+        .await;
+    result.unwrap();
+    watch.advanced(&store, "assign with generation");
+    assert_eq!(
+        generation,
+        Some(watch.0),
+        "the call reports its own advance"
+    );
+    store
+        .set_folder_path("ashgrove", "/srv/fixture-root/Ashgrove")
+        .await
+        .unwrap();
+    watch.advanced(&store, "set folder");
+    store.clear_folder_path("ashgrove").await.unwrap();
+    watch.advanced(&store, "clear folder");
+    store
+        .assign_title_folders(&[TitleFolderWrite::assign(
+            "ashgrove",
+            "/srv/fixture-root/Emberfall",
+        )])
+        .await
+        .unwrap_err();
+    watch.advanced(&store, "a refused write still ends its scope");
+    store.assign_title_folders(&[]).await.unwrap();
+    watch.unchanged(&store, "an empty write writes nothing");
+
+    store.create(titled("duskmere", None)).await.unwrap();
+    watch.unchanged(&store, "a title created without a folder owns nothing");
+    store
+        .create(titled("gloamridge", Some("/srv/fixture-root/Gloamridge")))
+        .await
+        .unwrap();
+    watch.advanced(&store, "create with a folder");
+    store
+        .create_or_get_existing(titled("pinecrest", Some("/srv/fixture-root/Pinecrest")))
+        .await
+        .unwrap();
+    watch.advanced(&store, "create or get existing");
+    store
+        .create_or_get_existing_with_options_patch(
+            titled("thornvale", Some("/srv/fixture-root/Thornvale")),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    watch.advanced(&store, "create or get existing with options");
+    store
+        .create_or_get_existing_preserving_options(
+            titled("hollowmere", Some("/srv/fixture-root/Hollowmere")),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    watch.advanced(&store, "create or get existing preserving options");
+    // No pending import has that id, so the transaction rolls back after the
+    // title was inserted with its folder; the scope still advances.
+    store
+        .create_or_get_existing_and_bind_pending_import(
+            titled("briarwick", Some("/srv/fixture-root/Briarwick")),
+            "synthetic-missing-pending-import",
+        )
+        .await
+        .unwrap_err();
+    watch.advanced(&store, "create and bind pending import");
+
+    store.delete("emberfall").await.unwrap();
+    watch.advanced(&store, "delete");
+    assert!(
+        store
+            .delete_titles_with_records(&["cinderwake".to_string()])
+            .await
+            .unwrap()
+    );
+    watch.advanced(&store, "delete titles with records");
+}
+
+#[tokio::test]
+async fn an_open_folder_write_hides_the_counter_until_it_ends() {
+    let (store, _pool) = store_with_titles(&[]).await;
+    let before = store.title_folder_write_generation().unwrap();
+    let scope = super::TitleFolderWriteScope::open();
+    assert_eq!(store.title_folder_write_generation(), Some(before));
+    scope.proof().mark();
+    assert_eq!(
+        store.title_folder_write_generation(),
+        None,
+        "a marked write may commit before it advances"
+    );
+    assert_eq!(scope.end(), Some(before + 1));
+    assert_eq!(store.title_folder_write_generation(), Some(before + 1));
+    // Dropped without ending, as on an early return or a cancelled call.
+    let scope = super::TitleFolderWriteScope::marked();
+    assert_eq!(store.title_folder_write_generation(), None);
+    drop(scope);
+    assert_eq!(store.title_folder_write_generation(), Some(before + 2));
+    drop(super::TitleFolderWriteScope::open());
+    assert_eq!(store.title_folder_write_generation(), Some(before + 2));
+}
+
+#[tokio::test]
+async fn folder_owner_read_matches_the_delete_preview_read() {
+    let (store, _pool) = store_with_titles(&["emberfall", "cinderwake", "ashgrove"]).await;
+    store
+        .assign_title_folders(&[
+            TitleFolderWrite::assign("emberfall", "/srv/fixture-root/Emberfall"),
+            TitleFolderWrite::assign("ashgrove", "/srv/fixture-root/Ashgrove"),
+        ])
+        .await
+        .unwrap();
+    let expected: Vec<(String, String)> = store
+        .list_delete_preview_info()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|owner| {
+            owner
+                .folder_path
+                .filter(|path| !path.is_empty())
+                .map(|path| (owner.title_id, path))
+        })
+        .collect();
+    assert_eq!(expected.len(), 2);
+    assert_eq!(store.list_title_folder_owners().await.unwrap(), expected);
+}
