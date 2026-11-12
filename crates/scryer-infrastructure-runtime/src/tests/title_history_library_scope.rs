@@ -187,7 +187,9 @@ async fn library_scope_selects_the_rows_of_its_listed_titles() {
     let movie_rows = domain_events
         .count_title_history_page_events(
             None,
-            Some(TitleHistoryTitleScope::Libraries(&[movie.clone()])),
+            Some(TitleHistoryTitleScope::Libraries(std::slice::from_ref(
+                &movie,
+            ))),
             false,
             None,
         )
