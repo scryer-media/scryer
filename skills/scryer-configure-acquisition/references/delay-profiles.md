@@ -1,7 +1,7 @@
 # Delay profiles
 
-Permission: **Manage catalog settings**. UI: **Settings > Delay profiles**
-(`/settings/delay-profiles`).
+Needs the **Manage catalog settings** permission. UI: **Settings > Delay
+profiles** (`/settings/delay-profiles`).
 
 ```sh
 sh "$G" "$S"/operations/DelayProfiles.graphql > delay.json

@@ -64,7 +64,8 @@ scan_builtin bearer_token '[Bb]earer [A-Za-z0-9._~+/=-]{12,}'
 scan_builtin email '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
 scan_builtin ipv4 '(^|[^0-9.])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)'
 
-echo "scanned $(printf '%s\n' "$list" | wc -l | tr -d ' ') files, $n terms"
+n_files=$(printf '%s\n' "$list" | wc -l | tr -d ' ')
+echo "scanned $n_files files, $n terms"
 if [ "$found" -eq 0 ]; then
   echo "no matches"
   exit 0

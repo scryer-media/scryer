@@ -1,8 +1,8 @@
 # Quality profiles
 
-Permission: **Manage catalog settings**. UI: **Settings > Quality profiles**
-(`/settings/quality-profiles`); per-scope selection is under each media
-area's settings, **Quality**.
+Needs the **Manage catalog settings** permission. UI: **Settings >
+Quality profiles** (`/settings/quality-profiles`); per-scope selection is
+under each media area's settings, **Quality**.
 
 ## Read
 

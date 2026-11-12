@@ -50,7 +50,7 @@ Write it to a file such as `rule.rego`. Start from the closest example:
 Regex follows Rust syntax: no lookaround and no backreferences
 (`references/regex.md`).
 
-### 3. Validate (read-only, no confirmation needed)
+### 3. Validate (read-only, runs directly)
 
 ```sh
 jq -n --rawfile s rule.rego '{input: {regoSource: $s}}' > v-vars.json

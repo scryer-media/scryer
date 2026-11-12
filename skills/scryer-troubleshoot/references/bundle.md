@@ -5,7 +5,7 @@
 It needs the **Manage system settings** permission. Scryer builds it in
 memory and writes nothing to disk. The compressed size cap is 8 MiB.
 
-Refusals are JSON `{"error": "<sentence>", "reason": "<code>"}`:
+Refusals are a JSON object with an `error` sentence and a `reason` code:
 
 | HTTP | reason | meaning |
 |---|---|---|

@@ -1,9 +1,10 @@
 # Indexers
 
-Permission: **Manage system settings** for indexer config and tests;
-**Manage catalog settings** for routing. UI: **Integrations > Indexers**
-(`/integrations/indexers`); per-scope routing is under each media area's
-settings, **Routing** (for example `/movies/settings/routing`).
+Needs the **Manage system settings** permission for indexer config and
+tests, and the **Manage catalog settings** permission for routing. UI:
+**Integrations > Indexers** (`/integrations/indexers`); per-scope routing
+is under each media area's settings, **Routing** (for example
+`/movies/settings/routing`).
 
 ## Read
 
