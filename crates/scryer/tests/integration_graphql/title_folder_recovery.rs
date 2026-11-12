@@ -73,7 +73,7 @@ async fn title_folder_recovery_preserves_seventeen_originals_and_catalog_identit
         true,
     )
     .await;
-    set_title_folder_path(&ctx, &title.id, &ancestor).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, &ancestor).await;
     let healthy = create_catalog_title(
         &ctx,
         "Neighbor Series",
@@ -265,7 +265,7 @@ async fn title_folder_recovery_missing_sources_stays_unresolved() {
         true,
     )
     .await;
-    set_title_folder_path(&ctx, &title.id, &ancestor).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, &ancestor).await;
     let source = ancestor.join("missing.mkv").to_string_lossy().into_owned();
     ctx.media_files
         .insert_media_file(&InsertMediaFileInput {
@@ -321,7 +321,7 @@ async fn title_folder_recovery_rolls_back_all_paths_and_resumes_verified_copies(
         true,
     )
     .await;
-    set_title_folder_path(&ctx, &title.id, &ancestor).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, &ancestor).await;
     let source = ancestor.join("film.mkv");
     std::fs::write(&source, b"synthetic movie").unwrap();
     ctx.media_files
@@ -457,7 +457,7 @@ async fn title_folder_recovery_adopts_unique_external_id_folders_without_recreat
             false,
         )
         .await;
-        set_title_folder_path(&ctx, &title.id, &ancestor).await;
+        seed_unchecked_title_folder_path(&ctx, &title.id, &ancestor).await;
         ctx.app.enroll_title_folder_recovery().await.unwrap();
         let operation = await_recovery(&ctx, &title.id).await;
         assert!(
@@ -501,7 +501,7 @@ async fn title_folder_recovery_duplicate_external_id_folders_are_unresolved() {
         true,
     )
     .await;
-    set_title_folder_path(&ctx, &title.id, &ancestor).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, &ancestor).await;
     ctx.app.enroll_title_folder_recovery().await.unwrap();
     let operation = await_recovery(&ctx, &title.id).await;
     assert_eq!(
@@ -637,7 +637,7 @@ async fn title_folder_recovery_uses_tracked_folder_in_another_root_of_the_same_l
         true,
     )
     .await;
-    set_title_folder_path(&ctx, &title.id, &ancestor).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, &ancestor).await;
     let path = folder.join("episode.mkv");
     std::fs::write(&path, b"media").unwrap();
     ctx.media_files
@@ -699,7 +699,7 @@ async fn title_folder_recovery_refuses_foreign_generated_destination() {
             true,
         )
         .await;
-        set_title_folder_path(&ctx, &title.id, &ancestor).await;
+        seed_unchecked_title_folder_path(&ctx, &title.id, &ancestor).await;
         let source = ancestor.join("film.mkv");
         std::fs::write(&source, b"media").unwrap();
         ctx.media_files
@@ -768,7 +768,7 @@ async fn title_folder_recovery_never_adopts_exact_id_recycle_storage() {
         true,
     )
     .await;
-    set_title_folder_path(&ctx, &title.id, &ancestor).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, &ancestor).await;
     ctx.app.enroll_title_folder_recovery().await.unwrap();
     let operation = await_recovery(&ctx, &title.id).await;
     assert_eq!(operation.state, LocationOperationState::Failed);

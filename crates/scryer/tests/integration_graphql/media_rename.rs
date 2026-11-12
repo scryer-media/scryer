@@ -3037,7 +3037,7 @@ async fn assert_root_level_record_does_not_block_a_rename(record_at_parent: bool
     } else {
         movie_root.as_path()
     };
-    set_title_folder_path(&ctx, &idle.id, invalid_folder).await;
+    seed_unchecked_title_folder_path(&ctx, &idle.id, invalid_folder).await;
     let (moving, source) = seed_movie_in_folder(&ctx, &movie_root, "Birch Quay", "94119").await;
 
     let preview = ctx
@@ -3517,7 +3517,7 @@ async fn an_all_noop_rename_repairs_a_title_recorded_at_the_library_root() {
         "94131",
     )
     .await;
-    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
 
     let preview = ctx
         .app
@@ -3565,7 +3565,7 @@ async fn an_all_noop_rename_leaves_a_root_record_when_the_media_is_split() {
         })
         .await
         .expect("insert stray media file");
-    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
 
     let preview = ctx
         .app
@@ -3651,7 +3651,7 @@ async fn an_all_noop_rename_leaves_a_root_record_when_an_extra_copy_is_elsewhere
         })
         .await
         .expect("insert extra copy");
-    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
     let rows_before = ctx
         .media_files
         .list_media_files_for_title(&title.id)
@@ -3731,7 +3731,7 @@ async fn an_all_noop_rename_leaves_a_root_record_when_a_collection_is_elsewhere(
         })
         .await
         .expect("create collection elsewhere");
-    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
 
     let preview = ctx
         .app
