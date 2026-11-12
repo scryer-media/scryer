@@ -84,6 +84,7 @@ async fn title_slug_lookup_short_route_uses_default_library() {
                 path: "/Volumes/Media/Movies".to_string(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("default movie library should update");
@@ -126,6 +127,36 @@ async fn title_slug_lookup_short_route_uses_default_library() {
 }
 
 #[tokio::test]
+async fn add_title_refuses_a_disabled_target_library() {
+    let (app, user) = bootstrap();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    app.services
+        .catalog
+        .libraries
+        .set_enabled(&library_id, false)
+        .await
+        .expect("disable target library");
+
+    let error = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Disabled target".to_string(),
+                facet: MediaFacet::Movie,
+                ..Default::default()
+            },
+            library_id,
+        )
+        .await
+        .expect_err("disabled libraries cannot receive new titles");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::DISABLED)
+    );
+}
+
+#[tokio::test]
 async fn create_library_rejects_root_used_by_other_facet_library() {
     let (app, user) = bootstrap();
     let series_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
@@ -150,6 +181,7 @@ async fn create_library_rejects_root_used_by_other_facet_library() {
                 path: "/Volumes/Media/TV".to_string(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("series library roots should update");
@@ -214,6 +246,7 @@ async fn update_library_rejects_root_used_by_other_facet_library() {
                 path: "/Volumes/Media/TV".to_string(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("series library roots should update");
@@ -2712,6 +2745,7 @@ async fn folder_ownership_two_movie_libraries(roots: &[&str]) -> (AppUseCase, Ti
                     is_default: index == 0,
                 })
                 .collect(),
+            None,
         )
         .await
         .expect("movie library roots should update");
@@ -3764,4 +3798,107 @@ async fn update_library_cancels_the_library_scan_only_when_a_root_is_removed() {
     assert_eq!(updated.removed_title_count, 2);
     assert!(tracker.get_session(session_id).await.is_none());
     assert!(token.is_cancelled());
+}
+
+#[tokio::test]
+async fn disabling_and_reenabling_library_preserves_roots_settings_titles_and_files() {
+    let fixture = RootRemovalFixture::new().await;
+    fixture
+        .app
+        .update_library_settings(
+            &fixture.user,
+            &fixture.library_id,
+            LibrarySettingsOverrideDraft {
+                search_languages: Some(vec!["swe".to_string()]),
+                ..empty_library_settings_override()
+            },
+        )
+        .await
+        .expect("configure library settings");
+    let settings_before = fixture
+        .app
+        .get_library_settings(&fixture.user, &fixture.library_id)
+        .await
+        .expect("read configured library settings")
+        .search_languages;
+    let roots_before = fixture
+        .app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&fixture.library_id)
+        .await
+        .expect("load library")
+        .expect("library exists")
+        .roots
+        .into_iter()
+        .map(|root| (root.id, root.path, root.is_default))
+        .collect::<Vec<_>>();
+    let title_snapshots = fixture
+        .titles_on_a
+        .iter()
+        .chain(std::iter::once(&fixture.title_on_b))
+        .map(|title| {
+            (
+                title.id.clone(),
+                title.library_id.clone(),
+                title.root_folder_id.clone(),
+                title.folder_path.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let disk_before = root_removal_disk_snapshot(fixture.temp.path());
+
+    for enabled in [false, true] {
+        let updated = fixture
+            .app
+            .update_library_with_enabled_outcome(
+                &fixture.user,
+                &fixture.library_id,
+                crate::LibraryUpdateDraft {
+                    enabled: Some(enabled),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("toggle library enabled state");
+        assert_eq!(updated.library.enabled, enabled);
+        assert_eq!(
+            updated
+                .library
+                .roots
+                .iter()
+                .map(|root| (root.id.clone(), root.path.clone(), root.is_default))
+                .collect::<Vec<_>>(),
+            roots_before
+        );
+        assert_eq!(
+            fixture
+                .app
+                .get_library_settings(&fixture.user, &fixture.library_id)
+                .await
+                .expect("read library settings after toggle")
+                .search_languages,
+            settings_before
+        );
+        for (title_id, library_id, root_folder_id, folder_path) in &title_snapshots {
+            let title = fixture
+                .app
+                .services
+                .catalog
+                .titles
+                .get_by_id(title_id)
+                .await
+                .expect("load title after toggle")
+                .expect("toggle must retain catalog titles");
+            assert_eq!(title.library_id.as_str(), library_id.as_str());
+            assert_eq!(title.root_folder_id.as_str(), root_folder_id.as_str());
+            assert_eq!(title.folder_path.as_deref(), folder_path.as_deref());
+        }
+        assert_eq!(
+            root_removal_disk_snapshot(fixture.temp.path()),
+            disk_before,
+            "toggling a library must not alter files on disk"
+        );
+    }
 }

@@ -356,7 +356,7 @@ impl CommandHost {
             }
             PluginHostRequest::Http(request) => PluginHostResponse::Http(
                 self.http_request(request)
-                    .map_or_else(|error| service_error(error.to_string()), PluginResult::Ok),
+                    .map_or_else(http_service_error, PluginResult::Ok),
             ),
             PluginHostRequest::ReservedHttpBatch(_) => {
                 PluginHostResponse::ReservedHttpBatch(unsupported())
@@ -611,6 +611,21 @@ fn service_error<T>(message: String) -> PluginResult<T> {
         retry_after_seconds: Some(0),
         details: None,
     })
+}
+
+fn http_service_error<T>(error: HostHttpError) -> PluginResult<T> {
+    if error.kind == HostHttpErrorKind::QuotaRefused
+        && let Some(reason) = error.reason
+    {
+        return PluginResult::Err(PluginError {
+            code: PluginErrorCode::from(reason),
+            public_message: error.to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        });
+    }
+    service_error(error.to_string())
 }
 
 /// A typed failure of the host-owned archive-extraction service.
@@ -969,6 +984,24 @@ fn unsupported_response(request: PluginHostRequest) -> PluginHostResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocking_http_quota_reason_survives_the_plugin_host_abi() {
+        let reason =
+            scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED;
+        let response = http_service_error::<()>(HostHttpError::monthly_quota(
+            AppError::validation_refused(reason, "monthly request limit reached"),
+        ));
+        let PluginResult::Err(error) = response else {
+            panic!("a quota refusal must remain an error response");
+        };
+
+        assert_eq!(error.code.as_str(), reason);
+        assert_eq!(
+            error.public_message,
+            "validation: monthly request limit reached"
+        );
+    }
 
     #[test]
     fn archive_host_errors_redact_password_bearing_names() {

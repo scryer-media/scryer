@@ -41,6 +41,7 @@ import { FACET_REGISTRY, facetById } from "@/lib/facets/registry";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 import { dispatchCatalogTitlesRefresh } from "@/lib/events/catalog-titles";
 import { dispatchNavigationBadgesRefresh } from "@/lib/events/navigation-badges";
+import { selectableLibraries } from "@/lib/utils/library-filter";
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
   authorizationCacheSignature,
@@ -349,6 +350,7 @@ export interface UseGlobalSearchResult {
   resetGlobalSearch: () => void;
   catalogQualityProfileOptions: CatalogQualityProfileOption[];
   catalogConfigLoading: boolean;
+  refreshCatalogConfig: () => Promise<void>;
   ensureCatalogConfigReady: (facet: Facet) => Promise<void>;
   isCatalogConfigReady: (facet: Facet) => boolean;
   resolveDefaultQualityProfileIdForFacet: (facet: Facet) => string;
@@ -370,6 +372,7 @@ export interface UseGlobalSearchResult {
   ) => boolean;
   rootFoldersByFacet: Record<Facet, RootFolderOption[]>;
   librariesByFacet: Record<Facet, LibraryRecord[]>;
+  viewableLibrariesByFacet: Record<Facet, LibraryRecord[]>;
   requestableLibrariesByFacet: Record<Facet, LibraryRecord[]>;
   queueFacet: Facet;
   setQueueFacet: (value: Facet) => void;
@@ -461,7 +464,7 @@ function mediaRequestExternalRatingInput(
 function librariesByFacetFromList(
   libraries: LibraryRecord[],
 ): Record<Facet, LibraryRecord[]> {
-  return libraries.reduce(
+  return selectableLibraries(libraries).reduce(
     (acc: Record<Facet, LibraryRecord[]>, library: LibraryRecord) => {
       acc[library.facet]?.push(library);
       return acc;
@@ -511,6 +514,7 @@ function sameLibrariesByFacet(
           entry.name === candidate.name &&
           entry.slug === candidate.slug &&
           entry.isDefault === candidate.isDefault &&
+          entry.enabled === candidate.enabled &&
           (entry.qualityProfileId ?? null) ===
             (candidate.qualityProfileId ?? null) &&
           (entry.requestQualityProfileDefaultId ?? null) ===
@@ -614,6 +618,9 @@ export function useGlobalSearch({
   const [librariesByFacet, setLibrariesByFacet] = useState<
     Record<Facet, LibraryRecord[]>
   >(() => ({ MOVIE: [], SERIES: [], ANIME: [] }));
+  const [viewableLibrariesByFacet, setViewableLibrariesByFacet] = useState<
+    Record<Facet, LibraryRecord[]>
+  >(() => ({ MOVIE: [], SERIES: [], ANIME: [] }));
   const [requestableLibrariesByFacet, setRequestableLibrariesByFacet] =
     useState<Record<Facet, LibraryRecord[]>>(() => ({
       MOVIE: [],
@@ -628,6 +635,9 @@ export function useGlobalSearch({
     catalogConfigAuthorizationSignature === catalogAuthorizationSignature;
   const visibleLibrariesByFacet = catalogConfigMatchesAuthorization
     ? librariesByFacet
+    : EMPTY_LIBRARIES_BY_FACET;
+  const visibleViewableLibrariesByFacet = catalogConfigMatchesAuthorization
+    ? viewableLibrariesByFacet
     : EMPTY_LIBRARIES_BY_FACET;
   const visibleRequestableLibrariesByFacet = catalogConfigMatchesAuthorization
     ? requestableLibrariesByFacet
@@ -834,6 +844,9 @@ export function useGlobalSearch({
         const nextLibrariesByFacet = librariesByFacetFromList(
           data.manageableLibraries ?? [],
         );
+        const nextViewableLibrariesByFacet = librariesByFacetFromList(
+          data.viewableLibraries ?? [],
+        );
         const nextRequestableLibrariesByFacet = librariesByFacetFromList(
           data.requestableLibraries ?? [],
         );
@@ -841,6 +854,11 @@ export function useGlobalSearch({
           return sameLibrariesByFacet(previous, nextLibrariesByFacet)
             ? previous
             : nextLibrariesByFacet;
+        });
+        setViewableLibrariesByFacet((previous) => {
+          return sameLibrariesByFacet(previous, nextViewableLibrariesByFacet)
+            ? previous
+            : nextViewableLibrariesByFacet;
         });
         setRequestableLibrariesByFacet((previous) => {
           return sameLibrariesByFacet(previous, nextRequestableLibrariesByFacet)
@@ -863,8 +881,24 @@ export function useGlobalSearch({
             .toPromise();
           if (error) throw error;
           if (!isCurrentRefresh()) return;
+          const nextLibrariesByFacet = librariesByFacetFromList(
+            data?.manageableLibraries ?? [],
+          );
           const nextRequestableLibrariesByFacet = librariesByFacetFromList(
             data?.requestableLibraries ?? [],
+          );
+          const nextViewableLibrariesByFacet = librariesByFacetFromList(
+            data?.viewableLibraries ?? [],
+          );
+          setViewableLibrariesByFacet((previous) => {
+            return sameLibrariesByFacet(previous, nextViewableLibrariesByFacet)
+              ? previous
+              : nextViewableLibrariesByFacet;
+          });
+          setLibrariesByFacet((previous) =>
+            sameLibrariesByFacet(previous, nextLibrariesByFacet)
+              ? previous
+              : nextLibrariesByFacet,
           );
           setRequestableLibrariesByFacet((previous) => {
             return sameLibrariesByFacet(
@@ -924,6 +958,12 @@ export function useGlobalSearch({
     },
     [isCatalogConfigReady, refreshCatalogQualityProfileState],
   );
+
+  const refreshCatalogConfig = useCallback(async () => {
+    catalogConfigRefreshTokenRef.current += 1;
+    catalogConfigRefreshPromiseRef.current = null;
+    await refreshCatalogQualityProfileState();
+  }, [refreshCatalogQualityProfileState]);
 
   const primeCatalogConfigForMetadataActions = useCallback(async () => {
     if (catalogConfigLoadedRef.current && catalogConfigMatchesAuthorization) {
@@ -1890,6 +1930,7 @@ export function useGlobalSearch({
     resetGlobalSearch,
     catalogQualityProfileOptions,
     catalogConfigLoading,
+    refreshCatalogConfig,
     ensureCatalogConfigReady,
     isCatalogConfigReady,
     resolveDefaultQualityProfileIdForFacet,
@@ -1899,6 +1940,7 @@ export function useGlobalSearch({
     isMetadataSearchResultInCatalog,
     rootFoldersByFacet,
     librariesByFacet: visibleLibrariesByFacet,
+    viewableLibrariesByFacet: visibleViewableLibrariesByFacet,
     requestableLibrariesByFacet: visibleRequestableLibrariesByFacet,
     queueFacet,
     setQueueFacet,

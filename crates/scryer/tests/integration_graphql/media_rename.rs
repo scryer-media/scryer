@@ -2534,7 +2534,7 @@ async fn configure_library_roots(
         .collect::<Vec<_>>();
     let updated = ctx
         .libraries
-        .update(&library_id, library.name, library.slug, drafts)
+        .update(&library_id, library.name, library.slug, drafts, None)
         .await
         .expect("configure library roots");
     paths

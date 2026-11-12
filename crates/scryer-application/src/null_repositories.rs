@@ -3290,6 +3290,7 @@ fn null_default_library(facet: MediaFacet) -> Library {
         name: format!("Default {}", facet.as_str()),
         slug: scryer_domain::default_library_slug_for_facet(&facet).to_string(),
         is_default: true,
+        enabled: true,
         roots: Vec::new(),
         created_at: now,
         updated_at: now,
@@ -3329,6 +3330,7 @@ impl LibraryRepository for NullLibraryRepository {
         _name: String,
         _slug: String,
         _roots: Vec<LibraryRootDraft>,
+        _enabled: Option<bool>,
     ) -> AppResult<Library> {
         Err(AppError::Repository(
             "library repository not configured".into(),

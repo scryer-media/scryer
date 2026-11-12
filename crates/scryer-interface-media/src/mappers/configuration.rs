@@ -742,6 +742,8 @@ pub fn from_indexer_config_with_fields(
         rate_limit_seconds: config.rate_limit_seconds,
         rate_limit_burst: config.rate_limit_burst,
         max_queries_per_minute: config.max_queries_per_minute,
+        max_requests_per_month: config.max_requests_per_month.map(Long),
+        max_grabs_per_month: config.max_grabs_per_month.map(Long),
         disabled_until: config.disabled_until,
         rate_limited_until,
         is_enabled: config.is_enabled,

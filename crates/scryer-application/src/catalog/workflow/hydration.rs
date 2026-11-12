@@ -500,6 +500,19 @@ impl AppUseCase {
                 "title name is required",
             ));
         }
+        let target_library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&library_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::LIBRARY_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })?;
+        crate::library::require_library_enabled(&target_library)?;
         let root_folder_id = self
             .resolve_title_root_folder_id_for_library(
                 &library_id,

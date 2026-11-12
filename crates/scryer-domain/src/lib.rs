@@ -208,6 +208,7 @@ pub struct Library {
     pub name: String,
     pub slug: String,
     pub is_default: bool,
+    pub enabled: bool,
     pub roots: Vec<LibraryRoot>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -2047,6 +2048,14 @@ pub struct IndexerConfig {
     /// budget beyond the request interval.
     #[serde(default)]
     pub max_queries_per_minute: Option<i64>,
+    /// Maximum Scryer-observed HTTP requests in a UTC calendar month.
+    #[serde(default)]
+    pub max_requests_per_month: Option<i64>,
+    /// Maximum Scryer-initiated grabs in a UTC calendar month. The slot is
+    /// reserved before artifact retrieval and remains consumed if its outcome
+    /// is uncertain.
+    #[serde(default)]
+    pub max_grabs_per_month: Option<i64>,
     pub disabled_until: Option<DateTime<Utc>>,
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
@@ -2361,6 +2370,10 @@ pub struct NewIndexerConfig {
     pub rate_limit_burst: Option<i64>,
     #[serde(default)]
     pub max_queries_per_minute: Option<i64>,
+    #[serde(default)]
+    pub max_requests_per_month: Option<i64>,
+    #[serde(default)]
+    pub max_grabs_per_month: Option<i64>,
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
     pub enable_auto_search: bool,

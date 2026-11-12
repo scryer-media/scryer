@@ -1,5 +1,62 @@
 use super::*;
 
+struct GrabAdmissionProbe {
+    attempts: std::sync::atomic::AtomicUsize,
+    deny: bool,
+}
+
+impl GrabAdmissionProbe {
+    fn new(deny: bool) -> Self {
+        Self {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            deny,
+        }
+    }
+
+    fn attempts(&self) -> usize {
+        self.attempts.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl crate::IndexerStatsTracker for GrabAdmissionProbe {
+    fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+
+    fn record_grab(&self, _indexer_id: &str, _indexer_name: &str) {}
+
+    fn record_api_limits(
+        &self,
+        _indexer_id: &str,
+        _api_current: Option<u32>,
+        _api_max: Option<u32>,
+        _grab_current: Option<u32>,
+        _grab_max: Option<u32>,
+    ) {
+    }
+
+    fn admit_monthly_grab<'a>(
+        &'a self,
+        _indexer_id: &'a str,
+        _at: chrono::DateTime<Utc>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.deny {
+                Err(AppError::validation_refused(
+                    crate::error_reasons::indexer_monthly_quota::GRAB_LIMIT_REACHED,
+                    "monthly grab limit reached",
+                ))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn all_stats(&self) -> Vec<crate::IndexerQueryStats> {
+        Vec::new()
+    }
+}
+
 #[tokio::test]
 async fn manual_grab_retains_scope_history_when_client_item_disappears() {
     let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
@@ -541,11 +598,14 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
-    let (app, user) = bootstrap_with_cleanup_tracking(
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
         download_client.clone(),
         download_submissions.clone(),
         pending_releases,
     );
+    let admissions = Arc::new(GrabAdmissionProbe::new(false));
+    let app =
+        base_app.with_test_overrides(|services| services.with_indexer_stats(admissions.clone()));
     let request = NewTitle {
         name: "Queued Once".into(),
         facet: MediaFacet::Movie,
@@ -556,7 +616,7 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
         ..Default::default()
     };
     let queued_release = QueuedReleaseSelection {
-        indexer_id: None,
+        indexer_id: Some("idx-monthly".into()),
         source_hint: Some("https://example.invalid/releases/queued-once.nzb".to_string()),
         source_kind: Some(DownloadSourceKind::NzbUrl),
         source_title: Some("Queued.Once.2026.1080p.WEB-DL".to_string()),
@@ -572,6 +632,7 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
         .expect("first queued add should succeed");
     assert!(!first.reused_existing_title);
     assert!(!first.reused_queued_download);
+    assert_eq!(admissions.attempts(), 1);
 
     let second = app
         .add_title_and_queue_download_with_outcome(&user, request, queued_release)
@@ -581,6 +642,11 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
     assert_eq!(second.download_job_id, first.download_job_id);
     assert!(second.reused_existing_title);
     assert!(second.reused_queued_download);
+    assert_eq!(
+        admissions.attempts(),
+        1,
+        "reusing an accepted submission must not consume another monthly grab"
+    );
 
     let submissions = download_submissions.store.lock().await.clone();
     let expected_signature = normalize_release_selection_signature(
@@ -601,6 +667,86 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
             .await
             .as_slice(),
         &["Queued Once".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn exhausted_monthly_grab_limit_precedes_artifact_fetch_and_client_submission() {
+    struct Resolver(std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl crate::IndexerArtifactResolver for Resolver {
+        async fn resolve_artifact(
+            &self,
+            _request: &crate::IndexerArtifactResolutionRequest,
+        ) -> AppResult<crate::PreparedIndexerArtifact> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(AppError::Repository(
+                "artifact resolver should not run after quota refusal".into(),
+            ))
+        }
+    }
+
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let admissions = Arc::new(GrabAdmissionProbe::new(true));
+    let resolver = Arc::new(Resolver(std::sync::atomic::AtomicUsize::new(0)));
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_indexer_stats(admissions.clone())
+            .with_indexer_artifact_resolver(Some(resolver.clone()))
+    });
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Monthly Grab Limit".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+
+    let error = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                indexer_id: Some("idx-monthly".into()),
+                source_hint: Some("https://indexer.example/release.nzb".into()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Monthly.Grab.Limit.2026.1080p.WEB-DL".into()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect_err("the local monthly grab cap should refuse the submission");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::indexer_monthly_quota::GRAB_LIMIT_REACHED)
+    );
+    assert_eq!(admissions.attempts(), 1);
+    assert_eq!(
+        resolver.0.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "quota denial must happen before the indexer artifact fetch"
+    );
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty(),
+        "quota denial must happen before download-client submission"
     );
 }
 

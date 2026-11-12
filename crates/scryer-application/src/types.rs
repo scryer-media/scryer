@@ -26,6 +26,15 @@ pub struct LibraryRootDraft {
     pub is_default: bool,
 }
 
+#[derive(Default)]
+pub struct LibraryUpdateDraft {
+    pub name: Option<String>,
+    pub roots: Option<Vec<LibraryRootDraft>>,
+    pub removed_root_ids: Option<Vec<String>>,
+    pub enabled: Option<bool>,
+    pub settings: Option<crate::LibrarySettingsOverrideDraft>,
+}
+
 /// A library after an update, with what the update took out of the catalog.
 #[derive(Clone, Debug)]
 pub struct UpdatedLibrary {
@@ -5380,6 +5389,8 @@ mod indexer_search_identity_tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,

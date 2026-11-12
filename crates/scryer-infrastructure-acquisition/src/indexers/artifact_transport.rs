@@ -579,7 +579,7 @@ impl IndexerArtifactTransport {
             OutboundHttpClient::new(proxy_reqwest_client(), RateLimitRegistry::indexers());
         let response = tokio::time::timeout(
             timeout,
-            solver_http.send_with_rate_limit_and_dispatch_observer(
+            solver_http.send_with_rate_limit_and_async_dispatch_observer(
                 RequestPolicy::no_retry("indexer_solver", "indexer_artifact_solver")
                     .without_redirects(),
                 || {
@@ -595,12 +595,16 @@ impl IndexerArtifactTransport {
                 },
                 |_| async {},
                 |_| {
-                    // The solver replays this request against the indexer, so
-                    // it is one indexer request regardless of the POST's origin.
-                    tally
-                        .try_note_sent_call(scryer_application::CALL_SOLVER)
-                        .then_some(())
-                        .ok_or(OutboundHttpError::DispatchRejected)
+                    let tally = &tally;
+                    async move {
+                        // The solver replays this request against the indexer,
+                        // so its send consumes one indexer request slot.
+                        tally
+                            .try_note_sent_call_async(scryer_application::CALL_SOLVER)
+                            .await
+                            .then_some(())
+                            .ok_or(OutboundHttpError::DispatchRejected)
+                    }
                 },
             ),
         )
@@ -612,6 +616,11 @@ impl IndexerArtifactTransport {
             )
         })?
         .map_err(|error| {
+            if matches!(&error, OutboundHttpError::DispatchRejected)
+                && let Some(quota_error) = tally.take_dispatch_error()
+            {
+                return quota_error;
+            }
             if matches!(error, OutboundHttpError::Transport { .. }) {
                 tally.note_result(IndexerRequestResult::NoResponse);
             }
@@ -799,7 +808,7 @@ impl IndexerArtifactTransport {
             let response = timeout(
                 remaining,
                 self.outbound_http
-                    .send_with_rate_limit_and_dispatch_observer(
+                    .send_with_rate_limit_and_async_dispatch_observer(
                         request_policy,
                         || {
                             builder
@@ -808,17 +817,20 @@ impl IndexerArtifactTransport {
                         },
                         |_| async {},
                         |actual_url| {
-                            let indexer_request = indexer_base_url
-                                .and_then(|base| same_url_origin(base, actual_url))
-                                .unwrap_or(true);
-                            let admitted = if indexer_request {
-                                tally.try_note_sent(actual_url.as_str())
-                            } else {
-                                tally.try_note_auxiliary_sent_call("external_redirect")
-                            };
-                            admitted
-                                .then_some(())
-                                .ok_or(OutboundHttpError::DispatchRejected)
+                            let tally = &tally;
+                            async move {
+                                let indexer_request = indexer_base_url
+                                    .and_then(|base| same_url_origin(base, &actual_url))
+                                    .unwrap_or(true);
+                                let admitted = if indexer_request {
+                                    tally.try_note_sent_async(actual_url.as_str()).await
+                                } else {
+                                    tally.try_note_auxiliary_sent_call("external_redirect")
+                                };
+                                admitted
+                                    .then_some(())
+                                    .ok_or(OutboundHttpError::DispatchRejected)
+                            }
                         },
                     ),
             )
@@ -973,22 +985,25 @@ impl IndexerArtifactTransport {
             let response = timeout(
                 remaining,
                 self.outbound_http
-                    .send_with_rate_limit_and_dispatch_observer(
+                    .send_with_rate_limit_and_async_dispatch_observer(
                         request_policy,
                         || hop_client.get(hop_url.clone()).timeout(remaining),
                         |_| async {},
                         |actual_url| {
-                            let indexer_request = indexer_base_url
-                                .and_then(|base| same_url_origin(base, actual_url))
-                                .unwrap_or(true);
-                            let admitted = if indexer_request {
-                                tally.try_note_sent(actual_url.as_str())
-                            } else {
-                                tally.try_note_auxiliary_sent_call("external_redirect")
-                            };
-                            admitted
-                                .then_some(())
-                                .ok_or(OutboundHttpError::DispatchRejected)
+                            let tally = &tally;
+                            async move {
+                                let indexer_request = indexer_base_url
+                                    .and_then(|base| same_url_origin(base, &actual_url))
+                                    .unwrap_or(true);
+                                let admitted = if indexer_request {
+                                    tally.try_note_sent_async(actual_url.as_str()).await
+                                } else {
+                                    tally.try_note_auxiliary_sent_call("external_redirect")
+                                };
+                                admitted
+                                    .then_some(())
+                                    .ok_or(OutboundHttpError::DispatchRejected)
+                            }
                         },
                     ),
             )
@@ -1079,6 +1094,11 @@ fn map_artifact_outbound_error_via(
     error: OutboundHttpError,
     egress: ArtifactEgress<'_>,
 ) -> AppError {
+    if matches!(&error, OutboundHttpError::DispatchRejected)
+        && let Some(quota_error) = tally.take_dispatch_error()
+    {
+        return quota_error;
+    }
     if let ArtifactEgress::TransportProxy(proxy) = egress
         && let OutboundHttpError::Transport { source, .. } = &error
         && !source.is_timeout()
@@ -2008,6 +2028,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,

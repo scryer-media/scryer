@@ -531,7 +531,7 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         );
         let response_result = self
             .outbound_http
-            .send_with_rate_limit_and_dispatch_observer(
+            .send_with_rate_limit_and_async_dispatch_observer(
                 RequestPolicy::safe_read(
                     format!("direct_nab_caps:{}", direct_config.base_url),
                     format!(
@@ -550,22 +550,28 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
                 },
                 |_| async {},
                 |actual_url| {
-                    let admitted = if reqwest::Url::parse(&url)
-                        .is_ok_and(|url| url.origin() == actual_url.origin())
-                    {
-                        tally.try_note_sent(actual_url.as_str())
-                    } else {
-                        tally.try_note_auxiliary_sent_call("external_redirect")
-                    };
-                    admitted
-                        .then_some(())
-                        .ok_or(OutboundHttpError::DispatchRejected)
+                    let is_indexer_origin = reqwest::Url::parse(&url)
+                        .is_ok_and(|url| url.origin() == actual_url.origin());
+                    let tally = &tally;
+                    async move {
+                        let admitted = if is_indexer_origin {
+                            tally.try_note_sent_async(actual_url.as_str()).await
+                        } else {
+                            tally.try_note_auxiliary_sent_call("external_redirect")
+                        };
+                        admitted
+                            .then_some(())
+                            .ok_or(OutboundHttpError::DispatchRejected)
+                    }
                 },
             )
             .await;
         let response = match response_result {
             Ok(response) => response,
             Err(error) => {
+                if let Some(quota_error) = tally.take_dispatch_error() {
+                    return Err(quota_error);
+                }
                 let (outcome, retry_after, cooldown_action) = match &error {
                     OutboundHttpError::RateLimited(rate_limited) => (
                         SchedulerFeedbackOutcome::RateLimited,
@@ -1163,6 +1169,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -1215,6 +1223,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -1353,6 +1363,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,

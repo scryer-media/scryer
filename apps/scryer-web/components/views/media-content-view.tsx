@@ -104,6 +104,7 @@ import type {
   TitleCatalogFilterOptionsRecord,
 } from "@/lib/types";
 import type { TitleCatalogAdvancedFilters } from "@/lib/utils/title-catalog-query";
+import { selectableLibraries } from "@/lib/utils/library-filter";
 import type {
   InteractiveSearchIndexerProgress,
   InteractiveSearchProgress,
@@ -1128,6 +1129,10 @@ function TitleContextPanel({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const dateTimeFormat = useUiDateTimeFormat();
+  const selectableLibraryRecords = React.useMemo(
+    () => selectableLibraries(libraries),
+    [libraries],
+  );
   const [releaseSearchRequestId, setReleaseSearchRequestId] = React.useState(0);
   const [releaseSearchLoading, setReleaseSearchLoading] = React.useState(false);
   const [releaseSearchTitleId, setReleaseSearchTitleId] = React.useState<
@@ -1299,7 +1304,7 @@ function TitleContextPanel({
         className={cn("flex", panelClassName)}
       >
         <CatalogFiltersPanel
-          libraries={libraries}
+          libraries={selectableLibraryRecords}
           librariesLoading={librariesLoading}
           selectedLibraryIds={selectedLibraryIds}
           onSelectedLibraryIdsChange={onSelectedLibraryIdsChange}
@@ -2052,6 +2057,10 @@ export function MediaContentView({
         settings?: LibrarySettingsDraft;
       },
     ) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
+    setLibraryEnabled: (
+      libraryId: string,
+      enabled: boolean,
+    ) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
     deleteLibrary: (
       libraryId: string,
     ) => Promise<boolean | void> | boolean | void;
@@ -2310,6 +2319,10 @@ export function MediaContentView({
     openBulkTitleMove,
     canMoveSelectedTitles,
   } = state;
+  const selectableLibraryRecords = React.useMemo(
+    () => selectableLibraries(libraries),
+    [libraries],
+  );
   const [titleFilterInputValue, setTitleFilterInputValue] =
     React.useState(titleFilter);
   const [titleLayoutRef, titleLayoutWidth] =
@@ -3694,6 +3707,7 @@ export function MediaContentView({
                 }
                 onCreateLibrary={state.createLibrary}
                 onUpdateLibrary={state.updateLibrary}
+                onSetLibraryEnabled={state.setLibraryEnabled}
                 onDeleteLibrary={state.deleteLibrary}
                 onScan={handleLibraryScan}
               />
@@ -3782,7 +3796,7 @@ export function MediaContentView({
                                   </SheetTitle>
                                 </SheetHeader>
                                 <CatalogFiltersPanel
-                                  libraries={libraries}
+                                  libraries={selectableLibraryRecords}
                                   librariesLoading={librariesLoading}
                                   selectedLibraryIds={selectedLibraryIds}
                                   onSelectedLibraryIdsChange={

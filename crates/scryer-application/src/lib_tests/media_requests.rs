@@ -439,6 +439,30 @@ async fn pending_media_request_blocks_profile_removal_after_library_allowlist_ch
 }
 
 #[tokio::test]
+async fn submit_media_request_refuses_disabled_library_before_writing() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    harness
+        .libraries
+        .set_enabled(&library_id, false)
+        .await
+        .expect("disable request target");
+
+    let error = harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id, 9077))
+        .await
+        .expect_err("disabled libraries cannot receive media requests");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::DISABLED)
+    );
+    assert!(harness.media_requests.requests.lock().await.is_empty());
+    assert!(harness.domain_events.events.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn submit_media_request_auto_approves_for_requester_with_auto_approve_permission() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);

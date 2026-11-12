@@ -1516,7 +1516,7 @@ impl AppUseCase {
         }
 
         let mut first_error = None;
-        for library in libraries {
+        for library in libraries.into_iter().filter(|library| library.enabled) {
             // Setup can finish before its hinted full scan starts. Keep automatic
             // scans behind that scan until it consumes the source monitoring state.
             if trigger_source != JobTriggerSource::Manual

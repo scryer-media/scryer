@@ -18,8 +18,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use chrono::Utc;
 use metrics::counter;
 
+use crate::AppError;
 use crate::indexer_errors::classify_indexer_http_response;
 use crate::ports::{IndexerDispatchAdmission, IndexerStatsTracker};
 use crate::types::{
@@ -152,6 +154,7 @@ pub struct IndexerRequestTally {
     stats: Arc<dyn IndexerStatsTracker>,
     indexer_origin: Option<String>,
     pending: Mutex<Vec<&'static str>>,
+    dispatch_error: Mutex<Option<AppError>>,
 }
 
 impl IndexerRequestTally {
@@ -168,6 +171,7 @@ impl IndexerRequestTally {
             stats,
             indexer_origin: None,
             pending: Mutex::new(Vec::new()),
+            dispatch_error: Mutex::new(None),
         }
     }
 
@@ -184,6 +188,13 @@ impl IndexerRequestTally {
     /// One request is about to leave for `url`. Counts it on the dashboard
     /// immediately: whatever happens next, the indexer has been asked.
     pub fn try_note_sent(&self, url: &str) -> bool {
+        self.try_note_sent_blocking(url)
+    }
+
+    /// Asynchronously admit and record one actual request to the indexer.
+    /// Local quota failures are retained for the transport boundary to return
+    /// as typed application errors rather than provider failures.
+    pub async fn try_note_sent_async(&self, url: &str) -> bool {
         if self.indexer_origin.as_ref().is_some_and(|origin| {
             url::Url::parse(url)
                 .map(|url| url.origin().ascii_serialization() != *origin)
@@ -191,25 +202,92 @@ impl IndexerRequestTally {
         }) {
             return self.try_note_auxiliary_sent_call(CALL_EXTERNAL_REDIRECT);
         }
-        self.try_note_sent_call(newznab_call_label(url))
+        self.try_note_sent_call_async(newznab_call_label(url)).await
+    }
+
+    /// Blocking counterpart for dedicated plugin HTTP worker threads only.
+    pub fn try_note_sent_blocking(&self, url: &str) -> bool {
+        if self.indexer_origin.as_ref().is_some_and(|origin| {
+            url::Url::parse(url)
+                .map(|url| url.origin().ascii_serialization() != *origin)
+                .unwrap_or(false)
+        }) {
+            return self.try_note_auxiliary_sent_call(CALL_EXTERNAL_REDIRECT);
+        }
+        self.try_note_sent_call_blocking(newznab_call_label(url))
     }
 
     /// As [`Self::note_sent`], for a request whose `call` label is not derived
     /// from a newznab URL.
     pub fn try_note_sent_call(&self, call: &'static str) -> bool {
+        self.try_note_sent_call_blocking(call)
+    }
+
+    pub async fn try_note_sent_call_async(&self, call: &'static str) -> bool {
         let _admission = match self.try_admit_dispatch() {
             Ok(admission) => admission,
             Err(()) => return false,
         };
         if crate::indexer_error_history_is_persistable(&self.indexer_id) {
+            let dispatched_at = Utc::now();
+            if let Err(error) = self
+                .stats
+                .admit_monthly_request(&self.indexer_id, dispatched_at)
+                .await
+            {
+                self.store_dispatch_error(error);
+                return false;
+            }
             self.stats.record_api_request_sent_at(
                 &self.indexer_id,
                 &self.indexer_name,
-                chrono::Utc::now(),
+                dispatched_at,
             );
         }
         self.note_pending(call);
         true
+    }
+
+    /// Explicit blocking path for dedicated plugin HTTP worker threads.
+    pub fn try_note_sent_call_blocking(&self, call: &'static str) -> bool {
+        let _admission = match self.try_admit_dispatch() {
+            Ok(admission) => admission,
+            Err(()) => return false,
+        };
+        if crate::indexer_error_history_is_persistable(&self.indexer_id) {
+            let dispatched_at = Utc::now();
+            if let Err(error) = self
+                .stats
+                .admit_monthly_request_blocking(&self.indexer_id, dispatched_at)
+            {
+                self.store_dispatch_error(error);
+                return false;
+            }
+            self.stats.record_api_request_sent_at(
+                &self.indexer_id,
+                &self.indexer_name,
+                dispatched_at,
+            );
+        }
+        self.note_pending(call);
+        true
+    }
+
+    pub fn take_dispatch_error(&self) -> Option<AppError> {
+        self.dispatch_error
+            .lock()
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "recovering poisoned indexer dispatch error capture");
+                error.into_inner()
+            })
+            .take()
+    }
+
+    fn store_dispatch_error(&self, error: AppError) {
+        *self.dispatch_error.lock().unwrap_or_else(|error| {
+            tracing::warn!(%error, "recovering poisoned indexer dispatch error capture");
+            error.into_inner()
+        }) = Some(error);
     }
 
     /// Admit and record an actual outbound transport hop that is associated

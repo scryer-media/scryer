@@ -2546,6 +2546,11 @@ mod tests {
                 Some(1),
                 "inspected bundle should persist convergence coverage"
             );
+            assert_eq!(
+                inspected.row_counts.get("indexer_monthly_usage").copied(),
+                Some(1),
+                "backup must retain monthly usage so restore cannot replenish indexer quotas"
+            );
             for table in [
                 "maintenance_action_steps",
                 "maintenance_action_step_attempts",
@@ -2773,9 +2778,12 @@ mod tests {
         for statement in [
             "INSERT INTO indexers
              (id, name, provider_type, base_url, is_enabled, enable_interactive_search,
-              enable_auto_search, created_at, updated_at)
+              enable_auto_search, max_requests_per_month, max_grabs_per_month, created_at, updated_at)
              VALUES ('backup-indexer', 'Fixture indexer', 'newznab', 'https://example.invalid',
-                     1, 1, 1, '2026-01-01', '2026-01-01')",
+                     1, 1, 1, 200, 20, '2026-01-01', '2026-01-01')",
+            "INSERT INTO indexer_monthly_usage
+             (indexer_id, month_start, request_count, grab_count, updated_at)
+             VALUES ('backup-indexer', '2026-01-01T00:00:00Z', 123, 7, '2026-01-02T03:04:05Z')",
             "INSERT INTO indexer_api_clients
              (id, name, enabled, protocols_json, lookup_id, secret_hash, key_generation,
               revision, created_at, updated_at)
@@ -2828,6 +2836,11 @@ mod tests {
 
     async fn verify_backup_matrix_lists(pool: &sqlx::SqlitePool) -> AppResult<()> {
         for (query, expected) in [
+            ("SELECT max_requests_per_month || ':' || max_grabs_per_month
+              FROM indexers WHERE id = 'backup-indexer'", "200:20"),
+            ("SELECT month_start || ':' || request_count || ':' || grab_count || ':' || updated_at
+              FROM indexer_monthly_usage WHERE indexer_id = 'backup-indexer'",
+             "2026-01-01T00:00:00Z:123:7:2026-01-02T03:04:05Z"),
             ("SELECT secret_hash FROM indexer_api_clients WHERE id = 'backup-client'",
              "fixture-hash"),
             ("SELECT categories_json FROM indexer_api_client_grants WHERE client_id = 'backup-client' AND indexer_id = 'backup-indexer'",

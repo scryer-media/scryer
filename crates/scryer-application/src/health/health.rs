@@ -559,6 +559,7 @@ mod tests {
             name: name.to_string(),
             slug: id.to_string(),
             is_default: false,
+            enabled: true,
             roots: paths
                 .iter()
                 .enumerate()

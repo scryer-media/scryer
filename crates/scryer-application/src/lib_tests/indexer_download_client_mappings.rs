@@ -163,6 +163,8 @@ async fn indexer_create_and_update_persist_mapping_atomically() {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
@@ -190,6 +192,8 @@ async fn indexer_create_and_update_persist_mapping_atomically() {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
@@ -547,6 +551,8 @@ async fn managed_child_rate_limits_are_operator_owned_and_survive_sync() {
                 id: "managed-child".to_string(),
                 rate_limit_seconds: Some(15),
                 max_queries_per_minute: Some(Some(4)),
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 ..Default::default()
             },
         )
@@ -561,6 +567,8 @@ async fn managed_child_rate_limits_are_operator_owned_and_survive_sync() {
             IndexerConfigUpdate {
                 id: "managed-child".to_string(),
                 max_queries_per_minute: Some(Some(0)),
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 ..Default::default()
             },
         )
@@ -582,6 +590,8 @@ async fn managed_child_rate_limits_are_operator_owned_and_survive_sync() {
             IndexerConfigUpdate {
                 id: "managed-child".to_string(),
                 max_queries_per_minute: Some(None),
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 ..Default::default()
             },
         )
@@ -698,6 +708,8 @@ async fn indexer_query_budget_is_refused_on_a_managed_children_parent() {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: Some(30),
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 is_enabled: false,
                 enable_interactive_search: false,
                 enable_auto_search: false,
@@ -725,6 +737,8 @@ async fn indexer_query_budget_is_refused_on_a_managed_children_parent() {
             IndexerConfigUpdate {
                 id: "sync-parent".to_string(),
                 max_queries_per_minute: Some(Some(30)),
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 ..Default::default()
             },
         )

@@ -1016,6 +1016,15 @@ mod restore_tests {
             let services =
                 PostgresServices::new_with_mode(url.as_str(), crate::MigrationMode::Apply).await?;
             let pool = services.pool();
+            sqlx::query(
+                "INSERT INTO indexer_monthly_usage
+                 (indexer_id, month_start, request_count, grab_count)
+                 VALUES ('backup-quota-fixture', '2026-01-01T00:00:00Z', 123, 7)",
+            )
+            .execute(pool)
+            .await
+            .map_err(repo_err)?;
+            validate_backup_catalog(pool).await?;
             let tables = ordered_export_tables(pool).await?;
             let directory = tempfile::tempdir().unwrap();
             let mut counts = BTreeMap::new();
@@ -1025,6 +1034,14 @@ mod restore_tests {
                 counts.insert(table.clone(), rows);
             }
             tx.rollback().await.map_err(repo_err)?;
+            assert_eq!(counts.get("indexer_monthly_usage"), Some(&1));
+            sqlx::query(
+                "UPDATE indexer_monthly_usage SET request_count = 199, grab_count = 19
+                 WHERE indexer_id = 'backup-quota-fixture'",
+            )
+            .execute(pool)
+            .await
+            .map_err(repo_err)?;
             let deadline = scryer_application::RestoreDeadline::new();
             deadline
                 .scope(restore_bundle_parts_into_postgres_pool(
@@ -1035,6 +1052,14 @@ mod restore_tests {
                 ))
                 .await?;
             assert_eq!(deadline.import_percent(), Some(100));
+            let usage: (String, i64, i64) = sqlx::query_as(
+                "SELECT month_start, request_count, grab_count FROM indexer_monthly_usage
+                 WHERE indexer_id = 'backup-quota-fixture'",
+            )
+            .fetch_one(pool)
+            .await
+            .map_err(repo_err)?;
+            assert_eq!(usage, ("2026-01-01T00:00:00Z".into(), 123, 7));
 
             // A bad row is encountered after the transaction clears its tables.
             // The failed import must restore every original row count.

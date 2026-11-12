@@ -92,6 +92,7 @@ import {
 } from "@/lib/utils/discovery-actions";
 import {
   normalizeLibraryFilterSelection,
+  selectableLibraries,
   singleSelectedLibraryId,
 } from "@/lib/utils/library-filter";
 import {
@@ -642,6 +643,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     catalogConfigLoading,
     catalogQualityProfileOptions,
     ensureCatalogConfigReady,
+    refreshCatalogConfig,
     librariesByFacet,
     queueFacet,
     requestableLibrariesByFacet,
@@ -1053,6 +1055,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const shouldLoadMediaSettings =
     shouldLoadMediaSettingsForSection || bulkEditDialogOpen;
   const [libraries, setLibraries] = React.useState<LibraryRecord[]>([]);
+  const enabledLibraries = React.useMemo(
+    () => selectableLibraries(libraries),
+    [libraries],
+  );
   const [librariesFacet, setLibrariesFacet] = React.useState<Facet | null>(
     null,
   );
@@ -1066,10 +1072,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     if (selectedLibraryId) {
       return selectedLibraryId;
     }
-    return explicitSelectedLibraryIds.length === 0 && libraries.length === 1
-      ? (libraries[0]?.id ?? null)
+    return explicitSelectedLibraryIds.length === 0 &&
+      enabledLibraries.length === 1
+      ? (enabledLibraries[0]?.id ?? null)
       : null;
-  }, [libraries, selectedLibraryIds]);
+  }, [enabledLibraries, selectedLibraryIds]);
   const activeTargetLibraryScanSession = effectiveLibraryScanTargetId
     ? getActiveSession(activeFacet, effectiveLibraryScanTargetId)
     : null;
@@ -1098,10 +1105,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     const eligibleLibraryIds = new Set(
       explicitLibraryIds.length > 0
         ? explicitLibraryIds
-        : libraries.map((library) => library.id),
+        : enabledLibraries.map((library) => library.id),
     );
     const validRootFolderIds = new Set(
-      libraries
+      enabledLibraries
         .filter((library) => eligibleLibraryIds.has(library.id))
         .flatMap((library) => library.roots.map((root) => root.id)),
     );
@@ -1115,7 +1122,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     });
   }, [
     activeFacet,
-    libraries,
+    enabledLibraries,
     librariesFacet,
     selectedLibraryIds,
     setAdvancedTitleFilters,
@@ -4885,6 +4892,44 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     ],
   );
 
+  const setLibraryEnabled = React.useCallback(
+    async (libraryId: string, enabled: boolean) => {
+      setLibrarySettingsSaving(true);
+      try {
+        const { data, error } = await client
+          .mutation<{ updateLibrary: LibraryRecord }>(updateLibraryMutation, {
+            input: { libraryId, enabled },
+          })
+          .toPromise();
+        if (error) throw error;
+        const library = data?.updateLibrary ?? null;
+        if (!library) {
+          throw new Error(t("settings.librarySaveFailed"));
+        }
+        await refreshLibraries();
+        await refreshCatalogConfig();
+        setGlobalStatus(
+          t(enabled ? "settings.libraryEnabled" : "settings.libraryDisabled"),
+          { level: "SUCCESS" },
+        );
+        return library;
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(
+            error,
+            t("settings.librarySaveFailed"),
+            t,
+          ),
+          { level: "ERROR" },
+        );
+        return null;
+      } finally {
+        setLibrarySettingsSaving(false);
+      }
+    },
+    [client, refreshCatalogConfig, refreshLibraries, setGlobalStatus, t],
+  );
+
   const deleteLibrary = React.useCallback(
     async (libraryId: string) => {
       setLibrarySettingsSaving(true);
@@ -5565,6 +5610,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           loadFacetDownloadClientRouting,
           createLibrary,
           updateLibrary,
+          setLibraryEnabled,
           deleteLibrary,
           onOpenOverview,
           onCloseOverview: handleCloseOverview,

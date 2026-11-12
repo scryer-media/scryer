@@ -766,6 +766,7 @@ impl AppUseCase {
             slug,
             name,
             is_default: false,
+            enabled: true,
             roots: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -820,6 +821,33 @@ impl AppUseCase {
         removed_root_ids: Option<Vec<String>>,
         settings: Option<LibrarySettingsOverrideDraft>,
     ) -> AppResult<UpdatedLibrary> {
+        self.update_library_with_enabled_outcome(
+            actor,
+            library_id,
+            LibraryUpdateDraft {
+                name,
+                roots,
+                removed_root_ids,
+                enabled: None,
+                settings,
+            },
+        )
+        .await
+    }
+
+    pub async fn update_library_with_enabled_outcome(
+        &self,
+        actor: &User,
+        library_id: &str,
+        update: LibraryUpdateDraft,
+    ) -> AppResult<UpdatedLibrary> {
+        let LibraryUpdateDraft {
+            name,
+            roots,
+            removed_root_ids,
+            enabled,
+            settings,
+        } = update;
         let existing = self
             .services
             .catalog
@@ -834,6 +862,8 @@ impl AppUseCase {
             })?;
         self.require_library_management_permission(actor, &existing.id)
             .await?;
+        let name_was_provided = name.is_some();
+        let next_enabled = enabled.unwrap_or(existing.enabled);
         let name = name
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
@@ -909,12 +939,22 @@ impl AppUseCase {
             self.delete_titles_under_removed_roots(actor, &existing, &dropped_root_ids)
                 .await?
         };
-        let library = self
-            .services
-            .catalog
-            .libraries
-            .update(&existing.id, name.clone(), slug, roots)
-            .await?;
+        let library = if enabled.is_some() && !name_was_provided && !roots_were_provided {
+            self.services
+                .catalog
+                .libraries
+                .set_enabled(&existing.id, next_enabled)
+                .await?
+        } else {
+            self.services
+                .catalog
+                .libraries
+                .update(&existing.id, name.clone(), slug, roots, enabled)
+                .await?
+        };
+        if !library.enabled {
+            self.cancel_library_scan_sessions(&existing.id).await;
+        }
         if let Some(settings) = settings {
             self.update_library_settings(actor, &library.id, settings)
                 .await?;
@@ -1302,13 +1342,17 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
 
-        let library_paths = self.read_library_paths_for_scan_facet(&facet).await?;
-        let library_id = self
+        let default_library = self
             .services
             .catalog
             .libraries
             .default_for_facet(facet.clone())
-            .await?
+            .await?;
+        if let Some(library) = &default_library {
+            crate::library::require_library_enabled(library)?;
+        }
+        let library_paths = self.read_library_paths_for_scan_facet(&facet).await?;
+        let library_id = default_library
             .map(|library| library.id)
             .unwrap_or_else(|| scryer_domain::default_library_id_for_facet(&facet));
         let (_coordinator, session) = LibraryScanCoordinator::start_for_library(
@@ -1384,6 +1428,7 @@ impl AppUseCase {
             })?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
+        crate::library::require_library_enabled(&library)?;
         let library_paths = configured_library_scan_paths(&library)?;
 
         let (_coordinator, session) = LibraryScanCoordinator::start_for_library(
@@ -1437,16 +1482,21 @@ impl AppUseCase {
         session_id_override: Option<String>,
         mode: LibraryScanMode,
     ) -> AppResult<LibraryScanSummary> {
-        let session_library_id = self
+        let default_library = self
             .services
             .catalog
             .libraries
             .default_for_facet(facet.clone())
-            .await?
-            .map(|library| library.id)
+            .await?;
+        let session_library_id = default_library
+            .as_ref()
+            .map(|library| library.id.clone())
             .unwrap_or_else(|| scryer_domain::default_library_id_for_facet(&facet));
         self.require_library_management_permission(actor, &session_library_id)
             .await?;
+        if let Some(library) = &default_library {
+            crate::library::require_library_enabled(library)?;
+        }
         let library_paths = self.read_library_paths_for_scan_facet(&facet).await?;
         self.scan_library_paths_with_tracking(
             actor,
@@ -1482,6 +1532,7 @@ impl AppUseCase {
             })?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
+        crate::library::require_library_enabled(&library)?;
         let library_paths = configured_library_scan_paths(&library)?;
         self.scan_library_paths_with_tracking(
             actor,
@@ -1911,6 +1962,7 @@ impl AppUseCase {
     ) -> AppResult<LibraryScanSummary> {
         self.require_library_management_permission(actor, &library.id)
             .await?;
+        crate::library::require_library_enabled(library)?;
         let library_paths = library
             .roots
             .iter()

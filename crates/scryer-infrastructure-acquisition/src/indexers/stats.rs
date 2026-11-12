@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -437,12 +439,106 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
         self.record_api_request_sent_on(indexer_id, indexer_name, dispatched_at.date_naive());
     }
 
+    fn admit_monthly_request<'a>(
+        &'a self,
+        indexer_id: &'a str,
+        at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = scryer_application::AppResult<()>> + Send + 'a>> {
+        Box::pin(async move { self.admit_monthly_request_inner(indexer_id, at).await })
+    }
+
+    fn admit_monthly_request_blocking(
+        &self,
+        indexer_id: &str,
+        at: DateTime<Utc>,
+    ) -> scryer_application::AppResult<()> {
+        if self.datastore.is_none() {
+            return Ok(());
+        }
+        let runtime = self.quota_runtime_handle().ok_or_else(|| {
+            scryer_application::AppError::temporary_unavailable_reason(
+                scryer_application::error_reasons::indexer_monthly_quota::ACCOUNTING_UNAVAILABLE,
+                "Monthly indexer request usage could not be durably checked; request was refused.",
+                None,
+            )
+        })?;
+        runtime.block_on(self.admit_monthly_request_inner(indexer_id, at))
+    }
+
+    fn admit_monthly_grab<'a>(
+        &'a self,
+        indexer_id: &'a str,
+        at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = scryer_application::AppResult<()>> + Send + 'a>> {
+        Box::pin(async move { self.admit_monthly_grab_inner(indexer_id, at).await })
+    }
+
     fn all_stats(&self) -> Vec<IndexerQueryStats> {
         self.collect_stats()
     }
 }
 
 impl InMemoryIndexerStatsTracker {
+    async fn admit_monthly_request_inner(
+        &self,
+        indexer_id: &str,
+        at: DateTime<Utc>,
+    ) -> scryer_application::AppResult<()> {
+        let Some(datastore) = self.datastore.as_ref() else {
+            return Ok(());
+        };
+        match crate::queries::indexer::admit_monthly_indexer_request(datastore, indexer_id, at)
+            .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(scryer_application::AppError::validation_refused(
+                scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+                "This indexer's locally configured monthly request limit has been reached.",
+            )),
+            Err(error) => {
+                tracing::warn!(
+                    indexer_id,
+                    error = %error,
+                    "failed to durably admit monthly indexer request"
+                );
+                Err(scryer_application::AppError::temporary_unavailable_reason(
+                    scryer_application::error_reasons::indexer_monthly_quota::ACCOUNTING_UNAVAILABLE,
+                    "Monthly indexer request usage could not be durably checked; request was refused.",
+                    None,
+                ))
+            }
+        }
+    }
+
+    async fn admit_monthly_grab_inner(
+        &self,
+        indexer_id: &str,
+        at: DateTime<Utc>,
+    ) -> scryer_application::AppResult<()> {
+        let Some(datastore) = self.datastore.as_ref() else {
+            return Ok(());
+        };
+        match crate::queries::indexer::admit_monthly_indexer_grab(datastore, indexer_id, at).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(scryer_application::AppError::validation_refused(
+                scryer_application::error_reasons::indexer_monthly_quota::GRAB_LIMIT_REACHED,
+                "This indexer's locally configured monthly grab limit has been reached.",
+            )),
+            Err(error) => {
+                tracing::warn!(
+                    indexer_id,
+                    error = %error,
+                    "failed to durably admit monthly indexer grab"
+                );
+                Err(scryer_application::AppError::temporary_unavailable_reason(
+                    scryer_application::error_reasons::indexer_monthly_quota::ACCOUNTING_UNAVAILABLE,
+                    "Monthly indexer grab usage could not be durably checked; grab was refused.",
+                    None,
+                ))
+            }
+        }
+    }
+
     fn record_api_request_sent_on(&self, indexer_id: &str, indexer_name: &str, today: NaiveDate) {
         if !scryer_application::indexer_error_history_is_persistable(indexer_id) {
             return;

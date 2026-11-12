@@ -48,6 +48,8 @@ const ru: LocaleDictionary = {
     "Не удалось скопировать. Текст выделен; нажмите Ctrl+C или ⌘C.",
   "status.copyFailed":
     "Не удалось скопировать: браузер запретил доступ к буферу обмена.",
+  "error.reason.LIBRARY_DISABLED":
+    "Эта библиотека отключена. Включите её, прежде чем выбирать её для добавления тайтлов или запускать сканирование.",
   "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
     "Не удалось проверить медиафайл, поэтому он не может заменить существующий файл библиотеки.",
   "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
@@ -738,6 +740,17 @@ const ru: LocaleDictionary = {
   "settings.librarySaveAndScanButton": "Сохранить и сканировать",
   "settings.librarySaveOnlyButton": "Только сохранить",
   "settings.libraryDeleteButton": "Удалить библиотеку",
+  "settings.libraryDisableButton": "Отключить",
+  "settings.libraryDisableConfirmTitle": "Отключить библиотеку {{name}}?",
+  "settings.libraryDisableConfirm":
+    "Библиотека {{name}} исчезнет из раздела «Каталоги» и станет недоступна для добавления тайтлов. Запланированные сканирования и обновления остановятся, а текущее сканирование будет отменено. Существующие тайтлы, файлы, папки и настройки сохранятся. Включить библиотеку снова можно в разделе «Настройки» > «Общие» > «Библиотеки по умолчанию».",
+  "settings.defaultLibrariesTitle": "Библиотеки по умолчанию",
+  "settings.defaultLibrariesHelp":
+    "Библиотеки по умолчанию нельзя удалить. При отключении библиотека исчезает из раздела «Каталоги», и через неё нельзя будет добавлять или запрашивать тайтлы. Запланированные сканирования и обновления остановятся, а текущие сканирования будут отменены. Существующие тайтлы, файлы, папки и настройки сохранятся. Включённые библиотеки настраиваются в разделе «Каталоги».",
+  "settings.defaultLibrariesEmpty": "Нет доступных библиотек по умолчанию.",
+  "settings.defaultLibrariesLoadFailed":
+    "Не удалось загрузить библиотеки по умолчанию.",
+  "settings.defaultLibraryToggleLabel": "Библиотека {{name}} включена",
   "settings.libraryDeleteConfirm":
     "Удалить библиотеку {{name}}? Медиафайлы на диске удалены не будут.",
   "settings.libraryRemoveRootsTitle": "Удаление корневых папок",
@@ -755,6 +768,8 @@ const ru: LocaleDictionary = {
   "settings.librarySaved": "Библиотека сохранена.",
   "settings.libraryDeleted": "Библиотека удалена.",
   "settings.librarySaveFailed": "Не удалось сохранить библиотеку.",
+  "settings.libraryEnabled": "Библиотека включена.",
+  "settings.libraryDisabled": "Библиотека отключена.",
   "settings.libraryDeleteFailed": "Не удалось удалить библиотеку.",
   "settings.librarySettingsLoadFailed":
     "Не удалось загрузить настройки библиотеки.",
@@ -7910,6 +7925,14 @@ const ru: LocaleDictionary = {
     "Максимальное число запросов в минуту должно быть не меньше 1; оставьте поле пустым, чтобы не ограничивать число запросов.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
     "Максимальное число запросов в минуту задаётся для каждого управляемого индексатора, а не для индексатора, который их синхронизирует.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "Достигнут заданный для этого индексатора месячный лимит запросов.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "Достигнут заданный для этого индексатора месячный лимит загрузок.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Не удалось надёжно проверить месячный расход индексатора; запрос отклонён.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Месячные лимиты запросов и загрузок должны быть положительными целыми числами или пустыми.",
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Нижний предел минимального числа сидов не может быть отрицательным.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
@@ -11383,6 +11406,15 @@ const ru: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "Без ограничений",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Максимум запросов в минуту должен быть целым числом не меньше 1; оставьте поле пустым для отключения ограничения.",
+  "form.indexerMaxRequestsPerMonth": "Максимум запросов в месяц",
+  "form.indexerMaxGrabsPerMonth": "Максимум загрузок в месяц",
+  "form.indexerMonthlyLimitPlaceholder": "Без ограничений",
+  "form.indexerMonthlyLimitHelp":
+    "Учитывается только трафик этого экземпляра Scryer. Загрузка резервируется до получения файла и остаётся учтённой, если результат неизвестен. Лимиты сбрасываются в 00:00 UTC в первый день месяца.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Максимум запросов в месяц должен быть целым числом не меньше 1 или пустым.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Максимум загрузок в месяц должен быть целым числом не меньше 1 или пустым.",
   "form.subtitleProviderFacetsRequired":
     "Выберите хотя бы один тип содержимого. Scryer никогда не выполняет поиск через провайдера, у которого не выбран ни один тип.",
   "qualityProfile.qualityPreference": "Приоритет качества",

@@ -219,6 +219,7 @@ async fn configure_default_library_root(
                 path: media_root.to_string(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("default library root should update");

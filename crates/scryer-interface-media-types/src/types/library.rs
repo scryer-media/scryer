@@ -1368,6 +1368,8 @@ pub struct UpdateLibraryInput {
     pub library_id: ID,
     /// Replacement display name; omission preserves it.
     pub name: Option<String>,
+    /// Whether this library is available for navigation, searches, and scans; omission preserves it.
+    pub enabled: Option<bool>,
     /// Replacement root list; omission preserves roots and an empty list clears them when valid.
     pub roots: Option<Vec<UpdateLibraryRootInput>>,
     /// Ids of the stored roots `roots` drops. Must name exactly the roots the edit removes; ignored when `roots` is omitted.

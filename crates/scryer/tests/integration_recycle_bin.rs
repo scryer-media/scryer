@@ -223,6 +223,7 @@ async fn seed_library_in_store(ctx: &TestContext, name: &str, root: &Path) -> Li
             name: name.to_string(),
             slug: name.to_lowercase().replace(' ', "-"),
             is_default: false,
+            enabled: true,
             roots: Vec::new(),
             created_at: now,
             updated_at: now,

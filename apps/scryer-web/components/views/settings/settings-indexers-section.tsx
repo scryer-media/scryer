@@ -95,6 +95,8 @@ import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
 import {
   indexerQueryBudgetDraftValue,
   indexerRateLimitSecondsDraftValue,
+  indexerMonthlyRequestLimitDraftValue,
+  indexerMonthlyGrabLimitDraftValue,
 } from "@/lib/utils/indexer-payload";
 
 type SettingsIndexersSectionProps = {
@@ -152,7 +154,12 @@ type SettingsIndexersSectionProps = {
   ) => Promise<void> | void;
   updateIndexerRateLimits: (
     indexer: IndexerRecord,
-    draft: { rateLimitSeconds: string; maxQueriesPerMinute: string },
+    draft: {
+      rateLimitSeconds: string;
+      maxQueriesPerMinute: string;
+      maxRequestsPerMonth: string;
+      maxGrabsPerMonth: string;
+    },
   ) => Promise<boolean>;
   deleteIndexer: (indexer: IndexerRecord) => Promise<void> | void;
   syncIndexer: (indexer: IndexerRecord) => Promise<void> | void;
@@ -256,12 +263,16 @@ function ManagedIndexerRateLimitsPopover({
   onSave: (draft: {
     rateLimitSeconds: string;
     maxQueriesPerMinute: string;
+    maxRequestsPerMonth: string;
+    maxGrabsPerMonth: string;
   }) => Promise<boolean>;
 }) {
   const t = useTranslate();
   const [open, setOpen] = React.useState(false);
   const [rateLimitSeconds, setRateLimitSeconds] = React.useState("");
   const [maxQueriesPerMinute, setMaxQueriesPerMinute] = React.useState("");
+  const [maxRequestsPerMonth, setMaxRequestsPerMonth] = React.useState("");
+  const [maxGrabsPerMonth, setMaxGrabsPerMonth] = React.useState("");
   const intervalId = selectorId(
     "settings-indexer-rate-limit-seconds",
     indexer.name,
@@ -270,11 +281,21 @@ function ManagedIndexerRateLimitsPopover({
     "settings-indexer-max-queries-per-minute",
     indexer.name,
   );
+  const requestsId = selectorId(
+    "settings-indexer-max-requests-per-month",
+    indexer.name,
+  );
+  const grabsId = selectorId(
+    "settings-indexer-max-grabs-per-month",
+    indexer.name,
+  );
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (nextOpen) {
       setRateLimitSeconds(indexerRateLimitSecondsDraftValue(indexer));
       setMaxQueriesPerMinute(indexerQueryBudgetDraftValue(indexer));
+      setMaxRequestsPerMonth(indexerMonthlyRequestLimitDraftValue(indexer));
+      setMaxGrabsPerMonth(indexerMonthlyGrabLimitDraftValue(indexer));
     }
     setOpen(nextOpen);
   };
@@ -296,17 +317,23 @@ function ManagedIndexerRateLimitsPopover({
           className="space-y-3"
           onSubmit={(event) => {
             event.preventDefault();
-            void onSave({ rateLimitSeconds, maxQueriesPerMinute }).then(
-              (saved) => {
-                if (saved) {
-                  setOpen(false);
-                }
-              },
-            );
+            void onSave({
+              rateLimitSeconds,
+              maxQueriesPerMinute,
+              maxRequestsPerMonth,
+              maxGrabsPerMonth,
+            }).then((saved) => {
+              if (saved) {
+                setOpen(false);
+              }
+            });
           }}
         >
           <p className="text-sm font-medium">
             {t("settings.indexerRateLimits")}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {t("form.indexerMonthlyLimitHelp")}
           </p>
           <label className="block">
             <Label className="mb-2 block" htmlFor={intervalId}>
@@ -321,6 +348,36 @@ function ManagedIndexerRateLimitsPopover({
               value={rateLimitSeconds}
               onChange={(event) => setRateLimitSeconds(event.target.value)}
               placeholder={t("form.indexerRateLimitSecondsPlaceholder")}
+            />
+          </label>
+          <label className="block">
+            <Label className="mb-2 block" htmlFor={requestsId}>
+              {t("form.indexerMaxRequestsPerMonth")}
+            </Label>
+            <Input
+              id={requestsId}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              step={1}
+              value={maxRequestsPerMonth}
+              onChange={(event) => setMaxRequestsPerMonth(event.target.value)}
+              placeholder={t("form.indexerMonthlyLimitPlaceholder")}
+            />
+          </label>
+          <label className="block">
+            <Label className="mb-2 block" htmlFor={grabsId}>
+              {t("form.indexerMaxGrabsPerMonth")}
+            </Label>
+            <Input
+              id={grabsId}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              step={1}
+              value={maxGrabsPerMonth}
+              onChange={(event) => setMaxGrabsPerMonth(event.target.value)}
+              placeholder={t("form.indexerMonthlyLimitPlaceholder")}
             />
           </label>
           <label className="block">
@@ -2021,6 +2078,65 @@ export function SettingsIndexersSection({
                               }
                               placeholder={t(
                                 "form.indexerRateLimitSecondsPlaceholder",
+                              )}
+                            />
+                          </label>
+                        ) : null}
+                        {!isManagedSyncProvider ? (
+                          <p className="text-xs text-muted-foreground md:col-span-2">
+                            {t("form.indexerMonthlyLimitHelp")}
+                          </p>
+                        ) : null}
+                        {!isManagedSyncProvider ? (
+                          <label>
+                            <Label
+                              className="mb-2 block"
+                              htmlFor="settings-indexer-max-requests-per-month"
+                            >
+                              {t("form.indexerMaxRequestsPerMonth")}
+                            </Label>
+                            <Input
+                              id="settings-indexer-max-requests-per-month"
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              step={1}
+                              value={indexerDraft.maxRequestsPerMonth}
+                              onChange={(event) =>
+                                setIndexerDraft((prev: IndexerDraft) => ({
+                                  ...prev,
+                                  maxRequestsPerMonth: event.target.value,
+                                }))
+                              }
+                              placeholder={t(
+                                "form.indexerMonthlyLimitPlaceholder",
+                              )}
+                            />
+                          </label>
+                        ) : null}
+                        {!isManagedSyncProvider ? (
+                          <label>
+                            <Label
+                              className="mb-2 block"
+                              htmlFor="settings-indexer-max-grabs-per-month"
+                            >
+                              {t("form.indexerMaxGrabsPerMonth")}
+                            </Label>
+                            <Input
+                              id="settings-indexer-max-grabs-per-month"
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              step={1}
+                              value={indexerDraft.maxGrabsPerMonth}
+                              onChange={(event) =>
+                                setIndexerDraft((prev: IndexerDraft) => ({
+                                  ...prev,
+                                  maxGrabsPerMonth: event.target.value,
+                                }))
+                              }
+                              placeholder={t(
+                                "form.indexerMonthlyLimitPlaceholder",
                               )}
                             />
                           </label>
