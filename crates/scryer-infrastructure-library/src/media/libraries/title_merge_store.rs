@@ -228,6 +228,8 @@ impl TitleMergeRepository for TitleMergeStore {
         let source_title_id = map.source_title_id.clone();
         let plan = plan.clone();
 
+        // The merge retires the source title row; the set of folder owners can change.
+        let scope = crate::media::titles::store::TitleFolderWriteScope::marked();
         let result =
             SqlRuntime::run_in_transaction(&self.datastore, "execute_title_merge", move |tx| {
                 let plan = plan.clone();
@@ -267,6 +269,7 @@ impl TitleMergeRepository for TitleMergeStore {
                 })
             })
             .await;
+        drop(scope);
         // The destination keeps its own bridge; only the source's row goes.
         if let Some(cache) = &self.anime_numbering_bridge_cache {
             cache.invalidate(&source_title_id);

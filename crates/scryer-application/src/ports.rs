@@ -2028,6 +2028,42 @@ pub trait TitleRepository: Send + Sync {
             })
             .collect())
     }
+    /// Every title that records a folder, as `(title id, folder)`, in the
+    /// order [`Self::list_delete_preview_info`] returns titles. Titles with no
+    /// folder or an empty one are left out.
+    async fn list_title_folder_owners(&self) -> AppResult<Vec<(String, String)>> {
+        Ok(self
+            .list_delete_preview_info()
+            .await?
+            .into_iter()
+            .filter_map(|owner| {
+                owner
+                    .folder_path
+                    .filter(|path| !path.is_empty())
+                    .map(|path| (owner.title_id, path))
+            })
+            .collect())
+    }
+    /// A counter that advances after every write that can change which
+    /// titles record a folder or the folder any title records, once that
+    /// write's transaction has ended, whether it committed or not.
+    ///
+    /// A reader that takes the value before reading the owners, and later
+    /// finds it unchanged, knows no such write has finished in between.
+    /// `None` means this repository keeps no counter, or such a write is in
+    /// progress, and the reader must read the owners again.
+    fn title_folder_write_generation(&self) -> Option<u64> {
+        None
+    }
+    /// [`Self::assign_title_folders`], also returning the value of
+    /// [`Self::title_folder_write_generation`] that this call's own advance
+    /// produced. `None` when that is unknown.
+    async fn assign_title_folders_with_generation(
+        &self,
+        writes: &[crate::TitleFolderWrite],
+    ) -> (AppResult<()>, Option<u64>) {
+        (self.assign_title_folders(writes).await, None)
+    }
     async fn list_for_libraries(
         &self,
         facet: Option<MediaFacet>,

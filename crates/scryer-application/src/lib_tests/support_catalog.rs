@@ -20,7 +20,7 @@ pub(super) type PausedDownloadRequests = Arc<Mutex<Vec<PausedDownloadRequest>>>;
 
 #[derive(Default)]
 pub(crate) struct MockTitleRepo {
-    pub(super) store: Arc<Mutex<Vec<Title>>>,
+    pub(crate) store: Arc<Mutex<Vec<Title>>>,
     pub(super) fail_monitoring_for: Mutex<HashSet<String>>,
     /// The title tag registry, in definition order. Mirrors the store's
     /// behaviour rather than its SQL: unique labels, a rename that rewrites
@@ -33,6 +33,11 @@ pub(crate) struct MockTitleRepo {
     /// id list or on its own. Lets a fault start at a later read of a job.
     pub(super) fail_reads_of_title_after: Mutex<Option<(String, usize)>>,
     pub(super) lose_folder_claim: AtomicBool,
+    /// Keep the store's folder-write counter: every folder write, title
+    /// created with a folder and title delete advances it. Off by default,
+    /// so a repository without a counter is the default.
+    pub(crate) counts_folder_writes: AtomicBool,
+    pub(crate) folder_writes: std::sync::atomic::AtomicU64,
     /// Make every pre-flight folder check refuse, as if another title owned
     /// the folder, while the write path itself is left alone.
     pub(super) refuse_folder_checks: AtomicBool,
@@ -299,6 +304,54 @@ pub(super) fn sorted_limited_job_runs(
 }
 
 impl MockTitleRepo {
+    /// Advance the folder-write counter after a write, when it is kept.
+    fn advance_folder_writes(&self) -> Option<u64> {
+        self.counts_folder_writes
+            .load(Ordering::SeqCst)
+            .then(|| self.folder_writes.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    /// [`TitleRepository::assign_title_folders`] without the counter advance.
+    async fn assign_title_folders_unadvanced(
+        &self,
+        writes: &[crate::TitleFolderWrite],
+    ) -> AppResult<()> {
+        for write in writes {
+            if let Some(error) = self.folder_path_write_failure(&write.title_id).await {
+                return Err(error);
+            }
+            if self.lose_folder_claim.load(Ordering::SeqCst)
+                && matches!(
+                    write.expected_current,
+                    crate::ExpectedTitleFolder::Exactly(_)
+                )
+            {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::folder_ownership::TITLE_FOLDER_CHANGED,
+                    "title folder changed before this write",
+                ));
+            }
+        }
+        let mut list = self.store.lock().await;
+        let planned = self.plan_folder_writes(&list, writes, None, false).await?;
+        for write in planned {
+            if let Some(title) = list.iter_mut().find(|entry| entry.id == write.title_id) {
+                title.folder_path = write.folder_path;
+            }
+        }
+        Ok(())
+    }
+
+    fn advance_folder_writes_for_created(&self, title: &Title) {
+        if title
+            .folder_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
+        {
+            self.advance_folder_writes();
+        }
+    }
+
     /// Check this repository's folder writes against `libraries`' roots.
     pub(super) fn share_library_roots(&self, libraries: MockLibraryRepo) -> Arc<MockLibraryRepo> {
         let _ = self.library_store.set(libraries.libraries.clone());
@@ -413,7 +466,7 @@ impl MockTitleRepo {
     }
 
     /// Make every `set_folder_path`/`clear_folder_path` for `title_id` fail.
-    pub(super) async fn fail_folder_path_writes_for(&self, title_id: &str, message: &str) {
+    pub(crate) async fn fail_folder_path_writes_for(&self, title_id: &str, message: &str) {
         *self.folder_path_write_error.lock().await =
             Some((title_id.to_string(), message.to_string()));
     }
@@ -1108,6 +1161,8 @@ impl TitleRepository for MockTitleRepo {
 
         self.check_created_title_folder(&list, &title).await?;
         list.push(title.clone());
+        drop(list);
+        self.advance_folder_writes_for_created(&title);
         Ok(CreateTitleOutcome {
             title,
             reused_existing: false,
@@ -1221,6 +1276,9 @@ impl TitleRepository for MockTitleRepo {
         }
 
         list.push(title.clone());
+        drop(pending_items);
+        drop(list);
+        self.advance_folder_writes_for_created(&title);
         Ok(CreateTitleOutcome {
             title,
             reused_existing: false,
@@ -1231,6 +1289,8 @@ impl TitleRepository for MockTitleRepo {
         let mut list = self.store.lock().await;
         self.check_created_title_folder(&list, &title).await?;
         list.push(title.clone());
+        drop(list);
+        self.advance_folder_writes_for_created(&title);
         Ok(title)
     }
 
@@ -1543,6 +1603,8 @@ impl TitleRepository for MockTitleRepo {
             .position(|entry| entry.id == id)
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
         list.remove(position);
+        drop(list);
+        self.advance_folder_writes();
         Ok(())
     }
 
@@ -1618,32 +1680,26 @@ impl TitleRepository for MockTitleRepo {
         Ok(())
     }
 
+    async fn assign_title_folders_with_generation(
+        &self,
+        writes: &[crate::TitleFolderWrite],
+    ) -> (AppResult<()>, Option<u64>) {
+        if writes.is_empty() {
+            return (Ok(()), None);
+        }
+        let result = self.assign_title_folders_unadvanced(writes).await;
+        (result, self.advance_folder_writes())
+    }
+
+    fn title_folder_write_generation(&self) -> Option<u64> {
+        self.counts_folder_writes
+            .load(Ordering::SeqCst)
+            .then(|| self.folder_writes.load(Ordering::SeqCst))
+    }
+
     /// The production write path, with the store's checks run in memory.
     async fn assign_title_folders(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
-        for write in writes {
-            if let Some(error) = self.folder_path_write_failure(&write.title_id).await {
-                return Err(error);
-            }
-            if self.lose_folder_claim.load(Ordering::SeqCst)
-                && matches!(
-                    write.expected_current,
-                    crate::ExpectedTitleFolder::Exactly(_)
-                )
-            {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::folder_ownership::TITLE_FOLDER_CHANGED,
-                    "title folder changed before this write",
-                ));
-            }
-        }
-        let mut list = self.store.lock().await;
-        let planned = self.plan_folder_writes(&list, writes, None, false).await?;
-        for write in planned {
-            if let Some(title) = list.iter_mut().find(|entry| entry.id == write.title_id) {
-                title.folder_path = write.folder_path;
-            }
-        }
-        Ok(())
+        self.assign_title_folders_with_generation(writes).await.0
     }
 
     async fn check_title_folder_writes(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
@@ -1671,6 +1727,8 @@ impl TitleRepository for MockTitleRepo {
             .find(|entry| entry.id == id)
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
         title.folder_path = Some(folder_path.to_string());
+        drop(list);
+        self.advance_folder_writes();
         Ok(())
     }
 
@@ -1684,6 +1742,8 @@ impl TitleRepository for MockTitleRepo {
             .find(|entry| entry.id == id)
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
         title.folder_path = None;
+        drop(list);
+        self.advance_folder_writes();
         Ok(())
     }
 

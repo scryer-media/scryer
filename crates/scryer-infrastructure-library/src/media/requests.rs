@@ -250,77 +250,88 @@ impl MediaRequestRepository for MediaRequestStore {
         Option<scryer_domain::DomainEvent>,
     )> {
         let request = request.clone();
-        SqlRuntime::run_in_transaction(&self.datastore, "approve_request_with_title", move |tx| {
-            let (request, title, options, resolution, added_event) = (
-                request.clone(),
-                title.clone(),
-                options.clone(),
-                resolution.clone(),
-                added_event.clone(),
-            );
-            Box::pin(async move {
-                let movie_only = request.is_list_series_movie();
-                let created = if movie_only {
-                    let selection =
-                        request
-                            .requested_monitor_selection
-                            .as_ref()
-                            .ok_or_else(|| {
-                                AppError::validation_refused(
-                                    crate::error_reasons::MEDIA_LIST_MOVIE_SELECTION_MISSING,
-                                    "list movie selection is missing",
-                                )
-                            })?;
-                    crate::media::titles::store::create_or_get_title_preserving_options_tx(
-                        tx, &title, selection,
-                    )
-                    .await?
-                } else {
-                    crate::media::titles::store::create_or_get_title_tx(tx, &title, &options)
+        let scope = crate::media::titles::store::TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let result = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "approve_request_with_title",
+            move |tx| {
+                let (request, title, options, resolution, added_event, proof) = (
+                    request.clone(),
+                    title.clone(),
+                    options.clone(),
+                    resolution.clone(),
+                    added_event.clone(),
+                    proof.clone(),
+                );
+                Box::pin(async move {
+                    let movie_only = request.is_list_series_movie();
+                    let created = if movie_only {
+                        let selection =
+                            request
+                                .requested_monitor_selection
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    AppError::validation_refused(
+                                        crate::error_reasons::MEDIA_LIST_MOVIE_SELECTION_MISSING,
+                                        "list movie selection is missing",
+                                    )
+                                })?;
+                        crate::media::titles::store::create_or_get_title_preserving_options_tx(
+                            tx, &proof, &title, selection,
+                        )
                         .await?
-                };
-                // The application guards this identity. A concurrent creation
-                // with another id must retry under the correct title guard.
-                if created.title.id != title.id {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::MEDIA_REQUEST_APPROVAL_TITLE_CHANGED,
-                        "request title changed during approval; retry",
-                    ));
-                }
-                let advanced = created
-                    .title
-                    .tags
-                    .iter()
-                    .any(|tag| tag == "scryer:monitor-type:advanced");
-                if !movie_only && (!advanced || options.monitor_selection.is_some()) {
-                    replace_monitor_selection_tx(
-                        tx,
-                        crate::media::monitor_selections::OWNER_KIND_TITLE,
-                        &title.id,
-                        if advanced {
-                            options.monitor_selection.as_ref().and_then(Option::as_ref)
-                        } else {
-                            None
-                        },
-                    )
-                    .await?;
-                }
-                let event = if created.reused_existing {
-                    None
-                } else {
-                    Some(append_domain_event_tx(tx, added_event).await?)
-                };
-                let result = resolve_pending_overlapping_tx(tx, &request, resolution).await?;
-                if result.updated == 0 {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::MEDIA_REQUEST_NOT_PENDING,
-                        "request is no longer pending",
-                    ));
-                }
-                Ok((created, result, event))
-            })
-        })
-        .await
+                    } else {
+                        crate::media::titles::store::create_or_get_title_tx(
+                            tx, &proof, &title, &options,
+                        )
+                        .await?
+                    };
+                    // The application guards this identity. A concurrent creation
+                    // with another id must retry under the correct title guard.
+                    if created.title.id != title.id {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::MEDIA_REQUEST_APPROVAL_TITLE_CHANGED,
+                            "request title changed during approval; retry",
+                        ));
+                    }
+                    let advanced = created
+                        .title
+                        .tags
+                        .iter()
+                        .any(|tag| tag == "scryer:monitor-type:advanced");
+                    if !movie_only && (!advanced || options.monitor_selection.is_some()) {
+                        replace_monitor_selection_tx(
+                            tx,
+                            crate::media::monitor_selections::OWNER_KIND_TITLE,
+                            &title.id,
+                            if advanced {
+                                options.monitor_selection.as_ref().and_then(Option::as_ref)
+                            } else {
+                                None
+                            },
+                        )
+                        .await?;
+                    }
+                    let event = if created.reused_existing {
+                        None
+                    } else {
+                        Some(append_domain_event_tx(tx, added_event).await?)
+                    };
+                    let result = resolve_pending_overlapping_tx(tx, &request, resolution).await?;
+                    if result.updated == 0 {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::MEDIA_REQUEST_NOT_PENDING,
+                            "request is no longer pending",
+                        ));
+                    }
+                    Ok((created, result, event))
+                })
+            },
+        )
+        .await;
+        drop(scope);
+        result
     }
 
     async fn resolve_pending_overlapping(
