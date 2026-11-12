@@ -2198,6 +2198,21 @@ const ru: LocaleDictionary = {
   "queue.assignTitleBeforeImport":
     "Назначьте материал перед запуском ручного импорта.",
   "queue.ignore": "Игнорировать",
+  "queue.dismissImportWarning": "Скрыть предупреждение — сохранить раздачу",
+  "queue.resumeImportTracking": "Возобновить отслеживание импорта",
+  "queue.state.importDismissed": "Предупреждение импорта скрыто",
+  "activity.importFilter.dismissed": "Скрытые предупреждения",
+  "queue.importTrackingFailed": "Не удалось изменить отслеживание импорта.",
+  "queue.importDismissedSuccess":
+    "Предупреждение скрыто. Торрент, раздача и файлы не изменены. Возобновить отслеживание можно в разделе «Скрытые предупреждения».",
+  "queue.importTrackingResumed":
+    "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
+    "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
+    "Этот элемент клиента теперь относится к другой загрузке. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
+    "Эта загрузка уже импортирована, завершилась ошибкой или проигнорирована, поэтому её предупреждение больше нельзя изменить.",
   "queue.ignoreSuccess": "Загрузка проигнорирована.",
   "queue.ignoreFailed": "Не удалось проигнорировать загрузку.",
   "queue.releaseHeldSources": "Освободить удерживаемые источники",

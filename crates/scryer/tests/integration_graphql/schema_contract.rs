@@ -910,8 +910,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // The server-side Arr custom-format translator adds
     // `translateArrCustomFormats`: 292->293.
     assert!(mutation_field_names.contains(&"translateArrCustomFormats"));
+    // Import-warning dismissal adds one mutation and one exact-identity
+    // input: 293->294.
+    assert!(mutation_field_names.contains(&"setTrackedDownloadImportDismissed"));
     assert_eq!(
-        mutation_field_count, 293,
+        mutation_field_count, 294,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1417,16 +1420,19 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // The dismissal command's TrackedDownloadImportTrackingInput: +1.
+    assert!(public_type_names.contains(&"TrackedDownloadImportTrackingInput"));
     assert_eq!(
         public_types.len(),
-        1032,
+        1033,
         "public types: {public_type_names:?}"
     );
     assert_eq!(kind_count("OBJECT"), 557);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
-    assert_eq!(kind_count("INPUT_OBJECT"), 249);
+    // TrackedDownloadImportTrackingInput is the dismissal command's new input.
+    assert_eq!(kind_count("INPUT_OBJECT"), 250);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
     assert_eq!(kind_count("ENUM"), 214);

@@ -1845,6 +1845,59 @@ mod series_plan_tests {
     }
 
     #[test]
+    fn tracker_episode_range_pack_preserves_declared_membership() {
+        let mut title = scene_pack_title();
+        title.name = "Пример шоу".into();
+        title.aliases.clear();
+        title.tagged_aliases.clear();
+        let catalog: Vec<_> = (1..=13)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let release =
+            "Пример шоу  - S1E1-13 - 2026  Sub 4K, HEVC, SDR WEBDL 2160p";
+        let parsed = parse_import_release_for_title(release, &title);
+        let evidence = episode_scoped_pack_evidence(release);
+        let verification = verified_episode_pack(
+            &evidence,
+            &title,
+            &catalog,
+            None,
+            Some(&HashSet::from(["ep-1".into()])),
+            None,
+        );
+        let EpisodePackVerification::Verified(pack) = verification else {
+            panic!("declared episode range should verify; parsed={parsed:?}");
+        };
+        assert_eq!(
+            catalog
+                .iter()
+                .filter(|episode| pack.vouches_for(episode))
+                .count(),
+            13
+        );
+        assert!(!pack.vouches_for(&catalog_episode("outside-pack", 14, 14)));
+        for n in 1..=13 {
+            let member = format!("/downloads/Пример шоу.S01E{n:02}.mkv");
+            let draft = plan_episode_pack_member(
+                &title,
+                Path::new("/downloads"),
+                Path::new(&member),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            let PlannedEpisodeMemberDisposition::Import { episodes } =
+                finalize_pack_member_disposition(draft, &pack)
+            else {
+                panic!("declared member should import: {member}");
+            };
+            assert_eq!(episodes.len(), 1);
+            assert_eq!(episodes[0].id, format!("ep-{n}"));
+        }
+    }
+
+    #[test]
     fn issue_393_verified_pack_scope_is_bounded_by_release_not_initiating_episode() {
         let title = scene_pack_title();
         let catalog: Vec<_> = (1..=4)

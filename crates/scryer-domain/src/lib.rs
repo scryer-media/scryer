@@ -2718,7 +2718,9 @@ pub enum TrackedDownloadState {
     FailedPending,
     /// Failure processed; redownload triggered if enabled.
     Failed,
-    /// User manually dismissed.
+    /// Import tracking was dismissed by the operator; retain the client entry and payload.
+    ImportDismissed,
+    /// User manually ignored; existing client-entry cleanup semantics apply.
     Ignored,
 }
 
@@ -2734,6 +2736,7 @@ impl TrackedDownloadState {
             Self::ImportBlocked => "import_blocked",
             Self::FailedPending => "failed_pending",
             Self::Failed => "failed",
+            Self::ImportDismissed => "import_dismissed",
             Self::Ignored => "ignored",
         }
     }
@@ -2749,6 +2752,7 @@ impl TrackedDownloadState {
             "import_blocked" => Some(Self::ImportBlocked),
             "failed_pending" => Some(Self::FailedPending),
             "failed" => Some(Self::Failed),
+            "import_dismissed" => Some(Self::ImportDismissed),
             "ignored" => Some(Self::Ignored),
             _ => None,
         }
@@ -2760,7 +2764,10 @@ impl TrackedDownloadState {
     /// still live in the client and has to be re-evaluated against its seeding
     /// goal on every poll until the goal is met.
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Imported | Self::Failed | Self::Ignored)
+        matches!(
+            self,
+            Self::Imported | Self::Failed | Self::Ignored | Self::ImportDismissed
+        )
     }
 
     /// Import work is finished for this download and must not be dispatched
@@ -5022,6 +5029,10 @@ pub enum DownloadQueueCommandAction {
     Delete,
     /// An operator released the sources a completed import was holding.
     ReleaseHeldSources,
+    /// Hide an import warning without issuing a command to the download client.
+    DismissImportWarning,
+    /// Explicitly resume import tracking for a dismissed source.
+    ResumeImportTracking,
 }
 
 impl DownloadQueueCommandAction {
@@ -5031,6 +5042,8 @@ impl DownloadQueueCommandAction {
             Self::Resume => "resume",
             Self::Delete => "delete",
             Self::ReleaseHeldSources => "release_held_sources",
+            Self::DismissImportWarning => "dismiss_import_warning",
+            Self::ResumeImportTracking => "resume_import_tracking",
         }
     }
 
@@ -5040,6 +5053,8 @@ impl DownloadQueueCommandAction {
             "resume" => Some(Self::Resume),
             "delete" => Some(Self::Delete),
             "release_held_sources" => Some(Self::ReleaseHeldSources),
+            "dismiss_import_warning" => Some(Self::DismissImportWarning),
+            "resume_import_tracking" => Some(Self::ResumeImportTracking),
             _ => None,
         }
     }

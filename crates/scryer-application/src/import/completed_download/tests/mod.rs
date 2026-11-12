@@ -45,6 +45,7 @@ type ScopedRecentCompletedCalls = Vec<(Vec<String>, Vec<String>)>;
 #[derive(Default)]
 struct TestTitleRepo {
     titles: Arc<Mutex<Vec<Title>>>,
+    fail_matching: bool,
 }
 
 #[async_trait]
@@ -100,6 +101,12 @@ impl TitleRepository for TestTitleRepo {
         facet: Option<MediaFacet>,
         query: Option<String>,
     ) -> AppResult<Vec<Title>> {
+        if self.fail_matching {
+            return Err(AppError::not_found_reason(
+                "fixture_matcher_unavailable",
+                "synthetic matcher failure",
+            ));
+        }
         self.list(facet, query).await
     }
 
@@ -1782,6 +1789,7 @@ fn build_app_with_import_artifact_repository_and_repositories(
     let services = AppServices::builder(
         Arc::new(TestTitleRepo {
             titles: Arc::new(Mutex::new(titles)),
+            fail_matching: false,
         }),
         Arc::new(TestShowRepo {
             collections: Arc::new(Mutex::new(collections)),

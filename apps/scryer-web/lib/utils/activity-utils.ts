@@ -141,6 +141,8 @@ export type QueueRowPresentation = {
   canResume: boolean;
   canAssignTitle: boolean;
   canIgnore: boolean;
+  canDismissImport: boolean;
+  canResumeImportTracking: boolean;
   canMarkFailed: boolean;
   canInteractiveManualImport: boolean;
   canDirectManualImport: boolean;
@@ -193,24 +195,26 @@ export function deriveQueueRowPresentation(
           : "queue.state.postProcessing";
   const statusLabel = isWaitingForDiskSpace(queueItem)
     ? t("queue.state.waitingForDiskSpace")
-    : displayStateKey === "IGNORED"
-      ? t("queue.state.ignored")
-      : queueItem.importTransferPhase === "EXTRACTING"
-        ? t("queue.transfer.extracting")
-        : queueItem.importTransferPhase === "COPYING"
-          ? t("queue.transfer.copying")
-          : queueItem.importTransferPhase === "VERIFYING"
-            ? t("move.checkpointState.VERIFYING")
-            : queueItem.importTransferPhase === "WAITING"
-              ? t("move.checkpointState.PENDING")
-              : queueItem.importTransferPhase === "FINALIZING"
-                ? t("queue.transfer.finalizing")
-                : displayStateKey === "POST_PROCESSING"
-                  ? t(postProcessingStatusKey)
-                  : t(
-                      queueStateLabels[statusBadgeKey.toLowerCase()] ??
-                        "queue.state.unknown",
-                    );
+    : trackedStateKey === "import_dismissed"
+      ? t("queue.state.importDismissed")
+      : displayStateKey === "IGNORED"
+        ? t("queue.state.ignored")
+        : queueItem.importTransferPhase === "EXTRACTING"
+          ? t("queue.transfer.extracting")
+          : queueItem.importTransferPhase === "COPYING"
+            ? t("queue.transfer.copying")
+            : queueItem.importTransferPhase === "VERIFYING"
+              ? t("move.checkpointState.VERIFYING")
+              : queueItem.importTransferPhase === "WAITING"
+                ? t("move.checkpointState.PENDING")
+                : queueItem.importTransferPhase === "FINALIZING"
+                  ? t("queue.transfer.finalizing")
+                  : displayStateKey === "POST_PROCESSING"
+                    ? t(postProcessingStatusKey)
+                    : t(
+                        queueStateLabels[statusBadgeKey.toLowerCase()] ??
+                          "queue.state.unknown",
+                      );
   const hasStatusDetails =
     (stateKey === "failed" ||
       stateKey === "warning" ||
@@ -254,6 +258,10 @@ export function deriveQueueRowPresentation(
     canResume: stateKey === "paused",
     canAssignTitle: actions.assignTitle,
     canIgnore: actions.ignore,
+    canDismissImport:
+      !!queueItem.downloadId && actions.dismissImportWarning === true,
+    canResumeImportTracking:
+      !!queueItem.downloadId && actions.resumeImportTracking === true,
     canMarkFailed: actions.markFailed,
     canInteractiveManualImport: actions.manualImportInteractive,
     canDirectManualImport: actions.manualImportDirect,

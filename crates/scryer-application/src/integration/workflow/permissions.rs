@@ -266,7 +266,7 @@ fn download_history_item_from_terminal_row(
         TrackedDownloadState::Failed => (DownloadQueueState::Failed, None),
         // A dismissed grab is closed history; the display layer reads
         // `Ignored` off the tracked state, not off the client state.
-        TrackedDownloadState::Ignored => (DownloadQueueState::Completed, None),
+        TrackedDownloadState::Ignored | TrackedDownloadState::ImportDismissed => (DownloadQueueState::Completed, None),
         _ => return None,
     };
 

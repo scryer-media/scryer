@@ -3353,6 +3353,10 @@ export const cancelActiveImportMutation = `mutation CancelActiveImport($streamId
   cancelActiveImport(streamId: $streamId)
 }`;
 
+export const setTrackedDownloadImportDismissedMutation = `mutation SetTrackedDownloadImportDismissed($input: TrackedDownloadImportTrackingInput!) {
+  setTrackedDownloadImportDismissed(input: $input)
+}`;
+
 export const ignoreTrackedDownloadMutation = `mutation IgnoreTrackedDownload($input: IgnoreTrackedDownloadInput!) {
   ignoreTrackedDownload(input: $input) {
     kind

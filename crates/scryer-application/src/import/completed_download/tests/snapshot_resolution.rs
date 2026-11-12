@@ -1,6 +1,40 @@
 use super::*;
 
 #[tokio::test]
+async fn dismissed_import_resume_cannot_approve_id_only_when_matcher_is_unavailable() {
+    for restored_without_messages in [false, true] {
+        let title = build_title("title-a", "Example Movie", MediaFacet::Movie);
+        let mut app = build_app(vec![title.clone()], vec![], vec![], vec![]);
+        app.services.catalog.titles = Arc::new(TestTitleRepo {
+            titles: Arc::new(Mutex::new(vec![title])),
+            fail_matching: true,
+        });
+        // A row restored after a restart has no in-memory conflict message, so
+        // infrastructure failure itself must close the gate.
+        let mut td = build_tracked_download("title-a", "movie", "Another.Example.Movie.2020.1080p");
+        td.state = TrackedDownloadState::Downloading;
+        td.match_type = TitleMatchType::IdOnly;
+        if !restored_without_messages {
+            td.warn_kind(
+                crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict,
+                ID_ONLY_CONFLICT_MESSAGE,
+            );
+        }
+        let mut completed = build_completed_download(
+            "Another.Example.Movie.2020.1080p",
+            "/synthetic/completed",
+            Some("movie"),
+        );
+        completed.release_name = Some("Another.Example.Movie.2020.1080p".to_string());
+        assert!(!maybe_resolve_title_from_completed_download(&app, &mut td, &completed).await);
+        assert_eq!(td.state, TrackedDownloadState::Downloading);
+        if !restored_without_messages {
+            assert!(has_id_only_conflict(&td));
+        }
+    }
+}
+
+#[tokio::test]
 async fn foreign_swedish_download_resolves_unique_local_alias_without_year_or_id() {
     let release = "Over.Atlanten.S11E02.SWEDiSH.1080p.WEB.h264-INGRID";
     let mut title = build_title("swedish-show", "Over the Atlantic", MediaFacet::Series);

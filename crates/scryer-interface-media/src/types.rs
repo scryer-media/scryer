@@ -806,6 +806,10 @@ pub struct DownloadImportActionsPayload {
     pub ignore: bool,
     /// Whether the item can be marked failed.
     pub mark_failed: bool,
+    /// Whether this blocked warning can be dismissed without changing its client entry.
+    pub dismiss_import_warning: bool,
+    /// Whether tracking can be explicitly resumed for this dismissed source.
+    pub resume_import_tracking: bool,
 }
 
 #[derive(SimpleObject, Clone)]
