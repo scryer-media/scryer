@@ -52,6 +52,9 @@ You can read more in the [Arr comparison doc](https://www.scryer.media/scryer/do
 
 *Scryer was written from scratch and has no affiliation with the Servarr tools*
 
+For supported Russian/Latin spellings inside verified series downloads, see
+[series-pack member name matching](docs/import-title-matching.md).
+
 ## Technical Overview
 
 Scryer ships as a single Rust binary with:
