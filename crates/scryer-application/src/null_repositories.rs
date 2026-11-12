@@ -2578,7 +2578,7 @@ impl DomainEventRepository for NullDomainEventRepository {
     async fn count_title_history_page_events(
         &self,
         _: Option<&[TitleHistoryEventType]>,
-        _: Option<&[String]>,
+        _: Option<crate::TitleHistoryTitleScope<'_>>,
         _: bool,
         _: Option<&str>,
     ) -> AppResult<i64> {
@@ -2598,7 +2598,7 @@ impl DomainEventRepository for NullDomainEventRepository {
     async fn list_title_history_page_events(
         &self,
         _: Option<&[TitleHistoryEventType]>,
-        _: Option<&[String]>,
+        _: Option<crate::TitleHistoryTitleScope<'_>>,
         _: bool,
         _: Option<&str>,
         _: usize,

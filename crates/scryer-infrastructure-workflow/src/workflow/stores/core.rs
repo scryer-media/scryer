@@ -6,7 +6,7 @@ use scryer_application::{
     DownloadSubmission, DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity,
     ExternalImportMonitorSnapshotChunk, ExternalImportMonitorSnapshotEntryKind, ImportArtifact,
     JobKey, JobRunRecord, JobRunStatus, JobTriggerSource, PendingReleaseStatus, SubmissionScope,
-    SuccessfulGrabCommit, WorkflowOperationInfo,
+    SuccessfulGrabCommit, TitleHistoryTitleScope, WorkflowOperationInfo,
 };
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
@@ -1167,7 +1167,7 @@ const NOT_RULE_REJECTION_SQL: &str = "(import_skip_reason IS NULL OR import_skip
 pub fn build_title_history_filter_sql(
     _datastore: &StoreDatastore,
     event_types: Option<&[TitleHistoryEventType]>,
-    title_ids: Option<&[String]>,
+    title_scope: Option<TitleHistoryTitleScope<'_>>,
     include_titleless: bool,
     download_id: Option<&str>,
 ) -> (String, Vec<SqlArg>) {
@@ -1177,7 +1177,7 @@ pub fn build_title_history_filter_sql(
     // indexer, with no catalog title behind it". Excluding it unconditionally
     // deleted it in SQL before the projection ever saw it, so the unfiltered
     // History page could not show it however the projection behaved. Title
-    // scoping is `title_ids` below, and `title_id = {}` / `IN (...)` already
+    // scoping is `title_scope` below, and `title_id = {}` / `IN (...)` already
     // excludes NULLs on its own - which is exactly right, since a row with no
     // catalog title can never satisfy a title-scoped filter.
     let mut clauses: Vec<String> = Vec::new();
@@ -1362,7 +1362,7 @@ pub fn build_title_history_filter_sql(
             clauses.push(format!("({})", parts.join(" OR ")));
         }
     }
-    if let Some(title_ids) = title_ids {
+    if let Some(title_scope) = title_scope {
         // `include_titleless` widens a title scope to also admit rows with no
         // catalog title. It is set when the scope is the caller's library
         // authorization rather than a title the user picked: an unlinked grab
@@ -1370,14 +1370,27 @@ pub fn build_title_history_filter_sql(
         // `title_id IN (...)` would drop it every time, which is what kept
         // unlinked grabs off /activity/history even once the projection kept
         // them. A user-chosen title or title search never sets it.
-        let scope = if title_ids.is_empty() {
-            "0".to_string()
-        } else if title_ids.len() == 1 {
-            args.push(SqlArg::Text(title_ids[0].clone()));
-            "title_id = {}".to_string()
-        } else {
-            args.extend(title_ids.iter().cloned().map(SqlArg::Text));
-            format!("title_id IN ({})", placeholders(title_ids.len()))
+        let scope = match title_scope {
+            TitleHistoryTitleScope::Titles([]) | TitleHistoryTitleScope::Libraries([]) => {
+                "0".to_string()
+            }
+            TitleHistoryTitleScope::Titles([title_id]) => {
+                args.push(SqlArg::Text(title_id.clone()));
+                "title_id = {}".to_string()
+            }
+            TitleHistoryTitleScope::Titles(title_ids) => {
+                args.extend(title_ids.iter().cloned().map(SqlArg::Text));
+                format!("title_id IN ({})", placeholders(title_ids.len()))
+            }
+            // The library's titles are resolved in the statement: the binds
+            // stay one per library however large the catalog is.
+            TitleHistoryTitleScope::Libraries(library_ids) => {
+                args.extend(library_ids.iter().cloned().map(SqlArg::Text));
+                format!(
+                    "title_id IN (SELECT id FROM titles WHERE library_id IN ({}))",
+                    placeholders(library_ids.len())
+                )
+            }
         };
         if include_titleless {
             clauses.push(format!("({scope} OR title_id IS NULL)"));

@@ -1134,6 +1134,9 @@ impl AppUseCase {
         actor: &User,
         episode_ids: &[String],
     ) -> AppResult<Vec<crate::types::EpisodeMediaAvailability>> {
+        if episode_ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let availability = self
             .services
             .library

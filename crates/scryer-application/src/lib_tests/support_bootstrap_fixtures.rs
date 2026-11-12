@@ -377,7 +377,11 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
     let download_client = Arc::new(StubDownloadClient::default());
     let indexer_client = Arc::new(MockIndexerClient);
     let libraries = titles.share_library_roots(MockLibraryRepo::default());
-    let domain_events = Arc::new(MockDomainEventRepo::default());
+    let domain_events = Arc::new({
+        let mut domain_events = MockDomainEventRepo::default();
+        domain_events.titles = Some(titles.clone());
+        domain_events
+    });
     let media_requests = Arc::new(MockMediaRequestRepo {
         titles: Some(titles.clone()),
         ..MockMediaRequestRepo::with_domain_events(domain_events.clone())

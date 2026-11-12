@@ -3999,10 +3999,16 @@ mod tests {
         async fn count_title_history_page_events(
             &self,
             event_types: Option<&[TitleHistoryEventType]>,
-            title_ids: Option<&[String]>,
+            title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
             _include_titleless: bool,
             download_id: Option<&str>,
         ) -> AppResult<i64> {
+            let title_ids = title_scope.map(|scope| match scope {
+                crate::TitleHistoryTitleScope::Titles(title_ids) => title_ids,
+                crate::TitleHistoryTitleScope::Libraries(_) => {
+                    unimplemented!("these tests never read history by library")
+                }
+            });
             let events = self.events.lock().await;
             Ok(events
                 .iter()
@@ -4025,13 +4031,19 @@ mod tests {
         async fn list_title_history_page_events(
             &self,
             event_types: Option<&[TitleHistoryEventType]>,
-            title_ids: Option<&[String]>,
+            title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
             _include_titleless: bool,
             download_id: Option<&str>,
             limit: usize,
             offset: usize,
         ) -> AppResult<Vec<DomainEvent>> {
             let page_size = if limit == 0 { usize::MAX } else { limit };
+            let title_ids = title_scope.map(|scope| match scope {
+                crate::TitleHistoryTitleScope::Titles(title_ids) => title_ids,
+                crate::TitleHistoryTitleScope::Libraries(_) => {
+                    unimplemented!("these tests never read history by library")
+                }
+            });
             let events = self.events.lock().await;
             Ok(events
                 .iter()

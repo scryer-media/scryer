@@ -56,6 +56,7 @@ mod sql_runtime_gated_write;
 mod sqlite_write_batching;
 mod stores_migrations_regressions;
 mod title_fuzzy_index;
+mod title_history_library_scope;
 mod title_images;
 mod title_name_candidates;
 mod title_search_projection;

@@ -19,9 +19,30 @@ pub(crate) struct MockDomainEventRepo {
     /// One per append transaction: `append` and `append_once` count one, and
     /// `append_many` counts one for the whole batch.
     pub(crate) append_commits: AtomicUsize,
+    /// The catalog a library-scoped history page read resolves its titles
+    /// from, as the store resolves them in SQL.
+    pub(super) titles: Option<Arc<MockTitleRepo>>,
 }
 
 impl MockDomainEventRepo {
+    /// The title ids a history page read is scoped to.
+    async fn history_scope_title_ids(
+        &self,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
+    ) -> AppResult<Option<Vec<String>>> {
+        Ok(match title_scope {
+            None => None,
+            Some(crate::TitleHistoryTitleScope::Titles(title_ids)) => Some(title_ids.to_vec()),
+            Some(crate::TitleHistoryTitleScope::Libraries(library_ids)) => Some(
+                self.titles
+                    .as_ref()
+                    .expect("a library-scoped history read needs the title repo")
+                    .list_title_ids_for_libraries(library_ids, None)
+                    .await?,
+            ),
+        })
+    }
+
     async fn store_event(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
         if self.fail_append.load(Ordering::SeqCst) {
             return Err(AppError::Repository(
@@ -393,10 +414,12 @@ impl DomainEventRepository for MockDomainEventRepo {
     async fn count_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
         _include_titleless: bool,
         download_id: Option<&str>,
     ) -> AppResult<i64> {
+        let title_ids = self.history_scope_title_ids(title_scope).await?;
+        let title_ids = title_ids.as_deref();
         let events = self.events.lock().await;
         Ok(events
             .iter()
@@ -418,13 +441,15 @@ impl DomainEventRepository for MockDomainEventRepo {
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
         _include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> AppResult<Vec<DomainEvent>> {
         let page_size = if limit == 0 { usize::MAX } else { limit };
+        let title_ids = self.history_scope_title_ids(title_scope).await?;
+        let title_ids = title_ids.as_deref();
         let events = self.events.lock().await;
         Ok(events
             .iter()

@@ -727,10 +727,11 @@ pub use ports::{
     ScopeCoverageRow, ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository,
     ShowRepository, SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore, SubtitleDownloadRepository,
     SubtitlePluginProvider, SubtitleProviderClient, SubtitleProviderConfigRepository,
-    SystemInfoProvider, TitleImageProcessor, TitleImageRepository, TitleListProjection,
-    TitleNameBucketQuery, TitleNameCandidate, TitleRepository, TitleRowProjection, TotpRepository,
-    UserExternalAccountRepository, UserRepository, VerifiedExternalIdentity, WebauthnRepository,
-    WorkflowOperationInfo, WorkflowOperationRepository,
+    SystemInfoProvider, TitleHistoryTitleScope, TitleImageProcessor, TitleImageRepository,
+    TitleListProjection, TitleNameBucketQuery, TitleNameCandidate, TitleRepository,
+    TitleRowProjection, TotpRepository, UserExternalAccountRepository, UserRepository,
+    VerifiedExternalIdentity, WebauthnRepository, WorkflowOperationInfo,
+    WorkflowOperationRepository,
 };
 pub use ports::{
     AudiencePlay, AudienceRead, MediaServerSignalReader, MediaServerSignalRepository,

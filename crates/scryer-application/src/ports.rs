@@ -1337,6 +1337,16 @@ pub trait DiscoveryRepository: Send + Sync {
     ) -> AppResult<()>;
 }
 
+/// The catalog titles a title-history page read covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleHistoryTitleScope<'a> {
+    /// Exactly these titles.
+    Titles(&'a [String]),
+    /// Every title in these libraries, resolved by the store in the same
+    /// statement instead of as an id list.
+    Libraries(&'a [String]),
+}
+
 /// Stored values and related metadata required by a title list consumer.
 ///
 /// All fields default to on, so a caller that never thinks about the
@@ -1956,6 +1966,32 @@ pub trait TitleRepository: Send + Sync {
                     .await
             }
         }
+    }
+    /// Ids of the titles in `library_ids`, in list order (`LOWER(name)`, then
+    /// id), at most `limit` of them. The same titles in the same order as
+    /// [`Self::list_with_projection`] for those libraries; a store reads only
+    /// the id. An empty `library_ids` holds no titles.
+    async fn list_title_ids_for_libraries(
+        &self,
+        library_ids: &[String],
+        limit: Option<usize>,
+    ) -> AppResult<Vec<String>> {
+        if library_ids.is_empty() || limit == Some(0) {
+            return Ok(Vec::new());
+        }
+        let titles = self
+            .list_with_projection(
+                None,
+                Some(library_ids),
+                None,
+                TitleListProjection::without_canonical_tags().without_external_ids(),
+            )
+            .await?;
+        Ok(titles
+            .into_iter()
+            .take(limit.unwrap_or(usize::MAX))
+            .map(|title| title.id)
+            .collect())
     }
     /// How many titles one library holds, for the request-rule
     /// `library_title_count` fact (spec 0003 §3.2).
@@ -5348,23 +5384,23 @@ pub trait DomainEventRepository: Send + Sync {
     }
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>>;
     async fn list(&self, filter: &DomainEventFilter) -> AppResult<Vec<DomainEvent>>;
-    /// `title_ids` scopes the page to those catalog titles. `include_titleless`
+    /// `title_scope` scopes the page to those catalog titles. `include_titleless`
     /// additionally admits rows that have no catalog title at all - an unlinked
     /// grab (FR-026) is recorded against the release and the indexer, so it can
     /// never be named by a title id, and a page scoped only by the caller's
     /// library authorization would otherwise drop it. It is ignored when
-    /// `title_ids` is `None`, where nothing is excluded anyway.
+    /// `title_scope` is `None`, where nothing is excluded anyway.
     async fn count_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<TitleHistoryTitleScope<'_>>,
         include_titleless: bool,
         download_id: Option<&str>,
     ) -> AppResult<i64>;
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<TitleHistoryTitleScope<'_>>,
         include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
