@@ -554,7 +554,7 @@ async fn library_scoped_history_matches_the_listed_title_read() {
 
     let mut compared = 0usize;
     let mut non_empty = 0usize;
-    for actor in &actors {
+    for (actor_index, actor) in actors.iter().enumerate() {
         for library_ids in &library_choices {
             for (title_ids, title_search) in &title_choices {
                 for event_types in &event_type_choices {
@@ -593,8 +593,7 @@ async fn library_scoped_history_matches_the_listed_title_read() {
                             );
                             assert_eq!(
                                 scoped, listed,
-                                "{}: {filter:?} include_total={include_total}",
-                                actor.username
+                                "actor {actor_index}: {filter:?} include_total={include_total}"
                             );
                             compared += 1;
                             if scoped.is_ok_and(|(records, _)| !records.is_empty()) {
