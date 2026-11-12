@@ -47,7 +47,7 @@ pub struct SubtitleLanguagePref {
 ///
 /// Compares the wanted languages against:
 /// 1. Already-downloaded external subtitles (from `subtitle_downloads` table)
-/// 2. Embedded subtitle streams (from `media_files.analysis_json`)
+/// 2. Embedded subtitle streams (from the stored media analysis, `media_file_analyses`)
 ///
 /// Returns only the combinations that are still needed.
 pub fn compute_missing_subtitles(

@@ -932,6 +932,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "location_operation_plans",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "location_operation_title_checkpoints",
         classification: BackupTableClassification::Export,
     },
@@ -1074,6 +1078,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "media_files",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "media_file_analyses",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {

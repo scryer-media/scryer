@@ -3970,6 +3970,23 @@ file = "postgres/migrations/0337_title_delete_indexes.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 338
+description = "payload blob tables"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0338_payload_blob_tables.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0338_payload_blob_tables.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"
