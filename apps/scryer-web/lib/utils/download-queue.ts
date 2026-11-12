@@ -689,13 +689,16 @@ export function collectDownloadClientFilterOptions(
 }
 
 export function matchesImportStatuses(
-  item: Pick<DownloadQueueItem, "displayState">,
+  item: Pick<DownloadQueueItem, "displayState"> &
+    Partial<Pick<DownloadQueueItem, "trackedState">>,
   statuses: DownloadImportStatus[],
 ): boolean {
   if (statuses.length === 0) {
     return false;
   }
 
+  if (item.trackedState === "IMPORT_DISMISSED")
+    return statuses.includes("DISMISSED");
   switch (item.displayState) {
     case "IMPORTING":
       return statuses.includes("IMPORTING");

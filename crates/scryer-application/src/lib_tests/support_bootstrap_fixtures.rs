@@ -76,6 +76,38 @@ impl DownloadRegistryRepository for FixtureDownloadRegistry {
     }
 }
 
+pub(crate) struct ImportTrackingSpy {
+    client: Arc<StubDownloadClient>,
+    submissions: Arc<TrackingDownloadSubmissionRepo>,
+}
+
+impl ImportTrackingSpy {
+    pub(crate) async fn assert_untouched(&self) {
+        assert!(self.client.delete_attempts.lock().await.is_empty());
+        assert!(self.client.paused_requests.lock().await.is_empty());
+        assert!(self.client.submitted_title_ids.lock().await.is_empty());
+        assert!(self.submissions.pending_cleanup.lock().await.is_empty());
+    }
+}
+
+pub(crate) fn bootstrap_import_tracking_spy() -> (AppUseCase, User, ImportTrackingSpy) {
+    let client = Arc::new(StubDownloadClient::default());
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (app, actor) = bootstrap_with_cleanup_tracking(
+        client.clone(),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    (
+        app,
+        actor,
+        ImportTrackingSpy {
+            client,
+            submissions,
+        },
+    )
+}
+
 pub(crate) fn bootstrap() -> (AppUseCase, User) {
     bootstrap_with_user_repo(Arc::new(MockUserRepo::default()))
 }

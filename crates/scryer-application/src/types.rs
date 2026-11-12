@@ -1208,6 +1208,8 @@ pub enum DownloadActivityFilter {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DownloadImportFilter {
+    /// Only explicitly dismissed warnings; not part of All or Attention.
+    Dismissed,
     All,
     Attention,
     Importing,

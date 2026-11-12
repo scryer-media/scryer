@@ -10,6 +10,21 @@ use scryer_interface_media::{mappers, types::*};
 #[derive(Default)]
 pub struct DownloadMutations;
 
+/// The exact grab whose import warning is dismissed or whose tracking is resumed.
+#[derive(async_graphql::InputObject)]
+pub struct TrackedDownloadImportTrackingInput {
+    /// Canonical grab identity; a re-added torrent must not inherit a stale action.
+    pub download_id: async_graphql::ID,
+    /// Configured download client owning the item.
+    pub client_id: Option<async_graphql::ID>,
+    /// Download client type.
+    pub client_type: String,
+    /// Native client-side item id.
+    pub download_client_item_id: String,
+    /// True hides the warning and suppresses automatic import; false explicitly resumes tracking.
+    pub dismissed: bool,
+}
+
 /// Replacement archive password for one failed download client job.
 #[derive(async_graphql::InputObject)]
 pub struct RetryDownloadPasswordInput {
@@ -654,6 +669,29 @@ impl DownloadMutations {
         app.cancel_active_import_stream(&actor, stream_id.as_ref())
             .await
             .map_err(to_gql_error)?;
+        Ok(true)
+    }
+
+    /// Dismiss an import warning (or explicitly resume its tracking) without changing
+    /// the download client entry, seeding state, files, acquisition claims or quality rules.
+    async fn set_tracked_download_import_dismissed(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Exact download identity and requested import-tracking dismissal state.")]
+        input: TrackedDownloadImportTrackingInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.set_tracked_download_import_dismissed(
+            &actor,
+            input.client_id.as_ref().map(|id| id.as_str()),
+            &input.client_type,
+            &input.download_client_item_id,
+            input.download_id.as_str(),
+            input.dismissed,
+        )
+        .await
+        .map_err(to_gql_error)?;
         Ok(true)
     }
 
