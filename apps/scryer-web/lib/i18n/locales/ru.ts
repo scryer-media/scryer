@@ -8196,6 +8196,8 @@ const ru: LocaleDictionary = {
     "Библиотеки по умолчанию нельзя удалить.",
   "error.reason.LIBRARY_DEFAULT_LIBRARY_NOT_FOUND":
     "Библиотека по умолчанию не найдена.",
+  "error.reason.LIBRARY_DEFAULT_MONITOR_TYPE_INVALID":
+    "Выберите тип мониторинга по умолчанию, который поддерживает эта библиотека.",
   "error.reason.LIBRARY_DELETE_TARGET_NOT_FILE":
     "Удаление каталога по пути с выбранным значением через операцию удаления отдельного файла запрещено.",
   "error.reason.LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS":
