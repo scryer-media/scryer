@@ -4630,6 +4630,15 @@ export const searchMetadataQuery = `query SearchMetadata($query: String!, $type:
   }
 }`;
 
+/// Single-facet search for a user with a library they can request into but
+/// not view: the same results, plus the viewer's libraries that already hold
+/// each one.
+export const searchMetadataRequesterQuery = `query SearchMetadataRequester($query: String!, $type: MediaFacetValue!, $limit: Int, $language: String! = "eng", $year: Int) {
+  searchMetadata(query: $query, type: $type, limit: $limit, language: $language, year: $year) {${METADATA_SEARCH_FIELDS}
+    presentInLibraryIds
+  }
+}`;
+
 export const pendingImportTitleSearchQuery = `query PendingImportTitleSearch($pendingImportId: ID!, $query: String!, $limit: Int = 8, $language: String! = "eng", $year: Int) {
   pendingImportTitleSearch(pendingImportId: $pendingImportId, query: $query, limit: $limit, language: $language, year: $year) {${METADATA_SEARCH_FIELDS}
     existingTitleId
@@ -4730,6 +4739,23 @@ export const searchMetadataMultiQuery = `query SearchMetadataMulti($query: Strin
     series {${METADATA_SEARCH_FIELDS}
     }
     anime {${METADATA_SEARCH_FIELDS}
+    }
+  }
+}`;
+
+/// Global search for a user with a library they can request into but not
+/// view: the same results, plus the viewer's libraries that already hold each
+/// one, since the catalog search cannot see those libraries.
+export const searchMetadataMultiRequesterQuery = `query SearchMetadataMultiRequester($query: String!, $limit: Int, $language: String! = "eng") {
+  searchMetadataMulti(query: $query, limit: $limit, language: $language) {
+    movies {${METADATA_SEARCH_FIELDS}
+      presentInLibraryIds
+    }
+    series {${METADATA_SEARCH_FIELDS}
+      presentInLibraryIds
+    }
+    anime {${METADATA_SEARCH_FIELDS}
+      presentInLibraryIds
     }
   }
 }`;

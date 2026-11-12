@@ -106,6 +106,7 @@ fn from_metadata_search_item(
         runtime_minutes: item.runtime_minutes,
         sort_title: item.sort_title,
         existing_title_id: None,
+        present_in_library_ids: Vec::new(),
     }
 }
 

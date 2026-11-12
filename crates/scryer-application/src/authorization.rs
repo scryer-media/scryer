@@ -447,6 +447,28 @@ pub(crate) struct LibraryPermissionContext {
 }
 
 impl LibraryPermissionContext {
+    /// Whether the actor holds at least one of `permissions` on any library.
+    pub(crate) fn has_any_library_with_any(&self, permissions: &[LibraryPermission]) -> bool {
+        self.candidate_library_ids.iter().any(|library_id| {
+            permissions.iter().any(|permission| {
+                effective_library_permission(&self.authorization, library_id, *permission)
+            })
+        })
+    }
+
+    /// The stored libraries on which the actor holds at least one of
+    /// `permissions`, in catalog order.
+    pub(crate) fn libraries_with_any(
+        &self,
+        permissions: &[LibraryPermission],
+    ) -> impl Iterator<Item = &scryer_domain::Library> {
+        self.libraries.iter().filter(move |library| {
+            permissions.iter().any(|permission| {
+                effective_library_permission(&self.authorization, &library.id, *permission)
+            })
+        })
+    }
+
     /// [`AppUseCase::authorized_library_ids`] for `permission`.
     pub(crate) fn library_ids(&self, permission: LibraryPermission) -> Vec<String> {
         self.candidate_library_ids

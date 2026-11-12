@@ -24,6 +24,7 @@ import {
   buildCatalogSearchSections,
   buildGlobalSearchTabs,
   buildMetadataResultCounts,
+  buildMetadataResultRequestPresentation,
   buildMetadataSearchActionState,
   metadataSearchItemFromCatalogTitle,
   countHiddenCatalogResultsForFilters,
@@ -841,6 +842,10 @@ export function MobileSearchOverlay({
 
   const renderMetadataItem = React.useCallback(
     (result: MetadataTvdbSearchItem, facet: "MOVIE" | "SERIES" | "ANIME") => {
+      const requestPresentation = buildMetadataResultRequestPresentation(
+        result,
+        requestableLibrariesByFacet[facet],
+      );
       const {
         actionTitle,
         disabled,
@@ -855,7 +860,7 @@ export function MobileSearchOverlay({
             rootFoldersByFacet[facet].some((rootFolder) =>
               Boolean(rootFolder.path.trim()),
             )),
-        canRequest: requestableLibrariesByFacet[facet].length > 0,
+        canRequest: requestPresentation.requestableLibraries.length > 0,
         resultName: result.name,
         t,
       });
@@ -866,7 +871,11 @@ export function MobileSearchOverlay({
         }
 
         if (opensRequestDialog) {
-          setRequestDialogTarget({ result, facet });
+          setRequestDialogTarget({
+            result,
+            facet,
+            libraries: requestPresentation.requestableLibraries,
+          });
           return;
         }
 

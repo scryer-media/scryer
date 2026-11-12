@@ -166,6 +166,23 @@ pub struct TitleExternalIdLookup {
     pub external_id: String,
 }
 
+/// One identity a batched library-presence read asks about: a facet, an id
+/// source (lowercase) and a value (trimmed), compared the way
+/// `list_existing_external_ids_in_library_and_facet` compares them.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TitleExternalIdPresenceLookup {
+    pub facet: MediaFacet,
+    pub source: String,
+    pub value: String,
+}
+
+/// A library that holds a title carrying one requested identity.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TitleExternalIdPresence {
+    pub library_id: String,
+    pub lookup: TitleExternalIdPresenceLookup,
+}
+
 #[derive(Clone, Debug)]
 pub struct TitleExternalIdLookupMatch {
     pub lookup_index: usize,
@@ -2326,6 +2343,53 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(existing)
     }
+
+    /// `list_existing_external_ids_in_library_and_facet` for many libraries
+    /// and many `(facet, source, value)` identities at once: every library of
+    /// `library_ids` that holds a title of the lookup's facet carrying that
+    /// identity. The default asks the per-library method once per library
+    /// and `(facet, source)`; SQL stores override it with one read per chunk.
+    async fn list_existing_external_ids_in_libraries(
+        &self,
+        library_ids: &[String],
+        lookups: &[TitleExternalIdPresenceLookup],
+    ) -> AppResult<HashSet<TitleExternalIdPresence>> {
+        let mut grouped = std::collections::HashMap::<(MediaFacet, String), Vec<String>>::new();
+        for lookup in lookups {
+            grouped
+                .entry((
+                    lookup.facet.clone(),
+                    lookup.source.trim().to_ascii_lowercase(),
+                ))
+                .or_default()
+                .push(lookup.value.trim().to_string());
+        }
+        let mut present = HashSet::new();
+        for library_id in library_ids {
+            for ((facet, source), values) in &grouped {
+                for value in self
+                    .list_existing_external_ids_in_library_and_facet(
+                        library_id,
+                        facet.clone(),
+                        source,
+                        values,
+                    )
+                    .await?
+                {
+                    present.insert(TitleExternalIdPresence {
+                        library_id: library_id.clone(),
+                        lookup: TitleExternalIdPresenceLookup {
+                            facet: facet.clone(),
+                            source: source.clone(),
+                            value,
+                        },
+                    });
+                }
+            }
+        }
+        Ok(present)
+    }
+
     /// Same lookup as `list_existing_external_ids_in_library_and_facet`, but
     /// keeping the owning title id for each matched external id so callers can
     /// point the user at the title they already have. The default fans out over

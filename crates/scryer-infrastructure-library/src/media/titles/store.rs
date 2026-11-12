@@ -739,6 +739,31 @@ fn sql_placeholders(count: usize) -> String {
         .join(", ")
 }
 
+/// Which of `lookups` `(facet, source, external_id)` identities each of
+/// `libraries` holds. Binds the identities first, three per row, then the
+/// library ids.
+fn external_id_presence_sql(lookups: usize, libraries: usize) -> String {
+    let requested_values = std::iter::repeat_n("({}, {}, {})", lookups)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "WITH requested(facet, source, external_id) AS (
+             VALUES {requested_values}
+         )
+         SELECT DISTINCT title_external_ids.library_id AS library_id,
+                requested.facet AS facet,
+                requested.source AS source,
+                requested.external_id AS external_id
+           FROM requested
+           JOIN title_external_ids
+             ON title_external_ids.library_id IN ({})
+            AND title_external_ids.source = requested.source
+            AND title_external_ids.external_id = requested.external_id
+            AND title_external_ids.facet = requested.facet",
+        sql_placeholders(libraries)
+    )
+}
+
 fn title_name_candidate_from_row(
     row: &SqlRow,
 ) -> AppResult<scryer_application::TitleNameCandidate> {
@@ -2671,6 +2696,78 @@ impl TitleRepository for TitleStore {
             existing.insert(row.text("external_id")?);
         }
         Ok(existing)
+    }
+
+    /// One read per chunk of libraries and identities, matched exactly as the
+    /// single-library lookup matches: source lowercased, value trimmed, and
+    /// served by `idx_title_external_ids_library_source_value`. Only the
+    /// library id and the matched identity are read; no title is decoded.
+    async fn list_existing_external_ids_in_libraries(
+        &self,
+        library_ids: &[String],
+        lookups: &[scryer_application::TitleExternalIdPresenceLookup],
+    ) -> AppResult<std::collections::HashSet<scryer_application::TitleExternalIdPresence>> {
+        let mut present = std::collections::HashSet::new();
+        let library_ids = library_ids
+            .iter()
+            .map(|library_id| library_id.trim())
+            .filter(|library_id| !library_id.is_empty())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let wanted = lookups
+            .iter()
+            .filter_map(|lookup| {
+                let source = lookup.source.trim().to_ascii_lowercase();
+                let value = lookup.value.trim().to_string();
+                (!source.is_empty() && !value.is_empty())
+                    .then(|| (lookup.facet.as_str().to_string(), source, value))
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if library_ids.is_empty() || wanted.is_empty() {
+            return Ok(present);
+        }
+        let facet_by_name = lookups
+            .iter()
+            .map(|lookup| (lookup.facet.as_str().to_string(), lookup.facet.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        // Three binds per identity and one per library. Libraries are few;
+        // the identity list takes whatever room they leave.
+        let limit = max_binds(&self.datastore.read_exec());
+        let (library_ids, libraries_per_statement) =
+            id_list_statements(&library_ids, 1, 3, limit / 2, limit / 4);
+        for library_chunk in library_ids.chunks(libraries_per_statement) {
+            let lookups_per_statement = ((limit - library_chunk.len()) / 3).max(1);
+            for lookup_chunk in wanted.chunks(lookups_per_statement) {
+                let sql = external_id_presence_sql(lookup_chunk.len(), library_chunk.len());
+                let mut args = Vec::with_capacity(lookup_chunk.len() * 3 + library_chunk.len());
+                for (facet, source, value) in lookup_chunk {
+                    args.push(SqlArg::Text(facet.clone()));
+                    args.push(SqlArg::Text(source.clone()));
+                    args.push(SqlArg::Text(value.clone()));
+                }
+                args.extend(library_chunk.iter().cloned().map(SqlArg::Text));
+                for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                    let facet_name = row.text("facet")?;
+                    let Some(facet) = facet_by_name.get(&facet_name) else {
+                        continue;
+                    };
+                    present.insert(scryer_application::TitleExternalIdPresence {
+                        library_id: row.text("library_id")?,
+                        lookup: scryer_application::TitleExternalIdPresenceLookup {
+                            facet: facet.clone(),
+                            source: row.text("source")?,
+                            value: row.text("external_id")?,
+                        },
+                    });
+                }
+            }
+        }
+        Ok(present)
     }
 
     async fn map_existing_external_ids_to_title_ids_in_library_and_facet(
@@ -7587,6 +7684,8 @@ async fn delete_indexer_search_learning_for_title_tx(
 
 #[cfg(test)]
 mod catalog_presence_tests;
+#[cfg(test)]
+mod external_id_presence_tests;
 
 #[cfg(test)]
 mod catalog_order_tests;
