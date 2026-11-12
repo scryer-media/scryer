@@ -62,7 +62,8 @@ impl fmt::Debug for TorboxApi {
 }
 
 /// Which of TorBox's two download families an item belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TorboxItemKind {
     Torrent,
     Usenet,

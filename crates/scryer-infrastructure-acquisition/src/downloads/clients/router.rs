@@ -55,7 +55,7 @@ pub fn download_client_feedback_timeout() -> Duration {
 }
 
 /// Read a staged NZB back out of its zstd frame, for handing to a browser.
-async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
+pub(super) async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
     let input = tokio::fs::File::open(&staged_nzb.compressed_path)
         .await
         .map_err(|error| {
@@ -1458,6 +1458,10 @@ impl PrioritizedDownloadClientRouter {
         if Self::is_native_nzb_client_type(&config.client_type) {
             return artifact_kind == DownloadArtifactKind::NzbBytes;
         }
+        if config.client_type == super::torbox::client::CLIENT_TYPE {
+            // Torrents and NZBs alike: TorBox takes both.
+            return true;
+        }
         let Some(provider) = plugin_provider else {
             return false;
         };
@@ -2122,6 +2126,14 @@ impl PrioritizedDownloadClientRouter {
             }
             "http" => {
                 let client = HttpDownloadClient::for_config(config, proxy_config, http_client)?;
+                Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
+            }
+            super::torbox::client::CLIENT_TYPE => {
+                let client = super::torbox::TorboxDownloadClient::for_config(
+                    config,
+                    proxy_config,
+                    http_client,
+                )?;
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             _ => {
@@ -2982,7 +2994,8 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 .await
             {
                 Ok((mut effective_request, resolved_seed_goals)) => {
-                    if Self::is_native_nzb_client_type(&config.client_type)
+                    if (Self::is_native_nzb_client_type(&config.client_type)
+                        || config.client_type == super::torbox::client::CLIENT_TYPE)
                         && Self::request_uses_nzb_payload(&effective_request)
                         && let Some(staged_nzb) = staged_nzb.as_ref()
                     {

@@ -591,7 +591,7 @@ impl HttpStateStore {
 }
 
 /// A file-name stem that cannot leave its directory.
-fn safe_file_stem(raw: &str) -> String {
+pub(crate) fn safe_file_stem(raw: &str) -> String {
     let safe: String = raw
         .chars()
         .map(|ch| {
@@ -611,13 +611,13 @@ fn safe_file_stem(raw: &str) -> String {
 }
 
 #[cfg(unix)]
-async fn sync_directory(dir: &Path) -> std::io::Result<()> {
+pub(crate) async fn sync_directory(dir: &Path) -> std::io::Result<()> {
     tokio::fs::File::open(dir).await?.sync_all().await
 }
 
 /// Windows cannot open a directory as a file; its renames are not made
 /// durable this way.
 #[cfg(not(unix))]
-async fn sync_directory(_dir: &Path) -> std::io::Result<()> {
+pub(crate) async fn sync_directory(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }

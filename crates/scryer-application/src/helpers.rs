@@ -2,7 +2,8 @@ use super::*;
 use std::future::Future;
 
 pub(crate) const INHERIT_QUALITY_PROFILE_VALUE: &str = "__inherit__";
-pub(crate) const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "weaver", "http"];
+pub(crate) const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 5] =
+    ["nzbget", "sabnzbd", "weaver", "http", "torbox"];
 
 pub(crate) fn parsed_episode_lookup_season(
     ep_meta: &ParsedEpisodeMetadata,
@@ -61,6 +62,13 @@ fn native_accepted_inputs(client_type: &str) -> Vec<DownloadSourceKind> {
     match client_type {
         "nzbget" | "sabnzbd" | "weaver" => vec![DownloadSourceKind::NzbFile],
         "http" => vec![DownloadSourceKind::HttpResource],
+        // One client for both families: TorBox fetches the torrent or the
+        // usenet download, and Scryer fetches the files from TorBox.
+        "torbox" => vec![
+            DownloadSourceKind::MagnetUri,
+            DownloadSourceKind::TorrentFile,
+            DownloadSourceKind::NzbFile,
+        ],
         _ => vec![],
     }
 }

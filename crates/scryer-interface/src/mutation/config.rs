@@ -17,7 +17,7 @@ use crate::mappers::{
 use crate::types::*;
 
 fn should_seed_download_client_routing(client_type: &str) -> bool {
-    matches!(client_type, "nzbget" | "sabnzbd" | "weaver")
+    matches!(client_type, "nzbget" | "sabnzbd" | "weaver" | "torbox")
 }
 
 fn optional_datetime_input(

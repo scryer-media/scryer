@@ -24,9 +24,6 @@ use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub use http::HttpDownloadClient;
-pub(crate) use http::{
-    apply_saved_config as apply_saved_http_config, forget_engine as forget_http_engine,
-};
 pub use nzbget::NzbgetDownloadClient;
 pub use router::{
     PrioritizedDownloadClientRouter, describe_download_client_router_metrics,
@@ -39,6 +36,20 @@ pub use weaver_supervisor::start_weaver_bridge_supervisor;
 
 const MAX_NZB_BYTES: u64 = 32 * 1024 * 1024;
 const STAGED_NZB_ZSTD_LEVEL: i32 = 3;
+
+/// Bring the long-lived state of the clients that keep it (the HTTP
+/// downloader's engine, the TorBox client's runtime) in line with a saved
+/// configuration.
+pub(crate) fn apply_saved_http_config(config: &scryer_domain::DownloadClientConfig) {
+    http::apply_saved_config(config);
+    torbox::client::apply_saved_config(config);
+}
+
+/// Stop the long-lived state of a deleted configuration.
+pub(crate) fn forget_http_engine(config_id: &str) {
+    http::forget_engine(config_id);
+    torbox::client::forget_runtime(config_id);
+}
 
 /// The HTTP client a native (non-plugin) download client should use.
 ///
@@ -102,6 +113,11 @@ impl scryer_application::BuiltinDownloadClientConnectionTester
         if client_type == "http" {
             // A local directory, not a server: nothing to dial.
             return http::test_http_download_dir(config_json).await;
+        }
+        if client_type == torbox::client::CLIENT_TYPE {
+            // TorBox's own host and a local directory: no host setting.
+            let http_client = native_download_client_http_client(&client_type, proxy_config)?;
+            return torbox::client::test_unsaved_config(config_json, http_client).await;
         }
         let config = parse_download_client_config_json(config_json)?;
         let base_url = resolve_download_client_base_url(&config).ok_or_else(|| {

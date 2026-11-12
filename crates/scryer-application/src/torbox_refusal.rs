@@ -39,6 +39,29 @@ pub const LINK_OFFLINE: &str = "TORBOX_LINK_OFFLINE";
 pub const RATE_LIMITED: &str = "TORBOX_RATE_LIMITED";
 /// TorBox could not serve the request because of a fault on its side.
 pub const UNAVAILABLE: &str = "TORBOX_UNAVAILABLE";
+/// TorBox flagged a file of the download as infected, so it is not fetched.
+pub const FILE_INFECTED: &str = "TORBOX_FILE_INFECTED";
+/// TorBox holds a file of the download only inside a zip, which Scryer does
+/// not fetch.
+pub const FILE_ZIPPED: &str = "TORBOX_FILE_ZIPPED";
+/// The finished download holds no video file to fetch.
+pub const NO_VIDEO_FILE: &str = "TORBOX_NO_VIDEO_FILE";
+/// TorBox reports that it could not finish the download.
+pub const REMOTE_FAILED: &str = "TORBOX_REMOTE_FAILED";
+/// The download is no longer in the TorBox account.
+pub const ITEM_MISSING: &str = "TORBOX_ITEM_MISSING";
+/// A torrent has stopped making progress because no peer has its data.
+pub const STALLED: &str = "TORBOX_STALLED";
+/// The file paths TorBox reports cannot be laid out safely on disk.
+pub const FILE_PATHS_UNUSABLE: &str = "TORBOX_FILE_PATHS_UNUSABLE";
+/// The request carries no torrent, magnet, or NZB this client can send.
+pub const SOURCE_MISSING: &str = "TORBOX_SOURCE_MISSING";
+/// TorBox offers no way to do this to a download in its current phase.
+pub const ACTION_UNSUPPORTED: &str = "TORBOX_ACTION_UNSUPPORTED";
+/// The client has no download with the given id.
+pub const JOB_NOT_FOUND: &str = "TORBOX_JOB_NOT_FOUND";
+/// The client configuration has no API token.
+pub const TOKEN_REQUIRED: &str = "TORBOX_TOKEN_REQUIRED";
 
 /// Every reason a TorBox refusal can name. Clients key translations on these,
 /// so adding, renaming, or removing one must be deliberate.
@@ -58,6 +81,17 @@ pub const ALL: &[&str] = &[
     LINK_OFFLINE,
     RATE_LIMITED,
     UNAVAILABLE,
+    FILE_INFECTED,
+    FILE_ZIPPED,
+    NO_VIDEO_FILE,
+    REMOTE_FAILED,
+    ITEM_MISSING,
+    STALLED,
+    FILE_PATHS_UNUSABLE,
+    SOURCE_MISSING,
+    ACTION_UNSUPPORTED,
+    JOB_NOT_FOUND,
+    TOKEN_REQUIRED,
 ];
 
 #[cfg(test)]

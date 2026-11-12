@@ -32,14 +32,19 @@ mod tests;
 /// [`linked::LinkSource`], and report them with [`queue_item_for`] and
 /// [`completed_download_for`].
 pub(crate) mod owned {
-    pub(crate) use super::engine::{HttpEngine, HttpEngineLimits, LiveSnapshot};
+    pub(crate) use super::engine::{HttpEngine, LiveSnapshot};
     pub(crate) use super::linked::{
-        CONNECTIONS_PER_LINK, LinkOutcome, LinkPurpose, LinkRequest, LinkSource, LinkedFile,
-        LinkedJobRequest, ResolvedLink,
+        CONNECTIONS_PER_LINK, LinkOutcome, LinkRequest, LinkSource, LinkedFile, LinkedJobRequest,
+        ResolvedLink,
     };
-    pub(crate) use super::state::{HttpFileRole, HttpJob, HttpJobState};
+    pub(crate) use super::state::{
+        HttpFileRole, HttpJob, HttpJobState, STATE_DIR_NAME, safe_file_stem, sync_directory,
+    };
     pub(crate) use super::transfer::Egress;
-    pub(crate) use super::{completed_download_for, queue_item_for};
+    pub(crate) use super::{
+        HttpClientSettings, check_download_dir, completed_download_for, egress_for, egress_key,
+        queue_item_for, test_http_download_dir,
+    };
 }
 
 use std::collections::HashMap;
@@ -308,7 +313,7 @@ impl HttpDownloadClient {
 /// What an egress client is built from: nothing for the direct path, else
 /// the proxy's revision and the endpoint it egresses through. A restarted
 /// tunnel front changes the endpoint even when the settings did not.
-fn egress_key(proxy_config: Option<&ProxyConfig>) -> AppResult<String> {
+pub(crate) fn egress_key(proxy_config: Option<&ProxyConfig>) -> AppResult<String> {
     let Some(proxy) = proxy_config.filter(|proxy| !proxy.is_challenge_solver()) else {
         return Ok("direct".to_string());
     };
@@ -332,7 +337,7 @@ fn egress_key(proxy_config: Option<&ProxyConfig>) -> AppResult<String> {
 /// The proxied client follows no redirects: the transfer follows them one
 /// hop at a time, so the hop limit, the https downgrade refusal and the
 /// origin scoping of the resource's headers hold through a proxy too.
-fn egress_for(proxy_config: Option<&ProxyConfig>) -> AppResult<Egress> {
+pub(crate) fn egress_for(proxy_config: Option<&ProxyConfig>) -> AppResult<Egress> {
     let Some(proxy) = proxy_config.filter(|proxy| !proxy.is_challenge_solver()) else {
         return Ok(Egress::Direct);
     };
@@ -393,7 +398,7 @@ pub(crate) async fn test_http_download_dir(config_json: &str) -> AppResult<()> {
 
 const WRITE_CHECK_FILE_NAME: &str = "write-check";
 
-async fn check_download_dir(dir: &Path) -> AppResult<()> {
+pub(crate) async fn check_download_dir(dir: &Path) -> AppResult<()> {
     let metadata = tokio::fs::metadata(dir).await.map_err(|error| {
         AppError::validation_refused(
             crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_UNREACHABLE,
