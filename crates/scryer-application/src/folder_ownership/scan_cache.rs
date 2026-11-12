@@ -38,7 +38,7 @@ pub(crate) async fn with_scan_ownership<F: std::future::Future>(
 
 /// An owner list estimated above this many bytes is not held between claims;
 /// each claim reads the owners anew instead.
-const HELD_OWNERS_BYTE_BUDGET: usize = 64 * 1024 * 1024;
+const HELD_OWNERS_BYTE_BUDGET: usize = 512 * 1024 * 1024;
 
 pub(crate) struct ScanOwnershipContext {
     admission: Arc<tokio::sync::Semaphore>,
