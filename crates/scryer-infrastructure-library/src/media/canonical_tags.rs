@@ -199,11 +199,12 @@ pub async fn load_title_metadata_tags(
     exec: SqlExec<'_, '_>,
     title_ids: &[String],
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
-    load_metadata_tags(exec, TITLE_METADATA_TABLES, title_ids, None).await
+    load_metadata_tags(exec, TITLE_METADATA_TABLES, Owners::Ids(title_ids), None).await
 }
 
 /// Load a title's tags whose `LOWER(category)` is one of `lowered_categories`
 /// (already lowercase), with their sources and source keys.
+#[cfg(test)]
 pub async fn load_title_metadata_tags_in_lowered_categories(
     exec: SqlExec<'_, '_>,
     title_ids: &[String],
@@ -212,7 +213,36 @@ pub async fn load_title_metadata_tags_in_lowered_categories(
     load_metadata_tags(
         exec,
         TITLE_METADATA_TABLES,
-        title_ids,
+        Owners::Ids(title_ids),
+        Some(CategoryFilter::LoweredIn(lowered_categories)),
+    )
+    .await
+}
+
+/// Owners chosen by a `WITH` clause instead of a bound id list, so a read
+/// over a whole selection costs the same statements at any selection size.
+#[derive(Clone, Copy)]
+pub struct OwnerSelection<'a> {
+    /// A `WITH ...` clause; its placeholders take `args`, in order.
+    pub with_clause: &'a str,
+    /// A table expression in `with_clause` with one `id` row per owner.
+    pub cte: &'a str,
+    pub args: &'a [SqlArg],
+}
+
+/// Load the tags whose `LOWER(category)` is one of `lowered_categories`
+/// (already lowercase), with their sources and source keys, for the titles a
+/// selection names: the same tags, in the same order, as reading those
+/// titles' ids, but as three statements whatever the selection's size.
+pub async fn load_selected_title_metadata_tags_in_lowered_categories(
+    exec: SqlExec<'_, '_>,
+    selection: OwnerSelection<'_>,
+    lowered_categories: &[&str],
+) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
+    load_metadata_tags(
+        exec,
+        TITLE_METADATA_TABLES,
+        Owners::Selected(selection),
         Some(CategoryFilter::LoweredIn(lowered_categories)),
     )
     .await
@@ -225,7 +255,7 @@ pub async fn load_discovery_title_metadata_tags(
     load_metadata_tags(
         exec,
         DISCOVERY_TITLE_METADATA_TABLES,
-        discovery_title_ids,
+        Owners::Ids(discovery_title_ids),
         None,
     )
     .await
@@ -247,7 +277,7 @@ pub async fn load_discovery_title_metadata_tags_in_category(
     load_metadata_tags(
         exec,
         DISCOVERY_TITLE_METADATA_TABLES,
-        discovery_title_ids,
+        Owners::Ids(discovery_title_ids),
         Some(CategoryFilter::Trimmed(category)),
     )
     .await
@@ -267,6 +297,23 @@ enum CategoryFilter<'a> {
 /// the sqlite and postgres bind ceilings.
 const METADATA_TAG_OWNER_CHUNK: usize = 900;
 
+/// Whose tags a read loads.
+#[derive(Clone, Copy)]
+enum Owners<'a> {
+    Ids(&'a [String]),
+    Selected(OwnerSelection<'a>),
+}
+
+/// One tag read's owners as SQL: `owner_column IN {owner_set}`, after an
+/// optional `with_clause`. `args` bind the placeholders of both, which come
+/// before any category placeholder.
+#[derive(Clone, Copy)]
+struct OwnerFilter<'a> {
+    with_clause: &'a str,
+    owner_set: &'a str,
+    args: &'a [SqlArg],
+}
+
 /// Reads tags, their sources and their source keys as three statements per
 /// chunk of owners and merges them in Rust. Joining the three tables in one
 /// statement returns tags x sources x keys rows per tag.
@@ -276,10 +323,14 @@ const METADATA_TAG_OWNER_CHUNK: usize = 900;
 /// source key `(sort_index, source_tag_key)` produces: tags in that order,
 /// sources and source keys each in their own order, trimmed, blank values
 /// dropped and repeats kept only at their first position.
+///
+/// An id list is read [`METADATA_TAG_OWNER_CHUNK`] owners at a time; a
+/// selection is read in one set of three statements, each restating the
+/// selection's `WITH` clause.
 async fn load_metadata_tags(
     mut exec: SqlExec<'_, '_>,
     tables: MetadataTables,
-    owner_ids: &[String],
+    owners: Owners<'_>,
     category: Option<CategoryFilter<'_>>,
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
     let (category_clause, category_args) = match category {
@@ -301,15 +352,41 @@ async fn load_metadata_tags(
     };
     let category = category.map(|_| (category_clause.as_str(), category_args.as_slice()));
     let mut merged = BTreeMap::<String, OwnerTags>::new();
-    for chunk in owner_ids.chunks(METADATA_TAG_OWNER_CHUNK) {
-        load_metadata_tags_chunk(
-            reborrow_exec(&mut exec),
-            tables,
-            chunk,
-            category,
-            &mut merged,
-        )
-        .await?;
+    match owners {
+        Owners::Ids(owner_ids) => {
+            for chunk in owner_ids.chunks(METADATA_TAG_OWNER_CHUNK) {
+                let owner_set = format!("({})", bind_placeholders(chunk.len()));
+                let owner_args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+                load_metadata_tags_chunk(
+                    reborrow_exec(&mut exec),
+                    tables,
+                    OwnerFilter {
+                        with_clause: "",
+                        owner_set: &owner_set,
+                        args: &owner_args,
+                    },
+                    category,
+                    &mut merged,
+                )
+                .await?;
+            }
+        }
+        Owners::Selected(selection) => {
+            let with_clause = format!("{} ", selection.with_clause.trim_end());
+            let owner_set = format!("(SELECT id FROM {})", selection.cte);
+            load_metadata_tags_chunk(
+                reborrow_exec(&mut exec),
+                tables,
+                OwnerFilter {
+                    with_clause: &with_clause,
+                    owner_set: &owner_set,
+                    args: selection.args,
+                },
+                category,
+                &mut merged,
+            )
+            .await?;
+        }
     }
     Ok(merged
         .into_iter()
@@ -333,19 +410,16 @@ fn reborrow_exec<'a, 'db>(exec: &'a mut SqlExec<'_, 'db>) -> SqlExec<'a, 'db> {
 async fn load_metadata_tags_chunk(
     mut exec: SqlExec<'_, '_>,
     tables: MetadataTables,
-    owner_ids: &[String],
+    owners: OwnerFilter<'_>,
     category: Option<(&str, &[SqlArg])>,
     merged: &mut BTreeMap<String, OwnerTags>,
 ) -> AppResult<()> {
-    if owner_ids.is_empty() {
-        return Ok(());
-    }
-    let placeholders = bind_placeholders(owner_ids.len());
-    let mut args = owner_ids
-        .iter()
-        .cloned()
-        .map(SqlArg::Text)
-        .collect::<Vec<_>>();
+    let OwnerFilter {
+        with_clause,
+        owner_set,
+        args: owner_args,
+    } = owners;
+    let mut args = owner_args.to_vec();
     let category_clause = match category {
         Some((clause, category_args)) => {
             args.extend(category_args.iter().cloned());
@@ -358,7 +432,7 @@ async fn load_metadata_tags_chunk(
     let tag_rows = SqlRuntime::fetch_all(
         reborrow_exec(&mut exec),
         &format!(
-            "SELECT
+            "{with_clause}SELECT
                 t.{owner_column} AS owner_id,
                 t.tag_key AS tag_key,
                 t.category AS category,
@@ -368,7 +442,7 @@ async fn load_metadata_tags_chunk(
                 t.is_adult AS is_adult,
                 t.is_spoiler AS is_spoiler
              FROM {tags} t
-             WHERE t.{owner_column} IN ({placeholders}){category_clause}
+             WHERE t.{owner_column} IN {owner_set}{category_clause}
              ORDER BY t.{owner_column}, t.sort_index, t.category, t.name, t.tag_key",
             tags = tables.tags,
         ),
@@ -423,9 +497,9 @@ async fn load_metadata_tags_chunk(
         let rows = SqlRuntime::fetch_all(
             reborrow_exec(&mut exec),
             &format!(
-                "SELECT v.{owner_column} AS owner_id, v.tag_key AS tag_key, v.{column} AS tag_value
+                "{with_clause}SELECT v.{owner_column} AS owner_id, v.tag_key AS tag_key, v.{column} AS tag_value
                  FROM {table} v{category_join}
-                 WHERE v.{owner_column} IN ({placeholders}){category_clause}
+                 WHERE v.{owner_column} IN {owner_set}{category_clause}
                  ORDER BY v.{owner_column}, v.tag_key, v.sort_index, v.{column}"
             ),
             &args,
