@@ -3168,6 +3168,8 @@ const it: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protocollo",
   "indexerSearch.facet.resolution": "Risoluzione",
   "indexerSearch.facet.source": "Sorgente",
+  "indexerSearch.facet.videoCodec": "Codec video",
+  "indexerSearch.facet.audioCodec": "Codec audio",
   "indexerSearch.facet.audio": "Audio e HDR",
   "indexerSearch.facet.flags": "Contrassegni",
   "indexerSearch.facet.indexer": "Indexer",

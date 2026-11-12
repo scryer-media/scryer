@@ -83,16 +83,19 @@ test("resolution buckets collapse the parser's raw height token", () => {
   assert.equal(resolutionBucket("WEB-DL"), null);
 });
 
-test("facet keys cover protocol, resolution, source, audio, flags and indexer", () => {
+test("facet keys cover every rail group", () => {
   const keys = releaseFacetKeys(
     release({
       title: "Movie.2160p.REMUX",
       source: "abNZB",
       sourceKind: "TORRENT_FILE",
       freeleech: true,
+      languages: ["eng", " eng ", "ger"],
       parsedRelease: parsed({
         quality: "2160p",
         source: "BluRay",
+        videoCodec: "x265",
+        audio: "TrueHD",
         isRemux: true,
         isAtmos: true,
         isDolbyVision: true,
@@ -106,16 +109,61 @@ test("facet keys cover protocol, resolution, source, audio, flags and indexer", 
     "audio:atmos",
     "audio:dolbyVision",
     "audio:hdr",
+    "audioCodec:TrueHD",
     "flags:freeleech",
     "flags:proper",
     "indexer:abNZB",
+    "language:eng",
+    "language:ger",
     "protocol:torrent",
     "resolution:2160p",
     "source:REMUX",
+    "videoCodec:x265",
   ]);
 });
 
-test("facet counts are computed over the whole result set", () => {
+test("rail groups follow the fixed order and languages read as names", () => {
+  const groups = buildIndexerSearchFacets([
+    release({
+      title: "Sample.Feature.2160p",
+      sourceKind: "TORRENT_FILE",
+      freeleech: true,
+      languages: ["eng", "fre"],
+      parsedRelease: parsed({
+        quality: "2160p",
+        source: "WEB-DL",
+        videoCodec: "x265",
+        audio: "DDP",
+        isAtmos: true,
+      }),
+    }),
+  ]);
+
+  assert.deepEqual(
+    groups.map((group) => group.key),
+    [
+      "protocol",
+      "resolution",
+      "source",
+      "videoCodec",
+      "audioCodec",
+      "audio",
+      "language",
+      "flags",
+      "indexer",
+    ],
+  );
+  const language = groups.find((group) => group.key === "language");
+  assert.deepEqual(
+    language?.items.map((item) => [item.value, item.label]),
+    [
+      ["eng", "English"],
+      ["fre", "French"],
+    ],
+  );
+});
+
+test("with nothing selected, facet counts cover the whole result set", () => {
   const releases = [
     release({
       title: "one",
@@ -157,6 +205,185 @@ test("facet counts are computed over the whole result set", () => {
     "NZBgeek",
     "TorrentLeech",
   ]);
+});
+
+function facetCounts(
+  groups: ReturnType<typeof buildIndexerSearchFacets>,
+  groupKey: string,
+): [string, number][] {
+  return (
+    groups
+      .find((group) => group.key === groupKey)
+      ?.items.map((item): [string, number] => [item.value, item.count]) ?? []
+  );
+}
+
+const NOW = Date.parse("2026-09-02T00:00:00Z");
+
+function disjunctiveFixture(): Release[] {
+  return [
+    release({
+      title: "Sample.Alpha.2160p.BluRay.DV",
+      parsedRelease: parsed({
+        quality: "2160p",
+        source: "BluRay",
+        isDolbyVision: true,
+      }),
+    }),
+    release({
+      title: "Sample.Beta.2160p.BluRay",
+      parsedRelease: parsed({ quality: "2160p", source: "BluRay" }),
+    }),
+    release({
+      title: "Sample.Gamma.1080p.WEB-DL",
+      parsedRelease: parsed({ quality: "1080p", source: "WEB-DL" }),
+    }),
+    release({
+      title: "Sample.Delta.1080p.WEB-DL",
+      sizeBytes: 1 * GIB,
+      parsedRelease: parsed({ quality: "1080p", source: "WEB-DL" }),
+    }),
+    release({
+      title: "Sample.Epsilon.720p.HDTV",
+      parsedRelease: parsed({ quality: "720p", source: "HDTV" }),
+    }),
+  ];
+}
+
+test("a selection narrows the counts of every other group", () => {
+  const groups = buildIndexerSearchFacets(
+    disjunctiveFixture(),
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["audio:dolbyVision"] },
+    NOW,
+  );
+
+  // Only the BluRay release carries Dolby Vision, so every other source is
+  // still listed, in full-set order, with nothing left to show.
+  assert.deepEqual(facetCounts(groups, "source"), [
+    ["BluRay", 1],
+    ["WEB-DL", 0],
+    ["HDTV", 0],
+  ]);
+  assert.deepEqual(facetCounts(groups, "resolution"), [
+    ["2160p", 1],
+    ["1080p", 0],
+    ["720p", 0],
+  ]);
+});
+
+test("a group's own selection leaves its own counts alone", () => {
+  const releases = disjunctiveFixture();
+  const unfiltered = facetCounts(buildIndexerSearchFacets(releases), "source");
+  const groups = buildIndexerSearchFacets(
+    releases,
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["source:HDTV"] },
+    NOW,
+  );
+
+  assert.deepEqual(facetCounts(groups, "source"), unfiltered);
+  // Across groups the selection still narrows.
+  assert.deepEqual(facetCounts(groups, "resolution"), [
+    ["2160p", 0],
+    ["1080p", 0],
+    ["720p", 1],
+  ]);
+});
+
+test("counts combine selections from several groups", () => {
+  const groups = buildIndexerSearchFacets(
+    disjunctiveFixture(),
+    {
+      ...EMPTY_INDEXER_SEARCH_FILTERS,
+      facets: ["resolution:1080p", "resolution:720p", "source:WEB-DL"],
+    },
+    NOW,
+  );
+
+  // Source counts see only the resolution selection (1080p OR 720p).
+  assert.deepEqual(facetCounts(groups, "source"), [
+    ["BluRay", 0],
+    ["WEB-DL", 2],
+    ["HDTV", 1],
+  ]);
+  // Resolution counts see only the source selection.
+  assert.deepEqual(facetCounts(groups, "resolution"), [
+    ["2160p", 0],
+    ["1080p", 2],
+    ["720p", 0],
+  ]);
+  // A third group sees both: the two 1080p WEB-DL releases.
+  assert.deepEqual(facetCounts(groups, "protocol"), [["usenet", 2]]);
+});
+
+test("size, seeder and age limits narrow every count", () => {
+  const groups = buildIndexerSearchFacets(
+    disjunctiveFixture(),
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, minSizeGiB: 4 },
+    NOW,
+  );
+
+  assert.deepEqual(facetCounts(groups, "source"), [
+    ["BluRay", 2],
+    ["WEB-DL", 1],
+    ["HDTV", 1],
+  ]);
+
+  const aged = buildIndexerSearchFacets(
+    [
+      ...disjunctiveFixture(),
+      release({
+        title: "Sample.Zeta.1080p.WEB-DL",
+        publishedAt: "2020-01-01T00:00:00Z",
+        parsedRelease: parsed({ quality: "1080p", source: "WEB-DL" }),
+      }),
+    ],
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, maxAgeDays: 365 },
+    NOW,
+  );
+  assert.deepEqual(facetCounts(aged, "source"), [
+    ["WEB-DL", 2],
+    ["BluRay", 2],
+    ["HDTV", 1],
+  ]);
+});
+
+test("a selected item nothing matches stays listed", () => {
+  const groups = buildIndexerSearchFacets(
+    disjunctiveFixture(),
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["indexer:QuietIndexer"] },
+    NOW,
+  );
+  assert.deepEqual(facetCounts(groups, "indexer"), [
+    ["NZBgeek", 5],
+    ["QuietIndexer", 0],
+  ]);
+  assert.deepEqual(facetCounts(groups, "source"), [
+    ["BluRay", 0],
+    ["WEB-DL", 0],
+    ["HDTV", 0],
+  ]);
+});
+
+test("a release with several languages counts under each one", () => {
+  const releases = [
+    release({ title: "Sample.Multi.1080p", languages: ["eng", "ger"] }),
+    release({ title: "Sample.English.1080p", languages: ["eng"] }),
+    release({ title: "Sample.Silent.1080p" }),
+  ];
+  assert.deepEqual(facetCounts(buildIndexerSearchFacets(releases), "language"), [
+    ["eng", 2],
+    ["ger", 1],
+  ]);
+
+  const filtered = filterIndexerSearchReleases(
+    releases,
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["language:ger"] },
+    NOW,
+  );
+  assert.deepEqual(
+    filtered.map((entry) => entry.title),
+    ["Sample.Multi.1080p"],
+  );
 });
 
 test("facets OR within a group and AND across groups", () => {

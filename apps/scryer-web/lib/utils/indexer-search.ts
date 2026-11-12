@@ -4,6 +4,7 @@
 // every one of them is a plain function over `Release[]` that a test can drive.
 import type { InteractiveSearchIndexerProgress } from "@/lib/graphql/release-search";
 import type { Release } from "@/lib/types";
+import { formatSearchLanguageLabels } from "../constants/audio-languages.ts";
 import { indexerSearchResultRowId } from "./dom-ids.ts";
 
 /** An indexer that answered slower than this reads as "slow" (D15). */
@@ -13,7 +14,15 @@ export type IndexerSearchSortKey =
   `${"release" | "indexer" | "size" | "age" | "peers"}-${"asc" | "desc"}`;
 
 export type IndexerSearchFacetGroupKey =
-  "protocol" | "resolution" | "source" | "audio" | "flags" | "indexer";
+  | "protocol"
+  | "resolution"
+  | "source"
+  | "videoCodec"
+  | "audioCodec"
+  | "audio"
+  | "language"
+  | "flags"
+  | "indexer";
 
 export type IndexerSearchFacetItem = {
   /** `<group>:<value>`; the identity the selection set stores. */
@@ -127,9 +136,27 @@ export function releaseFacetKeys(release: Release): string[] {
   if (source) {
     keys.push(facetKey("source", source));
   }
+  const videoCodec = parsed?.videoCodec?.trim();
+  if (videoCodec) {
+    keys.push(facetKey("videoCodec", videoCodec));
+  }
+  const audioCodec = parsed?.audio?.trim();
+  if (audioCodec) {
+    keys.push(facetKey("audioCodec", audioCodec));
+  }
   if (parsed?.isAtmos) keys.push(facetKey("audio", "atmos"));
   if (parsed?.isDolbyVision) keys.push(facetKey("audio", "dolbyVision"));
   if (parsed?.detectedHdr) keys.push(facetKey("audio", "hdr"));
+  // The parsed release carries no languages; these are the audio languages
+  // the indexer reported, one key each.
+  const languages = new Set<string>();
+  for (const language of release.languages ?? []) {
+    const value = language.trim();
+    if (value) languages.add(value);
+  }
+  for (const language of languages) {
+    keys.push(facetKey("language", language));
+  }
   if (release.freeleech === true) keys.push(facetKey("flags", "freeleech"));
   if (parsed?.isProperUpload) keys.push(facetKey("flags", "proper"));
   const indexer = release.source?.trim();
@@ -153,43 +180,123 @@ const FACET_GROUPS: { key: IndexerSearchFacetGroupKey; labelKey: string }[] = [
   { key: "protocol", labelKey: "indexerSearch.facet.protocol" },
   { key: "resolution", labelKey: "indexerSearch.facet.resolution" },
   { key: "source", labelKey: "indexerSearch.facet.source" },
+  { key: "videoCodec", labelKey: "indexerSearch.facet.videoCodec" },
+  { key: "audioCodec", labelKey: "indexerSearch.facet.audioCodec" },
   { key: "audio", labelKey: "indexerSearch.facet.audio" },
+  { key: "language", labelKey: "label.language" },
   { key: "flags", labelKey: "indexerSearch.facet.flags" },
   { key: "indexer", labelKey: "indexerSearch.facet.indexer" },
 ];
 
 const RESOLUTION_ORDER = ["2160p", "1080p", "720p", "SD"];
 
+function facetGroupOf(key: string): string {
+  const separator = key.indexOf(":");
+  return separator < 0 ? key : key.slice(0, separator);
+}
+
+function facetValueOf(key: string): string {
+  return key.slice(key.indexOf(":") + 1);
+}
+
+/** Selected facet keys bucketed by group; within a bucket they OR. */
+function selectedFacetsByGroup(facets: string[]): Map<string, Set<string>> {
+  const byGroup = new Map<string, Set<string>>();
+  for (const key of facets) {
+    const group = facetGroupOf(key);
+    const bucket = byGroup.get(group) ?? new Set<string>();
+    bucket.add(key);
+    byGroup.set(group, bucket);
+  }
+  return byGroup;
+}
+
+function hasAnyKey(keys: Set<string>, selected: Set<string>): boolean {
+  for (const key of selected) {
+    if (keys.has(key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function facetItemLabel(group: string, value: string): string {
+  return group === "language" ? formatSearchLanguageLabels([value]) : value;
+}
+
 /**
- * Facet groups with counts over the **full** result set, so ticking one facet
- * never moves another's count within a search (handoff §6).
+ * Facet groups with disjunctive counts. An item's count is the number of
+ * releases that pass every active filter except its own group's facet
+ * selection: the other groups' selections and the size, seeder and age
+ * limits all narrow it, so a count says how many rows ticking that item
+ * would leave. The item list and its order come from the full result set,
+ * so rows never jump or vanish as boxes are ticked; an item nothing matches
+ * keeps its row with a count of zero, and a selected item is always listed.
  */
 export function buildIndexerSearchFacets(
   releases: Release[],
+  filters: IndexerSearchFilters = EMPTY_INDEXER_SEARCH_FILTERS,
+  nowMs: number = 0,
 ): IndexerSearchFacetGroup[] {
+  const selectedByGroup = selectedFacetsByGroup(filters.facets);
+  const fullCounts = new Map<string, number>();
   const counts = new Map<string, number>();
+  const bump = (map: Map<string, number>, key: string) =>
+    map.set(key, (map.get(key) ?? 0) + 1);
+
   for (const release of releases) {
-    for (const key of releaseFacetKeys(release)) {
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    const keys = releaseFacetKeys(release);
+    for (const key of keys) {
+      bump(fullCounts, key);
+    }
+    if (!passesLimitFilters(release, filters, nowMs)) {
+      continue;
+    }
+    // A release missing two selected groups is excluded whichever group is
+    // relaxed; missing exactly one, it counts only toward that group's items.
+    const keySet = new Set(keys);
+    let missedGroup: string | null = null;
+    let missedCount = 0;
+    for (const [group, selected] of selectedByGroup) {
+      if (!hasAnyKey(keySet, selected)) {
+        missedGroup = group;
+        missedCount += 1;
+        if (missedCount > 1) break;
+      }
+    }
+    if (missedCount > 1) {
+      continue;
+    }
+    for (const key of keys) {
+      if (missedGroup === null || facetGroupOf(key) === missedGroup) {
+        bump(counts, key);
+      }
     }
   }
 
-  return FACET_GROUPS.map(({ key: groupKey, labelKey }) => {
-    const items: IndexerSearchFacetItem[] = [];
-    for (const [key, count] of counts) {
-      const [group, ...rest] = key.split(":");
-      if (group !== groupKey) {
-        continue;
-      }
-      const value = rest.join(":");
-      items.push({
-        key,
-        value,
-        labelKey: SEMANTIC_FACET_LABEL_KEYS[key],
-        label: value,
-        count,
-      });
+  for (const key of filters.facets) {
+    if (!fullCounts.has(key)) {
+      fullCounts.set(key, 0);
     }
+  }
+
+  const itemsByGroup = new Map<string, IndexerSearchFacetItem[]>();
+  for (const key of fullCounts.keys()) {
+    const group = facetGroupOf(key);
+    const value = facetValueOf(key);
+    const items = itemsByGroup.get(group) ?? [];
+    items.push({
+      key,
+      value,
+      labelKey: SEMANTIC_FACET_LABEL_KEYS[key],
+      label: facetItemLabel(group, value),
+      count: counts.get(key) ?? 0,
+    });
+    itemsByGroup.set(group, items);
+  }
+
+  return FACET_GROUPS.map(({ key: groupKey, labelKey }) => {
+    const items = itemsByGroup.get(groupKey) ?? [];
     items.sort((left, right) => {
       if (groupKey === "resolution") {
         return (
@@ -197,8 +304,10 @@ export function buildIndexerSearchFacets(
           RESOLUTION_ORDER.indexOf(right.value)
         );
       }
-      if (left.count !== right.count) {
-        return right.count - left.count;
+      const leftFull = fullCounts.get(left.key) ?? 0;
+      const rightFull = fullCounts.get(right.key) ?? 0;
+      if (leftFull !== rightFull) {
+        return rightFull - leftFull;
       }
       return left.value.localeCompare(right.value);
     });
@@ -289,59 +398,56 @@ export function filterIndexerSearchReleases(
   filters: IndexerSearchFilters,
   nowMs: number,
 ): Release[] {
-  const selectedByGroup = new Map<string, Set<string>>();
-  for (const key of filters.facets) {
-    const group = key.split(":")[0] ?? "";
-    const bucket = selectedByGroup.get(group) ?? new Set<string>();
-    bucket.add(key);
-    selectedByGroup.set(group, bucket);
-  }
+  const selectedByGroup = selectedFacetsByGroup(filters.facets);
 
   return releases.filter((release) => {
-    const keys = new Set(releaseFacetKeys(release));
-    for (const selected of selectedByGroup.values()) {
-      let matched = false;
-      for (const key of selected) {
-        if (keys.has(key)) {
-          matched = true;
-          break;
+    if (selectedByGroup.size > 0) {
+      const keys = new Set(releaseFacetKeys(release));
+      for (const selected of selectedByGroup.values()) {
+        if (!hasAnyKey(keys, selected)) {
+          return false;
         }
       }
-      if (!matched) {
-        return false;
-      }
     }
+    return passesLimitFilters(release, filters, nowMs);
+  });
+}
 
-    const bytes = release.sizeBytes ?? null;
-    if (bytes != null) {
-      const gib = bytes / GIB;
-      if (filters.minSizeGiB != null && gib < filters.minSizeGiB) return false;
-      if (filters.maxSizeGiB != null && gib > filters.maxSizeGiB) return false;
-      if (filters.sizeRangeGiB) {
-        const [low, high] = filters.sizeRangeGiB;
-        if (gib < low || gib > high) return false;
-      }
+/** The size, seeder and age limits; everything but the facet selection. */
+function passesLimitFilters(
+  release: Release,
+  filters: IndexerSearchFilters,
+  nowMs: number,
+): boolean {
+  const bytes = release.sizeBytes ?? null;
+  if (bytes != null) {
+    const gib = bytes / GIB;
+    if (filters.minSizeGiB != null && gib < filters.minSizeGiB) return false;
+    if (filters.maxSizeGiB != null && gib > filters.maxSizeGiB) return false;
+    if (filters.sizeRangeGiB) {
+      const [low, high] = filters.sizeRangeGiB;
+      if (gib < low || gib > high) return false;
     }
+  }
 
-    // A seeder floor is a torrent question; usenet results report no swarm and
-    // are never excluded by it.
-    if (
-      filters.minSeeders != null &&
-      release.seeders != null &&
-      release.seeders < filters.minSeeders
-    ) {
+  // A seeder floor is a torrent question; usenet results report no swarm and
+  // are never excluded by it.
+  if (
+    filters.minSeeders != null &&
+    release.seeders != null &&
+    release.seeders < filters.minSeeders
+  ) {
+    return false;
+  }
+
+  if (filters.maxAgeDays != null) {
+    const ageMs = releaseAgeMs(release, nowMs);
+    if (ageMs != null && ageMs > filters.maxAgeDays * 86_400_000) {
       return false;
     }
+  }
 
-    if (filters.maxAgeDays != null) {
-      const ageMs = releaseAgeMs(release, nowMs);
-      if (ageMs != null && ageMs > filters.maxAgeDays * 86_400_000) {
-        return false;
-      }
-    }
-
-    return true;
-  });
+  return true;
 }
 
 export function sortIndexerSearchReleases(

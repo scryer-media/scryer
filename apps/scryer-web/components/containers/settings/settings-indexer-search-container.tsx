@@ -54,6 +54,7 @@ import {
   sortIndexerSearchReleases,
   summarizeIndexerHealth,
   writeSavedIndexerSearches,
+  type IndexerSearchFilters,
   type IndexerSearchSortKey,
   type SavedIndexerSearch,
 } from "@/lib/utils/indexer-search";
@@ -570,38 +571,37 @@ export function SettingsIndexerSearchContainer() {
     [expireResults, searchIdByRowKey, setGlobalStatus, t],
   );
 
-  const facetGroups = React.useMemo(
-    () => buildIndexerSearchFacets(releases),
-    [releases],
-  );
-  const sizeBoundsGiB = React.useMemo(
-    () => releaseSizeBoundsGiB(releases),
-    [releases],
-  );
-  const filteredReleases = React.useMemo(
-    () =>
-      filterIndexerSearchReleases(
-        releases,
-        {
-          facets: selectedFacets,
-          minSizeGiB: positiveNumberOrNull(advanced.minSizeGiB),
-          maxSizeGiB: positiveNumberOrNull(advanced.maxSizeGiB),
-          minSeeders: positiveNumberOrNull(advanced.minSeeders),
-          maxAgeDays: positiveNumberOrNull(advanced.maxAgeDays),
-          sizeRangeGiB,
-        },
-        nowMs,
-      ),
+  const searchFilters = React.useMemo<IndexerSearchFilters>(
+    () => ({
+      facets: selectedFacets,
+      minSizeGiB: positiveNumberOrNull(advanced.minSizeGiB),
+      maxSizeGiB: positiveNumberOrNull(advanced.maxSizeGiB),
+      minSeeders: positiveNumberOrNull(advanced.minSeeders),
+      maxAgeDays: positiveNumberOrNull(advanced.maxAgeDays),
+      sizeRangeGiB,
+    }),
     [
       advanced.maxAgeDays,
       advanced.maxSizeGiB,
       advanced.minSeeders,
       advanced.minSizeGiB,
-      nowMs,
-      releases,
       selectedFacets,
       sizeRangeGiB,
     ],
+  );
+  const facetGroups = React.useMemo(
+    () => buildIndexerSearchFacets(releases, searchFilters, nowMs),
+    [nowMs, releases, searchFilters],
+  );
+  // Bounds stay on the full result set so the slider does not rescale itself
+  // as other filters narrow the rows.
+  const sizeBoundsGiB = React.useMemo(
+    () => releaseSizeBoundsGiB(releases),
+    [releases],
+  );
+  const filteredReleases = React.useMemo(
+    () => filterIndexerSearchReleases(releases, searchFilters, nowMs),
+    [nowMs, releases, searchFilters],
   );
   const rows = React.useMemo(
     () => sortIndexerSearchReleases(filteredReleases, sort),
