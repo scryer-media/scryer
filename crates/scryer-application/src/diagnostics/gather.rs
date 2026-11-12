@@ -254,15 +254,15 @@ impl AppUseCase {
             }
         }
 
-        if let Some(repository) = self.services.notifications.notification_channels() {
-            if let Some(channels) = source!("notification_channels", repository.list_channels()) {
-                for channel in &channels {
-                    let kind = serde_label(&channel.channel_type);
-                    known.protect(&kind);
-                    let pseudonym = known.entity("notification", Some(&kind), &channel.id);
-                    known.name(&pseudonym, &channel.name);
-                    known.config_json(&pseudonym, &channel.config_json);
-                }
+        if let Some(repository) = self.services.notifications.notification_channels()
+            && let Some(channels) = source!("notification_channels", repository.list_channels())
+        {
+            for channel in &channels {
+                let kind = serde_label(&channel.channel_type);
+                known.protect(&kind);
+                let pseudonym = known.entity("notification", Some(&kind), &channel.id);
+                known.name(&pseudonym, &channel.name);
+                known.config_json(&pseudonym, &channel.config_json);
             }
         }
 
@@ -271,18 +271,17 @@ impl AppUseCase {
             .integrations
             .subtitle_provider_configs
             .available()
+            && let Some(providers) = source!("subtitle_providers", repository.list(None))
         {
-            if let Some(providers) = source!("subtitle_providers", repository.list(None)) {
-                for provider in &providers {
-                    known.protect(&provider.provider_type);
-                    let pseudonym = known.entity(
-                        "subtitle-provider",
-                        Some(&provider.provider_type),
-                        &provider.id,
-                    );
-                    known.name(&pseudonym, &provider.name);
-                    known.config_json(&pseudonym, &provider.config_json);
-                }
+            for provider in &providers {
+                known.protect(&provider.provider_type);
+                let pseudonym = known.entity(
+                    "subtitle-provider",
+                    Some(&provider.provider_type),
+                    &provider.id,
+                );
+                known.name(&pseudonym, &provider.name);
+                known.config_json(&pseudonym, &provider.config_json);
             }
         }
 

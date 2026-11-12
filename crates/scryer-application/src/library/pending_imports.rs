@@ -568,7 +568,7 @@ impl AppUseCase {
             .library_scan_unmatched_items
             .page_library_scan_items_requiring_action(
                 facet.clone(),
-                status.clone(),
+                status,
                 &library_ids,
                 &PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES,
                 limit,

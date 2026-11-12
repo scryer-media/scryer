@@ -737,6 +737,7 @@ pub(super) async fn current_visible_video_file_count(
         .unwrap_or(0)
 }
 
+#[cfg(test)]
 pub(super) async fn visible_source_files_have_terminal_dispositions(
     app: &AppUseCase,
     td: &TrackedDownload,
