@@ -196,6 +196,94 @@ async fn overlapping_request_resolution_preserves_each_lease_and_provenance() {
 }
 
 #[tokio::test]
+async fn overlapping_approval_leaves_other_seasons_and_quality_profiles_pending() {
+    let store = test_store().await;
+    seed_resolution_requests(&store).await;
+    SqlRuntime::run_in_transaction(&store.datastore, "seed_approval_scopes", |tx| {
+        Box::pin(async move {
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "UPDATE libraries SET facet = 'series' WHERE id = 'library-under-test'",
+                &[],
+            )
+            .await?;
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "UPDATE titles SET facet = 'series' WHERE id = 'approved-title'",
+                &[],
+            )
+            .await?;
+            for (id, season, profile) in [
+                ("primary", 2, "hd"),
+                ("sibling", 3, "hd"),
+                ("forever", 2, "uhd"),
+            ] {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE media_requests
+                        SET facet = 'series', requested_monitor_type = 'advanced',
+                            requested_quality_profile_id = {}
+                      WHERE id = {}",
+                    &[SqlArg::Text(profile.into()), SqlArg::Text(id.into())],
+                )
+                .await?;
+                replace_monitor_selection_tx(
+                    tx,
+                    OWNER_KIND_MEDIA_REQUEST,
+                    id,
+                    Some(&MonitorSelection {
+                        seasons: vec![season],
+                        series_movies: Vec::new(),
+                    }),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+
+    let request = store.get("primary").await.unwrap().unwrap();
+    let mut resolution = approval(&request);
+    resolution.approved_quality_profile_id = Some("hd".into());
+    let result = store
+        .resolve_pending_overlapping(&request, resolution.clone())
+        .await
+        .unwrap();
+    assert_eq!(result.updated, 1);
+    assert_eq!(
+        store.get("primary").await.unwrap().unwrap().status,
+        MediaRequestStatus::Approved
+    );
+    for id in ["sibling", "forever"] {
+        let row = store.get(id).await.unwrap().unwrap();
+        assert_eq!(row.status, MediaRequestStatus::Pending);
+        assert_eq!(row.created_title_id, None);
+    }
+
+    // A stale retry cannot resolve a new sibling even if its scope now
+    // matches the primary request that has already left the pending state.
+    SqlRuntime::execute_write(
+        &store.datastore,
+        "match_previous_approval_scope",
+        "UPDATE media_requests SET requested_quality_profile_id = 'hd' WHERE id = 'forever'",
+        vec![],
+    )
+    .await
+    .unwrap();
+    let result = store
+        .resolve_pending_overlapping(&request, resolution)
+        .await
+        .unwrap();
+    assert_eq!(result.updated, 0);
+    assert_eq!(
+        store.get("forever").await.unwrap().unwrap().status,
+        MediaRequestStatus::Pending
+    );
+}
+
+#[tokio::test]
 async fn failed_claim_write_keeps_approval_pending_and_retry_creates_all_holds() {
     let store = test_store().await;
     let request = seed_resolution_requests(&store).await;

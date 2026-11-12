@@ -310,7 +310,19 @@ impl MediaRequestRepository for MediaRequestStore {
                 } else {
                     Some(append_domain_event_tx(tx, added_event).await?)
                 };
-                let result = resolve_pending_overlapping_tx(tx, &request, resolution).await?;
+                let monitor_type = title
+                    .tags
+                    .iter()
+                    .find_map(|tag| tag.strip_prefix("scryer:monitor-type:"));
+                let monitor_selection = options.monitor_selection.as_ref().and_then(Option::as_ref);
+                let result = resolve_pending_overlapping_tx(
+                    tx,
+                    &request,
+                    resolution,
+                    monitor_type,
+                    monitor_selection,
+                )
+                .await?;
                 if result.updated == 0 {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::MEDIA_REQUEST_NOT_PENDING,
@@ -336,9 +348,16 @@ impl MediaRequestRepository for MediaRequestStore {
             move |tx| {
                 let request = request.clone();
                 let resolution = resolution.clone();
-                Box::pin(
-                    async move { resolve_pending_overlapping_tx(tx, &request, resolution).await },
-                )
+                Box::pin(async move {
+                    resolve_pending_overlapping_tx(
+                        tx,
+                        &request,
+                        resolution,
+                        request.requested_monitor_type.as_deref(),
+                        request.requested_monitor_selection.as_ref(),
+                    )
+                    .await
+                })
             },
         )
         .await
@@ -823,6 +842,8 @@ async fn resolve_pending_overlapping_tx(
     tx: &mut SqlTx<'_>,
     request: &MediaRequest,
     resolution: MediaRequestResolution,
+    approved_monitor_type: Option<&str>,
+    approved_monitor_selection: Option<&MonitorSelection>,
 ) -> AppResult<MediaRequestResolutionResult> {
     let resolved_at = resolution.resolved_at;
     let mut args = vec![
@@ -830,7 +851,7 @@ async fn resolve_pending_overlapping_tx(
         SqlArg::OptText(resolution.resolved_by_user_id),
         SqlArg::Timestamp(resolved_at),
         SqlArg::OptText(resolution.created_title_id),
-        SqlArg::OptText(resolution.approved_quality_profile_id),
+        SqlArg::OptText(resolution.approved_quality_profile_id.clone()),
         SqlArg::OptText(resolution.approved_quality_profile_name),
         SqlArg::Text(request.id.clone()),
         SqlArg::OptI64(resolution.approved_lease_days),
@@ -844,6 +865,7 @@ async fn resolve_pending_overlapping_tx(
         SqlArg::Timestamp(resolved_at),
     ];
 
+    let resolution_arg_count = args.len();
     let where_clause = if request.is_list_series_movie() {
         args.push(SqlArg::Text(request.library_id.clone()));
         args.push(SqlArg::Text(request.identity_fingerprint.clone()));
@@ -883,6 +905,33 @@ async fn resolve_pending_overlapping_tx(
                     AND ({overlap_clauses})
              )"
         )
+    };
+
+    let where_clause = if resolution.status == MediaRequestStatus::Approved {
+        let approved_ids = matching_approval_request_ids(
+            tx,
+            &where_clause,
+            &args[resolution_arg_count..],
+            &request.id,
+            resolution.approved_quality_profile_id.as_deref(),
+            approved_monitor_type,
+            approved_monitor_selection,
+        )
+        .await?;
+        if approved_ids.is_empty() {
+            return Ok(MediaRequestResolutionResult {
+                updated: 0,
+                event: None,
+            });
+        }
+        let placeholders = std::iter::repeat_n("{}", approved_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        args.truncate(resolution_arg_count);
+        args.extend(approved_ids.into_iter().map(SqlArg::Text));
+        format!("status = 'pending' AND id IN ({placeholders})")
+    } else {
+        where_clause
     };
 
     let sql = format!(
@@ -938,6 +987,62 @@ async fn resolve_pending_overlapping_tx(
         updated: rows.len() as u64,
         event,
     })
+}
+
+async fn matching_approval_request_ids(
+    tx: &mut SqlTx<'_>,
+    where_clause: &str,
+    scope_args: &[SqlArg],
+    primary_id: &str,
+    approved_profile: Option<&str>,
+    approved_monitor_type: Option<&str>,
+    approved_monitor_selection: Option<&MonitorSelection>,
+) -> AppResult<Vec<String>> {
+    // SQLite holds the writer gate. On PostgreSQL, lock the request rows in
+    // order so preference edits and cancellations cannot race the resolution.
+    let lock_clause = if matches!(&*tx, SqlTx::Postgres(_)) {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
+    let rows = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT id, requested_quality_profile_id, requested_monitor_type
+               FROM media_requests
+              WHERE {where_clause}
+              ORDER BY id{lock_clause}"
+        ),
+        scope_args,
+    )
+    .await?;
+    let mut primary_pending = false;
+    let mut siblings = Vec::new();
+    for row in rows {
+        let id = row.text("id")?;
+        if id == primary_id {
+            primary_pending = true;
+        } else if row.opt_text("requested_quality_profile_id")?.as_deref() == approved_profile
+            && row.opt_text("requested_monitor_type")?.as_deref() == approved_monitor_type
+        {
+            siblings.push(id);
+        }
+    }
+    if !primary_pending {
+        return Ok(Vec::new());
+    }
+    let selections =
+        load_monitor_selections_for_owners(SqlExec::Tx(tx), OWNER_KIND_MEDIA_REQUEST, &siblings)
+            .await?;
+    siblings.retain(
+        |id| match (selections.get(id), approved_monitor_selection) {
+            (Some(requested), Some(approved)) => requested.has_same_scope(approved),
+            (None, None) => true,
+            _ => false,
+        },
+    );
+    siblings.push(primary_id.to_string());
+    Ok(siblings)
 }
 
 /// The approval and its lease commit together. If claim persistence fails, the
