@@ -2,6 +2,7 @@ mod http;
 mod nzbget;
 mod router;
 mod sabnzbd;
+pub mod torbox;
 pub mod weaver;
 pub mod weaver_graphql;
 pub mod weaver_subscription;
