@@ -1401,9 +1401,20 @@ enum SubroutineRef {
     Name(String),
 }
 
+/// How deep groups, classes and stacked quantifiers may nest. The parser and
+/// every later pass over the tree recurse once per level, so the bound keeps
+/// them inside a worker thread's stack. Real custom formats nest a handful of
+/// levels.
+pub(super) const MAX_NESTING_DEPTH: usize = 64;
+
+fn nesting_too_deep() -> String {
+    format!("Regex nests deeper than {MAX_NESTING_DEPTH} levels")
+}
+
 struct Parser {
     tokens: Vec<Token>,
     next: usize,
+    depth: usize,
     capturing_groups: usize,
     named_groups: HashMap<String, usize>,
     has_numbered_ref: bool,
@@ -1416,6 +1427,7 @@ pub(super) fn parse(pattern: &str) -> ParseResult<Regex> {
     let mut parser = Parser {
         tokens: tokenize(pattern)?,
         next: 0,
+        depth: 0,
         capturing_groups: 0,
         named_groups: HashMap::new(),
         has_numbered_ref: false,
@@ -1543,7 +1555,7 @@ impl Parser {
             Token::Backreference(raw) => self.backreference(&raw),
             Token::Character { value, .. } => create_character(value, state.checking_range_end),
             Token::ClassHyphen => self.class_hyphen(parent, state),
-            Token::ClassOpen { negate } => self.class_open(negate, state),
+            Token::ClassOpen { negate } => self.nested(|parser| parser.class_open(negate, state)),
             Token::CharacterSet {
                 kind,
                 negate,
@@ -1554,7 +1566,7 @@ impl Parser {
                 value,
             }),
             Token::Directive(flags) => Ok(Node::Directive(flags)),
-            Token::GroupOpen(open) => self.group_open(open, state),
+            Token::GroupOpen(open) => self.nested(|parser| parser.group_open(open, state)),
             Token::NamedCallout { kind, tag, args } => Ok(Node::NamedCallout { kind, tag, args }),
             Token::Quantifier { kind, min, max } => {
                 let Some(last) = parent.last() else {
@@ -1562,6 +1574,15 @@ impl Parser {
                 };
                 if !last.is_quantifiable() {
                     return Err("Quantifier requires a repeatable token".to_string());
+                }
+                let mut stacked = 1;
+                let mut inner = last;
+                while let Node::Quantifier { body, .. } = inner {
+                    stacked += 1;
+                    if stacked > MAX_NESTING_DEPTH {
+                        return Err(nesting_too_deep());
+                    }
+                    inner = body;
                 }
                 let body = parent.pop().expect("checked above");
                 Ok(Node::Quantifier {
@@ -1574,6 +1595,17 @@ impl Parser {
             Token::Subroutine(raw) => self.subroutine(&raw),
             other => Err(format!("Unexpected token type \"{}\"", token_type(&other))),
         }
+    }
+
+    /// Parse one group or class, refusing a pattern that nests too deep.
+    fn nested(&mut self, parse: impl FnOnce(&mut Self) -> ParseResult<Node>) -> ParseResult<Node> {
+        if self.depth == MAX_NESTING_DEPTH {
+            return Err(nesting_too_deep());
+        }
+        self.depth += 1;
+        let node = parse(self);
+        self.depth -= 1;
+        node
     }
 
     fn backreference(&mut self, raw: &str) -> ParseResult<Node> {
