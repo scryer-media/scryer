@@ -609,6 +609,10 @@ struct DumpNormalization {
     admin_user_id: Option<String>,
 }
 
+/// Tables and views come out by name. Indexes and triggers come out in the
+/// order the migrations created them: with no statistics SQLite breaks a tie
+/// between two usable indexes by that order, and fires same-event triggers by
+/// it, so a database built from the baseline must not reorder them.
 async fn canonical_database_dump(pool: &sqlx::SqlitePool) -> Result<String> {
     let mut out = String::new();
     let virtual_tables = virtual_table_names(pool).await?;
@@ -625,7 +629,9 @@ async fn canonical_database_dump(pool: &sqlx::SqlitePool) -> Result<String> {
               WHEN 'trigger' THEN 3
               WHEN 'view' THEN 4
               ELSE 5
-          END, name",
+          END,
+          CASE WHEN type IN ('index', 'trigger') THEN rowid ELSE 0 END,
+          name",
     )
     .fetch_all(pool)
     .await
@@ -826,6 +832,10 @@ fn sql_literal(
         return Ok("NULL".to_string());
     }
 
+    if let Some(expression) = regenerated_seed_expression(BaselineEngine::Sqlite, table, column) {
+        return Ok(expression.to_string());
+    }
+
     match raw.type_info().name() {
         "INTEGER" | "BOOLEAN" => Ok(row.try_get::<i64, _>(index)?.to_string()),
         "REAL" => {
@@ -863,6 +873,24 @@ fn sql_literal(
                 normalization,
             )))
         }
+    }
+}
+
+/// A seeded value its migration draws at random, so that no two installs
+/// share it. The baseline carries the migration's own expression in place of
+/// one drawn value: a fresh install still gets its own, and two replays dump
+/// the same text.
+fn regenerated_seed_expression(
+    engine: BaselineEngine,
+    table: &str,
+    column: &str,
+) -> Option<&'static str> {
+    match (table, column) {
+        ("discovery_affinity_revision", "revision") => Some(match engine {
+            BaselineEngine::Sqlite => "lower(hex(randomblob(16)))",
+            BaselineEngine::Postgres => "md5(random()::text || clock_timestamp()::text)",
+        }),
+        _ => None,
     }
 }
 
@@ -997,8 +1025,11 @@ async fn postgres_data_dump(pool: &sqlx::PgPool) -> Result<String> {
             };
             let mut values = Vec::with_capacity(columns.len());
             for (index, column) in columns.iter().enumerate() {
+                let regenerated =
+                    regenerated_seed_expression(BaselineEngine::Postgres, &table, &column.name);
                 values.push(match row.try_get::<Option<String>, _>(index)? {
                     None => "NULL".to_string(),
+                    Some(_) if regenerated.is_some() => regenerated.unwrap_or_default().to_string(),
                     Some(value) if column.bare_literal => value,
                     Some(_) if column.timestamp => quote_sql_string(CANONICAL_TIMESTAMP),
                     Some(value) => quote_sql_string(&normalize_dump_text_value(
@@ -1265,9 +1296,9 @@ ALTER TABLE ONLY public.download_jobs
             counts
         };
 
-        let sqlite = seeded_rows("baselines/0254_baseline.sql");
+        let sqlite = seeded_rows("baselines/0341_baseline.sql");
         assert!(!sqlite.is_empty());
-        assert_eq!(sqlite, seeded_rows("postgres/baselines/0254_baseline.sql"));
+        assert_eq!(sqlite, seeded_rows("postgres/baselines/0341_baseline.sql"));
     }
 
     #[test]

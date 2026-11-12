@@ -1,3 +1,13 @@
+CREATE FUNCTION discovery_affinity_bump_revision() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    INSERT INTO discovery_affinity_revision (id, revision)
+    VALUES (1, md5(random()::text || clock_timestamp()::text))
+    ON CONFLICT (id) DO UPDATE SET revision = excluded.revision;
+    RETURN NULL;
+END;
+$$;
 CREATE FUNCTION title_search_enqueue_deleted_title() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -43,6 +53,15 @@ CREATE TABLE blocklist (
     normalized_release_name text DEFAULT ''::text NOT NULL,
     indexer_id text DEFAULT ''::text NOT NULL,
     info_hash text
+);
+CREATE TABLE canonical_tag_vocabulary_cache (
+    id text NOT NULL,
+    version text NOT NULL,
+    payload_json jsonb NOT NULL,
+    checked_at timestamp with time zone NOT NULL,
+    jitter_seconds bigint NOT NULL,
+    CONSTRAINT canonical_tag_vocabulary_cache_id_check CHECK ((id = 'canonical'::text)),
+    CONSTRAINT canonical_tag_vocabulary_cache_jitter_seconds_check CHECK (((jitter_seconds >= 0) AND (jitter_seconds <= 21600)))
 );
 CREATE TABLE collection_external_ids (
     id text NOT NULL,
@@ -93,6 +112,43 @@ CREATE TABLE collections (
     interstitial_movie_mal_id text,
     interstitial_movie_anidb_id text,
     special_movies_json text DEFAULT '[]'::text NOT NULL
+);
+CREATE TABLE delay_profile_facets (
+    profile_id text NOT NULL,
+    facet text NOT NULL,
+    "position" integer DEFAULT 0 NOT NULL
+);
+CREATE TABLE delay_profile_libraries (
+    profile_id text NOT NULL,
+    library_id text NOT NULL,
+    "position" integer DEFAULT 0 NOT NULL
+);
+CREATE TABLE delay_profile_tags (
+    profile_id text NOT NULL,
+    label text NOT NULL,
+    "position" integer DEFAULT 0 NOT NULL
+);
+CREATE TABLE delay_profiles (
+    id text NOT NULL,
+    name text NOT NULL,
+    usenet_delay_minutes bigint DEFAULT 0 NOT NULL,
+    torrent_delay_minutes bigint DEFAULT 0 NOT NULL,
+    preferred_protocol text DEFAULT 'usenet'::text NOT NULL,
+    min_age_minutes bigint DEFAULT 0 NOT NULL,
+    bypass_score_threshold integer,
+    enable_usenet boolean DEFAULT true NOT NULL,
+    enable_torrent boolean DEFAULT true NOT NULL,
+    bypass_if_highest_quality boolean DEFAULT false NOT NULL,
+    priority integer DEFAULT 0 NOT NULL,
+    "position" bigint DEFAULT 0 NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE discovery_affinity_revision (
+    id integer NOT NULL,
+    revision text NOT NULL,
+    CONSTRAINT discovery_affinity_revision_id_check CHECK ((id = 1))
 );
 CREATE TABLE discovery_facets (
     run_id text NOT NULL,
@@ -145,6 +201,34 @@ CREATE TABLE discovery_items (
     recommendation_score double precision,
     base_rank double precision
 );
+CREATE TABLE discovery_library_graph_payloads (
+    run_id text NOT NULL,
+    payload bytea NOT NULL
+);
+CREATE TABLE discovery_library_graph_runs (
+    id text NOT NULL,
+    facet text NOT NULL,
+    axis text NOT NULL,
+    status text NOT NULL,
+    subject_count bigint DEFAULT 0 NOT NULL,
+    submitted_count bigint DEFAULT 0 NOT NULL,
+    generated_at text,
+    error_code text,
+    error_text text,
+    started_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    retry_after_seconds bigint,
+    omitted_subject_keys_json text DEFAULT '[]'::text NOT NULL
+);
+CREATE TABLE discovery_neighbor_cache (
+    target_key text NOT NULL,
+    language text NOT NULL,
+    payload_version integer NOT NULL,
+    payload_blob bytea NOT NULL,
+    fetched_at timestamp with time zone NOT NULL
+);
 CREATE TABLE discovery_pending_context_changes (
     id text NOT NULL,
     scope_key text DEFAULT 'default'::text NOT NULL,
@@ -160,6 +244,11 @@ CREATE TABLE discovery_pending_context_changes (
     last_seen_sequence bigint,
     first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
     last_seen_at timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE discovery_presentation_selection (
+    scope_key text NOT NULL,
+    language text NOT NULL,
+    revision bigint DEFAULT 1 NOT NULL
 );
 CREATE TABLE discovery_section_items (
     run_id text NOT NULL,
@@ -213,7 +302,8 @@ CREATE TABLE discovery_sync_runs (
     completed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    acknowledged_at timestamp with time zone
+    acknowledged_at timestamp with time zone,
+    presentation_revision bigint DEFAULT 0 NOT NULL
 );
 CREATE TABLE discovery_sync_state (
     scope_key text NOT NULL,
@@ -298,7 +388,8 @@ CREATE TABLE discovery_title_metadata_tags (
     confidence double precision,
     is_adult boolean DEFAULT false NOT NULL,
     is_spoiler boolean DEFAULT false NOT NULL,
-    sort_index integer DEFAULT 0 NOT NULL
+    sort_index integer DEFAULT 0 NOT NULL,
+    affinity_signals_json text DEFAULT '[]'::text NOT NULL
 );
 CREATE TABLE discovery_title_source_tag_values (
     discovery_title_id text NOT NULL,
@@ -341,7 +432,8 @@ CREATE TABLE discovery_titles (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     is_adult boolean DEFAULT false NOT NULL,
-    content_ratings_json text DEFAULT '[]'::text NOT NULL
+    content_ratings_json text DEFAULT '[]'::text NOT NULL,
+    affinity_signals_json text DEFAULT '[]'::text NOT NULL
 );
 CREATE TABLE domain_events (
     sequence bigint NOT NULL,
@@ -361,7 +453,8 @@ CREATE TABLE domain_events (
     actor_display_name text DEFAULT 'System'::text NOT NULL,
     import_status text,
     media_file_delete_reason text,
-    download_id text
+    download_id text,
+    import_skip_reason text
 );
 CREATE SEQUENCE domain_events_sequence_seq
     START WITH 1
@@ -390,6 +483,12 @@ CREATE TABLE download_cleanup (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT download_cleanup_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text])))
+);
+CREATE TABLE download_cleanup_seed_state (
+    id integer NOT NULL,
+    changed_through timestamp with time zone NOT NULL,
+    full_scan_at timestamp with time zone NOT NULL,
+    CONSTRAINT download_cleanup_seed_state_id_check CHECK ((id = 1))
 );
 CREATE TABLE download_client_bindings (
     download_id text NOT NULL,
@@ -454,7 +553,8 @@ CREATE TABLE download_import_artifacts (
     imported_media_file_id text,
     created_at timestamp with time zone DEFAULT now(),
     source_client_id text,
-    canonical_download_id text
+    canonical_download_id text,
+    workspace_relative_path text
 );
 CREATE TABLE download_queue_commands (
     id text NOT NULL,
@@ -509,7 +609,11 @@ CREATE TABLE download_submissions (
     seed_info_hash text,
     seed_post_import_tracking text,
     release_size_bytes bigint,
-    info_hash text
+    info_hash text,
+    release_listing_json text,
+    password_candidates text,
+    password_retry_state text,
+    grabbed_file_names_json text
 );
 CREATE TABLE downloads (
     id text NOT NULL,
@@ -560,7 +664,9 @@ CREATE TABLE episodes (
     absolute_number text,
     overview text,
     tvdb_id text,
-    image_url text
+    image_url text,
+    contiguous_absolute_number bigint,
+    tmdb_id text
 );
 CREATE TABLE event_subscriber_offsets (
     subscriber_name text NOT NULL,
@@ -675,6 +781,32 @@ CREATE TABLE image_proxy_sources (
     fallback_class text NOT NULL,
     last_seen_at timestamp with time zone NOT NULL
 );
+CREATE TABLE import_space_incident_lock (
+    id integer NOT NULL,
+    revision integer NOT NULL,
+    CONSTRAINT import_space_incident_lock_id_check CHECK ((id = 1))
+);
+CREATE TABLE import_space_incidents (
+    destination_key text NOT NULL,
+    incident_id text NOT NULL
+);
+CREATE TABLE import_space_members (
+    member_key text NOT NULL,
+    job_key text NOT NULL,
+    destination_key text NOT NULL,
+    measurement_json text NOT NULL,
+    download_id text NOT NULL,
+    observed_at text DEFAULT ''::text NOT NULL
+);
+CREATE TABLE import_space_notification_attempts (
+    event_id text NOT NULL,
+    attempts integer NOT NULL,
+    first_attempt_at text NOT NULL
+);
+CREATE TABLE import_space_notification_receipts (
+    event_id text NOT NULL,
+    target_key text NOT NULL
+);
 CREATE TABLE imports (
     id text NOT NULL,
     source_system text NOT NULL,
@@ -696,6 +828,28 @@ CREATE TABLE imports (
     import_transfer_started_at timestamp with time zone,
     import_transfer_updated_at timestamp with time zone,
     canonical_download_id text
+);
+CREATE TABLE indexer_api_client_grants (
+    client_id text NOT NULL,
+    indexer_id text NOT NULL,
+    categories_json text
+);
+CREATE TABLE indexer_api_clients (
+    id text NOT NULL,
+    name text NOT NULL,
+    enabled boolean NOT NULL,
+    protocols_json text NOT NULL,
+    lookup_id text,
+    secret_hash text,
+    key_generation bigint NOT NULL,
+    revision bigint NOT NULL,
+    last_used_at timestamp with time zone,
+    last_outcome_code text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT indexer_api_clients_check CHECK (((lookup_id IS NULL) = (secret_hash IS NULL))),
+    CONSTRAINT indexer_api_clients_key_generation_check CHECK ((key_generation > 0)),
+    CONSTRAINT indexer_api_clients_revision_check CHECK ((revision > 0))
 );
 CREATE TABLE indexer_api_quotas (
     indexer_id text NOT NULL,
@@ -721,6 +875,15 @@ CREATE TABLE indexer_errors (
     payload_format_version integer NOT NULL,
     response_zstd bytea NOT NULL,
     occurred_at timestamp with time zone NOT NULL
+);
+CREATE TABLE indexer_facet_learning (
+    indexer_id text NOT NULL,
+    facet text NOT NULL,
+    empty_title_ids text DEFAULT '[]'::text NOT NULL,
+    suppressed_until timestamp with time zone,
+    reprobe_claimed_at timestamp with time zone,
+    revision bigint DEFAULT 0 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 CREATE TABLE indexer_search_candidate_source_values (
     source_id text NOT NULL,
@@ -787,6 +950,40 @@ CREATE TABLE indexer_search_learning (
     suppressed boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+CREATE TABLE indexer_search_listing_readers (
+    indexer_id text NOT NULL,
+    indexer_fingerprint text NOT NULL,
+    title_id text NOT NULL,
+    facet text NOT NULL,
+    scope_key text NOT NULL,
+    query_signature text NOT NULL,
+    strategy_family text NOT NULL,
+    first_page_fingerprint text NOT NULL,
+    observed_at timestamp with time zone NOT NULL
+);
+CREATE TABLE indexer_search_listing_runs (
+    run_id text NOT NULL,
+    indexer_id text NOT NULL,
+    indexer_fingerprint text NOT NULL,
+    title_id text NOT NULL,
+    facet text NOT NULL,
+    first_page_fingerprint text NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+CREATE TABLE indexer_search_listings (
+    indexer_id text NOT NULL,
+    indexer_fingerprint text NOT NULL,
+    title_id text NOT NULL,
+    facet text NOT NULL,
+    first_page_fingerprint text NOT NULL,
+    owner_scope_key text NOT NULL,
+    owner_query_signature text NOT NULL,
+    owner_strategy_family text NOT NULL,
+    page_cursor text,
+    finished boolean DEFAULT false NOT NULL,
+    chain_started_at timestamp with time zone NOT NULL,
+    advanced_at timestamp with time zone NOT NULL
+);
 CREATE TABLE indexer_search_run_candidate_sources (
     run_id text NOT NULL,
     source_id text NOT NULL,
@@ -810,7 +1007,11 @@ CREATE TABLE indexer_search_runs (
     retry_at timestamp with time zone,
     error_summary text,
     indexer_fingerprint text NOT NULL,
-    created_at timestamp with time zone NOT NULL
+    created_at timestamp with time zone NOT NULL,
+    strategy_state text,
+    coverage_scope_key text,
+    page_cursor text,
+    cursor_chain_id text
 );
 CREATE TABLE indexer_system_backoffs (
     indexer_id text NOT NULL,
@@ -843,7 +1044,9 @@ CREATE TABLE indexers (
     proxy_config_id text,
     last_error_message text,
     download_client_id text,
-    seeding_profile_id text
+    seeding_profile_id text,
+    max_queries_per_minute bigint,
+    last_error_code text
 );
 CREATE TABLE jellyfin_media_server_details (
     connection_id text NOT NULL,
@@ -967,6 +1170,103 @@ CREATE TABLE lifecycle_claims (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     released_reason text
 );
+CREATE TABLE list_exclusion_external_ids (
+    exclusion_id text NOT NULL,
+    source text NOT NULL,
+    value text NOT NULL,
+    external_kind text DEFAULT ''::text NOT NULL
+);
+CREATE TABLE list_exclusions (
+    id text NOT NULL,
+    kind text NOT NULL,
+    display_title text NOT NULL,
+    year integer,
+    scope text NOT NULL,
+    subscription_id text,
+    created_by_user_id text,
+    created_at timestamp with time zone NOT NULL
+);
+CREATE TABLE list_memberships (
+    subscription_id text NOT NULL,
+    item_key text NOT NULL,
+    rank bigint,
+    season integer,
+    display_title text,
+    year integer,
+    external_ids_json text DEFAULT '[]'::text NOT NULL,
+    smg_title_id bigint,
+    title_id text,
+    request_id text,
+    kind text NOT NULL,
+    state text NOT NULL,
+    state_reason text,
+    added_by_list boolean DEFAULT false NOT NULL,
+    first_seen_at timestamp with time zone NOT NULL,
+    last_seen_at timestamp with time zone NOT NULL,
+    left_at timestamp with time zone,
+    left_handled boolean DEFAULT false NOT NULL,
+    series_movie_json jsonb
+);
+CREATE TABLE list_subscription_routes (
+    subscription_id text NOT NULL,
+    kind text NOT NULL,
+    library_id text NOT NULL,
+    quality_profile_id text,
+    root_folder_id text,
+    monitor_type text NOT NULL,
+    min_availability text,
+    use_season_folders boolean,
+    release_numbering text,
+    tags_json text DEFAULT '[]'::text NOT NULL
+);
+CREATE TABLE list_subscriptions (
+    id text NOT NULL,
+    scope text NOT NULL,
+    owner_user_id text NOT NULL,
+    provider text NOT NULL,
+    source_type text NOT NULL,
+    source_params_json text DEFAULT '{}'::text NOT NULL,
+    source_origin text NOT NULL,
+    chart_key text,
+    chart_scope text,
+    name text NOT NULL,
+    provider_url text,
+    kinds_json text DEFAULT '[]'::text NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    mode text NOT NULL,
+    filters_json text DEFAULT '[]'::text NOT NULL,
+    max_per_sync integer,
+    on_leave text DEFAULT 'keep'::text NOT NULL,
+    interval_seconds bigint NOT NULL,
+    credential_id text,
+    sync_state text DEFAULT 'new'::text NOT NULL,
+    last_sync_at timestamp with time zone,
+    next_sync_at timestamp with time zone,
+    error_message text,
+    error_at timestamp with time zone,
+    paused_until timestamp with time zone,
+    fetch_fingerprint text,
+    count_total bigint DEFAULT 0 NOT NULL,
+    count_in_library bigint DEFAULT 0 NOT NULL,
+    count_added bigint DEFAULT 0 NOT NULL,
+    count_requested bigint DEFAULT 0 NOT NULL,
+    count_held bigint DEFAULT 0 NOT NULL,
+    count_filtered bigint DEFAULT 0 NOT NULL,
+    count_excluded bigint DEFAULT 0 NOT NULL,
+    count_unresolved bigint DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+CREATE TABLE list_sync_runs (
+    id text NOT NULL,
+    subscription_id text NOT NULL,
+    job_run_id text,
+    started_at timestamp with time zone NOT NULL,
+    finished_at timestamp with time zone,
+    outcome text NOT NULL,
+    counts_json text DEFAULT '{}'::text NOT NULL,
+    error_message text
+);
 CREATE TABLE location_file_resolutions (
     operation_id text NOT NULL,
     title_id text NOT NULL,
@@ -980,6 +1280,10 @@ CREATE TABLE location_operation_owned_entities (
     ownership_mode text DEFAULT 'exclusive'::text NOT NULL,
     acquired_at timestamp with time zone DEFAULT now() NOT NULL,
     released_at timestamp with time zone
+);
+CREATE TABLE location_operation_plans (
+    operation_id text NOT NULL,
+    plan bytea NOT NULL
 );
 CREATE TABLE location_operation_title_checkpoints (
     operation_id text NOT NULL,
@@ -1040,7 +1344,6 @@ CREATE TABLE location_operations (
     destination_library_id text,
     destination_root_id text,
     plan_fingerprint text DEFAULT ''::text NOT NULL,
-    plan_json text,
     verification_depth text DEFAULT 'full'::text NOT NULL,
     verification_fallback_count integer DEFAULT 0 NOT NULL,
     title_total integer DEFAULT 0 NOT NULL,
@@ -1065,7 +1368,17 @@ CREATE TABLE location_operations (
     completed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    reason_code text
+    reason_code text,
+    recovery_key text,
+    recovery_committed_at timestamp with time zone
+);
+CREATE TABLE location_recovery_staging (
+    id text NOT NULL,
+    operation_id text NOT NULL,
+    media_file_id text NOT NULL,
+    source_path text NOT NULL,
+    destination_path text NOT NULL,
+    staging_path text NOT NULL
 );
 CREATE TABLE location_transfer_progress (
     operation_id text NOT NULL,
@@ -1212,7 +1525,8 @@ CREATE TABLE maintenance_rule_sets (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     effect_arming text DEFAULT 'none'::text NOT NULL,
-    destructive_rearm_required boolean DEFAULT false NOT NULL
+    destructive_rearm_required boolean DEFAULT false NOT NULL,
+    system_owned boolean DEFAULT false NOT NULL
 );
 CREATE TABLE maintenance_sequence_terminal_memberships (
     id text NOT NULL,
@@ -1254,6 +1568,10 @@ CREATE TABLE manual_import_selections (
     archive_workspace_root text,
     canonical_download_id text
 );
+CREATE TABLE media_file_analyses (
+    media_file_id text NOT NULL,
+    analysis bytea NOT NULL
+);
 CREATE TABLE media_files (
     id text NOT NULL,
     title_id text NOT NULL,
@@ -1275,7 +1593,6 @@ CREATE TABLE media_files (
     audio_channels bigint,
     duration_seconds bigint,
     container_format text,
-    analysis_json text,
     video_frame_rate text,
     video_profile text,
     audio_bitrate_kbps bigint,
@@ -1309,7 +1626,9 @@ CREATE TABLE media_files (
     analysis_attempted_at text,
     analysis_attempt_source text,
     analysis_attempt_status text,
-    analysis_attempt_json text
+    analysis_attempt_json text,
+    release_listing_json text,
+    current_score_evaluation text
 );
 CREATE TABLE media_request_external_ids (
     request_id text NOT NULL,
@@ -1357,8 +1676,29 @@ CREATE TABLE media_requests (
     decided_by_rule_set_ids text DEFAULT '[]'::text NOT NULL,
     policy_tags_json text DEFAULT '[]'::text NOT NULL,
     metadata_snapshot_json text DEFAULT '{}'::text NOT NULL,
+    origin_kind text DEFAULT 'manual'::text NOT NULL,
+    origin_subscription_id text,
     CONSTRAINT media_requests_facet_check CHECK ((facet = ANY (ARRAY['movie'::text, 'series'::text, 'anime'::text]))),
     CONSTRAINT media_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text, 'canceled'::text])))
+);
+CREATE TABLE media_server_audience_plays (
+    connection_id text NOT NULL,
+    external_account_id text NOT NULL,
+    provider_item_id text NOT NULL,
+    kind text NOT NULL,
+    scryer_title_id text,
+    scryer_episode_id text,
+    play_count bigint DEFAULT 0 NOT NULL,
+    last_played_at timestamp with time zone,
+    CONSTRAINT media_server_audience_plays_external_account_id_check CHECK ((external_account_id <> ''::text)),
+    CONSTRAINT media_server_audience_plays_kind_check CHECK ((kind = ANY (ARRAY['movie'::text, 'episode'::text]))),
+    CONSTRAINT media_server_audience_plays_provider_item_id_check CHECK ((provider_item_id <> ''::text))
+);
+CREATE TABLE media_server_audience_reads (
+    connection_id text NOT NULL,
+    sweep_started_at timestamp with time zone NOT NULL,
+    read_at timestamp with time zone NOT NULL,
+    play_count bigint DEFAULT 0 NOT NULL
 );
 CREATE TABLE media_server_connections (
     id text NOT NULL,
@@ -1395,6 +1735,16 @@ CREATE TABLE media_server_playback_items (
     last_seen_at timestamp with time zone NOT NULL,
     CONSTRAINT media_server_playback_items_entity_kind_check CHECK ((entity_kind = ANY (ARRAY['title'::text, 'episode'::text])))
 );
+CREATE TABLE media_server_signal_roster (
+    connection_id text NOT NULL,
+    link_id text NOT NULL,
+    external_user_id text NOT NULL,
+    scryer_user_id text NOT NULL,
+    link_verified_at timestamp with time zone,
+    sweep_started_at timestamp with time zone NOT NULL,
+    read_at timestamp with time zone NOT NULL,
+    CONSTRAINT media_server_signal_roster_link_id_check CHECK ((link_id <> ''::text))
+);
 CREATE TABLE media_server_signal_sync_state (
     connection_id text NOT NULL,
     provider text NOT NULL,
@@ -1404,7 +1754,8 @@ CREATE TABLE media_server_signal_sync_state (
     last_error text,
     participant_count bigint DEFAULT 0 NOT NULL,
     signal_count bigint DEFAULT 0 NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_error_code text
 );
 CREATE TABLE media_server_user_media_signals (
     id text NOT NULL,
@@ -1422,7 +1773,8 @@ CREATE TABLE media_server_user_media_signals (
     observed_at timestamp with time zone DEFAULT now() NOT NULL,
     sync_generation bigint DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    is_favorite boolean DEFAULT false NOT NULL
 );
 CREATE TABLE monitor_selections (
     owner_kind text NOT NULL,
@@ -1572,7 +1924,9 @@ CREATE TABLE pending_releases (
     coverage_identity text,
     role text DEFAULT 'primary'::text NOT NULL,
     last_decision_code text,
-    release_age_unknown boolean DEFAULT false NOT NULL
+    release_age_unknown boolean DEFAULT false NOT NULL,
+    release_listing_json text,
+    http_release_json text
 );
 CREATE TABLE plex_media_server_details (
     connection_id text NOT NULL,
@@ -1656,7 +2010,11 @@ CREATE TABLE post_processing_scripts (
     execution_mode text DEFAULT 'blocking'::text NOT NULL,
     timeout_secs bigint DEFAULT 300,
     enabled boolean DEFAULT true NOT NULL,
-    debug boolean DEFAULT false NOT NULL
+    debug boolean DEFAULT false NOT NULL,
+    language text DEFAULT 'shell'::text NOT NULL,
+    trigger text DEFAULT 'post_import'::text NOT NULL,
+    schedule_json text,
+    run_on_startup boolean DEFAULT false NOT NULL
 );
 CREATE TABLE proxy_configs (
     id text CONSTRAINT indexer_proxy_configs_id_not_null NOT NULL,
@@ -1845,7 +2203,8 @@ CREATE TABLE rule_sets (
     managed_tag_filter text,
     evaluation_phase text DEFAULT 'additional'::text NOT NULL,
     exclusive_group text,
-    disabled_reason text
+    disabled_reason text,
+    disabled_reason_code text
 );
 CREATE TABLE scope_indexer_coverage (
     scope_key text NOT NULL,
@@ -1959,6 +2318,19 @@ CREATE TABLE subtitle_provider_configs (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     config_json text NOT NULL
+);
+CREATE TABLE subtitle_search_backoffs (
+    media_file_id text NOT NULL,
+    language text NOT NULL,
+    hearing_impaired boolean NOT NULL,
+    forced boolean NOT NULL,
+    file_path text NOT NULL,
+    size_bytes bigint NOT NULL,
+    wanted_languages text NOT NULL,
+    enabled_providers text NOT NULL,
+    empty_searches integer NOT NULL,
+    searched_at timestamp with time zone NOT NULL,
+    retry_after timestamp with time zone NOT NULL
 );
 CREATE TABLE title_anime_numbering_bridges (
     title_id text NOT NULL,
@@ -2082,7 +2454,8 @@ CREATE TABLE title_metadata_tags (
     confidence double precision,
     is_adult boolean DEFAULT false NOT NULL,
     is_spoiler boolean DEFAULT false NOT NULL,
-    sort_index integer DEFAULT 0 NOT NULL
+    sort_index integer DEFAULT 0 NOT NULL,
+    affinity_signals_json text DEFAULT '[]'::text NOT NULL
 );
 CREATE TABLE title_more_like_this_items (
     source_title_id text NOT NULL,
@@ -2103,6 +2476,11 @@ CREATE TABLE title_recommendation_cards (
     payload_blob bytea,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE title_recycle_purges (
+    title_id text NOT NULL,
+    library_id text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL
 );
 CREATE TABLE title_search_collation_keys (
     term_id bigint NOT NULL,
@@ -2203,7 +2581,12 @@ CREATE TABLE titles (
     root_folder_id text NOT NULL,
     catalog_sort_key text DEFAULT ''::text NOT NULL,
     popularity double precision,
-    smg_identity_backfill_attempt_count bigint DEFAULT 0 NOT NULL
+    smg_identity_backfill_attempt_count bigint DEFAULT 0 NOT NULL,
+    movie_release_dates_json text,
+    catalog_name_tie_key text DEFAULT ''::text NOT NULL,
+    folder_path_key text COLLATE pg_catalog."C",
+    folder_conflict_reason text,
+    folder_conflict_path text
 );
 CREATE TABLE totp_credentials (
     id text NOT NULL,
@@ -2326,6 +2709,51 @@ CREATE TABLE user_library_permission_masks (
     permission_mask bigint NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
+CREATE TABLE user_list_accounts (
+    id text NOT NULL,
+    user_id text NOT NULL,
+    provider text NOT NULL,
+    external_user_id text NOT NULL,
+    username text NOT NULL,
+    display_name text,
+    credential_encrypted text NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
+    error_message text,
+    linked_at timestamp with time zone NOT NULL,
+    last_used_at timestamp with time zone,
+    last_refresh_at timestamp with time zone,
+    updated_at timestamp with time zone NOT NULL
+);
+CREATE TABLE user_list_policies (
+    user_id text NOT NULL,
+    policy text NOT NULL,
+    updated_by_user_id text,
+    updated_at timestamp with time zone NOT NULL
+);
+CREATE TABLE user_ui_catalog_views (
+    user_id text NOT NULL,
+    device_class text NOT NULL,
+    facet text NOT NULL,
+    view_mode text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE user_ui_dashboard_layout_items (
+    user_id text NOT NULL,
+    breakpoint text NOT NULL,
+    panel_id text NOT NULL,
+    x integer NOT NULL,
+    y integer NOT NULL,
+    w integer NOT NULL,
+    h integer NOT NULL
+);
+CREATE TABLE user_ui_dashboard_layouts (
+    user_id text NOT NULL,
+    breakpoint text NOT NULL,
+    column_count integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
 CREATE TABLE user_ui_settings (
     user_id text NOT NULL,
     theme text DEFAULT 'dark'::text NOT NULL,
@@ -2339,17 +2767,22 @@ CREATE TABLE user_ui_settings (
     sidebar_mode text DEFAULT 'expanded'::text NOT NULL,
     default_landing_view text DEFAULT 'movies'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    palette text DEFAULT 'CLASSIC'::text NOT NULL,
+    discovery_grid_hide_owned boolean DEFAULT true NOT NULL,
+    discovery_grid_hide_requested boolean DEFAULT false NOT NULL,
+    CONSTRAINT user_ui_settings_palette_check CHECK ((palette = ANY (ARRAY['CLASSIC'::text, 'SCRYER_DEFAULT'::text, 'SLATE'::text, 'OCEAN'::text, 'FOREST'::text, 'PLUM'::text, 'EMBER'::text, 'GRAPHITE'::text, 'PAPYRUS'::text])))
 );
 CREATE TABLE user_ui_table_columns (
-    user_id text NOT NULL,
-    facet text NOT NULL,
-    table_view_mode text NOT NULL,
-    column_id text NOT NULL,
-    column_order integer NOT NULL,
-    visible boolean DEFAULT true NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    user_id text CONSTRAINT user_ui_table_columns_user_id_not_null1 NOT NULL,
+    device_class text DEFAULT 'desktop'::text NOT NULL,
+    facet text CONSTRAINT user_ui_table_columns_facet_not_null1 NOT NULL,
+    table_view_mode text CONSTRAINT user_ui_table_columns_table_view_mode_not_null1 NOT NULL,
+    column_id text CONSTRAINT user_ui_table_columns_column_id_not_null1 NOT NULL,
+    column_order integer CONSTRAINT user_ui_table_columns_column_order_not_null1 NOT NULL,
+    visible boolean DEFAULT true CONSTRAINT user_ui_table_columns_visible_not_null1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() CONSTRAINT user_ui_table_columns_created_at_not_null1 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() CONSTRAINT user_ui_table_columns_updated_at_not_null1 NOT NULL
 );
 CREATE TABLE users (
     id text NOT NULL,
@@ -2424,6 +2857,12 @@ CREATE TABLE workflow_operations (
     external_reference text,
     series_movie_link_id text
 );
+CREATE TABLE workflow_private_inputs (
+    run_id text NOT NULL,
+    actor_user_id text NOT NULL,
+    request_key text NOT NULL,
+    input_encrypted text
+);
 ALTER TABLE ONLY domain_events ALTER COLUMN sequence SET DEFAULT nextval('domain_events_sequence_seq'::regclass);
 ALTER TABLE ONLY title_search_index_queue ALTER COLUMN seq SET DEFAULT nextval('title_search_index_queue_seq_seq'::regclass);
 ALTER TABLE ONLY title_search_terms ALTER COLUMN term_id SET DEFAULT nextval('title_search_terms_term_id_seq'::regclass);
@@ -2437,10 +2876,22 @@ ALTER TABLE ONLY application_migrations
     ADD CONSTRAINT application_migrations_pkey PRIMARY KEY (migration_id);
 ALTER TABLE ONLY blocklist
     ADD CONSTRAINT blocklist_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY canonical_tag_vocabulary_cache
+    ADD CONSTRAINT canonical_tag_vocabulary_cache_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY collection_external_ids
     ADD CONSTRAINT collection_external_ids_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY collections
     ADD CONSTRAINT collections_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY delay_profile_facets
+    ADD CONSTRAINT delay_profile_facets_pkey PRIMARY KEY (profile_id, facet);
+ALTER TABLE ONLY delay_profile_libraries
+    ADD CONSTRAINT delay_profile_libraries_pkey PRIMARY KEY (profile_id, library_id);
+ALTER TABLE ONLY delay_profile_tags
+    ADD CONSTRAINT delay_profile_tags_pkey PRIMARY KEY (profile_id, label);
+ALTER TABLE ONLY delay_profiles
+    ADD CONSTRAINT delay_profiles_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY discovery_affinity_revision
+    ADD CONSTRAINT discovery_affinity_revision_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY discovery_facets
     ADD CONSTRAINT discovery_facets_pkey PRIMARY KEY (run_id, facet_name, facet_value);
 ALTER TABLE ONLY discovery_item_library_provenance
@@ -2451,8 +2902,16 @@ ALTER TABLE ONLY discovery_item_subject_links
     ADD CONSTRAINT discovery_item_subject_links_item_id_link_type_subject_key_key UNIQUE (item_id, link_type, subject_key);
 ALTER TABLE ONLY discovery_items
     ADD CONSTRAINT discovery_items_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY discovery_library_graph_payloads
+    ADD CONSTRAINT discovery_library_graph_payloads_pkey PRIMARY KEY (run_id);
+ALTER TABLE ONLY discovery_library_graph_runs
+    ADD CONSTRAINT discovery_library_graph_runs_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY discovery_neighbor_cache
+    ADD CONSTRAINT discovery_neighbor_cache_pkey PRIMARY KEY (target_key, language);
 ALTER TABLE ONLY discovery_pending_context_changes
     ADD CONSTRAINT discovery_pending_context_changes_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY discovery_presentation_selection
+    ADD CONSTRAINT discovery_presentation_selection_pkey PRIMARY KEY (scope_key);
 ALTER TABLE ONLY discovery_section_items
     ADD CONSTRAINT discovery_section_items_pkey PRIMARY KEY (run_id, section_id, item_id);
 ALTER TABLE ONLY discovery_sections
@@ -2491,6 +2950,8 @@ ALTER TABLE ONLY domain_events
     ADD CONSTRAINT domain_events_pkey PRIMARY KEY (sequence);
 ALTER TABLE ONLY download_cleanup
     ADD CONSTRAINT download_cleanup_pkey PRIMARY KEY (download_id);
+ALTER TABLE ONLY download_cleanup_seed_state
+    ADD CONSTRAINT download_cleanup_seed_state_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY download_client_bindings
     ADD CONSTRAINT download_client_bindings_pkey PRIMARY KEY (download_id);
 ALTER TABLE ONLY download_client_status
@@ -2551,12 +3012,30 @@ ALTER TABLE ONLY image_proxy_cache_entries
     ADD CONSTRAINT image_proxy_cache_entries_pkey PRIMARY KEY (token, variant);
 ALTER TABLE ONLY image_proxy_sources
     ADD CONSTRAINT image_proxy_sources_pkey PRIMARY KEY (token);
+ALTER TABLE ONLY import_space_incident_lock
+    ADD CONSTRAINT import_space_incident_lock_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY import_space_incidents
+    ADD CONSTRAINT import_space_incidents_pkey PRIMARY KEY (destination_key);
+ALTER TABLE ONLY import_space_members
+    ADD CONSTRAINT import_space_members_pkey PRIMARY KEY (member_key);
+ALTER TABLE ONLY import_space_notification_attempts
+    ADD CONSTRAINT import_space_notification_attempts_pkey PRIMARY KEY (event_id);
+ALTER TABLE ONLY import_space_notification_receipts
+    ADD CONSTRAINT import_space_notification_receipts_pkey PRIMARY KEY (event_id, target_key);
 ALTER TABLE ONLY imports
     ADD CONSTRAINT imports_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY indexer_api_client_grants
+    ADD CONSTRAINT indexer_api_client_grants_pkey PRIMARY KEY (client_id, indexer_id);
+ALTER TABLE ONLY indexer_api_clients
+    ADD CONSTRAINT indexer_api_clients_lookup_id_key UNIQUE (lookup_id);
+ALTER TABLE ONLY indexer_api_clients
+    ADD CONSTRAINT indexer_api_clients_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY indexer_api_quotas
     ADD CONSTRAINT indexer_api_quotas_pkey PRIMARY KEY (indexer_id);
 ALTER TABLE ONLY indexer_errors
     ADD CONSTRAINT indexer_errors_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY indexer_facet_learning
+    ADD CONSTRAINT indexer_facet_learning_pkey PRIMARY KEY (indexer_id, facet);
 ALTER TABLE ONLY proxy_configs
     ADD CONSTRAINT indexer_proxy_configs_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY indexer_search_candidate_sources
@@ -2571,6 +3050,12 @@ ALTER TABLE ONLY indexer_search_candidates
     ADD CONSTRAINT indexer_search_candidates_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY indexer_search_learning
     ADD CONSTRAINT indexer_search_learning_pkey PRIMARY KEY (indexer_id, title_id, facet, strategy_key);
+ALTER TABLE ONLY indexer_search_listing_readers
+    ADD CONSTRAINT indexer_search_listing_readers_pkey PRIMARY KEY (indexer_id, indexer_fingerprint, title_id, facet, scope_key, query_signature);
+ALTER TABLE ONLY indexer_search_listing_runs
+    ADD CONSTRAINT indexer_search_listing_runs_pkey PRIMARY KEY (run_id);
+ALTER TABLE ONLY indexer_search_listings
+    ADD CONSTRAINT indexer_search_listings_pkey PRIMARY KEY (indexer_id, indexer_fingerprint, title_id, facet, first_page_fingerprint);
 ALTER TABLE ONLY indexer_search_run_candidate_sources
     ADD CONSTRAINT indexer_search_run_candidate_sources_pkey PRIMARY KEY (run_id, source_id);
 ALTER TABLE ONLY indexer_search_runs
@@ -2599,16 +3084,34 @@ ALTER TABLE ONLY lifecycle_candidates
     ADD CONSTRAINT lifecycle_candidates_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY lifecycle_claims
     ADD CONSTRAINT lifecycle_claims_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY list_exclusion_external_ids
+    ADD CONSTRAINT list_exclusion_external_ids_pkey PRIMARY KEY (exclusion_id, source, value);
+ALTER TABLE ONLY list_exclusions
+    ADD CONSTRAINT list_exclusions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY list_memberships
+    ADD CONSTRAINT list_memberships_pkey PRIMARY KEY (subscription_id, item_key);
+ALTER TABLE ONLY list_subscription_routes
+    ADD CONSTRAINT list_subscription_routes_pkey PRIMARY KEY (subscription_id, kind);
+ALTER TABLE ONLY list_subscriptions
+    ADD CONSTRAINT list_subscriptions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY list_sync_runs
+    ADD CONSTRAINT list_sync_runs_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY location_file_resolutions
     ADD CONSTRAINT location_file_resolutions_pkey PRIMARY KEY (operation_id, title_id, source_path);
 ALTER TABLE ONLY location_operation_owned_entities
     ADD CONSTRAINT location_operation_owned_entities_pkey PRIMARY KEY (operation_id, entity_type, entity_id);
+ALTER TABLE ONLY location_operation_plans
+    ADD CONSTRAINT location_operation_plans_pkey PRIMARY KEY (operation_id);
 ALTER TABLE ONLY location_operation_title_checkpoints
     ADD CONSTRAINT location_operation_title_checkpoints_pkey PRIMARY KEY (operation_id, title_id);
 ALTER TABLE ONLY location_operation_verifications
     ADD CONSTRAINT location_operation_verifications_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY location_operations
     ADD CONSTRAINT location_operations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY location_recovery_staging
+    ADD CONSTRAINT location_recovery_staging_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY location_recovery_staging
+    ADD CONSTRAINT location_recovery_staging_staging_path_key UNIQUE (staging_path);
 ALTER TABLE ONLY location_transfer_progress
     ADD CONSTRAINT location_transfer_progress_pkey PRIMARY KEY (operation_id);
 ALTER TABLE ONLY location_transfer_runtime
@@ -2647,6 +3150,8 @@ ALTER TABLE ONLY manual_import_selection_candidates
     ADD CONSTRAINT manual_import_selection_candidates_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY manual_import_selections
     ADD CONSTRAINT manual_import_selections_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY media_file_analyses
+    ADD CONSTRAINT media_file_analyses_pkey PRIMARY KEY (media_file_id);
 ALTER TABLE ONLY media_files
     ADD CONSTRAINT media_files_file_path_key UNIQUE (file_path);
 ALTER TABLE ONLY media_files
@@ -2657,6 +3162,10 @@ ALTER TABLE ONLY media_request_requesters
     ADD CONSTRAINT media_request_requesters_pkey PRIMARY KEY (request_id, user_id);
 ALTER TABLE ONLY media_requests
     ADD CONSTRAINT media_requests_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY media_server_audience_plays
+    ADD CONSTRAINT media_server_audience_plays_pkey PRIMARY KEY (connection_id, external_account_id, provider_item_id);
+ALTER TABLE ONLY media_server_audience_reads
+    ADD CONSTRAINT media_server_audience_reads_pkey PRIMARY KEY (connection_id);
 ALTER TABLE ONLY media_server_connections
     ADD CONSTRAINT media_server_connections_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY media_server_default_library_grants
@@ -2665,6 +3174,8 @@ ALTER TABLE ONLY media_server_path_mappings
     ADD CONSTRAINT media_server_path_mappings_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY media_server_playback_items
     ADD CONSTRAINT media_server_playback_items_pkey PRIMARY KEY (connection_id, entity_kind, entity_id);
+ALTER TABLE ONLY media_server_signal_roster
+    ADD CONSTRAINT media_server_signal_roster_pkey PRIMARY KEY (connection_id, link_id);
 ALTER TABLE ONLY media_server_signal_sync_state
     ADD CONSTRAINT media_server_signal_sync_state_pkey PRIMARY KEY (connection_id);
 ALTER TABLE ONLY media_server_user_media_signals
@@ -2771,6 +3282,8 @@ ALTER TABLE ONLY subtitle_downloads
     ADD CONSTRAINT subtitle_downloads_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY subtitle_provider_configs
     ADD CONSTRAINT subtitle_provider_configs_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY subtitle_search_backoffs
+    ADD CONSTRAINT subtitle_search_backoffs_pkey PRIMARY KEY (media_file_id, language, hearing_impaired, forced);
 ALTER TABLE ONLY title_anime_numbering_bridges
     ADD CONSTRAINT title_anime_numbering_bridges_pkey PRIMARY KEY (title_id);
 ALTER TABLE ONLY title_external_ids
@@ -2795,6 +3308,8 @@ ALTER TABLE ONLY title_more_like_this_items
     ADD CONSTRAINT title_more_like_this_items_source_title_id_discovery_title__key UNIQUE (source_title_id, discovery_title_id);
 ALTER TABLE ONLY title_recommendation_cards
     ADD CONSTRAINT title_recommendation_cards_pkey PRIMARY KEY (discovery_title_id);
+ALTER TABLE ONLY title_recycle_purges
+    ADD CONSTRAINT title_recycle_purges_pkey PRIMARY KEY (title_id);
 ALTER TABLE ONLY title_search_collation_keys
     ADD CONSTRAINT title_search_collation_keys_pkey PRIMARY KEY (term_id, profile);
 ALTER TABLE ONLY title_search_index_queue
@@ -2829,10 +3344,20 @@ ALTER TABLE ONLY user_external_accounts
     ADD CONSTRAINT user_external_accounts_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY user_library_permission_masks
     ADD CONSTRAINT user_library_permission_masks_pkey PRIMARY KEY (user_id, library_id);
+ALTER TABLE ONLY user_list_accounts
+    ADD CONSTRAINT user_list_accounts_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY user_list_policies
+    ADD CONSTRAINT user_list_policies_pkey PRIMARY KEY (user_id);
+ALTER TABLE ONLY user_ui_catalog_views
+    ADD CONSTRAINT user_ui_catalog_views_pkey PRIMARY KEY (user_id, device_class, facet);
+ALTER TABLE ONLY user_ui_dashboard_layout_items
+    ADD CONSTRAINT user_ui_dashboard_layout_items_pkey PRIMARY KEY (user_id, breakpoint, panel_id);
+ALTER TABLE ONLY user_ui_dashboard_layouts
+    ADD CONSTRAINT user_ui_dashboard_layouts_pkey PRIMARY KEY (user_id, breakpoint);
 ALTER TABLE ONLY user_ui_settings
     ADD CONSTRAINT user_ui_settings_pkey PRIMARY KEY (user_id);
 ALTER TABLE ONLY user_ui_table_columns
-    ADD CONSTRAINT user_ui_table_columns_pkey PRIMARY KEY (user_id, facet, table_view_mode, column_id);
+    ADD CONSTRAINT user_ui_table_columns_pkey PRIMARY KEY (user_id, device_class, facet, table_view_mode, column_id);
 ALTER TABLE ONLY users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY users
@@ -2849,6 +3374,10 @@ ALTER TABLE ONLY webauthn_credentials
     ADD CONSTRAINT webauthn_credentials_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY workflow_operations
     ADD CONSTRAINT workflow_operations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY workflow_private_inputs
+    ADD CONSTRAINT workflow_private_inputs_actor_user_id_request_key_key UNIQUE (actor_user_id, request_key);
+ALTER TABLE ONLY workflow_private_inputs
+    ADD CONSTRAINT workflow_private_inputs_pkey PRIMARY KEY (run_id);
 CREATE INDEX idx_api_keys_user_created ON api_keys USING btree (user_id, created_at DESC);
 CREATE UNIQUE INDEX idx_blocklist_info_hash_unique ON blocklist USING btree (title_id, info_hash) WHERE (info_hash IS NOT NULL);
 CREATE UNIQUE INDEX idx_blocklist_release_unique ON blocklist USING btree (title_id, indexer_id, normalized_release_name) WHERE (info_hash IS NULL);
@@ -2856,19 +3385,27 @@ CREATE INDEX idx_blocklist_title_id ON blocklist USING btree (title_id);
 CREATE INDEX idx_collection_external_ids_title_provenance ON collection_external_ids USING btree (title_id, provenance);
 CREATE UNIQUE INDEX idx_collection_external_ids_unique ON collection_external_ids USING btree (collection_id, source, external_id, provenance, source_scope);
 CREATE INDEX idx_collections_title ON collections USING btree (title_id, collection_type);
+CREATE INDEX idx_delay_profile_libraries_library_id ON delay_profile_libraries USING btree (library_id);
+CREATE INDEX idx_delay_profile_tags_label ON delay_profile_tags USING btree (label);
 CREATE INDEX idx_discovery_item_library_provenance_item ON discovery_item_library_provenance USING btree (item_id, subject_key, library_id, title_id);
 CREATE INDEX idx_discovery_item_library_provenance_library ON discovery_item_library_provenance USING btree (run_id, library_id, item_id);
-CREATE INDEX idx_discovery_item_rank_components_item ON discovery_item_rank_components USING btree (item_id, component_index);
+CREATE INDEX idx_discovery_item_rank_components_run ON discovery_item_rank_components USING btree (run_id);
 CREATE INDEX idx_discovery_item_subject_links_item ON discovery_item_subject_links USING btree (item_id, link_type, sort_index);
 CREATE INDEX idx_discovery_item_subject_links_run_type_key ON discovery_item_subject_links USING btree (run_id, link_type, subject_key, item_id);
 CREATE INDEX idx_discovery_items_active_title ON discovery_items USING btree (base_generation_id, discovery_title_id, tombstoned_at);
+CREATE INDEX idx_discovery_items_discovery_title ON discovery_items USING btree (discovery_title_id);
 CREATE INDEX idx_discovery_items_generation_rank ON discovery_items USING btree (base_generation_id, tombstoned_at, owned_in_input);
 CREATE INDEX idx_discovery_items_generation_recommendation ON discovery_items USING btree (base_generation_id, recommendation_score DESC, rank_score DESC, sort_index);
-CREATE INDEX idx_discovery_items_run ON discovery_items USING btree (run_id);
+CREATE INDEX idx_discovery_items_generation_relevance ON discovery_items USING btree (base_generation_id, owned_in_input, COALESCE(recommendation_score, ('-999999999.0'::numeric)::double precision) DESC, COALESCE(rank_score, ('-999999999.0'::numeric)::double precision) DESC, sort_index) WHERE (tombstoned_at IS NULL);
 CREATE INDEX idx_discovery_items_run_section ON discovery_items USING btree (run_id, section_id, sort_index);
 CREATE INDEX idx_discovery_items_section ON discovery_items USING btree (section_id, sort_index, rank_score);
+CREATE INDEX idx_discovery_items_tombstoned_by_run ON discovery_items USING btree (tombstoned_by_run_id) WHERE (tombstoned_by_run_id IS NOT NULL);
+CREATE INDEX idx_discovery_library_graph_runs_facet_status_started ON discovery_library_graph_runs USING btree (facet, status, started_at);
+CREATE INDEX idx_discovery_neighbor_cache_fetched_at ON discovery_neighbor_cache USING btree (fetched_at);
 CREATE INDEX idx_discovery_pending_changes_scope_seen ON discovery_pending_context_changes USING btree (scope_key, last_seen_at);
 CREATE INDEX idx_discovery_pending_changes_scope_sequence ON discovery_pending_context_changes USING btree (scope_key, last_seen_sequence);
+CREATE INDEX idx_discovery_pending_changes_title ON discovery_pending_context_changes USING btree (title_id);
+CREATE INDEX idx_discovery_section_items_item ON discovery_section_items USING btree (item_id);
 CREATE INDEX idx_discovery_section_items_run_section ON discovery_section_items USING btree (run_id, section_id, sort_index);
 CREATE INDEX idx_discovery_sections_run_surface ON discovery_sections USING btree (run_id, surface, sort_index);
 CREATE INDEX idx_discovery_submitted_subjects_run_key ON discovery_submitted_subjects USING btree (run_id, subject_key, library_id, title_id);
@@ -2880,12 +3417,11 @@ CREATE INDEX idx_discovery_title_metadata_external_ratings_source_norm ON discov
 CREATE INDEX idx_discovery_title_metadata_rating_sources_order ON discovery_title_metadata_rating_sources USING btree (discovery_title_id, sort_index, source);
 CREATE INDEX idx_discovery_title_metadata_tags_category_name ON discovery_title_metadata_tags USING btree (category, name, discovery_title_id);
 CREATE INDEX idx_discovery_title_source_tag_values_title ON discovery_title_source_tag_values USING btree (discovery_title_id, source_tag_sort_index, value_sort_index);
-CREATE INDEX idx_discovery_title_source_tags_title ON discovery_title_source_tags USING btree (discovery_title_id, sort_index);
 CREATE INDEX idx_discovery_title_terms_kind_value ON discovery_title_terms USING btree (term_kind, term_value, discovery_title_id);
 CREATE INDEX idx_discovery_title_terms_title ON discovery_title_terms USING btree (discovery_title_id, term_kind, sort_index);
-CREATE INDEX idx_discovery_titles_key_language ON discovery_titles USING btree (target_key_norm, language);
+CREATE INDEX idx_discovery_titles_resolved_title ON discovery_titles USING btree (resolved_title_id);
+CREATE INDEX idx_domain_events_event_type_occurred_at ON domain_events USING btree (event_type, occurred_at);
 CREATE INDEX idx_domain_events_event_type_sequence ON domain_events USING btree (event_type, sequence DESC);
-CREATE INDEX idx_domain_events_occurred_at ON domain_events USING btree (occurred_at DESC);
 CREATE INDEX idx_domain_events_stream_sequence ON domain_events USING btree (stream_id, sequence) WHERE (stream_id IS NOT NULL);
 CREATE INDEX idx_domain_events_title_sequence ON domain_events USING btree (title_id, sequence DESC) WHERE (title_id IS NOT NULL);
 CREATE INDEX idx_download_cleanup_due ON download_cleanup USING btree (status, next_attempt_at, client_id);
@@ -2894,14 +3430,17 @@ CREATE INDEX idx_download_client_bindings_locator ON download_client_bindings US
 CREATE INDEX idx_download_client_status_disabled_until ON download_client_status USING btree (disabled_until);
 CREATE INDEX idx_download_clients_client_priority ON download_clients USING btree (client_priority);
 CREATE UNIQUE INDEX idx_download_clients_name ON download_clients USING btree (name);
-CREATE INDEX idx_download_identity_states_canonical_download_id ON download_identity_states USING btree (canonical_download_id);
 CREATE INDEX idx_download_identity_states_canonical_latest ON download_identity_states USING btree (canonical_download_id, updated_at DESC, id DESC);
 CREATE INDEX idx_download_identity_states_client_item ON download_identity_states USING btree (client_type, download_client_item_id, client_id);
 CREATE INDEX idx_download_identity_states_download_id ON download_identity_states USING btree (client_id, client_type, download_id);
+CREATE INDEX idx_download_identity_states_reason_canonical ON download_identity_states USING btree (reason, canonical_download_id);
+CREATE INDEX idx_download_identity_states_updated_at ON download_identity_states USING btree (updated_at);
 CREATE INDEX idx_download_import_artifacts_episode ON download_import_artifacts USING btree (episode_id, result);
 CREATE INDEX idx_download_import_artifacts_import_episode ON download_import_artifacts USING btree (import_id, episode_id, result, created_at DESC);
+CREATE INDEX idx_download_import_artifacts_imported_media_file ON download_import_artifacts USING btree (imported_media_file_id);
 CREATE INDEX idx_download_import_artifacts_retention ON download_import_artifacts USING btree (created_at, import_id);
 CREATE INDEX idx_download_import_artifacts_source ON download_import_artifacts USING btree (COALESCE(source_client_id, ''::text), source_system, source_ref, created_at);
+CREATE INDEX idx_download_import_artifacts_title ON download_import_artifacts USING btree (title_id);
 CREATE UNIQUE INDEX idx_download_queue_commands_active_unique ON download_queue_commands USING btree (action, COALESCE(client_id, ''::text), client_type, download_client_item_id, is_history) WHERE (status = ANY (ARRAY['queued'::text, 'running'::text]));
 CREATE INDEX idx_download_queue_commands_source ON download_queue_commands USING btree (COALESCE(client_id, ''::text), client_type, download_client_item_id, is_history, created_at DESC);
 CREATE INDEX idx_download_queue_commands_status ON download_queue_commands USING btree (action, status, updated_at);
@@ -2910,35 +3449,45 @@ CREATE INDEX idx_download_submissions_client_item ON download_submissions USING 
 CREATE INDEX idx_download_submissions_download_id ON download_submissions USING btree (download_client_id, download_client_type, download_id);
 CREATE INDEX idx_download_submissions_seed_info_hash ON download_submissions USING btree (seed_info_hash);
 CREATE INDEX idx_download_submissions_title_request_signature ON download_submissions USING btree (title_id, request_signature);
+CREATE INDEX idx_download_submissions_tracked_state_at ON download_submissions USING btree (tracked_state_at);
+CREATE INDEX idx_downloads_created_at_id ON downloads USING btree (created_at, id);
 CREATE INDEX idx_episode_external_ids_title_provenance ON episode_external_ids USING btree (title_id, provenance);
 CREATE UNIQUE INDEX idx_episode_external_ids_unique ON episode_external_ids USING btree (episode_id, source, external_id, provenance, source_scope);
+CREATE INDEX idx_episodes_air_date ON episodes USING btree (air_date);
 CREATE INDEX idx_episodes_collection ON episodes USING btree (collection_id);
 CREATE INDEX idx_episodes_title ON episodes USING btree (title_id, season_number);
 CREATE INDEX idx_external_subtitle_probe_cache_file_path ON external_subtitle_probe_cache USING btree (file_path);
-CREATE INDEX idx_external_subtitle_probe_cache_media_file ON external_subtitle_probe_cache USING btree (media_file_id);
 CREATE INDEX idx_file_episode_map_episode ON file_episode_map USING btree (episode_id);
 CREATE UNIQUE INDEX idx_file_episode_map_one_primary_per_episode ON file_episode_map USING btree (episode_id) WHERE (role = 'primary'::text);
 CREATE INDEX idx_file_series_movie_link_map_link ON file_series_movie_link_map USING btree (series_movie_link_id);
+CREATE INDEX idx_history_events_actor_user ON history_events USING btree (actor_user_id) WHERE (actor_user_id IS NOT NULL);
 CREATE INDEX idx_history_events_occurred_at ON history_events USING btree (occurred_at DESC);
 CREATE INDEX idx_history_events_title_time ON history_events USING btree (title_id, occurred_at DESC);
 CREATE INDEX idx_history_events_type_time ON history_events USING btree (event_type, occurred_at DESC);
-CREATE INDEX idx_history_title_time ON history_events USING btree (title_id, occurred_at DESC);
-CREATE INDEX idx_history_type_time ON history_events USING btree (event_type, occurred_at DESC);
 CREATE INDEX idx_image_proxy_cache_entries_last_accessed_at ON image_proxy_cache_entries USING btree (last_accessed_at);
 CREATE INDEX idx_image_proxy_sources_last_seen_at ON image_proxy_sources USING btree (last_seen_at);
+CREATE INDEX idx_import_space_members_destination ON import_space_members USING btree (destination_key);
+CREATE INDEX idx_import_space_members_job ON import_space_members USING btree (job_key);
 CREATE UNIQUE INDEX idx_imports_active_download_id ON imports USING btree (COALESCE(source_client_id, ''::text), source_system, download_id) WHERE ((download_id IS NOT NULL) AND (status = ANY (ARRAY['pending'::text, 'running'::text, 'processing'::text])));
+CREATE INDEX idx_imports_canonical_download_id ON imports USING btree (canonical_download_id);
 CREATE INDEX idx_imports_download_id ON imports USING btree (source_client_id, source_system, download_id);
+CREATE INDEX idx_imports_source_identity ON imports USING btree (COALESCE(source_client_id, ''::text), source_system, source_ref);
 CREATE UNIQUE INDEX idx_imports_source_ref ON imports USING btree (COALESCE(source_client_id, ''::text), source_system, source_ref, import_type) WHERE (download_id IS NULL);
 CREATE INDEX idx_imports_status_updated_at ON imports USING btree (status, updated_at);
+CREATE INDEX idx_imports_type_status_updated_at ON imports USING btree (import_type, status, updated_at);
 CREATE INDEX idx_indexer_errors_indexer_occurred_at_id ON indexer_errors USING btree (indexer_id, occurred_at DESC, id DESC);
 CREATE INDEX idx_indexer_errors_occurred_at ON indexer_errors USING btree (occurred_at);
 CREATE INDEX idx_indexer_search_candidates_expiry ON indexer_search_candidates USING btree (expires_at);
-CREATE INDEX idx_indexer_search_learning_title ON indexer_search_learning USING btree (indexer_id, title_id, facet);
-CREATE INDEX idx_indexer_search_run_sources_run ON indexer_search_run_candidate_sources USING btree (run_id);
+CREATE INDEX idx_indexer_search_learning_title_id ON indexer_search_learning USING btree (title_id);
+CREATE INDEX idx_indexer_search_listing_readers_listing ON indexer_search_listing_readers USING btree (indexer_id, indexer_fingerprint, title_id, facet, first_page_fingerprint);
+CREATE INDEX idx_indexer_search_listing_runs_listing ON indexer_search_listing_runs USING btree (indexer_id, indexer_fingerprint, title_id, facet, first_page_fingerprint, created_at);
+CREATE INDEX idx_indexer_search_listings_owner ON indexer_search_listings USING btree (indexer_id, owner_scope_key, owner_query_signature);
 CREATE INDEX idx_indexer_search_run_sources_session ON indexer_search_run_candidate_sources USING btree (search_session_id);
 CREATE INDEX idx_indexer_search_run_sources_source ON indexer_search_run_candidate_sources USING btree (source_id);
+CREATE INDEX idx_indexer_search_runs_coverage_scope ON indexer_search_runs USING btree (coverage_scope_key, indexer_id, created_at DESC);
 CREATE INDEX idx_indexer_search_runs_indexer_created ON indexer_search_runs USING btree (indexer_id, created_at DESC);
 CREATE INDEX idx_indexer_search_runs_scope_created ON indexer_search_runs USING btree (scope_key, created_at DESC);
+CREATE INDEX idx_indexer_search_runs_session ON indexer_search_runs USING btree (search_session_id);
 CREATE INDEX idx_indexer_search_sources_indexer_reusable ON indexer_search_candidate_sources USING btree (indexer_id, reusable_until);
 CREATE INDEX idx_indexer_system_backoffs_disabled_until ON indexer_system_backoffs USING btree (disabled_until);
 CREATE INDEX idx_indexers_download_client_id ON indexers USING btree (download_client_id);
@@ -2958,14 +3507,25 @@ CREATE UNIQUE INDEX idx_library_scan_unmatched_items_library_path ON library_sca
 CREATE INDEX idx_library_scan_unmatched_items_library_updated ON library_scan_unmatched_items USING btree (library_id, updated_at DESC);
 CREATE INDEX idx_library_scan_unmatched_items_root_status_updated ON library_scan_unmatched_items USING btree (facet, scan_root, status, updated_at DESC);
 CREATE INDEX idx_library_scan_unmatched_items_root_updated ON library_scan_unmatched_items USING btree (facet, scan_root, updated_at DESC);
+CREATE INDEX idx_library_scan_unmatched_items_title_id ON library_scan_unmatched_items USING btree (title_id);
 CREATE INDEX idx_lifecycle_action_runs_candidate ON lifecycle_action_runs USING btree (candidate_id);
+CREATE INDEX idx_lifecycle_action_runs_generation_started ON lifecycle_action_runs USING btree (candidate_id, match_generation, started_at, id);
 CREATE INDEX idx_lifecycle_action_runs_rule_set ON lifecycle_action_runs USING btree (rule_set_id, started_at DESC);
+CREATE INDEX idx_lifecycle_action_runs_status_finished ON lifecycle_action_runs USING btree (status, finished_at);
 CREATE UNIQUE INDEX idx_lifecycle_candidates_active_subject ON lifecycle_candidates USING btree (rule_set_id, subject_kind, subject_id) WHERE (state <> ALL (ARRAY['succeeded'::text, 'failed'::text, 'canceled'::text, 'excluded'::text]));
 CREATE INDEX idx_lifecycle_candidates_rule_state ON lifecycle_candidates USING btree (rule_set_id, state);
 CREATE INDEX idx_lifecycle_candidates_subject_generation ON lifecycle_candidates USING btree (rule_set_id, subject_kind, subject_id, match_generation);
 CREATE INDEX idx_lifecycle_candidates_title ON lifecycle_candidates USING btree (title_id);
+CREATE UNIQUE INDEX idx_lifecycle_claims_live_operator_keep ON lifecycle_claims USING btree (title_id) WHERE ((producer = 'operator_keep'::text) AND (state = ANY (ARRAY['dormant'::text, 'active'::text])));
 CREATE UNIQUE INDEX idx_lifecycle_claims_live_producer ON lifecycle_claims USING btree (producer, producer_ref) WHERE ((state = ANY (ARRAY['dormant'::text, 'active'::text])) AND (producer_ref IS NOT NULL));
 CREATE INDEX idx_lifecycle_claims_title_state ON lifecycle_claims USING btree (title_id, state);
+CREATE INDEX idx_list_exclusion_external_ids_lookup ON list_exclusion_external_ids USING btree (source, value);
+CREATE INDEX idx_list_exclusions_subscription ON list_exclusions USING btree (subscription_id);
+CREATE INDEX idx_list_memberships_request ON list_memberships USING btree (request_id);
+CREATE INDEX idx_list_memberships_title ON list_memberships USING btree (title_id);
+CREATE INDEX idx_list_subscriptions_due ON list_subscriptions USING btree (enabled, next_sync_at);
+CREATE INDEX idx_list_subscriptions_owner ON list_subscriptions USING btree (owner_user_id);
+CREATE INDEX idx_list_sync_runs_subscription ON list_sync_runs USING btree (subscription_id, started_at);
 CREATE UNIQUE INDEX idx_location_operation_owned_entities_active ON location_operation_owned_entities USING btree (entity_type, entity_id) WHERE (released_at IS NULL);
 CREATE INDEX idx_location_operation_owned_entities_operation ON location_operation_owned_entities USING btree (operation_id, released_at);
 CREATE INDEX idx_location_operation_title_checkpoints_order ON location_operation_title_checkpoints USING btree (operation_id, sequence);
@@ -2975,6 +3535,7 @@ CREATE UNIQUE INDEX idx_location_operation_verifications_destination ON location
 CREATE INDEX idx_location_operation_verifications_media_file ON location_operation_verifications USING btree (media_file_id);
 CREATE INDEX idx_location_operation_verifications_title ON location_operation_verifications USING btree (operation_id, title_id);
 CREATE INDEX idx_location_operations_destination_root ON location_operations USING btree (destination_root_id);
+CREATE UNIQUE INDEX idx_location_operations_recovery_key ON location_operations USING btree (recovery_key);
 CREATE INDEX idx_location_operations_source_root ON location_operations USING btree (source_root_id);
 CREATE INDEX idx_location_operations_state ON location_operations USING btree (state, updated_at DESC);
 CREATE INDEX idx_location_transfer_titles_page ON location_transfer_titles USING btree (operation_id, hot_rank, sequence, title_id);
@@ -2983,8 +3544,8 @@ CREATE INDEX idx_login_verification_challenges_user_id ON login_verification_cha
 CREATE UNIQUE INDEX idx_maintenance_action_job_receipts_accepted_request ON maintenance_action_job_receipts USING btree (candidate_id, match_generation, revision_number, step_id, request_hash) WHERE (state = ANY (ARRAY['accepted'::text, 'completed'::text]));
 CREATE INDEX idx_maintenance_action_job_receipts_step ON maintenance_action_job_receipts USING btree (candidate_id, match_generation, revision_number, step_id, dispatch_attempt DESC);
 CREATE INDEX idx_maintenance_action_step_attempts_step ON maintenance_action_step_attempts USING btree (candidate_id, match_generation, revision_number, step_id, attempt, started_at DESC);
-CREATE INDEX idx_maintenance_action_steps_candidate ON maintenance_action_steps USING btree (candidate_id, match_generation, revision_number, step_id);
 CREATE INDEX idx_maintenance_evaluation_runs_rule_set ON maintenance_evaluation_runs USING btree (rule_set_id, started_at DESC);
+CREATE INDEX idx_maintenance_evaluation_runs_started ON maintenance_evaluation_runs USING btree (started_at DESC, id);
 CREATE UNIQUE INDEX idx_maintenance_rule_exclusions_global_subject ON maintenance_rule_exclusions USING btree (subject_kind, subject_id) WHERE (rule_set_id IS NULL);
 CREATE UNIQUE INDEX idx_maintenance_rule_exclusions_rule_subject ON maintenance_rule_exclusions USING btree (rule_set_id, subject_kind, subject_id) WHERE (rule_set_id IS NOT NULL);
 CREATE INDEX idx_maintenance_rule_exclusions_title ON maintenance_rule_exclusions USING btree (title_id);
@@ -2992,28 +3553,30 @@ CREATE INDEX idx_maintenance_rule_revisions_rule_set ON maintenance_rule_revisio
 CREATE INDEX idx_maintenance_rule_set_libraries_library ON maintenance_rule_set_libraries USING btree (library_id);
 CREATE UNIQUE INDEX idx_maintenance_sequence_terminal_memberships_active ON maintenance_sequence_terminal_memberships USING btree (rule_set_id, revision_number, subject_kind, subject_id) WHERE (released_at IS NULL);
 CREATE INDEX idx_maintenance_sequence_terminal_memberships_active_page ON maintenance_sequence_terminal_memberships USING btree (rule_set_id, revision_number, id) WHERE (released_at IS NULL);
-CREATE INDEX idx_manual_import_selection_candidates_selection ON manual_import_selection_candidates USING btree (selection_id);
 CREATE INDEX idx_manual_import_selections_canonical_download ON manual_import_selections USING btree (canonical_download_id, actor_user_id, title_id, updated_at DESC);
 CREATE INDEX idx_manual_import_selections_owner ON manual_import_selections USING btree (actor_user_id, title_id, source_client_id, source_system, source_ref);
 CREATE INDEX idx_manual_import_selections_source ON manual_import_selections USING btree (source_client_id, source_system, source_ref);
+CREATE INDEX idx_manual_import_selections_title_id ON manual_import_selections USING btree (title_id);
 CREATE INDEX idx_media_files_analysis_refresh ON media_files USING btree (analysis_revision, analysis_attempted_at, id);
 CREATE INDEX idx_media_files_full_blake3 ON media_files USING btree (full_blake3) WHERE (full_blake3 IS NOT NULL);
 CREATE INDEX idx_media_files_full_hash_missing ON media_files USING btree (id) WHERE (full_blake3 IS NULL);
 CREATE INDEX idx_media_files_id_role_path ON media_files USING btree (id, role, file_path);
-CREATE INDEX idx_media_files_title ON media_files USING btree (title_id);
+CREATE INDEX idx_media_files_title_attention ON media_files USING btree (title_id) WHERE ((role = 'primary'::text) AND (scan_status = ANY (ARRAY['scan_failed'::text, 'review_required'::text])));
 CREATE INDEX idx_media_files_title_path ON media_files USING btree (title_id, file_path);
 CREATE INDEX idx_media_request_external_ids_lookup ON media_request_external_ids USING btree (library_id, source, external_id);
 CREATE INDEX idx_media_request_requesters_user ON media_request_requesters USING btree (user_id);
 CREATE INDEX idx_media_requests_created_title ON media_requests USING btree (created_title_id);
+CREATE INDEX idx_media_requests_fingerprint_created ON media_requests USING btree (identity_fingerprint, created_at, id);
 CREATE INDEX idx_media_requests_library_facet_status ON media_requests USING btree (library_id, facet, status);
+CREATE INDEX idx_media_requests_requester_created ON media_requests USING btree (created_by_user_id, created_at, id);
 CREATE INDEX idx_media_requests_status_updated ON media_requests USING btree (status, updated_at);
+CREATE INDEX idx_media_server_audience_plays_title ON media_server_audience_plays USING btree (scryer_title_id);
 CREATE INDEX idx_media_server_connections_provider ON media_server_connections USING btree (provider, enabled);
 CREATE INDEX idx_media_server_path_mappings_connection ON media_server_path_mappings USING btree (connection_id, sort_order);
 CREATE INDEX idx_media_server_playback_items_entity ON media_server_playback_items USING btree (entity_kind, entity_id);
 CREATE INDEX idx_media_server_signals_episode ON media_server_user_media_signals USING btree (scryer_episode_id);
 CREATE UNIQUE INDEX idx_media_server_signals_participant_item ON media_server_user_media_signals USING btree (connection_id, external_user_id, provider_item_id);
 CREATE INDEX idx_media_server_signals_title ON media_server_user_media_signals USING btree (scryer_title_id);
-CREATE INDEX idx_monitor_selections_owner ON monitor_selections USING btree (owner_kind, owner_id);
 CREATE INDEX idx_movie_entities_anidb_id ON movie_entities USING btree (anidb_id) WHERE ((anidb_id IS NOT NULL) AND (anidb_id <> ''::text));
 CREATE INDEX idx_movie_entities_imdb_id ON movie_entities USING btree (imdb_id) WHERE ((imdb_id IS NOT NULL) AND (imdb_id <> ''::text));
 CREATE INDEX idx_movie_entities_mal_id ON movie_entities USING btree (mal_id) WHERE ((mal_id IS NOT NULL) AND (mal_id <> ''::text));
@@ -3039,6 +3602,7 @@ CREATE UNIQUE INDEX idx_pending_releases_active_release_identity ON pending_rele
 CREATE INDEX idx_pending_releases_active_unknown_age ON pending_releases USING btree (release_age_unknown, status, indexer_id, added_at) WHERE release_age_unknown;
 CREATE INDEX idx_pending_releases_indexer_id ON pending_releases USING btree (indexer_id);
 CREATE INDEX idx_pending_releases_status ON pending_releases USING btree (status);
+CREATE INDEX idx_pending_releases_title_added ON pending_releases USING btree (title_id, added_at DESC);
 CREATE INDEX idx_pending_releases_wanted ON pending_releases USING btree (wanted_item_id, status);
 CREATE INDEX idx_plugin_catalog_sources_kind ON plugin_catalog_sources USING btree (source_kind);
 CREATE INDEX idx_pp_script_runs_script_id ON post_processing_script_runs USING btree (script_id, started_at DESC);
@@ -3053,10 +3617,14 @@ CREATE INDEX idx_quality_profile_video_codec_allowlist_profile ON quality_profil
 CREATE INDEX idx_quality_profile_video_codec_blocklist_profile ON quality_profile_video_codec_blocklist USING btree (profile_id);
 CREATE INDEX idx_quality_profiles_scope ON quality_profiles USING btree (scope, scope_id);
 CREATE INDEX idx_release_decisions_created_at ON release_decisions USING btree (created_at DESC);
+CREATE INDEX idx_release_decisions_title_created_at ON release_decisions USING btree (title_id, created_at);
 CREATE INDEX idx_release_decisions_wanted ON release_decisions USING btree (wanted_item_id, created_at DESC);
 CREATE INDEX idx_release_download_attempts_outcome_attempted ON release_download_attempts USING btree (outcome, attempted_at DESC);
 CREATE INDEX idx_release_download_attempts_source_hint ON release_download_attempts USING btree (source_hint);
 CREATE INDEX idx_release_download_attempts_source_title ON release_download_attempts USING btree (source_title);
+CREATE INDEX idx_release_download_attempts_title ON release_download_attempts USING btree (title_id);
+CREATE INDEX idx_request_rule_decisions_evaluated ON request_rule_decisions USING btree (evaluated_at DESC, id DESC);
+CREATE INDEX idx_request_rule_decisions_outcome_evaluated ON request_rule_decisions USING btree (effective_outcome, evaluated_at DESC, id DESC);
 CREATE INDEX idx_request_rule_decisions_request ON request_rule_decisions USING btree (request_id, evaluated_at DESC);
 CREATE INDEX idx_request_rule_revisions_rule_set ON request_rule_revisions USING btree (rule_set_id, revision_number DESC);
 CREATE INDEX idx_request_rule_set_libraries_library ON request_rule_set_libraries USING btree (library_id);
@@ -3067,11 +3635,11 @@ CREATE INDEX idx_scope_indexer_coverage_indexer ON scope_indexer_coverage USING 
 CREATE INDEX idx_scope_indexer_coverage_searched_at ON scope_indexer_coverage USING btree (searched_at);
 CREATE UNIQUE INDEX idx_seeding_profiles_name ON seeding_profiles USING btree (lower(name));
 CREATE UNIQUE INDEX idx_series_movie_links_legacy_collection ON series_movie_links USING btree (legacy_collection_id) WHERE (legacy_collection_id IS NOT NULL);
+CREATE INDEX idx_series_movie_links_linked_episode ON series_movie_links USING btree (linked_episode_id);
 CREATE INDEX idx_series_movie_links_movie ON series_movie_links USING btree (movie_entity_id);
 CREATE INDEX idx_series_movie_links_title ON series_movie_links USING btree (series_title_id);
 CREATE UNIQUE INDEX idx_setting_values_scope_name ON settings_values USING btree (setting_definition_id, scope, COALESCE(scope_id, ''::text));
 CREATE INDEX idx_settings_values_definition ON settings_values USING btree (setting_definition_id);
-CREATE INDEX idx_subtitle_blocklist_media_file ON subtitle_blocklist USING btree (media_file_id);
 CREATE INDEX idx_subtitle_downloads_language ON subtitle_downloads USING btree (language);
 CREATE INDEX idx_subtitle_downloads_media_file ON subtitle_downloads USING btree (media_file_id);
 CREATE INDEX idx_subtitle_downloads_title ON subtitle_downloads USING btree (title_id);
@@ -3084,10 +3652,11 @@ CREATE INDEX idx_title_credits_title_kind ON title_credits USING btree (title_id
 CREATE UNIQUE INDEX idx_title_credits_title_owner ON title_credits USING btree (title_id, "position") WHERE (title_id IS NOT NULL);
 CREATE UNIQUE INDEX idx_title_external_ids_library_kind_lookup ON title_external_ids USING btree (library_id, source, external_kind, external_id);
 CREATE INDEX idx_title_external_ids_library_source_value ON title_external_ids USING btree (library_id, source, external_id);
+CREATE INDEX idx_title_external_ids_numeric_suffix ON title_external_ids USING btree ((("substring"(external_id, '([0-9]+)\s*$'::text))::numeric));
+CREATE INDEX idx_title_external_ids_source_value_nocase ON title_external_ids USING btree (source, lower(external_id));
 CREATE INDEX idx_title_external_ids_title_id ON title_external_ids USING btree (title_id);
+CREATE INDEX idx_title_external_ids_value_nocase ON title_external_ids USING btree (lower(TRIM(BOTH FROM external_id)));
 CREATE INDEX idx_title_image_variants_blob_digest ON title_image_variants USING btree (blob_digest);
-CREATE INDEX idx_title_image_variants_image_variant ON title_image_variants USING btree (title_image_id, variant_key);
-CREATE INDEX idx_title_images_title_kind ON title_images USING btree (title_id, kind);
 CREATE UNIQUE INDEX idx_title_metadata_external_ratings_movie_owner ON title_metadata_external_ratings USING btree (movie_entity_id, source) WHERE (movie_entity_id IS NOT NULL);
 CREATE INDEX idx_title_metadata_external_ratings_order ON title_metadata_external_ratings USING btree (title_id, sort_index, source);
 CREATE INDEX idx_title_metadata_external_ratings_source_norm ON title_metadata_external_ratings USING btree (source, normalized, title_id);
@@ -3100,6 +3669,7 @@ CREATE UNIQUE INDEX idx_title_metadata_rating_summaries_title_owner ON title_met
 CREATE INDEX idx_title_metadata_tags_category_name ON title_metadata_tags USING btree (category, name, title_id);
 CREATE INDEX idx_title_more_like_this_items_source_order ON title_more_like_this_items USING btree (source_title_id, sort_index, rank_score DESC);
 CREATE INDEX idx_title_more_like_this_items_title ON title_more_like_this_items USING btree (discovery_title_id);
+CREATE INDEX idx_title_recycle_purges_recorded_at ON title_recycle_purges USING btree (recorded_at, title_id);
 CREATE INDEX idx_title_search_collation_keys_profile_key ON title_search_collation_keys USING btree (profile, collation_key);
 CREATE INDEX idx_title_search_index_queue_title_id ON title_search_index_queue USING btree (title_id);
 CREATE INDEX idx_title_search_terms_bucket ON title_search_terms USING btree (facet, script, numbers_key, char_length);
@@ -3107,15 +3677,36 @@ CREATE INDEX idx_title_search_terms_facet_literal ON title_search_terms USING bt
 CREATE INDEX idx_title_search_terms_facet_match_term ON title_search_terms USING btree (facet, match_term);
 CREATE INDEX idx_title_search_terms_facet_normalized_term ON title_search_terms USING btree (facet, normalized_term);
 CREATE INDEX idx_title_search_terms_facet_romanization ON title_search_terms USING btree (facet, romanization_key);
+CREATE INDEX idx_title_search_terms_kind_literal ON title_search_terms USING btree (term_kind, literal_term);
 CREATE INDEX idx_title_search_terms_normalized_term ON title_search_terms USING btree (normalized_term);
 CREATE INDEX idx_title_search_terms_stripped_year_key ON title_search_terms USING btree (term_kind, stripped_year_key);
-CREATE INDEX idx_title_search_terms_title_id ON title_search_terms USING btree (title_id);
-CREATE UNIQUE INDEX idx_title_search_terms_title_kind_normalized ON title_search_terms USING btree (title_id, term_kind, normalized_term);
+CREATE UNIQUE INDEX idx_title_search_terms_title_kind_language ON title_search_terms USING btree (title_id, term_kind, literal_term, COALESCE(language_tag, ''::text));
 CREATE UNIQUE INDEX idx_title_tag_definitions_label ON title_tag_definitions USING btree (label);
-CREATE INDEX idx_titles_catalog_sort_key ON titles USING btree (catalog_sort_key, name, year, id);
+CREATE INDEX idx_titles_catalog_order_asc ON titles USING btree (catalog_sort_key COLLATE "C", catalog_name_tie_key COLLATE "C", (
+CASE
+    WHEN (year IS NULL) THEN 1
+    ELSE 0
+END), year, id COLLATE "C");
+CREATE INDEX idx_titles_catalog_order_desc ON titles USING btree (catalog_sort_key COLLATE "C" DESC, catalog_name_tie_key COLLATE "C" DESC, (
+CASE
+    WHEN (year IS NULL) THEN 1
+    ELSE 0
+END), year DESC, id COLLATE "C" DESC);
 CREATE INDEX idx_titles_created_at ON titles USING btree (created_at);
 CREATE INDEX idx_titles_facet_monitored ON titles USING btree (facet, monitored);
 CREATE INDEX idx_titles_facet_normalized_slug ON titles USING btree (facet, lower(TRIM(BOTH FROM slug))) WHERE ((slug IS NOT NULL) AND (TRIM(BOTH FROM slug) <> ''::text));
+CREATE INDEX idx_titles_imdb_id_nocase ON titles USING btree (lower(TRIM(BOTH FROM imdb_id))) WHERE (imdb_id IS NOT NULL);
+CREATE INDEX idx_titles_imdb_id_numeric_suffix ON titles USING btree ((("substring"(imdb_id, '([0-9]+)\s*$'::text))::numeric)) WHERE (imdb_id IS NOT NULL);
+CREATE INDEX idx_titles_library_catalog_order_asc ON titles USING btree (library_id, catalog_sort_key COLLATE "C", catalog_name_tie_key COLLATE "C", (
+CASE
+    WHEN (year IS NULL) THEN 1
+    ELSE 0
+END), year, id COLLATE "C");
+CREATE INDEX idx_titles_library_catalog_order_desc ON titles USING btree (library_id, catalog_sort_key COLLATE "C" DESC, catalog_name_tie_key COLLATE "C" DESC, (
+CASE
+    WHEN (year IS NULL) THEN 1
+    ELSE 0
+END), year DESC, id COLLATE "C" DESC);
 CREATE INDEX idx_titles_library_folder_path ON titles USING btree (library_id, folder_path);
 CREATE INDEX idx_titles_library_folder_path_lookup ON titles USING btree (library_id, lower(replace(folder_path, '/'::text, '\'::text)));
 CREATE INDEX idx_titles_library_name ON titles USING btree (library_id, lower(name), id);
@@ -3134,11 +3725,14 @@ CREATE UNIQUE INDEX idx_user_external_accounts_pending_username ON user_external
 CREATE UNIQUE INDEX idx_user_external_accounts_provider_identity ON user_external_accounts USING btree (provider, connection_id, external_user_id);
 CREATE UNIQUE INDEX idx_user_external_accounts_user_provider_connection ON user_external_accounts USING btree (user_id, provider, connection_id);
 CREATE INDEX idx_user_external_accounts_user_status ON user_external_accounts USING btree (user_id, status);
-CREATE INDEX idx_user_ui_table_columns_user_view ON user_ui_table_columns USING btree (user_id, facet, table_view_mode, column_order);
-CREATE UNIQUE INDEX idx_wanted_items_collection_id ON wanted_items USING btree (collection_id) WHERE (collection_id IS NOT NULL);
+CREATE UNIQUE INDEX idx_user_list_accounts_identity ON user_list_accounts USING btree (user_id, provider, external_user_id);
+CREATE INDEX idx_user_ui_table_columns_user_view ON user_ui_table_columns USING btree (user_id, device_class, facet, table_view_mode, column_order);
+CREATE INDEX idx_wanted_items_collection ON wanted_items USING btree (collection_id);
+CREATE UNIQUE INDEX idx_wanted_items_collection_id ON wanted_items USING btree (collection_id) WHERE ((collection_id IS NOT NULL) AND (episode_id IS NULL));
+CREATE INDEX idx_wanted_items_episode ON wanted_items USING btree (episode_id);
 CREATE UNIQUE INDEX idx_wanted_items_movie_unique ON wanted_items USING btree (title_id) WHERE ((episode_id IS NULL) AND (collection_id IS NULL) AND (series_movie_link_id IS NULL));
 CREATE UNIQUE INDEX idx_wanted_items_series_movie_link ON wanted_items USING btree (series_movie_link_id) WHERE (series_movie_link_id IS NOT NULL);
-CREATE INDEX idx_wanted_items_title ON wanted_items USING btree (title_id);
+CREATE INDEX idx_wanted_items_status_updated_at ON wanted_items USING btree (status, updated_at);
 CREATE INDEX idx_webauthn_challenges_expires_at ON webauthn_challenges USING btree (expires_at);
 CREATE INDEX idx_webauthn_challenges_login_verification ON webauthn_challenges USING btree (login_verification_challenge_id);
 CREATE INDEX idx_webauthn_challenges_user_id ON webauthn_challenges USING btree (user_id);
@@ -3146,11 +3740,33 @@ CREATE INDEX idx_webauthn_credentials_user_id_created_at ON webauthn_credentials
 CREATE INDEX idx_workflow_operations_active_job_started ON workflow_operations USING btree (started_at) WHERE ((job_key IS NOT NULL) AND (status = ANY (ARRAY['queued'::text, 'running'::text, 'discovering'::text])));
 CREATE INDEX idx_workflow_operations_actor_job_started ON workflow_operations USING btree (actor_user_id, job_key, started_at DESC) WHERE ((job_key IS NOT NULL) AND (actor_user_id IS NOT NULL));
 CREATE INDEX idx_workflow_operations_actor_recent_started ON workflow_operations USING btree (actor_user_id, started_at DESC) WHERE ((job_key IS NOT NULL) AND (actor_user_id IS NOT NULL));
+CREATE INDEX idx_workflow_operations_collection ON workflow_operations USING btree (collection_id);
+CREATE INDEX idx_workflow_operations_episode ON workflow_operations USING btree (episode_id);
 CREATE INDEX idx_workflow_operations_job_key_started ON workflow_operations USING btree (job_key, started_at DESC);
+CREATE INDEX idx_workflow_operations_job_operation_started ON workflow_operations USING btree (job_key, operation_type, started_at DESC);
 CREATE INDEX idx_workflow_operations_job_recent_started ON workflow_operations USING btree (started_at DESC) WHERE (job_key IS NOT NULL);
+CREATE INDEX idx_workflow_operations_media_file ON workflow_operations USING btree (media_file_id);
 CREATE INDEX idx_workflow_operations_status_started ON workflow_operations USING btree (status, started_at);
+CREATE INDEX idx_workflow_operations_title ON workflow_operations USING btree (title_id);
+CREATE INDEX indexer_api_client_grants_source ON indexer_api_client_grants USING btree (indexer_id);
+CREATE UNIQUE INDEX titles_folder_path_key_unique ON titles USING btree (folder_path_key) WHERE (folder_path_key IS NOT NULL);
 CREATE UNIQUE INDEX totp_enrollment_challenges_one_active_per_user ON totp_enrollment_challenges USING btree (user_id);
+CREATE TRIGGER discovery_submitted_subjects_delete_bump_affinity_revision AFTER DELETE ON discovery_submitted_subjects FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER discovery_submitted_subjects_insert_bump_affinity_revision AFTER INSERT ON discovery_submitted_subjects FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER discovery_submitted_subjects_update_bump_affinity_revision AFTER UPDATE ON discovery_submitted_subjects FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tag_source_keys_delete_bump_affinity_revision AFTER DELETE ON title_metadata_tag_source_keys FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tag_source_keys_insert_bump_affinity_revision AFTER INSERT ON title_metadata_tag_source_keys FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tag_source_keys_update_bump_affinity_revision AFTER UPDATE ON title_metadata_tag_source_keys FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tag_sources_delete_bump_affinity_revision AFTER DELETE ON title_metadata_tag_sources FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tag_sources_insert_bump_affinity_revision AFTER INSERT ON title_metadata_tag_sources FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tag_sources_update_bump_affinity_revision AFTER UPDATE ON title_metadata_tag_sources FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tags_delete_bump_affinity_revision AFTER DELETE ON title_metadata_tags FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tags_insert_bump_affinity_revision AFTER INSERT ON title_metadata_tags FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER title_metadata_tags_update_bump_affinity_revision AFTER UPDATE ON title_metadata_tags FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER titles_delete_bump_affinity_revision AFTER DELETE ON titles FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
 CREATE TRIGGER titles_delete_enqueue_fuzzy_index AFTER DELETE ON titles FOR EACH ROW EXECUTE FUNCTION title_search_enqueue_deleted_title();
+CREATE TRIGGER titles_insert_bump_affinity_revision AFTER INSERT ON titles FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
+CREATE TRIGGER titles_update_bump_affinity_revision AFTER UPDATE OF library_id, facet ON titles FOR EACH STATEMENT EXECUTE FUNCTION discovery_affinity_bump_revision();
 ALTER TABLE ONLY api_keys
     ADD CONSTRAINT api_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY blocklist
@@ -3161,6 +3777,14 @@ ALTER TABLE ONLY collection_external_ids
     ADD CONSTRAINT collection_external_ids_title_id_fkey FOREIGN KEY (title_id) REFERENCES titles(id) ON DELETE CASCADE;
 ALTER TABLE ONLY collections
     ADD CONSTRAINT collections_title_id_fkey FOREIGN KEY (title_id) REFERENCES titles(id) ON DELETE CASCADE;
+ALTER TABLE ONLY delay_profile_facets
+    ADD CONSTRAINT delay_profile_facets_profile_id_fkey FOREIGN KEY (profile_id) REFERENCES delay_profiles(id) ON DELETE CASCADE;
+ALTER TABLE ONLY delay_profile_libraries
+    ADD CONSTRAINT delay_profile_libraries_library_id_fkey FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE;
+ALTER TABLE ONLY delay_profile_libraries
+    ADD CONSTRAINT delay_profile_libraries_profile_id_fkey FOREIGN KEY (profile_id) REFERENCES delay_profiles(id) ON DELETE CASCADE;
+ALTER TABLE ONLY delay_profile_tags
+    ADD CONSTRAINT delay_profile_tags_profile_id_fkey FOREIGN KEY (profile_id) REFERENCES delay_profiles(id) ON DELETE CASCADE;
 ALTER TABLE ONLY discovery_facets
     ADD CONSTRAINT discovery_facets_run_id_fkey FOREIGN KEY (run_id) REFERENCES discovery_sync_runs(id) ON DELETE CASCADE;
 ALTER TABLE ONLY discovery_item_library_provenance
@@ -3183,6 +3807,8 @@ ALTER TABLE ONLY discovery_items
     ADD CONSTRAINT discovery_items_run_id_fkey FOREIGN KEY (run_id) REFERENCES discovery_sync_runs(id) ON DELETE CASCADE;
 ALTER TABLE ONLY discovery_items
     ADD CONSTRAINT discovery_items_tombstoned_by_run_id_fkey FOREIGN KEY (tombstoned_by_run_id) REFERENCES discovery_sync_runs(id) ON DELETE SET NULL;
+ALTER TABLE ONLY discovery_library_graph_payloads
+    ADD CONSTRAINT discovery_library_graph_payloads_run_id_fkey FOREIGN KEY (run_id) REFERENCES discovery_library_graph_runs(id) ON DELETE CASCADE;
 ALTER TABLE ONLY discovery_pending_context_changes
     ADD CONSTRAINT discovery_pending_context_changes_title_id_fkey FOREIGN KEY (title_id) REFERENCES titles(id) ON DELETE SET NULL;
 ALTER TABLE ONLY discovery_section_items
@@ -3285,6 +3911,10 @@ ALTER TABLE ONLY image_proxy_cache_entries
     ADD CONSTRAINT image_proxy_cache_entries_token_fkey FOREIGN KEY (token) REFERENCES image_proxy_sources(token) ON DELETE CASCADE;
 ALTER TABLE ONLY imports
     ADD CONSTRAINT imports_canonical_download_id_fkey FOREIGN KEY (canonical_download_id) REFERENCES downloads(id);
+ALTER TABLE ONLY indexer_api_client_grants
+    ADD CONSTRAINT indexer_api_client_grants_client_id_fkey FOREIGN KEY (client_id) REFERENCES indexer_api_clients(id) ON DELETE CASCADE;
+ALTER TABLE ONLY indexer_api_client_grants
+    ADD CONSTRAINT indexer_api_client_grants_indexer_id_fkey FOREIGN KEY (indexer_id) REFERENCES indexers(id) ON DELETE CASCADE;
 ALTER TABLE ONLY indexer_errors
     ADD CONSTRAINT indexer_errors_indexer_id_fkey FOREIGN KEY (indexer_id) REFERENCES indexers(id) ON DELETE CASCADE;
 ALTER TABLE ONLY indexer_search_candidate_source_values
@@ -3311,16 +3941,38 @@ ALTER TABLE ONLY lifecycle_action_runs
     ADD CONSTRAINT lifecycle_action_runs_candidate_id_fkey FOREIGN KEY (candidate_id) REFERENCES lifecycle_candidates(id) ON DELETE CASCADE;
 ALTER TABLE ONLY lifecycle_candidates
     ADD CONSTRAINT lifecycle_candidates_rule_set_id_fkey FOREIGN KEY (rule_set_id) REFERENCES maintenance_rule_sets(id) ON DELETE CASCADE;
+ALTER TABLE ONLY list_exclusion_external_ids
+    ADD CONSTRAINT list_exclusion_external_ids_exclusion_id_fkey FOREIGN KEY (exclusion_id) REFERENCES list_exclusions(id) ON DELETE CASCADE;
+ALTER TABLE ONLY list_exclusions
+    ADD CONSTRAINT list_exclusions_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE ONLY list_exclusions
+    ADD CONSTRAINT list_exclusions_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES list_subscriptions(id) ON DELETE CASCADE;
+ALTER TABLE ONLY list_memberships
+    ADD CONSTRAINT list_memberships_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES list_subscriptions(id) ON DELETE CASCADE;
+ALTER TABLE ONLY list_subscription_routes
+    ADD CONSTRAINT list_subscription_routes_library_id_fkey FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE;
+ALTER TABLE ONLY list_subscription_routes
+    ADD CONSTRAINT list_subscription_routes_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES list_subscriptions(id) ON DELETE CASCADE;
+ALTER TABLE ONLY list_subscriptions
+    ADD CONSTRAINT list_subscriptions_credential_id_fkey FOREIGN KEY (credential_id) REFERENCES user_list_accounts(id) ON DELETE SET NULL;
+ALTER TABLE ONLY list_subscriptions
+    ADD CONSTRAINT list_subscriptions_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY list_sync_runs
+    ADD CONSTRAINT list_sync_runs_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES list_subscriptions(id) ON DELETE CASCADE;
 ALTER TABLE ONLY location_file_resolutions
     ADD CONSTRAINT location_file_resolutions_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES location_operations(id) ON DELETE CASCADE;
 ALTER TABLE ONLY location_operation_owned_entities
     ADD CONSTRAINT location_operation_owned_entities_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES location_operations(id) ON DELETE CASCADE;
+ALTER TABLE ONLY location_operation_plans
+    ADD CONSTRAINT location_operation_plans_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES location_operations(id) ON DELETE CASCADE;
 ALTER TABLE ONLY location_operation_title_checkpoints
     ADD CONSTRAINT location_operation_title_checkpoints_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES location_operations(id) ON DELETE CASCADE;
 ALTER TABLE ONLY location_operation_verifications
     ADD CONSTRAINT location_operation_verifications_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES location_operations(id) ON DELETE CASCADE;
 ALTER TABLE ONLY location_operations
     ADD CONSTRAINT location_operations_initiated_by_user_id_fkey FOREIGN KEY (initiated_by_user_id) REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE ONLY location_recovery_staging
+    ADD CONSTRAINT location_recovery_staging_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES location_operations(id);
 ALTER TABLE ONLY location_transfer_progress
     ADD CONSTRAINT location_transfer_progress_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES location_operations(id) ON DELETE CASCADE;
 ALTER TABLE ONLY location_transfer_titles
@@ -3345,6 +3997,8 @@ ALTER TABLE ONLY maintenance_rule_set_libraries
     ADD CONSTRAINT maintenance_rule_set_libraries_rule_set_id_fkey FOREIGN KEY (rule_set_id) REFERENCES maintenance_rule_sets(id) ON DELETE CASCADE;
 ALTER TABLE ONLY maintenance_sequence_terminal_memberships
     ADD CONSTRAINT maintenance_sequence_terminal_memberships_candidate_id_fkey FOREIGN KEY (candidate_id) REFERENCES lifecycle_candidates(id) ON DELETE CASCADE;
+ALTER TABLE ONLY media_file_analyses
+    ADD CONSTRAINT media_file_analyses_media_file_id_fkey FOREIGN KEY (media_file_id) REFERENCES media_files(id) ON DELETE CASCADE;
 ALTER TABLE ONLY media_files
     ADD CONSTRAINT media_files_title_id_fkey FOREIGN KEY (title_id) REFERENCES titles(id) ON DELETE CASCADE;
 ALTER TABLE ONLY media_request_external_ids
@@ -3363,6 +4017,10 @@ ALTER TABLE ONLY media_requests
     ADD CONSTRAINT media_requests_library_id_fkey FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE;
 ALTER TABLE ONLY media_requests
     ADD CONSTRAINT media_requests_resolved_by_user_id_fkey FOREIGN KEY (resolved_by_user_id) REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE ONLY media_server_audience_plays
+    ADD CONSTRAINT media_server_audience_plays_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES media_server_connections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY media_server_audience_reads
+    ADD CONSTRAINT media_server_audience_reads_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES media_server_connections(id) ON DELETE CASCADE;
 ALTER TABLE ONLY media_server_default_library_grants
     ADD CONSTRAINT media_server_default_library_grants_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES media_server_connections(id) ON DELETE CASCADE;
 ALTER TABLE ONLY media_server_default_library_grants
@@ -3371,6 +4029,8 @@ ALTER TABLE ONLY media_server_path_mappings
     ADD CONSTRAINT media_server_path_mappings_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES media_server_connections(id) ON DELETE CASCADE;
 ALTER TABLE ONLY media_server_playback_items
     ADD CONSTRAINT media_server_playback_items_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES media_server_connections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY media_server_signal_roster
+    ADD CONSTRAINT media_server_signal_roster_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES media_server_connections(id) ON DELETE CASCADE;
 ALTER TABLE ONLY media_server_signal_sync_state
     ADD CONSTRAINT media_server_signal_sync_state_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES media_server_connections(id) ON DELETE CASCADE;
 ALTER TABLE ONLY media_server_user_media_signals
@@ -3429,6 +4089,8 @@ ALTER TABLE ONLY subtitle_downloads
     ADD CONSTRAINT subtitle_downloads_media_file_id_fkey FOREIGN KEY (media_file_id) REFERENCES media_files(id) ON DELETE CASCADE;
 ALTER TABLE ONLY subtitle_downloads
     ADD CONSTRAINT subtitle_downloads_title_id_fkey FOREIGN KEY (title_id) REFERENCES titles(id) ON DELETE CASCADE;
+ALTER TABLE ONLY subtitle_search_backoffs
+    ADD CONSTRAINT subtitle_search_backoffs_media_file_id_fkey FOREIGN KEY (media_file_id) REFERENCES media_files(id) ON DELETE CASCADE;
 ALTER TABLE ONLY title_anime_numbering_bridges
     ADD CONSTRAINT title_anime_numbering_bridges_title_id_fkey FOREIGN KEY (title_id) REFERENCES titles(id) ON DELETE CASCADE;
 ALTER TABLE ONLY title_credits
@@ -3487,10 +4149,22 @@ ALTER TABLE ONLY user_library_permission_masks
     ADD CONSTRAINT user_library_permission_masks_library_id_fkey FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE;
 ALTER TABLE ONLY user_library_permission_masks
     ADD CONSTRAINT user_library_permission_masks_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY user_list_accounts
+    ADD CONSTRAINT user_list_accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY user_list_policies
+    ADD CONSTRAINT user_list_policies_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE ONLY user_list_policies
+    ADD CONSTRAINT user_list_policies_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY user_ui_catalog_views
+    ADD CONSTRAINT user_ui_catalog_views_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY user_ui_dashboard_layout_items
+    ADD CONSTRAINT user_ui_dashboard_layout_items_user_id_breakpoint_fkey FOREIGN KEY (user_id, breakpoint) REFERENCES user_ui_dashboard_layouts(user_id, breakpoint) ON DELETE CASCADE;
+ALTER TABLE ONLY user_ui_dashboard_layouts
+    ADD CONSTRAINT user_ui_dashboard_layouts_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY user_ui_settings
     ADD CONSTRAINT user_ui_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY user_ui_table_columns
-    ADD CONSTRAINT user_ui_table_columns_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT user_ui_table_columns_user_id_fkey1 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY wanted_items
     ADD CONSTRAINT wanted_items_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES collections(id);
 ALTER TABLE ONLY wanted_items
@@ -3517,6 +4191,8 @@ ALTER TABLE ONLY workflow_operations
     ADD CONSTRAINT workflow_operations_series_movie_link_id_fkey FOREIGN KEY (series_movie_link_id) REFERENCES series_movie_links(id) ON DELETE SET NULL;
 ALTER TABLE ONLY workflow_operations
     ADD CONSTRAINT workflow_operations_title_id_fkey FOREIGN KEY (title_id) REFERENCES titles(id) ON DELETE SET NULL;
+INSERT INTO discovery_affinity_revision (id, revision) VALUES (1, md5(random()::text || clock_timestamp()::text));
+INSERT INTO import_space_incident_lock (id, revision) VALUES (1, 0);
 INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at) VALUES ('anime_default_library', 'anime', 'Anime', 'anime', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
 INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at) VALUES ('movie_default_library', 'movie', 'Movies', 'movies', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
 INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at) VALUES ('series_default_library', 'series', 'Series', 'series', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
@@ -3534,6 +4210,9 @@ INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order,
 INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order, created_at) VALUES ('4k', '1080P', 1, '1970-01-01T00:00:00Z');
 INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order, created_at) VALUES ('4k', '2160P', 0, '1970-01-01T00:00:00Z');
 INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order, created_at) VALUES ('4k', '720P', 2, '1970-01-01T00:00:00Z');
+INSERT INTO settings_definitions (id, category, scope, key_name, data_type, default_value_json, is_sensitive, validation_json, created_at, updated_at) VALUES ('media:system:movie.availability_delay_days', 'media', 'system', 'movie.availability_delay_days', 'number', '0', false, NULL, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+INSERT INTO settings_definitions (id, category, scope, key_name, data_type, default_value_json, is_sensitive, validation_json, created_at, updated_at) VALUES ('media:system:movie.default_availability', 'media', 'system', 'movie.default_availability', 'string', '"released"', false, NULL, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+INSERT INTO settings_definitions (id, category, scope, key_name, data_type, default_value_json, is_sensitive, validation_json, created_at, updated_at) VALUES ('media:system:movie.release_market', 'media', 'system', 'movie.release_market', 'string', '"US"', false, NULL, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
 INSERT INTO settings_definitions (id, category, scope, key_name, data_type, default_value_json, is_sensitive, validation_json, created_at, updated_at) VALUES ('title-tags-pending-deletions', 'system', 'system', 'title_tags.pending_deletions', 'json', '{}', false, NULL, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
 INSERT INTO settings_definitions (id, category, scope, key_name, data_type, default_value_json, is_sensitive, validation_json, created_at, updated_at) VALUES ('title-tags-pending-renames', 'system', 'system', 'title_tags.pending_renames', 'json', '{}', false, NULL, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
 INSERT INTO title_search_meta (id, collation_version, projection_generation) VALUES (1, '', 0);

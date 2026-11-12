@@ -1268,8 +1268,8 @@ mod tests {
     }
 
     fn postgres_parity_index_names_from_source() -> BTreeSet<String> {
-        let mut indexes: BTreeSet<String> = std::fs::read_to_string(postgres_0254_baseline_path())
-            .expect("read PostgreSQL 0254 baseline")
+        let mut indexes: BTreeSet<String> = std::fs::read_to_string(postgres_0341_baseline_path())
+            .expect("read PostgreSQL 0341 baseline")
             .lines()
             .filter_map(|line| {
                 let trimmed = line.trim();
@@ -1345,15 +1345,15 @@ mod tests {
         indexes
     }
 
-    fn postgres_0254_baseline_path() -> PathBuf {
+    fn postgres_0341_baseline_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer/src/db/postgres/baselines/0254_baseline.sql")
+            .join("../scryer/src/db/postgres/baselines/0341_baseline.sql")
     }
 
     async fn assert_postgres_runtime_schema_columns(postgres_pool: &sqlx::PgPool) -> AppResult<()> {
         // Each engine independently applies its current baseline, engine-specific
         // SQL steps, and hooks. Compare the complete logical schema, rather than
-        // rejecting every column introduced after the old 0254 baseline.
+        // rejecting every column introduced after the baseline.
         let sqlite = crate::sqlite_services::SqliteServices::new_with_mode(
             "sqlite://:memory:",
             MigrationMode::Apply,
