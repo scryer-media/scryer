@@ -759,6 +759,12 @@ const ru: LocaleDictionary = {
   "settings.libraryDeleted": "Библиотека удалена.",
   "settings.librarySaveFailed": "Не удалось сохранить библиотеку.",
   "settings.libraryDeleteFailed": "Не удалось удалить библиотеку.",
+  "settings.libraryDeleteQueued":
+    "Библиотека удаляется. Она останется в списке, пока не будут удалены её материалы.",
+  "settings.libraryDeleteProgressClearing":
+    "Очистка записей материалов: {{processed}} из {{total}}",
+  "settings.libraryDeleteProgressDeleting":
+    "Удаление материалов: {{processed}} из {{total}}",
   "settings.librarySettingsLoadFailed":
     "Не удалось загрузить настройки библиотеки.",
   "settings.libraryRequiredAudioLabel": "Требуемый аудиоформат",
@@ -860,6 +866,7 @@ const ru: LocaleDictionary = {
     "Файлы, для которых не удалось вычислить хеш",
   "jobs.fullHashBackfillFailuresMore": "…и ещё {{count}} не показано",
   "jobs.nextRunPrefix": "Следующий запуск: {{value}}",
+  "jobs.nothingToDo": "Нечего делать, проверено {{value}}",
   "jobs.startedAt": "Запущено {{value}}",
   "jobs.completedAt": "Завершено {{value}}",
   "jobs.failedToTrigger": "Не удалось запустить задание",
@@ -8115,6 +8122,8 @@ const ru: LocaleDictionary = {
     "Фоновое заполнение полных хешей завершает работу.",
   "error.reason.JOB_LIBRARY_ACCESS_DENIED":
     "У вас нет доступа к этой библиотеке.",
+  "error.reason.JOB_LIBRARY_DELETION_JOBS_INVALID":
+    "Задания удаления библиотек запускаются удалением библиотеки.",
   "error.reason.JOB_LOCATION_OPERATIONS_INVALID":
     "Операции с расположением необходимо запускать через мутацию операции с расположением.",
   "error.reason.JOB_MEDIA_FILE_DELETION_JOBS_INVALID":
@@ -8188,6 +8197,8 @@ const ru: LocaleDictionary = {
     "Удаление выбранного элемента с выбранным значением запрещено: он находится за пределами настроенных корневых папок.",
   "error.reason.LIBRARY_DELETE_TARGET_PARENT_REQUIRED":
     "Удаление выбранного элемента с выбранным значением запрещено: у него нет родительского каталога.",
+  "error.reason.LIBRARY_DELETION_ALREADY_RUNNING":
+    "Эта библиотека уже удаляется.",
   "error.reason.LIBRARY_DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY":
     "Папка назначения содержит границу другого тайтла или тайтла с неустановленной принадлежностью.",
   "error.reason.LIBRARY_DESTINATION_OCCUPIED":
@@ -12988,6 +12999,9 @@ const ru: LocaleDictionary = {
   "jobs.builtin.TitleDeletion.name": "Удаление материалов",
   "jobs.builtin.TitleDeletion.description":
     "Удаление выбранных материалов из каталога.",
+  "jobs.builtin.LibraryDeletion.name": "Удаление библиотеки",
+  "jobs.builtin.LibraryDeletion.description":
+    "Удаление библиотеки и её материалов из каталога; файлы на диске остаются.",
   "jobs.builtin.TitleRename.name": "Переименование материалов",
   "jobs.builtin.TitleRename.description":
     "Переименование файлов выбранных материалов.",

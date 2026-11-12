@@ -237,18 +237,24 @@ pub(super) type RecordedGrabs = Arc<std::sync::Mutex<Vec<(String, String)>>>;
 pub(super) fn bootstrap_with_grab_recorder() -> (AppUseCase, User, RecordedGrabs) {
     let tracker = Arc::new(RecordingIndexerStatsTracker::default());
     let grabs = Arc::clone(&tracker.grabs);
-    let (app, user) = bootstrap_with_services(Arc::new(MockUserRepo::default()), Some(tracker));
+    let (app, user, _) = bootstrap_with_services(Arc::new(MockUserRepo::default()), Some(tracker));
     (app, user, grabs)
 }
 
 pub(super) fn bootstrap_with_user_repo(users: Arc<MockUserRepo>) -> (AppUseCase, User) {
-    bootstrap_with_services(users, None)
+    let (app, user, _) = bootstrap_with_services(users, None);
+    (app, user)
+}
+
+/// Same app as [`bootstrap`], with its title repository handed back.
+pub(crate) fn bootstrap_with_title_repo() -> (AppUseCase, User, Arc<MockTitleRepo>) {
+    bootstrap_with_services(Arc::new(MockUserRepo::default()), None)
 }
 
 fn bootstrap_with_services(
     users: Arc<MockUserRepo>,
     indexer_stats: Option<Arc<RecordingIndexerStatsTracker>>,
-) -> (AppUseCase, User) {
+) -> (AppUseCase, User, Arc<MockTitleRepo>) {
     let titles = Arc::new(MockTitleRepo::default());
     let shows = Arc::new(MockShowRepo {
         titles: Some(titles.clone()),
@@ -315,7 +321,7 @@ fn bootstrap_with_services(
         services.with_download_registry(Arc::new(FixtureDownloadRegistry::default()))
     });
 
-    (app, admin)
+    (app, admin, titles)
 }
 
 pub(super) struct MediaRequestTestHarness {

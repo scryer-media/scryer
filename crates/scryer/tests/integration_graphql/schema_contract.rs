@@ -4098,7 +4098,7 @@ async fn graphql_introspection_library_delete_uses_id_and_payload_result() {
         .iter()
         .filter_map(|field| field["name"].as_str())
         .collect();
-    assert_eq!(payload_fields, vec!["id"]);
+    assert_eq!(payload_fields, vec!["id", "jobRun"]);
 }
 
 #[tokio::test]
@@ -4254,16 +4254,7 @@ async fn graphql_introspection_title_delete_uses_payload_result() {
         .iter()
         .filter_map(|field| field["name"].as_str())
         .collect();
-    assert_eq!(
-        payload_fields,
-        vec![
-            "id",
-            "recyclePurged",
-            "recyclePreserved",
-            "recycleBusy",
-            "recycleFailed"
-        ]
-    );
+    assert_eq!(payload_fields, vec!["id"]);
 }
 
 #[tokio::test]

@@ -413,6 +413,26 @@ function jobStatusFromLibraryScanStatus(
   }
 }
 
+/**
+ * When the scheduler last found nothing to do for `job`, if that visit is
+ * newer than the run shown. Such a visit records no run, so without this the
+ * card would show only the last time there was work.
+ */
+function idleCheckAfterLastRun(
+  job: JobDefinition,
+  lastRun: JobRun | null | undefined,
+): string | null {
+  const checkedAt = job.schedule.lastIdleCheckAt;
+  if (!checkedAt) {
+    return null;
+  }
+  const runAt = lastRun?.completedAt ?? lastRun?.startedAt ?? null;
+  if (runAt && Date.parse(runAt) >= Date.parse(checkedAt)) {
+    return null;
+  }
+  return checkedAt;
+}
+
 function isStaleActiveRun(
   activeRun: JobRun | null | undefined,
   lastRun: JobRun | null | undefined,
@@ -807,6 +827,23 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     });
   }, [jobRows, sortDirection, sortKey, t]);
 
+  const renderIdleCheck = (
+    job: JobDefinition,
+    lastRun: JobRun | null | undefined,
+  ) => {
+    const checkedAt = idleCheckAfterLastRun(job, lastRun);
+    if (!checkedAt) {
+      return null;
+    }
+    return (
+      <p className={`mt-1 text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+        {t("jobs.nothingToDo", {
+          value: formatDate(checkedAt, t, dateTimeFormat),
+        })}
+      </p>
+    );
+  };
+
   const renderRows = (rows: JobTableRow[]) =>
     rows.map(({ instanceKey, job, activeRun, lastRun, status, isDisabled }) => (
       <TableRow
@@ -848,6 +885,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
             t,
             dateTimeFormat,
           )}
+          {renderIdleCheck(job, lastRun)}
         </TableCell>
         <TableCell className="w-[7.5rem] min-w-[7.5rem]">
           <span className={runStatusTone(status)}>
@@ -1238,6 +1276,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                   dateTimeFormat,
                 )}
               </p>
+              {renderIdleCheck(job, lastRun)}
             </div>
           </div>
         </div>

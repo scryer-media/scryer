@@ -300,6 +300,17 @@ pub struct FileMoveRequest<'a> {
 pub trait TitleFileMover: Send + Sync {
     async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile>;
 
+    /// Persist the content hashes a placement held back from
+    /// [`Self::move_file`] for the caller that decides whether the placement
+    /// stands. A mover that persists nothing, or persists inside `move_file`,
+    /// keeps this no-op.
+    async fn persist_deferred_hashes(
+        &self,
+        _request: FileMoveRequest<'_>,
+        _verified: &VerifiedFile,
+    ) {
+    }
+
     /// The runner stopped trying to place `file` without a verified copy, for
     /// the reason `abandonment` names. A transient failure inside
     /// [`Self::move_file`] is not this; the runner may still retry it, so only

@@ -1736,6 +1736,16 @@ pub struct DiscoveryAffinityTitle {
     pub canonical_tags: Vec<CanonicalMediaTag>,
 }
 
+/// A deleted title whose recycle-bin entries housekeeping still has to remove
+/// for good, with the library whose bins hold them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleRecyclePurge {
+    pub title_id: String,
+    pub library_id: String,
+    /// When the title's delete recorded it.
+    pub recorded_at: DateTime<Utc>,
+}
+
 #[async_trait]
 pub trait TitleRepository: Send + Sync {
     /// SQL implementations join the submitted generation without hydrating titles.
@@ -2017,6 +2027,42 @@ pub trait TitleRepository: Send + Sync {
                 folder_path: title.folder_path,
             })
             .collect())
+    }
+    /// Every title that records a folder, as `(title id, folder)`, in the
+    /// order [`Self::list_delete_preview_info`] returns titles. Titles with no
+    /// folder or an empty one are left out.
+    async fn list_title_folder_owners(&self) -> AppResult<Vec<(String, String)>> {
+        Ok(self
+            .list_delete_preview_info()
+            .await?
+            .into_iter()
+            .filter_map(|owner| {
+                owner
+                    .folder_path
+                    .filter(|path| !path.is_empty())
+                    .map(|path| (owner.title_id, path))
+            })
+            .collect())
+    }
+    /// A counter that advances after every write that can change which
+    /// titles record a folder or the folder any title records, once that
+    /// write's transaction has ended, whether it committed or not.
+    ///
+    /// A reader that takes the value before reading the owners, and later
+    /// finds it unchanged, knows no such write has finished in between.
+    /// `None` means this repository keeps no counter, or such a write is in
+    /// progress, and the reader must read the owners again.
+    fn title_folder_write_generation(&self) -> Option<u64> {
+        None
+    }
+    /// [`Self::assign_title_folders`], also returning the value of
+    /// [`Self::title_folder_write_generation`] that this call's own advance
+    /// produced. `None` when that is unknown.
+    async fn assign_title_folders_with_generation(
+        &self,
+        writes: &[crate::TitleFolderWrite],
+    ) -> (AppResult<()>, Option<u64>) {
+        (self.assign_title_folders(writes).await, None)
     }
     async fn list_for_libraries(
         &self,
@@ -2768,8 +2814,50 @@ pub trait TitleRepository: Send + Sync {
     ///
     /// `Ok(false)` means the store has no such batch and deleted nothing; the
     /// caller then deletes title by title.
-    async fn delete_titles_with_records(&self, _ids: &[String]) -> AppResult<bool> {
+    ///
+    /// With `recycle_purge_recorded_at`, the same transaction records every
+    /// title with its library as a [`TitleRecyclePurge`] recorded then.
+    async fn delete_titles_with_records(
+        &self,
+        _ids: &[String],
+        _recycle_purge_recorded_at: Option<DateTime<Utc>>,
+    ) -> AppResult<bool> {
         Ok(false)
+    }
+    /// [`Self::delete`], recording the title with its library as a
+    /// [`TitleRecyclePurge`] recorded at `recorded_at`, in the same
+    /// transaction.
+    async fn delete_recording_recycle_purge(
+        &self,
+        id: &str,
+        recorded_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let _ = (id, recorded_at);
+        Err(AppError::Repository(
+            "this title repository cannot record recycle purges".into(),
+        ))
+    }
+    /// Recorded [`TitleRecyclePurge`]s, oldest first (then by title id), at
+    /// most `limit`.
+    async fn list_recycle_purges(&self, limit: usize) -> AppResult<Vec<TitleRecyclePurge>> {
+        let _ = limit;
+        Ok(Vec::new())
+    }
+    /// Forget at most `limit` recorded titles recorded before `cutoff`,
+    /// oldest first, whether or not entries of theirs remain. Writes nothing
+    /// when none is that old. Returns how many were forgotten.
+    async fn drop_recycle_purges_recorded_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<u32> {
+        let _ = (cutoff, limit);
+        Ok(0)
+    }
+    /// Forget these recorded titles: housekeeping has finished their entries.
+    async fn clear_recycle_purges(&self, title_ids: &[String]) -> AppResult<()> {
+        let _ = title_ids;
+        Ok(())
     }
     /// The one write path for titles' recorded folders.
     ///
@@ -5853,6 +5941,12 @@ pub trait HousekeepingRepository: Send + Sync {
     async fn delete_maintenance_evaluation_runs_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
+    /// Held maintenance action runs that finished more than `days` ago. The
+    /// newest run of each candidate generation, every run that is not held,
+    /// and every run carrying a scoped-deletion resume journal are kept.
+    async fn delete_held_lifecycle_action_runs_older_than(&self, _days: i64) -> AppResult<u32> {
+        Ok(0)
+    }
     async fn delete_history_events_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32>;
     async fn delete_download_import_artifacts_for_title_ids(
         &self,
@@ -8024,6 +8118,13 @@ pub trait StagedNzbStore: Send + Sync {
     async fn delete_staged_nzb(&self, staged_nzb: &StagedNzbRef) -> AppResult<bool>;
 
     async fn prune_staged_nzbs_older_than(&self, older_than: DateTime<Utc>) -> AppResult<u32>;
+
+    /// Whether [`Self::prune_staged_nzbs_older_than`] with the same cutoff
+    /// would remove anything. Answering `true` is always safe: it only means
+    /// the prune runs and finds out.
+    async fn has_staged_nzbs_older_than(&self, _older_than: DateTime<Utc>) -> AppResult<bool> {
+        Ok(true)
+    }
 
     fn mark_artifact_active(&self, path: &Path) -> AppResult<()>;
 
@@ -13608,6 +13709,19 @@ pub trait SubtitleDownloadRepository: Send + Sync {
         provider_file_id: &str,
         language: &str,
         reason: Option<&str>,
+    ) -> AppResult<()>;
+    /// The "nothing found" backoff rows of these media files.
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        media_file_ids: &[String],
+    ) -> AppResult<Vec<crate::subtitles::SubtitleSearchBackoff>>;
+    /// Write `upserts` and remove `cleared` (languages of `media_file_id`) in
+    /// one transaction.
+    async fn apply_search_backoffs(
+        &self,
+        media_file_id: &str,
+        upserts: &[crate::subtitles::SubtitleSearchBackoff],
+        cleared: &[crate::subtitles::SubtitleSearchBackoffKey],
     ) -> AppResult<()>;
 }
 

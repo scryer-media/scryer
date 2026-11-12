@@ -662,6 +662,7 @@ async fn table_snapshot(ctx: &TestContext) -> Vec<String> {
         ),
         ("download_submissions", "id"),
         ("title_search_terms", "title_id"),
+        ("title_recycle_purges", "title_id || ':' || library_id"),
     ];
     let mut rows = Vec::new();
     for (table, key) in TABLES {
@@ -860,3 +861,313 @@ async fn title_delete_job_matches_one_title_at_a_time() {
             .any(|row| row == "lifecycle_claims:cmp-movie-000-claim:released:title_deleted")
     );
 }
+
+const LIBRARY_DELETE_TITLES: usize = 150;
+const EMBERFALL_LIBRARY: &str = "emberfall-library";
+
+/// Seeds a non-default movie library with `LIBRARY_DELETE_TITLES` titles,
+/// their records, a pending import and a library-scoped setting, plus ten
+/// titles in the default movie library that the delete keeps.
+async fn seed_library_for_delete(ctx: &TestContext, root: &std::path::Path) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let library_path = root.join("emberfall").to_string_lossy().to_string();
+    let kept_path = root.join("ashgrove").to_string_lossy().to_string();
+    // The default movie library, picked before the deleted library exists.
+    let (kept_library, kept_root) = library_root(ctx, "movie", &kept_path).await;
+    sqlx::query(
+        "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at) \
+         VALUES (?, 'movie', 'Emberfall Movies', 'emberfall-movies', 0, ?, ?)",
+    )
+    .bind(EMBERFALL_LIBRARY)
+    .bind(&now)
+    .bind(&now)
+    .execute(&ctx.db.pool)
+    .await
+    .expect("insert library");
+    sqlx::query(
+        "INSERT INTO library_roots (id, library_id, path, normalized_path, is_default, created_at, updated_at) \
+         VALUES ('emberfall-root', ?, ?, ?, 1, ?, ?)",
+    )
+    .bind(EMBERFALL_LIBRARY)
+    .bind(&library_path)
+    .bind(&library_path)
+    .bind(&now)
+    .bind(&now)
+    .execute(&ctx.db.pool)
+    .await
+    .expect("insert library root");
+    let mut ids = Vec::new();
+    {
+        let mut tx = ctx.db.pool.begin().await.expect("begin");
+        for index in 0..LIBRARY_DELETE_TITLES + 10 {
+            let (id, library, root_id) = if index < LIBRARY_DELETE_TITLES {
+                (
+                    format!("emberfall-{index:03}"),
+                    EMBERFALL_LIBRARY,
+                    "emberfall-root",
+                )
+            } else {
+                (
+                    format!("ashgrove-{index:03}"),
+                    kept_library.as_str(),
+                    kept_root.as_str(),
+                )
+            };
+            let name = format!("Cinderwake {index:03}");
+            insert_title(&mut tx, &id, &name, "movie", library, root_id, &now).await;
+            insert_media_file(
+                &mut tx,
+                &format!("{id}-file"),
+                &id,
+                &format!("/synthetic/{id}.mkv"),
+                &now,
+            )
+            .await;
+            ids.push(id);
+        }
+        tx.commit().await.expect("commit");
+    }
+    for id in &ids {
+        seed_title_records(ctx, id, &now).await;
+    }
+    sqlx::query(
+        "INSERT INTO library_scan_unmatched_items (id, facet, scan_session_id, scan_root, item_path, display_name, query, reason_code, created_at, updated_at, library_id) \
+         VALUES ('emberfall-pending', 'movie', 'synthetic-scan', ?, ?, 'Emberfall Pending', 'emberfall pending', 'synthetic', ?, ?, ?)",
+    )
+    .bind(&library_path)
+    .bind(format!("{library_path}/Emberfall.Pending.mkv"))
+    .bind(&now)
+    .bind(&now)
+    .bind(EMBERFALL_LIBRARY)
+    .execute(&ctx.db.pool)
+    .await
+    .expect("insert pending import");
+    sqlx::query(
+        "INSERT INTO settings_values (id, setting_definition_id, scope, scope_id, value_json, source, updated_by_user_id, created_at, updated_at) \
+         SELECT 'emberfall-setting', id, scope, ?, '\"emberfall\"', 'user', NULL, ?, ? FROM settings_definitions ORDER BY id LIMIT 1",
+    )
+    .bind(EMBERFALL_LIBRARY)
+    .bind(&now)
+    .bind(&now)
+    .execute(&ctx.db.pool)
+    .await
+    .expect("insert library setting");
+    // Titles with a recorded download retire it title by title, one in each
+    // of the job's chunks but the last.
+    for (index, title_id) in ["emberfall-004", "emberfall-070"].iter().enumerate() {
+        let download_id = format!("00000000-0000-4000-8000-0000000e0de{index}");
+        sqlx::query(
+            "INSERT INTO downloads (id, origin, created_at) VALUES (?, 'scryer_submission', ?)",
+        )
+        .bind(&download_id)
+        .bind(&now)
+        .execute(&ctx.db.pool)
+        .await
+        .expect("seed download");
+        sqlx::query(
+            "INSERT INTO download_submissions (id, title_id, facet, download_client_type, download_client_item_id, source_title, submitted_at) \
+             VALUES (?, ?, 'movie', 'synthetic', ?, 'Synthetic.Release', ?)",
+        )
+        .bind(&download_id)
+        .bind(title_id)
+        .bind(format!("synthetic-item-{index}"))
+        .bind(&now)
+        .execute(&ctx.db.pool)
+        .await
+        .expect("seed download submission");
+    }
+    // Earlier events of deleted and kept titles.
+    for title_id in ["emberfall-000", "emberfall-149", "ashgrove-150"] {
+        sqlx::query(
+            "INSERT INTO domain_events (event_id, occurred_at, title_id, facet, schema_version, \
+               stream_kind, stream_id, event_type, payload_json) \
+             VALUES (?, ?, ?, 'movie', 1, 'title', NULL, 'title_added', '{}')",
+        )
+        .bind(format!("{title_id}-added"))
+        .bind(&now)
+        .bind(title_id)
+        .execute(&ctx.db.pool)
+        .await
+        .expect("seed domain event");
+    }
+}
+
+/// The rows a library delete touches beyond a title delete's.
+async fn library_snapshot(ctx: &TestContext) -> Vec<String> {
+    const TABLES: &[(&str, &str)] = &[
+        ("libraries", "id"),
+        ("library_roots", "id"),
+        ("settings_values", "id || ':' || coalesce(scope_id, '')"),
+        (
+            "library_scan_unmatched_items",
+            "id || ':' || coalesce(library_id, '')",
+        ),
+    ];
+    let mut rows = table_snapshot(ctx).await;
+    for (table, key) in TABLES {
+        let found: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT CAST({key} AS TEXT) FROM {table}"
+        )))
+        .fetch_all(&ctx.db.pool)
+        .await
+        .unwrap_or_else(|error| panic!("snapshot {table}: {error}"));
+        rows.extend(found.into_iter().map(|(key,)| format!("{table}:{key}")));
+    }
+    rows.sort();
+    rows
+}
+
+/// Every domain event but a job run's, in order: type, title and payload.
+async fn non_job_events(ctx: &TestContext) -> Vec<(String, String, String)> {
+    let rows: Vec<(String, Option<String>, Vec<u8>)> = sqlx::query_as(
+        "SELECT event_type, title_id, CAST(payload_json AS BLOB) FROM domain_events \
+         WHERE event_type NOT LIKE 'job_run_%' ORDER BY sequence",
+    )
+    .fetch_all(&ctx.db.pool)
+    .await
+    .expect("domain events");
+    rows.into_iter()
+        .map(|(event_type, title_id, payload)| {
+            (
+                event_type,
+                title_id.unwrap_or_default(),
+                String::from_utf8_lossy(&payload).to_string(),
+            )
+        })
+        .collect()
+}
+
+async fn job_events(ctx: &TestContext) -> Vec<String> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT event_type FROM domain_events WHERE event_type LIKE 'job_run_%' ORDER BY sequence",
+    )
+    .fetch_all(&ctx.db.pool)
+    .await
+    .expect("job events");
+    rows.into_iter().map(|(event_type,)| event_type).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn library_delete_job_removes_the_library_and_keeps_other_titles() {
+    // SAFETY: set before any connection opens, in this test's own process.
+    unsafe { std::env::set_var("SCRYER_SQLITE_WAL_AUTOCHECKPOINT_PAGES", "0") };
+    let root = tempfile::tempdir().expect("root");
+    let db = tempfile::tempdir().expect("db dir");
+    let db_path = db.path().join("library-delete.db");
+    let ctx = TestContext::new_with_database_path(&db_path.to_string_lossy()).await;
+    seed_library_for_delete(&ctx, root.path()).await;
+    let admin = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default admin");
+    let kept_rows = |rows: &[String]| {
+        rows.iter()
+            .filter(|row| row.contains("ashgrove-"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let kept_before = kept_rows(&library_snapshot(&ctx).await);
+    let wal_path = db.path().join("library-delete.db-wal");
+    let (_, commits_before) = wal_frames(&wal_path);
+
+    let accepted = ctx
+        .app
+        .start_delete_library_job(&admin, EMBERFALL_LIBRARY)
+        .await
+        .expect("start library deletion job");
+    let run_id = accepted.job_run.id.clone();
+    common::wait_until("library deletion job completes", || {
+        let admin = &admin;
+        let run_id = run_id.clone();
+        let ctx = &ctx;
+        async move {
+            ctx.app
+                .list_recent_job_runs(admin, 20)
+                .await
+                .expect("list job runs")
+                .into_iter()
+                .any(|run| run.id == run_id && run.completed_at.is_some())
+        }
+    })
+    .await;
+    let run = ctx
+        .app
+        .list_recent_job_runs(&admin, 20)
+        .await
+        .expect("list job runs")
+        .into_iter()
+        .find(|run| run.id == run_id)
+        .expect("finished run");
+    let (_, commits_after) = wal_frames(&wal_path);
+    assert_eq!(run.status, scryer_application::JobRunStatus::Completed);
+
+    let rows = library_snapshot(&ctx).await;
+    let events = non_job_events(&ctx).await;
+    assert_eq!(
+        job_events(&ctx).await,
+        ["job_run_started", "job_run_completed"]
+    );
+    // The library and everything scoped to it is gone; the kept library's
+    // titles keep every row.
+    assert!(
+        !rows
+            .iter()
+            // A deleted title's lifecycle claim is kept, released.
+            .any(|row| row.contains("emberfall-") && !row.ends_with(":released:title_deleted")),
+        "{:?}",
+        rows.iter()
+            .filter(|row| row.contains("emberfall-"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(kept_rows(&rows), kept_before);
+    assert!(rows.iter().any(|row| row == "titles:ashgrove-150"));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(event_type, _, _)| event_type == "title_deleted")
+            .count(),
+        LIBRARY_DELETE_TITLES
+    );
+    let summary: serde_json::Value =
+        serde_json::from_str(run.summary_json.as_deref().expect("summary")).expect("summary json");
+    assert_eq!(summary["deleted"], true);
+    assert_eq!(summary["titleCount"], LIBRARY_DELETE_TITLES);
+    let progress: serde_json::Value =
+        serde_json::from_str(run.progress_json.as_deref().expect("progress"))
+            .expect("progress json");
+    assert_eq!(progress["processed"], LIBRARY_DELETE_TITLES);
+    assert_eq!(progress["total"], LIBRARY_DELETE_TITLES);
+
+    // Only the kept title's earlier event survives beside the title-deleted
+    // events.
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(event_type, _, _)| event_type == "title_added")
+            .map(|(_, title_id, _)| title_id.as_str())
+            .collect::<Vec<_>>(),
+        ["ashgrove-150"]
+    );
+    // Title-deleted events follow the library's title order.
+    let deleted_order = events
+        .iter()
+        .filter(|(event_type, _, _)| event_type == "title_deleted")
+        .map(|(_, title_id, _)| title_id.clone())
+        .collect::<Vec<_>>();
+    let mut sorted = deleted_order.clone();
+    sorted.sort();
+    assert_eq!(deleted_order, sorted);
+
+    // Chunks of 64, with one progress write after each chunk, plus the run,
+    // the started and finished events, and the finished run.
+    let commits = commits_after - commits_before;
+    report(format!(
+        "LIBRARY DELETE [writes]: job {commits} write transactions for {LIBRARY_DELETE_TITLES} titles",
+    ));
+    assert_eq!(commits, LIBRARY_DELETE_JOB_COMMITS);
+}
+
+/// Write transactions of the library deletion job for
+/// [`LIBRARY_DELETE_TITLES`] titles, two with a recorded download.
+const LIBRARY_DELETE_JOB_COMMITS: u64 = 40;

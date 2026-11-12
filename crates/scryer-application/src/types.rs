@@ -35,6 +35,12 @@ pub struct UpdatedLibrary {
     pub removed_title_count: usize,
 }
 
+/// A library delete accepted to run in the background, with its job run.
+#[derive(Clone, Debug)]
+pub struct DeleteLibraryJobAccepted {
+    pub job_run: crate::JobRun,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum MetadataFieldUpdate<T> {
     #[default]

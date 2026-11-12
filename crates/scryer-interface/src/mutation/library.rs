@@ -204,7 +204,9 @@ impl LibraryMutations {
         Ok(payload)
     }
 
-    /// Delete the library configuration identified by the supplied ID.
+    /// Accept a background job that deletes the library identified by the
+    /// supplied ID and removes its titles from the catalog. Files on disk are
+    /// left alone.
     async fn delete_library(
         &self,
         ctx: &Context<'_>,
@@ -213,10 +215,14 @@ impl LibraryMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let id = id.to_string();
-        app.delete_library(&actor, &id)
+        let accepted = app
+            .start_delete_library_job(&actor, &id)
             .await
             .map_err(to_gql_error)?;
-        Ok(DeleteLibraryPayload { id: ID::from(id) })
+        Ok(DeleteLibraryPayload {
+            id: ID::from(id),
+            job_run: from_job_run(accepted.job_run),
+        })
     }
 
     /// Start a library scan and return the accepted scan session snapshot.

@@ -638,6 +638,12 @@ impl HousekeepingRepository for TestLibraryStateStore {
             .await
     }
 
+    async fn delete_held_lifecycle_action_runs_older_than(&self, days: i64) -> AppResult<u32> {
+        self.housekeeping
+            .delete_held_lifecycle_action_runs_older_than(days)
+            .await
+    }
+
     async fn delete_history_events_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32> {
         self.housekeeping
             .delete_history_events_for_title_ids(title_ids)
@@ -776,6 +782,26 @@ impl SubtitleDownloadRepository for TestLibraryStateStore {
     ) -> AppResult<()> {
         self.subtitle_downloads
             .blocklist(media_file_id, provider, provider_file_id, language, reason)
+            .await
+    }
+
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        media_file_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::subtitles::SubtitleSearchBackoff>> {
+        self.subtitle_downloads
+            .list_search_backoffs_for_media_files(media_file_ids)
+            .await
+    }
+
+    async fn apply_search_backoffs(
+        &self,
+        media_file_id: &str,
+        upserts: &[scryer_application::subtitles::SubtitleSearchBackoff],
+        cleared: &[scryer_application::subtitles::SubtitleSearchBackoffKey],
+    ) -> AppResult<()> {
+        self.subtitle_downloads
+            .apply_search_backoffs(media_file_id, upserts, cleared)
             .await
     }
 }

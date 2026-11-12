@@ -889,6 +889,7 @@ async fn graphql_introspection_exposes_typed_timestamps_as_datetime() {
         ("linkedAccount", "lastLoginAt"),
         ("autoBackupSettings", "nextRunAt"),
         ("jobScheduleInfo", "nextRunAt"),
+        ("jobScheduleInfo", "lastIdleCheckAt"),
         ("jobRun", "completedAt"),
         ("indexerQueryStats", "lastQueryAt"),
         ("indexerSearchResult", "publishedAt"),

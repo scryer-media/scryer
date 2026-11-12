@@ -190,6 +190,7 @@ pub enum JobKey {
     ArtworkEncoding,
     TitleImageCacheRefresh,
     TitleDeletion,
+    LibraryDeletion,
     TitleRename,
     MediaFileDeletion,
     MediaFileRescore,
@@ -247,6 +248,7 @@ impl JobKey {
             Self::ArtworkEncoding => "artwork_encoding",
             Self::TitleImageCacheRefresh => "title_image_cache_refresh",
             Self::TitleDeletion => "title_deletion",
+            Self::LibraryDeletion => "library_deletion",
             Self::TitleRename => "title_rename",
             Self::MediaFileRescore => "media_file_rescore",
             Self::MediaFileDeletion => "media_file_deletion",
@@ -286,6 +288,7 @@ impl JobKey {
             "artwork_encoding" => Some(Self::ArtworkEncoding),
             "title_image_cache_refresh" => Some(Self::TitleImageCacheRefresh),
             "title_deletion" => Some(Self::TitleDeletion),
+            "library_deletion" => Some(Self::LibraryDeletion),
             "title_rename" => Some(Self::TitleRename),
             "media_file_rescore" => Some(Self::MediaFileRescore),
             "media_file_deletion" => Some(Self::MediaFileDeletion),
@@ -326,6 +329,7 @@ impl JobKey {
             Self::ArtworkEncoding => "Artwork Encoding",
             Self::TitleImageCacheRefresh => "Title Image Cache Refresh",
             Self::TitleDeletion => "Title Deletion",
+            Self::LibraryDeletion => "Library Deletion",
             Self::TitleRename => "Title Rename",
             Self::MediaFileRescore => "Refresh File Scores",
             Self::MediaFileDeletion => "Media File Deletion",
@@ -385,6 +389,9 @@ impl JobKey {
                 "Refresh remote artwork URLs from SMG and rebuild locally processed title images."
             }
             Self::TitleDeletion => "Delete selected titles from the catalog.",
+            Self::LibraryDeletion => {
+                "Delete a library and remove its titles from the catalog, leaving files on disk."
+            }
             Self::TitleRename => "Rename files for selected titles.",
             Self::MediaFileRescore => "Evaluate selected files under current scoring rules.",
             Self::MediaFileDeletion => "Delete a media file from disk and the catalog.",
@@ -433,6 +440,7 @@ impl JobKey {
             | Self::DiscoverySync
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
+            | Self::LibraryDeletion
             | Self::TitleRename
             | Self::MediaFileDeletion
             | Self::MediaFileRescore
@@ -486,6 +494,7 @@ impl JobKey {
             | Self::LibraryScanAnime
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
+            | Self::LibraryDeletion
             | Self::TitleRename
             | Self::MediaFileDeletion
             | Self::MediaFileRescore
@@ -526,6 +535,7 @@ impl JobKey {
             | Self::LibraryScanAnime
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
+            | Self::LibraryDeletion
             | Self::TitleRename
             | Self::MediaFileDeletion
             | Self::MediaFileRescore
@@ -579,6 +589,7 @@ impl JobKey {
             self,
             Self::AutoBackup
                 | Self::TitleDeletion
+                | Self::LibraryDeletion
                 | Self::TitleRename
                 | Self::MediaFileDeletion
                 | Self::MediaFileRescore
@@ -636,6 +647,9 @@ pub struct JobScheduleInfo {
     pub interval_seconds: Option<i64>,
     pub initial_delay_seconds: Option<i64>,
     pub next_run_at: Option<DateTime<Utc>>,
+    /// When the scheduler last visited the job and found nothing to do, so
+    /// recorded no run. Held in memory only; `None` after a restart.
+    pub last_idle_check_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -669,6 +683,7 @@ impl JobDefinition {
                 interval_seconds: key.interval_seconds(),
                 initial_delay_seconds: key.initial_delay_seconds(),
                 next_run_at,
+                last_idle_check_at: None,
             },
         }
     }
@@ -792,6 +807,8 @@ pub struct LibraryProbeSignature {
 struct JobRunTrackerState {
     active_runs: HashMap<String, JobRun>,
     next_run_at: HashMap<JobKey, DateTime<Utc>>,
+    /// The last scheduler visit of each job that found nothing to do.
+    idle_checks: HashMap<JobKey, DateTime<Utc>>,
     /// One more run asked for while a run of the job was active, with the
     /// user who asked. Taken when the last active run of that job ends.
     rerun_requests: HashMap<JobKey, scryer_domain::User>,
@@ -1022,6 +1039,17 @@ impl JobRunTracker {
     pub async fn next_run_at(&self, job_key: JobKey) -> Option<DateTime<Utc>> {
         let state = self.state.lock().await;
         state.next_run_at.get(&job_key).copied()
+    }
+
+    /// Remember that a scheduler visit of `job_key` found nothing to do.
+    pub async fn record_idle_check(&self, job_key: JobKey, at: DateTime<Utc>) {
+        let mut state = self.state.lock().await;
+        state.idle_checks.insert(job_key, at);
+    }
+
+    pub async fn all_idle_checks(&self) -> HashMap<JobKey, DateTime<Utc>> {
+        let state = self.state.lock().await;
+        state.idle_checks.clone()
     }
 }
 

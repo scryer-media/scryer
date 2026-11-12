@@ -42,6 +42,7 @@ export type JobKey =
   | "TITLE_IMAGE_CACHE_REFRESH"
   | "ARTWORK_ENCODING"
   | "TITLE_DELETION"
+  | "LIBRARY_DELETION"
   | "MEDIA_FILE_DELETION"
   | "MEDIA_FILE_RESCORE"
   | "RECYCLE_BIN_RESTORE"
@@ -59,6 +60,8 @@ export type JobScheduleInfo = {
   intervalSeconds: number | null;
   initialDelaySeconds: number | null;
   nextRunAt: string | null;
+  /** The scheduler's last visit that found nothing to do and recorded no run. */
+  lastIdleCheckAt: string | null;
 };
 
 export type JobDefinition = {

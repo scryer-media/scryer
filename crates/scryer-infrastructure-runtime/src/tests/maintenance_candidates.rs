@@ -2021,6 +2021,266 @@ async fn maintenance_scoped_deletion_checkpoint_survives_unbounded_safety_holds(
     let _ = std::fs::remove_file(db);
 }
 
+/// Retention removes only held runs past the window that are neither the
+/// newest of their candidate generation nor a resume journal, and a resume
+/// after the prune still finds the journal it would have found before.
+#[tokio::test]
+async fn housekeeping_prunes_old_held_action_runs_but_keeps_journals_and_the_newest() {
+    use scryer_application::HousekeepingRepository;
+    use scryer_domain::LifecycleActionRunStatus as Status;
+
+    let (services, db) = temp_services("scryer_maintenance_held_run_retention").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    for (id, title) in [
+        ("cand-emberfall", "title-emberfall"),
+        ("cand-cinderwake", "title-cinderwake"),
+    ] {
+        store
+            .create_candidate(&candidate(id, "rule-a", title, 1))
+            .await
+            .expect("create candidate");
+    }
+    let kind = "unmonitor_scope_delete_files";
+    let journal = r#"{"scoped_deletion":1,"files":[]}"#;
+    let now = Utc::now();
+    // (id, candidate, generation, status, detail, age in days, finished)
+    let rows: &[(&str, &str, i64, Status, &str, i64, bool)] = &[
+        // Emberfall generation 1: an old held journal row, not the newest.
+        (
+            "ember-journal-held",
+            "cand-emberfall",
+            1,
+            Status::Held,
+            journal,
+            200,
+            true,
+        ),
+        (
+            "ember-held-old",
+            "cand-emberfall",
+            1,
+            Status::Held,
+            "{}",
+            190,
+            true,
+        ),
+        // The underscore of the journal key is literal: this is no journal.
+        (
+            "ember-held-lookalike",
+            "cand-emberfall",
+            1,
+            Status::Held,
+            r#"{"scopedXdeletion":1}"#,
+            180,
+            true,
+        ),
+        (
+            "ember-failed-old",
+            "cand-emberfall",
+            1,
+            Status::Failed,
+            "{}",
+            170,
+            true,
+        ),
+        (
+            "ember-held-unfinished",
+            "cand-emberfall",
+            1,
+            Status::Held,
+            "{}",
+            160,
+            false,
+        ),
+        (
+            "ember-held-recent",
+            "cand-emberfall",
+            1,
+            Status::Held,
+            "{}",
+            10,
+            true,
+        ),
+        // Emberfall generation 2: every row is old and held; the newest stays,
+        // and a tie on start time is broken by id as the resume read does.
+        (
+            "ember-gen2-held-a",
+            "cand-emberfall",
+            2,
+            Status::Held,
+            "{}",
+            150,
+            true,
+        ),
+        (
+            "ember-gen2-tie-a",
+            "cand-emberfall",
+            2,
+            Status::Held,
+            "{}",
+            100,
+            true,
+        ),
+        (
+            "ember-gen2-tie-b",
+            "cand-emberfall",
+            2,
+            Status::Held,
+            "{}",
+            100,
+            true,
+        ),
+        // Cinderwake: the journal row is the newest of its generation.
+        (
+            "cinder-held-old",
+            "cand-cinderwake",
+            1,
+            Status::Held,
+            "{}",
+            140,
+            true,
+        ),
+        (
+            "cinder-journal-held",
+            "cand-cinderwake",
+            1,
+            Status::Held,
+            journal,
+            130,
+            true,
+        ),
+    ];
+    for (id, candidate_id, generation, status, detail, age_days, finished) in rows {
+        let at = now - chrono::Duration::days(*age_days);
+        store
+            .start_action_run(&scryer_domain::LifecycleActionRun {
+                id: (*id).into(),
+                candidate_id: (*candidate_id).into(),
+                rule_set_id: "rule-a".into(),
+                revision_number: 1,
+                title_id: "title".into(),
+                subject_kind: "episode".into(),
+                subject_id: "episode-1".into(),
+                action_kind: kind.into(),
+                match_generation: *generation,
+                idempotency_key: format!("hold:{id}"),
+                attempt: 1,
+                status: *status,
+                hold_reason: (*status == Status::Held).then(|| "tag_conflict".into()),
+                error: None,
+                detail: (*detail).into(),
+                started_at: at,
+                finished_at: finished.then_some(at),
+                created_at: at,
+            })
+            .await
+            .expect("seed action run");
+    }
+    let resume = |candidate_id: &'static str| {
+        let store = &store;
+        async move {
+            store
+                .latest_scoped_deletion_action_run(candidate_id, 1, kind)
+                .await
+                .expect("read journal")
+                .map(|run| run.id)
+        }
+    };
+    let ember_before = resume("cand-emberfall").await;
+    let cinder_before = resume("cand-cinderwake").await;
+    assert_eq!(ember_before.as_deref(), Some("ember-journal-held"));
+    assert_eq!(cinder_before.as_deref(), Some("cinder-journal-held"));
+
+    let housekeeping = housekeeping_store(&services);
+    let deleted = housekeeping
+        .delete_held_lifecycle_action_runs_older_than(90)
+        .await
+        .expect("prune held runs");
+    assert_eq!(deleted, 5);
+
+    let mut remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM lifecycle_action_runs")
+        .fetch_all(&services.pool)
+        .await
+        .expect("list remaining runs");
+    remaining.sort();
+    assert_eq!(
+        remaining,
+        vec![
+            "cinder-journal-held",
+            "ember-failed-old",
+            "ember-gen2-tie-b",
+            "ember-held-recent",
+            "ember-held-unfinished",
+            "ember-journal-held",
+        ]
+    );
+    assert_eq!(resume("cand-emberfall").await, ember_before);
+    assert_eq!(resume("cand-cinderwake").await, cinder_before);
+
+    assert_eq!(
+        housekeeping
+            .delete_held_lifecycle_action_runs_older_than(90)
+            .await
+            .expect("second prune"),
+        0,
+        "a second pass finds nothing"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// The retention pass reads held runs through the finish-time index and
+/// finds a newer run of the same generation through the generation index.
+#[tokio::test]
+async fn held_action_run_retention_is_index_served_on_sqlite() {
+    let (services, db) = temp_services("scryer_maintenance_held_run_retention_plan").await;
+    let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+        "EXPLAIN QUERY PLAN
+         SELECT 1 AS present FROM lifecycle_action_runs
+          WHERE status = ?1
+            AND finished_at IS NOT NULL
+            AND finished_at < ?2
+            AND detail NOT LIKE ?3 ESCAPE '!'
+            AND EXISTS (
+                SELECT 1
+                  FROM lifecycle_action_runs newer
+                 WHERE newer.candidate_id = lifecycle_action_runs.candidate_id
+                   AND newer.match_generation = lifecycle_action_runs.match_generation
+                   AND (
+                       newer.started_at > lifecycle_action_runs.started_at
+                       OR (
+                           newer.started_at = lifecycle_action_runs.started_at
+                           AND newer.id > lifecycle_action_runs.id
+                       )
+                   )
+            )
+          LIMIT 1",
+    )
+    .bind("held")
+    .bind("2026-01-01T00:00:00Z")
+    .bind("%\"scoped!_deletion\":%")
+    .fetch_all(&services.pool)
+    .await
+    .expect("explain retention probe");
+    let details = plan
+        .into_iter()
+        .map(|(_, _, _, detail)| detail)
+        .collect::<Vec<_>>()
+        .join("\n");
+    println!("{details}");
+    assert!(
+        details.contains("idx_lifecycle_action_runs_status_finished"),
+        "{details}"
+    );
+    assert!(
+        details.contains("idx_lifecycle_action_runs_generation_started"),
+        "{details}"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
 #[tokio::test]
 async fn effect_arming_and_attempts_round_trip() {
     let (services, db) = temp_services("scryer_maintenance_arming").await;

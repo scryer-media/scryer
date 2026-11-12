@@ -67,6 +67,7 @@ mod metadata_search;
 mod multilingual_title_matching;
 mod queueing;
 mod recycle_bin_roots;
+mod recycle_purge_selection;
 mod release_anchor_prefetch;
 mod rename_folder_record;
 mod request_rules;
@@ -112,7 +113,9 @@ use support_acquisition_downloads::*;
 #[cfg(unix)]
 pub(crate) use support_bootstrap_fixtures::bootstrap_application_upgrade;
 use support_bootstrap_fixtures::*;
-pub(crate) use support_bootstrap_fixtures::{bootstrap, bootstrap_import_tracking_spy};
+pub(crate) use support_bootstrap_fixtures::{
+    bootstrap, bootstrap_import_tracking_spy, bootstrap_with_title_repo,
+};
 pub(crate) use support_catalog::MockTitleRepo;
 use support_catalog::*;
 pub(crate) use support_events_requests::MockDomainEventRepo;

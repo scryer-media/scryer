@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   jobInstanceKey,
+  libraryDeletionFailureReason,
+  libraryDeletionProgress,
   longRunningJobs,
   mergeLatestJobRun,
   normalizeJobRun,
@@ -422,4 +424,46 @@ test("jobs without a panel on Activity never count as long-running", () => {
     count: 0,
     nextChangeAtMs: null,
   });
+});
+
+test("library deletion runs report their pass while running and their reason when failed", () => {
+  const running = jobRun({
+    id: "library-delete",
+    jobKey: "LIBRARY_DELETION",
+    status: "RUNNING",
+    startedAt: "2026-01-01T00:00:00Z",
+    progressJson: JSON.stringify({
+      phase: "deleting",
+      processed: 64,
+      total: 150,
+    }),
+  });
+  assert.deepEqual(libraryDeletionProgress(running), {
+    phase: "deleting",
+    processed: 64,
+    total: 150,
+  });
+  assert.equal(
+    libraryDeletionProgress({ ...running, progressJson: { phase: "queued" } }),
+    null,
+  );
+  assert.equal(libraryDeletionProgress({ ...running, status: "FAILED" }), null);
+  assert.equal(
+    libraryDeletionProgress({ ...running, jobKey: "TITLE_DELETION" }),
+    null,
+  );
+
+  const failed = {
+    ...running,
+    status: "FAILED" as const,
+    summaryJson: { reason: "LIBRARY_DELETION_ALREADY_RUNNING" },
+  };
+  assert.equal(
+    libraryDeletionFailureReason(failed),
+    "LIBRARY_DELETION_ALREADY_RUNNING",
+  );
+  assert.equal(
+    libraryDeletionFailureReason({ ...failed, summaryJson: { reason: null } }),
+    null,
+  );
 });

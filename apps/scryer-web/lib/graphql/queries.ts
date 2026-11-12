@@ -2439,6 +2439,7 @@ export const jobsQuery = `query Jobs {
       intervalSeconds
       initialDelaySeconds
       nextRunAt
+      lastIdleCheckAt
     }
   }
 }`;

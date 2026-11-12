@@ -932,6 +932,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "location_operation_plans",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "location_operation_title_checkpoints",
         classification: BackupTableClassification::Export,
     },
@@ -1074,6 +1078,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "media_files",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "media_file_analyses",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -1287,6 +1295,11 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "subtitle_downloads",
         classification: BackupTableClassification::Export,
     },
+    // Automatic-search delays only; a restore starts every file fresh.
+    BackupTableCatalogEntry {
+        table: "subtitle_search_backoffs",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "subtitle_provider_configs",
         classification: BackupTableClassification::Export,
@@ -1318,6 +1331,13 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     BackupTableCatalogEntry {
         table: "title_recommendation_cards",
         classification: BackupTableClassification::ResetOnRestore,
+    },
+    // Pending cleanup work, like `download_cleanup`: the deletes it records
+    // are already in the exported catalog, and only these rows lead
+    // housekeeping to their recycle-bin entries.
+    BackupTableCatalogEntry {
+        table: "title_recycle_purges",
+        classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
         table: "titles",

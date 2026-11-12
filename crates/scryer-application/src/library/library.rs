@@ -40,11 +40,39 @@ use crate::library_scan_unmatched::{
 use crate::settings::settings::{
     effective_scan_roots_from_root_folders, root_folder_entries_from_library_roots,
 };
+use scryer_domain::{
+    DomainEventPayload, JobRunCompletedEventData, JobRunFailedEventData, JobRunStartedEventData,
+};
 use tracing::{debug, warn};
 
 const LIBRARY_SCAN_MOVIE_BATCH_SIZE: usize = 32;
 const LIBRARY_SCAN_SERIES_BATCH_SIZE: usize = 8;
 const TITLE_SCAN_FILE_BATCH_SIZE: usize = 128;
+
+const LIBRARY_DELETION_PHASE_QUEUED: &str = "queued";
+/// The titles are being deleted, a chunk at a time.
+const LIBRARY_DELETION_PHASE_DELETING: &str = "deleting";
+const LIBRARY_DELETION_PHASE_COMPLETED: &str = "completed";
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryDeletionProgress<'a> {
+    status: &'static str,
+    phase: &'static str,
+    library_id: &'a str,
+    /// Titles the library had when the job listed them.
+    total: usize,
+    /// Titles this phase has finished.
+    processed: usize,
+}
+
+/// The run a library deletion job reports its progress to.
+pub(crate) struct LibraryDeletionTracker {
+    run: JobRunRecord,
+    library_id: String,
+    total: usize,
+}
+
 #[path = "scan/candidates.rs"]
 mod scan_candidates;
 #[path = "scan/full.rs"]
@@ -986,7 +1014,10 @@ impl AppUseCase {
         })
     }
 
-    pub async fn delete_library(&self, actor: &User, library_id: &str) -> AppResult<bool> {
+    /// The checks a library delete makes before it changes anything: the
+    /// library exists, the actor may manage it, it is not a default library,
+    /// and no location operation holds its roots.
+    async fn admit_library_delete(&self, actor: &User, library_id: &str) -> AppResult<Library> {
         let library = self
             .services
             .catalog
@@ -1013,7 +1044,20 @@ impl AppUseCase {
             &library.id,
         )
         .await?;
+        Ok(library)
+    }
 
+    /// Everything a library delete changes, in order, once it is admitted.
+    /// Catalog rows only: files on disk and the recycle bin are left alone.
+    /// The library row goes last, so a delete that stops partway leaves the
+    /// library in place with the titles it had not reached, and deleting it
+    /// again finishes the job.
+    async fn delete_admitted_library(
+        &self,
+        library: &Library,
+        actor: &User,
+        tracker: &mut LibraryDeletionTracker,
+    ) -> AppResult<bool> {
         self.cancel_library_scan_sessions(&library.id).await;
 
         self.services
@@ -1032,7 +1076,7 @@ impl AppUseCase {
                 None,
             )
             .await?;
-        self.delete_titles_logically(&titles, DomainEventActor::from(actor), false)
+        self.delete_library_titles_in_chunks(&titles, DomainEventActor::from(actor), tracker)
             .await?;
 
         self.services
@@ -1058,6 +1102,228 @@ impl AppUseCase {
             ]);
         }
         Ok(deleted)
+    }
+
+    /// Admit a library delete and run it as a background job. The request
+    /// returns once the job is accepted; the job reports how many titles it
+    /// has worked through. A delete of a library already being deleted is
+    /// refused. A job stopped by a restart is failed at startup like any
+    /// other run, and the library stays listed until a delete finishes.
+    pub async fn start_delete_library_job(
+        &self,
+        actor: &User,
+        library_id: &str,
+    ) -> AppResult<DeleteLibraryJobAccepted> {
+        let (accepted, _job) = self
+            .start_delete_library_job_task(actor, library_id)
+            .await?;
+        Ok(accepted)
+    }
+
+    /// [`Self::start_delete_library_job`], also handing back the job's task.
+    pub(crate) async fn start_delete_library_job_task(
+        &self,
+        actor: &User,
+        library_id: &str,
+    ) -> AppResult<(DeleteLibraryJobAccepted, tokio::task::JoinHandle<()>)> {
+        let library = self.admit_library_delete(actor, library_id).await?;
+        let deletion_guard = self
+            .runtime
+            .jobs
+            .interactive_operation_guards
+            .try_acquire(&format!("library-delete:{}", library.id))
+            .await
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::library::DELETION_ALREADY_RUNNING,
+                    format!("library {} is already being deleted", library.id),
+                )
+            })?;
+
+        let now = chrono::Utc::now();
+        let mut run = JobRunRecord {
+            id: Id::new().0,
+            job_key: JobKey::LibraryDeletion,
+            operation_type: format!("library_deletion:{}", library.id),
+            status: JobRunStatus::Running,
+            trigger_source: JobTriggerSource::Manual,
+            actor_user_id: Some(actor.id.clone()),
+            progress_json: serde_json::to_string(&LibraryDeletionProgress {
+                status: JobRunStatus::Running.as_str(),
+                phase: LIBRARY_DELETION_PHASE_QUEUED,
+                library_id: &library.id,
+                total: 0,
+                processed: 0,
+            })
+            .ok(),
+            summary_json: None,
+            summary_text: None,
+            error_text: None,
+            started_at: now,
+            completed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        run = self.services.events.job_runs.create_job_run(&run).await?;
+        let job_run = JobRun::from_record(&run, None);
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(job_run.clone())
+            .await;
+        let actor_event = DomainEventActor::from(actor);
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                actor_event,
+                run.id.clone(),
+                DomainEventPayload::JobRunStarted(JobRunStartedEventData {
+                    run_id: run.id.clone(),
+                    job_key: run.job_key.as_str().to_string(),
+                    operation_type: run.operation_type.clone(),
+                    trigger_source: run.trigger_source.as_str().to_string(),
+                }),
+            ))
+            .await;
+
+        let app = self.clone();
+        let actor = actor.clone();
+        let job = self.restore_coordinator().spawn_task(async move {
+            app.run_delete_library_job(run, actor, library, deletion_guard)
+                .await;
+        });
+
+        Ok((DeleteLibraryJobAccepted { job_run }, job))
+    }
+
+    /// The body of a library deletion job: the delete itself, then the run's
+    /// outcome. Dropping it partway is what a restart does to it.
+    async fn run_delete_library_job(
+        &self,
+        run: JobRunRecord,
+        actor: User,
+        library: Library,
+        _deletion_guard: tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        let mut tracker = LibraryDeletionTracker {
+            run,
+            library_id: library.id.clone(),
+            total: 0,
+        };
+        let result = self
+            .delete_admitted_library(&library, &actor, &mut tracker)
+            .await;
+        let LibraryDeletionTracker { mut run, total, .. } = tracker;
+        let completed_at = chrono::Utc::now();
+        let (status, summary_text) = match &result {
+            Ok(_) => (
+                JobRunStatus::Completed,
+                format!("Deleted library {} and {total} title(s)", library.name),
+            ),
+            Err(_) => (
+                JobRunStatus::Failed,
+                format!("Failed to delete library {}", library.name),
+            ),
+        };
+        run.status = status;
+        run.progress_json = serde_json::to_string(&LibraryDeletionProgress {
+            status: status.as_str(),
+            phase: LIBRARY_DELETION_PHASE_COMPLETED,
+            library_id: &library.id,
+            total,
+            processed: if result.is_ok() {
+                total
+            } else {
+                // How far it got is in the last progress written.
+                run.progress_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                    .and_then(|value| value["processed"].as_u64())
+                    .map(|value| value as usize)
+                    .unwrap_or(0)
+            },
+        })
+        .ok();
+        run.summary_json = Some(
+            serde_json::json!({
+                "libraryId": library.id,
+                "titleCount": total,
+                "deleted": matches!(result, Ok(true)),
+                "reason": result.as_ref().err().and_then(|error| error.reason()),
+            })
+            .to_string(),
+        );
+        run.summary_text = Some(summary_text);
+        run.error_text = result.as_ref().err().map(ToString::to_string);
+        run.completed_at = Some(completed_at);
+        run.updated_at = completed_at;
+        let updated = match self.services.events.job_runs.update_job_run(&run).await {
+            Ok(updated) => updated,
+            Err(error) => {
+                warn!(error = %error, library_id = %library.id, "failed to finish library deletion job");
+                run
+            }
+        };
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(&updated, None))
+            .await;
+        let payload = if status == JobRunStatus::Failed {
+            DomainEventPayload::JobRunFailed(JobRunFailedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                error_text: updated.error_text.clone(),
+            })
+        } else {
+            DomainEventPayload::JobRunCompleted(JobRunCompletedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                summary_text: updated.summary_text.clone(),
+            })
+        };
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                DomainEventActor::from(&actor),
+                updated.id.clone(),
+                payload,
+            ))
+            .await;
+    }
+
+    /// Record how far a library deletion job has got: in memory for the live
+    /// view, and in its run row so a restart shows where it stopped.
+    async fn report_library_deletion_progress(
+        &self,
+        tracker: &mut LibraryDeletionTracker,
+        phase: &'static str,
+        processed: usize,
+    ) {
+        tracker.run.progress_json = serde_json::to_string(&LibraryDeletionProgress {
+            status: JobRunStatus::Running.as_str(),
+            phase,
+            library_id: &tracker.library_id,
+            total: tracker.total,
+            processed,
+        })
+        .ok();
+        tracker.run.updated_at = chrono::Utc::now();
+        match self
+            .services
+            .events
+            .job_runs
+            .update_job_run(&tracker.run)
+            .await
+        {
+            Ok(updated) => tracker.run = updated,
+            Err(error) => {
+                warn!(error = %error, "failed to record library deletion progress")
+            }
+        }
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(&tracker.run, None))
+            .await;
     }
 
     /// Cancel every running scan of `library_id`. Retiring a root, or the
@@ -1124,7 +1390,6 @@ impl AppUseCase {
         clear_recycle_bin: bool,
     ) -> AppResult<usize> {
         let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
-
         let mut recycle_index = crate::recycle_bin::TitleRecycleEntryIndex::default();
         for title in titles {
             self.purge_title_logical_dependents(
@@ -1136,37 +1401,67 @@ impl AppUseCase {
             .await?;
         }
 
-        if !title_ids.is_empty() {
-            self.services
-                .events
-                .domain_events
-                .delete_for_title_ids(&title_ids)
-                .await?;
-            self.services
-                .workflow
-                .housekeeping
-                .delete_history_events_for_title_ids(&title_ids)
-                .await?;
-            self.services
-                .workflow
-                .housekeeping
-                .delete_download_import_artifacts_for_title_ids(&title_ids)
-                .await?;
-            self.services
-                .workflow
-                .housekeeping
-                .delete_release_attempts_for_title_ids(&title_ids)
-                .await?;
-        }
+        self.delete_title_history_records(&title_ids).await?;
 
         for title in titles {
-            self.delete_title_row(title, actor.clone(), true, Vec::new())
+            self.delete_title_row(title, actor.clone(), true, Vec::new(), false)
                 .await?;
             self.release_lifecycle_claims_for_deleted_title(&title.id)
                 .await;
         }
 
         Ok(titles.len())
+    }
+
+    /// The deleted titles' domain events (all but their title-deleted
+    /// events), history events, import artifacts and release attempts.
+    pub(crate) async fn delete_title_history_records(&self, title_ids: &[String]) -> AppResult<()> {
+        if title_ids.is_empty() {
+            return Ok(());
+        }
+        self.services
+            .events
+            .domain_events
+            .delete_for_title_ids(title_ids)
+            .await?;
+        let housekeeping = &self.services.workflow.housekeeping;
+        housekeeping
+            .delete_history_events_for_title_ids(title_ids)
+            .await?;
+        housekeeping
+            .delete_download_import_artifacts_for_title_ids(title_ids)
+            .await?;
+        housekeeping
+            .delete_release_attempts_for_title_ids(title_ids)
+            .await?;
+        Ok(())
+    }
+
+    /// The titles of a library deletion job, in chunks of
+    /// [`crate::catalog::workflow::LIBRARY_DELETE_CHUNK`], reporting after
+    /// each chunk. Each chunk is
+    /// deleted completely before the next starts, so a job stopped partway
+    /// leaves only whole titles behind.
+    async fn delete_library_titles_in_chunks(
+        &self,
+        titles: &[scryer_domain::Title],
+        actor: DomainEventActor,
+        tracker: &mut LibraryDeletionTracker,
+    ) -> AppResult<()> {
+        tracker.total = titles.len();
+        let mut processed = 0;
+        for chunk in titles.chunks(crate::catalog::workflow::LIBRARY_DELETE_CHUNK) {
+            self.delete_library_title_chunk(chunk, actor.clone())
+                .await?;
+            processed += chunk.len();
+            self.report_library_deletion_progress(
+                tracker,
+                LIBRARY_DELETION_PHASE_DELETING,
+                processed,
+            )
+            .await;
+        }
+        Ok(())
     }
 
     /// Take the titles under the removed roots out of the catalog, leaving

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 mod scan_cache;
-pub(crate) use scan_cache::{ScanOwnershipContext, with_scan_ownership};
+pub(crate) use scan_cache::{ScanClaimReservation, ScanOwnershipContext, with_scan_ownership};
 
 use scryer_domain::Title;
 
@@ -615,23 +615,32 @@ impl FolderOverlapKeys {
         owned_path: &str,
         verified_directory: &mut impl FnMut(&Path) -> bool,
     ) -> AppResult<bool> {
-        let Some(owner) = overlap_prefilter_key(owned_path) else {
+        let prepared = OwnerOverlapPrefilter::prepare(owned_path, &self.roots);
+        self.needs_exact_comparison_prepared(&prepared, owned_path, verified_directory)
+    }
+
+    /// The library root keys these keys were built with, which an
+    /// [`OwnerOverlapPrefilter`] must have been prepared with.
+    pub(crate) fn root_keys(&self) -> &[(String, Option<String>)] {
+        &self.roots
+    }
+
+    /// [`Self::needs_exact_comparison_with_evidence`] for an owner whose
+    /// candidate-independent part was prepared with [`Self::root_keys`].
+    pub(crate) fn needs_exact_comparison_prepared(
+        &mut self,
+        prepared: &OwnerOverlapPrefilter,
+        owned_path: &str,
+        verified_directory: &mut impl FnMut(&Path) -> bool,
+    ) -> AppResult<bool> {
+        let OwnerOverlapPrefilter::Keys {
+            keys: owner_keys,
+            path,
+            chain,
+        } = prepared
+        else {
             return Ok(true);
         };
-        let mut owner_keys = vec![owner.clone()];
-        for (root, resolved) in &self.roots {
-            if overlap_keys_related(&owner, root) && owner.len() >= root.len() {
-                let Some(resolved) = resolved else {
-                    return Ok(true);
-                };
-                let rest = owner[root.len()..].trim_start_matches('/');
-                owner_keys.push(if rest.is_empty() {
-                    resolved.clone()
-                } else {
-                    format!("{}/{rest}", resolved.trim_end_matches('/'))
-                });
-            }
-        }
         if owner_keys.iter().any(|owner| {
             self.candidate
                 .iter()
@@ -639,20 +648,7 @@ impl FolderOverlapKeys {
         }) {
             return Ok(true);
         }
-        let path = stored_path_to_path_buf(owned_path);
-        if !path.is_absolute() {
-            return Ok(true);
-        }
-        for ancestor in path.ancestors() {
-            let is_resolved_root = overlap_prefilter_key(&path_to_stored_string(ancestor))
-                .is_some_and(|key| {
-                    self.roots
-                        .iter()
-                        .any(|(root, resolved)| resolved.is_some() && *root == key)
-                });
-            if is_resolved_root {
-                break;
-            }
+        for ancestor in path.ancestors().take(*chain) {
             let is_link = match self.links.get(ancestor) {
                 Some(is_link) => *is_link,
                 None => {
@@ -680,6 +676,85 @@ impl FolderOverlapKeys {
         }
         Ok(false)
     }
+}
+
+/// The part of [`FolderOverlapKeys::needs_exact_comparison`] that depends only
+/// on one owner's folder and the library root keys, computed once and reused
+/// for every candidate compared with the same roots. Pure: preparing reads no
+/// file and no catalog row.
+pub(crate) enum OwnerOverlapPrefilter {
+    /// The owner needs the exact comparison whatever the candidate: its folder
+    /// has no key, lies under a root that could not be resolved, or is
+    /// relative.
+    Exact,
+    Keys {
+        /// The owner's key and its key under each resolved root it lies in.
+        keys: Vec<String>,
+        path: std::path::PathBuf,
+        /// How many of `path`'s ancestors, from `path` itself, lie below the
+        /// nearest resolved root and are walked for links.
+        chain: usize,
+    },
+}
+
+impl OwnerOverlapPrefilter {
+    pub(crate) fn prepare(owned_path: &str, roots: &[(String, Option<String>)]) -> Self {
+        let Some(owner) = overlap_prefilter_key(owned_path) else {
+            return Self::Exact;
+        };
+        let mut keys = vec![owner.clone()];
+        for (root, resolved) in roots {
+            if overlap_keys_related(&owner, root) && owner.len() >= root.len() {
+                let Some(resolved) = resolved else {
+                    return Self::Exact;
+                };
+                let rest = owner[root.len()..].trim_start_matches('/');
+                keys.push(if rest.is_empty() {
+                    resolved.clone()
+                } else {
+                    format!("{}/{rest}", resolved.trim_end_matches('/'))
+                });
+            }
+        }
+        let path = stored_path_to_path_buf(owned_path);
+        if !path.is_absolute() {
+            return Self::Exact;
+        }
+        let chain = path
+            .ancestors()
+            .take_while(|ancestor| {
+                !overlap_prefilter_key(&path_to_stored_string(ancestor)).is_some_and(|key| {
+                    roots
+                        .iter()
+                        .any(|(root, resolved)| resolved.is_some() && *root == key)
+                })
+            })
+            .count();
+        Self::Keys { keys, path, chain }
+    }
+}
+
+/// [`ensure_folder_move_available_to_title`] ahead of recording the folder
+/// for `title`. During a scan an accepted folder is also reserved for `title`
+/// until the returned reservation settles, so a concurrent claim of a folder
+/// that overlaps it is refused as if it were already recorded. Outside a scan
+/// this is exactly [`ensure_folder_move_available_to_title`].
+async fn ensure_folder_claim_available_to_title(
+    app: &AppUseCase,
+    title: &Title,
+    folder_path: &Path,
+) -> AppResult<Option<ScanClaimReservation>> {
+    if !folder_path.as_os_str().is_empty()
+        && let Some(context) = ScanOwnershipContext::current()
+    {
+        return context
+            .check_and_reserve(app, title, path_to_stored_string(folder_path))
+            .await
+            .map(Some);
+    }
+    ensure_folder_move_available_to_title(app, title, folder_path)
+        .await
+        .map(|()| None)
 }
 
 pub(crate) async fn ensure_folder_move_available_to_title(
@@ -943,16 +1018,15 @@ pub(crate) async fn claim_title_folder_for_delete(
         })
         .await?
     };
-    ensure_unowned_folder_claimable(app, title, folder_path, TitleFolderClaimLayout::Configured)
-        .await?;
+    let mut reservation = ensure_unowned_folder_claimable(
+        app,
+        title,
+        folder_path,
+        TitleFolderClaimLayout::Configured,
+    )
+    .await?;
     let write = crate::TitleFolderWrite::assign(&title.id, &stored).expecting(None);
-    match app
-        .services
-        .catalog
-        .titles
-        .assign_title_folders(&[write])
-        .await
-    {
+    match assign_claimed_title_folder(app, write, &mut reservation).await {
         Ok(()) => {}
         Err(error) if title_folder_write_lost(&error) => {
             return Err(AppError::validation_refused(
@@ -962,7 +1036,8 @@ pub(crate) async fn claim_title_folder_for_delete(
         }
         Err(error) => return Err(error),
     }
-    title.folder_path = Some(recorded_folder_after_claim(app, &title.id, stored).await?);
+    title.folder_path =
+        Some(recorded_folder_after_reserved_claim(app, &title.id, stored, reservation).await?);
     Ok(())
 }
 
@@ -1011,8 +1086,10 @@ pub(crate) async fn ensure_title_folder_claimable(
     folder_path: &Path,
 ) -> AppResult<()> {
     ensure_folder_available_to_title(app, title, folder_path).await?;
+    // Nothing is recorded here, so nothing stays reserved.
     ensure_unowned_folder_claimable(app, title, folder_path, TitleFolderClaimLayout::Configured)
         .await
+        .map(drop)
 }
 
 async fn claim_title_folder_with_layout(
@@ -1029,21 +1106,21 @@ async fn claim_title_folder_with_layout(
     }
 
     let stage = std::time::Instant::now();
-    ensure_unowned_folder_claimable(app, title, folder_path, layout).await?;
+    let mut reservation = ensure_unowned_folder_claimable(app, title, folder_path, layout).await?;
     let claimable_ms = elapsed_ms(stage);
     let folder_path = path_to_stored_string(folder_path);
     let stage = std::time::Instant::now();
-    app.services
-        .catalog
-        .titles
-        .assign_title_folders(&[
-            crate::TitleFolderWrite::assign(&title.id, &folder_path).expecting(None)
-        ])
-        .await?;
+    assign_claimed_title_folder(
+        app,
+        crate::TitleFolderWrite::assign(&title.id, &folder_path).expecting(None),
+        &mut reservation,
+    )
+    .await?;
     let write_ms = elapsed_ms(stage);
     let folder = folder_path.clone();
     let stage = std::time::Instant::now();
-    title.folder_path = Some(recorded_folder_after_claim(app, &title.id, folder_path).await?);
+    title.folder_path =
+        Some(recorded_folder_after_reserved_claim(app, &title.id, folder_path, reservation).await?);
     let reread_ms = elapsed_ms(stage);
     tracing::debug!(
         folder = %folder,
@@ -1069,15 +1146,49 @@ async fn recorded_folder_after_claim(
     title_id: &str,
     claimed: String,
 ) -> AppResult<String> {
-    Ok(app
+    recorded_folder_after_reserved_claim(app, title_id, claimed, None).await
+}
+
+/// [`recorded_folder_after_claim`] for a claim that may hold a scan
+/// reservation. The reservation settles with the folder the catalog now
+/// records for the title, read once by the same lookup.
+async fn recorded_folder_after_reserved_claim(
+    app: &AppUseCase,
+    title_id: &str,
+    claimed: String,
+    reservation: Option<ScanClaimReservation>,
+) -> AppResult<String> {
+    let recorded = app
         .services
         .catalog
         .titles
         .get_by_id(title_id)
         .await?
-        .and_then(|title| title.folder_path)
+        .and_then(|title| title.folder_path);
+    if let Some(reservation) = reservation {
+        reservation.recorded(recorded.clone());
+    }
+    Ok(recorded
         .filter(|recorded| crate::title_folder_keys::title_folder_key(recorded).is_some())
         .unwrap_or(claimed))
+}
+
+/// Records a claimed folder. A claim that holds a scan reservation also
+/// learns which counter advance its own write produced, so the scan knows
+/// that advance changed nothing it does not already hold.
+async fn assign_claimed_title_folder(
+    app: &AppUseCase,
+    write: crate::TitleFolderWrite,
+    reservation: &mut Option<ScanClaimReservation>,
+) -> AppResult<()> {
+    let titles = &app.services.catalog.titles;
+    let Some(reservation) = reservation.as_mut() else {
+        return titles.assign_title_folders(&[write]).await;
+    };
+    reservation.begin_write();
+    let (result, generation) = titles.assign_title_folders_with_generation(&[write]).await;
+    reservation.wrote(generation);
+    result
 }
 
 async fn ensure_unowned_folder_claimable(
@@ -1085,9 +1196,9 @@ async fn ensure_unowned_folder_claimable(
     title: &Title,
     folder_path: &Path,
     layout: TitleFolderClaimLayout<'_>,
-) -> AppResult<()> {
+) -> AppResult<Option<ScanClaimReservation>> {
     let started = std::time::Instant::now();
-    ensure_folder_move_available_to_title(app, title, folder_path).await?;
+    let reservation = ensure_folder_claim_available_to_title(app, title, folder_path).await?;
     let ownership_ms = elapsed_ms(started);
     let stage = std::time::Instant::now();
     let boundary_verified = match &layout {
@@ -1185,7 +1296,7 @@ async fn ensure_unowned_folder_claimable(
         total_ms = elapsed_ms(started),
         "title folder claimable stage timing"
     );
-    Ok(())
+    Ok(reservation)
 }
 
 pub(crate) async fn unlink_title_media_in_folder(

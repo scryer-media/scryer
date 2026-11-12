@@ -126,6 +126,20 @@ impl SubtitleDownloadRepository for TrackedSubtitleRepo {
     ) -> AppResult<()> {
         Ok(())
     }
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        _media_file_ids: &[String],
+    ) -> AppResult<Vec<crate::subtitles::SubtitleSearchBackoff>> {
+        Ok(Vec::new())
+    }
+    async fn apply_search_backoffs(
+        &self,
+        _media_file_id: &str,
+        _upserts: &[crate::subtitles::SubtitleSearchBackoff],
+        _cleared: &[crate::subtitles::SubtitleSearchBackoffKey],
+    ) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 fn capacity(available_bytes: u64) -> crate::helpers::FilesystemSpace {

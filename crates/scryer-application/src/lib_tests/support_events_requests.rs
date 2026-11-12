@@ -16,9 +16,42 @@ pub(crate) struct MockDomainEventRepo {
     pub(super) list_filters: Arc<Mutex<Vec<DomainEventFilter>>>,
     /// Every subscriber offset write, in order.
     pub(crate) subscriber_offset_writes: std::sync::Mutex<Vec<(String, i64)>>,
+    /// One per append transaction: `append` and `append_once` count one, and
+    /// `append_many` counts one for the whole batch.
+    pub(crate) append_commits: AtomicUsize,
 }
 
 impl MockDomainEventRepo {
+    async fn store_event(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        if self.fail_append.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic event append failure".into(),
+            ));
+        }
+        let mut events = self.events.lock().await;
+        let sequence = events
+            .last()
+            .map(|existing| existing.sequence + 1)
+            .unwrap_or(1);
+        let stored = DomainEvent {
+            sequence,
+            event_id: event.event_id,
+            occurred_at: event.occurred_at,
+            actor_kind: event.actor_kind,
+            actor_user_id: event.actor_user_id,
+            actor_display_name: event.actor_display_name,
+            title_id: event.title_id,
+            facet: event.facet,
+            correlation_id: event.correlation_id,
+            causation_id: event.causation_id,
+            schema_version: event.schema_version,
+            stream: event.stream,
+            payload: event.payload,
+        };
+        events.push(stored.clone());
+        Ok(stored)
+    }
+
     pub(super) async fn set_delete_operation_log(&self, operation_log: Arc<Mutex<Vec<String>>>) {
         *self.delete_operation_log.lock().await = Some(operation_log);
     }
@@ -237,33 +270,8 @@ impl DomainEventRepository for MockDomainEventRepo {
     }
 
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
-        if self.fail_append.load(Ordering::SeqCst) {
-            return Err(AppError::Repository(
-                "synthetic event append failure".into(),
-            ));
-        }
-        let mut events = self.events.lock().await;
-        let sequence = events
-            .last()
-            .map(|existing| existing.sequence + 1)
-            .unwrap_or(1);
-        let stored = DomainEvent {
-            sequence,
-            event_id: event.event_id,
-            occurred_at: event.occurred_at,
-            actor_kind: event.actor_kind,
-            actor_user_id: event.actor_user_id,
-            actor_display_name: event.actor_display_name,
-            title_id: event.title_id,
-            facet: event.facet,
-            correlation_id: event.correlation_id,
-            causation_id: event.causation_id,
-            schema_version: event.schema_version,
-            stream: event.stream,
-            payload: event.payload,
-        };
-        events.push(stored.clone());
-        Ok(stored)
+        self.append_commits.fetch_add(1, Ordering::SeqCst);
+        self.store_event(event).await
     }
 
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>> {
@@ -272,9 +280,10 @@ impl DomainEventRepository for MockDomainEventRepo {
                 "synthetic event append failure".into(),
             ));
         }
+        self.append_commits.fetch_add(1, Ordering::SeqCst);
         let mut stored = Vec::with_capacity(events.len());
         for event in events {
-            stored.push(self.append(event).await?);
+            stored.push(self.store_event(event).await?);
         }
         Ok(stored)
     }

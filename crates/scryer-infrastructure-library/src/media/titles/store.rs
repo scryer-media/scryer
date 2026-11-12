@@ -142,6 +142,101 @@ const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
 const STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT: &str = "/.scryer-upgrade-replacement-";
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
+/// Advances once after every transaction that wrote a title's folder, gave a
+/// new title a folder, or deleted a title. One counter for the process, shared
+/// by every store over the catalog: an advance caused by another datastore
+/// only makes a reader read again.
+static TITLE_FOLDER_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Marked scopes whose counter advance has not happened yet. A transaction
+/// can commit before its scope ends, so while one is open the counter alone
+/// cannot say the catalog is unchanged.
+static TITLE_FOLDER_WRITES_IN_FLIGHT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn advance_title_folder_writes() -> u64 {
+    TITLE_FOLDER_WRITES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
+/// The counter, or `None` while a marked scope is open. Every write that
+/// committed before this call has either advanced the value returned or is
+/// still in flight: a scope is counted in flight from its first mark, which
+/// precedes its statements, until after its advance.
+pub(crate) fn title_folder_write_generation() -> Option<u64> {
+    if TITLE_FOLDER_WRITES_IN_FLIGHT.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        return None;
+    }
+    Some(TITLE_FOLDER_WRITES.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+/// Brackets one transaction that may write a title's folder or the set of
+/// titles. Opened before the transaction and ended after it, so the counter
+/// advances only once the transaction is over, committed or not. Dropping it
+/// unended advances the counter too, so an early return or a cancelled call
+/// never skips the advance.
+pub(crate) struct TitleFolderWriteScope {
+    marked: Arc<std::sync::atomic::AtomicBool>,
+    ended: bool,
+}
+
+/// What a statement sequence that writes folders or titles requires, so it
+/// can only run inside a [`TitleFolderWriteScope`]. Marking it makes the
+/// scope advance the counter.
+#[derive(Clone)]
+pub(crate) struct TitleFolderWriteProof(Arc<std::sync::atomic::AtomicBool>);
+
+impl TitleFolderWriteProof {
+    pub(crate) fn mark(&self) {
+        if !self.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            TITLE_FOLDER_WRITES_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+impl TitleFolderWriteScope {
+    /// A scope that advances the counter only if a write marks it.
+    pub(crate) fn open() -> Self {
+        Self {
+            marked: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ended: false,
+        }
+    }
+
+    /// A scope that always advances the counter.
+    pub(crate) fn marked() -> Self {
+        let scope = Self::open();
+        scope.proof().mark();
+        scope
+    }
+
+    pub(crate) fn proof(&self) -> TitleFolderWriteProof {
+        TitleFolderWriteProof(self.marked.clone())
+    }
+
+    /// End the scope after its transaction: the value its own advance
+    /// produced, or `None` when nothing marked it.
+    pub(crate) fn end(mut self) -> Option<u64> {
+        self.finish()
+    }
+
+    fn finish(&mut self) -> Option<u64> {
+        if std::mem::replace(&mut self.ended, true)
+            || !self.marked.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return None;
+        }
+        let generation = advance_title_folder_writes();
+        TITLE_FOLDER_WRITES_IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        Some(generation)
+    }
+}
+
+impl Drop for TitleFolderWriteScope {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 #[derive(Clone, Copy)]
 enum TitleCatalogSqlDialect {
     Sqlite,
@@ -656,6 +751,50 @@ fn title_name_candidate_from_row(
         match_year: row.opt_i32("match_year")?,
         language_tag: row.opt_text("language_tag")?,
     })
+}
+
+impl TitleStore {
+    async fn delete_title_row(
+        &self,
+        id: &str,
+        recycle_purge_recorded_at: Option<DateTime<Utc>>,
+    ) -> AppResult<()> {
+        let cache_key = id.to_string();
+        let id = id.to_string();
+        let scope = TitleFolderWriteScope::marked();
+        let result = SqlRuntime::run_in_transaction(&self.datastore, "delete_title", move |tx| {
+            let id = id.clone();
+            Box::pin(async move {
+                if let Some(recorded_at) = recycle_purge_recorded_at {
+                    record_title_recycle_purges_tx(tx, std::slice::from_ref(&id), recorded_at)
+                        .await?;
+                }
+                delete_title_search_projection_sql_tx(tx, &id).await?;
+                delete_indexer_search_learning_for_title_tx(tx, &id).await?;
+                // `monitor_selections` is keyed by (owner_kind, owner_id) with
+                // no foreign key, so the cascade has to be explicit.
+                replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &id, None).await?;
+                let rows = SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM titles WHERE id = {}",
+                    &[SqlArg::Text(id.clone())],
+                )
+                .await?;
+                if rows == 0 {
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::TITLE_NOT_FOUND,
+                        format!("title {id}"),
+                    ));
+                }
+                Ok(())
+            })
+        })
+        .await;
+        drop(scope);
+        // `title_anime_numbering_bridges` cascades with the title row.
+        self.invalidate_anime_numbering_bridge(&cache_key);
+        result
+    }
 }
 
 #[async_trait]
@@ -2602,19 +2741,23 @@ impl TitleRepository for TitleStore {
         let external_ids = normalized_external_ids(&title.external_ids);
         let library_id = title.library_id.clone();
         let fallback_selection = selection.clone();
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let fallback_proof = proof.clone();
         let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "create_title_preserving_existing",
             move |tx| {
                 let title = title.clone();
                 let selection = selection.clone();
+                let proof = proof.clone();
                 Box::pin(async move {
-                    create_or_get_title_preserving_options_tx(tx, &title, &selection).await
+                    create_or_get_title_preserving_options_tx(tx, &proof, &title, &selection).await
                 })
             },
         )
         .await;
-        match result {
+        let result = match result {
             Err(error) if is_title_external_id_conflict_error(&error) => {
                 match self
                     .find_existing_title_after_unique_conflict(&library_id, &external_ids)
@@ -2627,9 +2770,10 @@ impl TitleRepository for TitleStore {
                             move |tx| {
                                 let title = title.clone();
                                 let selection = fallback_selection.clone();
+                                let proof = fallback_proof.clone();
                                 Box::pin(async move {
                                     create_or_get_title_preserving_options_tx(
-                                        tx, &title, &selection,
+                                        tx, &proof, &title, &selection,
                                     )
                                     .await
                                 })
@@ -2641,7 +2785,9 @@ impl TitleRepository for TitleStore {
                 }
             }
             result => result,
-        }
+        };
+        drop(scope);
+        result
     }
 
     async fn create_or_get_existing(&self, title: Title) -> AppResult<CreateTitleOutcome> {
@@ -2658,16 +2804,22 @@ impl TitleRepository for TitleStore {
         let library_id = title.library_id.clone();
         let fallback_options_patch = options_patch.clone();
         let fallback_root_folder_id = title.root_folder_id.clone();
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
         let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "create_or_get_existing_title",
             move |tx| {
                 let title = title.clone();
                 let options_patch = options_patch.clone();
-                Box::pin(async move { create_or_get_title_tx(tx, &title, &options_patch).await })
+                let proof = proof.clone();
+                Box::pin(
+                    async move { create_or_get_title_tx(tx, &proof, &title, &options_patch).await },
+                )
             },
         )
         .await;
+        drop(scope);
 
         match result {
             Ok(outcome) => Ok(outcome),
@@ -2699,12 +2851,15 @@ impl TitleRepository for TitleStore {
         let external_ids = normalized_external_ids(&title.external_ids);
         let library_id = title.library_id.clone();
         let pending_import_id = pending_import_id.to_string();
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
         let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "create_or_get_existing_title_and_bind_pending_import",
             move |tx| {
                 let title = title.clone();
                 let pending_import_id = pending_import_id.clone();
+                let proof = proof.clone();
                 Box::pin(async move {
                     if let Some(existing) = find_existing_title_for_create_tx(tx, &title).await? {
                         return Ok(CreateTitleOutcome {
@@ -2713,7 +2868,7 @@ impl TitleRepository for TitleStore {
                         });
                     }
 
-                    create_title_tx(tx, &title).await?;
+                    create_title_tx(tx, &proof, &title).await?;
                     let title = load_title_tx_or_not_found(tx, &title.id, true).await?;
                     resolve_pending_import_for_created_title_tx(tx, &pending_import_id, &title)
                         .await?;
@@ -2725,6 +2880,7 @@ impl TitleRepository for TitleStore {
             },
         )
         .await;
+        drop(scope);
 
         match result {
             Ok(outcome) => Ok(outcome),
@@ -2745,15 +2901,20 @@ impl TitleRepository for TitleStore {
     }
 
     async fn create(&self, title: Title) -> AppResult<Title> {
-        SqlRuntime::run_in_transaction(&self.datastore, "create_title", move |tx| {
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let result = SqlRuntime::run_in_transaction(&self.datastore, "create_title", move |tx| {
             let title = title.clone();
+            let proof = proof.clone();
             Box::pin(async move {
-                create_title_tx(tx, &title).await?;
+                create_title_tx(tx, &proof, &title).await?;
                 let title = load_title_tx_or_not_found(tx, &title.id, true).await?;
                 Ok(title)
             })
         })
-        .await
+        .await;
+        drop(scope);
+        result
     }
 
     async fn list_titles_due_for_hydration(
@@ -3303,43 +3464,115 @@ impl TitleRepository for TitleStore {
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
-        let cache_key = id.to_string();
-        let id = id.to_string();
-        let result = SqlRuntime::run_in_transaction(&self.datastore, "delete_title", move |tx| {
-            let id = id.clone();
+        self.delete_title_row(id, None).await
+    }
+
+    async fn delete_recording_recycle_purge(
+        &self,
+        id: &str,
+        recorded_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        self.delete_title_row(id, Some(recorded_at)).await
+    }
+
+    async fn list_recycle_purges(
+        &self,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_application::TitleRecyclePurge>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT title_id, library_id, recorded_at FROM title_recycle_purges
+             ORDER BY recorded_at, title_id LIMIT {}",
+            &[SqlArg::I64(limit.min(i64::MAX as usize) as i64)],
+        )
+        .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(scryer_application::TitleRecyclePurge {
+                    title_id: row.text("title_id")?,
+                    library_id: row.text("library_id")?,
+                    recorded_at: row.timestamp("recorded_at")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn drop_recycle_purges_recorded_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<u32> {
+        // A read first, so a pass with nothing that old writes nothing.
+        let expired = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT title_id FROM title_recycle_purges WHERE recorded_at < {} LIMIT 1",
+            &[SqlArg::Timestamp(cutoff)],
+        )
+        .await?;
+        if expired.is_none() {
+            return Ok(0);
+        }
+        let dropped = SqlRuntime::execute_write(
+            &self.datastore,
+            "drop_expired_recycle_purges",
+            "DELETE FROM title_recycle_purges WHERE title_id IN (
+               SELECT title_id FROM title_recycle_purges
+                WHERE recorded_at < {}
+                ORDER BY recorded_at, title_id
+                LIMIT {}
+             )",
+            vec![
+                SqlArg::Timestamp(cutoff),
+                SqlArg::I64(limit.min(i64::MAX as usize) as i64),
+            ],
+        )
+        .await?;
+        Ok(u32::try_from(dropped).unwrap_or(u32::MAX))
+    }
+
+    async fn clear_recycle_purges(&self, title_ids: &[String]) -> AppResult<()> {
+        if title_ids.is_empty() {
+            return Ok(());
+        }
+        let title_ids = title_ids.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "clear_recycle_purges", move |tx| {
+            let title_ids = title_ids.clone();
             Box::pin(async move {
-                delete_title_search_projection_sql_tx(tx, &id).await?;
-                delete_indexer_search_learning_for_title_tx(tx, &id).await?;
-                // `monitor_selections` is keyed by (owner_kind, owner_id) with
-                // no foreign key, so the cascade has to be explicit.
-                replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &id, None).await?;
-                let rows = SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "DELETE FROM titles WHERE id = {}",
-                    &[SqlArg::Text(id.clone())],
-                )
-                .await?;
-                if rows == 0 {
-                    return Err(AppError::not_found_reason(
-                        crate::error_reasons::TITLE_NOT_FOUND,
-                        format!("title {id}"),
-                    ));
+                let (ids, per_statement) = id_list_statements(
+                    &title_ids,
+                    1,
+                    0,
+                    max_binds(&SqlExec::Tx(tx)),
+                    TITLE_ID_LIST_BIND_CHUNK,
+                );
+                for chunk in ids.chunks(per_statement) {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        &format!(
+                            "DELETE FROM title_recycle_purges WHERE title_id IN ({})",
+                            sql_placeholders(chunk.len())
+                        ),
+                        &chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>(),
+                    )
+                    .await?;
                 }
                 Ok(())
             })
         })
-        .await;
-        // `title_anime_numbering_bridges` cascades with the title row.
-        self.invalidate_anime_numbering_bridge(&cache_key);
-        result
+        .await
     }
 
-    async fn delete_titles_with_records(&self, ids: &[String]) -> AppResult<bool> {
+    async fn delete_titles_with_records(
+        &self,
+        ids: &[String],
+        recycle_purge_recorded_at: Option<DateTime<Utc>>,
+    ) -> AppResult<bool> {
         if ids.is_empty() {
             return Ok(true);
         }
         let ids = ids.to_vec();
         let cache_keys = ids.clone();
+        let scope = TitleFolderWriteScope::marked();
         let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "delete_titles_with_records",
@@ -3378,6 +3611,9 @@ impl TitleRepository for TitleStore {
                     ];
                     for chunk in ids.chunks(per_statement) {
                         let placeholders = sql_placeholders(chunk.len());
+                        if let Some(recorded_at) = recycle_purge_recorded_at {
+                            record_title_recycle_purges_tx(tx, chunk, recorded_at).await?;
+                        }
                         for statement in BY_TITLE {
                             SqlRuntime::execute(
                                 SqlExec::Tx(tx),
@@ -3418,6 +3654,7 @@ impl TitleRepository for TitleStore {
             },
         )
         .await;
+        drop(scope);
         // `title_anime_numbering_bridges` cascades with the title rows.
         for key in &cache_keys {
             self.invalidate_anime_numbering_bridge(key);
@@ -3426,15 +3663,46 @@ impl TitleRepository for TitleStore {
     }
 
     async fn assign_title_folders(&self, writes: &[TitleFolderWrite]) -> AppResult<()> {
+        self.assign_title_folders_with_generation(writes).await.0
+    }
+
+    async fn assign_title_folders_with_generation(
+        &self,
+        writes: &[TitleFolderWrite],
+    ) -> (AppResult<()>, Option<u64>) {
         if writes.is_empty() {
-            return Ok(());
+            return (Ok(()), None);
         }
         let writes = writes.to_vec();
-        SqlRuntime::run_in_transaction(&self.datastore, "assign_title_folders", move |tx| {
-            let writes = writes.clone();
-            Box::pin(async move { assign_title_folders_tx(tx, &writes).await })
-        })
-        .await
+        let scope = TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let result =
+            SqlRuntime::run_in_transaction(&self.datastore, "assign_title_folders", move |tx| {
+                let writes = writes.clone();
+                let proof = proof.clone();
+                Box::pin(async move { assign_title_folders_tx(tx, &proof, &writes).await })
+            })
+            .await;
+        (result, scope.end())
+    }
+
+    fn title_folder_write_generation(&self) -> Option<u64> {
+        title_folder_write_generation()
+    }
+
+    async fn list_title_folder_owners(&self) -> AppResult<Vec<(String, String)>> {
+        // The order and the filter of `list_delete_preview_info` and its
+        // callers' empty-folder filter, with only the two columns used.
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, folder_path FROM titles \
+             WHERE folder_path IS NOT NULL AND folder_path <> '' ORDER BY id",
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.text("id")?, row.text("folder_path")?)))
+        .collect()
     }
 
     async fn check_title_folder_writes(&self, writes: &[TitleFolderWrite]) -> AppResult<()> {
@@ -6388,6 +6656,7 @@ async fn find_existing_title_for_create_tx(
 
 pub(crate) async fn create_or_get_title_preserving_options_tx(
     tx: &mut SqlTx<'_>,
+    proof: &TitleFolderWriteProof,
     title: &Title,
     selection: &MonitorSelection,
 ) -> AppResult<CreateTitleOutcome> {
@@ -6464,7 +6733,7 @@ pub(crate) async fn create_or_get_title_preserving_options_tx(
             reused_existing: true,
         });
     }
-    create_title_tx(tx, title).await?;
+    create_title_tx(tx, proof, title).await?;
     replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &title.id, Some(selection)).await?;
     Ok(CreateTitleOutcome {
         title: load_title_tx_or_not_found(tx, &title.id, true).await?,
@@ -6474,6 +6743,7 @@ pub(crate) async fn create_or_get_title_preserving_options_tx(
 
 pub(crate) async fn create_or_get_title_tx(
     tx: &mut SqlTx<'_>,
+    proof: &TitleFolderWriteProof,
     title: &Title,
     options_patch: &TitleOptionsPatch,
 ) -> AppResult<CreateTitleOutcome> {
@@ -6492,14 +6762,20 @@ pub(crate) async fn create_or_get_title_tx(
             reused_existing: true,
         });
     }
-    create_title_tx(tx, title).await?;
+    create_title_tx(tx, proof, title).await?;
     Ok(CreateTitleOutcome {
         title: load_title_tx_or_not_found(tx, &title.id, true).await?,
         reused_existing: false,
     })
 }
 
-async fn create_title_tx(tx: &mut SqlTx<'_>, title: &Title) -> AppResult<()> {
+/// A title created without a folder changes no title's folder, so only a
+/// title created with one marks `proof`.
+async fn create_title_tx(
+    tx: &mut SqlTx<'_>,
+    proof: &TitleFolderWriteProof,
+    title: &Title,
+) -> AppResult<()> {
     let library = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
         "SELECT id FROM libraries WHERE id = {} AND facet = {}",
@@ -6532,7 +6808,7 @@ async fn create_title_tx(tx: &mut SqlTx<'_>, title: &Title) -> AppResult<()> {
     let args = title_write_args(title, scheduled_hydration_attempt(title), 0);
     SqlRuntime::execute(SqlExec::Tx(tx), TITLE_INSERT_SQL, &args).await?;
     if let Some(folder) = folder {
-        assign_title_folders_tx(tx, &[TitleFolderWrite::assign(&title.id, folder)]).await?;
+        assign_title_folders_tx(tx, proof, &[TitleFolderWrite::assign(&title.id, folder)]).await?;
     }
     replace_title_search_projection_sql_tx(tx, title).await?;
     replace_title_external_ids_projection_sql_tx(tx, title).await?;
@@ -6581,11 +6857,13 @@ pub(crate) async fn lock_title_folder_writes_tx(
 /// halfway through.
 pub(crate) async fn assign_title_folders_tx(
     tx: &mut SqlTx<'_>,
+    proof: &TitleFolderWriteProof,
     writes: &[TitleFolderWrite],
 ) -> AppResult<()> {
     let Some(first) = writes.first() else {
         return Ok(());
     };
+    proof.mark();
     lock_title_folder_writes_tx(tx, &first.title_id).await?;
 
     let planned = read_title_folder_write_plan(&mut TitleFolderPlanSource::Tx(tx), writes).await?;
@@ -7265,6 +7543,33 @@ async fn delete_title_search_projection_sql_tx(
         .await?;
         Ok(())
     }
+}
+
+/// Record `title_ids` with their libraries as titles whose recycle-bin
+/// entries housekeeping removes for good. Read from the title rows, so it runs
+/// in the deleting transaction before they go: one statement for the ids.
+async fn record_title_recycle_purges_tx(
+    tx: &mut SqlTx<'_>,
+    title_ids: &[String],
+    recorded_at: DateTime<Utc>,
+) -> AppResult<()> {
+    if title_ids.is_empty() {
+        return Ok(());
+    }
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        &format!(
+            "INSERT INTO title_recycle_purges (title_id, library_id, recorded_at)
+             SELECT id, library_id, {{}} FROM titles WHERE id IN ({})
+             ON CONFLICT (title_id) DO NOTHING",
+            sql_placeholders(title_ids.len())
+        ),
+        &std::iter::once(SqlArg::Timestamp(recorded_at))
+            .chain(title_ids.iter().cloned().map(SqlArg::Text))
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+    Ok(())
 }
 
 async fn delete_indexer_search_learning_for_title_tx(

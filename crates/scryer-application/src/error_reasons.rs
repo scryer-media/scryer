@@ -163,6 +163,8 @@ pub mod library {
     pub const NAME_TAKEN: &str = "LIBRARY_NAME_TAKEN";
     /// Default libraries cannot be deleted.
     pub const DEFAULT_LIBRARIES_CANNOT_DELETED: &str = "LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED";
+    /// The library is already being deleted by a running job.
+    pub const DELETION_ALREADY_RUNNING: &str = "LIBRARY_DELETION_ALREADY_RUNNING";
     /// Library scan session was not found.
     pub const SCAN_SESSION_NOT_FOUND: &str = "LIBRARY_SCAN_SESSION_NOT_FOUND";
     /// Library scan session is not cancelable.
@@ -382,6 +384,7 @@ pub mod library {
         ROOT_ID_DUPLICATED,
         NAME_TAKEN,
         DEFAULT_LIBRARIES_CANNOT_DELETED,
+        DELETION_ALREADY_RUNNING,
         SCAN_SESSION_NOT_FOUND,
         SCAN_CANCEL_UNAVAILABLE,
         ROOTS_NOT_CONFIGURED,
@@ -5087,6 +5090,8 @@ pub mod jobs {
     pub const TITLE_DELETION_JOBS_INVALID: &str = "JOB_TITLE_DELETION_JOBS_INVALID";
     /// Title rename jobs must be started from the rename mutation.
     pub const TITLE_RENAME_JOBS_INVALID: &str = "JOB_TITLE_RENAME_JOBS_INVALID";
+    /// Library deletion jobs must be started from the library deletion mutation.
+    pub const LIBRARY_DELETION_JOBS_INVALID: &str = "JOB_LIBRARY_DELETION_JOBS_INVALID";
     /// Media file deletion jobs must be started from the media file deletion mutation.
     pub const MEDIA_FILE_DELETION_JOBS_INVALID: &str = "JOB_MEDIA_FILE_DELETION_JOBS_INVALID";
     /// Select files, seasons, or titles to refresh scores.
@@ -5167,6 +5172,7 @@ pub mod jobs {
         BACKGROUND_LIBRARY_REFRESH_TEMPORARILY_DISABLED,
         TITLE_DELETION_JOBS_INVALID,
         TITLE_RENAME_JOBS_INVALID,
+        LIBRARY_DELETION_JOBS_INVALID,
         MEDIA_FILE_DELETION_JOBS_INVALID,
         SELECT_FILES_SEASONS_TITLES_REFRESH_SCORES,
         RECYCLE_RESTORE_JOBS_INVALID,

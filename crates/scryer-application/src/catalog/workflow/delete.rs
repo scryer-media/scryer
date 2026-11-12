@@ -1,6 +1,9 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TitleLogicalDeleteOptions {
     pub(crate) purge_recycle_bin_entries: bool,
+    /// Record the title, in the transaction that deletes its row, as one
+    /// whose recycle-bin entries the next housekeeping pass removes for good.
+    pub(crate) record_recycle_purge: bool,
     pub(crate) explicit_download_retirement: bool,
     pub(crate) append_title_deleted_event: bool,
     /// Media file paths the title tracked before its files were deleted from
@@ -13,6 +16,10 @@ pub(crate) struct TitleLogicalDeleteOptions {
 /// together. A multiple of the progress checkpoint interval, so every full
 /// chunk ends on a checkpoint.
 const TITLE_DELETE_CHUNK: usize = 64;
+
+/// Titles a library deletion job deletes together, with one progress write
+/// after each chunk.
+pub(crate) const LIBRARY_DELETE_CHUNK: usize = TITLE_DELETE_CHUNK;
 
 /// Catalog-cleanup failures carry the deletion reason code.
 fn title_cleanup_error(error: AppError) -> AppError {
@@ -33,32 +40,12 @@ fn title_cleanup_error(error: AppError) -> AppError {
 /// Files one title's result into a deletion job's summary.
 fn record_title_deletion_result(
     title_id: String,
-    result: AppResult<crate::title_delete::RecyclePurgeOutcome>,
+    result: AppResult<()>,
     succeeded_title_ids: &mut Vec<String>,
     failures: &mut Vec<TitleDeletionFailure>,
-    recycle_incomplete: &mut Vec<TitleRecycleIncomplete>,
-    recycle_outcomes: &mut std::collections::BTreeMap<
-        String,
-        crate::title_delete::RecyclePurgeOutcome,
-    >,
 ) {
     match result {
-        Ok(outcome) => {
-            recycle_outcomes.insert(title_id.clone(), outcome.clone());
-            if outcome.incomplete() {
-                recycle_incomplete.push(TitleRecycleIncomplete {
-                    title_id: title_id.clone(),
-                    reason: if outcome.busy > 0 {
-                        deletion_reason::RECYCLE_ENTRY_BUSY
-                    } else {
-                        deletion_reason::RECYCLE_PURGE_INCOMPLETE
-                    },
-                    preserved_count: outcome.preserved + outcome.busy + outcome.failed,
-                    outcome,
-                });
-            }
-            succeeded_title_ids.push(title_id);
-        }
+        Ok(()) => succeeded_title_ids.push(title_id),
         Err(error) => failures.push(TitleDeletionFailure {
             title_id,
             reason: error.reason().map(str::to_owned),
@@ -180,24 +167,12 @@ struct TitleDeletionFailure {
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TitleRecycleIncomplete {
-    title_id: String,
-    reason: &'static str,
-    preserved_count: usize,
-    #[serde(flatten)]
-    outcome: crate::title_delete::RecyclePurgeOutcome,
-}
-
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
 struct TitleDeletionSummary {
     total: usize,
     succeeded: usize,
     failed: usize,
     succeeded_title_ids: Vec<String>,
     failures: Vec<TitleDeletionFailure>,
-    recycle_incomplete: Vec<TitleRecycleIncomplete>,
-    recycle_outcomes: std::collections::BTreeMap<String, crate::title_delete::RecyclePurgeOutcome>,
 }
 impl AppUseCase {
     pub(crate) async fn should_remove_completed_download(
@@ -243,22 +218,9 @@ impl AppUseCase {
         delete_files_on_disk: bool,
         delete_confirmation: Option<DeleteExecutionConfirmation>,
     ) -> AppResult<()> {
-        self.delete_title_with_outcome(actor, id, delete_files_on_disk, delete_confirmation)
-            .await
-            .map(|_| ())
-    }
-
-    /// Explicit deletion reports recycle cleanup independently of catalog success.
-    pub async fn delete_title_with_outcome(
-        &self,
-        actor: &User,
-        id: &str,
-        delete_files_on_disk: bool,
-        confirmation: Option<DeleteExecutionConfirmation>,
-    ) -> AppResult<crate::title_delete::RecyclePurgeOutcome> {
         let item = DeleteTitlesJobItem {
             title_id: id.to_owned(),
-            preview_fingerprint: confirmation
+            preview_fingerprint: delete_confirmation
                 .as_ref()
                 .map(|value| value.preview_fingerprint.clone()),
         };
@@ -266,10 +228,9 @@ impl AppUseCase {
             actor,
             &item,
             delete_files_on_disk,
-            confirmation
+            delete_confirmation
                 .as_ref()
                 .and_then(|value| value.typed_confirmation.as_deref()),
-            &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
         )
         .await
     }
@@ -332,6 +293,7 @@ impl AppUseCase {
             actor,
             TitleLogicalDeleteOptions {
                 purge_recycle_bin_entries: true,
+                record_recycle_purge: false,
                 explicit_download_retirement: false,
                 append_title_deleted_event: true,
                 deleted_paths,
@@ -554,9 +516,6 @@ impl AppUseCase {
         let total = request.items.len();
         let mut succeeded_title_ids = Vec::new();
         let mut failures = Vec::new();
-        let mut recycle_incomplete = Vec::new();
-        let mut recycle_outcomes = std::collections::BTreeMap::new();
-        let mut recycle_index = crate::recycle_bin::TitleRecycleEntryIndex::default();
 
         if !request.delete_files_on_disk {
             for chunk in request.items.chunks(TITLE_DELETE_CHUNK) {
@@ -574,17 +533,13 @@ impl AppUseCase {
                         },
                     )
                     .await;
-                let results = self
-                    .delete_title_job_chunk(&actor, chunk, &mut recycle_index)
-                    .await;
+                let results = self.delete_title_job_chunk(&actor, chunk).await;
                 for (item, result) in chunk.iter().zip(results) {
                     record_title_deletion_result(
                         item.title_id.clone(),
                         result,
                         &mut succeeded_title_ids,
                         &mut failures,
-                        &mut recycle_incomplete,
-                        &mut recycle_outcomes,
                     );
                 }
                 let _ = self
@@ -633,7 +588,6 @@ impl AppUseCase {
                     &item,
                     request.delete_files_on_disk,
                     request.typed_confirmation.as_deref(),
-                    &mut recycle_index,
                 )
                 .await;
             record_title_deletion_result(
@@ -641,8 +595,6 @@ impl AppUseCase {
                 result,
                 &mut succeeded_title_ids,
                 &mut failures,
-                &mut recycle_incomplete,
-                &mut recycle_outcomes,
             );
 
             let _ = self
@@ -667,10 +619,8 @@ impl AppUseCase {
             failed: failures.len(),
             succeeded_title_ids,
             failures,
-            recycle_incomplete,
-            recycle_outcomes,
         };
-        let status = if summary.failed == 0 && summary.recycle_incomplete.is_empty() {
+        let status = if summary.failed == 0 {
             JobRunStatus::Completed
         } else if summary.succeeded == 0 {
             JobRunStatus::Failed
@@ -680,10 +630,8 @@ impl AppUseCase {
         let summary_text = match status {
             JobRunStatus::Completed => format!("Deleted {} title(s)", summary.succeeded),
             JobRunStatus::Warning => format!(
-                "Deleted {} title(s); {} failed; {} recycle purges incomplete",
-                summary.succeeded,
-                summary.failed,
-                summary.recycle_incomplete.len()
+                "Deleted {} title(s); {} failed",
+                summary.succeeded, summary.failed
             ),
             JobRunStatus::Failed => format!("Failed to delete {} title(s)", summary.failed),
             _ => "Title deletion finished".to_string(),
@@ -708,8 +656,7 @@ impl AppUseCase {
         item: &DeleteTitlesJobItem,
         delete_files_on_disk: bool,
         typed_confirmation: Option<&str>,
-        recycle_index: &mut crate::recycle_bin::TitleRecycleEntryIndex,
-    ) -> AppResult<crate::title_delete::RecyclePurgeOutcome> {
+    ) -> AppResult<()> {
         let delete_guard = self.acquire_title_delete_guard(&item.title_id).await?;
         let _location_guard = self
             .acquire_location_title_mutation(
@@ -764,30 +711,26 @@ impl AppUseCase {
             deleted_paths = paths_no_longer_on_disk(deleted_paths).await;
         }
 
-        let outcome = self
-            .purge_explicit_title_recycle_entries(
-                &title,
-                DomainEventActor::from(actor),
-                recycle_index,
-            )
-            .await;
+        // The title's recycle-bin entries are left to housekeeping, which
+        // removes them for good once this delete has recorded the title.
         self.delete_title_logical_cleanup(
             &title,
             actor,
             TitleLogicalDeleteOptions {
                 purge_recycle_bin_entries: false,
+                record_recycle_purge: true,
                 explicit_download_retirement: true,
                 append_title_deleted_event: true,
                 deleted_paths,
             },
         )
         .await
-        .map_err(title_cleanup_error)?;
-        Ok(outcome)
+        .map_err(title_cleanup_error)
     }
 
     /// One chunk of a deletion job that keeps files on disk: the same checks,
-    /// guards, recycle purge and catalog cleanup as
+    /// guards and catalog cleanup, recording each title for its recycle
+    /// purge, as
     /// [`Self::delete_title_job_item`] for each title, with the reads and
     /// writes shared across the chunk. Results are in item order.
     ///
@@ -800,8 +743,7 @@ impl AppUseCase {
         &self,
         actor: &User,
         items: &[DeleteTitlesJobItem],
-        recycle_index: &mut crate::recycle_bin::TitleRecycleEntryIndex,
-    ) -> Vec<AppResult<crate::title_delete::RecyclePurgeOutcome>> {
+    ) -> Vec<AppResult<()>> {
         let mut results = (0..items.len()).map(|_| None).collect::<Vec<_>>();
         let mut delete_guards = Vec::with_capacity(items.len());
         for (index, item) in items.iter().enumerate() {
@@ -918,83 +860,46 @@ impl AppUseCase {
             }
         }
 
-        let mut bins = std::collections::HashMap::new();
-        let mut outcomes = Vec::with_capacity(ready.len());
-        for (_, title) in &ready {
-            let key = (title.facet.clone(), title.library_id.clone());
-            if !bins.contains_key(&key) {
-                let configs = self.title_recycle_bin_configs(title).await;
-                bins.insert(key.clone(), configs);
-            }
-            outcomes.push(
-                self.purge_explicit_title_recycle_entries_in(
-                    title,
-                    DomainEventActor::from(actor),
-                    bins[&key].as_deref(),
-                    recycle_index,
-                )
-                .await,
-            );
-        }
-
         let ready_ids = ready
             .iter()
             .map(|(_, title)| title.id.clone())
-            .collect::<Vec<_>>();
-        // Every title after the chunk's first would, deleted at its own turn,
-        // have listed its bins after the titles before it were deleted.
-        let late = ready
-            .iter()
-            .skip(1)
-            .map(|(index, title)| {
-                (
-                    *index,
-                    title.id.clone(),
-                    (title.facet.clone(), title.library_id.clone()),
-                )
-            })
             .collect::<Vec<_>>();
         let with_downloads = self.titles_with_recorded_downloads(&ready_ids).await;
         // Titles are deleted in item order, so their events keep that order: a
         // run of titles without downloads is deleted together, and a title with
         // downloads is deleted on its own between runs.
-        let mut runs: Vec<(
-            bool,
-            Vec<(
-                usize,
-                scryer_domain::Title,
-                crate::title_delete::RecyclePurgeOutcome,
-            )>,
-        )> = Vec::new();
-        for ((index, title), outcome) in ready.into_iter().zip(outcomes) {
+        let mut runs: Vec<(bool, Vec<(usize, scryer_domain::Title)>)> = Vec::new();
+        for (index, title) in ready {
             let single = match &with_downloads {
                 Ok(with_downloads) => with_downloads.contains(&title.id),
                 Err(_) => true,
             };
             match runs.last_mut() {
-                Some((false, run)) if !single => run.push((index, title, outcome)),
-                _ => runs.push((single, vec![(index, title, outcome)])),
+                Some((false, run)) if !single => run.push((index, title)),
+                _ => runs.push((single, vec![(index, title)])),
             }
         }
         for (single, run) in runs {
             let together = !single
                 && matches!(
                     self.delete_titles_without_downloads(
-                        &run.iter().map(|(_, title, _)| title).collect::<Vec<_>>(),
+                        &run.iter().map(|(_, title)| title).collect::<Vec<_>>(),
                         DomainEventActor::from(actor),
+                        true,
                     )
                     .await,
                     Ok(true)
                 );
-            for (index, title, outcome) in run {
+            for (index, title) in run {
                 results[index] = Some(if together {
-                    Ok(outcome)
+                    Ok(())
                 } else {
                     self.delete_title_logical_cleanup(
                         &title,
                         actor,
                         TitleLogicalDeleteOptions {
                             purge_recycle_bin_entries: false,
+                            record_recycle_purge: true,
                             explicit_download_retirement: true,
                             append_title_deleted_event: true,
                             deleted_paths: Vec::new(),
@@ -1002,41 +907,7 @@ impl AppUseCase {
                     )
                     .await
                     .map_err(title_cleanup_error)
-                    .map(|_| outcome)
                 });
-            }
-        }
-
-        // Entries that reached a deleted title's bin after its purge listed it.
-        let late = late
-            .into_iter()
-            .filter(|(index, _, _)| matches!(results[*index], Some(Ok(_))))
-            .filter_map(|(index, title_id, key)| {
-                bins[&key]
-                    .as_deref()
-                    .map(|configs| (index, title_id, configs))
-            })
-            .collect::<Vec<_>>();
-        if !late.is_empty() {
-            let mut swept = self
-                .purge_late_title_recycle_entries(
-                    &late
-                        .iter()
-                        .map(|(_, title_id, configs)| (title_id.as_str(), *configs))
-                        .collect::<Vec<_>>(),
-                    DomainEventActor::from(actor),
-                    recycle_index,
-                )
-                .await;
-            for (index, title_id, _) in &late {
-                if let (Some(found), Some(Ok(outcome))) =
-                    (swept.remove(title_id), results[*index].as_mut())
-                {
-                    outcome.purged += found.purged;
-                    outcome.preserved += found.preserved;
-                    outcome.busy += found.busy;
-                    outcome.failed += found.failed;
-                }
             }
         }
         results
@@ -1075,16 +946,19 @@ impl AppUseCase {
         Ok(titles)
     }
 
-    /// The explicit-delete catalog cleanup of
-    /// [`Self::delete_title_logical_cleanup`] for titles with no recorded
-    /// downloads, shared across the titles: their unfinished imports, then
+    /// The catalog cleanup of [`Self::delete_title_logical_cleanup`] for
+    /// titles with no recorded downloads, or whose downloads were already
+    /// retired, shared across the titles: their unfinished imports, then
     /// their rows in one transaction, then one batch of title-deleted events,
-    /// then their lifecycle claims. `Ok(false)` when the store has no batch
-    /// delete; nothing was changed and the caller cleans up title by title.
+    /// then their lifecycle claims. With `record_recycle_purge` the
+    /// transaction also records each title for housekeeping's recycle purge.
+    /// `Ok(false)` when the store has no batch delete; nothing was changed
+    /// and the caller cleans up title by title.
     async fn delete_titles_without_downloads(
         &self,
         titles: &[&scryer_domain::Title],
         actor: DomainEventActor,
+        record_recycle_purge: bool,
     ) -> AppResult<bool> {
         let ids = titles
             .iter()
@@ -1111,7 +985,10 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .delete_titles_with_records(&ids)
+            .delete_titles_with_records(
+                &ids,
+                record_recycle_purge.then(|| self.runtime.environment.now()),
+            )
             .await?
         {
             return Ok(false);
@@ -1158,6 +1035,75 @@ impl AppUseCase {
             }
         }
         Ok(true)
+    }
+
+    /// One chunk of a library delete: each title's catalog cleanup, with
+    /// recycle entries left in place and no title recorded for their purge,
+    /// sharing the reads and writes across the chunk. The library's admission
+    /// already checked its roots, so no title guard is taken.
+    ///
+    /// The titles with recorded downloads retire them title by title first.
+    /// Then the chunk's events, history, import artifacts and release attempts
+    /// go, then every title row in one transaction, title by title if that
+    /// transaction fails. The first error stops the chunk.
+    pub(crate) async fn delete_library_title_chunk(
+        &self,
+        titles: &[scryer_domain::Title],
+        actor: DomainEventActor,
+    ) -> AppResult<()> {
+        let ids = titles
+            .iter()
+            .map(|title| title.id.clone())
+            .collect::<Vec<_>>();
+        // A failed read retires every title's downloads.
+        let with_downloads = self.titles_with_recorded_downloads(&ids).await;
+        let mut cleared = HashSet::new();
+        for title in titles {
+            let has_downloads = match &with_downloads {
+                Ok(with_downloads) => with_downloads.contains(&title.id),
+                Err(_) => true,
+            };
+            if has_downloads {
+                self.purge_title_logical_dependents(
+                    title,
+                    false,
+                    actor.clone(),
+                    &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
+                )
+                .await?;
+                cleared.insert(title.id.as_str());
+            }
+        }
+        self.delete_title_history_records(&ids).await?;
+
+        let together = self
+            .delete_titles_without_downloads(
+                &titles.iter().collect::<Vec<_>>(),
+                actor.clone(),
+                false,
+            )
+            .await;
+        if matches!(together, Ok(true)) {
+            return Ok(());
+        }
+        // A title without downloads adds no events of its own while its
+        // dependents go, so the history cleared above stays cleared.
+        for title in titles {
+            if !cleared.contains(title.id.as_str()) {
+                self.purge_title_logical_dependents(
+                    title,
+                    false,
+                    actor.clone(),
+                    &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
+                )
+                .await?;
+            }
+            self.delete_title_row(title, actor.clone(), true, Vec::new(), false)
+                .await?;
+            self.release_lifecycle_claims_for_deleted_title(&title.id)
+                .await;
+        }
+        Ok(())
     }
 
     async fn acquire_title_delete_guard(
@@ -1316,6 +1262,7 @@ impl AppUseCase {
             actor,
             options.append_title_deleted_event,
             options.deleted_paths,
+            options.record_recycle_purge,
         )
         .await?;
         // Last, and only once the rows are gone: a lifecycle claim is a hold on
@@ -1334,10 +1281,18 @@ impl AppUseCase {
         actor: DomainEventActor,
         append_title_deleted_event: bool,
         deleted_paths: Vec<String>,
+        record_recycle_purge: bool,
     ) -> AppResult<()> {
         let title_id = title.id.as_str();
 
-        self.services.catalog.titles.delete(title_id).await?;
+        let titles = &self.services.catalog.titles;
+        if record_recycle_purge {
+            titles
+                .delete_recording_recycle_purge(title_id, self.runtime.environment.now())
+                .await?;
+        } else {
+            titles.delete(title_id).await?;
+        }
         // Unconditional: `append_title_deleted_event` is false on the paths
         // that fold the delete into another event, and the row is gone either
         // way.
