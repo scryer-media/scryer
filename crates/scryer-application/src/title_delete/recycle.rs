@@ -53,7 +53,7 @@ impl RecordedTitleRecyclePurges {
     }
 
     /// Whether `title_id` is recorded and this bin belongs to the library it
-    /// was deleted from: the bins its delete would have purged.
+    /// was deleted from.
     pub(crate) fn claims(&self, title_id: &str, bin_libraries: &HashSet<String>) -> bool {
         self.libraries
             .get(title_id)

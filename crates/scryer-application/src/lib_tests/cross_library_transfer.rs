@@ -2051,7 +2051,7 @@ async fn an_interrupted_transfer_refuses_library_and_root_reconfiguration_undern
     // moving into.
     let deleted = fixture
         .app
-        .delete_library(&fixture.user, &fixture.destination_library_id)
+        .start_delete_library_job(&fixture.user, &fixture.destination_library_id)
         .await;
     let Err(crate::AppError::ValidationRefused {
         message, reason, ..

@@ -580,64 +580,42 @@ async fn title_delete_leaves_a_custom_bin_inside_another_library_root_untouched(
     );
 }
 
+/// A deleted title's entries are purged by housekeeping from a custom bin
+/// outside every root and from the default per-root bin alike.
 #[tokio::test]
-async fn housekeeping_purges_a_deleted_titles_entries_from_a_custom_bin_outside_every_root() {
-    let fixture = TitleDeleteFixture::new().await;
-    let bin = fixture.fixture.temp.path().join("outside-bin");
-    let (deleted_entry, kept_entry) = fixture.seed_bin(&bin).await;
-    let kept_before = snapshot_tree(&kept_entry);
-    let app = fixture.with_bin_setting(Some(&bin));
+async fn housekeeping_purges_a_deleted_titles_entries_from_custom_and_default_bins() {
+    for custom in [true, false] {
+        let fixture = TitleDeleteFixture::new().await;
+        let bin = if custom {
+            fixture.fixture.temp.path().join("outside-bin")
+        } else {
+            fixture.fixture.root_a().join(".scryer-recycle")
+        };
+        let (deleted_entry, kept_entry) = fixture.seed_bin(&bin).await;
+        let kept_before = snapshot_tree(&kept_entry);
+        let app = fixture.with_bin_setting(custom.then_some(bin.as_path()));
 
-    app.delete_title(&fixture.user, &fixture.deleted.id, false, None)
-        .await
-        .expect("delete title");
-    assert!(
-        deleted_entry.exists(),
-        "deletion leaves the entry to housekeeping"
-    );
-    assert_eq!(
-        recorded_recycle_purges(&app).await,
-        vec![fixture.deleted.id.clone()]
-    );
+        app.delete_title(&fixture.user, &fixture.deleted.id, false, None)
+            .await
+            .expect("delete title");
+        assert!(
+            deleted_entry.exists(),
+            "deletion leaves the entry to housekeeping"
+        );
+        assert_eq!(
+            recorded_recycle_purges(&app).await,
+            vec![fixture.deleted.id.clone()]
+        );
 
-    assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 1);
-    assert!(
-        !deleted_entry.exists(),
-        "the deleted title's entry is purged"
-    );
-    assert_eq!(snapshot_tree(&kept_entry), kept_before);
-    assert_untouched(&bin.join("unrelated.txt"), "unrelated bin content");
-    assert!(recorded_recycle_purges(&app).await.is_empty());
-}
-
-#[tokio::test]
-async fn housekeeping_purges_a_deleted_titles_entries_from_the_default_per_root_bin() {
-    let fixture = TitleDeleteFixture::new().await;
-    let bin = fixture.fixture.root_a().join(".scryer-recycle");
-    let (deleted_entry, kept_entry) = fixture.seed_bin(&bin).await;
-    let kept_before = snapshot_tree(&kept_entry);
-    let app = fixture.with_bin_setting(None);
-
-    app.delete_title(&fixture.user, &fixture.deleted.id, false, None)
-        .await
-        .expect("delete title");
-    assert!(
-        deleted_entry.exists(),
-        "deletion leaves the entry to housekeeping"
-    );
-    assert_eq!(
-        recorded_recycle_purges(&app).await,
-        vec![fixture.deleted.id.clone()]
-    );
-
-    assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 1);
-    assert!(
-        !deleted_entry.exists(),
-        "the deleted title's entry is purged"
-    );
-    assert_eq!(snapshot_tree(&kept_entry), kept_before);
-    assert_untouched(&bin.join("unrelated.txt"), "unrelated bin content");
-    assert!(recorded_recycle_purges(&app).await.is_empty());
+        assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 1);
+        assert!(
+            !deleted_entry.exists(),
+            "the deleted title's entry is purged"
+        );
+        assert_eq!(snapshot_tree(&kept_entry), kept_before);
+        assert_untouched(&bin.join("unrelated.txt"), "unrelated bin content");
+        assert!(recorded_recycle_purges(&app).await.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -708,28 +686,6 @@ async fn title_delete_policy_cleanup_keeps_replacement_validation() {
     );
     assert_eq!(snapshot_tree(&kept), kept_before);
     assert!(deleted.exists());
-}
-
-#[tokio::test]
-async fn housekeeping_purges_upgrade_without_replacement_of_a_deleted_title() {
-    let fixture = TitleDeleteFixture::new().await;
-    let bin = fixture.fixture.root_a().join(".scryer-recycle");
-    let (deleted, kept) = fixture.seed_bin(&bin).await;
-    rewrite_entry(
-        &deleted,
-        "upgrade_replaced",
-        crate::recycle_bin::RECYCLE_STATUS_COMMITTED,
-    );
-    let before = snapshot_tree(&kept);
-    let app = fixture.with_bin_setting(None);
-    app.delete_title(&fixture.user, &fixture.deleted.id, false, None)
-        .await
-        .unwrap();
-    assert!(deleted.exists());
-    assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 1);
-    assert!(!deleted.exists());
-    assert_eq!(snapshot_tree(&kept), before);
-    assert!(recorded_recycle_purges(&app).await.is_empty());
 }
 
 #[tokio::test]
@@ -908,46 +864,6 @@ async fn housekeeping_purges_recycle_entry_created_during_a_deletion_job() {
         assert!(recorded_recycle_purges(&app).await.is_empty());
     })
     .await;
-}
-
-#[tokio::test]
-async fn title_delete_leaves_busy_recycle_entry_and_still_deletes_catalog_title() {
-    let fixture = TitleDeleteFixture::new().await;
-    let bin = fixture.fixture.root_a().join(".scryer-recycle");
-    let (deleted, _) = fixture.seed_bin(&bin).await;
-    let app = fixture.with_bin_setting(None);
-    let entry_id = deleted.file_name().unwrap().to_str().unwrap();
-    let _guard = app
-        .runtime
-        .jobs
-        .interactive_operation_guards
-        .try_acquire(&format!("recycle-entry:{entry_id}"))
-        .await
-        .unwrap();
-    let before = snapshot_tree(&bin);
-    app.delete_title(&fixture.user, &fixture.deleted.id, false, None)
-        .await
-        .unwrap();
-    assert_eq!(snapshot_tree(&bin), before);
-    assert!(
-        app.services
-            .catalog
-            .titles
-            .get_by_id(&fixture.deleted.id)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 0);
-    assert_eq!(
-        snapshot_tree(&bin),
-        before,
-        "the busy entry survives the pass"
-    );
-    assert_eq!(
-        recorded_recycle_purges(&app).await,
-        vec![fixture.deleted.id.clone()]
-    );
 }
 
 #[tokio::test]
@@ -1848,174 +1764,103 @@ fn bin_contents(bin: &Path) -> Vec<(String, Option<Vec<u8>>, Option<String>)> {
     contents
 }
 
-/// A deleted title's recycle entries end in the same state whether the old
-/// inline purge ran at delete time or the delete records the title and one
-/// housekeeping pass purges them. The bins hold, for the deleted title, a
-/// plain removal, an upgrade whose replacement row is gone, and an entry held
-/// busy by another operation; an entry of a surviving title; an entry of a
-/// title that is missing from the catalog but was never recorded; an entry of
-/// the deleted title in another library's bin; and one in a directory no
-/// pass covers.
+/// One housekeeping pass after a title delete purges exactly the deleted
+/// title's free entries in its own library's bins. The bins hold, for the
+/// deleted title, a plain removal, an upgrade whose replacement row is gone,
+/// and an entry held busy by another operation; an entry of a surviving
+/// title; an entry of a title that is missing from the catalog but was never
+/// recorded; an entry of the deleted title in another library's bin; and one
+/// in a directory no pass covers. Everything but the first two is left as it
+/// was, and the busy entry keeps the title recorded until a later pass.
 #[tokio::test]
-async fn title_delete_then_housekeeping_matches_the_inline_purge() {
-    struct Outcome {
-        bins: Vec<Vec<(String, Option<Vec<u8>>, Option<String>)>>,
-        title_gone: bool,
-    }
-    async fn scenario(inline: bool) -> Outcome {
-        let fixture = TitleDeleteFixture::new().await;
-        let root_a = fixture.fixture.root_a();
-        let root_b = fixture.fixture.root_b();
-        let bin_a = root_a.join(".scryer-recycle");
-        let bin_b = root_b.join(".scryer-recycle");
-        let stray = fixture.fixture.temp.path().join("stray-bin");
-        let deleted = fixture.deleted.id.clone();
-        seed_entry(&bin_a, &root_a, &deleted, "emberfall-removed", |_| {}).await;
-        seed_entry(
-            &bin_a,
-            &root_a,
-            &deleted,
-            "emberfall-upgraded",
-            |manifest| {
-                manifest.reason = "upgrade_replaced".to_string();
-                manifest.original_file_id = Some("synthetic-emberfall-original".to_string());
-                manifest.media_root = Some(root_a.to_string_lossy().to_string());
-                manifest.replacement_file_id = Some("synthetic-emberfall-gone".to_string());
-                manifest.replacement_path = Some(
-                    root_a
-                        .join("emberfall-replacement.mkv")
-                        .to_string_lossy()
-                        .to_string(),
-                );
-            },
-        )
-        .await;
-        let busy = seed_entry(&bin_a, &root_a, &deleted, "emberfall-busy", |_| {}).await;
-        seed_entry(&bin_a, &root_a, &fixture.kept.id, "cinderwake-kept", |_| {}).await;
-        seed_entry(
-            &bin_a,
-            &root_a,
-            "synthetic-ashgrove-missing",
-            "ashgrove-missing",
-            |_| {},
-        )
-        .await;
-        seed_entry(&bin_b, &root_b, &deleted, "emberfall-other-library", |_| {}).await;
-        seed_entry(&stray, &root_a, &deleted, "emberfall-stray", |_| {}).await;
+async fn housekeeping_purges_only_a_deleted_titles_free_entries_in_its_librarys_bins() {
+    let fixture = TitleDeleteFixture::new().await;
+    let root_a = fixture.fixture.root_a();
+    let root_b = fixture.fixture.root_b();
+    let bin_a = root_a.join(".scryer-recycle");
+    let bin_b = root_b.join(".scryer-recycle");
+    let stray = fixture.fixture.temp.path().join("stray-bin");
+    let deleted = fixture.deleted.id.clone();
+    seed_entry(&bin_a, &root_a, &deleted, "emberfall-removed", |_| {}).await;
+    seed_entry(
+        &bin_a,
+        &root_a,
+        &deleted,
+        "emberfall-upgraded",
+        |manifest| {
+            manifest.reason = "upgrade_replaced".to_string();
+            manifest.original_file_id = Some("synthetic-emberfall-original".to_string());
+            manifest.media_root = Some(root_a.to_string_lossy().to_string());
+            manifest.replacement_file_id = Some("synthetic-emberfall-gone".to_string());
+            manifest.replacement_path = Some(
+                root_a
+                    .join("emberfall-replacement.mkv")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        },
+    )
+    .await;
+    let busy = seed_entry(&bin_a, &root_a, &deleted, "emberfall-busy", |_| {}).await;
+    seed_entry(&bin_a, &root_a, &fixture.kept.id, "cinderwake-kept", |_| {}).await;
+    seed_entry(
+        &bin_a,
+        &root_a,
+        "synthetic-ashgrove-missing",
+        "ashgrove-missing",
+        |_| {},
+    )
+    .await;
+    seed_entry(&bin_b, &root_b, &deleted, "emberfall-other-library", |_| {}).await;
+    seed_entry(&stray, &root_a, &deleted, "emberfall-stray", |_| {}).await;
+    let bins = [&bin_a, &bin_b, &stray];
+    let before = bins.map(|bin| bin_contents(bin));
 
-        let app = fixture.with_bin_setting(None);
-        let busy_id = busy.file_name().unwrap().to_str().unwrap().to_string();
-        let guard = app
-            .runtime
-            .jobs
-            .interactive_operation_guards
-            .try_acquire(&format!("recycle-entry:{busy_id}"))
+    let app = fixture.with_bin_setting(None);
+    let busy_id = busy.file_name().unwrap().to_str().unwrap().to_string();
+    let guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .try_acquire(&format!("recycle-entry:{busy_id}"))
+        .await
+        .unwrap();
+    app.delete_title(&fixture.user, &deleted, false, None)
+        .await
+        .unwrap();
+    assert!(
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&deleted)
             .await
-            .unwrap();
-        if inline {
-            // The purge deletion used to run before its catalog cleanup: every
-            // bin of the title's library, listed for the title, each entry
-            // purged without the replacement check.
-            let roots = app
-                .all_library_root_folders_for_facet(&fixture.deleted.facet)
-                .await
-                .unwrap()
-                .into_iter()
-                .filter(|root| root.library_id == fixture.deleted.library_id)
-                .map(|root| root.path)
-                .collect::<Vec<_>>();
-            let mut index = crate::recycle_bin::TitleRecycleEntryIndex::default();
-            let mut outcome = crate::title_delete::RecyclePurgeOutcome::default();
-            for (_, config) in app.recycle_bin_configs_for_recycling(roots).await {
-                assert!(config.validation_error.is_none());
-                for entry in crate::recycle_bin::list_committed_entries_for_title(
-                    &config, &deleted, &mut index,
-                )
-                .await
-                .unwrap()
-                {
-                    app.purge_listed_title_recycle_entry(
-                        &config,
-                        &deleted,
-                        entry,
-                        DomainEventActor::system(),
-                        &mut outcome,
-                    )
-                    .await;
-                }
-            }
-            assert_eq!(outcome.purged, 2);
-            assert_eq!(outcome.busy, 1);
-            app.delete_title(&fixture.user, &deleted, false, None)
-                .await
-                .unwrap();
-            // The old delete purged nothing later.
-            app.services
-                .catalog
-                .titles
-                .clear_recycle_purges(std::slice::from_ref(&deleted))
-                .await
-                .unwrap();
-        } else {
-            app.delete_title(&fixture.user, &deleted, false, None)
-                .await
-                .unwrap();
-            assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 2);
-            assert_eq!(
-                recorded_recycle_purges(&app).await,
-                vec![deleted.clone()],
-                "the busy entry keeps its title recorded"
-            );
-        }
-        let outcome = Outcome {
-            bins: [&bin_a, &bin_b, &stray]
-                .into_iter()
-                .map(|bin| bin_contents(bin))
-                .collect(),
-            title_gone: app
-                .services
-                .catalog
-                .titles
-                .get_by_id(&deleted)
-                .await
-                .unwrap()
-                .is_none(),
-        };
-        if !inline {
-            drop(guard);
-            assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 1);
-            assert!(
-                !busy.exists(),
-                "a later pass purges the entry once it is free"
-            );
-            assert!(recorded_recycle_purges(&app).await.is_empty());
-        }
-        outcome
-    }
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        bins.map(|bin| bin_contents(bin)),
+        before,
+        "deletion leaves every bin to housekeeping"
+    );
 
-    let inline = scenario(true).await;
-    let deferred = scenario(false).await;
-    assert!(inline.title_gone && deferred.title_gone);
-    assert_eq!(inline.bins, deferred.bins);
-    let names = |bin: &[(String, Option<Vec<u8>>, Option<String>)]| {
-        bin.iter()
-            .map(|(name, _, _)| name.clone())
-            .filter(|name| name != ".scryer-recycle-root")
-            .collect::<Vec<_>>()
-    };
+    assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 2);
+    let mut expected = before.clone();
+    expected[0]
+        .retain(|(name, _, _)| name != "emberfall-removed.mkv" && name != "emberfall-upgraded.mkv");
+    assert_eq!(bins.map(|bin| bin_contents(bin)), expected);
     assert_eq!(
-        names(&deferred.bins[0]),
-        vec![
-            "ashgrove-missing.mkv",
-            "cinderwake-kept.mkv",
-            "emberfall-busy.mkv",
-        ]
+        recorded_recycle_purges(&app).await,
+        vec![deleted.clone()],
+        "the busy entry keeps its title recorded"
     );
-    assert_eq!(
-        names(&deferred.bins[1]),
-        vec!["emberfall-other-library.mkv"]
+
+    drop(guard);
+    assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 1);
+    assert!(
+        !busy.exists(),
+        "a later pass purges the entry once it is free"
     );
-    assert_eq!(names(&deferred.bins[2]), vec!["emberfall-stray.mkv"]);
+    assert!(recorded_recycle_purges(&app).await.is_empty());
 }
 
 /// Deleting titles, one at a time or as a job, makes no call on any recycle
@@ -2255,44 +2100,6 @@ async fn housekeeping_keeps_recycle_cleanup_records_when_history_is_kept_forever
         vec![fixture.deleted.id.clone()]
     );
     assert!(deleted.exists());
-}
-
-/// Records are read oldest first, so a full window never starves an older
-/// record behind newer ones.
-#[tokio::test]
-async fn recorded_recycle_cleanup_is_read_oldest_first() {
-    let titles = MockTitleRepo::default();
-    let at = |day: i64| {
-        chrono::DateTime::parse_from_rfc3339("2026-03-01T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc)
-            + chrono::Duration::days(day)
-    };
-    *titles.recycle_purges.lock().await = vec![
-        crate::TitleRecyclePurge {
-            title_id: "ashgrove".into(),
-            library_id: "library".into(),
-            recorded_at: at(2),
-        },
-        crate::TitleRecyclePurge {
-            title_id: "emberfall".into(),
-            library_id: "library".into(),
-            recorded_at: at(0),
-        },
-        crate::TitleRecyclePurge {
-            title_id: "cinderwake".into(),
-            library_id: "library".into(),
-            recorded_at: at(1),
-        },
-    ];
-    let first = titles.list_recycle_purges(2).await.unwrap();
-    assert_eq!(
-        first
-            .iter()
-            .map(|purge| purge.title_id.as_str())
-            .collect::<Vec<_>>(),
-        ["emberfall", "cinderwake"]
-    );
 }
 
 /// Until housekeeping runs, an entry of a deleted title stays on the recycle

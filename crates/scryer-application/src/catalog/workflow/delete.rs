@@ -1037,12 +1037,10 @@ impl AppUseCase {
         Ok(true)
     }
 
-    /// One chunk of a library delete: the catalog cleanup
-    /// [`Self::delete_titles_logically`] makes for each title, with recycle
-    /// entries left in place and no title recorded for their purge, sharing
-    /// the reads and writes across the chunk. The library's admission already
-    /// checked its roots; like the title-by-title form, no title guard is
-    /// taken.
+    /// One chunk of a library delete: each title's catalog cleanup, with
+    /// recycle entries left in place and no title recorded for their purge,
+    /// sharing the reads and writes across the chunk. The library's admission
+    /// already checked its roots, so no title guard is taken.
     ///
     /// The titles with recorded downloads retire them title by title first.
     /// Then the chunk's events, history, import artifacts and release attempts
@@ -1057,8 +1055,7 @@ impl AppUseCase {
             .iter()
             .map(|title| title.id.clone())
             .collect::<Vec<_>>();
-        // A failed read retires every title's downloads, as the title-by-title
-        // form does for each.
+        // A failed read retires every title's downloads.
         let with_downloads = self.titles_with_recorded_downloads(&ids).await;
         let mut cleared = HashSet::new();
         for title in titles {

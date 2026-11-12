@@ -795,106 +795,6 @@ impl TitleStore {
         self.invalidate_anime_numbering_bridge(&cache_key);
         result
     }
-
-    async fn delete_titles_with_records_batch(
-        &self,
-        ids: &[String],
-        recycle_purge_recorded_at: Option<DateTime<Utc>>,
-    ) -> AppResult<bool> {
-        if ids.is_empty() {
-            return Ok(true);
-        }
-        let ids = ids.to_vec();
-        let cache_keys = ids.clone();
-        let scope = TitleFolderWriteScope::marked();
-        let result = SqlRuntime::run_in_transaction(
-            &self.datastore,
-            "delete_titles_with_records",
-            move |tx| {
-                let ids = ids.clone();
-                Box::pin(async move {
-                    let (ids, per_statement) = id_list_statements(
-                        &ids,
-                        1,
-                        1,
-                        max_binds(&SqlExec::Tx(tx)),
-                        TITLE_ID_LIST_BIND_CHUNK,
-                    );
-                    let title_args = |chunk: &[String]| {
-                        chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>()
-                    };
-                    // The rows the title-by-title cleanup removes after the
-                    // downloads, in its order, then the title rows themselves.
-                    const BY_TITLE: &[&str] = &[
-                        "DELETE FROM manual_import_selection_candidates
-                         WHERE selection_id IN (
-                           SELECT id FROM manual_import_selections WHERE title_id IN ({ids})
-                         )",
-                        "DELETE FROM manual_import_selections WHERE title_id IN ({ids})",
-                        "DELETE FROM pending_releases WHERE title_id IN ({ids})",
-                        "DELETE FROM wanted_items WHERE title_id IN ({ids})",
-                        "DELETE FROM download_submission_episode_links
-                         WHERE download_id IN (
-                             SELECT id FROM download_submissions WHERE title_id IN ({ids})
-                         )",
-                        "DELETE FROM download_submissions WHERE title_id IN ({ids})",
-                        "DELETE FROM blocklist WHERE title_id IN ({ids})",
-                        "DELETE FROM library_probe_signatures WHERE title_id IN ({ids})",
-                        "DELETE FROM library_scan_unmatched_items WHERE title_id IN ({ids})",
-                        "DELETE FROM indexer_search_learning WHERE title_id IN ({ids})",
-                    ];
-                    for chunk in ids.chunks(per_statement) {
-                        let placeholders = sql_placeholders(chunk.len());
-                        if let Some(recorded_at) = recycle_purge_recorded_at {
-                            record_title_recycle_purges_tx(tx, chunk, recorded_at).await?;
-                        }
-                        for statement in BY_TITLE {
-                            SqlRuntime::execute(
-                                SqlExec::Tx(tx),
-                                &statement.replace("{ids}", &placeholders),
-                                &title_args(chunk),
-                            )
-                            .await?;
-                        }
-                        for id in chunk {
-                            delete_title_search_projection_sql_tx(tx, id).await?;
-                        }
-                        let mut args = vec![SqlArg::Text(OWNER_KIND_TITLE.to_string())];
-                        args.extend(title_args(chunk));
-                        SqlRuntime::execute(
-                            SqlExec::Tx(tx),
-                            &format!(
-                                "DELETE FROM monitor_selections
-                                 WHERE owner_kind = {{}} AND owner_id IN ({placeholders})"
-                            ),
-                            &args,
-                        )
-                        .await?;
-                        let rows = SqlRuntime::execute(
-                            SqlExec::Tx(tx),
-                            &format!("DELETE FROM titles WHERE id IN ({placeholders})"),
-                            &title_args(chunk),
-                        )
-                        .await?;
-                        if rows != chunk.len() as u64 {
-                            return Err(AppError::not_found_reason(
-                                crate::error_reasons::TITLE_NOT_FOUND,
-                                "a title in the batch no longer exists".to_string(),
-                            ));
-                        }
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await;
-        drop(scope);
-        // `title_anime_numbering_bridges` cascades with the title rows.
-        for key in &cache_keys {
-            self.invalidate_anime_numbering_bridge(key);
-        }
-        result.map(|()| true)
-    }
 }
 
 #[async_trait]
@@ -3667,8 +3567,99 @@ impl TitleRepository for TitleStore {
         ids: &[String],
         recycle_purge_recorded_at: Option<DateTime<Utc>>,
     ) -> AppResult<bool> {
-        self.delete_titles_with_records_batch(ids, recycle_purge_recorded_at)
-            .await
+        if ids.is_empty() {
+            return Ok(true);
+        }
+        let ids = ids.to_vec();
+        let cache_keys = ids.clone();
+        let scope = TitleFolderWriteScope::marked();
+        let result = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_titles_with_records",
+            move |tx| {
+                let ids = ids.clone();
+                Box::pin(async move {
+                    let (ids, per_statement) = id_list_statements(
+                        &ids,
+                        1,
+                        1,
+                        max_binds(&SqlExec::Tx(tx)),
+                        TITLE_ID_LIST_BIND_CHUNK,
+                    );
+                    let title_args = |chunk: &[String]| {
+                        chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>()
+                    };
+                    // The rows the title-by-title cleanup removes after the
+                    // downloads, in its order, then the title rows themselves.
+                    const BY_TITLE: &[&str] = &[
+                        "DELETE FROM manual_import_selection_candidates
+                         WHERE selection_id IN (
+                           SELECT id FROM manual_import_selections WHERE title_id IN ({ids})
+                         )",
+                        "DELETE FROM manual_import_selections WHERE title_id IN ({ids})",
+                        "DELETE FROM pending_releases WHERE title_id IN ({ids})",
+                        "DELETE FROM wanted_items WHERE title_id IN ({ids})",
+                        "DELETE FROM download_submission_episode_links
+                         WHERE download_id IN (
+                             SELECT id FROM download_submissions WHERE title_id IN ({ids})
+                         )",
+                        "DELETE FROM download_submissions WHERE title_id IN ({ids})",
+                        "DELETE FROM blocklist WHERE title_id IN ({ids})",
+                        "DELETE FROM library_probe_signatures WHERE title_id IN ({ids})",
+                        "DELETE FROM library_scan_unmatched_items WHERE title_id IN ({ids})",
+                        "DELETE FROM indexer_search_learning WHERE title_id IN ({ids})",
+                    ];
+                    for chunk in ids.chunks(per_statement) {
+                        let placeholders = sql_placeholders(chunk.len());
+                        if let Some(recorded_at) = recycle_purge_recorded_at {
+                            record_title_recycle_purges_tx(tx, chunk, recorded_at).await?;
+                        }
+                        for statement in BY_TITLE {
+                            SqlRuntime::execute(
+                                SqlExec::Tx(tx),
+                                &statement.replace("{ids}", &placeholders),
+                                &title_args(chunk),
+                            )
+                            .await?;
+                        }
+                        for id in chunk {
+                            delete_title_search_projection_sql_tx(tx, id).await?;
+                        }
+                        let mut args = vec![SqlArg::Text(OWNER_KIND_TITLE.to_string())];
+                        args.extend(title_args(chunk));
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            &format!(
+                                "DELETE FROM monitor_selections
+                                 WHERE owner_kind = {{}} AND owner_id IN ({placeholders})"
+                            ),
+                            &args,
+                        )
+                        .await?;
+                        let rows = SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            &format!("DELETE FROM titles WHERE id IN ({placeholders})"),
+                            &title_args(chunk),
+                        )
+                        .await?;
+                        if rows != chunk.len() as u64 {
+                            return Err(AppError::not_found_reason(
+                                crate::error_reasons::TITLE_NOT_FOUND,
+                                "a title in the batch no longer exists".to_string(),
+                            ));
+                        }
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        drop(scope);
+        // `title_anime_numbering_bridges` cascades with the title rows.
+        for key in &cache_keys {
+            self.invalidate_anime_numbering_bridge(key);
+        }
+        result.map(|()| true)
     }
 
     async fn assign_title_folders(&self, writes: &[TitleFolderWrite]) -> AppResult<()> {

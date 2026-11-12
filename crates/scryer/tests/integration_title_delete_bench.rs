@@ -1047,16 +1047,10 @@ async fn job_events(ctx: &TestContext) -> Vec<String> {
     rows.into_iter().map(|(event_type,)| event_type).collect()
 }
 
-struct LibraryDeleteOutcome {
-    rows: Vec<String>,
-    events: Vec<(String, String, String)>,
-    job_events: Vec<String>,
-    commits: u64,
-    summary: Option<serde_json::Value>,
-    progress: Option<serde_json::Value>,
-}
-
-async fn library_delete_scenario(as_job: bool) -> LibraryDeleteOutcome {
+#[tokio::test(flavor = "multi_thread")]
+async fn library_delete_job_removes_the_library_and_keeps_other_titles() {
+    // SAFETY: set before any connection opens, in this test's own process.
+    unsafe { std::env::set_var("SCRYER_SQLITE_WAL_AUTOCHECKPOINT_PAGES", "0") };
     let root = tempfile::tempdir().expect("root");
     let db = tempfile::tempdir().expect("db dir");
     let db_path = db.path().join("library-delete.db");
@@ -1067,111 +1061,88 @@ async fn library_delete_scenario(as_job: bool) -> LibraryDeleteOutcome {
         .find_or_create_default_user()
         .await
         .expect("default admin");
+    let kept_rows = |rows: &[String]| {
+        rows.iter()
+            .filter(|row| row.contains("ashgrove-"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let kept_before = kept_rows(&library_snapshot(&ctx).await);
     let wal_path = db.path().join("library-delete.db-wal");
     let (_, commits_before) = wal_frames(&wal_path);
 
-    let (mut summary, mut progress) = (None, None);
-    if as_job {
-        let accepted = ctx
-            .app
-            .start_delete_library_job(&admin, EMBERFALL_LIBRARY)
-            .await
-            .expect("start library deletion job");
-        let run_id = accepted.job_run.id.clone();
-        common::wait_until("library deletion job completes", || {
-            let admin = &admin;
-            let run_id = run_id.clone();
-            let ctx = &ctx;
-            async move {
-                ctx.app
-                    .list_recent_job_runs(admin, 20)
-                    .await
-                    .expect("list job runs")
-                    .into_iter()
-                    .any(|run| run.id == run_id && run.completed_at.is_some())
-            }
-        })
-        .await;
-        let run = ctx
-            .app
-            .list_recent_job_runs(&admin, 20)
-            .await
-            .expect("list job runs")
-            .into_iter()
-            .find(|run| run.id == run_id)
-            .expect("finished run");
-        assert_eq!(run.status, scryer_application::JobRunStatus::Completed);
-        summary = run
-            .summary_json
-            .as_deref()
-            .map(|json| serde_json::from_str(json).expect("summary json"));
-        progress = run
-            .progress_json
-            .as_deref()
-            .map(|json| serde_json::from_str(json).expect("progress json"));
-    } else {
-        let deleted = ctx
-            .app
-            .delete_library(&admin, EMBERFALL_LIBRARY)
-            .await
-            .expect("delete library");
-        assert!(deleted);
-    }
+    let accepted = ctx
+        .app
+        .start_delete_library_job(&admin, EMBERFALL_LIBRARY)
+        .await
+        .expect("start library deletion job");
+    let run_id = accepted.job_run.id.clone();
+    common::wait_until("library deletion job completes", || {
+        let admin = &admin;
+        let run_id = run_id.clone();
+        let ctx = &ctx;
+        async move {
+            ctx.app
+                .list_recent_job_runs(admin, 20)
+                .await
+                .expect("list job runs")
+                .into_iter()
+                .any(|run| run.id == run_id && run.completed_at.is_some())
+        }
+    })
+    .await;
+    let run = ctx
+        .app
+        .list_recent_job_runs(&admin, 20)
+        .await
+        .expect("list job runs")
+        .into_iter()
+        .find(|run| run.id == run_id)
+        .expect("finished run");
     let (_, commits_after) = wal_frames(&wal_path);
+    assert_eq!(run.status, scryer_application::JobRunStatus::Completed);
 
-    LibraryDeleteOutcome {
-        rows: library_snapshot(&ctx).await,
-        events: non_job_events(&ctx).await,
-        job_events: job_events(&ctx).await,
-        commits: commits_after - commits_before,
-        summary,
-        progress,
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn library_delete_job_matches_the_request_delete() {
-    // SAFETY: set before any connection opens, in this test's own process.
-    unsafe { std::env::set_var("SCRYER_SQLITE_WAL_AUTOCHECKPOINT_PAGES", "0") };
-    let request = library_delete_scenario(false).await;
-    let job = library_delete_scenario(true).await;
-
-    assert_eq!(job.rows, request.rows);
-    assert_eq!(job.events, request.events);
-    assert!(request.job_events.is_empty(), "{:?}", request.job_events);
-    assert_eq!(job.job_events, ["job_run_started", "job_run_completed"]);
+    let rows = library_snapshot(&ctx).await;
+    let events = non_job_events(&ctx).await;
+    assert_eq!(
+        job_events(&ctx).await,
+        ["job_run_started", "job_run_completed"]
+    );
     // The library and everything scoped to it is gone; the kept library's
     // titles keep every row.
     assert!(
-        !job.rows
+        !rows
             .iter()
             // A deleted title's lifecycle claim is kept, released.
             .any(|row| row.contains("emberfall-") && !row.ends_with(":released:title_deleted")),
         "{:?}",
-        job.rows
-            .iter()
+        rows.iter()
             .filter(|row| row.contains("emberfall-"))
             .collect::<Vec<_>>()
     );
-    assert!(job.rows.iter().any(|row| row == "titles:ashgrove-150"));
+    assert_eq!(kept_rows(&rows), kept_before);
+    assert!(rows.iter().any(|row| row == "titles:ashgrove-150"));
     assert_eq!(
-        job.events
+        events
             .iter()
             .filter(|(event_type, _, _)| event_type == "title_deleted")
             .count(),
         LIBRARY_DELETE_TITLES
     );
-    let summary = job.summary.expect("summary");
+    let summary: serde_json::Value =
+        serde_json::from_str(run.summary_json.as_deref().expect("summary")).expect("summary json");
     assert_eq!(summary["deleted"], true);
     assert_eq!(summary["titleCount"], LIBRARY_DELETE_TITLES);
-    let progress = job.progress.expect("progress");
+    let progress: serde_json::Value =
+        serde_json::from_str(run.progress_json.as_deref().expect("progress"))
+            .expect("progress json");
     assert_eq!(progress["processed"], LIBRARY_DELETE_TITLES);
     assert_eq!(progress["total"], LIBRARY_DELETE_TITLES);
 
     // Only the kept title's earlier event survives beside the title-deleted
     // events.
     assert_eq!(
-        job.events
+        events
             .iter()
             .filter(|(event_type, _, _)| event_type == "title_added")
             .map(|(_, title_id, _)| title_id.as_str())
@@ -1179,8 +1150,7 @@ async fn library_delete_job_matches_the_request_delete() {
         ["ashgrove-150"]
     );
     // Title-deleted events follow the library's title order.
-    let deleted_order = job
-        .events
+    let deleted_order = events
         .iter()
         .filter(|(event_type, _, _)| event_type == "title_deleted")
         .map(|(_, title_id, _)| title_id.clone())
@@ -1189,52 +1159,15 @@ async fn library_delete_job_matches_the_request_delete() {
     sorted.sort();
     assert_eq!(deleted_order, sorted);
 
-    // The request deletes title by title; the job deletes in chunks of 64,
-    // with one progress write after each chunk, plus its run, the started
-    // and finished events, and the finished run.
-    let progress_writes = LIBRARY_DELETE_TITLES.div_ceil(64) as u64;
+    // Chunks of 64, with one progress write after each chunk, plus the run,
+    // the started and finished events, and the finished run.
+    let commits = commits_after - commits_before;
     report(format!(
-        "LIBRARY DELETE [writes]: request {} write transactions, job {} ({progress_writes} progress writes) for {LIBRARY_DELETE_TITLES} titles",
-        request.commits, job.commits,
+        "LIBRARY DELETE [writes]: job {commits} write transactions for {LIBRARY_DELETE_TITLES} titles",
     ));
-    assert_eq!(request.commits, 1359);
-    assert_eq!(job.commits, LIBRARY_DELETE_JOB_COMMITS);
+    assert_eq!(commits, LIBRARY_DELETE_JOB_COMMITS);
 }
 
 /// Write transactions of the library deletion job for
-/// [`LIBRARY_DELETE_TITLES`] titles, two with a recorded download. Deleting
-/// title by title, with a progress write every 64 titles of each of two
-/// passes, the job made 1369: the request's 1359 and its own 10.
+/// [`LIBRARY_DELETE_TITLES`] titles, two with a recorded download.
 const LIBRARY_DELETE_JOB_COMMITS: u64 = 40;
-
-#[tokio::test(flavor = "multi_thread")]
-async fn library_delete_job_refuses_like_the_request_delete() {
-    let root = tempfile::tempdir().expect("root");
-    let ctx = TestContext::new().await;
-    seed_library_for_delete(&ctx, root.path()).await;
-    let admin = ctx
-        .app
-        .find_or_create_default_user()
-        .await
-        .expect("default admin");
-    let default_movies =
-        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Movie);
-    for library_id in [default_movies.as_str(), "ashgrove-missing-library"] {
-        let in_request = ctx
-            .app
-            .delete_library(&admin, library_id)
-            .await
-            .expect_err("the request delete refuses");
-        let as_job = ctx
-            .app
-            .start_delete_library_job(&admin, library_id)
-            .await
-            .expect_err("the job refuses");
-        assert_eq!(as_job.reason(), in_request.reason(), "{library_id}");
-        assert!(as_job.reason().is_some(), "{library_id}: {as_job:?}");
-        assert_eq!(as_job.to_string(), in_request.to_string(), "{library_id}");
-    }
-    assert!(job_events(&ctx).await.is_empty());
-    let rows = library_snapshot(&ctx).await;
-    assert!(rows.iter().any(|row| row == "libraries:emberfall-library"));
-}
