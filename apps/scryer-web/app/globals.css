@@ -155,6 +155,9 @@
   --scry-info-solid-hover: #0369a1;
   --scry-info-on-solid: #f0f9ff;
   --scry-bg: #ffffff;
+  --scry-hover-card-shadow:
+    0 1px 2px rgb(15 23 42 / 0.1), 0 10px 20px -6px rgb(15 23 42 / 0.18),
+    0 28px 56px -12px rgb(15 23 42 / 0.28);
   --scry-card2: #f4f6fb;
   --scry-rowHover: #eef1f8;
   --scry-hover: #eef1f8;
@@ -324,6 +327,9 @@
   --scry-info-solid-hover: #0284c7;
   --scry-info-on-solid: #082f49;
   --scry-bg: #070d1c;
+  --scry-hover-card-shadow:
+    0 2px 4px rgb(0 0 0 / 0.55), 0 12px 24px -6px rgb(0 0 0 / 0.7),
+    0 32px 64px -12px rgb(0 0 0 / 0.85);
   --scry-card2: #0a1120;
   --scry-rowHover: #0c1526;
   --scry-hover: #101a30;
@@ -1587,7 +1593,7 @@ body {
   background-image: linear-gradient(var(--popover), var(--popover));
   border-color: var(--border-color);
   border-radius: 0.75rem;
-  box-shadow: 0 24px 64px rgb(0 0 0 / 0.55);
+  box-shadow: var(--scry-hover-card-shadow);
   color: var(--popover-foreground);
   overflow: hidden;
 }
@@ -1598,7 +1604,7 @@ body {
   border: 1px solid
     color-mix(in srgb, var(--border-color) 88%, var(--primary) 12%);
   border-radius: 0.875rem;
-  box-shadow: 0 28px 72px rgb(0 0 0 / 0.58);
+  box-shadow: var(--scry-hover-card-shadow);
   color: var(--popover-foreground);
   max-height: calc(100vh - 1.5rem);
   overflow: hidden;
