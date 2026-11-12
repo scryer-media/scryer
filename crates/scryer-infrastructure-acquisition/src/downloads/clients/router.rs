@@ -279,6 +279,13 @@ fn download_client_remote_path_mappings(
     }
 }
 
+/// Whether a completed row of this client may name the parent of its release
+/// folder, so the release folder is looked for on disk. TorBox reports the
+/// engine's own job folder, so probing for it decides nothing.
+fn completed_import_dir_may_be_parent(client_type: &str) -> bool {
+    client_type != super::torbox::client::CLIENT_TYPE
+}
+
 fn normalize_completed_download_import_dir(item: &mut scryer_domain::CompletedDownload) {
     let reported_dir = Path::new(item.dest_dir.trim());
     if !reported_dir.is_dir() {
@@ -3508,7 +3515,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                                 if let Some(mappings) = mappings.as_deref() {
                                     apply_remote_path_mappings_to_completed_download(row, mappings);
                                 }
-                                if accepts_torrents {
+                                if accepts_torrents
+                                    && completed_import_dir_may_be_parent(&config.client_type)
+                                {
                                     normalize_completed_download_import_dir(row);
                                 }
                             }
@@ -3734,7 +3743,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         if let Some(mappings) = mappings.as_deref() {
                             apply_remote_path_mappings_to_completed_download(item, mappings);
                         }
-                        if accepts_torrents {
+                        if accepts_torrents
+                            && completed_import_dir_may_be_parent(&config.client_type)
+                        {
                             normalize_completed_download_import_dir(item);
                         }
                         accepted_items.push(item.clone());
@@ -3867,7 +3878,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         if let Some(mappings) = mappings.as_deref() {
                             apply_remote_path_mappings_to_completed_download(item, mappings);
                         }
-                        if accepts_torrents {
+                        if accepts_torrents
+                            && completed_import_dir_may_be_parent(&config.client_type)
+                        {
                             normalize_completed_download_import_dir(item);
                         }
                         accepted_items.push(item.clone());
@@ -4004,7 +4017,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         DownloadSourceKind::MagnetUri,
                         self.plugin_provider.as_ref(),
                     );
-                    if accepts_torrents {
+                    if accepts_torrents && completed_import_dir_may_be_parent(&config.client_type) {
                         normalize_completed_download_import_dir(&mut item);
                     }
                     item
@@ -9219,6 +9232,19 @@ mod tests {
             normalize_completed_download_import_dir(&mut item);
 
             assert_eq!(item.dest_dir, root.path().to_string_lossy());
+        }
+    }
+
+    #[test]
+    fn only_torbox_rows_skip_the_release_folder_probe() {
+        assert!(!completed_import_dir_may_be_parent(
+            super::super::torbox::client::CLIENT_TYPE
+        ));
+        for client_type in ["qbittorrent", "transmission", "any-torrent-client"] {
+            assert!(
+                completed_import_dir_may_be_parent(client_type),
+                "{client_type}"
+            );
         }
     }
 

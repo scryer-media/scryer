@@ -240,7 +240,8 @@ impl Fixture {
                 client_id: self.client_id.clone(),
                 settings: settings_in(dir, cached_only),
                 api: TorboxApi::new(scryer_outbound_http::generic_reqwest_client(), TOKEN)
-                    .with_base_url(self.server.uri()),
+                    .with_base_url(self.server.uri())
+                    .allow_plain_http_links(),
                 egress: Egress::Direct,
                 egress_key: "direct".to_string(),
                 predecessor,
@@ -2515,4 +2516,326 @@ fn only_failed_jobs_holding_nothing_on_torbox_are_pruned_past_the_retention() {
             "the oldest empty failure {n} is pruned"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// failed torrents and cleanup
+
+async fn seeding_of(
+    runtime: &Arc<TorboxRuntime>,
+    job_id: &str,
+) -> scryer_domain::DownloadSeedingSnapshot {
+    TorboxDownloadClient::with_runtime(Arc::clone(runtime))
+        .list_history()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == job_id)
+        .expect("in the history")
+        .seeding
+        .expect("a torrent reports seeding")
+}
+
+#[tokio::test]
+async fn a_torrent_that_failed_before_torbox_finished_is_removable() {
+    let fixture = Fixture::new().await;
+    fixture.mount_torrent_create(101).await;
+    fixture
+        .mount_list("torrents", vec![item(101, "error", false, vec![])])
+        .await;
+    let runtime = fixture.runtime();
+    let grab = TorboxDownloadClient::with_runtime(Arc::clone(&runtime))
+        .submit_download(&magnet_request("Synthetic.Show.S01.WEB"))
+        .await
+        .unwrap();
+    runtime.poll_once().await.unwrap();
+    let record = record_of(&runtime, &grab.job_id).await;
+    assert_eq!(record.phase, TorboxJobPhase::Failed);
+    assert_eq!(
+        record.error_reason.as_deref(),
+        Some(torbox_refusal::REMOTE_FAILED)
+    );
+    assert_eq!(
+        seeding_of(&runtime, &grab.job_id).await.can_remove,
+        Some(true),
+        "nothing was downloaded, so nothing is seeded"
+    );
+    let lists = fixture.requests_to("/v1/api/torrents/mylist").await.len();
+    runtime.poll_once().await.unwrap();
+    assert_eq!(
+        fixture.requests_to("/v1/api/torrents/mylist").await.len(),
+        lists,
+        "nothing more to read"
+    );
+}
+
+#[tokio::test]
+async fn a_torrent_refused_after_torbox_finished_follows_the_privacy_rule() {
+    let fixture = Fixture::new().await;
+    fixture.mount_torrent_create(101).await;
+    let mut silent = item(101, "uploading", true, vec![file(1, "Show/readme.txt")]);
+    silent.as_object_mut().unwrap().remove("private");
+    fixture.mount_list("torrents", vec![silent.clone()]).await;
+    let runtime = fixture.runtime();
+    let grab = TorboxDownloadClient::with_runtime(Arc::clone(&runtime))
+        .submit_download(&magnet_request("Synthetic.Show.S01.WEB"))
+        .await
+        .unwrap();
+    runtime.poll_once().await.unwrap();
+    let record = record_of(&runtime, &grab.job_id).await;
+    assert_eq!(record.phase, TorboxJobPhase::Failed);
+    assert_eq!(
+        record.error_reason.as_deref(),
+        Some(torbox_refusal::NO_VIDEO_FILE)
+    );
+    assert!(record.remote_finished_at.is_some());
+    assert_eq!(
+        seeding_of(&runtime, &grab.job_id).await.can_remove,
+        None,
+        "TorBox may be seeding a private torrent"
+    );
+
+    // The poller reads it once for its privacy, then leaves it alone.
+    fixture.server.reset().await;
+    let mut private = silent;
+    private["private"] = json!(true);
+    fixture.mount_list("torrents", vec![private]).await;
+    runtime.poll_once().await.unwrap();
+    runtime.poll_once().await.unwrap();
+    assert_eq!(
+        fixture.requests_to("/v1/api/torrents/mylist").await.len(),
+        1
+    );
+    assert_eq!(record_of(&runtime, &grab.job_id).await.private, Some(true));
+    let seeding = seeding_of(&runtime, &grab.job_id).await;
+    assert_eq!(seeding.is_private, Some(true), "the seeding gate holds it");
+    assert_eq!(seeding.seed_goal_ratio, None);
+}
+
+#[tokio::test]
+async fn a_torrent_refused_after_torbox_finished_waits_for_its_seed_goal() {
+    let fixture = Fixture::new().await;
+    fixture.mount_torrent_create(101).await;
+    let seeding = item(101, "uploading", true, vec![file(1, "Show/readme.txt")]);
+    fixture.mount_list("torrents", vec![seeding]).await;
+    let runtime = fixture.runtime();
+    let mut request = magnet_request("Synthetic.Show.S01.WEB");
+    request.seed_goal_ratio = Some(1.0);
+    let grab = TorboxDownloadClient::with_runtime(Arc::clone(&runtime))
+        .submit_download(&request)
+        .await
+        .unwrap();
+    runtime.poll_once().await.unwrap();
+    assert_eq!(
+        record_of(&runtime, &grab.job_id).await.phase,
+        TorboxJobPhase::Failed
+    );
+    runtime.poll_once().await.unwrap();
+    assert_eq!(
+        seeding_of(&runtime, &grab.job_id).await.can_remove,
+        Some(false),
+        "TorBox still seeds it"
+    );
+
+    fixture.server.reset().await;
+    fixture
+        .mount_list(
+            "torrents",
+            vec![item(
+                101,
+                "completed",
+                true,
+                vec![file(1, "Show/readme.txt")],
+            )],
+        )
+        .await;
+    runtime.poll_once().await.unwrap();
+    assert_eq!(
+        seeding_of(&runtime, &grab.job_id).await.can_remove,
+        Some(true),
+        "TorBox stopped seeding"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// the job folder on disk
+
+#[tokio::test]
+async fn a_job_folder_another_client_made_is_never_used() {
+    let fixture = Fixture::new().await;
+    let foreign = fixture.dir.path().join("Synthetic.Show.S01.WEB");
+    std::fs::create_dir_all(&foreign).unwrap();
+    let foreign_file = foreign.join("synthetic-other-client.mkv");
+    std::fs::write(&foreign_file, b"synthetic other client bytes").unwrap();
+    fixture.mount_torrent_create(101).await;
+    fixture
+        .mount_list(
+            "torrents",
+            vec![item(101, "completed", true, season_files())],
+        )
+        .await;
+    fixture.mount_links("torrents").await;
+    let runtime = fixture.runtime();
+    let job_id = run_torrent_to_completion(
+        &fixture,
+        &runtime,
+        &magnet_request("Synthetic.Show.S01.WEB"),
+    )
+    .await;
+
+    let record = record_of(&runtime, &job_id).await;
+    assert_eq!(
+        record.job_folder.as_deref(),
+        Some("Synthetic.Show.S01.WEB (2)")
+    );
+    let completed = TorboxDownloadClient::with_runtime(Arc::clone(&runtime))
+        .list_completed_downloads()
+        .await
+        .unwrap();
+    assert_eq!(
+        Path::new(&completed[0].dest_dir),
+        fixture.dir.path().join("Synthetic.Show.S01.WEB (2)")
+    );
+    let entries: Vec<_> = std::fs::read_dir(&foreign)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        entries,
+        vec![std::ffi::OsString::from("synthetic-other-client.mkv")]
+    );
+    assert_eq!(
+        std::fs::read(&foreign_file).unwrap(),
+        b"synthetic other client bytes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// a create a gateway answered with a server error
+
+fn budget_of_one() -> TorboxHourlyBudget {
+    TorboxHourlyBudget::with_limit(Arc::new(SystemTorboxClock), 1, Duration::from_secs(3600))
+}
+
+fn bad_gateway() -> ResponseTemplate {
+    ResponseTemplate::new(502).set_body_string("<html>synthetic bad gateway</html>")
+}
+
+#[tokio::test]
+async fn a_gateway_error_on_the_create_adopts_the_item_torbox_made() {
+    let fixture = Fixture::new().await;
+    // Empty before the create, the new item after it.
+    Mock::given(method("GET"))
+        .and(path("/v1/api/torrents/mylist"))
+        .respond_with(ok(json!([])))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&fixture.server)
+        .await;
+    fixture
+        .mount_list(
+            "torrents",
+            vec![item_with_hash(101, HASH, "downloading", false)],
+        )
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/api/torrents/createtorrent"))
+        .respond_with(bad_gateway())
+        .mount(&fixture.server)
+        .await;
+    let runtime = fixture.runtime_with(false, false, budget_of_one());
+    let client = TorboxDownloadClient::with_runtime(Arc::clone(&runtime));
+    let grab = client
+        .submit_download(&magnet_request("Synthetic.Show.S01.WEB"))
+        .await
+        .expect("the item TorBox made is found");
+    let record = record_of(&runtime, &grab.job_id).await;
+    assert_eq!(record.torbox_id, Some(101));
+    assert_eq!(record.phase, TorboxJobPhase::Remote);
+    let error = client
+        .submit_download(&magnet_request("Synthetic.Show.S02.WEB"))
+        .await
+        .expect_err("the slot stays counted");
+    assert_eq!(error.reason(), Some(torbox_refusal::HOURLY_LIMIT));
+}
+
+#[tokio::test]
+async fn a_gateway_error_with_no_item_leaves_the_job_for_the_poller() {
+    let fixture = Fixture::new().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/api/torrents/createtorrent"))
+        .respond_with(bad_gateway())
+        .mount(&fixture.server)
+        .await;
+    let runtime = fixture.runtime_with(false, false, budget_of_one());
+    let client = TorboxDownloadClient::with_runtime(Arc::clone(&runtime));
+    let error = client
+        .submit_download(&magnet_request("Synthetic.Show.S01.WEB"))
+        .await
+        .expect_err("nobody knows yet");
+    assert!(error.is_download_submit_ambiguous(), "{error:?}");
+    let records = runtime.records().await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].phase, TorboxJobPhase::Submitting);
+    assert_eq!(records[0].torbox_id, None);
+    let error = client
+        .submit_download(&magnet_request("Synthetic.Show.S02.WEB"))
+        .await
+        .expect_err("the slot stays counted");
+    assert_eq!(error.reason(), Some(torbox_refusal::HOURLY_LIMIT));
+}
+
+// ---------------------------------------------------------------------------
+// a submit dropped mid-create
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_submit_is_reconciled_by_the_poller() {
+    let fixture = Fixture::new().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/api/torrents/mylist"))
+        .respond_with(ok(json!([])))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&fixture.server)
+        .await;
+    fixture
+        .mount_list(
+            "torrents",
+            vec![item_with_hash(101, HASH, "downloading", false)],
+        )
+        .await;
+    let (mut arrived, release) = mount_held_create(&fixture, json!({ "torrent_id": 101 })).await;
+    let runtime = fixture.runtime();
+    let client = Arc::new(TorboxDownloadClient::with_runtime(Arc::clone(&runtime)));
+    let submitting = {
+        let client = Arc::clone(&client);
+        tokio::spawn(async move {
+            client
+                .submit_download(&magnet_request("Synthetic.Show.S01.WEB"))
+                .await
+        })
+    };
+    tokio::time::timeout(WAIT_BOUND, arrived.recv())
+        .await
+        .expect("the create was sent")
+        .unwrap();
+    submitting.abort();
+    assert!(submitting.await.unwrap_err().is_cancelled());
+    release.send(()).unwrap();
+
+    let job_id = runtime.records().await.remove(0).id;
+    tokio::time::timeout(WAIT_BOUND, async {
+        loop {
+            runtime.poll_once().await.unwrap();
+            if record_of(&runtime, &job_id).await.torbox_id.is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the poller adopts the item the dropped create made");
+    let record = record_of(&runtime, &job_id).await;
+    assert_eq!(record.torbox_id, Some(101));
+    assert_eq!(record.phase, TorboxJobPhase::Remote);
 }

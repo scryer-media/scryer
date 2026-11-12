@@ -298,10 +298,11 @@ struct RuntimeState {
 }
 
 impl RuntimeState {
-    /// A fetched torrent the poller still reads: one that seeds to a goal,
-    /// or one with no goal whose privacy TorBox has not reported yet.
+    /// A torrent TorBox finished that the poller still reads: one that
+    /// seeds to a goal, or one with no goal whose privacy TorBox has not
+    /// reported yet. It may be fetching or have failed after TorBox finished.
     fn reads_fetching(&self, record: &TorboxJobRecord) -> bool {
-        record.phase == TorboxJobPhase::Fetching
+        record.torbox_finished()
             && !record.cancelled
             && ((record.watches_seeding() && !self.seeding_ended.contains(&record.id))
                 || (record.awaits_privacy() && !self.privacy_checked.contains(&record.id)))
@@ -312,8 +313,7 @@ impl RuntimeState {
         match record.phase {
             TorboxJobPhase::Submitting => !self.in_flight.contains(&record.id),
             TorboxJobPhase::Remote => !record.cancelled,
-            TorboxJobPhase::Fetching => self.reads_fetching(record),
-            TorboxJobPhase::Failed => false,
+            TorboxJobPhase::Fetching | TorboxJobPhase::Failed => self.reads_fetching(record),
         }
     }
 
@@ -584,7 +584,9 @@ impl TorboxRuntime {
                     return Some(self.poll_interval);
                 }
                 _ if state.awaits_delete(record) => return Some(self.poll_interval),
-                TorboxJobPhase::Fetching if state.reads_fetching(record) => {
+                TorboxJobPhase::Fetching | TorboxJobPhase::Failed
+                    if state.reads_fetching(record) =>
+                {
                     seeding = true;
                 }
                 _ => {}
@@ -869,7 +871,7 @@ impl TorboxRuntime {
                         }
                         snapshots.insert(record.id.clone(), snapshot);
                     }
-                    TorboxJobPhase::Fetching => {
+                    TorboxJobPhase::Fetching | TorboxJobPhase::Failed => {
                         let seeds = record.watches_seeding() && !seeding_ended.contains(&record.id);
                         let privacy =
                             record.awaits_privacy() && !privacy_checked.contains(&record.id);
@@ -1085,7 +1087,31 @@ impl TorboxRuntime {
                 .into_iter()
                 .map(|(job, _)| job.output_basename.to_lowercase()),
         );
-        Ok(fetch::unique_job_folder(&base, &taken))
+        // The engine creates the job folder and the host later removes the
+        // payload files in it as this job's, so a folder of that name that
+        // another client sharing the directory made must never be used.
+        // Nothing in hand says whether one exists: each candidate is probed
+        // once, which is one probe per job when the fetch starts plus one per
+        // name already taken on disk. An existing entry is left untouched.
+        loop {
+            let folder = fetch::unique_job_folder(&base, &taken);
+            let path = self.download_dir.join(&folder);
+            match tokio::fs::symlink_metadata(&path).await {
+                Ok(_) => {
+                    taken.insert(folder.to_lowercase());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(folder),
+                Err(error) => {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_UNREACHABLE,
+                        format!(
+                            "the job folder {} could not be checked: {error}",
+                            path.display()
+                        ),
+                    ));
+                }
+            }
+        }
     }
 
     async fn record(&self, id: &str) -> Option<TorboxJobRecord> {
@@ -1524,6 +1550,10 @@ impl TorboxDownloadClient {
             state.in_flight.insert(record_id.clone());
             state.records.push(record);
         }
+        let _in_flight = InFlightGuard {
+            runtime: Arc::clone(runtime),
+            record_id: record_id.clone(),
+        };
         if let Err(error) = runtime.persist().await {
             self.drop_record(&record_id).await;
             release(&mut reservation);
@@ -1564,7 +1594,7 @@ impl TorboxDownloadClient {
                 }
                 created
             }
-            Err(error) if error.outcome_unknown() => {
+            Err(error) if error.create_outcome_unknown() => {
                 warn!(
                     client_id = runtime.client_id.as_str(),
                     item_id = record_id.as_str(),
@@ -1722,6 +1752,38 @@ impl TorboxDownloadClient {
                 "a refused TorBox download could not be dropped from the records"
             );
         }
+    }
+}
+
+/// Takes a submit's record out of `in_flight` however the submit ends,
+/// including when its future is dropped mid-create, and wakes the poller,
+/// which then treats the record as a create whose answer was lost.
+struct InFlightGuard {
+    runtime: Arc<TorboxRuntime>,
+    record_id: String,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        // `Drop` cannot await the state lock. Take it when it is free;
+        // otherwise hand the removal to a task.
+        if let Ok(mut state) = self.runtime.state.try_lock() {
+            state.in_flight.remove(&self.record_id);
+            drop(state);
+            self.runtime.wake.notify_one();
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // No runtime is left to run the poller; a restart starts with
+            // nothing in flight.
+            return;
+        };
+        let runtime = Arc::clone(&self.runtime);
+        let record_id = std::mem::take(&mut self.record_id);
+        handle.spawn(async move {
+            runtime.state.lock().await.in_flight.remove(&record_id);
+            runtime.wake.notify_one();
+        });
     }
 }
 
@@ -2010,13 +2072,15 @@ fn seeding_snapshot(
     snapshot: Option<&RemoteSnapshot>,
     seeding_ended: bool,
 ) -> DownloadSeedingSnapshot {
-    let downloaded = record.phase == TorboxJobPhase::Fetching
-        || snapshot.is_some_and(|snapshot| snapshot.downloaded);
+    let downloaded =
+        record.torbox_finished() || snapshot.is_some_and(|snapshot| snapshot.downloaded);
     let is_private = snapshot
         .and_then(|snapshot| snapshot.private)
         .or(record.private);
-    // TorBox confirmed it holds the item no more: nothing is left to seed.
-    let can_remove = if seeding_ended {
+    // TorBox confirmed it holds the item no more, or the job failed before
+    // TorBox finished it: nothing is seeded.
+    let never_finished = record.phase == TorboxJobPhase::Failed && !record.torbox_finished();
+    let can_remove = if seeding_ended || never_finished {
         Some(true)
     } else if !record.has_seed_goal() {
         is_private.and(downloaded.then_some(true))

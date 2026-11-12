@@ -34,6 +34,9 @@ pub const TORBOX_DEFAULT_RATE_LIMIT_RETRY: Duration = Duration::from_secs(60);
 /// The wait suggested after a TorBox-side fault that names none.
 pub const TORBOX_DEFAULT_SERVER_FAULT_RETRY: Duration = Duration::from_secs(60);
 const REDACTED: &str = "<redacted>";
+/// The largest answer read from TorBox. Generous for the list of a large
+/// account; anything bigger is not read.
+pub const TORBOX_MAX_ANSWER_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone)]
 struct TorboxToken(String);
@@ -50,6 +53,10 @@ pub struct TorboxApi {
     base_url: String,
     token: TorboxToken,
     http: reqwest::Client,
+    max_answer_bytes: usize,
+    /// Local mock servers hand out plain `http` links.
+    #[cfg(test)]
+    plain_http_links: bool,
 }
 
 impl fmt::Debug for TorboxApi {
@@ -352,6 +359,22 @@ impl TorboxError {
             Self::Decode { status, .. } => (200..300).contains(status),
             _ => false,
         }
+    }
+
+    /// [`Self::outcome_unknown`] for a create, which also counts a server
+    /// error that carries no TorBox code: a gateway in front of TorBox may
+    /// answer 5xx after TorBox made the item. A 5xx with TorBox's own code
+    /// is TorBox refusing.
+    pub fn create_outcome_unknown(&self) -> bool {
+        self.outcome_unknown()
+            || matches!(
+                self,
+                Self::Refused {
+                    status: 500..,
+                    code: None,
+                    ..
+                }
+            )
     }
 
     /// The Scryer error for this outcome, carrying a `torbox_refusal` reason
@@ -752,6 +775,9 @@ impl TorboxApi {
             base_url: TORBOX_API_BASE_URL.to_string(),
             token: TorboxToken(token.into().trim().to_string()),
             http,
+            max_answer_bytes: TORBOX_MAX_ANSWER_BYTES,
+            #[cfg(test)]
+            plain_http_links: false,
         }
     }
 
@@ -759,6 +785,27 @@ impl TorboxApi {
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into().trim_end_matches('/').to_string();
         self
+    }
+
+    /// Accept the plain `http` download links a local mock server hands out.
+    #[cfg(test)]
+    pub(crate) fn allow_plain_http_links(mut self) -> Self {
+        self.plain_http_links = true;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_max_answer_bytes(mut self, max: usize) -> Self {
+        self.max_answer_bytes = max;
+        self
+    }
+
+    fn accepts_link_scheme(&self, scheme: &str) -> bool {
+        #[cfg(test)]
+        if self.plain_http_links && scheme == "http" {
+            return true;
+        }
+        scheme == "https"
     }
 
     pub fn base_url(&self) -> &str {
@@ -986,13 +1033,13 @@ impl TorboxApi {
             }
         };
         match reqwest::Url::parse(link.trim()) {
-            Ok(url) if matches!(url.scheme(), "http" | "https") => {
+            Ok(url) if self.accepts_link_scheme(url.scheme()) => {
                 Ok(TorboxDownloadUrl(url.to_string()))
             }
             _ => Err(TorboxError::Decode {
                 operation,
                 status: answer.status,
-                message: "the download link is not an http(s) URL".to_string(),
+                message: "the download link is not an https URL".to_string(),
             }),
         }
     }
@@ -1125,11 +1172,8 @@ impl TorboxApi {
                 retry_after,
             });
         }
-        let body = response
-            .bytes()
-            .await
-            .map_err(|error| self.transport_error(operation, error))?;
         let status = status.as_u16();
+        let body = self.read_answer(operation, status, response).await?;
         let envelope = serde_json::from_slice::<Envelope>(&body).ok();
         match envelope {
             Some(envelope) if (200..300).contains(&status) && envelope.success == Some(true) => {
@@ -1160,6 +1204,40 @@ impl TorboxApi {
                 retry_after,
             }),
         }
+    }
+
+    /// The answer's body, read up to the cap. A body over the cap is not
+    /// read further and is an unreadable answer.
+    async fn read_answer(
+        &self,
+        operation: TorboxOperation,
+        status: u16,
+        mut response: reqwest::Response,
+    ) -> Result<Vec<u8>, TorboxError> {
+        let max = self.max_answer_bytes;
+        let too_large = || TorboxError::Decode {
+            operation,
+            status,
+            message: format!("the answer is larger than {max} bytes"),
+        };
+        if response
+            .content_length()
+            .is_some_and(|length| length > max as u64)
+        {
+            return Err(too_large());
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| self.transport_error(operation, error))?
+        {
+            if body.len().saturating_add(chunk.len()) > max {
+                return Err(too_large());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
     }
 
     fn transport_error(&self, operation: TorboxOperation, error: reqwest::Error) -> TorboxError {

@@ -1131,3 +1131,88 @@ fn every_known_code_round_trips() {
         TorboxErrorCode::Other("NEW_THING".to_string())
     );
 }
+
+#[tokio::test]
+async fn a_plain_http_download_link_is_refused() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/api/torrents/requestdl"))
+        .respond_with(ok(json!(
+            "http://cdn.synthetic.test/dl/abc123?sig=secretsig"
+        )))
+        .mount(&server)
+        .await;
+    let error = api(&server)
+        .request_download(TorboxItemKind::Torrent, 42, TorboxDownloadTarget::File(3))
+        .await
+        .expect_err("only https links are fetched");
+    assert!(matches!(error, TorboxError::Decode { .. }), "{error:?}");
+    assert!(!error.to_string().contains("secretsig"));
+
+    // The relaxation for local mock servers exists only in tests.
+    let link = api(&server)
+        .allow_plain_http_links()
+        .request_download(TorboxItemKind::Torrent, 42, TorboxDownloadTarget::File(3))
+        .await
+        .expect("a mock server's link");
+    assert!(link.expose().starts_with("http://"));
+}
+
+#[tokio::test]
+async fn an_answer_over_the_cap_is_not_read() {
+    let server = MockServer::start().await;
+    let items: Vec<Value> = (0..50)
+        .map(|id| json!({ "id": id, "name": format!("Synthetic.Item.{id}") }))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/v1/api/torrents/mylist"))
+        .respond_with(ok(json!(items)))
+        .mount(&server)
+        .await;
+    let error = api(&server)
+        .with_max_answer_bytes(256)
+        .list(TorboxItemKind::Torrent, Default::default())
+        .await
+        .expect_err("the answer is over the cap");
+    assert!(
+        matches!(error, TorboxError::Decode { status: 200, .. }),
+        "{error:?}"
+    );
+
+    let listed = api(&server)
+        .list(TorboxItemKind::Torrent, Default::default())
+        .await
+        .expect("under the default cap");
+    assert_eq!(listed.len(), 50);
+    assert_eq!(TORBOX_MAX_ANSWER_BYTES, 32 * 1024 * 1024);
+}
+
+#[tokio::test]
+async fn a_gateway_error_on_a_create_leaves_its_outcome_unknown() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/api/torrents/createtorrent"))
+        .respond_with(ResponseTemplate::new(502).set_body_string("<html>bad gateway</html>"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/api/torrents/createtorrent"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "success": false, "error": "DATABASE_ERROR", "detail": "synthetic", "data": null,
+        })))
+        .mount(&server)
+        .await;
+    let gateway = api(&server)
+        .create_torrent(magnet_create())
+        .await
+        .expect_err("502");
+    assert!(!gateway.outcome_unknown());
+    assert!(gateway.create_outcome_unknown(), "{gateway:?}");
+    let coded = api(&server)
+        .create_torrent(magnet_create())
+        .await
+        .expect_err("500 with a TorBox code");
+    assert!(coded.code().is_some(), "{coded:?}");
+    assert!(!coded.create_outcome_unknown(), "TorBox itself refused");
+}

@@ -105,21 +105,32 @@ impl TorboxJobRecord {
         self.seed_goal_ratio.is_some() || self.seed_goal_seconds.is_some()
     }
 
+    /// TorBox holds the whole item: the fetch started, or the job failed
+    /// after TorBox finished (its files were refused), so TorBox may be
+    /// seeding it either way.
+    pub(crate) fn torbox_finished(&self) -> bool {
+        match self.phase {
+            TorboxJobPhase::Fetching => true,
+            TorboxJobPhase::Failed => self.remote_finished_at.is_some(),
+            TorboxJobPhase::Submitting | TorboxJobPhase::Remote => false,
+        }
+    }
+
     /// A torrent whose TorBox seeding decides when it may be removed, so
     /// it is polled while it seeds.
     pub(crate) fn watches_seeding(&self) -> bool {
         self.kind == super::api::TorboxItemKind::Torrent
-            && self.phase == TorboxJobPhase::Fetching
+            && self.torbox_finished()
             && self.torbox_id.is_some()
             && self.has_seed_goal()
     }
 
-    /// A fetched torrent with no seed goal whose privacy TorBox has not
+    /// A finished torrent with no seed goal whose privacy TorBox has not
     /// reported: until it has, the torrent is held, since a private one
     /// must keep seeding.
     pub(crate) fn awaits_privacy(&self) -> bool {
         self.kind == super::api::TorboxItemKind::Torrent
-            && self.phase == TorboxJobPhase::Fetching
+            && self.torbox_finished()
             && self.torbox_id.is_some()
             && !self.has_seed_goal()
             && self.private.is_none()
