@@ -24,7 +24,7 @@ configuration and are written mode 600.
 
 - Sonarr and Radarr are only read (GET). Any arr change is made by the
   operator in arr's UI.
-- Read-only steps run without asking. Every Scryer write shows the operator
+- Read-only steps run directly. Every Scryer write shows the operator
   a short summary (counts, names, the first few items) and waits for a yes.
 - Never delete anything: not arr data, not media, not Scryer titles, roots or
   rule sets. Never send `removedRootIds`.

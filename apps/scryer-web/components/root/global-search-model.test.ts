@@ -16,6 +16,7 @@ import {
   buildGlobalSearchTabs,
   buildMetadataSearchActionState,
   buildMetadataResultCounts,
+  buildMetadataResultRequestPresentation,
   countHiddenCatalogResults,
   countHiddenCatalogResultsForFilters,
   countHiddenMetadataResults,
@@ -37,9 +38,15 @@ import {
   getVisibleRouteCommandResults,
   getVisibleRouteCommandResultsForFilters,
   isGlobalSearchFilterSelected,
+  isMetadataResultInLibrary,
   normalizeGlobalSearchFilterSelection,
+  selectMetadataSearchQueryVariant,
   toggleGlobalSearchFilterSelection,
 } from "./global-search-model.ts";
+import type {
+  LibraryPermission,
+  PermissionUser,
+} from "@/lib/utils/permissions";
 
 const t: Translate = (key) => key;
 
@@ -809,4 +816,193 @@ test("a series row known only by its TMDB id can still be added or requested", (
   );
   mappedOnly.externalIds = [{ source: "tmdb", kind: "movie", value: "5151" }];
   assert.equal(metadataSearchItemFromCatalogTitle(mappedOnly), null);
+});
+
+test("a result every requestable library already holds is in the library", () => {
+  const requestable = [
+    library("movies-main", "MOVIE", true),
+    library("movies-kids", "MOVIE"),
+  ];
+  const result = {
+    ...metadata("Fixture Film"),
+    presentInLibraryIds: ["movies-kids", "movies-main"],
+  };
+
+  const presentation = buildMetadataResultRequestPresentation(
+    result,
+    requestable,
+  );
+  assert.equal(presentation.heldInEveryRequestableLibrary, true);
+  assert.deepEqual(presentation.requestableLibraries, []);
+
+  const action = buildMetadataSearchActionState({
+    isInCatalog: presentation.heldInEveryRequestableLibrary,
+    canAdd: false,
+    canRequest: presentation.requestableLibraries.length > 0,
+    resultName: result.name,
+    t,
+  });
+  assert.equal(action.isInCatalog, true);
+  assert.equal(action.disabled, true);
+  assert.equal(action.opensRequestDialog, false);
+});
+
+test("a result some requestable libraries hold stays requestable into the rest", () => {
+  const main = library("movies-main", "MOVIE", true);
+  const kids = library("movies-kids", "MOVIE");
+  const archive = library("movies-archive", "MOVIE");
+  const result = {
+    ...metadata("Fixture Film"),
+    // A library the viewer cannot request into does not count either way.
+    presentInLibraryIds: ["movies-kids", "movies-elsewhere"],
+  };
+
+  const presentation = buildMetadataResultRequestPresentation(result, [
+    main,
+    kids,
+    archive,
+  ]);
+  assert.equal(presentation.heldInEveryRequestableLibrary, false);
+  assert.deepEqual(
+    presentation.requestableLibraries.map((entry) => entry.id),
+    ["movies-main", "movies-archive"],
+  );
+
+  const action = buildMetadataSearchActionState({
+    isInCatalog: presentation.heldInEveryRequestableLibrary,
+    canAdd: false,
+    canRequest: presentation.requestableLibraries.length > 0,
+    resultName: result.name,
+    t,
+  });
+  assert.equal(action.isInCatalog, false);
+  assert.equal(action.opensRequestDialog, true);
+});
+
+test("a result without presence is requestable into every library, as before", () => {
+  const requestable = [library("movies-main", "MOVIE", true)];
+  for (const presentInLibraryIds of [undefined, []]) {
+    const presentation = buildMetadataResultRequestPresentation(
+      { ...metadata("Fixture Film"), presentInLibraryIds },
+      requestable,
+    );
+    assert.equal(presentation.heldInEveryRequestableLibrary, false);
+    assert.equal(presentation.requestableLibraries, requestable);
+  }
+  // No library to request into: never "in library" from presence alone.
+  assert.equal(
+    buildMetadataResultRequestPresentation(
+      { ...metadata("Fixture Film"), presentInLibraryIds: ["movies-main"] },
+      [],
+    ).heldInEveryRequestableLibrary,
+    false,
+  );
+});
+
+function permissionUser(
+  grants: Array<[string, LibraryPermission[]]>,
+  appPermissions: PermissionUser["appPermissions"] = [],
+): PermissionUser {
+  return {
+    appPermissions,
+    libraryPermissions: grants.map(([libraryId, permissions]) => ({
+      libraryId,
+      permissions,
+    })),
+  };
+}
+
+test("a viewer who can View every library they request into keeps the catalog query", () => {
+  assert.equal(selectMetadataSearchQueryVariant(null), "catalog");
+  assert.equal(
+    selectMetadataSearchQueryVariant(
+      permissionUser([
+        ["movies-main", ["VIEW", "REQUEST"]],
+        ["movies-kids", ["VIEW"]],
+        ["series-main", ["VIEW", "AUTO_APPROVE_REQUESTS"]],
+      ]),
+    ),
+    "catalog",
+  );
+  // Administrators View every library without an explicit grant.
+  assert.equal(
+    selectMetadataSearchQueryVariant(
+      permissionUser([], ["MANAGE_PERMISSIONS"]),
+    ),
+    "catalog",
+  );
+});
+
+test("a request-only viewer runs the requester query", () => {
+  assert.equal(
+    selectMetadataSearchQueryVariant(
+      permissionUser([["movies-main", ["REQUEST"]]]),
+    ),
+    "requester",
+  );
+  // Auto-approve implies Request.
+  assert.equal(
+    selectMetadataSearchQueryVariant(
+      permissionUser([["movies-main", ["AUTO_APPROVE_REQUESTS"]]]),
+    ),
+    "requester",
+  );
+});
+
+test("a mixed viewer runs the requester query and a result in the request-only library is narrowed or marked", () => {
+  const user = permissionUser([
+    ["movies-main", ["VIEW", "REQUEST"]],
+    ["movies-kids", ["REQUEST"]],
+  ]);
+  assert.equal(selectMetadataSearchQueryVariant(user), "requester");
+
+  const requestable = [
+    library("movies-main", "MOVIE", true),
+    library("movies-kids", "MOVIE"),
+  ];
+
+  // Held only in the request-only library, which the catalog merge cannot see.
+  const heldInKids = {
+    ...metadata("Fixture Film"),
+    presentInLibraryIds: ["movies-kids"],
+  };
+  assert.equal(
+    isMetadataResultInLibrary({
+      inCatalogMerge: false,
+      result: heldInKids,
+      requestableLibraries: requestable,
+    }),
+    false,
+  );
+  assert.deepEqual(
+    buildMetadataResultRequestPresentation(
+      heldInKids,
+      requestable,
+    ).requestableLibraries.map((entry) => entry.id),
+    ["movies-main"],
+  );
+
+  // Held in both: marked, even though the catalog merge found nothing.
+  const heldInBoth = {
+    ...metadata("Fixture Film"),
+    presentInLibraryIds: ["movies-main", "movies-kids"],
+  };
+  assert.equal(
+    isMetadataResultInLibrary({
+      inCatalogMerge: false,
+      result: heldInBoth,
+      requestableLibraries: requestable,
+    }),
+    true,
+  );
+
+  // The catalog merge alone still marks a result, as before.
+  assert.equal(
+    isMetadataResultInLibrary({
+      inCatalogMerge: true,
+      result: metadata("Fixture Film"),
+      requestableLibraries: requestable,
+    }),
+    true,
+  );
 });

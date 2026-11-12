@@ -246,7 +246,8 @@ pub use ports::{
     MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
     MediaRequestUpdateResult, SeriesMovieExternalIdLookupMatch, SubtitleSyncClient,
     SubtitleSyncJob, TitleArtworkUrlUpdate, TitleDeletePreviewInfo, TitleExternalIdLookup,
-    TitleExternalIdLookupMatch, UserUiSettingsRepository,
+    TitleExternalIdLookupMatch, TitleExternalIdPresence, TitleExternalIdPresenceLookup,
+    UserUiSettingsRepository,
 };
 pub(crate) mod normalize;
 pub use acquisition::submission::describe_acquisition_metrics;

@@ -56,6 +56,10 @@ pub(crate) struct MockTitleRepo {
     pub(super) halt_deletes_after: Mutex<Option<(usize, Arc<tokio::sync::Notify>)>>,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
+    /// Batched library-presence reads, and the library ids each one asked
+    /// about, so a test can prove one read per search and the libraries it
+    /// was scoped to.
+    pub(super) external_id_presence_reads: std::sync::Mutex<Vec<Vec<String>>>,
     /// How many times a caller asked for the whole catalog to match against.
     /// Scheduled pollers must not pay for this before they know they have
     /// somewhere to send a result.
@@ -844,6 +848,38 @@ impl TitleRepository for MockTitleRepo {
             }
         }
         Ok(existing)
+    }
+
+    async fn list_existing_external_ids_in_libraries(
+        &self,
+        library_ids: &[String],
+        lookups: &[crate::TitleExternalIdPresenceLookup],
+    ) -> AppResult<HashSet<crate::TitleExternalIdPresence>> {
+        self.external_id_presence_reads
+            .lock()
+            .expect("presence read log")
+            .push(library_ids.to_vec());
+        let list = self.store.lock().await;
+        let mut present = HashSet::new();
+        for title in list
+            .iter()
+            .filter(|title| library_ids.contains(&title.library_id))
+        {
+            for lookup in lookups.iter().filter(|lookup| lookup.facet == title.facet) {
+                if title.external_ids.iter().any(|external_id| {
+                    external_id
+                        .source
+                        .eq_ignore_ascii_case(lookup.source.trim())
+                        && external_id.value.trim() == lookup.value.trim()
+                }) {
+                    present.insert(crate::TitleExternalIdPresence {
+                        library_id: title.library_id.clone(),
+                        lookup: lookup.clone(),
+                    });
+                }
+            }
+        }
+        Ok(present)
     }
 
     async fn map_existing_external_ids_to_title_ids_in_library_and_facet(

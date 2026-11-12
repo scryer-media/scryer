@@ -41,6 +41,7 @@ import {
   buildCatalogSearchSections,
   buildGlobalSearchTabs,
   buildMetadataResultCounts,
+  buildMetadataResultRequestPresentation,
   buildMetadataSearchActionState,
   metadataSearchItemFromCatalogTitle,
   countHiddenCatalogResultsForFilters,
@@ -1258,6 +1259,10 @@ export const RootHeader = React.memo(function RootHeader({
   const renderMetadataSection = React.useCallback(
     (items: MetadataTvdbSearchItem[], facet: Facet, _section: string) => {
       return items.map((result) => {
+        const requestPresentation = buildMetadataResultRequestPresentation(
+          result,
+          requestableLibrariesByFacet[facet],
+        );
         const {
           actionTitle,
           disabled,
@@ -1272,7 +1277,7 @@ export const RootHeader = React.memo(function RootHeader({
               rootFoldersByFacet[facet].some((rootFolder) =>
                 Boolean(rootFolder.path.trim()),
               )),
-          canRequest: requestableLibrariesByFacet[facet].length > 0,
+          canRequest: requestPresentation.requestableLibraries.length > 0,
           resultName: result.name,
           t,
         });
@@ -1283,7 +1288,11 @@ export const RootHeader = React.memo(function RootHeader({
           }
 
           if (opensRequestDialog) {
-            handleOpenRequestDialog(result, facet);
+            handleOpenRequestDialog(
+              result,
+              facet,
+              requestPresentation.requestableLibraries,
+            );
             return;
           }
 

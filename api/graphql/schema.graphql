@@ -19338,6 +19338,14 @@ type MetadataSearchItemPayload {
 	search populates it; every other metadata-search surface returns null.
 	"""
 	existingTitleId: ID
+	"""
+	Ids of the libraries of this result's facet that already hold a title
+	with one of its external ids, limited to libraries the caller may
+	view, request into or manage titles in. Carries no title id. Computed
+	only by `searchMetadata` and `searchMetadataMulti`, and only when
+	selected; every other metadata-search surface returns an empty list.
+	"""
+	presentInLibraryIds: [ID!]!
 }
 
 """

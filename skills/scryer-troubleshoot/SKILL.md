@@ -6,8 +6,9 @@ description: Diagnoses problems on an operator's own Scryer instance from the di
 # Troubleshoot Scryer
 
 Find the cause of a Scryer problem while reading as little as possible.
-Everything here is read-only. Bulk data goes to files; read only counts,
-jq extracts and capped searches.
+Diagnosis is read-only. A settings change or a connection test happens
+only after the operator says yes. Bulk data goes to files; read only
+counts, jq extracts and capped searches.
 
 ## Prerequisites
 

@@ -17,9 +17,9 @@ first and waits for a yes.
 - Set `S` to this skill's directory (absolute path) and work in a separate
   directory the operator agrees to, so output files never land inside the
   skill. Secret-bearing files go in a private subdirectory of it.
-- Permissions: **Manage system settings** for indexers and download
-  clients; **Manage catalog settings** for routing, quality and delay
-  profiles.
+- Needs the **Manage system settings** permission for indexers and
+  download clients, and the **Manage catalog settings** permission for
+  routing, quality and delay profiles.
 - Local tools: `jq`.
 
 ## Rules

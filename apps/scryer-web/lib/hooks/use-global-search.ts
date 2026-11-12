@@ -10,6 +10,10 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { showCatalogAddToast } from "@/components/root/catalog-add-toast";
 import {
+  isMetadataResultInLibrary,
+  selectMetadataSearchQueryVariant,
+} from "@/components/root/global-search-model";
+import {
   catalogSearchTitlesQuery,
   globalSearchInitQuery,
   globalSearchRequesterInitQuery,
@@ -17,7 +21,9 @@ import {
   metadataSeriesQuery,
   requestableLibrariesQuery,
   searchMetadataMultiQuery,
+  searchMetadataMultiRequesterQuery,
   searchMetadataQuery,
+  searchMetadataRequesterQuery,
   titlesByExternalIdsQuery,
 } from "@/lib/graphql/queries";
 import { isAbortError, makeAbortableFetch } from "@/lib/graphql/urql-client";
@@ -548,6 +554,10 @@ export function useGlobalSearch({
     authenticatedUser,
     LIBRARY_PERMISSIONS.view,
   );
+  // Presence is asked for only when some library the user can request into
+  // is one they cannot View, so the catalog merge cannot see it.
+  const needsLibraryPresence =
+    selectMetadataSearchQueryVariant(authenticatedUser) === "requester";
   const [queueFacet, setQueueFacet] = useState<Facet>(initialQueueFacet);
   const catalogChangeSignal = 0;
   const sortByRelevance = useCallback(
@@ -988,10 +998,22 @@ export function useGlobalSearch({
     [catalogTitlesByTvdbId],
   );
 
+  // A result is in the library when the catalog search found it in a library
+  // the viewer can View, or when the server reports that every library the
+  // viewer could request it into already holds it.
   const isMetadataSearchResultInCatalog = useCallback(
-    (_facet: Facet, result: MetadataTvdbSearchItem) =>
-      isMetadataSearchResultInAnyCatalog(result),
-    [isMetadataSearchResultInAnyCatalog],
+    (facet: Facet, result: MetadataTvdbSearchItem) =>
+      isMetadataResultInLibrary({
+        inCatalogMerge:
+          canViewCatalog && isMetadataSearchResultInAnyCatalog(result),
+        result,
+        requestableLibraries: visibleRequestableLibrariesByFacet[facet],
+      }),
+    [
+      canViewCatalog,
+      isMetadataSearchResultInAnyCatalog,
+      visibleRequestableLibrariesByFacet,
+    ],
   );
 
   const mapFacetToTvdbType = useCallback((facet: Facet) => {
@@ -1140,12 +1162,17 @@ export function useGlobalSearch({
       setGlobalStatus(t("status.searchingTvdb", { query }));
       try {
         const { data: searchData, error: searchError } = await client
-          .query(searchMetadataQuery, {
-            query,
-            type: mapFacetToTvdbType(queueFacet),
-            limit: 12,
-            language: metadataLanguageForUi(uiLanguage),
-          })
+          .query(
+            needsLibraryPresence
+              ? searchMetadataRequesterQuery
+              : searchMetadataQuery,
+            {
+              query,
+              type: mapFacetToTvdbType(queueFacet),
+              limit: 12,
+              language: metadataLanguageForUi(uiLanguage),
+            },
+          )
           .toPromise();
         if (searchError) throw searchError;
         const rankedMatches = sortByRelevance(
@@ -1159,7 +1186,12 @@ export function useGlobalSearch({
           : {};
         const matches = rankedMatches.filter(
           (item: MetadataTvdbSearchItem) =>
-            !isMetadataResultCataloged(catalogLookup, item),
+            !isMetadataResultInLibrary({
+              inCatalogMerge: isMetadataResultCataloged(catalogLookup, item),
+              result: item,
+              requestableLibraries:
+                visibleRequestableLibrariesByFacet[queueFacet],
+            }),
         );
         setTvdbCandidates(matches);
         setGlobalStatus(
@@ -1182,11 +1214,13 @@ export function useGlobalSearch({
       canViewCatalog,
       lookupCatalogTitlesForMetadataResults,
       mapFacetToTvdbType,
+      needsLibraryPresence,
       queueFacet,
       setGlobalStatus,
       sortByRelevance,
       t,
       uiLanguage,
+      visibleRequestableLibrariesByFacet,
     ],
   );
 
@@ -1281,7 +1315,9 @@ export function useGlobalSearch({
 
       const metadataPromise = client
         .query(
-          searchMetadataMultiQuery,
+          needsLibraryPresence
+            ? searchMetadataMultiRequesterQuery
+            : searchMetadataMultiQuery,
           {
             query: trimmed,
             limit: AUTOCOMPLETE_LIMIT,
@@ -1448,6 +1484,7 @@ export function useGlobalSearch({
       emptyCatalogTitlesByTvdbId,
       emptyMetadataSearchResults,
       lookupCatalogTitlesForMetadataResults,
+      needsLibraryPresence,
       primeCatalogConfigForMetadataActions,
       resolveCatalogPosterUrl,
       setGlobalStatus,
