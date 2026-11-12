@@ -112,6 +112,10 @@ function normalizeJobDefinition(value: unknown): JobDefinition | null {
           : null,
       nextRunAt:
         typeof schedule.nextRunAt === "string" ? schedule.nextRunAt : null,
+      lastIdleCheckAt:
+        typeof schedule.lastIdleCheckAt === "string"
+          ? schedule.lastIdleCheckAt
+          : null,
     },
   };
 }
@@ -152,6 +156,7 @@ function customJobDefinition(
       intervalSeconds: null,
       initialDelaySeconds: null,
       nextRunAt: null,
+      lastIdleCheckAt: null,
     },
   };
 }

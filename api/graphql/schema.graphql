@@ -10600,6 +10600,12 @@ type JobScheduleInfoPayload {
 	Next scheduled run as a UTC timestamp, or null when no run is scheduled.
 	"""
 	nextRunAt: DateTime
+	"""
+	UTC time the scheduler last visited the job and found nothing to do, so
+	recorded no run. Null when no such visit happened since the server
+	started.
+	"""
+	lastIdleCheckAt: DateTime
 }
 
 """

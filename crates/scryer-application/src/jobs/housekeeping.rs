@@ -281,6 +281,33 @@ impl AppUseCase {
     }
 }
 
+/// The names in the recycle bin directory that are among `wanted`, from one
+/// read of the directory. Only names are read: no entry is opened or probed.
+/// A failed read of any part of the directory fails the whole bin, as the
+/// listing it stands in for does.
+async fn selected_names_in_recycle_bin(
+    base_path: &std::path::Path,
+    wanted: &HashSet<&str>,
+) -> AppResult<Vec<String>> {
+    let mut entries = tokio::fs::read_dir(base_path).await.map_err(|error| {
+        AppError::Repository(format!(
+            "failed to read recycle bin directory {}: {error}",
+            base_path.display()
+        ))
+    })?;
+    let mut names = Vec::new();
+    while let Some(entry) = entries.next_entry().await.map_err(|error| {
+        AppError::Repository(format!("failed to read recycle bin entry: {error}"))
+    })? {
+        if let Some(name) = entry.file_name().to_str()
+            && wanted.contains(name)
+        {
+            names.push(name.to_string());
+        }
+    }
+    Ok(names)
+}
+
 fn resolve_recycle_entry_library_with_title(
     entry: &crate::recycle_bin::RecycleEntry,
     roots: &[RecycleRootLibrary],
@@ -672,21 +699,27 @@ impl AppUseCase {
                     !protected_upgrade_file_ids.contains(&media_file.media_file_id)
                 })
                 .collect::<std::collections::VecDeque<_>>();
+            let mut root_checks = OrphanSweepRootChecks::new();
             while !unprobed.is_empty() {
                 // The probes are blocking filesystem calls, so they run off the
                 // runtime. Each blocking pass stops at the first orphan it
                 // finds, so every row is still removed straight after its own
-                // root check and file probe, exactly as when they ran inline.
-                let (rest, orphan) = tokio::task::spawn_blocking(move || {
-                    let orphan =
-                        next_orphan_media_file(&mut unprobed, ORPHAN_SWEEP_PROBES_PER_PASS);
-                    (unprobed, orphan)
+                // file probe. A root's availability is proven once per window
+                // of rows and re-proven when the next window starts.
+                let (rest, checks, orphan) = tokio::task::spawn_blocking(move || {
+                    let orphan = next_orphan_media_file(
+                        &mut unprobed,
+                        ORPHAN_SWEEP_PROBES_PER_PASS,
+                        &mut root_checks,
+                    );
+                    (unprobed, root_checks, orphan)
                 })
                 .await
                 .map_err(|error| {
                     AppError::Repository(format!("orphan media-file probe task failed: {error}"))
                 })?;
                 unprobed = rest;
+                root_checks = checks;
                 let Some(media_file) = orphan else {
                     continue;
                 };
@@ -768,8 +801,9 @@ impl AppUseCase {
             stale_download_queue_deletes,
             stale_rule_set_history,
             stale_maintenance_evaluation_runs,
+            stale_held_action_runs,
         ) = if general_settings.keep_history_forever {
-            (0, 0, 0, 0, 0, 0, 0)
+            (0, 0, 0, 0, 0, 0, 0, 0)
         } else {
             (
                 self.services
@@ -812,6 +846,11 @@ impl AppUseCase {
                     .housekeeping
                     .delete_maintenance_evaluation_runs_older_than(history_retention_days)
                     .await?,
+                self.services
+                    .workflow
+                    .housekeeping
+                    .delete_held_lifecycle_action_runs_older_than(history_retention_days)
+                    .await?,
             )
         };
         let stale_operational_domain_events = self
@@ -845,6 +884,7 @@ impl AppUseCase {
             + stale_download_queue_deletes
             + stale_rule_set_history
             + stale_maintenance_evaluation_runs
+            + stale_held_action_runs
             + stale_list_sync_runs;
 
         // 3. Stale staged NZB artifacts (> 1 hour old)
@@ -1406,24 +1446,7 @@ impl AppUseCase {
     ) -> AppResult<crate::RecycleBinBatchJobAccepted> {
         let entry_ids = normalize_recycle_batch_ids(entry_ids)?;
         let guards = self.acquire_recycle_entry_guards(&entry_ids).await?;
-        let available = self.list_recycled_items(actor, None).await?;
-        let available_by_id = available
-            .into_iter()
-            .map(|item| (item.id, item.library_id))
-            .collect::<HashMap<_, _>>();
-        let mut library_ids = HashSet::new();
-        for entry_id in &entry_ids {
-            let library_id = available_by_id.get(entry_id).ok_or_else(|| {
-                AppError::not_found_reason(
-                    crate::error_reasons::jobs::RECYCLE_ENTRY_NOT_FOUND,
-                    format!("recycle entry {entry_id}"),
-                )
-            })?;
-            library_ids.insert(library_id.clone());
-        }
-
-        let mut library_ids = library_ids.into_iter().collect::<Vec<_>>();
-        library_ids.sort();
+        let library_ids = self.recycle_purge_selection(actor, &entry_ids).await?;
         let (run, job_run, actor_event) = self
             .create_recycle_batch_job_run(
                 actor,
@@ -1445,6 +1468,139 @@ impl AppUseCase {
         });
 
         Ok(crate::RecycleBinBatchJobAccepted { entry_ids, job_run })
+    }
+
+    /// The sorted libraries of the selected entries, refusing the batch when
+    /// any selected entry is not a trusted committed entry of a library the
+    /// actor may manage. This is exactly the answer the full recycle-bin
+    /// listing gives for those ids.
+    ///
+    /// Only the selected entries are opened: each bin's directory names are
+    /// read once and only the names that were selected are inspected, and
+    /// their titles' libraries are read in one batched statement. A damaged
+    /// entry that was not selected is therefore quarantined by the next
+    /// listing or expiry sweep rather than by this request; a selected one is
+    /// still quarantined here, by the same inspection.
+    pub(crate) async fn recycle_purge_selection(
+        &self,
+        actor: &scryer_domain::User,
+        entry_ids: &[String],
+    ) -> AppResult<Vec<String>> {
+        let not_found = |entry_id: &str| {
+            AppError::not_found_reason(
+                crate::error_reasons::jobs::RECYCLE_ENTRY_NOT_FOUND,
+                format!("recycle entry {entry_id}"),
+            )
+        };
+        self.require_recycle_bin_page_access(actor).await?;
+        let selected_library_ids = self.selected_recycle_library_ids(actor, None).await?;
+        if selected_library_ids.is_empty() {
+            return Err(not_found(entry_ids.first().map_or("", String::as_str)));
+        }
+        let roots = self.recycle_root_libraries().await?;
+        let wanted = entry_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+
+        let mut found = Vec::new();
+        for (media_root, config) in self.resolve_all_recycle_configs().await {
+            // A disabled bin lists nothing; the readiness of an enabled one
+            // is checked again by the lookup of each selected entry.
+            if !(config.enabled && config.cleanup_enabled) {
+                continue;
+            }
+            let names = match selected_names_in_recycle_bin(&config.base_path, &wanted).await {
+                Ok(names) => names,
+                Err(error) => {
+                    info!(error = %error, media_root = %media_root, "failed to list recycle entries");
+                    continue;
+                }
+            };
+            for name in names {
+                if let Some(entry) =
+                    crate::recycle_bin::find_committed_entry(&config, &name).await?
+                {
+                    found.push(crate::recycle_bin::RecycleEntry {
+                        entry_id: name,
+                        manifest: entry.manifest,
+                        media_root: media_root.clone(),
+                    });
+                }
+            }
+        }
+
+        let mut title_ids = found
+            .iter()
+            .filter_map(|entry| entry.manifest.title_id.clone())
+            .collect::<Vec<_>>();
+        title_ids.sort();
+        title_ids.dedup();
+        let title_libraries = if title_ids.is_empty() {
+            HashMap::new()
+        } else {
+            self.services
+                .catalog
+                .titles
+                .list_library_ids_for_titles(&title_ids)
+                .await?
+                .into_iter()
+                .collect::<HashMap<_, _>>()
+        };
+
+        let mut library_by_entry = HashMap::new();
+        for entry in &found {
+            let title_library_id = entry
+                .manifest
+                .title_id
+                .as_deref()
+                .and_then(|title_id| title_libraries.get(title_id))
+                .map(String::as_str);
+            if let Some(library) =
+                resolve_recycle_entry_library_with_title(entry, &roots, title_library_id)
+                && selected_library_ids.contains(&library.id)
+            {
+                library_by_entry
+                    .entry(entry.entry_id.as_str())
+                    .or_insert(library.id);
+            }
+        }
+
+        let mut library_ids = HashSet::new();
+        for entry_id in entry_ids {
+            let library_id = library_by_entry
+                .get(entry_id.as_str())
+                .ok_or_else(|| not_found(entry_id))?;
+            library_ids.insert(library_id.clone());
+        }
+        let mut library_ids = library_ids.into_iter().collect::<Vec<_>>();
+        library_ids.sort();
+        Ok(library_ids)
+    }
+
+    /// The selection as the full recycle-bin listing answers it, kept to
+    /// compare the narrow lookup against.
+    #[cfg(test)]
+    pub(crate) async fn recycle_purge_selection_by_listing(
+        &self,
+        actor: &scryer_domain::User,
+        entry_ids: &[String],
+    ) -> AppResult<Vec<String>> {
+        let available = self.list_recycled_items(actor, None).await?;
+        let available_by_id = available
+            .into_iter()
+            .map(|item| (item.id, item.library_id))
+            .collect::<HashMap<_, _>>();
+        let mut library_ids = HashSet::new();
+        for entry_id in entry_ids {
+            let library_id = available_by_id.get(entry_id).ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::jobs::RECYCLE_ENTRY_NOT_FOUND,
+                    format!("recycle entry {entry_id}"),
+                )
+            })?;
+            library_ids.insert(library_id.clone());
+        }
+        let mut library_ids = library_ids.into_iter().collect::<Vec<_>>();
+        library_ids.sort();
+        Ok(library_ids)
     }
 
     async fn acquire_recycle_entry_guards(
@@ -2537,8 +2693,85 @@ impl AppUseCase {
 
 /// How many catalog rows one blocking orphan-sweep pass may probe before it
 /// hands control back, so a large library does not hold one blocking thread
-/// for the whole sweep.
+/// for the whole sweep. It is also how many rows one media-root availability
+/// verdict is reused for before the root is proven again.
 const ORPHAN_SWEEP_PROBES_PER_PASS: usize = 256;
+
+/// Media-root availability verdicts for the orphan sweep, each reused for at
+/// most [`ORPHAN_SWEEP_PROBES_PER_PASS`] rows.
+///
+/// Proving a root available costs an lstat, an opendir and a readdir, which
+/// on a network share are round trips. The verdict is taken once per root per
+/// window of rows instead of once per row, and every window starts over, so a
+/// root that disconnects mid-sweep is seen again within one window.
+struct OrphanSweepRootChecks {
+    verdicts: std::collections::HashMap<PathBuf, crate::AppResult<()>>,
+    rows_in_window: usize,
+}
+
+impl OrphanSweepRootChecks {
+    fn new() -> Self {
+        Self {
+            verdicts: std::collections::HashMap::new(),
+            rows_in_window: 0,
+        }
+    }
+
+    /// The root verdict for one row: the same answer
+    /// [`crate::fs_safety::resolve_available_root_for_path`] gives, with the
+    /// filesystem part taken at most once per root per window.
+    fn check(&mut self, path: &Path, roots: &[PathBuf]) -> crate::AppResult<()> {
+        if self.rows_in_window >= ORPHAN_SWEEP_PROBES_PER_PASS {
+            self.verdicts.clear();
+            self.rows_in_window = 0;
+        }
+        self.rows_in_window += 1;
+        let root = crate::fs_safety::containing_root_for_path(path, roots)?;
+        self.verdicts
+            .entry(root)
+            .or_insert_with_key(|root| crate::fs_safety::ensure_root_available(root))
+            .clone()
+    }
+}
+
+/// What the sweep decided about one catalog row.
+#[derive(Debug)]
+enum OrphanProbe {
+    /// The file is on disk; the row stays.
+    Present,
+    /// The root is available and the file is proven missing.
+    Orphan,
+    /// The root could not be proven available; the row is skipped.
+    RootRefused(crate::AppError),
+    /// The file's status could not be read; the row is skipped.
+    StatusUnreadable(std::io::Error),
+}
+
+/// Decides one catalog row. Root availability is checked before probing the
+/// file path so a disconnected media root cannot make every row look
+/// orphaned. Adds one lstat of the file per row; the root probes come from
+/// `root_checks`.
+///
+/// Blocking: call it from a blocking thread.
+fn probe_orphan_media_file(
+    media_file: &crate::HousekeepingMediaFileRootRow,
+    root_checks: &mut OrphanSweepRootChecks,
+) -> OrphanProbe {
+    let file_path = crate::stored_paths::stored_path_to_path_buf(&media_file.file_path);
+    let roots = media_file
+        .root_paths
+        .iter()
+        .map(|root| crate::stored_paths::stored_path_to_path_buf(root))
+        .collect::<Vec<_>>();
+    if let Err(error) = root_checks.check(&file_path, &roots) {
+        return OrphanProbe::RootRefused(error);
+    }
+    match std::fs::symlink_metadata(&file_path) {
+        Ok(_) => OrphanProbe::Present,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => OrphanProbe::Orphan,
+        Err(error) => OrphanProbe::StatusUnreadable(error),
+    }
+}
 
 /// Probes catalog rows from the front of `files` until one is proven missing
 /// on disk, and returns it. Rows whose root is unavailable, or whose status
@@ -2549,37 +2782,27 @@ const ORPHAN_SWEEP_PROBES_PER_PASS: usize = 256;
 fn next_orphan_media_file(
     files: &mut std::collections::VecDeque<crate::HousekeepingMediaFileRootRow>,
     budget: usize,
+    root_checks: &mut OrphanSweepRootChecks,
 ) -> Option<crate::HousekeepingMediaFileRootRow> {
     for _ in 0..budget {
         let media_file = files.pop_front()?;
-        let file_path = crate::stored_paths::stored_path_to_path_buf(&media_file.file_path);
-        let roots = media_file
-            .root_paths
-            .iter()
-            .map(|root| crate::stored_paths::stored_path_to_path_buf(root))
-            .collect::<Vec<_>>();
-        // Root availability is checked before probing the file path so a
-        // disconnected media root cannot make every row look orphaned.
-        if let Err(error) = crate::fs_safety::resolve_available_root_for_path(&file_path, &roots) {
-            warn!(
-                error = %error,
-                file_id = %media_file.media_file_id,
-                path = %file_path.display(),
-                "skipping orphan media-file cleanup because media root is unavailable"
-            );
-            continue;
-        }
-
-        match std::fs::symlink_metadata(&file_path) {
-            Ok(_) => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Some(media_file);
-            }
-            Err(error) => {
+        match probe_orphan_media_file(&media_file, root_checks) {
+            OrphanProbe::Present => continue,
+            OrphanProbe::Orphan => return Some(media_file),
+            OrphanProbe::RootRefused(error) => {
                 warn!(
                     error = %error,
                     file_id = %media_file.media_file_id,
-                    path = %file_path.display(),
+                    path = %crate::stored_paths::stored_path_to_path_buf(&media_file.file_path).display(),
+                    "skipping orphan media-file cleanup because media root is unavailable"
+                );
+                continue;
+            }
+            OrphanProbe::StatusUnreadable(error) => {
+                warn!(
+                    error = %error,
+                    file_id = %media_file.media_file_id,
+                    path = %crate::stored_paths::stored_path_to_path_buf(&media_file.file_path).display(),
                     "skipping orphan media-file cleanup because file status could not be read"
                 );
                 continue;
@@ -2679,14 +2902,196 @@ mod tests {
                 .iter()
                 .cloned()
                 .collect::<std::collections::VecDeque<_>>();
+            let mut root_checks = OrphanSweepRootChecks::new();
             let mut found = Vec::new();
             while !pending.is_empty() {
-                if let Some(orphan) = next_orphan_media_file(&mut pending, budget) {
+                if let Some(orphan) = next_orphan_media_file(&mut pending, budget, &mut root_checks)
+                {
                     found.push(orphan.media_file_id);
                 }
             }
             assert_eq!(found, expected, "budget {budget}");
         }
+    }
+
+    /// One row's decision as a comparable value: the kind, and for a refused
+    /// root the refusal's reason code.
+    fn probe_label(probe: &OrphanProbe) -> String {
+        match probe {
+            OrphanProbe::Present => "present".to_string(),
+            OrphanProbe::Orphan => "orphan".to_string(),
+            OrphanProbe::RootRefused(error) => {
+                format!("refused:{}", error.validation_reason().unwrap_or("none"))
+            }
+            OrphanProbe::StatusUnreadable(_) => "unreadable".to_string(),
+        }
+    }
+
+    /// The per-row check the sweep made before root verdicts were reused.
+    fn per_row_probe_label(media_file: &crate::HousekeepingMediaFileRootRow) -> String {
+        let file_path = crate::stored_paths::stored_path_to_path_buf(&media_file.file_path);
+        let roots = media_file
+            .root_paths
+            .iter()
+            .map(|root| crate::stored_paths::stored_path_to_path_buf(root))
+            .collect::<Vec<_>>();
+        if let Err(error) = crate::fs_safety::resolve_available_root_for_path(&file_path, &roots) {
+            return format!("refused:{}", error.validation_reason().unwrap_or("none"));
+        }
+        match std::fs::symlink_metadata(&file_path) {
+            Ok(_) => "present".to_string(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "orphan".to_string(),
+            Err(_) => "unreadable".to_string(),
+        }
+    }
+
+    fn sweep_row(
+        id: &str,
+        path: &std::path::Path,
+        roots: &[&std::path::Path],
+    ) -> crate::HousekeepingMediaFileRootRow {
+        crate::HousekeepingMediaFileRootRow {
+            media_file_id: id.to_string(),
+            title_id: format!("title-{id}"),
+            file_path: path.to_string_lossy().into_owned(),
+            library_id: "library-1".to_string(),
+            root_paths: roots
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn reused_root_verdicts_sweep_and_refuse_the_same_rows_as_per_row_checks() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mounted = temp.path().join("Emberfall");
+        let empty = temp.path().join("Cinderwake");
+        let unmounted = temp.path().join("Ashgrove");
+        let linked = temp.path().join("Ashgrove Link");
+        std::fs::create_dir_all(mounted.join("Season 01")).expect("mounted root");
+        std::fs::create_dir_all(&empty).expect("empty root");
+        std::fs::write(mounted.join("Season 01").join("present.mkv"), b"x").expect("present");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&mounted, &linked).expect("symlinked root");
+
+        // More rows than one window, so verdicts are both reused and renewed.
+        let mut files = Vec::new();
+        for index in 0..(ORPHAN_SWEEP_PROBES_PER_PASS * 2 + 37) {
+            let id = format!("file-{index:04}");
+            let row = match index % 7 {
+                0 => sweep_row(
+                    &id,
+                    &mounted.join("Season 01").join("present.mkv"),
+                    &[&mounted],
+                ),
+                1 => sweep_row(
+                    &id,
+                    &mounted.join("Season 01").join(format!("gone-{index}.mkv")),
+                    &[&mounted],
+                ),
+                2 => sweep_row(&id, &empty.join(format!("gone-{index}.mkv")), &[&empty]),
+                3 => sweep_row(
+                    &id,
+                    &unmounted.join(format!("gone-{index}.mkv")),
+                    &[&unmounted],
+                ),
+                4 => sweep_row(
+                    &id,
+                    &temp.path().join(format!("outside-{index}.mkv")),
+                    &[&mounted],
+                ),
+                5 => sweep_row(&id, &linked.join(format!("gone-{index}.mkv")), &[&linked]),
+                _ => sweep_row(
+                    &id,
+                    &mounted.join("Season 01").join("present.mkv"),
+                    &[&empty, &mounted],
+                ),
+            };
+            files.push(row);
+        }
+
+        let expected = files.iter().map(per_row_probe_label).collect::<Vec<_>>();
+        let mut root_checks = OrphanSweepRootChecks::new();
+        let actual = files
+            .iter()
+            .map(|row| probe_label(&probe_orphan_media_file(row, &mut root_checks)))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        let empty_reason = crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_EMPTY;
+        let mut required = vec![
+            "present".to_string(),
+            "orphan".to_string(),
+            format!("refused:{empty_reason}"),
+            format!(
+                "refused:{}",
+                crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNAVAILABLE
+            ),
+            format!("refused:{}", crate::delete_refusal::PATH_OUTSIDE_ROOTS),
+        ];
+        if cfg!(unix) {
+            required.push(format!(
+                "refused:{}",
+                crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_SYMLINK
+            ));
+        }
+        for label in &required {
+            assert!(
+                expected.iter().any(|seen| seen == label),
+                "the fixture must produce {label}: {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_root_that_empties_mid_sweep_is_refused_from_the_next_window() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("Emberfall");
+        std::fs::create_dir_all(&root).expect("root");
+        let marker = root.join("mounted");
+        std::fs::write(&marker, b"x").expect("marker");
+
+        // Every row's file is missing, so a row is an orphan exactly while its
+        // root is believed available.
+        let files = (0..(ORPHAN_SWEEP_PROBES_PER_PASS * 2 + 10))
+            .map(|index| {
+                sweep_row(
+                    &format!("file-{index:04}"),
+                    &root.join(format!("gone-{index}.mkv")),
+                    &[&root],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let disconnect_after = 10;
+        let mut root_checks = OrphanSweepRootChecks::new();
+        let mut labels = Vec::new();
+        for (index, row) in files.iter().enumerate() {
+            if index == disconnect_after {
+                // The share drops: the mount point is left as an empty folder.
+                std::fs::remove_file(&marker).expect("unmount");
+            }
+            labels.push(probe_label(&probe_orphan_media_file(row, &mut root_checks)));
+        }
+
+        let first_refused = labels
+            .iter()
+            .position(|label| label != "orphan")
+            .expect("the emptied root must be refused");
+        assert_eq!(
+            first_refused, ORPHAN_SWEEP_PROBES_PER_PASS,
+            "the root is re-proven when the next window starts"
+        );
+        let refused_empty = format!(
+            "refused:{}",
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_EMPTY
+        );
+        assert!(
+            labels[first_refused..]
+                .iter()
+                .all(|label| *label == refused_empty),
+            "{labels:?}"
+        );
     }
 
     fn test_library() -> RecycleEntryLibrary {

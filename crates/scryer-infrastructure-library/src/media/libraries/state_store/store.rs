@@ -1925,6 +1925,47 @@ impl HousekeepingRepository for HousekeepingStore {
         .await
     }
 
+    async fn delete_held_lifecycle_action_runs_older_than(&self, days: i64) -> AppResult<u32> {
+        // A held run whose detail carries a scoped-deletion journal may be the
+        // checkpoint an interrupted deletion resumes from, even when later
+        // holds of the same generation follow it, so journal rows stay. The
+        // newest run of each candidate generation is kept whatever it is:
+        // a newer run of the same generation must exist for a row to go.
+        execute_housekeeping_delete_batched(
+            &self.datastore,
+            "delete_held_lifecycle_action_runs_older_than",
+            "lifecycle_action_runs",
+            "id",
+            "status = {}
+                AND finished_at IS NOT NULL
+                AND finished_at < {}
+                AND detail NOT LIKE {} ESCAPE '!'
+                AND EXISTS (
+                    SELECT 1
+                      FROM lifecycle_action_runs newer
+                     WHERE newer.candidate_id = lifecycle_action_runs.candidate_id
+                       AND newer.match_generation = lifecycle_action_runs.match_generation
+                       AND (
+                           newer.started_at > lifecycle_action_runs.started_at
+                           OR (
+                               newer.started_at = lifecycle_action_runs.started_at
+                               AND newer.id > lifecycle_action_runs.id
+                           )
+                       )
+                )",
+            vec![
+                SqlArg::Text(
+                    scryer_domain::LifecycleActionRunStatus::Held
+                        .as_storage_str()
+                        .to_string(),
+                ),
+                housekeeping_cutoff_arg(days),
+                SqlArg::Text("%\"scoped!_deletion\":%".to_string()),
+            ],
+        )
+        .await
+    }
+
     async fn delete_history_events_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32> {
         delete_for_title_ids_shared(
             &self.datastore,

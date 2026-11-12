@@ -5315,6 +5315,7 @@ const en: LocaleDictionary = {
   "jobs.fullHashBackfillFailures": "Files that could not be hashed",
   "jobs.fullHashBackfillFailuresMore": "…and {{count}} more not listed",
   "jobs.nextRunPrefix": "Next run: {{value}}",
+  "jobs.nothingToDo": "Nothing to do, checked {{value}}",
   "jobs.startedAt": "Started {{value}}",
   "jobs.completedAt": "Completed {{value}}",
   "jobs.failedToTrigger": "Failed to trigger job",

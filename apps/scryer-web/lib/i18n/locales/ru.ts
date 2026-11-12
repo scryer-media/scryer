@@ -860,6 +860,7 @@ const ru: LocaleDictionary = {
     "Файлы, для которых не удалось вычислить хеш",
   "jobs.fullHashBackfillFailuresMore": "…и ещё {{count}} не показано",
   "jobs.nextRunPrefix": "Следующий запуск: {{value}}",
+  "jobs.nothingToDo": "Нечего делать, проверено {{value}}",
   "jobs.startedAt": "Запущено {{value}}",
   "jobs.completedAt": "Завершено {{value}}",
   "jobs.failedToTrigger": "Не удалось запустить задание",

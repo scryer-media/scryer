@@ -661,6 +661,7 @@ pub fn from_job_definition(definition: JobDefinition) -> JobDefinitionPayload {
                 .initial_delay_seconds
                 .map(|value| value as i32),
             next_run_at: definition.schedule.next_run_at,
+            last_idle_check_at: definition.schedule.last_idle_check_at,
         },
     }
 }
