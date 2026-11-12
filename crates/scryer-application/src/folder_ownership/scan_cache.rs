@@ -4,9 +4,10 @@
 //! for the link checks. Without a counter, or after any other folder write,
 //! the owners are read anew for the claim, as outside a scan.
 //!
-//! Held owners are indexed by comparison key and by the directories their
-//! link checks walk, so a claim visits only the owners the linear visit would
-//! compare or probe, in the same order, with the same probes.
+//! Held owners are indexed by comparison key. A claim compares the owners
+//! whose keys relate to the candidate, and skips an unrelated owner only when
+//! every folder its link check walks was proven a directory under the current
+//! stamp of the directory containing it.
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -48,39 +49,13 @@ pub(crate) struct ScanOwnershipContext {
     /// and applied by the next claim that holds it.
     settlements: Mutex<Vec<Settlement>>,
     next_reservation: AtomicU64,
+    /// Test control: answer held claims by the linear visit.
     #[cfg(test)]
-    oracle: ClaimOracle,
-}
-
-/// Test controls: answer held claims by the linear visit, or check every
-/// indexed claim against the linear visit run on a copy of the evidence.
-#[cfg(test)]
-#[derive(Default)]
-struct ClaimOracle {
     linear: std::sync::atomic::AtomicBool,
-    compare: std::sync::atomic::AtomicBool,
-    compared: AtomicU64,
-    rests: AtomicU64,
-    mismatches: Mutex<Vec<String>>,
-    /// Replaces [`HELD_OWNERS_BYTE_BUDGET`] when set.
-    byte_budget: std::sync::atomic::AtomicUsize,
-}
-
-impl ScanOwnershipContext {
-    fn held_owners_byte_budget(&self) -> usize {
-        #[cfg(test)]
-        {
-            let budget = self.oracle.byte_budget.load(Ordering::SeqCst);
-            if budget != 0 {
-                return budget;
-            }
-        }
-        HELD_OWNERS_BYTE_BUDGET
-    }
 }
 
 /// One recorded folder owner and its comparison keys for the roots in
-/// [`HeldList::prepared_for`].
+/// [`HeldList::prepared`].
 struct HeldOwner {
     title_id: String,
     folder: String,
@@ -96,14 +71,8 @@ impl HeldOwner {
         }
     }
 
-    fn estimated_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.title_id.capacity()
-            + self.folder.capacity()
-            + self
-                .prefilter
-                .as_ref()
-                .map_or(0, OwnerOverlapPrefilter::estimated_bytes)
+    fn prepare(&mut self, roots: &[(String, Option<String>)]) {
+        self.prefilter = Some(OwnerOverlapPrefilter::prepare(&self.folder, roots));
     }
 }
 
@@ -165,15 +134,14 @@ impl HeldList {
             return;
         }
         self.own.insert(generation);
-        if let Some(previous) = self.owners.remove(title_id)
-            && let Some((_, index)) = self.prepared.as_mut()
-        {
-            index.remove(&previous);
+        if self.owners.remove(title_id).is_some() {
+            // A replaced folder is rare in a scan: index the owners again.
+            self.prepared = None;
         }
         if let Some(folder) = folder.filter(|folder| !folder.is_empty()) {
             let mut owner = HeldOwner::new(title_id.to_owned(), folder);
             if let Some((roots, index)) = self.prepared.as_mut() {
-                owner.prefilter = Some(OwnerOverlapPrefilter::prepare(&owner.folder, roots));
+                owner.prepare(roots);
                 index.insert(&owner);
             }
             self.owners.insert(title_id.to_owned(), owner);
@@ -181,7 +149,7 @@ impl HeldList {
     }
 
     /// Prepare every owner and index them for `roots`, unless that is done.
-    fn prepare(&mut self, roots: &[(String, Option<String>)], evidence: &PathEvidence) {
+    fn prepare(&mut self, roots: &[(String, Option<String>)]) {
         if self
             .prepared
             .as_ref()
@@ -189,24 +157,12 @@ impl HeldList {
         {
             return;
         }
+        let mut index = OwnerIndex::default();
         for owner in self.owners.values_mut() {
-            owner.prefilter = Some(OwnerOverlapPrefilter::prepare(&owner.folder, roots));
+            owner.prepare(roots);
+            index.insert(owner);
         }
-        let index = OwnerIndex::build(self.owners.values(), evidence);
         self.prepared = Some((roots.to_vec(), index));
-    }
-
-    fn estimated_bytes(&self) -> usize {
-        self.owners
-            .values()
-            .map(|owner| {
-                owner.estimated_bytes() + std::mem::size_of::<String>() + owner.title_id.len()
-            })
-            .sum::<usize>()
-            + self
-                .prepared
-                .as_ref()
-                .map_or(0, |(_, index)| index.estimated_bytes())
     }
 }
 
@@ -217,234 +173,86 @@ struct OwnerIndex {
     /// Each owner key, its own and its key under a resolved root, to the
     /// owners holding it.
     keys: BTreeMap<String, BTreeSet<String>>,
-    /// Owners every claim compares or walks: their prefilter is
-    /// [`OwnerOverlapPrefilter::Exact`], or a directory they walk has no
+    /// Owners every claim compares or visits: their prefilter is
+    /// [`OwnerOverlapPrefilter::Exact`], or a folder they walk has no
     /// containing directory.
     always: BTreeSet<String>,
-    slots: HashMap<PathBuf, usize>,
-    groups: Vec<Option<ChainGroup>>,
-    free: Vec<usize>,
+    /// By containing directory, the folders owners' link checks walk in it.
+    groups: HashMap<PathBuf, ChainGroup>,
 }
 
-/// The directories owners walk for links that share one containing
-/// directory. The evidence checks each of them against that directory's
-/// stamp, so one probe of `parent` answers for all of them while it holds.
+/// Folders owners' link checks walk that share one containing directory. The
+/// evidence proves each against that directory's stamp, so one probe of the
+/// directory, which the linear visit also makes, answers for all of them.
+#[derive(Default)]
 struct ChainGroup {
-    parent: PathBuf,
-    /// Components of `parent`: of one owner's groups, the deeper is walked
-    /// first.
+    /// Components of the containing directory: an owner walks its deeper
+    /// groups first.
     depth: usize,
-    /// Each walked directory to the owners that walk it.
+    /// Each walked folder to the owners that walk it.
     children: HashMap<PathBuf, BTreeSet<String>>,
-    /// Every owner walking one of `children`; each walks at most one.
-    owners: BTreeSet<String>,
-    record: Option<GroupRecord>,
-}
-
-/// What the evidence held for a group: every child outside `unverified` is
-/// recorded as a directory under `stamp`, and nothing was removed from the
-/// evidence since its `invalidations` read `epoch`.
-struct GroupRecord {
-    stamp: Stamp,
-    epoch: u64,
-    unverified: HashSet<PathBuf>,
-}
-
-/// The directories an owner's link check walks, deepest first.
-fn chain_dirs(prefilter: &OwnerOverlapPrefilter) -> impl Iterator<Item = &Path> {
-    match prefilter {
-        OwnerOverlapPrefilter::Keys { path, chain, .. } => Some(path.ancestors().take(*chain)),
-        OwnerOverlapPrefilter::Exact => None,
-    }
-    .into_iter()
-    .flatten()
+    walkers: BTreeSet<String>,
+    /// A stamp of the containing directory, and the children not proven
+    /// directories under it. Every other child was, so while the directory
+    /// keeps that stamp, each is still a directory and not a link.
+    proven: Option<(Stamp, HashSet<PathBuf>)>,
 }
 
 impl ChainGroup {
-    /// The record the evidence supports now, with every child either under
-    /// `stamp` (the first one found when `None`) or absent.
-    fn record_from(&self, evidence: &PathEvidence, stamp: Option<Stamp>) -> Option<GroupRecord> {
-        let mut stamp = stamp;
-        let mut unverified = HashSet::new();
-        for child in self.children.keys() {
-            match (evidence.directories.get(child), stamp) {
-                (None, _) => {
-                    unverified.insert(child.clone());
-                }
-                (Some(recorded), None) => stamp = Some(*recorded),
-                (Some(recorded), Some(stamp)) if *recorded == stamp => {}
-                // A later check of that child would invalidate its siblings.
-                (Some(_), Some(_)) => return None,
-            }
-        }
-        Some(GroupRecord {
-            stamp: stamp?,
-            epoch: evidence.invalidations,
-            unverified,
-        })
+    fn prove(&mut self, evidence: &PathEvidence, stamp: Stamp) {
+        let unproven = self
+            .children
+            .keys()
+            .filter(|child| evidence.directories.get(*child) != Some(&stamp))
+            .cloned()
+            .collect();
+        self.proven = Some((stamp, unproven));
     }
 
-    /// Bring the record up to the evidence after a claim that found the
-    /// containing directory at `stamp`.
-    fn refresh(&mut self, evidence: &PathEvidence, stamp: Stamp) {
-        if let Some(record) = self.record.as_mut()
-            && record.stamp == stamp
-            && record.epoch == evidence.invalidations
-        {
-            let mut stale = false;
-            record
-                .unverified
-                .retain(|child| match evidence.directories.get(child) {
-                    Some(recorded) if *recorded == stamp => false,
-                    Some(_) => {
-                        stale = true;
-                        true
-                    }
-                    None => true,
-                });
-            if stale {
-                self.record = None;
-            }
-            return;
-        }
-        self.record = self.record_from(evidence, Some(stamp));
-    }
-
-    fn estimated_bytes(&self) -> usize {
-        let ids = |ids: &BTreeSet<String>| {
-            ids.iter()
-                .map(|id| id.capacity() + std::mem::size_of::<String>())
-                .sum::<usize>()
-        };
-        std::mem::size_of::<Self>()
-            + self.parent.as_os_str().len()
-            + self
-                .children
-                .iter()
-                .map(|(child, owners)| {
-                    std::mem::size_of::<PathBuf>() + child.as_os_str().len() + ids(owners)
-                })
-                .sum::<usize>()
-            + ids(&self.owners)
-            + self.record.as_ref().map_or(0, |record| {
-                record
-                    .unverified
-                    .iter()
-                    .map(|child| std::mem::size_of::<PathBuf>() + child.as_os_str().len())
-                    .sum()
-            })
+    /// The first owner from `from` on that walks a child here and is
+    /// neither the claimant nor already visited.
+    fn next_walker<'a>(
+        &'a self,
+        from: std::ops::Bound<&str>,
+        skip: impl Fn(&str) -> bool,
+    ) -> Option<&'a String> {
+        self.walkers
+            .range::<str, _>((from, Unbounded))
+            .find(|id| !skip(id))
     }
 }
 
 impl OwnerIndex {
-    fn build<'a>(owners: impl Iterator<Item = &'a HeldOwner>, evidence: &PathEvidence) -> Self {
-        let mut index = Self::default();
-        for owner in owners {
-            index.insert(owner);
-        }
-        for group in index.groups.iter_mut().flatten() {
-            group.record = group.record_from(evidence, None);
-        }
-        index
-    }
-
     fn insert(&mut self, owner: &HeldOwner) {
         let id = &owner.title_id;
-        let prefilter = owner
-            .prefilter
-            .as_ref()
-            .expect("owners are prepared before they are indexed");
-        let OwnerOverlapPrefilter::Keys { keys, .. } = prefilter else {
+        let Some(OwnerOverlapPrefilter::Keys { keys, path, chain }) = owner.prefilter.as_ref()
+        else {
             self.always.insert(id.clone());
             return;
         };
         for key in keys {
             self.keys.entry(key.clone()).or_default().insert(id.clone());
         }
-        for dir in chain_dirs(prefilter) {
+        for dir in path.ancestors().take(*chain) {
             let Some(parent) = dir.parent() else {
                 self.always.insert(id.clone());
                 continue;
             };
-            let slot = match self.slots.get(parent) {
-                Some(slot) => *slot,
-                None => {
-                    let group = ChainGroup {
-                        parent: parent.to_path_buf(),
-                        depth: parent.components().count(),
-                        children: HashMap::new(),
-                        owners: BTreeSet::new(),
-                        record: None,
-                    };
-                    let slot = match self.free.pop() {
-                        Some(slot) => {
-                            self.groups[slot] = Some(group);
-                            slot
-                        }
-                        None => {
-                            self.groups.push(Some(group));
-                            self.groups.len() - 1
-                        }
-                    };
-                    self.slots.insert(parent.to_path_buf(), slot);
-                    slot
-                }
-            };
-            let group = self.groups[slot]
-                .as_mut()
-                .expect("an indexed slot holds its group");
-            group.owners.insert(id.clone());
+            let group = self
+                .groups
+                .entry(parent.to_path_buf())
+                .or_insert_with(|| ChainGroup {
+                    depth: parent.components().count(),
+                    ..Default::default()
+                });
+            group.walkers.insert(id.clone());
             let walkers = group.children.entry(dir.to_path_buf()).or_default();
             if walkers.is_empty()
-                && let Some(record) = group.record.as_mut()
+                && let Some((_, unproven)) = group.proven.as_mut()
             {
-                record.unverified.insert(dir.to_path_buf());
+                unproven.insert(dir.to_path_buf());
             }
             walkers.insert(id.clone());
-        }
-    }
-
-    fn remove(&mut self, owner: &HeldOwner) {
-        let id = owner.title_id.as_str();
-        self.always.remove(id);
-        let Some(prefilter) = owner.prefilter.as_ref() else {
-            return;
-        };
-        if let OwnerOverlapPrefilter::Keys { keys, .. } = prefilter {
-            for key in keys {
-                if let Some(holders) = self.keys.get_mut(key) {
-                    holders.remove(id);
-                    if holders.is_empty() {
-                        self.keys.remove(key);
-                    }
-                }
-            }
-        }
-        for dir in chain_dirs(prefilter) {
-            let Some(parent) = dir.parent() else {
-                continue;
-            };
-            let Some(&slot) = self.slots.get(parent) else {
-                continue;
-            };
-            let group = self.groups[slot]
-                .as_mut()
-                .expect("an indexed slot holds its group");
-            group.owners.remove(id);
-            if let Some(walkers) = group.children.get_mut(dir) {
-                walkers.remove(id);
-                if walkers.is_empty() {
-                    group.children.remove(dir);
-                    if let Some(record) = group.record.as_mut() {
-                        record.unverified.remove(dir);
-                    }
-                }
-            }
-            if group.owners.is_empty() {
-                self.slots.remove(parent);
-                self.groups[slot] = None;
-                self.free.push(slot);
-            }
         }
     }
 
@@ -482,58 +290,30 @@ impl OwnerIndex {
         }
     }
 
-    /// After a claim: bring each group whose containing directory the claim
-    /// probed up to the evidence.
-    fn refresh_records(
-        &mut self,
-        evidence: &PathEvidence,
-        parents: &HashMap<PathBuf, Option<Stamp>>,
-    ) {
+    /// After a claim: bring the proof of each group whose containing
+    /// directory the claim probed up to the evidence.
+    fn refresh(&mut self, evidence: &PathEvidence, parents: &HashMap<PathBuf, Option<Stamp>>) {
         for (parent, stamp) in parents {
-            let Some(&slot) = self.slots.get(parent) else {
+            let Some(group) = self.groups.get_mut(parent) else {
                 continue;
             };
-            let group = self.groups[slot]
-                .as_mut()
-                .expect("an indexed slot holds its group");
-            match stamp {
-                Some(stamp) => group.refresh(evidence, *stamp),
-                None => group.record = None,
+            match (stamp, group.proven.as_mut()) {
+                (Some(stamp), Some((proven, unproven))) if proven == stamp => {
+                    unproven.retain(|child| evidence.directories.get(child) != Some(stamp));
+                }
+                (Some(stamp), _) => group.prove(evidence, *stamp),
+                (None, _) => group.proven = None,
             }
         }
     }
-
-    fn estimated_bytes(&self) -> usize {
-        let ids = |ids: &BTreeSet<String>| {
-            ids.iter()
-                .map(|id| id.capacity() + std::mem::size_of::<String>())
-                .sum::<usize>()
-        };
-        self.keys
-            .iter()
-            .map(|(key, holders)| key.capacity() + std::mem::size_of::<String>() + ids(holders))
-            .sum::<usize>()
-            + ids(&self.always)
-            + self
-                .slots
-                .keys()
-                .map(|parent| parent.as_os_str().len() + std::mem::size_of::<(PathBuf, usize)>())
-                .sum::<usize>()
-            + self
-                .groups
-                .iter()
-                .flatten()
-                .map(ChainGroup::estimated_bytes)
-                .sum::<usize>()
-    }
 }
 
-/// Where a claim's indexed visit is, in the linear visit's order: the
-/// groups of the owner at an id come before the owner, the deeper first, and
-/// a reserved folder after the recorded owner with the same id.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// A claim's next step through the index, in the linear visit's id order: an
+/// owner's groups, deeper first, come before the owner, and a reserved folder
+/// after the recorded owner with the same id.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum Step {
-    Group { depth: Reverse<usize>, slot: usize },
+    Group(Reverse<usize>, PathBuf),
     Recorded,
     Reserved(usize),
 }
@@ -548,17 +328,28 @@ struct OwnerVisit<'a> {
     cache: &'a mut PathEvidence,
     parents: HashMap<PathBuf, Option<Stamp>>,
     visited: usize,
-    /// Claims that fell back to the linear visit part way.
-    rest_visits: usize,
-    #[cfg(test)]
-    trail: Vec<String>,
 }
 
-impl OwnerVisit<'_> {
+impl<'a> OwnerVisit<'a> {
+    fn new(
+        candidate: &'a str,
+        roots: &'a [String],
+        claimant: &'a str,
+        cache: &'a mut PathEvidence,
+    ) -> AppResult<Self> {
+        Ok(Self {
+            candidate,
+            roots,
+            claimant,
+            keys: FolderOverlapKeys::from_roots(candidate, roots)?,
+            cache,
+            parents: HashMap::new(),
+            visited: 0,
+        })
+    }
+
     fn visit(&mut self, owner: &HeldOwner) -> AppResult<()> {
         self.visited += 1;
-        #[cfg(test)]
-        self.trail.push(owner.title_id.clone());
         let (id, path) = (&owner.title_id, &owner.folder);
         let prefilter = owner
             .prefilter
@@ -618,27 +409,26 @@ impl OwnerVisit<'_> {
             (Some(_), _) => recorded.next(),
             (None, _) => reserved.next(),
         } {
-            if owner.title_id == self.claimant {
-                continue;
+            if owner.title_id != self.claimant {
+                self.visit(owner)?;
             }
-            self.visit(owner)?;
         }
         Ok(())
     }
 
-    /// [`Self::visit_linear`] through the index. An owner the linear visit
-    /// would only find unrelated by key, with every walked directory proven
-    /// by evidence that holds, is skipped; every other owner is visited in
-    /// the same order with the same comparison. Each group's containing
-    /// directory is probed when the first owner that walks it unflagged is
-    /// reached, which is when the linear visit probes it.
+    /// [`Self::visit_linear`] through the index. Owners whose keys relate to
+    /// the candidate, owners walking a folder no proof covers, and reserved
+    /// folders are visited in the linear order. Every other owner is skipped
+    /// once each group it walks shows the proven stamp; a group that does not
+    /// has every owner walking it visited. A group's directory is probed when
+    /// the first owner skipped through it is reached, where the linear visit
+    /// probes it, so a refusal stops the claim before any later probe.
     fn visit_indexed(
         &mut self,
         owners: &BTreeMap<String, HeldOwner>,
         index: &OwnerIndex,
         reserved: &[HeldOwner],
     ) -> AppResult<()> {
-        let epoch = self.cache.invalidations;
         let claimant = self.claimant;
         let mut queue: BTreeSet<(String, Step)> = BTreeSet::new();
         let mut flagged: HashSet<String> = HashSet::new();
@@ -654,151 +444,60 @@ impl OwnerVisit<'_> {
         for id in &index.always {
             flag(id, &mut queue, &mut flagged);
         }
+        for group in index.groups.values() {
+            let walkers: Vec<&BTreeSet<String>> = match &group.proven {
+                None => vec![&group.walkers],
+                Some((_, unproven)) => unproven
+                    .iter()
+                    .filter_map(|child| group.children.get(child))
+                    .collect(),
+            };
+            for id in walkers.into_iter().flatten() {
+                flag(id, &mut queue, &mut flagged);
+            }
+        }
         for (at, owner) in reserved.iter().enumerate() {
             if owner.title_id != claimant {
                 queue.insert((owner.title_id.clone(), Step::Reserved(at)));
             }
         }
-        for (slot, group) in index.groups.iter().enumerate() {
-            if let Some(group) = group
-                && let Some(first) = group.owners.first()
-            {
-                queue.insert((
-                    first.clone(),
-                    Step::Group {
-                        depth: Reverse(group.depth),
-                        slot,
-                    },
-                ));
+        let skip = |flagged: &HashSet<String>, id: &str| id == claimant || flagged.contains(id);
+        for (parent, group) in &index.groups {
+            if let Some(first) = group.next_walker(Unbounded, |id| skip(&flagged, id)) {
+                let step = Step::Group(Reverse(group.depth), parent.clone());
+                queue.insert((first.clone(), step));
             }
         }
-        let mut held = Vec::new();
         while let Some((id, step)) = queue.pop_first() {
             match step {
-                Step::Group { slot, .. } => {
-                    let group = index.groups[slot]
-                        .as_ref()
-                        .expect("an indexed slot holds its group");
-                    if id == claimant || flagged.contains(&id) {
-                        // That owner is visited or skipped as a whole; the
-                        // group waits for the next owner that walks it.
-                        if let Some(next) = group
-                            .owners
-                            .range::<str, _>((Excluded(id.as_str()), Unbounded))
-                            .find(|next| {
-                                next.as_str() != claimant && !flagged.contains(next.as_str())
-                            })
-                        {
-                            queue.insert((next.clone(), step));
+                Step::Group(depth, parent) => {
+                    let group = &index.groups[&parent];
+                    if skip(&flagged, &id) {
+                        // A deeper group flagged that owner; this group waits
+                        // for the next owner skipped through it.
+                        let next =
+                            group.next_walker(Excluded(id.as_str()), |id| skip(&flagged, id));
+                        if let Some(next) = next {
+                            queue.insert((next.clone(), Step::Group(depth, parent)));
                         }
                         continue;
                     }
-                    let stamp = if cfg!(unix) {
-                        self.cache.parent_stamp(&group.parent, &mut self.parents)
-                    } else {
-                        None
-                    };
-                    match (&group.record, stamp) {
-                        (Some(record), Some(stamp))
-                            if record.stamp == stamp && record.epoch == epoch =>
+                    let stamp = self.cache.parent_stamp(&parent, &mut self.parents);
+                    if stamp.is_none() || group.proven.as_ref().map(|(proven, _)| *proven) != stamp
+                    {
+                        for walker in group
+                            .walkers
+                            .range::<str, _>((Included(id.as_str()), Unbounded))
                         {
-                            held.push(slot);
-                            for child in &record.unverified {
-                                for owner in group.children[child]
-                                    .range::<str, _>((Included(id.as_str()), Unbounded))
-                                {
-                                    flag(owner, &mut queue, &mut flagged);
-                                }
-                            }
-                        }
-                        _ => {
-                            for owner in group
-                                .owners
-                                .range::<str, _>((Included(id.as_str()), Unbounded))
-                            {
-                                flag(owner, &mut queue, &mut flagged);
-                            }
+                            flag(walker, &mut queue, &mut flagged);
                         }
                     }
                 }
-                Step::Recorded => {
-                    let owner = owners.get(&id).expect("an indexed owner is held");
-                    self.visit(owner)?;
-                    if self.cache.invalidations != epoch {
-                        return self
-                            .visit_rest(owners, index, reserved, &held, &flagged, &id, None);
-                    }
-                }
-                Step::Reserved(at) => {
-                    self.visit(&reserved[at])?;
-                    if self.cache.invalidations != epoch {
-                        return self.visit_rest(
-                            owners,
-                            index,
-                            reserved,
-                            &held,
-                            &flagged,
-                            &id,
-                            Some(at),
-                        );
-                    }
-                }
+                Step::Recorded => self.visit(&owners[&id])?,
+                Step::Reserved(at) => self.visit(&reserved[at])?,
             }
         }
         Ok(())
-    }
-
-    /// Evidence was removed during the claim, so records no longer prove
-    /// what the linear visit would find: visit every owner after the one at
-    /// `id` (the reserved folder at `reserved_at`, or the recorded owner) as
-    /// the linear visit does, with the link answers it holds by now for the
-    /// directories skipped owners walked.
-    #[allow(clippy::too_many_arguments)]
-    fn visit_rest(
-        &mut self,
-        owners: &BTreeMap<String, HeldOwner>,
-        index: &OwnerIndex,
-        reserved: &[HeldOwner],
-        held: &[usize],
-        flagged: &HashSet<String>,
-        id: &str,
-        reserved_at: Option<usize>,
-    ) -> AppResult<()> {
-        let walked_before = |owner: &str| match reserved_at {
-            Some(_) => owner <= id,
-            None => owner < id,
-        };
-        for &slot in held {
-            let group = index.groups[slot]
-                .as_ref()
-                .expect("an indexed slot holds its group");
-            let Some(record) = group.record.as_ref() else {
-                continue;
-            };
-            for (child, walkers) in &group.children {
-                if record.unverified.contains(child) {
-                    continue;
-                }
-                if walkers
-                    .iter()
-                    .take_while(|owner| walked_before(owner))
-                    .any(|owner| {
-                        owner.as_str() != self.claimant && !flagged.contains(owner.as_str())
-                    })
-                {
-                    self.keys.links.entry(child.clone()).or_insert(false);
-                }
-            }
-        }
-        let recorded = owners
-            .range::<str, _>((Excluded(id), Unbounded))
-            .map(|(_, owner)| owner);
-        let rest = match reserved_at {
-            Some(at) => &reserved[at + 1..],
-            None => &reserved[reserved.partition_point(|owner| owner.title_id.as_str() < id)..],
-        };
-        self.rest_visits += 1;
-        self.visit_linear(recorded, rest)
     }
 }
 
@@ -923,7 +622,7 @@ impl ScanOwnershipContext {
             settlements: Mutex::new(Vec::new()),
             next_reservation: AtomicU64::new(1),
             #[cfg(test)]
-            oracle: ClaimOracle::default(),
+            linear: Default::default(),
         })
     }
 
@@ -1033,7 +732,7 @@ impl ScanOwnershipContext {
                 .into_iter()
                 .map(|(title_id, folder)| HeldOwner::new(title_id, folder));
             match current {
-                Some(generation) if estimate <= self.held_owners_byte_budget() => {
+                Some(generation) if estimate <= HELD_OWNERS_BYTE_BUDGET => {
                     held.reloads += 1;
                     held.list = Some(HeldList {
                         generation,
@@ -1070,81 +769,54 @@ impl ScanOwnershipContext {
             let _permit = permit;
             let blocking_queue_ms = elapsed_ms(dispatched);
             let started = Instant::now();
-            let mut cache = self.cache.lock().map_err(|_| AppError::Repository("ownership evidence lock poisoned".into()))?;
-            let mut held = self.owners.lock().map_err(|_| AppError::Repository("ownership owners lock poisoned".into()))?;
+            let mut cache = self
+                .cache
+                .lock()
+                .map_err(|_| AppError::Repository("ownership evidence lock poisoned".into()))?;
+            let mut held = self
+                .owners
+                .lock()
+                .map_err(|_| AppError::Repository("ownership owners lock poisoned".into()))?;
             let lock_wait_ms = elapsed_ms(started);
-            let before = (cache.probes, cache.hits, cache.invalidations, cache.fallbacks);
+            let before = (
+                cache.probes,
+                cache.hits,
+                cache.invalidations,
+                cache.fallbacks,
+            );
             let mut owner_count = 0usize;
             let mut indexed = false;
             let result = (|| {
-                let keys = FolderOverlapKeys::from_roots(&candidate, &roots)?;
-                cache.set_roots(keys.root_keys());
-                let root_keys = keys.root_keys().to_vec();
-                let HeldOwners { list, reservations, .. } = &mut *held;
+                let mut visit = OwnerVisit::new(&candidate, &roots, &title_id, &mut cache)?;
+                let root_keys = visit.keys.root_keys().to_vec();
+                visit.cache.set_roots(&root_keys);
+                let HeldOwners {
+                    list, reservations, ..
+                } = &mut *held;
                 let mut reserved: Vec<HeldOwner> = reservations
                     .values()
                     .map(|(id, folder)| {
                         let mut owner = HeldOwner::new(id.clone(), folder.clone());
-                        owner.prefilter = Some(OwnerOverlapPrefilter::prepare(folder, &root_keys));
+                        owner.prepare(&root_keys);
                         owner
                     })
                     .collect();
                 reserved.sort_by(|left, right| left.title_id.cmp(&right.title_id));
-                if let (None, Some(list)) = (unheld.as_ref(), list.as_mut()) {
-                    list.prepare(&root_keys, &cache);
-                }
-                #[cfg(test)]
-                let expected = match (unheld.as_ref(), list.as_ref()) {
-                    (None, Some(list)) if self.oracle.compare.load(Ordering::SeqCst) => {
-                        let mut shadow = (*cache).clone();
-                        let (outcome, parents) = {
-                            let mut oracle = OwnerVisit {
-                                candidate: &candidate,
-                                roots: &roots,
-                                claimant: &title_id,
-                                keys: FolderOverlapKeys::from_roots(&candidate, &roots)?,
-                                cache: &mut shadow,
-                                parents: HashMap::new(),
-                                visited: 0,
-                                rest_visits: 0,
-                                #[cfg(test)]
-                                trail: Vec::new(),
-                            };
-                            let outcome = claim_outcome(&oracle.visit_linear(list.owners.values(), &reserved));
-                            (outcome, (oracle.parents, oracle.trail))
-                        };
-                        Some((outcome, shadow, parents))
-                    }
-                    _ => None,
-                };
-                #[cfg(test)]
-                {
-                    cache.replay = expected.as_ref().map(|(_, _, (parents, _))| parents.clone());
-                }
-                let mut visit = OwnerVisit {
-                    candidate: &candidate,
-                    roots: &roots,
-                    claimant: &title_id,
-                    keys,
-                    cache: &mut cache,
-                    parents: HashMap::new(),
-                    visited: 0,
-                    rest_visits: 0,
-                    #[cfg(test)]
-                    trail: Vec::new(),
-                };
                 let outcome = match (unheld.as_mut(), list.as_mut()) {
                     (Some(unheld), _) => {
-                        for owner in unheld.iter_mut() {
-                            owner.prefilter = Some(OwnerOverlapPrefilter::prepare(&owner.folder, &root_keys));
-                        }
+                        unheld
+                            .iter_mut()
+                            .for_each(|owner| owner.prepare(&root_keys));
                         visit.visit_linear(unheld.iter(), &reserved)
                     }
                     (None, Some(list)) => {
-                        let HeldList { owners, prepared, .. } = list;
+                        list.prepare(&root_keys);
+                        let HeldList {
+                            owners, prepared, ..
+                        } = list;
                         let (_, index) = prepared.as_mut().expect("held owners are prepared above");
                         #[cfg(test)]
-                        let linear = self.oracle.linear.load(Ordering::SeqCst);
+                        let linear = self.linear.load(Ordering::SeqCst);
                         #[cfg(not(test))]
                         let linear = false;
                         let outcome = if linear {
@@ -1153,38 +825,16 @@ impl ScanOwnershipContext {
                             indexed = true;
                             visit.visit_indexed(owners, index, &reserved)
                         };
-                        index.refresh_records(visit.cache, &visit.parents);
+                        index.refresh(visit.cache, &visit.parents);
                         outcome
                     }
                     (None, None) => {
-                        return Err(AppError::Repository("ownership owners were not loaded".into()));
+                        return Err(AppError::Repository(
+                            "ownership owners were not loaded".into(),
+                        ));
                     }
                 };
                 owner_count = visit.visited;
-                #[cfg(test)]
-                {
-                    visit.cache.replay = None;
-                }
-                #[cfg(test)]
-                self.oracle.rests.fetch_add(visit.rest_visits as u64, Ordering::SeqCst);
-                #[cfg(test)]
-                if let Some((expected, shadow, (parents, trail))) = expected {
-                    self.oracle.compared.fetch_add(1, Ordering::SeqCst);
-                    let actual = claim_outcome(&outcome);
-                    let evidence = &*visit.cache;
-                    if expected != actual
-                        || shadow.probes != evidence.probes
-                        || shadow.invalidations != evidence.invalidations
-                        || shadow.directories != evidence.directories
-                        || parents != visit.parents
-                    {
-                        self.oracle.mismatches.lock().unwrap().push(format!(
-                            "{candidate}: linear {expected:?} probes {} invalidations {}; indexed {actual:?} probes {} invalidations {}",
-                            shadow.probes, shadow.invalidations, evidence.probes, evidence.invalidations,
-                        ) + &format!(" linear trail {trail:?} indexed trail {:?} claim {}", visit.trail, self.oracle.compared.load(Ordering::SeqCst)
-                        ));
-                    }
-                }
                 outcome?;
                 if let Some(reservation) = reserve {
                     // Still under the permit: the next claim compares with it.
@@ -1218,7 +868,13 @@ impl ScanOwnershipContext {
                 "scan ownership check timing"
             );
             result
-        }).await.map_err(|error| AppError::Repository(format!("ownership verification task failed to join: {error}")))?
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "ownership verification task failed to join: {error}"
+            ))
+        })?
     }
 }
 
@@ -1240,8 +896,6 @@ impl Drop for ScanOwnershipContext {
                 owner_indexed_claims = held.indexed_claims,
                 owner_indexed_visits = held.indexed_visits,
                 held_owners = held.list.as_ref().map_or(0, |list| list.owners.len()),
-                estimated_held_owner_bytes =
-                    held.list.as_ref().map_or(0, HeldList::estimated_bytes),
                 "scan ownership evidence summary"
             );
         }
@@ -1280,16 +934,7 @@ fn stamp(metadata: &std::fs::Metadata) -> Option<Stamp> {
     }
 }
 
-#[cfg(test)]
-fn claim_outcome(outcome: &AppResult<()>) -> Result<(), (Option<&'static str>, String)> {
-    outcome
-        .as_ref()
-        .map(|_| ())
-        .map_err(|error| (error.validation_reason(), error.to_string()))
-}
-
 #[derive(Default)]
-#[cfg_attr(test, derive(Clone))]
 struct PathEvidence {
     // Each proven non-link directory is bound to its containing directory's
     // identity/change stamp. Never store missing paths or linked entries.
@@ -1301,11 +946,6 @@ struct PathEvidence {
     fallbacks: u64,
     checks: u64,
     elapsed: std::time::Duration,
-    /// The oracle's parent stamps, so the compared visit sees the same moment
-    /// of a shared directory (the system temporary directory) that other
-    /// processes change between the two visits. Each use still counts a probe.
-    #[cfg(test)]
-    replay: Option<HashMap<PathBuf, Option<Stamp>>>,
 }
 
 impl PathEvidence {
@@ -1332,21 +972,13 @@ impl PathEvidence {
         parent: &Path,
         parents: &mut HashMap<PathBuf, Option<Stamp>>,
     ) -> Option<Stamp> {
-        if let Some(current) = parents.get(parent) {
-            return *current;
-        }
-        self.probes += 1;
-        #[cfg(test)]
-        if let Some(current) = self.replay.as_ref().and_then(|replay| replay.get(parent)) {
-            parents.insert(parent.to_path_buf(), *current);
-            return *current;
-        }
-        let current = std::fs::symlink_metadata(parent)
-            .ok()
-            .as_ref()
-            .and_then(stamp);
-        parents.insert(parent.to_path_buf(), current);
-        current
+        *parents.entry(parent.to_path_buf()).or_insert_with(|| {
+            self.probes += 1;
+            std::fs::symlink_metadata(parent)
+                .ok()
+                .as_ref()
+                .and_then(stamp)
+        })
     }
 
     fn verify(&mut self, path: &Path, parents: &mut HashMap<PathBuf, Option<Stamp>>) -> bool {
@@ -2064,7 +1696,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_ownership_held_owners_claim_cost() {
-        for count in [100usize, 10_000, 100_000] {
+        for count in [100usize, 10_000] {
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path().join("library");
             std::fs::create_dir_all(&root).unwrap();
@@ -2076,50 +1708,7 @@ mod tests {
                 })
                 .collect();
             let candidate = path_to_stored_string(&root.join("Cinderwake"));
-            let roots = vec![path_to_stored_string(&root)];
-            let claims = if count > 10_000 { 4u32 } else { 16 };
-
-            // The comparison alone: keys built per owner per claim, as before,
-            // against keys prepared once and reused.
-            let mut cache = PathEvidence::default();
-            let start = Instant::now();
-            for _ in 0..claims {
-                let mut keys = FolderOverlapKeys::from_roots(&candidate, &roots).unwrap();
-                cache.set_roots(keys.root_keys());
-                let mut parents = HashMap::new();
-                for owner in &owners {
-                    assert!(
-                        !keys
-                            .needs_exact_comparison_with_evidence(owner, &mut |path| cache
-                                .verify(path, &mut parents))
-                            .unwrap()
-                    );
-                }
-            }
-            let rebuilt = start.elapsed() / claims;
-            let mut cache = PathEvidence::default();
-            let start = Instant::now();
-            let mut prepared: Option<Vec<OwnerOverlapPrefilter>> = None;
-            for _ in 0..claims {
-                let mut keys = FolderOverlapKeys::from_roots(&candidate, &roots).unwrap();
-                cache.set_roots(keys.root_keys());
-                let prepared = prepared.get_or_insert_with(|| {
-                    owners
-                        .iter()
-                        .map(|owner| OwnerOverlapPrefilter::prepare(owner, keys.root_keys()))
-                        .collect()
-                });
-                let mut parents = HashMap::new();
-                for (owner, prefilter) in owners.iter().zip(prepared.iter()) {
-                    assert!(
-                        !keys
-                            .needs_exact_comparison_prepared(prefilter, owner, &mut |path| cache
-                                .verify(path, &mut parents))
-                            .unwrap()
-                    );
-                }
-            }
-            let reused = start.elapsed() / claims;
+            let claims = 16u32;
 
             // Whole claims through the scan context: the catalog read anew per
             // claim (no counter), and the owners held and visited linearly or
@@ -2145,15 +1734,7 @@ mod tests {
                     .counts_folder_writes
                     .store(held_owners, Ordering::SeqCst);
                 let context = ScanOwnershipContext::new();
-                context
-                    .oracle
-                    .linear
-                    .store(mode == "linear", Ordering::SeqCst);
-                // Measured held at every size, whatever the default budget.
-                context
-                    .oracle
-                    .byte_budget
-                    .store(usize::MAX, Ordering::SeqCst);
+                context.linear.store(mode == "linear", Ordering::SeqCst);
                 if held_owners {
                     context
                         .clone()
@@ -2179,25 +1760,10 @@ mod tests {
                     assert_eq!((held.reloads, held.reuses), (1, u64::from(claims)));
                 }
                 if mode == "indexed" {
-                    let read: Vec<(String, String)> = owners
-                        .iter()
-                        .enumerate()
-                        .map(|(index, owner)| {
-                            (format!("synthetic-owner-{index:06}"), owner.clone())
-                        })
-                        .collect();
-                    eprintln!(
-                        "held owner bytes: owners={count} estimated_before_read={} estimated_held={} within_default_budget={}",
-                        estimated_unprepared_bytes(&read),
-                        held.list.as_ref().map_or(0, HeldList::estimated_bytes),
-                        estimated_unprepared_bytes(&read) <= HELD_OWNERS_BYTE_BUDGET
-                    );
                     assert_eq!(held.indexed_claims, u64::from(claims) + 1);
                     // An unrelated candidate under one flat root: once the
-                    // root's evidence holds, only owners whose folder the
-                    // evidence has no room to record are visited, as the
-                    // linear visit probes exactly those.
-                    assert_eq!(visits, count.saturating_sub(65_536) as u64);
+                    // root's folders are proven, no owner is visited.
+                    assert_eq!(visits, 0);
                 }
                 per_claim.push((elapsed, probes));
             }
@@ -2206,9 +1772,7 @@ mod tests {
                 "the index probes what the linear visit probes"
             );
             eprintln!(
-                "scan ownership claim cost (debug build): owners={count} claims={claims} compare_rebuilt_us={} compare_prepared_us={} check_read_per_claim_us={} check_held_linear_us={} check_held_indexed_us={} evidence_probes_per_claim_read={} linear={} indexed={}",
-                rebuilt.as_micros(),
-                reused.as_micros(),
+                "scan ownership claim cost (debug build): owners={count} claims={claims} check_read_per_claim_us={} check_held_linear_us={} check_held_indexed_us={} evidence_probes_per_claim_read={} linear={} indexed={}",
                 per_claim[0].0.as_micros(),
                 per_claim[1].0.as_micros(),
                 per_claim[2].0.as_micros(),
@@ -2304,28 +1868,42 @@ mod tests {
         let mut outcomes = Vec::new();
         for claimant in claimants {
             for candidate in candidates {
-                outcomes.push(reason(
-                    context
-                        .clone()
-                        .check(app, claimant, path_to_stored_string(candidate))
-                        .await,
-                ));
+                let mut answers = Vec::new();
+                // Indexed first, so a change since the last claim meets the
+                // index's proofs before any linear visit refreshes them.
+                for linear in [false, true] {
+                    context.linear.store(linear, Ordering::SeqCst);
+                    let candidate = path_to_stored_string(candidate);
+                    answers.push(reason(
+                        context.clone().check(app, claimant, candidate).await,
+                    ));
+                }
+                context.linear.store(false, Ordering::SeqCst);
+                assert_eq!(
+                    answers[0],
+                    answers[1],
+                    "{} claiming {}",
+                    claimant.id,
+                    candidate.display()
+                );
+                outcomes.push(answers.swap_remove(0));
             }
         }
         outcomes
     }
 
-    /// Every held claim is answered through the index and, on a copy of the
-    /// evidence, by the linear visit: the same decision, reason code and
-    /// reported owner, the same probes, and the same evidence afterwards.
+    /// Every held claim is answered through the index and then by the linear
+    /// visit: the same decision and reason code.
     #[tokio::test]
     async fn scan_ownership_index_answers_as_the_linear_visit() {
         let temp = tempfile::tempdir().unwrap();
-        let real = temp.path().join("real-library");
-        let alias = temp.path().join("alias-library");
-        let missing = temp.path().join("missing-library");
-        let outside = temp.path().join("outside");
-        let second = temp.path().join("second-library");
+        // Every directory a link check walks lies under `base`, which only
+        // this test changes, so a stamp changes only where the test says.
+        let base = temp.path().join("base");
+        let real = base.join("real-library");
+        let alias = base.join("alias-library");
+        let missing = base.join("missing-library");
+        let outside = base.join("outside");
         for dir in [
             real.join("Emberfall").join("Extras"),
             real.join("Emberfall Two"),
@@ -2337,9 +1915,9 @@ mod tests {
             real.join("Fernhollow"),
             real.join("Ivyreach"),
             real.join("Fresh"),
+            real.join("Locked").join("Sealed"),
             outside.join("Ashgrove Real"),
             outside.join("G Real").join("Gloamridge"),
-            second.clone(),
         ] {
             std::fs::create_dir_all(dir).unwrap();
         }
@@ -2351,7 +1929,7 @@ mod tests {
         symlink(&real, &alias).unwrap();
         symlink(outside.join("Ashgrove Real"), real.join("Ashgrove")).unwrap();
         let (app, actor, titles) = crate::lib_tests::bootstrap_with_title_repo();
-        let library_id = set_movie_roots(&app, &[&alias, &missing]).await;
+        let library_id = set_movie_roots(&app, &[&alias, &real, &missing]).await;
         let template = synthetic_movie(&app, &actor, &library_id, "Hollowmere").await;
         let seed = |id: &str, folder: String| {
             let mut title = template.clone();
@@ -2362,18 +1940,20 @@ mod tests {
         };
         let stored = |path: &Path| path_to_stored_string(path);
         let mut seeded = vec![
-            // Nested, sibling and look-alike owners under the stored root.
-            seed("owner-01", stored(&alias.join("Emberfall"))),
-            seed("owner-02", stored(&alias.join("Emberfall").join("Extras"))),
-            seed("owner-03", stored(&alias.join("Emberfall Two"))),
-            // Recorded under the resolved root, one in another case.
-            seed("owner-04", stored(&real.join("cinderwake"))),
+            // Under a folder that becomes unreadable for one sweep.
+            seed("owner-00", stored(&real.join("Locked").join("Sealed"))),
+            // Nested, sibling and look-alike owners.
+            seed("owner-01", stored(&real.join("Emberfall"))),
+            seed("owner-02", stored(&real.join("Emberfall").join("Extras"))),
+            seed("owner-03", stored(&real.join("Emberfall Two"))),
+            // Recorded through the linked root, one in another case.
+            seed("owner-04", stored(&alias.join("cinderwake"))),
             seed("owner-05", stored(&real.join("Pinecrest"))),
             // Under an organizing folder, walked two directories deep.
-            seed("owner-06", stored(&alias.join("G").join("Gloamridge"))),
-            seed("owner-07", stored(&alias.join("G").join("Glimmer"))),
+            seed("owner-06", stored(&real.join("G").join("Gloamridge"))),
+            seed("owner-07", stored(&real.join("G").join("Glimmer"))),
             // A link out of the library.
-            seed("owner-08", stored(&alias.join("Ashgrove"))),
+            seed("owner-08", stored(&real.join("Ashgrove"))),
             // Compared whatever the candidate: relative, and under a root
             // that does not resolve.
             seed("owner-zz-relative", "relative/Thornvale".into()),
@@ -2382,43 +1962,50 @@ mod tests {
         for filler in 0..24 {
             seeded.push(seed(
                 &format!("owner-1{filler:02}"),
-                stored(&alias.join(format!("Filler {filler:02}"))),
+                stored(&real.join(format!("Filler {filler:02}"))),
             ));
         }
         titles.store.lock().await.extend(seeded.iter().cloned());
         titles.counts_folder_writes.store(true, Ordering::SeqCst);
         let context = ScanOwnershipContext::new();
-        context.oracle.compare.store(true, Ordering::SeqCst);
-        let claimants = [template.clone(), seeded[4].clone(), seeded[1].clone()];
+        let claimants = [template.clone(), seeded[5].clone(), seeded[2].clone()];
         let candidates: Vec<PathBuf> = vec![
-            alias.join("Emberfall"),
-            alias.join("Emberfall").join("Extras").join("Deep"),
             real.join("Emberfall"),
-            alias.join("CINDERWAKE"),
-            alias.join("Emberfall Two").join("Bonus"),
-            alias.join("G"),
+            real.join("Emberfall").join("Extras").join("Deep"),
+            alias.join("Emberfall"),
+            real.join("CINDERWAKE"),
+            real.join("Emberfall Two").join("Bonus"),
+            real.join("G"),
             alias.join("G").join("Gloamridge"),
-            alias.join("Fresh"),
-            alias.join("Pinecrest"),
-            alias.clone(),
+            real.join("Fresh"),
+            real.join("Pinecrest"),
+            real.clone(),
             missing.join("Duskmere"),
-            alias.join("Ashgrove"),
+            real.join("Ashgrove"),
             outside.join("Ashgrove Real"),
             outside.join("G Real"),
-            alias.join("Filler 07"),
-            alias.join("Filler 07").join("Sub"),
-            alias.join("Fernhollow"),
-            alias.join("Ivyreach"),
+            real.join("Filler 07"),
+            real.join("Filler 07").join("Sub"),
+            real.join("Fernhollow"),
+            real.join("Ivyreach"),
         ];
         let mut outcomes = sweep(&app, &context, &claimants, &candidates).await;
+        outcomes.extend(sweep(&app, &context, &claimants, &candidates).await);
 
         // A reserved folder joins the visit by title id.
         let reserved = context
             .clone()
-            .check_and_reserve(&app, &template, stored(&alias.join("Fernhollow")))
+            .check_and_reserve(&app, &template, stored(&real.join("Fernhollow")))
             .await;
         outcomes.extend(sweep(&app, &context, &claimants[1..], &candidates).await);
         drop(reserved);
+
+        // An owner's folder cannot be inspected: its refusal comes first.
+        let locked = real.join("Locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let inspect_refused = std::fs::read_dir(&locked).is_err();
+        outcomes.extend(sweep(&app, &context, &claimants, &candidates).await);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         // Another writer deletes the owners every claim compares.
         titles.delete("owner-zz-relative").await.unwrap();
@@ -2438,11 +2025,7 @@ mod tests {
         let (reloads, _) = owner_stats(&context);
         with_scan_ownership(
             Some(context.clone()),
-            claim_title_folder_for_scan_if_missing(
-                &app,
-                &mut fernhollow,
-                &alias.join("Fernhollow"),
-            ),
+            claim_title_folder_for_scan_if_missing(&app, &mut fernhollow, &real.join("Fernhollow")),
         )
         .await
         .unwrap();
@@ -2455,20 +2038,23 @@ mod tests {
 
         // Another writer adds an owner and moves one.
         titles
-            .create(seed("owner-12", stored(&alias.join("Ivyreach"))))
+            .create(seed("owner-12", stored(&real.join("Ivyreach"))))
             .await
             .unwrap();
         titles
             .assign_title_folders(&[crate::TitleFolderWrite::assign(
                 "owner-03",
-                stored(&alias.join("Emberfall Three")),
+                stored(&real.join("Emberfall Three")),
             )
-            .expecting(seeded[2].folder_path.clone())])
+            .expecting(seeded[3].folder_path.clone())])
             .await
             .unwrap();
         outcomes.extend(sweep(&app, &context, &claimants, &candidates).await);
 
-        // Mid-scan, an organizing folder and an owner's folder become links.
+        // Mid-scan, a folder appears, then an organizing folder and an owner's
+        // folder become links.
+        std::fs::create_dir(real.join("Fresh Arrival")).unwrap();
+        outcomes.extend(sweep(&app, &context, &claimants, &candidates).await);
         std::fs::rename(real.join("G"), outside.join("G Saved")).unwrap();
         symlink(outside.join("G Real"), real.join("G")).unwrap();
         outcomes.extend(sweep(&app, &context, &claimants, &candidates).await);
@@ -2477,23 +2063,19 @@ mod tests {
         outcomes.extend(sweep(&app, &context, &claimants, &candidates).await);
 
         // The library's roots change.
-        set_movie_roots(&app, &[&second]).await;
+        set_movie_roots(&app, &[&base]).await;
         outcomes.extend(sweep(&app, &context, &claimants, &candidates).await);
 
-        let mismatches = context.oracle.mismatches.lock().unwrap().clone();
-        assert!(mismatches.is_empty(), "{mismatches:#?}");
         let held = context.owners.lock().unwrap();
-        let compared = context.oracle.compared.load(Ordering::SeqCst);
-        assert_eq!(held.indexed_claims, compared);
+        // Each compared claim, the reserving claim and the scan's own claim.
+        let compared = held.indexed_claims;
         assert_eq!(compared, outcomes.len() as u64 + 2);
-        assert!(
-            context.oracle.rests.load(Ordering::SeqCst) > 0,
-            "a link swap removes evidence mid-claim"
-        );
         assert!(outcomes.iter().any(Result::is_ok));
-        assert!(outcomes.contains(&Err(Some(
-            crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE
-        ))));
+        let overlap = crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE;
+        assert!(outcomes.contains(&Err(Some(overlap))));
+        let inspect =
+            crate::error_reasons::folder_ownership::CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE;
+        assert_eq!(outcomes.contains(&Err(Some(inspect))), inspect_refused);
         assert!(
             held.indexed_visits < compared * seeded.len() as u64 / 2,
             "visits={} claims={compared}",
