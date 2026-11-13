@@ -1072,12 +1072,25 @@ fn missing_grab_history_at_cutoff_still_yields_to_a_language_step() {
             false,
             true,
         ),
+        // More optional languages pass only while the grab still wants them,
+        // as they do over a file on disk.
+        (
+            AudioLanguageRank {
+                wanted: true,
+                optional_wanted: true,
+                ..AudioLanguageRank::for_test(0, 0)
+            },
+            AudioLanguageRank::for_test(0, 1),
+            1,
+            false,
+            true,
+        ),
         (
             AudioLanguageRank::for_test(0, 0),
             AudioLanguageRank::for_test(0, 1),
             1,
             false,
-            true,
+            false,
         ),
         (
             AudioLanguageRank::for_test(1, 0),

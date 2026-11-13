@@ -722,6 +722,67 @@ async fn standby_delay_parks_the_best_row_stops_the_walk_and_promotion_grabs_whe
     );
 }
 
+/// A delayed release records the step that admitted it, as a search or RSS
+/// grab does, rather than no step at all.
+#[tokio::test]
+async fn a_delayed_grab_records_the_step_that_admitted_it() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        download_client,
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        pending_releases,
+        wanted_items.clone(),
+    );
+    let files = Arc::new(MockMediaFileRepo::default());
+    let app = app.with_test_overrides(|builder| builder.with_media_files(files.clone()));
+    let (title, wanted_id) =
+        seed_movie_wanted_for_acquisition(&app, &user, &wanted_items, "Delayed Step Fixture", 2024)
+            .await;
+    files
+        .insert_media_file(&crate::InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: "/fixture/Delayed.Step.Fixture.2024.720p.WEB-DL-GRP.mkv".into(),
+            size_bytes: 1_000,
+            quality_label: Some("720p".into()),
+            grabbed_release_title: Some("Delayed.Step.Fixture.2024.720p.WEB-DL-GRP".into()),
+            role: crate::MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("seed the held file");
+    let wanted = wanted_items
+        .get_acquisition_scope_state_by_id(&wanted_id)
+        .await
+        .expect("load wanted scope")
+        .expect("wanted scope exists");
+    let parked = pending_movie_release(
+        &wanted_id,
+        &title,
+        "Delayed.Step.Fixture.2024.1080p.WEB-DL-GRP",
+        PendingReleaseStatus::Waiting,
+    );
+
+    let judgement = app
+        .judge_pending_release(
+            &wanted,
+            &parked,
+            &Utc::now(),
+            crate::acquisition::pending::PendingGrabTrigger::Automatic,
+        )
+        .await
+        .expect("judgement resolves");
+    let crate::acquisition::pending::PendingJudgement::Admitted(admitted) = judgement else {
+        panic!("a better tier over the held 720p file is admitted");
+    };
+    assert_eq!(
+        admitted.scoring().decided_by.as_deref(),
+        Some(crate::DecisionGate::QualityTier.as_str())
+    );
+    assert_eq!(admitted.scoring().decision_code, "upgrade");
+}
+
 /// One movie scope with one saved result, over repositories the test keeps.
 async fn saved_movie_result_fixture(
     name: &str,

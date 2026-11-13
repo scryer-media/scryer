@@ -75,6 +75,13 @@ pub(crate) struct AdmittedPendingRelease {
     incumbent_best_score: Option<i32>,
 }
 
+#[cfg(test)]
+impl AdmittedPendingRelease {
+    pub(crate) fn scoring(&self) -> &scryer_domain::GrabScoringSnapshot {
+        &self.scoring
+    }
+}
+
 /// A submission refused without burning its release, reduced to what failure
 /// accounting and refusal logging read (the error itself is not `Clone`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1437,20 +1444,11 @@ impl AppUseCase {
             }
         }
         let cutoff_scope = self.cutoff_scope_for(&pending_scope).await;
-        let analyzed_cutoff_quality =
-            crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-                &existing_files,
-                &cutoff_scope,
-            );
         // A resolution failure defers rather than errors: the callers expire
         // parked releases on Err, and a possibly transient settings problem
         // must not permanently burn delayed or standby candidates.
         let upgrade_context = match self
-            .resolve_upgrade_context_for_title_with_category_and_quality(
-                &title,
-                None,
-                analyzed_cutoff_quality,
-            )
+            .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
             .await
         {
             Ok(context) => context,
@@ -1520,6 +1518,8 @@ impl AppUseCase {
                         &facts.scoring_log,
                         &admission,
                         "manual_override",
+                        // An operator's standby grab is compared with nothing.
+                        None,
                     ),
                     title,
                     pending_scope,
@@ -1630,6 +1630,7 @@ impl AppUseCase {
                     &facts.scoring_log,
                     &admission,
                     "eligible",
+                    verdict.decided_by(&admission, candidate_facts),
                 ),
                 title,
                 pending_scope,

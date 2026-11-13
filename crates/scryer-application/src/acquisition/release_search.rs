@@ -1928,32 +1928,26 @@ pub(crate) fn scope_still_wants_language(
         .is_some_and(|incumbent| pipeline.still_wants(&incumbent.facts().side))
 }
 
-/// The language escape from the cutoff: the candidate is a step up in audio
-/// language over the file that set the cutoff.
+/// The escape from the cutoff over the file that set it, by the rule a
+/// recent grab at its cutoff also follows:
+/// [`crate::DecisionPipeline::passes_reached_cutoff`].
 ///
-/// A better preferred rank always counts. More optional languages count only
-/// when the incumbent is still wanted for them, which is when the profile's
-/// libraries keep searching for optional languages; otherwise an optional
-/// language improves a file when one turns up but is not worth going past the
-/// cutoff for.
-///
-/// Each half applies only while its gate is in the profile's pipeline: a
-/// language the profile does not compare cannot be an upgrade.
-fn candidate_is_language_upgrade(
+/// For the language steps: a better preferred rank always counts. More
+/// optional languages count only when the incumbent is still wanted for them,
+/// which is when the profile's libraries keep searching for optional
+/// languages; otherwise an optional language improves a file when one turns
+/// up but is not worth going past the cutoff for. A step the profile's
+/// pipeline does not run opens no escape.
+fn candidate_escapes_reached_cutoff(
     candidate: crate::admission::CandidateFacts,
     subject: &crate::admission::AdmissionSubject,
 ) -> bool {
     let pipeline = &candidate.pipeline;
-    let Some(incumbent) = subject.best_incumbent_record(pipeline) else {
-        return false;
-    };
-    let held = incumbent.facts();
-    pipeline.still_wants(&held.side)
-        && pipeline.passes_cutoff(
-            crate::decision_pipeline::CutoffEscape::Language,
-            &candidate.facts(),
-            &held,
-        )
+    subject
+        .best_incumbent_record(pipeline)
+        .is_some_and(|incumbent| {
+            pipeline.passes_reached_cutoff(&candidate.facts(), &incumbent.facts())
+        })
 }
 
 /// The one cutoff gate.
@@ -2003,7 +1997,7 @@ pub(crate) fn cutoff_refusal(
     // that still lacks its preferred language (or, when configured, an
     // optional one) lets a release that brings it through to the ladder, and
     // nothing else. The ladder still decides whether it lands.
-    if candidate_is_language_upgrade(candidate, subject) {
+    if candidate_escapes_reached_cutoff(candidate, subject) {
         return None;
     }
     Some(ReleaseAutoDecisionCode::CutoffReached)
@@ -2093,7 +2087,9 @@ pub(crate) fn automatic_candidate_delay_decision(
             .incumbents()
             .iter()
             .any(|incumbent| revision_upgrade_over(candidate_facts, incumbent)),
-        preferred_protocol_highest_quality: candidate_facts.tier_index == Some(0),
+        // The profile's best tier only counts while the profile ranks by tier.
+        preferred_protocol_highest_quality: profile.criteria.tier_cutoff_applies()
+            && candidate_facts.tier_index == Some(0),
         oldest_overlapping_pending_published_at,
     };
     crate::delay_profile::grab_time_delay_decision_with_context(
@@ -2970,16 +2966,12 @@ impl AppUseCase {
             None
         };
         let cutoff_scope = self.cutoff_scope_for(&subject.submission_scope).await;
-        let analyzed_cutoff_quality =
-            crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-                &existing_files,
-                &cutoff_scope,
-            );
         let upgrade_context = match self
-            .resolve_upgrade_context_for_title_with_category_and_quality(
+            .resolve_upgrade_context_for_scope(
                 title,
                 Some(subject.category.as_str()),
-                analyzed_cutoff_quality,
+                &existing_files,
+                &cutoff_scope,
             )
             .await
         {
@@ -7277,11 +7269,16 @@ mod tests {
             analyzed_cutoff_quality_for_scope(
                 &existing,
                 &CutoffScope::Episode("episode-1".to_string()),
+                &crate::QualityProfileCriteria::default(),
             ),
             Some("720p")
         );
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&existing, &CutoffScope::Title),
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &CutoffScope::Title,
+                &crate::QualityProfileCriteria::default()
+            ),
             Some("1080p")
         );
     }
@@ -7310,25 +7307,90 @@ mod tests {
             |ids: &[&str]| CutoffScope::Episodes(ids.iter().map(|id| (*id).to_string()).collect());
 
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&existing, &members(&["episode-1", "episode-2"])),
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &members(&["episode-1", "episode-2"]),
+                &crate::QualityProfileCriteria::default()
+            ),
             Some("720p"),
             "the season is only as good as its worst episode"
         );
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&existing, &members(&["episode-1"])),
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &members(&["episode-1"]),
+                &crate::QualityProfileCriteria::default()
+            ),
             Some("1080p")
         );
         assert_eq!(
             analyzed_cutoff_quality_for_scope(
                 &existing,
-                &members(&["episode-1", "episode-2", "episode-3"])
+                &members(&["episode-1", "episode-2", "episode-3"]),
+                &crate::QualityProfileCriteria::default(),
             ),
             None,
             "a missing member means the season has not reached any cutoff"
         );
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&existing, &members(&[])),
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &members(&[]),
+                &crate::QualityProfileCriteria::default()
+            ),
             None
+        );
+    }
+
+    /// The members are ranked in the profile's own tier order, not by
+    /// resolution: a profile that ranks 720p above 1080p finds a season
+    /// holding both only as good as its 1080p member, which is below its
+    /// cutoff, so that member can still be upgraded.
+    #[test]
+    fn a_pack_scope_ranks_its_members_in_the_profile_tier_order() {
+        use crate::acquisition::decision_helpers::{
+            CutoffScope, analyzed_cutoff_quality_for_scope,
+        };
+
+        let mut first = make_media_file("Nightfall.S01E01.720p.WEB-DL", Some("episode-1"));
+        first.quality_label = Some("720p".to_string());
+        let mut second = make_media_file("Nightfall.S01E02.1080p.WEB-DL", Some("episode-2"));
+        second.quality_label = Some("1080p".to_string());
+        let mut alternate = make_media_file("Nightfall.S01E02.2160p.WEB-DL", Some("episode-2"));
+        alternate.quality_label = Some("2160p".to_string());
+        alternate.role = crate::MediaFileRole::Additional;
+        let existing = vec![first, second, alternate];
+        let criteria = crate::QualityProfileCriteria {
+            quality_tiers: vec!["2160P".into(), "720P".into(), "1080P".into()],
+            cutoff_tier: Some("720P".into()),
+            ..Default::default()
+        };
+        let season = CutoffScope::Episodes(vec!["episode-1".into(), "episode-2".into()]);
+
+        let weakest = analyzed_cutoff_quality_for_scope(&existing, &season, &criteria);
+        assert_eq!(weakest, Some("1080p"));
+        assert!(!criteria.quality_cutoff_met(weakest));
+        // Under resolution order the season read as 720p, which is at cutoff.
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &season,
+                &crate::QualityProfileCriteria::default()
+            ),
+            Some("720p")
+        );
+        // Within one member the profile's best wins too.
+        let mut held_720 = make_media_file("Nightfall.S01E03.720p.WEB-DL", Some("episode-3"));
+        held_720.quality_label = Some("720p".to_string());
+        let mut held_1080 = make_media_file("Nightfall.S01E03.1080p.WEB-DL", Some("episode-3"));
+        held_1080.quality_label = Some("1080p".to_string());
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(
+                &[held_1080, held_720],
+                &CutoffScope::Episode("episode-3".into()),
+                &criteria,
+            ),
+            Some("720p")
         );
     }
 
@@ -7353,6 +7415,7 @@ mod tests {
             analyzed_cutoff_quality_for_scope(
                 &existing,
                 &CutoffScope::Episode("episode-1".to_string()),
+                &crate::QualityProfileCriteria::default(),
             ),
             Some("2160p")
         );
@@ -7721,6 +7784,229 @@ mod tests {
                     cutoff_refusal(candidate, &subject, true, true, &now()),
                     expected,
                     "keep searching: {keep_searching}"
+                );
+            }
+        }
+
+        /// The delay profile's "highest quality" bypass reads the profile's
+        /// best tier only while the profile ranks by tier at all.
+        #[test]
+        fn the_highest_quality_delay_bypass_needs_the_tier_step() {
+            let title = make_title();
+            let mut candidate = make_candidate("Nightfall.2022.2160p.WEB-DL-GRP", None);
+            candidate.published_at = Some(now().to_rfc3339());
+            let delay = crate::delay_profile::DelayProfile {
+                id: "delay".into(),
+                name: "Delay".into(),
+                usenet_delay_minutes: 60,
+                bypass_if_highest_quality: true,
+                ..Default::default()
+            };
+            let empty = AdmissionSubject::new(AdmissionScope::Title, []);
+            let holds = |pipeline: crate::DecisionPipeline| {
+                let mut profile = QualityProfile::default();
+                profile.criteria.decision_pipeline = pipeline;
+                automatic_candidate_delay_decision(
+                    &candidate,
+                    &title,
+                    &empty,
+                    &profile,
+                    std::slice::from_ref(&delay),
+                    false,
+                    None,
+                    &now(),
+                )
+                .expect("the delay profile applies")
+                .should_hold()
+            };
+            assert!(!holds(DEFAULT_ORDER), "the best tier bypasses the delay");
+            assert!(
+                holds(DEFAULT_ORDER.without(crate::DecisionGate::QualityTier)),
+                "without a tier step the tier does not decide the bypass"
+            );
+        }
+
+        /// A recent grab at its cutoff and the same release landed at its
+        /// cutoff let exactly the same candidates past: whatever the order of
+        /// the profile's steps, and whether or not optional languages are
+        /// still wanted.
+        ///
+        /// The queue is read through the admission gate, so the cutoff shows
+        /// only where its ladder would otherwise admit; the test counts those
+        /// cases on both sides so it cannot pass vacuously.
+        #[test]
+        fn a_queued_grab_and_a_landed_file_at_cutoff_share_one_escape_rule() {
+            use crate::DecisionGate::{
+                OptionalLanguages, PreferredLanguage, QualityTier, Revision,
+            };
+            let pipelines = [
+                DEFAULT_ORDER,
+                language_ahead_of_tier(),
+                crate::DecisionPipeline::try_from_gates([OptionalLanguages, PreferredLanguage])
+                    .unwrap(),
+                crate::DecisionPipeline::try_from_gates([
+                    OptionalLanguages,
+                    PreferredLanguage,
+                    QualityTier,
+                    Revision,
+                ])
+                .unwrap(),
+                crate::DecisionPipeline::try_from_gates([QualityTier, OptionalLanguages]).unwrap(),
+                crate::DecisionPipeline::try_from_gates([Revision]).unwrap(),
+                crate::DecisionPipeline::score_only(),
+            ];
+            let language = |preferred_rank, optional_hits, optional_wanted: bool| {
+                let rank = crate::AudioLanguageRank::for_test(preferred_rank, optional_hits);
+                crate::AudioLanguageRank {
+                    wanted: rank.wanted || optional_wanted,
+                    optional_wanted,
+                    ..rank
+                }
+            };
+            let policy = crate::admission::AdmissionPolicy {
+                allow_upgrades: true,
+                min_delta: 0,
+                cutoff_score: None,
+                manual_override: false,
+                applies_to_queue: true,
+            };
+            let (mut escaped, mut held_back) = (0, 0);
+            for pipeline in pipelines {
+                for held_language in [
+                    language(1, 0, false),
+                    language(1, 0, true),
+                    language(0, 0, false),
+                    language(0, 0, true),
+                ] {
+                    for held_revision in [0, 1] {
+                        let queued_at = |history_cutoff_reached| {
+                            AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![
+                                crate::admission::QueuedRelease {
+                                    missing_history: true,
+                                    history_cutoff_reached,
+                                    release_group: Some("GRP".into()),
+                                    title: "Sample.Title.2024.1080p.WEB-DL-GRP".to_string(),
+                                    covers: Vec::new(),
+                                    tier_index: Some(1),
+                                    revision: held_revision,
+                                    score: 900,
+                                    language: held_language,
+                                    release_key: None,
+                                },
+                            ])
+                        };
+                        let (queued_at_cutoff, queued_below_cutoff) =
+                            (queued_at(true), queued_at(false));
+                        let landed = AdmissionSubject::new(
+                            AdmissionScope::Title,
+                            holding(held_revision, 1).incumbents().iter().cloned().map(
+                                |mut incumbent| {
+                                    incumbent.language = held_language;
+                                    (incumbent, true)
+                                },
+                            ),
+                        );
+                        for tier in [0, 1, 2] {
+                            for revision in [0, 1, 2] {
+                                for (preferred_rank, optional_hits) in
+                                    [(0, 0), (0, 1), (1, 1), (2, 1)]
+                                {
+                                    for score in [900, 2_000] {
+                                        for ignore_proper_repack in [false, true] {
+                                            let candidate =
+                                                CandidateFacts::new(Some(tier), revision, score)
+                                                    .with_language(language(
+                                                        preferred_rank,
+                                                        optional_hits,
+                                                        false,
+                                                    ))
+                                                    .with_revision_policy(
+                                                        Some("GRP"),
+                                                        ignore_proper_repack,
+                                                    )
+                                                    .with_pipeline(pipeline);
+                                            let admitted = |subject: &AdmissionSubject| {
+                                                crate::admission::evaluate_admission(
+                                                    subject, candidate, &policy,
+                                                )
+                                                .is_admitted()
+                                            };
+                                            if !admitted(&queued_below_cutoff) {
+                                                continue;
+                                            }
+                                            let landed_escapes = cutoff_refusal(
+                                                candidate,
+                                                &landed,
+                                                true,
+                                                false,
+                                                &now(),
+                                            )
+                                            .is_none();
+                                            if landed_escapes {
+                                                escaped += 1;
+                                            } else {
+                                                held_back += 1;
+                                            }
+                                            assert_eq!(
+                                                admitted(&queued_at_cutoff),
+                                                landed_escapes,
+                                                "{pipeline:?}: candidate tier {tier} revision {revision} \
+                                                 language ({preferred_rank}, {optional_hits}) score {score} \
+                                                 ignore {ignore_proper_repack} against {held_language:?} \
+                                                 revision {held_revision}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                escaped > 0 && held_back > 0,
+                "{escaped} escaped, {held_back} held back"
+            );
+
+            // The two cases the queue used to let through on its own: more
+            // optional languages ahead of a worse preferred one, and more
+            // optional languages a profile no longer searches for.
+            let optional_first =
+                crate::DecisionPipeline::try_from_gates([OptionalLanguages, PreferredLanguage])
+                    .unwrap();
+            for (held_language, candidate_language) in [
+                (language(0, 0, true), language(1, 1, false)),
+                (language(0, 0, false), language(0, 1, false)),
+            ] {
+                let mut grab = crate::admission::QueuedRelease {
+                    missing_history: true,
+                    history_cutoff_reached: true,
+                    release_group: Some("GRP".into()),
+                    title: "Sample.Title.2024.1080p.WEB-DL-GRP".to_string(),
+                    covers: Vec::new(),
+                    tier_index: Some(1),
+                    revision: 0,
+                    score: 900,
+                    language: held_language,
+                    release_key: None,
+                };
+                let candidate = CandidateFacts::new(Some(1), 0, 900)
+                    .with_language(candidate_language)
+                    .with_revision_policy(Some("GRP"), false)
+                    .with_pipeline(optional_first);
+                let at_cutoff = AdmissionSubject::new(AdmissionScope::Title, [])
+                    .with_queued(vec![grab.clone()]);
+                assert!(
+                    !crate::admission::evaluate_admission(&at_cutoff, candidate, &policy)
+                        .is_admitted(),
+                    "{held_language:?} against {candidate_language:?}"
+                );
+                grab.history_cutoff_reached = false;
+                let below =
+                    AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![grab]);
+                assert!(
+                    crate::admission::evaluate_admission(&below, candidate, &policy).is_admitted(),
+                    "below its cutoff the ladder admits {candidate_language:?}"
                 );
             }
         }
