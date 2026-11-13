@@ -118,6 +118,55 @@ test("search hook only requests media settings for catalog-settings administrato
 
 const RATING_KEYS = ["normalized", "score", "source", "url", "value", "votes"];
 
+test("interactive search preserves gateway relevance over popularity in every facet", async () => {
+  const results = [
+    searchItem({
+      tvdbId: "1",
+      name: "Heroine? Saint? No, I'm an All-Works Maid!",
+      popularity: 1,
+    }),
+    searchItem({ tvdbId: "2", name: "TO BE HERO", popularity: 100 }),
+    searchItem({ tvdbId: "3", name: "Heroines Run the Show", popularity: 90 }),
+  ];
+  for (const facet of ["MOVIE", "SERIES", "ANIME"] as const) {
+    const { useGlobalSearch: renderSearch } = loadGlobalSearch({
+      react: {
+        useState: (initial: unknown) => [
+          typeof initial === "function" ? initial() : initial,
+          () => {},
+        ],
+        useRef: (current: unknown) => ({ current }),
+        useEffect: () => {},
+        useMemo: (compute: () => unknown) => compute(),
+        useCallback: (callback: unknown) => callback,
+      },
+      urql: {
+        useClient: () => ({
+          query: () => ({
+            toPromise: async () => ({ data: { searchMetadata: results } }),
+          }),
+        }),
+      },
+    });
+    const search = renderSearch({
+      authenticatedUser: {
+        id: "requester",
+        username: "requester",
+        appPermissions: [],
+        libraryPermissions: [],
+      },
+      queueFacet: facet,
+      uiLanguage: "eng",
+    });
+    const actual = await search.runTvdbSearch("heroine? saint?");
+    assert.deepEqual(
+      actual.map((item) => item.tvdbId),
+      ["1", "2", "3"],
+      facet,
+    );
+  }
+});
+
 function searchItem(
   overrides: Partial<MetadataTvdbSearchItem>,
 ): MetadataTvdbSearchItem {
