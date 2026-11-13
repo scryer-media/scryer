@@ -2993,7 +2993,18 @@ fn scene_titled_file_episode(source_video: &Path) -> Option<crate::ParsedEpisode
     {
         return None;
     }
-    parsed.episode
+    parsed.episode.filter(episode_identifies_file)
+}
+
+/// Whether an episode reading names what is in one physical file. A season
+/// marker describes release membership, not the episodes in the file; only
+/// concrete file numbering or a date can identify it.
+fn episode_identifies_file(episode: &crate::ParsedEpisodeMetadata) -> bool {
+    !episode.episode_numbers.is_empty()
+        || episode.absolute_episode.is_some()
+        || !episode.absolute_episode_numbers.is_empty()
+        || !episode.special_absolute_episode_numbers.is_empty()
+        || episode.air_date.is_some()
 }
 
 /// Reason code for a file whose anime numbering has more than one equally-good
@@ -3019,16 +3030,11 @@ fn file_episode_evidence_for_title(
     source_video: &Path,
     title: &scryer_domain::Title,
 ) -> Option<crate::ParsedReleaseMetadata> {
-    // A season marker describes release membership, not the episodes in this
-    // physical file. Only concrete file numbering or a date can identify it.
     let identifies_file = |evidence: &crate::ParsedReleaseMetadata| {
-        evidence.episode.as_ref().is_some_and(|episode| {
-            !episode.episode_numbers.is_empty()
-                || episode.absolute_episode.is_some()
-                || !episode.absolute_episode_numbers.is_empty()
-                || !episode.special_absolute_episode_numbers.is_empty()
-                || episode.air_date.is_some()
-        })
+        evidence
+            .episode
+            .as_ref()
+            .is_some_and(episode_identifies_file)
     };
     source_video_stem(Some(source_video))
         .map(|stem| parse_import_release_for_title(&stem, title))

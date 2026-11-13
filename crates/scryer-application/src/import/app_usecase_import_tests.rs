@@ -1012,6 +1012,34 @@ fn episode_identity_sole_scene_titled_video_identifies_itself() {
 }
 
 #[test]
+fn episode_identity_sole_scene_titled_season_only_video_takes_release_numbering() {
+    // A scene-styled name that carries only a season marker does not say which
+    // episode the file holds, so it cannot displace the release numbering.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file_path = write_video(dir.path(), "Show.A.S01.720p.WEB-DL.AV1.AAC2.0-GRP.mkv");
+    let evidence = bluey_submission_evidence(
+        BLUEY_EPISODE_RELEASE,
+        SubmissionScope::Episode {
+            episode_id: "ep-1".to_string(),
+        },
+    );
+
+    let parsed = build_augmented_episode_import_metadata_for_title(
+        &file_path,
+        &evidence,
+        &bluey_title(),
+        false,
+    );
+    let episode = parsed
+        .episode
+        .as_ref()
+        .expect("episode from the release title");
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![1]);
+    assert!(!episode.full_season);
+}
+
+#[test]
 fn episode_identity_sole_non_scene_video_takes_release_numbering() {
     // Not scene-titled (spaces, no group/quality): the release name remains
     // the better evidence for a sole video, even when the file names another
