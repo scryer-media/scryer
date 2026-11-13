@@ -175,6 +175,23 @@ fn score_cutoff_profile(cutoff_score: Option<i32>) -> QualityProfile {
     profile
 }
 
+/// A profile without a cutoff score whose chosen order compares the tier and
+/// revision, then the languages. The language steps are opt-in, so a profile
+/// that should nominate language targets chooses them.
+fn language_order_profile() -> QualityProfile {
+    let mut profile = score_cutoff_profile(None);
+    profile.criteria.set_decision_pipeline(
+        crate::DecisionPipeline::try_from_gates([
+            crate::DecisionGate::QualityTier,
+            crate::DecisionGate::Revision,
+            crate::DecisionGate::PreferredLanguage,
+            crate::DecisionGate::OptionalLanguages,
+        ])
+        .unwrap(),
+    );
+    profile
+}
+
 fn scores(bars: Vec<Option<crate::quality::landed_bar_memo::LandedBar>>) -> Vec<Option<i32>> {
     bars.into_iter()
         .map(|bar| bar.map(|bar| bar.score))
@@ -574,7 +591,7 @@ async fn a_page_of_series_scopes_reads_episodes_once_and_a_changed_span_misses()
 
 #[tokio::test]
 async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_score() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let german = fixture
         .add_movie(
             "German Cut",
@@ -612,7 +629,7 @@ async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_sc
         "the best-placed preferred language decides, not any preferred language"
     );
 
-    let mut no_upgrades = score_cutoff_profile(None);
+    let mut no_upgrades = language_order_profile();
     no_upgrades.criteria.allow_upgrades = false;
     fixture
         .quality_profiles
@@ -627,7 +644,7 @@ async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_sc
 
 #[tokio::test]
 async fn a_missing_optional_language_is_a_target_only_when_keep_searching_is_on() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let german_only = fixture
         .add_movie(
             "German Only",
@@ -658,7 +675,7 @@ async fn a_missing_optional_language_is_a_target_only_when_keep_searching_is_on(
 
 #[tokio::test]
 async fn a_title_preferred_language_override_alone_makes_a_language_target() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let english = fixture
         .add_movie(
             "Override Cut",
@@ -712,7 +729,7 @@ async fn a_title_preferred_language_override_alone_makes_a_language_target() {
 
 #[tokio::test]
 async fn without_a_cutoff_score_only_titles_with_their_own_preference_are_targets() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let mut titles = Vec::new();
     for index in 0..6 {
         let name = format!("Fixture Reel {index}");
@@ -749,7 +766,7 @@ async fn without_a_cutoff_score_only_titles_with_their_own_preference_are_target
 
 #[tokio::test]
 async fn the_override_only_targets_pass_matches_the_library_wide_pass() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let mut second_library = mock_default_library(MediaFacet::Movie);
     second_library.id = "library-movie-second".to_string();
     second_library.slug = "movies-second".to_string();
@@ -872,7 +889,7 @@ async fn the_override_only_targets_pass_matches_the_library_wide_pass() {
 
 #[tokio::test]
 async fn a_malformed_title_override_reads_as_inheriting_and_keeps_the_pass_going() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let wanted = fixture
         .add_movie(
             "Sound Reel",

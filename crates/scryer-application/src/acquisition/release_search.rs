@@ -7562,6 +7562,19 @@ mod tests {
             .unwrap()
         }
 
+        /// Tier and revision first, then the languages. The language steps
+        /// are opt-in, so a test about them under a tier-first order
+        /// chooses this.
+        fn tier_then_languages() -> crate::DecisionPipeline {
+            crate::DecisionPipeline::try_from_gates([
+                crate::DecisionGate::QualityTier,
+                crate::DecisionGate::Revision,
+                crate::DecisionGate::PreferredLanguage,
+                crate::DecisionGate::OptionalLanguages,
+            ])
+            .unwrap()
+        }
+
         fn holding(revision: i32, days_ago: i64) -> AdmissionSubject {
             AdmissionSubject::new(
                 AdmissionScope::Title,
@@ -7637,20 +7650,16 @@ mod tests {
         /// and what the file keeps instead is the language escape below.
         #[test]
         fn a_file_missing_the_preferred_language_still_reaches_its_cutoff() {
+            let order = tier_then_languages();
             let english = speaking(crate::AudioLanguageRank::for_test(1, 0));
-            assert!(incumbent_at_cutoff(
-                true,
-                &english,
-                Some(500),
-                &DEFAULT_ORDER
-            ));
-            assert!(incumbent_at_cutoff(true, &english, None, &DEFAULT_ORDER));
-            assert!(!incumbent_at_cutoff(false, &english, None, &DEFAULT_ORDER));
-            assert!(scope_still_wants_language(&english, &DEFAULT_ORDER));
+            assert!(incumbent_at_cutoff(true, &english, Some(500), &order));
+            assert!(incumbent_at_cutoff(true, &english, None, &order));
+            assert!(!incumbent_at_cutoff(false, &english, None, &order));
+            assert!(scope_still_wants_language(&english, &order));
             let german = speaking(crate::AudioLanguageRank::for_test(0, 0));
-            assert!(!scope_still_wants_language(&german, &DEFAULT_ORDER));
+            assert!(!scope_still_wants_language(&german, &order));
             // A language the profile does not compare is never wanted.
-            let without_languages = crate::DecisionPipeline::default_order()
+            let without_languages = order
                 .without(crate::DecisionGate::PreferredLanguage)
                 .without(crate::DecisionGate::OptionalLanguages);
             assert!(!scope_still_wants_language(&english, &without_languages));
@@ -7661,7 +7670,7 @@ mod tests {
         /// score.
         #[test]
         fn a_same_language_candidate_is_refused_at_cutoff_while_language_is_wanted() {
-            for pipeline in [DEFAULT_ORDER, language_ahead_of_tier()] {
+            for pipeline in [tier_then_languages(), language_ahead_of_tier()] {
                 let english_rank = crate::AudioLanguageRank::for_test(1, 0);
                 let english = speaking(english_rank);
                 for candidate in [
@@ -7691,7 +7700,7 @@ mod tests {
         /// either order, and goes on to the ladder.
         #[test]
         fn a_better_language_candidate_escapes_the_cutoff() {
-            for pipeline in [DEFAULT_ORDER, language_ahead_of_tier()] {
+            for pipeline in [tier_then_languages(), language_ahead_of_tier()] {
                 let english = speaking(crate::AudioLanguageRank::for_test(1, 0));
                 let german = crate::AudioLanguageRank::for_test(0, 0);
                 let candidate = CandidateFacts::new(Some(1), 0, 600)
@@ -7726,7 +7735,9 @@ mod tests {
             let candidate = CandidateFacts::new(Some(1), 0, 600)
                 .with_language(crate::AudioLanguageRank::for_test(0, 0))
                 .with_revision_policy(Some("GRP"), false)
-                .with_pipeline(DEFAULT_ORDER.without(crate::DecisionGate::PreferredLanguage));
+                .with_pipeline(
+                    tier_then_languages().without(crate::DecisionGate::PreferredLanguage),
+                );
             assert_eq!(
                 cutoff_refusal(candidate, &english, true, true, &now()),
                 Some(ReleaseAutoDecisionCode::CutoffReached)
@@ -7778,7 +7789,8 @@ mod tests {
                 let subject = speaking(held);
                 let candidate = CandidateFacts::new(Some(1), 0, 600)
                     .with_language(crate::AudioLanguageRank::for_test(0, 1))
-                    .with_revision_policy(Some("GRP"), false);
+                    .with_revision_policy(Some("GRP"), false)
+                    .with_pipeline(tier_then_languages());
                 let expected = (!keep_searching).then_some(ReleaseAutoDecisionCode::CutoffReached);
                 assert_eq!(
                     cutoff_refusal(candidate, &subject, true, true, &now()),
@@ -7841,6 +7853,7 @@ mod tests {
             };
             let pipelines = [
                 DEFAULT_ORDER,
+                tier_then_languages(),
                 language_ahead_of_tier(),
                 crate::DecisionPipeline::try_from_gates([OptionalLanguages, PreferredLanguage])
                     .unwrap(),

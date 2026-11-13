@@ -397,6 +397,19 @@ mod tests {
         .unwrap()
     }
 
+    /// Tier and revision first, then the languages. The language steps are
+    /// opt-in, so a test about them under a tier-first order chooses this.
+    fn tier_then_languages() -> crate::DecisionPipeline {
+        use crate::DecisionGate::*;
+        crate::DecisionPipeline::try_from_gates([
+            QualityTier,
+            Revision,
+            PreferredLanguage,
+            OptionalLanguages,
+        ])
+        .unwrap()
+    }
+
     #[test]
     fn a_preferred_language_gate_ahead_of_the_tier_outranks_a_better_tier() {
         let german_1080p = RankHead {
@@ -414,19 +427,22 @@ mod tests {
     }
 
     #[test]
-    fn the_default_order_keeps_the_tier_ahead_of_the_preferred_language() {
+    fn a_tier_first_order_keeps_the_tier_ahead_of_the_preferred_language() {
         let german_1080p = RankHead {
             side: spoken(1, AudioLanguageRank::for_test(0, 0)),
+            pipeline: tier_then_languages(),
             ..Default::default()
         };
         let english_2160p = RankHead {
             side: spoken(0, AudioLanguageRank::for_test(1, 0)),
+            pipeline: tier_then_languages(),
             ..Default::default()
         };
         assert!(english_2160p.key() < german_1080p.key());
         let german_2160p = RankHead {
             side: spoken(0, AudioLanguageRank::for_test(0, 0)),
             negated_score: 0,
+            pipeline: tier_then_languages(),
             ..Default::default()
         };
         let english_2160p_high_score = RankHead {
@@ -438,10 +454,7 @@ mod tests {
 
     #[test]
     fn optional_languages_follow_the_revision_and_precede_the_score() {
-        for pipeline in [
-            crate::DecisionPipeline::default_order(),
-            language_ahead_of_tier(),
-        ] {
+        for pipeline in [tier_then_languages(), language_ahead_of_tier()] {
             let dual = RankHead {
                 side: spoken(0, AudioLanguageRank::for_test(0, 1)),
                 pipeline,
@@ -542,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_order_key_reads_tier_revision_languages_score_size() {
+    fn the_default_order_key_reads_tier_revision_score_size() {
         let head = RankHead {
             side: spoken(2, AudioLanguageRank::for_test(1, 3)),
             negated_revision: -1,
@@ -550,8 +563,29 @@ mod tests {
             size_fit_penalty: 7,
             ..Default::default()
         };
-        // The four default steps fill the first slots; a step outside the
-        // default order leaves its slot at zero.
+        // The two default steps fill the first slots; the language steps are
+        // outside the default order, so their slots and every later one stay
+        // at zero.
+        let (blocked, gates, negated_score, size_fit_penalty) = head.key();
+        assert_eq!(
+            (blocked, &gates[..2], negated_score, size_fit_penalty),
+            (false, &[2, -1][..], -300, 7)
+        );
+        assert!(gates[2..].iter().all(|ordinal| *ordinal == 0));
+    }
+
+    #[test]
+    fn a_tier_first_order_key_reads_tier_revision_languages_score_size() {
+        let head = RankHead {
+            side: spoken(2, AudioLanguageRank::for_test(1, 3)),
+            negated_revision: -1,
+            negated_score: -300,
+            size_fit_penalty: 7,
+            pipeline: tier_then_languages(),
+            ..Default::default()
+        };
+        // The four chosen steps fill the first slots in order; a step outside
+        // the order leaves its slot at zero.
         let (blocked, gates, negated_score, size_fit_penalty) = head.key();
         assert_eq!(
             (blocked, &gates[..4], negated_score, size_fit_penalty),

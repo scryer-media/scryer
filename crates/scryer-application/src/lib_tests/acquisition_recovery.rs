@@ -18833,7 +18833,35 @@ async fn expired_pending_ranking_prefers_revision_of_queued_group() {
 #[tokio::test]
 async fn expired_pending_ranking_prefers_the_preferred_audio_language() {
     let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
-    let (app, title, _) = season_pack_downloading_fixture(vec![queued_pack]).await;
+    let (mut app, title, _) = season_pack_downloading_fixture(vec![queued_pack]).await;
+    // The language steps are opt-in: the profile chooses an order that
+    // compares the preferred language after the tier and revision.
+    let mut profile = crate::builtin_default_quality_profile();
+    profile.criteria.set_decision_pipeline(
+        crate::DecisionPipeline::try_from_gates([
+            crate::DecisionGate::QualityTier,
+            crate::DecisionGate::Revision,
+            crate::DecisionGate::PreferredLanguage,
+            crate::DecisionGate::OptionalLanguages,
+        ])
+        .unwrap(),
+    );
+    let profiles = Arc::new(StoredQualityProfileRepo::default());
+    profiles.set_profiles(vec![profile.clone()]).await;
+    app.services.config.quality_profiles = profiles;
+    app.services
+        .config
+        .settings
+        .upsert_setting_json(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            None,
+            serde_json::to_string(&profile.id).unwrap(),
+            "test",
+            None,
+        )
+        .await
+        .expect("select the language-order profile");
     for scope in ["series", title.library_id.as_str()] {
         app.services
             .config
