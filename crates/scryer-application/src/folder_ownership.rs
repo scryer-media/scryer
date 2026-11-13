@@ -716,9 +716,13 @@ pub(crate) struct RootOverlapKeys {
     /// The key of the root with its links resolved as far as it can be read,
     /// or `None` when the root is not a path that can be resolved.
     resolved: Option<String>,
-    /// The root as spelled, when nothing at or below it can be read: an owner
-    /// under it is compared by its keys alone.
-    dead: Option<std::path::PathBuf>,
+    /// The root as spelled. Keys ignore case, so on a volume that does not, a
+    /// folder can share a root's key and be another folder: only a folder
+    /// spelled as the root is taken for it.
+    spelled: std::path::PathBuf,
+    /// Nothing at or below the root can be read: an owner under it is
+    /// compared by its keys alone.
+    dead: bool,
 }
 
 /// What one probe of a folder says to the link walk.
@@ -794,14 +798,16 @@ impl FolderOverlapKeys {
                     return Some(RootOverlapKeys {
                         key,
                         resolved: None,
-                        dead: Some(path),
+                        spelled: path,
+                        dead: true,
                     });
                 }
                 let resolved = unreadable.resolve(&path);
                 Some(RootOverlapKeys {
                     key,
                     resolved: overlap_prefilter_key(&path_to_stored_string(&resolved.path)),
-                    dead: unreadable.dead(&path).then_some(path),
+                    dead: unreadable.dead(&path),
+                    spelled: path,
                 })
             })
             .collect();
@@ -920,9 +926,11 @@ pub(crate) enum OwnerOverlapPrefilter {
         keys: Vec<String>,
         path: std::path::PathBuf,
         /// How many of `path`'s ancestors, from `path` itself, lie below the
-        /// nearest library root and are walked for links. Zero when nothing
-        /// at or below that root can be read: the owner is then compared by
-        /// its keys, which is all the exact comparison could do.
+        /// nearest library root spelled as one of them, and are walked for
+        /// links. Every ancestor when there is no such root: the scan index
+        /// then asks this owner on every claim. Zero when nothing at or below
+        /// that root can be read: the owner is then compared by its keys,
+        /// which is all the exact comparison could do.
         chain: usize,
     },
 }
@@ -958,28 +966,19 @@ impl OwnerOverlapPrefilter {
         let mut chain = 0;
         for ancestor in path.ancestors() {
             let key = overlap_prefilter_key(&path_to_stored_string(ancestor));
+            // Root keys ignore case. A folder that shares a root's key and is
+            // spelled another way can be another folder, and a link: the
+            // root's resolved key says nothing of it, so the walk goes on
+            // through it and above it.
             let mut here = roots
                 .iter()
-                .filter(|root| key.as_ref() == Some(&root.key))
+                .filter(|root| key.as_ref() == Some(&root.key) && root.spelled == ancestor)
                 .peekable();
             if here.peek().is_some() {
-                let mut dead = false;
-                let mut readable = false;
-                for root in here {
-                    match &root.dead {
-                        // Root keys ignore case. A dead root says nothing of
-                        // a folder that only shares its key.
-                        Some(spelled) => dead |= spelled == ancestor,
-                        None => readable = true,
-                    }
-                }
-                if readable {
-                    break;
-                }
-                if dead {
+                if here.all(|root| root.dead) {
                     chain = 0;
-                    break;
                 }
+                break;
             }
             chain += 1;
         }
@@ -2081,6 +2080,57 @@ mod tests {
                 Some(crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE)
             );
         }
+    }
+
+    /// Root keys ignore case. Where the volume does not, `srv/TV` beside the
+    /// root `srv/tv` is another folder, here a link into the folder being
+    /// claimed. The other title recorded through it must still be found.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn move_check_refuses_owner_recorded_through_a_link_that_only_shares_a_roots_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let root = base.join("srv/tv");
+        let data = base.join("data");
+        let candidate = data.join("elsewhere/Show");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&candidate).unwrap();
+        let sentinel = candidate.join("preserved.mkv");
+        std::fs::write(&sentinel, b"preserved").unwrap();
+        let owned = base.join("srv/TV/Show");
+        let stored = |path: &Path| path_to_stored_string(path);
+        let roots = [stored(&root), stored(&data)];
+
+        // Whatever the volume: the folder that shares the root's key is
+        // walked, and so is everything above it. A folder spelled as the
+        // root is walked only below it.
+        let keys = FolderOverlapKeys::from_roots(&stored(&candidate), &roots).unwrap();
+        let chain =
+            |owner: &Path| match OwnerOverlapPrefilter::prepare(&stored(owner), keys.root_keys()) {
+                OwnerOverlapPrefilter::Keys { chain, .. } => chain,
+                OwnerOverlapPrefilter::Exact => panic!("an absolute owner has keys"),
+            };
+        assert_eq!(chain(&owned), owned.ancestors().count());
+        assert_eq!(chain(&root.join("Show")), 1);
+
+        // The link can exist only where `TV` and `tv` are two names.
+        let linked = std::os::unix::fs::symlink(data.join("elsewhere"), base.join("srv/TV"));
+        if linked.is_ok() {
+            assert!(title_folders_overlap(&stored(&candidate), &stored(&owned)).unwrap());
+            let mut keys = FolderOverlapKeys::from_roots(&stored(&candidate), &roots).unwrap();
+            assert!(keys.needs_exact_comparison(&stored(&owned)));
+            for outcome in
+                move_check_with_unreadable_owner(&owned, &candidate, &[&root, &data]).await
+            {
+                assert_eq!(
+                    outcome.unwrap_err().validation_reason(),
+                    Some(
+                        crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE
+                    )
+                );
+            }
+        }
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"preserved");
     }
 
     fn title(folder_path: Option<&str>) -> Title {
