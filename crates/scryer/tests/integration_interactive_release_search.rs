@@ -344,7 +344,6 @@ async fn setup_app_with_movie_routing(
                 path: root_path.to_string(),
                 is_default: true,
             }],
-            None,
         )
         .await
         .expect("seed default library root");

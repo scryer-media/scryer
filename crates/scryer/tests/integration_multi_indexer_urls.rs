@@ -281,7 +281,6 @@ where
                 path: root_path.to_string(),
                 is_default: true,
             }],
-            None,
         )
         .await
         .expect("seed default library root");
