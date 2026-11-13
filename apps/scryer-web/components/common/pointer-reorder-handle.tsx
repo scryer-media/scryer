@@ -43,7 +43,7 @@ type Drag = {
   grabX: number;
   grabY: number;
   rowStyle: string | null;
-  childVisibility: Array<[HTMLElement, string]>;
+  childVisibility: Array<[HTMLElement | SVGElement, string]>;
   hoveredList: HTMLElement | null;
   foreign: Foreign | null;
   /** The dragged row's height, for the slot it opens in another list. */
@@ -250,7 +250,7 @@ function lift(drag: Drag, clientX: number, clientY: number) {
   row.style.background = "rgba(var(--scry-accent-rgb), 0.08)";
   row.style.boxShadow = "none";
   for (const child of Array.from(row.children)) {
-    if (child instanceof HTMLElement) {
+    if (child instanceof HTMLElement || child instanceof SVGElement) {
       drag.childVisibility.push([child, child.style.visibility]);
       child.style.visibility = "hidden";
     }
