@@ -23,7 +23,7 @@ These changes are relative to v0.22.2.
 
 ### API changes
 
-- `DeleteLibraryPayload` returns `jobRun` for the background delete. Its `recyclePurged`, `recyclePreserved`, `recycleBusy` and `recycleFailed` fields are removed.
+- `DeleteLibraryPayload` returns `jobRun` for the background delete. `DeleteTitlePayload` no longer returns `recyclePurged`, `recyclePreserved`, `recycleBusy` or `recycleFailed`.
 - Quality profile criteria carry `decisionPipeline`, a list of `QualityDecisionGateValue` (`QUALITY_TIER`, `REVISION`, `PREFERRED_LANGUAGE`, `OPTIONAL_LANGUAGES`). A repeated step is refused with `INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE`. `ignoreProperRepack` remains readable and accepted and adds or removes the `REVISION` step. A profile that sets no order uses `QUALITY_TIER`, `REVISION`.
 - Quality profile decisions, recorded release decisions and grab history carry a nullable `decidedBy` naming the step that decided.
 - A null `cutoffScore` on save now clears the stored cutoff score.
