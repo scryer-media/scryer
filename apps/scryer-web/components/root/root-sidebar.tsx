@@ -11,6 +11,8 @@ import type {
   WantedSection,
 } from "@/components/root/types";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useSearchContext } from "@/lib/context/search-context";
+import { FACET_REGISTRY } from "@/lib/facets/registry";
 import {
   Sidebar,
   SidebarContent,
@@ -81,6 +83,7 @@ import {
 } from "@/components/ui/popover";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { cn } from "@/lib/utils";
+import { facetHasEnabledLibrary } from "@/lib/utils/library-filter";
 import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
 import {
@@ -737,6 +740,11 @@ function RootSidebarContent({
   onNavigate,
 }: RootSidebarProps) {
   const t = useTranslate();
+  const {
+    librariesByFacet,
+    viewableLibrariesByFacet,
+    requestableLibrariesByFacet,
+  } = useSearchContext();
   const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { apiExplorerEnabled } = useInstanceFeatures();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -853,17 +861,30 @@ function RootSidebarContent({
     })).filter((group) => group.entries.length > 0);
   }, [visibleSettingsEntries]);
   const canAccessMediaTopNav =
-    canViewCatalog || canResolveImports || canManageLibrarySettings;
+    canViewCatalog || canManageTitle || canRequestMedia || canResolveImports;
   const defaultMediaContentSection: ContentSettingsSection = canViewCatalog
     ? "overview"
     : canResolveImports
       ? "import"
-      : "library";
+      : canManageLibrarySettings
+        ? "library"
+        : "overview";
   const visibleTopNav = React.useMemo(
     () =>
-      topNav.filter(
-        (item) =>
+      topNav.filter((item) => {
+        const facet = FACET_REGISTRY.find(
+          (candidate) => candidate.viewId === item.id,
+        );
+        const hasEnabledFacetLibrary = facet
+          ? facetHasEnabledLibrary(facet.id, {
+              viewable: viewableLibrariesByFacet,
+              requestable: requestableLibrariesByFacet,
+              manageable: librariesByFacet,
+            })
+          : true;
+        return (
           (!MEDIA_NAV_VIEW_IDS.includes(item.id) || canAccessMediaTopNav) &&
+          (!MEDIA_NAV_VIEW_IDS.includes(item.id) || hasEnabledFacetLibrary) &&
           (item.id !== "calendar" || canViewCatalog) &&
           (item.id !== "lists" ||
             canAccessListsPage(
@@ -876,8 +897,9 @@ function RootSidebarContent({
           (item.id !== "dashboard" ||
             canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&
-          (item.id !== "activity" || canResolveImports || canManageTitle),
-      ),
+          (item.id !== "activity" || canResolveImports || canManageTitle)
+        );
+      }),
     [
       canAccessMediaTopNav,
       canViewLibraryInternals,
@@ -886,6 +908,9 @@ function RootSidebarContent({
       canManageTitle,
       canResolveImports,
       canViewCatalog,
+      librariesByFacet,
+      requestableLibrariesByFacet,
+      viewableLibrariesByFacet,
       topNav,
       user,
     ],

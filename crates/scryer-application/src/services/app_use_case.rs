@@ -664,6 +664,23 @@ impl AppUseCase {
             .record_grab(indexer_id, indexer_name);
     }
 
+    pub(crate) async fn admit_indexer_monthly_grab(
+        &self,
+        indexer_id: Option<&str>,
+    ) -> AppResult<()> {
+        let Some(indexer_id) = indexer_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && crate::indexer_error_history_is_persistable(id))
+        else {
+            return Ok(());
+        };
+        self.services
+            .integrations
+            .indexer_stats
+            .admit_monthly_grab(indexer_id, self.runtime.environment.now())
+            .await
+    }
+
     pub async fn cached_health_check_results(
         &self,
         actor: &User,

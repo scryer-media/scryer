@@ -61,6 +61,14 @@ impl RootMoveFixture {
         });
 
         let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+        let existing_library = app
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&library_id)
+            .await
+            .expect("library lookup")
+            .expect("library exists");
         let library = app
             .services
             .catalog
@@ -70,13 +78,7 @@ impl RootMoveFixture {
                 "Movies".to_string(),
                 "movies".to_string(),
                 crate::lib_tests::with_stored_root_ids(
-                    &app.services
-                        .catalog
-                        .libraries
-                        .get_by_id(&library_id)
-                        .await
-                        .expect("library lookup")
-                        .expect("library exists"),
+                    &existing_library,
                     vec![
                         LibraryRootDraft {
                             id: None,
@@ -90,6 +92,7 @@ impl RootMoveFixture {
                         },
                     ],
                 ),
+                None,
             )
             .await
             .expect("configure two roots");
@@ -153,6 +156,7 @@ impl RootMoveFixture {
                         is_default: false,
                     },
                 ],
+                None,
             )
             .await
             .expect("configure a third root");

@@ -100,6 +100,7 @@ async fn set_media_path(ctx: &TestContext, key_name: &str, value: &str) {
                 path: value.to_string(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("update default library root");
@@ -275,6 +276,7 @@ async fn scheduled_background_refresh_creates_one_job_run_per_library() {
             name: "Kids".to_string(),
             slug: "kids".to_string(),
             is_default: false,
+            enabled: true,
             roots: vec![],
             created_at: now,
             updated_at: now,
@@ -342,6 +344,7 @@ async fn scheduled_library_scan_creates_one_job_run_per_library() {
             name: "Kids".to_string(),
             slug: "kids".to_string(),
             is_default: false,
+            enabled: true,
             roots: vec![],
             created_at: now,
             updated_at: now,
@@ -390,6 +393,81 @@ async fn scheduled_library_scan_creates_one_job_run_per_library() {
         runs.iter().all(|run| run.status == JobRunStatus::Completed),
         "{:?}",
         runs.iter().map(|run| run.status).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn scheduled_library_jobs_skip_disabled_libraries() {
+    let ctx = TestContext::new().await;
+    seed_media_path_settings(&ctx).await;
+
+    let default_root = tempfile::tempdir().expect("default movie root");
+    set_media_path(
+        &ctx,
+        "movies.path",
+        default_root.path().to_string_lossy().as_ref(),
+    )
+    .await;
+
+    let disabled_root = tempfile::tempdir().expect("disabled movie root");
+    let now = Utc::now();
+    let disabled_library = LibraryRepository::create(
+        &ctx.libraries,
+        Library {
+            id: "movie_disabled_library".to_string(),
+            facet: MediaFacet::Movie,
+            name: "Disabled".to_string(),
+            slug: "disabled".to_string(),
+            is_default: false,
+            enabled: false,
+            roots: vec![],
+            created_at: now,
+            updated_at: now,
+        },
+        vec![LibraryRootDraft {
+            id: None,
+            path: disabled_root.path().to_string_lossy().to_string(),
+            is_default: true,
+        }],
+    )
+    .await
+    .expect("create disabled movie library");
+
+    for (job_key, trigger_source) in [
+        (JobKey::LibraryScanMovies, JobTriggerSource::ScheduledDaily),
+        (
+            JobKey::BackgroundLibraryRefreshMovies,
+            JobTriggerSource::ScheduledInterval,
+        ),
+    ] {
+        ctx.app
+            .run_scheduled_job_now(job_key, trigger_source)
+            .await
+            .expect("scheduled job should skip the disabled library");
+
+        let workflow_store = WorkflowOperationStore::new(ctx.db.datastore());
+        let runs = <WorkflowOperationStore as JobRunRepository>::list_job_runs(
+            &workflow_store,
+            Some(job_key),
+            5,
+        )
+        .await
+        .expect("list scheduled library job runs");
+        assert_eq!(
+            runs.len(),
+            1,
+            "only the enabled default library should be scheduled for {job_key:?}"
+        );
+        assert!(
+            runs.iter()
+                .all(|run| !run.operation_type.contains(&disabled_library.id)),
+            "disabled library must not get a scheduled operation"
+        );
+    }
+
+    assert!(
+        ctx.app.active_library_scan_sessions().await.is_empty(),
+        "scheduled jobs should leave no active library scan sessions",
     );
 }
 
@@ -682,6 +760,7 @@ async fn scheduled_job_failure_returns_err_and_persists_failed_run() {
             name: "Kids".to_string(),
             slug: "kids".to_string(),
             is_default: false,
+            enabled: true,
             roots: vec![],
             created_at: now,
             updated_at: now,

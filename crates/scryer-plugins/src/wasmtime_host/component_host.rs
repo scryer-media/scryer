@@ -170,6 +170,7 @@ struct ComponentIndexerErrorCapture {
     context: IndexerErrorCaptureContext,
     final_response: Option<CapturedIndexerHttpResponse>,
     denied_host: Option<String>,
+    local_dispatch_refusal: Option<scryer_application::AppError>,
 }
 
 #[derive(Default)]
@@ -476,9 +477,15 @@ impl ComponentHost {
         };
 
         if !self.request_host_allowed(&request.url) {
-            if let Ok(mut capture) = self.inner.indexer_error_capture.lock()
-                && let Some(capture) = capture.as_mut()
-            {
+            let mut capture = self
+                .inner
+                .indexer_error_capture
+                .lock()
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "recovering poisoned component indexer error capture");
+                    error.into_inner()
+                });
+            if let Some(capture) = capture.as_mut() {
                 capture.denied_host = url::Url::parse(&request.url).ok().and_then(|url| {
                     url.host_str()
                         .filter(|host| host.len() <= 253)
@@ -707,8 +714,9 @@ impl ComponentHost {
             result = async {
                 let request = builder.build().map_err(component_transport_error)?;
                 if let Some(tally) = tally.as_ref()
-                    && !tally.try_note_sent(request.url().as_str())
+                    && !tally.try_note_sent_async(request.url().as_str()).await
                 {
+                    self.capture_local_dispatch_refusal(tally.take_dispatch_error());
                     return Err(TransportError::Cancelled);
                 }
                 client.execute(request).await.map_err(|error| {
@@ -783,8 +791,9 @@ impl ComponentHost {
             }
             result = async {
                 if let Some(tally) = solve_tally.as_ref()
-                    && !tally.try_note_sent_call(CALL_SOLVER)
+                    && !tally.try_note_sent_call_async(CALL_SOLVER).await
                 {
+                    self.capture_local_dispatch_refusal(tally.take_dispatch_error());
                     return Err(TransportError::Cancelled);
                 }
                 proxy_client
@@ -958,6 +967,7 @@ impl ComponentHost {
                     context,
                     final_response: None,
                     denied_host: None,
+                    local_dispatch_refusal: None,
                 });
             }
             Err(error) => {
@@ -986,6 +996,9 @@ impl ComponentHost {
         let Some(capture) = capture else {
             return;
         };
+        if capture.local_dispatch_refusal.is_some() {
+            return;
+        }
         if let Some(host) = capture.denied_host {
             PluginHttpHost::record_host_policy_denial(&capture.context, &host);
             return;
@@ -1010,6 +1023,30 @@ impl ComponentHost {
                 "indexer_host_not_allowed: Host {host} is missing permission for this indexer instance"
             ),
         ))
+    }
+
+    fn capture_local_dispatch_refusal(&self, error: Option<scryer_application::AppError>) {
+        let Some(error) = error else {
+            return;
+        };
+        if let Ok(mut capture) = self.inner.indexer_error_capture.lock()
+            && let Some(capture) = capture.as_mut()
+        {
+            capture.local_dispatch_refusal.get_or_insert(error);
+        }
+    }
+
+    pub(crate) fn captured_local_dispatch_refusal(&self) -> Option<scryer_application::AppError> {
+        self.inner
+            .indexer_error_capture
+            .lock()
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "recovering poisoned component indexer error capture");
+                error.into_inner()
+            })
+            .as_ref()?
+            .local_dispatch_refusal
+            .clone()
     }
 
     /// Prefer the immutable accounting identity over error-response capture.
@@ -1774,6 +1811,101 @@ fn component_invocation_error_v1_1(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct QuotaRefusingStats;
+
+    impl scryer_application::IndexerStatsTracker for QuotaRefusingStats {
+        fn record_query(&self, _: &str, _: &str, _: bool) {}
+        fn record_grab(&self, _: &str, _: &str) {}
+        fn record_api_limits(
+            &self,
+            _: &str,
+            _: Option<u32>,
+            _: Option<u32>,
+            _: Option<u32>,
+            _: Option<u32>,
+        ) {
+        }
+        fn all_stats(&self) -> Vec<scryer_application::IndexerQueryStats> {
+            Vec::new()
+        }
+        fn admit_monthly_request<'a>(
+            &'a self,
+            _: &'a str,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = scryer_application::AppResult<()>> + Send + 'a>,
+        > {
+            Box::pin(std::future::ready(Err(
+                scryer_application::AppError::validation_refused(
+                    scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+                    "monthly request limit reached",
+                ),
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_request_preserves_local_quota_refusal_without_recording_provider_failure() {
+        #[derive(Default)]
+        struct Recorder(AtomicUsize);
+        impl scryer_application::IndexerErrorRecorder for Recorder {
+            fn record(
+                &self,
+                _: scryer_application::NewIndexerError,
+            ) -> scryer_application::AppResult<()> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let host = ComponentHost::for_indexer_with_provider_profile(
+            BTreeMap::new(),
+            Vec::new(),
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            None,
+        )
+        .expect("component host should build");
+        let recorder = Arc::new(Recorder::default());
+        host.begin_indexer_error_capture(IndexerErrorCaptureContext {
+            indexer_id: "quota-fixture".into(),
+            indexer_name: "Fixture".into(),
+            operation: scryer_application::IndexerErrorOperation::InteractiveSearch,
+            recorder: recorder.clone(),
+            stats: Arc::new(QuotaRefusingStats),
+        });
+        let url = reqwest::Url::parse("http://127.0.0.1:9/api").unwrap();
+        let request = HttpRequest {
+            method: "GET".into(),
+            url: url.to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(60),
+            host.send_direct_request(
+                &scryer_outbound_http::no_redirect_reqwest_client(),
+                &url,
+                &request,
+                &[],
+            ),
+        )
+        .await
+        .expect("local quota admission should finish");
+
+        assert!(matches!(result, Err(TransportError::Cancelled)));
+        assert_eq!(
+            host.captured_local_dispatch_refusal()
+                .expect("the adapter must receive the local refusal")
+                .reason(),
+            Some(scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED)
+        );
+        host.finish_indexer_error_capture(true);
+        assert_eq!(recorder.0.load(Ordering::SeqCst), 0);
+    }
 
     fn strategy_test_host(provider_profile: Option<Vec<u8>>) -> ComponentHost {
         ComponentHost::for_indexer_with_provider_profile(

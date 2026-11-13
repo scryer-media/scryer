@@ -99,6 +99,7 @@ async fn set_media_path(ctx: &TestContext, key_name: &str, value: &str) {
                 path: value.to_string(),
                 is_default: true,
             }],
+            None,
         )
         .await
         .expect("update default library root");

@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import ts from "typescript";
 import type { RequestsView } from "../../components/views/requests-view.tsx";
+import { selectableLibraries } from "../utils/library-filter.ts";
 
 type RequestsViewProps = Parameters<typeof RequestsView>[0];
 type QueryCall = { query: string; variables: Record<string, unknown> };
@@ -158,6 +159,7 @@ function mountContainer(adminRequests: unknown[]) {
     },
     "@/lib/utils/library-filter": {
       normalizeLibraryFilterSelection: (current: string[]) => current,
+      selectableLibraries,
     },
     "@/lib/utils/media-request-filters": { requesterFilterOptions: () => [] },
     "@/lib/utils/trailing-throttle": {

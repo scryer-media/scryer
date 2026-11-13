@@ -724,6 +724,8 @@ impl AppUseCase {
             download_id: Some(download_id),
             ..intent.request.clone()
         };
+        self.admit_indexer_monthly_grab(request.indexer_id.as_deref())
+            .await?;
         // An HTTP release is resolved by its indexer and described to the
         // client as a structured block; there is no artifact to fetch.
         if let Some(listed) = intent.http_release.as_ref() {

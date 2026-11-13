@@ -18,6 +18,7 @@ import {
   Import as ImportIcon,
   Pencil,
   Plus,
+  Power,
   RefreshCw,
   Save,
   Send,
@@ -181,6 +182,10 @@ type MediaLibrarySettingsPanelProps = {
     libraryId: string,
     input: LibraryMutationInput,
   ) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
+  onSetLibraryEnabled: (
+    libraryId: string,
+    enabled: boolean,
+  ) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
   onDeleteLibrary: (
     libraryId: string,
   ) => Promise<boolean | void> | boolean | void;
@@ -340,6 +345,7 @@ export const MediaLibrarySettingsPanel = React.memo(
     loadFacetDownloadClientRouting,
     onCreateLibrary,
     onUpdateLibrary,
+    onSetLibraryEnabled,
     onDeleteLibrary,
     onScan,
     onActiveLibraryNameChange,
@@ -350,6 +356,7 @@ export const MediaLibrarySettingsPanel = React.memo(
     // covers the panel adopting the saved library afterwards.
     const [saveInProgress, setSaveInProgress] = React.useState(false);
     const [deleteLibraryOpen, setDeleteLibraryOpen] = React.useState(false);
+    const [disableLibraryOpen, setDisableLibraryOpen] = React.useState(false);
     const [pendingRootRemoval, setPendingRootRemoval] = React.useState<{
       roots: LibraryRootRecord[];
       scan: boolean;
@@ -1337,6 +1344,34 @@ export const MediaLibrarySettingsPanel = React.memo(
       }
     };
 
+    const handleDisableLibrary = () => {
+      if (
+        !activeLibrary?.isDefault ||
+        activeLibrary.enabled === false ||
+        mode !== "existing" ||
+        actionBusy ||
+        hasDraftChanges
+      ) {
+        return;
+      }
+      setDisableLibraryOpen(true);
+    };
+
+    const handleConfirmDisableLibrary = async () => {
+      const library = activeLibrary;
+      setDisableLibraryOpen(false);
+      if (
+        !library?.isDefault ||
+        library.enabled === false ||
+        mode !== "existing" ||
+        actionBusy ||
+        hasDraftChanges
+      ) {
+        return;
+      }
+      await onSetLibraryEnabled(library.id, false);
+    };
+
     const handleSaveAndScanLibrary = async (removedRootIds: string[] = []) => {
       const savedLibrary = await handleSaveLibrary(removedRootIds);
       const libraryId =
@@ -1478,7 +1513,11 @@ export const MediaLibrarySettingsPanel = React.memo(
         ? t("settings.rootFolderEdit")
         : t("settings.rootFolderAdd");
     const libraryScanDisabled =
-      scanLoading || actionBusy || mode === "new" || !activeLibrary;
+      scanLoading ||
+      actionBusy ||
+      mode === "new" ||
+      !activeLibrary ||
+      activeLibrary.enabled === false;
     const libraryScanSummaryText = scanSummary
       ? t("settings.libraryScanSummary", {
           imported: scanSummary.imported,
@@ -1525,6 +1564,11 @@ export const MediaLibrarySettingsPanel = React.memo(
                           {library.isDefault ? (
                             <span className="shrink-0 rounded-[6px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.12)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-[var(--scry-accent-text)]">
                               {t("label.default")}
+                            </span>
+                          ) : null}
+                          {library.enabled === false ? (
+                            <span className="shrink-0 rounded-[6px] border border-[var(--scry-border2)] bg-[var(--scry-chip)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-[var(--scry-muted3)]">
+                              {t("label.disabled")}
                             </span>
                           ) : null}
                         </button>
@@ -2728,6 +2772,20 @@ export const MediaLibrarySettingsPanel = React.memo(
                 <div className="border-t border-[var(--scry-border2)] bg-[var(--scry-surf)]">
                   <div className="mx-auto flex w-full max-w-[920px] flex-wrap items-center gap-2 px-4 pb-[max(1.5rem,calc(0.875rem+env(safe-area-inset-bottom)))] pt-3.5 sm:px-6 sm:pb-3.5 md:px-[30px]">
                     {mode !== "new" &&
+                    activeLibrary?.isDefault &&
+                    activeLibrary.enabled !== false ? (
+                      <Button
+                        id="media-library-disable"
+                        type="button"
+                        variant="destructive"
+                        onClick={handleDisableLibrary}
+                        disabled={actionBusy || hasDraftChanges}
+                      >
+                        <Power className="mr-1.5 h-4 w-4" />
+                        {t("settings.libraryDisableButton")}
+                      </Button>
+                    ) : null}
+                    {mode !== "new" &&
                     activeLibrary &&
                     !activeLibrary.isDefault ? (
                       <Button
@@ -2756,7 +2814,9 @@ export const MediaLibrarySettingsPanel = React.memo(
                         !draftName.trim() ||
                         !hasDraftChanges ||
                         hasRootFolderConflicts ||
-                        hasInvalidRootFolderPaths
+                        hasInvalidRootFolderPaths ||
+                        (mode === "existing" &&
+                          activeLibrary?.enabled === false)
                       }
                       className="ml-auto"
                     >
@@ -2826,6 +2886,21 @@ export const MediaLibrarySettingsPanel = React.memo(
           cancelLabel={t("label.cancel")}
           onConfirm={handleConfirmDeleteLibrary}
           onCancel={() => setDeleteLibraryOpen(false)}
+        />
+        <ConfirmDialog
+          open={disableLibraryOpen}
+          title={t("settings.libraryDisableConfirmTitle", {
+            name: activeLibrary?.name ?? "",
+          })}
+          description={t("settings.libraryDisableConfirm", {
+            name: activeLibrary?.name ?? "",
+          })}
+          confirmLabel={t("settings.libraryDisableButton")}
+          cancelLabel={t("label.cancel")}
+          confirmButtonVariant="destructive"
+          isBusy={actionBusy}
+          onConfirm={handleConfirmDisableLibrary}
+          onCancel={() => setDisableLibraryOpen(false)}
         />
         <ConfirmDialog
           open={pendingRootRemoval !== null}

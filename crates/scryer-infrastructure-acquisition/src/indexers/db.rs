@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use scryer_application::AppResult;
 
 use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
@@ -21,6 +21,124 @@ pub struct PersistedIndexerQuota {
 pub struct DailyRequestCount {
     pub sent_on: NaiveDate,
     pub count: u32,
+}
+
+#[derive(Clone, Copy)]
+enum MonthlyUsageKind {
+    Request,
+    Grab,
+}
+
+impl MonthlyUsageKind {
+    fn count_column(self) -> &'static str {
+        match self {
+            Self::Request => "request_count",
+            Self::Grab => "grab_count",
+        }
+    }
+
+    fn other_count_column(self) -> &'static str {
+        match self {
+            Self::Request => "grab_count",
+            Self::Grab => "request_count",
+        }
+    }
+
+    fn limit_column(self) -> &'static str {
+        match self {
+            Self::Request => "max_requests_per_month",
+            Self::Grab => "max_grabs_per_month",
+        }
+    }
+
+    fn initial_counts(self) -> (i64, i64) {
+        match self {
+            Self::Request => (1, 0),
+            Self::Grab => (0, 1),
+        }
+    }
+}
+
+/// Atomically increments this Scryer instance's monthly request count unless
+/// the configured local cap has already been reached. The counter is durable
+/// independently of the dashboard's asynchronous daily flush.
+pub async fn admit_monthly_indexer_request(
+    datastore: &StoreDatastore,
+    indexer_id: &str,
+    at: DateTime<Utc>,
+) -> AppResult<bool> {
+    admit_monthly_usage(datastore, indexer_id, at, MonthlyUsageKind::Request).await
+}
+
+/// Atomically increments this Scryer instance's monthly grab count unless
+/// the configured local cap has already been reached.
+pub async fn admit_monthly_indexer_grab(
+    datastore: &StoreDatastore,
+    indexer_id: &str,
+    at: DateTime<Utc>,
+) -> AppResult<bool> {
+    admit_monthly_usage(datastore, indexer_id, at, MonthlyUsageKind::Grab).await
+}
+
+async fn admit_monthly_usage(
+    datastore: &StoreDatastore,
+    indexer_id: &str,
+    at: DateTime<Utc>,
+    kind: MonthlyUsageKind,
+) -> AppResult<bool> {
+    let month_start = at
+        .date_naive()
+        .with_day(1)
+        .expect("every calendar month has a first day")
+        .format("%Y-%m-%d")
+        .to_string();
+    let (request_count, grab_count) = kind.initial_counts();
+    let count_column = kind.count_column();
+    let other_count_column = kind.other_count_column();
+    let limit_column = kind.limit_column();
+    let sql = format!(
+        "INSERT INTO indexer_monthly_usage (
+            indexer_id, month_start, request_count, grab_count, updated_at
+         )
+         SELECT id, {{}}, {request_count}, {grab_count}, CURRENT_TIMESTAMP
+         FROM indexers
+         WHERE id = {{}}
+           AND ({limit_column} IS NULL OR {limit_column} > 0)
+         ON CONFLICT(indexer_id) DO UPDATE SET
+           month_start = excluded.month_start,
+           {count_column} = CASE
+             WHEN indexer_monthly_usage.month_start < excluded.month_start
+             THEN excluded.{count_column}
+             ELSE indexer_monthly_usage.{count_column} + 1
+           END,
+           {other_count_column} = CASE
+             WHEN indexer_monthly_usage.month_start < excluded.month_start
+             THEN excluded.{other_count_column}
+             ELSE indexer_monthly_usage.{other_count_column}
+           END,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE indexer_monthly_usage.month_start < excluded.month_start
+            OR (
+              indexer_monthly_usage.month_start = excluded.month_start
+              AND (
+                (SELECT {limit_column} FROM indexers WHERE id = excluded.indexer_id) IS NULL
+                OR indexer_monthly_usage.{count_column} < (
+                  SELECT {limit_column} FROM indexers WHERE id = excluded.indexer_id
+                )
+              )
+            )"
+    );
+    let affected = SqlRuntime::execute_write(
+        datastore,
+        "admit_indexer_monthly_usage",
+        &sql,
+        vec![
+            SqlArg::Text(month_start),
+            SqlArg::Text(indexer_id.to_string()),
+        ],
+    )
+    .await?;
+    Ok(affected == 1)
 }
 
 /// Bind the start of a UTC day in the shape the datastore stores
@@ -185,6 +303,21 @@ mod tests {
             .and_utc()
     }
 
+    fn utc_time(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+    ) -> DateTime<Utc> {
+        chrono::NaiveDate::from_ymd_opt(year, month, day)
+            .expect("test date is valid")
+            .and_hms_opt(hour, minute, second)
+            .expect("test time is valid")
+            .and_utc()
+    }
+
     async fn sqlite_datastore() -> (SqlitePool, StoreDatastore) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -208,6 +341,18 @@ mod tests {
         .execute(&pool)
         .await
         .expect("quota table should be created");
+        sqlx::query(
+            "CREATE TABLE indexer_monthly_usage (
+                indexer_id TEXT PRIMARY KEY NOT NULL,
+                month_start TEXT NOT NULL,
+                request_count INTEGER NOT NULL DEFAULT 0,
+                grab_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("monthly usage table should be created");
         let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
         seed_indexers(&datastore).await;
         (pool, datastore)
@@ -217,7 +362,11 @@ mod tests {
         SqlRuntime::execute_write(
             datastore,
             "create_test_indexers",
-            "CREATE TEMP TABLE indexers (id TEXT PRIMARY KEY NOT NULL)",
+            "CREATE TEMP TABLE indexers (
+                id TEXT PRIMARY KEY NOT NULL,
+                max_requests_per_month BIGINT,
+                max_grabs_per_month BIGINT
+            )",
             vec![],
         )
         .await
@@ -230,6 +379,211 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    async fn assert_monthly_admission_is_atomic_durable_and_resets_at_utc_month_boundary(
+        datastore: &StoreDatastore,
+    ) {
+        SqlRuntime::execute_write(
+            datastore,
+            "set_test_monthly_indexer_limits",
+            "UPDATE indexers
+             SET max_requests_per_month = 2, max_grabs_per_month = 1
+             WHERE id = {}",
+            vec![SqlArg::Text("idx-1".to_string())],
+        )
+        .await
+        .unwrap();
+        let before_rollover = utc_time(2024, 12, 31, 23, 59, 59);
+
+        assert!(
+            admit_monthly_indexer_request(datastore, "idx-1", before_rollover)
+                .await
+                .unwrap()
+        );
+        let (a, b, c) = tokio::join!(
+            admit_monthly_indexer_request(datastore, "idx-1", before_rollover),
+            admit_monthly_indexer_request(datastore, "idx-1", before_rollover),
+            admit_monthly_indexer_request(datastore, "idx-1", before_rollover),
+        );
+        let admitted_requests = [a.unwrap(), b.unwrap(), c.unwrap()]
+            .into_iter()
+            .filter(|admitted| *admitted)
+            .count();
+        assert_eq!(admitted_requests, 1);
+        assert!(
+            !admit_monthly_indexer_request(datastore, "idx-1", before_rollover)
+                .await
+                .unwrap()
+        );
+
+        let restarted = datastore.clone();
+        assert!(
+            !admit_monthly_indexer_request(&restarted, "idx-1", before_rollover)
+                .await
+                .unwrap(),
+            "usage must survive construction of a new tracker/store handle"
+        );
+
+        let after_rollover = utc_time(2025, 1, 1, 0, 0, 0);
+        assert!(
+            admit_monthly_indexer_request(&restarted, "idx-1", after_rollover)
+                .await
+                .unwrap()
+        );
+        assert!(
+            admit_monthly_indexer_grab(&restarted, "idx-1", after_rollover)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !admit_monthly_indexer_grab(&restarted, "idx-1", after_rollover)
+                .await
+                .unwrap()
+        );
+
+        SqlRuntime::execute_write(
+            &restarted,
+            "set_large_test_monthly_indexer_limits",
+            "UPDATE indexers
+             SET max_requests_per_month = 3000000000,
+                 max_grabs_per_month = 3000000000
+             WHERE id = {}",
+            vec![SqlArg::Text("idx-1".to_string())],
+        )
+        .await
+        .unwrap();
+        SqlRuntime::execute_write(
+            &restarted,
+            "seed_large_test_monthly_usage",
+            "UPDATE indexer_monthly_usage
+             SET month_start = {}, request_count = 2147483648, grab_count = 2147483648
+             WHERE indexer_id = {}",
+            vec![
+                SqlArg::Text("2025-02-01".to_string()),
+                SqlArg::Text("idx-1".to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+        let large_usage_month = utc_time(2025, 2, 1, 0, 0, 0);
+        assert!(
+            admit_monthly_indexer_request(&restarted, "idx-1", large_usage_month)
+                .await
+                .unwrap()
+        );
+        assert!(
+            admit_monthly_indexer_grab(&restarted, "idx-1", large_usage_month)
+                .await
+                .unwrap()
+        );
+        let row = SqlRuntime::fetch_optional(
+            restarted.read_exec(),
+            "SELECT request_count, grab_count FROM indexer_monthly_usage WHERE indexer_id = {}",
+            &[SqlArg::Text("idx-1".to_string())],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(row.i64("request_count").unwrap(), 2_147_483_649);
+        assert_eq!(row.i64("grab_count").unwrap(), 2_147_483_649);
+
+        SqlRuntime::execute_write(
+            &restarted,
+            "clear_test_monthly_indexer_limits",
+            "UPDATE indexers
+             SET max_requests_per_month = NULL, max_grabs_per_month = NULL
+             WHERE id = {}",
+            vec![SqlArg::Text("idx-1".to_string())],
+        )
+        .await
+        .unwrap();
+        let unlimited_month = utc_time(2025, 3, 1, 0, 0, 0);
+        for _ in 0..3 {
+            assert!(
+                admit_monthly_indexer_request(&restarted, "idx-1", unlimited_month)
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                admit_monthly_indexer_grab(&restarted, "idx-1", unlimited_month)
+                    .await
+                    .unwrap()
+            );
+        }
+        let row = SqlRuntime::fetch_optional(
+            restarted.read_exec(),
+            "SELECT request_count, grab_count FROM indexer_monthly_usage WHERE indexer_id = {}",
+            &[SqlArg::Text("idx-1".to_string())],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(row.i64("request_count").unwrap(), 3);
+        assert_eq!(row.i64("grab_count").unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn sqlite_monthly_admission_is_atomic_durable_and_resets_at_utc_month_boundary() {
+        let (_pool, datastore) = sqlite_datastore().await;
+        assert_monthly_admission_is_atomic_durable_and_resets_at_utc_month_boundary(&datastore)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn postgres_monthly_admission_is_atomic_durable_and_resets_at_utc_month_boundary() {
+        let Some(database_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            eprintln!(
+                "skipping PostgreSQL monthly indexer quota test; SCRYER_TEST_POSTGRES_URL is not set"
+            );
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("isolated PostgreSQL test database should connect");
+        sqlx::query(
+            "CREATE TEMP TABLE indexer_monthly_usage (
+                indexer_id TEXT PRIMARY KEY NOT NULL,
+                month_start TEXT NOT NULL,
+                request_count BIGINT NOT NULL DEFAULT 0,
+                grab_count BIGINT NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ON COMMIT PRESERVE ROWS",
+        )
+        .execute(&pool)
+        .await
+        .expect("temporary monthly usage table should be created");
+        let datastore = StoreDatastore::Postgres { pool };
+        seed_indexers(&datastore).await;
+        assert_monthly_admission_is_atomic_durable_and_resets_at_utc_month_boundary(&datastore)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn unlimited_monthly_admission_still_records_local_usage() {
+        let (_, datastore) = sqlite_datastore().await;
+        let at = utc_time(2025, 2, 15, 8, 0, 0);
+        for _ in 0..3 {
+            assert!(
+                admit_monthly_indexer_request(&datastore, "idx-1", at)
+                    .await
+                    .unwrap()
+            );
+        }
+        let row = SqlRuntime::fetch_optional(
+            datastore.read_exec(),
+            "SELECT request_count FROM indexer_monthly_usage WHERE indexer_id = {}",
+            &[SqlArg::Text("idx-1".to_string())],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(row.i64("request_count").unwrap(), 3);
     }
 
     async fn assert_deleted_indexer_quotas_are_not_hydrated(datastore: &StoreDatastore) {

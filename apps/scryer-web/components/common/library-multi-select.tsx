@@ -7,7 +7,10 @@ import {
 import { localizedFacetLabel } from "@/components/views/overview-localization";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { LibraryRecord } from "@/lib/types";
-import { normalizeLibraryFilterSelection } from "@/lib/utils/library-filter";
+import {
+  normalizeLibraryFilterSelection,
+  selectableLibraries,
+} from "@/lib/utils/library-filter";
 
 const FACET_ORDER: LibraryRecord["facet"][] = ["MOVIE", "SERIES", "ANIME"];
 const MAX_INLINE_LIBRARY_LABELS = 2;
@@ -42,18 +45,23 @@ export function LibraryMultiSelect({
 }: LibraryMultiSelectProps) {
   const t = useTranslate();
 
+  const availableLibraries = React.useMemo(
+    () => selectableLibraries(libraries),
+    [libraries],
+  );
   const normalizedSelectedLibraryIds = React.useMemo(
-    () => normalizeLibraryFilterSelection(selectedLibraryIds, libraries),
-    [libraries, selectedLibraryIds],
+    () =>
+      normalizeLibraryFilterSelection(selectedLibraryIds, availableLibraries),
+    [availableLibraries, selectedLibraryIds],
   );
   const groupedLibraries = React.useMemo(
-    () => groupLibrariesByFacet(libraries),
-    [libraries],
+    () => groupLibrariesByFacet(availableLibraries),
+    [availableLibraries],
   );
   const showFacetGroups = groupedLibraries.length > 1;
   const libraryById = React.useMemo(
-    () => new Map(libraries.map((library) => [library.id, library])),
-    [libraries],
+    () => new Map(availableLibraries.map((library) => [library.id, library])),
+    [availableLibraries],
   );
   const selectedLibraries = React.useMemo(
     () =>
@@ -83,10 +91,10 @@ export function LibraryMultiSelect({
   }, [selectedLibraries, showFacetGroups, t]);
 
   const implicitAllSelected =
-    libraries.length > 0 && normalizedSelectedLibraryIds.length === 0;
+    availableLibraries.length > 0 && normalizedSelectedLibraryIds.length === 0;
   const allLibraryIds = React.useMemo(
-    () => libraries.map((library) => library.id),
-    [libraries],
+    () => availableLibraries.map((library) => library.id),
+    [availableLibraries],
   );
   const effectiveSelectedLibraryIds = implicitAllSelected
     ? allLibraryIds

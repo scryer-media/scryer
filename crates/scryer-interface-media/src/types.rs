@@ -689,6 +689,8 @@ pub struct LibraryPayload {
     pub slug: String,
     /// Whether this is the configured default library for its facet.
     pub is_default: bool,
+    /// Whether the library is available for navigation, searches, and scans.
+    pub enabled: bool,
     /// Whether the library was created by bootstrap root-folder setup.
     pub is_bootstrap_default_root_set: bool,
     /// Root folders configured for the library.

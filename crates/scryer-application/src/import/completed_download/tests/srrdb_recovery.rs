@@ -301,7 +301,7 @@ async fn run_recovery_import_with_submissions(
             }],
         );
         let configured = libraries
-            .update(&library.id, library.name, library.slug, roots)
+            .update(&library.id, library.name, library.slug, roots, None)
             .await
             .expect("configure import fixture library");
         title.root_folder_id = configured.roots[0].id.clone();
