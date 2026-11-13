@@ -890,6 +890,58 @@ fn episode_identity_season_pack_member_uses_its_own_numbering_regardless_of_sibl
 }
 
 #[test]
+fn episode_identity_dotted_season_members_do_not_inherit_episode_set() {
+    let title = titled(MediaFacet::Series, "Спецы", Some(2026));
+    let evidence = ReleaseEvidence::ScryerSubmission {
+        title_id: title.id.clone(),
+        facet: "series".to_string(),
+        source_title: Some("Спецы".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::OperatorQueued,
+        scope: SubmissionScope::EpisodeSet {
+            episode_ids: (1..=16).map(|number| format!("ep-{number}")).collect(),
+        },
+    };
+    for number in 1..=16 {
+        let filename = format!("Specy.S01.E{number:02}.2026.WEB-DL.1080p.ExKinoRay.mkv");
+        let parsed = build_augmented_episode_import_metadata_for_title(
+            Path::new(&filename), &evidence, &title, true,
+        );
+        let episode = parsed.episode.as_ref().expect("member identity");
+        assert_eq!(episode.season, Some(1), "{filename}: {episode:?}");
+        assert_eq!(episode.episode_numbers, vec![number], "{filename}: {episode:?}");
+        assert!(!episode.full_season, "{filename}: {episode:?}");
+    }
+}
+
+#[test]
+fn episode_identity_season_only_filename_is_not_a_whole_season_video() {
+    let title = titled(MediaFacet::Series, "Спецы", Some(2026));
+    let evidence = ReleaseEvidence::ScryerSubmission {
+        title_id: title.id.clone(),
+        facet: "series".to_string(),
+        source_title: Some("Спецы".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::OperatorQueued,
+        scope: SubmissionScope::EpisodeSet {
+            episode_ids: (1..=16).map(|number| format!("ep-{number}")).collect(),
+        },
+    };
+    for filename in ["Specy.S01.2026.WEB-DL.1080p.ExKinoRay.mkv", "unknown.mkv"] {
+        for other_video_files in [false, true] {
+            let parsed = build_augmented_episode_import_metadata_for_title(
+                Path::new(filename), &evidence, &title, other_video_files,
+            );
+            assert!(parsed.episode.is_none(), "{filename}: {:?}", parsed.episode);
+        }
+    }
+}
+
+#[test]
 fn episode_identity_season_pack_member_with_obfuscated_name_gets_no_episode() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file_path = write_video(dir.path(), "4f8e2c7a91b6d3e0.mkv");

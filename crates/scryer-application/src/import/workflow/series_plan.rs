@@ -1647,6 +1647,51 @@ mod series_plan_tests {
     use super::*;
     use chrono::Utc;
 
+    #[test]
+    fn dotted_season_episode_set_members_resolve_one_to_one() {
+        let mut title = scene_pack_title();
+        title.name = "Спецы".into();
+        title.year = Some(2026);
+        let catalog: Vec<_> = (1..=16)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let evidence = ReleaseEvidence::ScryerSubmission {
+            title_id: title.id.clone(),
+            facet: "series".into(),
+            source_title: Some("Спецы".into()),
+            observed_release_name: None,
+            release_size_bytes: None,
+            release_listing_json: None,
+            purpose: crate::DownloadSubmissionPurpose::OperatorQueued,
+            scope: SubmissionScope::EpisodeSet {
+                episode_ids: catalog.iter().map(|ep| ep.id.clone()).collect(),
+            },
+        };
+        // An unnumbered release is not a verified pack. Its durable episode
+        // set bounds membership but cannot identify any individual file.
+        assert!(matches!(
+            verified_episode_pack(&evidence, &title, &catalog, None, None, None),
+            EpisodePackVerification::NotPack
+        ));
+        for n in 1..=16 {
+            let member = format!("Specy.S01.E{n:02}.2026.WEB-DL.1080p.ExKinoRay.mkv");
+            let parsed = build_augmented_episode_import_metadata_for_title(
+                Path::new(&member), &evidence, &title, true,
+            );
+            let episode = parsed.episode.expect("file episode identity");
+            let resolved = catalog_episodes_for_season_numbers(
+                &catalog, episode.season.expect("season"), &episode.episode_numbers,
+            ).expect("catalog members");
+            assert_eq!(resolved.iter().map(|ep| ep.id.as_str()).collect::<Vec<_>>(),
+                vec![format!("ep-{n}")], "{member}: {episode:?}");
+        }
+        let parsed = build_augmented_episode_import_metadata_for_title(
+            Path::new("Specy.S01.E01E02.2026.WEB-DL.1080p.ExKinoRay.mkv"),
+            &evidence, &title, true,
+        );
+        assert_eq!(parsed.episode.expect("real multi-episode file").episode_numbers, vec![1, 2]);
+    }
+
     fn episode_scoped_pack_evidence(release_name: &str) -> ReleaseEvidence {
         ReleaseEvidence::ScryerSubmission {
             title_id: "title-1".into(),
