@@ -6178,7 +6178,9 @@ pub trait IndexerStatsTracker: Send + Sync {
     }
 
     /// Atomically checks and consumes one locally configured monthly request
-    /// slot. Trackers without durable quota configuration are unlimited.
+    /// slot. An indexer without a monthly request limit is always admitted
+    /// and costs no database work; trackers without durable quota
+    /// configuration are unlimited.
     fn admit_monthly_request<'a>(
         &'a self,
         _indexer_id: &'a str,
@@ -6188,7 +6190,9 @@ pub trait IndexerStatsTracker: Send + Sync {
     }
 
     /// Blocking counterpart for plugin HTTP workers running on dedicated OS
-    /// threads. Never call this from an async runtime worker.
+    /// threads. Never call this from an async runtime thread: an
+    /// implementation that would have to wait on the database there refuses
+    /// the request instead.
     fn admit_monthly_request_blocking(
         &self,
         _indexer_id: &str,

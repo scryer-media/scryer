@@ -1549,14 +1549,23 @@ impl DatastoreAssembly {
     /// restart the same way whichever database is configured, and the quota SQL
     /// runs on either dialect.
     pub fn indexer_stats_tracker(&self) -> Arc<InMemoryIndexerStatsTracker> {
-        match &self.stores {
-            DatastoreStores::Sqlite { db, .. } => {
-                Arc::new(InMemoryIndexerStatsTracker::new(Some(db.datastore())))
-            }
-            DatastoreStores::Postgres { db, .. } => {
-                Arc::new(InMemoryIndexerStatsTracker::new(Some(db.datastore())))
-            }
-        }
+        // The tracker shares the monthly limits the indexer config store
+        // keeps current, so admission never reads them per request.
+        let (datastore, monthly_limits) = match &self.stores {
+            DatastoreStores::Sqlite {
+                db,
+                indexer_config_store,
+                ..
+            } => (db.datastore(), indexer_config_store.monthly_limits()),
+            DatastoreStores::Postgres {
+                db,
+                indexer_config_store,
+                ..
+            } => (db.datastore(), indexer_config_store.monthly_limits()),
+        };
+        Arc::new(
+            InMemoryIndexerStatsTracker::new(Some(datastore)).with_monthly_limits(monthly_limits),
+        )
     }
 
     pub fn indexer_search_learning_repository(&self) -> Arc<dyn IndexerSearchLearningRepository> {
@@ -2783,7 +2792,7 @@ mod tests {
                      1, 1, 1, 200, 20, '2026-01-01', '2026-01-01')",
             "INSERT INTO indexer_monthly_usage
              (indexer_id, month_start, request_count, grab_count, updated_at)
-             VALUES ('backup-indexer', '2026-01-01T00:00:00Z', 123, 7, '2026-01-02T03:04:05Z')",
+             VALUES ('backup-indexer', '2026-01-01', 123, 7, '2026-01-02T03:04:05Z')",
             "INSERT INTO indexer_api_clients
              (id, name, enabled, protocols_json, lookup_id, secret_hash, key_generation,
               revision, created_at, updated_at)
@@ -2840,7 +2849,7 @@ mod tests {
               FROM indexers WHERE id = 'backup-indexer'", "200:20"),
             ("SELECT month_start || ':' || request_count || ':' || grab_count || ':' || updated_at
               FROM indexer_monthly_usage WHERE indexer_id = 'backup-indexer'",
-             "2026-01-01T00:00:00Z:123:7:2026-01-02T03:04:05Z"),
+             "2026-01-01:123:7:2026-01-02T03:04:05Z"),
             ("SELECT secret_hash FROM indexer_api_clients WHERE id = 'backup-client'",
              "fixture-hash"),
             ("SELECT categories_json FROM indexer_api_client_grants WHERE client_id = 'backup-client' AND indexer_id = 'backup-indexer'",

@@ -1019,7 +1019,7 @@ mod restore_tests {
             sqlx::query(
                 "INSERT INTO indexer_monthly_usage
                  (indexer_id, month_start, request_count, grab_count)
-                 VALUES ('backup-quota-fixture', '2026-01-01T00:00:00Z', 123, 7)",
+                 VALUES ('backup-quota-fixture', '2026-01-01', 123, 7)",
             )
             .execute(pool)
             .await
@@ -1059,7 +1059,7 @@ mod restore_tests {
             .fetch_one(pool)
             .await
             .map_err(repo_err)?;
-            assert_eq!(usage, ("2026-01-01T00:00:00Z".into(), 123, 7));
+            assert_eq!(usage, ("2026-01-01".into(), 123, 7));
 
             // A bad row is encountered after the transaction clears its tables.
             // The failed import must restore every original row count.
