@@ -28,8 +28,13 @@ import {
   packRelatedCircles,
 } from "./library-graph-spiral-slots.ts";
 
-/** Above this many nodes, clusters collapse to one node each until expanded. */
-export const LIBRARY_GRAPH_COLLAPSE_THRESHOLD = 5000;
+/**
+ * Above this many nodes, the overview uses the packed neighbourhood layout and
+ * clusters collapse to one node each until expanded. The force layout below it
+ * only stays legible for small libraries: a library of a thousand or so
+ * densely linked titles, typical of anime, crushes into one overlapping pile.
+ */
+export const LIBRARY_GRAPH_COLLAPSE_THRESHOLD = 500;
 
 export type LibraryGraphSizeMetric = "ratingEvidence" | "rating" | "popularity";
 

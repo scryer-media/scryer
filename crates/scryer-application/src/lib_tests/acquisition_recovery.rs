@@ -722,6 +722,67 @@ async fn standby_delay_parks_the_best_row_stops_the_walk_and_promotion_grabs_whe
     );
 }
 
+/// A delayed release records the step that admitted it, as a search or RSS
+/// grab does, rather than no step at all.
+#[tokio::test]
+async fn a_delayed_grab_records_the_step_that_admitted_it() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        download_client,
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        pending_releases,
+        wanted_items.clone(),
+    );
+    let files = Arc::new(MockMediaFileRepo::default());
+    let app = app.with_test_overrides(|builder| builder.with_media_files(files.clone()));
+    let (title, wanted_id) =
+        seed_movie_wanted_for_acquisition(&app, &user, &wanted_items, "Delayed Step Fixture", 2024)
+            .await;
+    files
+        .insert_media_file(&crate::InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: "/fixture/Delayed.Step.Fixture.2024.720p.WEB-DL-GRP.mkv".into(),
+            size_bytes: 1_000,
+            quality_label: Some("720p".into()),
+            grabbed_release_title: Some("Delayed.Step.Fixture.2024.720p.WEB-DL-GRP".into()),
+            role: crate::MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("seed the held file");
+    let wanted = wanted_items
+        .get_acquisition_scope_state_by_id(&wanted_id)
+        .await
+        .expect("load wanted scope")
+        .expect("wanted scope exists");
+    let parked = pending_movie_release(
+        &wanted_id,
+        &title,
+        "Delayed.Step.Fixture.2024.1080p.WEB-DL-GRP",
+        PendingReleaseStatus::Waiting,
+    );
+
+    let judgement = app
+        .judge_pending_release(
+            &wanted,
+            &parked,
+            &Utc::now(),
+            crate::acquisition::pending::PendingGrabTrigger::Automatic,
+        )
+        .await
+        .expect("judgement resolves");
+    let crate::acquisition::pending::PendingJudgement::Admitted(admitted) = judgement else {
+        panic!("a better tier over the held 720p file is admitted");
+    };
+    assert_eq!(
+        admitted.scoring().decided_by.as_deref(),
+        Some(crate::DecisionGate::QualityTier.as_str())
+    );
+    assert_eq!(admitted.scoring().decision_code, "upgrade");
+}
+
 /// One movie scope with one saved result, over repositories the test keeps.
 async fn saved_movie_result_fixture(
     name: &str,
@@ -17901,6 +17962,186 @@ async fn refused_scheduled_ticks_record_no_run_and_no_events() {
     assert!(
         domain_events.events.lock().await.is_empty(),
         "a refused tick must not append a domain event"
+    );
+    let idle_checks = app.runtime.jobs.job_run_tracker.all_idle_checks().await;
+    for job_key in [JobKey::PendingReleaseProcessing, JobKey::RssSync] {
+        assert!(
+            idle_checks.contains_key(&job_key),
+            "{} remembers its idle visit",
+            job_key.as_str()
+        );
+    }
+}
+
+/// A staged-NZB cache whose age answer the test chooses, counting the prune
+/// passes that reach it.
+#[derive(Default)]
+struct AgedStagedNzbStore {
+    has_old_artifacts: bool,
+    age_checks: std::sync::atomic::AtomicUsize,
+    prunes: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl StagedNzbStore for AgedStagedNzbStore {
+    async fn create_pending_staged_nzb(
+        &self,
+        _source_url: &str,
+        _title_id: Option<&str>,
+    ) -> AppResult<crate::PendingStagedNzb> {
+        Err(AppError::Repository("not used".to_string()))
+    }
+
+    async fn finalize_pending_staged_nzb(
+        &self,
+        _pending: crate::PendingStagedNzb,
+        _raw_size_bytes: u64,
+    ) -> AppResult<crate::StagedNzbRef> {
+        Err(AppError::Repository("not used".to_string()))
+    }
+
+    async fn delete_staged_nzb(&self, _: &crate::StagedNzbRef) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn prune_staged_nzbs_older_than(
+        &self,
+        _older_than: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<u32> {
+        self.prunes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(u32::from(self.has_old_artifacts))
+    }
+
+    async fn has_staged_nzbs_older_than(
+        &self,
+        _older_than: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool> {
+        self.age_checks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.has_old_artifacts)
+    }
+
+    fn mark_artifact_active(&self, _path: &std::path::Path) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn mark_artifact_inactive(&self, _path: &std::path::Path) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+/// The Prowlarr sync, list sync and staged-NZB prune ticks follow the RSS
+/// gate: with no Prowlarr parent, no due list and no old cache artifact the
+/// scheduler writes no run row and no event, and only remembers the visit in
+/// memory so the jobs view can say it found nothing to do.
+#[tokio::test]
+async fn idle_prowlarr_list_and_staged_nzb_ticks_write_nothing() {
+    let (app, _) = bootstrap();
+    let job_runs = Arc::new(RecordingJobRunRepo::default());
+    let domain_events = Arc::new(MockDomainEventRepo::default());
+    let staged = Arc::new(AgedStagedNzbStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_job_runs(job_runs.clone())
+            .with_domain_events(domain_events.clone())
+            .with_staged_nzb_store(staged.clone())
+    });
+
+    for job_key in [
+        JobKey::ProwlarrSync,
+        JobKey::ListSync,
+        JobKey::StagedNzbPrune,
+    ] {
+        app.run_scheduled_job_now(job_key, JobTriggerSource::ScheduledInterval)
+            .await
+            .expect("an idle tick is not a failure");
+    }
+
+    assert!(
+        job_runs.runs.lock().await.is_empty(),
+        "an idle tick must not create a job run row"
+    );
+    assert!(
+        domain_events.events.lock().await.is_empty(),
+        "an idle tick must not append a domain event"
+    );
+    assert_eq!(
+        staged.age_checks.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the gate asks the cache once"
+    );
+    assert_eq!(
+        staged.prunes.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "an idle tick never reaches the prune pass"
+    );
+    let idle_checks = app.runtime.jobs.job_run_tracker.all_idle_checks().await;
+    for job_key in [
+        JobKey::ProwlarrSync,
+        JobKey::ListSync,
+        JobKey::StagedNzbPrune,
+    ] {
+        assert!(
+            idle_checks.contains_key(&job_key),
+            "{} remembers its idle visit",
+            job_key.as_str()
+        );
+    }
+}
+
+/// The gate is about work: an old cache artifact, or a user asking, runs the
+/// prune and records it exactly as before.
+#[tokio::test]
+async fn staged_nzb_prune_with_old_artifacts_or_manual_trigger_is_recorded() {
+    let (app, _) = bootstrap();
+    let job_runs = Arc::new(RecordingJobRunRepo::default());
+    let staged = Arc::new(AgedStagedNzbStore {
+        has_old_artifacts: true,
+        ..Default::default()
+    });
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_job_runs(job_runs.clone())
+            .with_staged_nzb_store(staged.clone())
+    });
+    app.run_scheduled_job_now(JobKey::StagedNzbPrune, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("a tick with old artifacts should run");
+
+    let (idle_app, _) = bootstrap();
+    let idle_runs = Arc::new(RecordingJobRunRepo::default());
+    let idle_staged = Arc::new(AgedStagedNzbStore::default());
+    let idle_app = idle_app.with_test_overrides(|builder| {
+        builder
+            .with_job_runs(idle_runs.clone())
+            .with_staged_nzb_store(idle_staged.clone())
+    });
+    idle_app
+        .run_scheduled_job_now(JobKey::StagedNzbPrune, JobTriggerSource::Manual)
+        .await
+        .expect("a manual prune should run");
+
+    for (runs, store) in [(&job_runs, &staged), (&idle_runs, &idle_staged)] {
+        let runs = runs.runs.lock().await;
+        assert_eq!(runs.len(), 1, "the run is recorded");
+        assert_eq!(runs[0].job_key, JobKey::StagedNzbPrune);
+        drop(runs);
+        assert_eq!(
+            store.prunes.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the prune pass runs once"
+        );
+    }
+    assert!(
+        idle_app
+            .runtime
+            .jobs
+            .job_run_tracker
+            .all_idle_checks()
+            .await
+            .is_empty(),
+        "a manual run is not an idle visit"
     );
 }
 

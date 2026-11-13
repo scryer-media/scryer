@@ -386,6 +386,8 @@ pub fn from_media_request(
             .requested_monitor_selection
             .as_ref()
             .map(monitor_selection_payload),
+        requested_required_audio_languages: request.requested_required_audio_languages.clone(),
+        requested_preferred_audio_languages: request.requested_preferred_audio_languages.clone(),
         resolved_by_user_id: request.resolved_by_user_id.map(Into::into),
         resolved_at: request.resolved_at,
         created_title_id: request.created_title_id.map(Into::into),
@@ -661,6 +663,7 @@ pub fn from_job_definition(definition: JobDefinition) -> JobDefinitionPayload {
                 .initial_delay_seconds
                 .map(|value| value as i32),
             next_run_at: definition.schedule.next_run_at,
+            last_idle_check_at: definition.schedule.last_idle_check_at,
         },
     }
 }

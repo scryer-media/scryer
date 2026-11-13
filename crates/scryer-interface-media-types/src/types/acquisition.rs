@@ -251,6 +251,10 @@ pub struct ParsedReleasePayload {
     pub stereoscopy: Option<ParsedStereoscopyPayload>,
     /// Audio description, or null when not detected.
     pub audio: Option<String>,
+    /// Audio channel layout such as `5.1`, or null when not detected.
+    pub audio_channels: Option<String>,
+    /// Audio languages named in the release title as ISO 639-2 codes, in title order.
+    pub audio_languages: Vec<String>,
     /// Whether dual audio was detected.
     pub is_dual_audio: bool,
     /// Whether Atmos audio was detected.

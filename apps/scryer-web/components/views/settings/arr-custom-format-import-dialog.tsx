@@ -134,8 +134,7 @@ export default function ArrCustomFormatImportDialog({
           return null;
         setBusy(false);
         const result = data?.translateArrCustomFormats as
-          | ArrCustomFormatTranslation
-          | undefined;
+          ArrCustomFormatTranslation | undefined;
         if (failure || !result) {
           setError(arrImportErrorMessage(failure, t, fallback));
           return null;
@@ -211,7 +210,15 @@ export default function ArrCustomFormatImportDialog({
       translationDiagnostics: [...new Set(diagnostics)],
     });
     onOpenChange(false);
-  }, [inspection, onApply, onOpenChange, requestTranslation, scores, source, t]);
+  }, [
+    inspection,
+    onApply,
+    onOpenChange,
+    requestTranslation,
+    scores,
+    source,
+    t,
+  ]);
 
   const formats = inspection?.formats ?? [];
   const diagnostics =

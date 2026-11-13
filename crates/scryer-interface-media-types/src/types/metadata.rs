@@ -80,6 +80,12 @@ pub struct MetadataSearchItemPayload {
     /// import's library and facet, or null. Only the pending-import title
     /// search populates it; every other metadata-search surface returns null.
     pub existing_title_id: Option<ID>,
+    /// Ids of the libraries of this result's facet that already hold a title
+    /// with one of its external ids, limited to libraries the caller may
+    /// view, request into or manage titles in. Carries no title id. Computed
+    /// only by `searchMetadata` and `searchMetadataMulti`, and only when
+    /// selected; every other metadata-search surface returns an empty list.
+    pub present_in_library_ids: Vec<ID>,
 }
 
 #[derive(SimpleObject, Clone)]

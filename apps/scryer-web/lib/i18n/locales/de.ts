@@ -1296,6 +1296,18 @@ const de: LocaleDictionary = {
   "title.monitoredSection": "{{facet}} überwacht",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Neuestes abrufen",
+  "search.addConfigRequiredAudio": "Erforderliche Audiosprache",
+  "search.addConfigPreferredAudio": "Bevorzugte Audiosprache",
+  "search.addConfigAudioChoose": "Sprachen wählen",
+  "search.addConfigAudioRequireNone": "Keine verlangen",
+  "title.preferredAudioLanguages": "Bevorzugte Audiosprachen",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Diese Audiosprache kennt Scryer nicht.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Die Audiosprache einer Route kennt Scryer nicht.",
+  "requests.requestedAudioLanguages": "Angefragte Audiosprachen",
+  "requests.requestedRequiredAudio": "Erforderlich: {{languages}}",
+  "requests.requestedPreferredAudio": "Bevorzugt: {{languages}}",
   "title.requiredAudioLanguages": "Erforderliche Audiosprachen",
   "title.originalAudioLanguagePerTitle": "Originalsprache (pro Titel)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1572,11 +1584,16 @@ const de: LocaleDictionary = {
   "system.title": "Systemgesundheit",
   "system.diagnosticsBundle.download": "Diagnosepaket herunterladen",
   "system.diagnosticsBundle.preparing": "Diagnose wird vorbereitet…",
-  "system.diagnosticsBundle.helper": "Protokolle, Metriken und eine Einstellungsübersicht in einer Datei für den Maintainer. Namen, Adressen, Pfade und Geheimnisse werden nach bestem Bemühen entfernt; prüfe das Paket, bevor du es teilst.",
-  "system.diagnosticsBundle.failed": "Das Diagnosepaket konnte nicht heruntergeladen werden.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Melde dich erneut an, um die Diagnose herunterzuladen.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Zum Herunterladen der Diagnose ist die Berechtigung für Systemeinstellungen erforderlich.",
-  "system.diagnosticsBundle.refusal.failed": "Das Diagnosepaket konnte nicht erstellt werden. Details stehen im Serverprotokoll.",
+  "system.diagnosticsBundle.helper":
+    "Protokolle, Metriken und eine Einstellungsübersicht in einer Datei für den Maintainer. Namen, Adressen, Pfade und Geheimnisse werden nach bestem Bemühen entfernt; prüfe das Paket, bevor du es teilst.",
+  "system.diagnosticsBundle.failed":
+    "Das Diagnosepaket konnte nicht heruntergeladen werden.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Melde dich erneut an, um die Diagnose herunterzuladen.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Zum Herunterladen der Diagnose ist die Berechtigung für Systemeinstellungen erforderlich.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Das Diagnosepaket konnte nicht erstellt werden. Details stehen im Serverprotokoll.",
   "system.jobsTitle": "Jobs",
   "system.notLoaded": "Systemstatus nicht geladen.",
   "system.refreshing": "Wird aktualisiert",
@@ -3133,6 +3150,9 @@ const de: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protokoll",
   "indexerSearch.facet.resolution": "Auflösung",
   "indexerSearch.facet.source": "Quelle",
+  "indexerSearch.facet.videoCodec": "Videocodec",
+  "indexerSearch.facet.audioCodec": "Audiocodec",
+  "indexerSearch.facet.audioChannels": "Audiokanäle",
   "indexerSearch.facet.audio": "Audio & HDR",
   "indexerSearch.facet.flags": "Merkmale",
   "indexerSearch.facet.indexer": "Indexer",
@@ -3873,28 +3893,18 @@ const de: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Entscheidungsreihenfolge",
   "qualityProfile.decisionOrderInfo":
     "Wenn zwei Releases dieses Profil erfüllen, prüft Scryer diese Schritte von oben nach unten. Der erste Schritt, der sie unterscheidet, entscheidet. Der Score entscheidet immer zuletzt.",
-  "qualityProfile.decisionPresets": "Vorlagen",
-  "qualityProfile.decisionPresetDefault": "Standard",
-  "qualityProfile.decisionPresetLanguageFirst": "Sprache zuerst",
-  "qualityProfile.decisionPresetScoreOnly": "Nur Score",
   "qualityProfile.decisionGateQualityTier": "Qualitätsstufe",
   "qualityProfile.decisionGateQualityTierDescription":
     "Das Release in der Stufe, die in der Qualitätspräferenz dieses Profils höher steht, gewinnt.",
-  "qualityProfile.decisionGateQualityTierSummary": "Qualitätsstufe",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Innerhalb derselben Stufe und Release-Gruppe gewinnt ein neueres PROPER oder REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK-Revision",
   "qualityProfile.decisionGatePreferredLanguage": "Bevorzugte Sprache",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Das Release, dessen Audiospur in den bevorzugten Audiosprachen der Bibliothek höher steht, gewinnt.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "bevorzugter Audiosprache",
   "qualityProfile.decisionGateOptionalLanguages": "Optionale Sprachen",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Das Release mit mehr optionalen Audiosprachen der Bibliothek gewinnt.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "Anzahl optionaler Audiosprachen",
   "qualityProfile.decisionGateUnknown": "Unbekannter Schritt ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Diese Version der Web-App kennt diesen Schritt nicht. Er bleibt an seiner Stelle.",
@@ -3908,11 +3918,6 @@ const de: LocaleDictionary = {
     "{{value}} zur Entscheidungsreihenfolge hinzufügen",
   "qualityProfile.decisionAvailableSteps": "Nicht verwendete Schritte",
   "qualityProfile.decisionAllStepsInUse": "Alle Schritte werden verwendet.",
-  "qualityProfile.decisionSummary":
-    "Releases werden nach {{steps}} und zuletzt nach Score verglichen.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, dann {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Releases werden nur nach Score verglichen.",
   "qualityProfile.decisionWarningTierAbsent":
     "Ohne den Schritt Qualitätsstufe kann ein Release einer niedrigeren Stufe eine Datei einer höheren Stufe ersetzen, und die Cutoff-Stufe gilt nicht. Nur der Cutoff-Score beendet die Suche nach Upgrades; ohne Cutoff-Score ist das Profil zufrieden, sobald eine Datei vorhanden ist.",
   "qualityProfile.decisionNoteTierBelowLanguage":

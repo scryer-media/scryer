@@ -79,15 +79,21 @@ impl AppUseCase {
                 )
                 .await?;
 
+            // The same rows, removed in one batch per library rather than one
+            // statement each.
+            let mut paths_by_library: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
             for item in items {
+                paths_by_library
+                    .entry(item.library_id)
+                    .or_default()
+                    .push(item.item_path);
+            }
+            for (library_id, item_paths) in paths_by_library {
                 self.services
                     .library
                     .library_scan_unmatched_items
-                    .delete_library_scan_unmatched_item(
-                        &item.library_id,
-                        item.facet.clone(),
-                        &item.item_path,
-                    )
+                    .delete_library_scan_unmatched_items(&library_id, facet.clone(), &item_paths)
                     .await?;
             }
         }

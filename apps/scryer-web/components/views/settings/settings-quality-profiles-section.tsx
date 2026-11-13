@@ -61,6 +61,7 @@ const QUALITY_EDITOR_SECTION_BODY_CLASS =
 const QUALITY_EDITOR_LIST_CLASS =
   "max-h-60 overflow-auto rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-2";
 const QUALITY_TIER_LIST = "quality-tiers";
+const AVAILABLE_QUALITY_TIER_LIST = "quality-tiers-available";
 const QUALITY_EDITOR_LIST_ITEM_CLASS =
   "mb-1 flex items-center justify-between gap-2 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] px-2 py-1.5 text-[var(--scry-ink2)] hover:bg-[var(--scry-hover)]";
 
@@ -184,7 +185,7 @@ type SettingsQualityProfilesSectionProps = {
     deniedField: QualityProfileListField,
     value: string,
   ) => void;
-  addQualityTier: (value: string) => void;
+  addQualityTier: (value: string, targetIndex?: number) => void;
   removeQualityTier: (value: string) => void;
   reorderQualityTier: (value: string, targetIndex: number) => void;
   qualityProfileInheritValue: string;
@@ -1055,6 +1056,13 @@ export function SettingsQualityProfilesSection({
                                     })}
                                     onDrop={(target) => {
                                       if (
+                                        target.list ===
+                                        AVAILABLE_QUALITY_TIER_LIST
+                                      ) {
+                                        removeQualityTier(qualityTier);
+                                        return;
+                                      }
+                                      if (
                                         target.list !== QUALITY_TIER_LIST ||
                                         target.item === null
                                       )
@@ -1151,7 +1159,11 @@ export function SettingsQualityProfilesSection({
                         <Label className="mb-2 block text-[var(--scry-ink2)]">
                           {t("qualityProfile.availableQualityTiers")}
                         </Label>
-                        <div className={QUALITY_EDITOR_LIST_CLASS}>
+                        <div
+                          className={QUALITY_EDITOR_LIST_CLASS}
+                          data-reorder-list={AVAILABLE_QUALITY_TIER_LIST}
+                          data-reorder-unordered
+                        >
                           {availableQualityTiers.length === 0 ? (
                             <p
                               className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}
@@ -1163,8 +1175,36 @@ export function SettingsQualityProfilesSection({
                               <div
                                 key={option.value}
                                 className={QUALITY_EDITOR_LIST_ITEM_CLASS}
+                                data-reorder-item={option.value}
                               >
-                                <span className="text-xs">{option.label}</span>
+                                <PointerReorderHandle
+                                  id={selectorId(
+                                    "settings-quality-profile-tier-add-drag",
+                                    option.value,
+                                  )}
+                                  title={t("qualityProfile.addQualityTier", {
+                                    value: option.label,
+                                  })}
+                                  onDrop={(target) => {
+                                    if (target.list !== QUALITY_TIER_LIST)
+                                      return;
+                                    const targetIndex =
+                                      target.item === null
+                                        ? -1
+                                        : activeQualityProfileTierOptions.indexOf(
+                                            target.item,
+                                          );
+                                    addQualityTier(
+                                      option.value,
+                                      targetIndex >= 0
+                                        ? targetIndex
+                                        : undefined,
+                                    );
+                                  }}
+                                />
+                                <span className="flex-1 text-xs">
+                                  {option.label}
+                                </span>
                                 <Button
                                   id={selectorId(
                                     "settings-quality-profile-tier-add",

@@ -1246,11 +1246,31 @@ async fn graphql_delay_profile_library_scope_round_trips_and_follows_library_del
 
     let deleted = gql(
         &ctx,
-        r#"mutation($id: ID!) { deleteLibrary(id: $id) { id } }"#,
+        r#"mutation($id: ID!) { deleteLibrary(id: $id) { id jobRun { id } } }"#,
         json!({ "id": library_id }),
     )
     .await;
     assert_no_errors(&deleted);
+    // The delete runs as a job; the profile changes when it finishes.
+    let run_id = deleted["data"]["deleteLibrary"]["jobRun"]["id"]
+        .as_str()
+        .expect("library deletion job run")
+        .to_string();
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    crate::common::wait_until("library deletion job completes", || {
+        let admin = &admin;
+        let run_id = run_id.clone();
+        let ctx = &ctx;
+        async move {
+            ctx.app
+                .list_recent_job_runs(admin, 20)
+                .await
+                .expect("list job runs")
+                .into_iter()
+                .any(|run| run.id == run_id && run.completed_at.is_some())
+        }
+    })
+    .await;
 
     let read = gql(&ctx, READ_SCOPED_DELAY_PROFILES, json!({})).await;
     assert_no_errors(&read);

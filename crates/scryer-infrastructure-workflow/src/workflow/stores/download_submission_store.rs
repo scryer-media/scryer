@@ -653,7 +653,8 @@ fn client_locator_chunk_predicate<'a>(
 /// `LIMIT` cuts an already-filtered set;
 /// `terminal_history_states_match_the_domain_definition` pins the list to
 /// [`TrackedDownloadState::is_terminal`].
-const TERMINAL_HISTORY_TRACKED_STATES: [&str; 3] = ["imported", "failed", "ignored"];
+const TERMINAL_HISTORY_TRACKED_STATES: [&str; 4] =
+    ["imported", "failed", "ignored", "import_dismissed"];
 
 /// Durable download-history rows.
 ///
@@ -6213,6 +6214,7 @@ mod seed_goal_tests {
             TrackedDownloadState::ImportBlocked,
             TrackedDownloadState::FailedPending,
             TrackedDownloadState::Failed,
+            TrackedDownloadState::ImportDismissed,
             TrackedDownloadState::Ignored,
         ]
         .into_iter()
@@ -7458,6 +7460,98 @@ mod seed_goal_tests {
                 ),
                 (modern_locator, "downloading".to_string()),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn dismissed_import_survives_repository_reopen_without_enqueuing_cleanup() {
+        let store = store().await;
+        let id = DownloadId::new();
+        let item = submission(id, "dismissed-job", "title-1");
+        let locator = ClientJobLocator::from_submission(&item);
+        let identity = submission_identity(id);
+        store
+            .record_submission_with_identity(item, identity.clone(), None)
+            .await
+            .unwrap();
+        store
+            .upsert_identity_tracked_state_for_download_returning_previous(
+                IdentityTrackedStateTarget {
+                    canonical_download_id: Some(&id),
+                    identity: &identity,
+                    source_identity: Some(&locator),
+                },
+                "import_dismissed",
+                &["imported", "failed", "ignored"],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let reopened = DownloadSubmissionStore::new(store.datastore.clone());
+        assert_eq!(
+            reopened
+                .get_identity_tracked_state_for_download(Some(&id), &identity, Some(&locator))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("import_dismissed")
+        );
+        assert!(
+            reopened
+                .list_due_download_cleanup(100)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // has_pending_download_cleanup means "not yet cleaned", even for an
+        // active grab. Assert actual cleanup scheduling instead of completion.
+        reopened.seed_download_cleanup(100).await.unwrap();
+        assert!(
+            SqlRuntime::fetch_optional(
+                reopened.datastore.read_exec(),
+                "SELECT download_id FROM download_cleanup WHERE download_id = {}",
+                &[SqlArg::Text(id.to_string())],
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        let history = reopened
+            .list_terminal_download_history_rows(100)
+            .await
+            .unwrap();
+        assert!(
+            history
+                .iter()
+                .any(|row| row.download_id == id && row.tracked_state == "import_dismissed")
+        );
+        // Resume is another durable state transition, not an import completion.
+        reopened
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &identity,
+                Some(&locator),
+                "downloading",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .get_identity_tracked_state_for_download(Some(&id), &identity, Some(&locator))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("downloading")
+        );
+        assert!(
+            reopened
+                .list_due_download_cleanup(100)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 

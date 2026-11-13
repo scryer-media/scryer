@@ -1,7 +1,7 @@
 use async_graphql::{Context, ID, MaybeUndefined, Object, Result as GqlResult};
 use scryer_application::{
     AppError, AppUseCase, DeleteExecutionConfirmation, DeleteTitlesJobItem, DeleteTitlesJobRequest,
-    QueuedReleaseSelection,
+    QueuedReleaseSelection, TitleOptionsPatch,
 };
 use scryer_domain::{Library, LibraryPermission, LibraryRoot, MediaFacet, Title, User};
 
@@ -88,7 +88,15 @@ fn resolved_title_options(
         recap_policy,
         release_numbering,
         monitor_selection,
+        required_audio_languages,
+        preferred_audio_languages,
     } = options;
+    let audio_languages = scryer_application::validated_title_audio_patch(TitleOptionsPatch {
+        required_audio_languages: maybe_undefined_patch(required_audio_languages),
+        preferred_audio_languages: maybe_undefined_patch(preferred_audio_languages),
+        ..TitleOptionsPatch::default()
+    })
+    .map_err(to_gql_error)?;
 
     let min_availability = match min_availability {
         MaybeUndefined::Undefined => None,
@@ -225,7 +233,18 @@ fn resolved_title_options(
         },
         release_numbering,
         monitor_selection,
+        required_audio_languages: audio_languages.required_audio_languages,
+        preferred_audio_languages: audio_languages.preferred_audio_languages,
     })
+}
+
+/// Omitted preserves, null clears, a value replaces.
+fn maybe_undefined_patch<T>(value: MaybeUndefined<T>) -> Option<Option<T>> {
+    match value {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(value) => Some(Some(value)),
+    }
 }
 
 fn normalize_search_option_list(
@@ -528,6 +547,7 @@ impl TitleMutations {
         let mut metadata_language_override = None;
         let mut monitor_selection_update = None;
         let mut min_availability_override = None;
+        let mut audio_languages_update = TitleOptionsPatch::default();
 
         if let Some(options) = options {
             let title = app
@@ -553,6 +573,11 @@ impl TitleMutations {
             // Applied after the tags land: whether the selection is kept or
             // cleared is decided by the monitor type the update just stored.
             monitor_selection_update = Some(resolved_options.monitor_selection.clone());
+            audio_languages_update = TitleOptionsPatch {
+                required_audio_languages: resolved_options.required_audio_languages.clone(),
+                preferred_audio_languages: resolved_options.preferred_audio_languages.clone(),
+                ..TitleOptionsPatch::default()
+            };
             tags = Some(merge_title_option_tags(base_tags, resolved_options));
         }
 
@@ -577,6 +602,9 @@ impl TitleMutations {
                 .await
                 .map_err(to_gql_error)?;
         }
+        app.set_title_audio_language_overrides(&actor, &title.id, &audio_languages_update)
+            .await
+            .map_err(to_gql_error)?;
         if let Some(min_availability) = min_availability_override {
             title = app
                 .update_title_min_availability(&actor, &title.id, min_availability)
@@ -700,26 +728,21 @@ impl TitleMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let title_id = input.title_id.to_string();
-        let recycle = app
-            .delete_title_with_outcome(
-                &actor,
-                &title_id,
-                input.delete_files_on_disk.unwrap_or(false),
-                input
-                    .preview_fingerprint
-                    .map(|preview_fingerprint| DeleteExecutionConfirmation {
-                        preview_fingerprint,
-                        typed_confirmation: input.typed_confirmation,
-                    }),
-            )
-            .await
-            .map_err(to_gql_error)?;
+        app.delete_title(
+            &actor,
+            &title_id,
+            input.delete_files_on_disk.unwrap_or(false),
+            input
+                .preview_fingerprint
+                .map(|preview_fingerprint| DeleteExecutionConfirmation {
+                    preview_fingerprint,
+                    typed_confirmation: input.typed_confirmation,
+                }),
+        )
+        .await
+        .map_err(to_gql_error)?;
         Ok(DeleteTitlePayload {
             id: ID::from(title_id),
-            recycle_purged: recycle.purged as i32,
-            recycle_preserved: recycle.preserved as i32,
-            recycle_busy: recycle.busy as i32,
-            recycle_failed: recycle.failed as i32,
         })
     }
 

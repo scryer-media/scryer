@@ -937,6 +937,18 @@ input ApproveMediaRequestInput {
 	them.
 	"""
 	tags: [String!]
+	"""
+	Approver override for the new title's required audio languages.
+	Omission grants what the requester asked for, null inherits, an empty
+	list requires none, and a value replaces the request's.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	Approver override for the new title's preferred audio languages.
+	Omission grants what the requester asked for, null or an empty list
+	inherits, and a value replaces the request's.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -3684,13 +3696,18 @@ type DeleteIndexerConfigPayload {
 }
 
 """
-Identity returned after deleting a library.
+A library delete accepted to run in the background.
 """
 type DeleteLibraryPayload {
 	"""
-	Deleted library identity.
+	Identity of the library being deleted.
 	"""
 	id: ID!
+	"""
+	Background job that deletes the library and its titles' catalog
+	records. The library stays listed until the job finishes.
+	"""
+	jobRun: JobRunPayload!
 }
 
 """
@@ -3981,22 +3998,6 @@ type DeleteTitlePayload {
 	Deleted title identity.
 	"""
 	id: ID!
-	"""
-	Recycle entries purged during this deletion.
-	"""
-	recyclePurged: Int!
-	"""
-	Recycle entries preserved after revalidation.
-	"""
-	recyclePreserved: Int!
-	"""
-	Recycle entries held by another operation.
-	"""
-	recycleBusy: Int!
-	"""
-	Recycle cleanup failures; catalog deletion still succeeded.
-	"""
-	recycleFailed: Int!
 }
 
 """
@@ -5860,12 +5861,24 @@ type DownloadImportActionsPayload {
 	Whether the item can be marked failed.
 	"""
 	markFailed: Boolean!
+	"""
+	Whether this blocked warning can be dismissed without changing its client entry.
+	"""
+	dismissImportWarning: Boolean!
+	"""
+	Whether tracking can be explicitly resumed for this dismissed source.
+	"""
+	resumeImportTracking: Boolean!
 }
 
 """
 Filter for import activity.
 """
 enum DownloadImportFilterValue {
+	"""
+	Show dismissed import warnings for explicitly resuming their tracking.
+	"""
+	DISMISSED
 	"""
 	Include every import state.
 	"""
@@ -8476,6 +8489,29 @@ type HistoryScoringPayload {
 }
 
 """
+A pending import a batch ignore did not ignore, with the error ignoring it
+alone would have returned.
+"""
+type IgnorePendingImportFailurePayload {
+	"""
+	Pending-import item ID as requested.
+	"""
+	id: ID!
+	"""
+	The error's message.
+	"""
+	message: String!
+	"""
+	The error's `code` extension.
+	"""
+	code: String
+	"""
+	The error's `reason` extension, when it names one.
+	"""
+	reason: String
+}
+
+"""
 Result of ignoring one pending import.
 """
 type IgnorePendingImportPayload {
@@ -8487,6 +8523,20 @@ type IgnorePendingImportPayload {
 	Status after the ignore operation.
 	"""
 	status: PendingImportStatusValue!
+}
+
+"""
+Result of ignoring several pending imports, each in request order.
+"""
+type IgnorePendingImportsPayload {
+	"""
+	Pending imports now ignored.
+	"""
+	ignored: [IgnorePendingImportPayload!]!
+	"""
+	Pending imports that were not ignored.
+	"""
+	failed: [IgnorePendingImportFailurePayload!]!
 }
 
 """
@@ -10400,6 +10450,10 @@ enum JobKeyValue {
 	"""
 	TITLE_DELETION
 	"""
+	Library deletion: the library and its titles' catalog records.
+	"""
+	LIBRARY_DELETION
+	"""
 	Title rename.
 	"""
 	TITLE_RENAME
@@ -10563,6 +10617,12 @@ type JobScheduleInfoPayload {
 	Next scheduled run as a UTC timestamp, or null when no run is scheduled.
 	"""
 	nextRunAt: DateTime
+	"""
+	UTC time the scheduler last visited the job and found nothing to do, so
+	recorded no run. Null when no such visit happened since the server
+	started.
+	"""
+	lastIdleCheckAt: DateTime
 }
 
 """
@@ -10811,6 +10871,19 @@ type LibraryPayload {
 	Titles removed from the catalog because the root under them was dropped by this mutation; zero everywhere else.
 	"""
 	removedTitleCount: Int!
+	"""
+	Required audio languages a new title in this library inherits: the
+	library's own, else its facet's. An empty list requires none. The
+	`original` token stays unresolved. Readable by anyone who can see the
+	library.
+	"""
+	inheritedRequiredAudioLanguages: [String!]!
+	"""
+	Preferred audio languages, in order, a new title in this library
+	inherits: the library's own, else its facet's. The `original` token
+	stays unresolved. Readable by anyone who can see the library.
+	"""
+	inheritedPreferredAudioLanguages: [String!]!
 	"""
 	Initial monitoring choice for new titles, readable by authorized requesters.
 	"""
@@ -12716,6 +12789,19 @@ input ListRouteInput {
 	Tags put on new titles.
 	"""
 	tags: [String!]! = []
+	"""
+	Required audio languages for new titles; null inherits the library's
+	and facet's, an empty list requires none. A request the list files
+	carries them. An unknown code is refused with
+	`LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	Preferred audio languages, in order, for new titles; null or an empty
+	list inherits. A request the list files carries them. An unknown code
+	is refused with `LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -12758,6 +12844,17 @@ type ListRoutePayload {
 	Tags put on new titles.
 	"""
 	tags: [String!]!
+	"""
+	Required audio languages for new titles, or null when they inherit the
+	library's and facet's. An empty list requires none. The `original`
+	token stays unresolved.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	Preferred audio languages, in order, for new titles, or null when they
+	inherit. The `original` token stays unresolved.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -18192,6 +18289,17 @@ type MediaRequestPayload {
 	"""
 	requestedMonitorSelection: MonitorSelectionPayload
 	"""
+	Required audio languages requested for the new title, or null when it
+	inherits its library's and facet's. An empty list requires none. The
+	`original` token stays unresolved.
+	"""
+	requestedRequiredAudioLanguages: [String!]
+	"""
+	Preferred audio languages, in order, requested for the new title, or
+	null when it inherits. The `original` token stays unresolved.
+	"""
+	requestedPreferredAudioLanguages: [String!]
+	"""
 	ID of the user who resolved the request, or null while unresolved.
 	"""
 	resolvedByUserId: ID
@@ -19290,6 +19398,14 @@ type MetadataSearchItemPayload {
 	search populates it; every other metadata-search surface returns null.
 	"""
 	existingTitleId: ID
+	"""
+	Ids of the libraries of this result's facet that already hold a title
+	with one of its external ids, limited to libraries the caller may
+	view, request into or manage titles in. Carries no title id. Computed
+	only by `searchMetadata` and `searchMetadataMulti`, and only when
+	selected; every other metadata-search surface returns an empty list.
+	"""
+	presentInLibraryIds: [ID!]!
 }
 
 """
@@ -19921,6 +20037,16 @@ type MutationRoot {
 		Opaque identity of the queued or active import stream.
 		"""
 		streamId: ID!
+	): Boolean!
+	"""
+	Dismiss an import warning (or explicitly resume its tracking) without changing
+	the download client entry, seeding state, files, acquisition claims or quality rules.
+	"""
+	setTrackedDownloadImportDismissed(
+		"""
+		Exact download identity and requested import-tracking dismissal state.
+		"""
+		input: TrackedDownloadImportTrackingInput!
 	): Boolean!
 	"""
 	Mark a tracked download ignored without deleting it from the download client.
@@ -20942,7 +21068,9 @@ type MutationRoot {
 		input: UpdateLibraryInput!
 	): LibraryPayload!
 	"""
-	Delete the library configuration identified by the supplied ID.
+	Accept a background job that deletes the library identified by the
+	supplied ID and removes its titles from the catalog. Files on disk are
+	left alone.
 	"""
 	deleteLibrary(
 		"""
@@ -21004,6 +21132,21 @@ type MutationRoot {
 		"""
 		pendingImportId: ID!
 	): IgnorePendingImportPayload!
+	"""
+	Mark several pending imports ignored without importing their files.
+	Each id is answered on its own: ignored, or failed with the error
+	`ignorePendingImport` would have returned for it. A repeated id counts
+	once. At most 1000 distinct ids per request: a larger request is
+	refused whole with reason `LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE`
+	and the `maxPendingImportIds` and `requestedPendingImportIds`
+	extensions, and no pending import changes.
+	"""
+	ignorePendingImports(
+		"""
+		Pending-import identities to ignore.
+		"""
+		pendingImportIds: [ID!]!
+	): IgnorePendingImportsPayload!
 	"""
 	Apply a title rename plan after validating its preview fingerprint and optional idempotency key.
 	"""
@@ -22964,6 +23107,14 @@ type ParsedReleasePayload {
 	Audio description, or null when not detected.
 	"""
 	audio: String
+	"""
+	Audio channel layout such as `5.1`, or null when not detected.
+	"""
+	audioChannels: String
+	"""
+	Audio languages named in the release title as ISO 639-2 codes, in title order.
+	"""
+	audioLanguages: [String!]!
 	"""
 	Whether dual audio was detected.
 	"""
@@ -28462,6 +28613,16 @@ input RequestRuleSampleInput {
 	together with `leaseDays`.
 	"""
 	leaseForever: Boolean
+	"""
+	Audio languages the sample requires. Omit or send null to leave it to
+	the library; an empty list asks for no requirement.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	Audio languages the sample prefers, in order. Omit or send null to
+	leave it to the library.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -31197,6 +31358,18 @@ input SubmitMediaRequestInput {
 	forever, which is what Scryer granted before leases existed.
 	"""
 	requestedLeaseDays: Int
+	"""
+	Required audio languages for the new title. Omitted or null inherits
+	the library's and facet's; an empty list requires none. An unknown code
+	is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	requestedRequiredAudioLanguages: [String!]
+	"""
+	Preferred audio languages, in order, for the new title. Omitted, null
+	or an empty list inherits. An unknown code is refused with
+	`SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	requestedPreferredAudioLanguages: [String!]
 }
 
 """
@@ -33005,6 +33178,14 @@ input TitleOptionsInput {
 	Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
 	"""
 	monitorSelection: MonitorSelectionInput
+	"""
+	The title's own required audio languages; omission preserves them, null clears them so the title inherits its library's and then its facet's, an empty list requires no language, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`. Needs the Manage titles grant, as `setTitleRequiredAudio` does.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	The title's own preferred audio languages, in order; omission preserves them, null or an empty list clears them so the title inherits its library's and then its facet's, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -33310,6 +33491,20 @@ type TitlePayload {
 	Whether the title uses the facet-level required audio-language setting without an override.
 	"""
 	inheritsRequiredAudioLanguages: Boolean!
+	"""
+	Title-specific preferred audio languages, in order, or null when the library's and then the facet's are inherited.
+	The `original` token remains unresolved in this configuration field.
+	"""
+	preferredAudioLanguagesOverride: [String!]
+	"""
+	Preferred audio languages, in order, after title, library, and facet inheritance.
+	The `original` token remains unresolved in this configuration field.
+	"""
+	effectivePreferredAudioLanguages: [String!]!
+	"""
+	Whether the title inherits its library's and then its facet's preferred audio languages.
+	"""
+	inheritsPreferredAudioLanguages: Boolean!
 	"""
 	Collections belonging to this title, or an empty list when none are available.
 	"""
@@ -33636,6 +33831,32 @@ input TotpVerifyInput {
 }
 
 """
+The exact grab whose import warning is dismissed or whose tracking is resumed.
+"""
+input TrackedDownloadImportTrackingInput {
+	"""
+	Canonical grab identity; a re-added torrent must not inherit a stale action.
+	"""
+	downloadId: ID!
+	"""
+	Configured download client owning the item.
+	"""
+	clientId: ID
+	"""
+	Download client type.
+	"""
+	clientType: String!
+	"""
+	Native client-side item id.
+	"""
+	downloadClientItemId: String!
+	"""
+	True hides the warning and suppresses automatic import; false explicitly resumes tracking.
+	"""
+	dismissed: Boolean!
+}
+
+"""
 Lifecycle state of a tracked download.
 """
 enum TrackedDownloadStateValue {
@@ -33676,6 +33897,10 @@ enum TrackedDownloadStateValue {
 	Download or import failed.
 	"""
 	FAILED
+	"""
+	Import tracking was dismissed without changing the client entry or payload.
+	"""
+	IMPORT_DISMISSED
 	"""
 	Download was ignored.
 	"""
@@ -34824,6 +35049,16 @@ input UpdateMediaRequestInput {
 	Replacement lease in days. Omission preserves the current lease; null requests forever.
 	"""
 	requestedLeaseDays: Int
+	"""
+	Replacement required audio languages. Omission preserves them, null
+	inherits, an empty list requires none.
+	"""
+	requestedRequiredAudioLanguages: [String!]
+	"""
+	Replacement preferred audio languages. Omission preserves them, null
+	or an empty list inherits.
+	"""
+	requestedPreferredAudioLanguages: [String!]
 }
 
 """

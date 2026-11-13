@@ -25,6 +25,7 @@ import {
   useIndexerSetup,
   type SetupIndexerProviderOption,
 } from "@/lib/hooks/use-indexer-setup";
+import { dispatchNavigationBadgesRefresh } from "@/lib/events/navigation-badges";
 import { usePluginManagement } from "@/lib/hooks/use-plugin-management";
 import { useSetupRulePacks } from "@/lib/hooks/use-setup-rule-packs";
 import { localPathStyleFromRuntimeValue } from "@/lib/utils/local-path-style";
@@ -509,6 +510,8 @@ export function SetupWizardContainer({
               })
               .toPromise();
             if (error) throw error;
+            // A retired root takes its pending imports off the badge.
+            dispatchNavigationBadgesRefresh();
             // Saved, so going back and pressing Next again changes nothing.
             libraries[save.field] = setupMediaLibraries(
               data?.updateLibrary ? [data.updateLibrary] : [],

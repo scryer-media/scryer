@@ -35,6 +35,12 @@ pub struct UpdatedLibrary {
     pub removed_title_count: usize,
 }
 
+/// A library delete accepted to run in the background, with its job run.
+#[derive(Clone, Debug)]
+pub struct DeleteLibraryJobAccepted {
+    pub job_run: crate::JobRun,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum MetadataFieldUpdate<T> {
     #[default]
@@ -1202,6 +1208,8 @@ pub enum DownloadActivityFilter {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DownloadImportFilter {
+    /// Only explicitly dismissed warnings; not part of All or Attention.
+    Dismissed,
     All,
     Attention,
     Importing,
@@ -1748,6 +1756,15 @@ pub struct ResolvePendingImportResult {
 pub struct IgnorePendingImportResult {
     pub id: String,
     pub status: PendingImportStatus,
+}
+
+/// Each requested pending import, ignored or refused, in request order.
+#[derive(Debug)]
+pub struct IgnorePendingImportsResult {
+    pub ignored: Vec<IgnorePendingImportResult>,
+    /// The id as requested and why it was not ignored: the same error
+    /// ignoring it alone would have returned.
+    pub failed: Vec<(String, crate::AppError)>,
 }
 
 #[derive(Clone, Debug)]

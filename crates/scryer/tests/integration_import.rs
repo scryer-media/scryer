@@ -3940,3 +3940,198 @@ async fn a_titleless_obfuscated_download_matches_and_imports_on_its_recovered_na
         "the artifact records the physical file name: {artifacts:#?}"
     );
 }
+
+/// Valid frames and commit frames in a write-ahead log. Each commit frame
+/// ends one write transaction.
+fn wal_commits(path: &Path) -> u64 {
+    let Ok(bytes) = std::fs::read(path) else {
+        return 0;
+    };
+    if bytes.len() < 32 {
+        return 0;
+    }
+    let page_size = u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let salt = &bytes[16..24];
+    let mut commits = 0;
+    let mut offset = 32;
+    while offset + 24 + page_size <= bytes.len() {
+        let header = &bytes[offset..offset + 24];
+        if &header[8..16] != salt {
+            break;
+        }
+        if header[4..8] != [0, 0, 0, 0] {
+            commits += 1;
+        }
+        offset += 24 + page_size;
+    }
+    commits
+}
+
+/// A scan marks the episodes it found covered completed in one write per
+/// title. Run against the per-episode write it replaced, over the same seeded
+/// rows, it leaves every row as the per-episode write did apart from the time
+/// of the write, and it commits once where the per-episode write committed
+/// once per episode.
+#[tokio::test]
+async fn scanned_episode_completion_in_one_write_matches_one_write_per_episode() {
+    const EPISODES: usize = 1_205;
+
+    async fn scenario(batched: bool) -> (Vec<(String, String, Option<String>)>, u64) {
+        let dir = tempfile::tempdir().expect("db dir");
+        let db_path = dir.path().join("completion.db");
+        let ctx = TestContext::new_with_database_path(&db_path.to_string_lossy()).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let (library_id,): (String,) =
+            sqlx::query_as("SELECT id FROM libraries WHERE facet = 'series' LIMIT 1")
+                .fetch_one(&ctx.db.pool)
+                .await
+                .expect("series library");
+        let root_path = dir.path().join("series").to_string_lossy().to_string();
+        sqlx::query(
+            "INSERT INTO library_roots (id, library_id, path, normalized_path, is_default, created_at, updated_at) \
+             VALUES ('cmp-scan-root', ?, ?, ?, 0, ?, ?)",
+        )
+        .bind(&library_id)
+        .bind(&root_path)
+        .bind(&root_path)
+        .bind(&now)
+        .bind(&now)
+        .execute(&ctx.db.pool)
+        .await
+        .expect("insert root");
+        let mut tx = ctx.db.pool.begin().await.expect("begin");
+        for title_id in ["cmp-scan-series", "cmp-scan-sibling"] {
+            sqlx::query(
+                "INSERT INTO titles (id, name, name_normalized, facet, monitored, created_at, slug, library_id, root_folder_id) \
+                 VALUES (?, ?, ?, 'series', 1, ?, ?, ?, 'cmp-scan-root')",
+            )
+            .bind(title_id)
+            .bind(format!("Synthetic {title_id}"))
+            .bind(format!("synthetic {title_id}"))
+            .bind(&now)
+            .bind(title_id)
+            .bind(&library_id)
+            .execute(&mut *tx)
+            .await
+            .expect("insert title");
+        }
+        let statuses = ["wanted", "grabbed", "completed", "paused"];
+        for index in 0..EPISODES {
+            for title_id in ["cmp-scan-series", "cmp-scan-sibling"] {
+                let episode_id = format!("{title_id}-e{index:04}");
+                sqlx::query(
+                    "INSERT INTO episodes (id, title_id, episode_type, episode_number, season_number, created_at, monitored) \
+                     VALUES (?, ?, 'standard', ?, '1', ?, 1)",
+                )
+                .bind(&episode_id)
+                .bind(title_id)
+                .bind(index.to_string())
+                .bind(&now)
+                .execute(&mut *tx)
+                .await
+                .expect("insert episode");
+                // Every seventh episode has no wanted row.
+                if index % 7 == 6 {
+                    continue;
+                }
+                let status = statuses[index % statuses.len()];
+                sqlx::query(
+                    "INSERT INTO wanted_items (id, title_id, episode_id, media_type, status, grabbed_release, created_at, updated_at) \
+                     VALUES (?, ?, ?, 'episode', ?, ?, ?, ?)",
+                )
+                .bind(format!("{episode_id}-wanted"))
+                .bind(title_id)
+                .bind(&episode_id)
+                .bind(status)
+                .bind((status == "grabbed").then(|| format!("{{\"title\":\"Synthetic.Release.{index}\"}}")))
+                .bind(&now)
+                .bind(&now)
+                .execute(&mut *tx)
+                .await
+                .expect("insert wanted item");
+            }
+        }
+        tx.commit().await.expect("commit seed");
+
+        // The scan found every episode but the last ten covered.
+        let covered = (0..EPISODES - 10)
+            .map(|index| format!("cmp-scan-series-e{index:04}"))
+            .collect::<Vec<_>>();
+        let (busy, _, _): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(&ctx.db.pool)
+            .await
+            .expect("checkpoint");
+        assert_eq!(busy, 0, "the log starts empty");
+        let wal_path = dir.path().join("completion.db-wal");
+        let before = wal_commits(&wal_path);
+        let last_search_at = chrono::Utc::now().to_rfc3339();
+        if batched {
+            ctx.library_state
+                .wanted
+                .complete_acquisition_scopes_for_episodes(
+                    "cmp-scan-series",
+                    &covered,
+                    Some(&last_search_at),
+                    false,
+                )
+                .await
+                .expect("complete in one write");
+        } else {
+            for episode_id in &covered {
+                ctx.library_state
+                    .wanted
+                    .complete_acquisition_scope_for_title(
+                        "cmp-scan-series",
+                        Some(episode_id),
+                        Some(&last_search_at),
+                        false,
+                    )
+                    .await
+                    .expect("complete one episode");
+            }
+        }
+        let commits = wal_commits(&wal_path) - before;
+
+        let rows: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT id, status, grabbed_release FROM wanted_items ORDER BY id")
+                .fetch_all(&ctx.db.pool)
+                .await
+                .expect("wanted rows");
+        // Rows the write did not reach keep the time they were seeded with.
+        let (untouched,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM wanted_items WHERE updated_at = ? AND last_search_at IS NULL",
+        )
+        .bind(&now)
+        .fetch_one(&ctx.db.pool)
+        .await
+        .expect("untouched rows");
+        let expected_untouched = (0..EPISODES).filter(|index| index % 7 != 6).count()
+            + (EPISODES - 10..EPISODES)
+                .filter(|index| index % 7 != 6)
+                .count();
+        assert_eq!(untouched as usize, expected_untouched);
+        (rows, commits)
+    }
+
+    // The log is counted from its start, so it must not be checkpointed and
+    // restarted while the per-episode writes run. Nextest runs each test in
+    // its own process, so the setting reaches no other test.
+    unsafe { std::env::set_var("SCRYER_SQLITE_WAL_AUTOCHECKPOINT_PAGES", "0") };
+    let (per_episode_rows, per_episode_commits) = scenario(false).await;
+    let (batched_rows, batched_commits) = scenario(true).await;
+    assert_eq!(batched_rows, per_episode_rows);
+    // One statement per covered episode; an update that matched no row
+    // commits nothing, so the log holds one commit per covered wanted row.
+    let covered_with_rows = (0..EPISODES - 10).filter(|index| index % 7 != 6).count();
+    assert_eq!(per_episode_commits, covered_with_rows as u64);
+    assert_eq!(batched_commits, 1);
+    // A passive scan keeps a recorded grab and completes what it covered.
+    assert!(batched_rows.iter().any(|(id, status, grabbed)| {
+        id == "cmp-scan-series-e0001-wanted" && status == "completed" && grabbed.is_some()
+    }));
+    assert!(
+        batched_rows
+            .iter()
+            .any(|(id, status, _)| { id == "cmp-scan-series-e1201-wanted" && status == "grabbed" })
+    );
+}

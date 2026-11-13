@@ -14,6 +14,57 @@ struct ExistingScannedMediaFile<'a> {
     should_invalidate_full_hashes: bool,
 }
 
+/// The episodes a title's scan found covered, in the order the pass found
+/// them. They are marked completed together once the pass has finalized its
+/// files, in one write instead of one per episode file.
+#[derive(Default)]
+pub(crate) struct ScannedEpisodeCompletions {
+    episode_ids: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl ScannedEpisodeCompletions {
+    fn push(&mut self, episode_id: &str) {
+        if self.seen.insert(episode_id.to_string()) {
+            self.episode_ids.push(episode_id.to_string());
+        }
+    }
+
+    /// Mark every collected episode completed, the way a passive scan marks
+    /// one: no file landed, so a recorded grab is kept. A failed batch
+    /// replays the episodes one by one.
+    pub(crate) async fn complete(&mut self, app: &AppUseCase, title_id: &str) {
+        if self.episode_ids.is_empty() {
+            return;
+        }
+        let episode_ids = std::mem::take(&mut self.episode_ids);
+        self.seen.clear();
+        let batched = app
+            .services
+            .workflow
+            .acquisition_scope_states
+            .complete_acquisition_scopes_for_episodes(
+                title_id,
+                &episode_ids,
+                Some(&chrono::Utc::now().to_rfc3339()),
+                false,
+            )
+            .await
+            .is_ok();
+        if !batched {
+            for episode_id in &episode_ids {
+                crate::import_workflow::mark_wanted_completed(
+                    app,
+                    title_id,
+                    Some(episode_id),
+                    false,
+                )
+                .await;
+            }
+        }
+    }
+}
+
 struct PersistedScannedMediaFile {
     file_id: String,
     should_analyze: bool,
@@ -427,6 +478,7 @@ pub(crate) async fn finalize_title_scan_file(
     summary: &mut LibraryScanSummary,
     db_elapsed: &mut Duration,
     external_subtitle_cache: &mut crate::subtitles::ExternalSubtitleDirectoryCache,
+    episode_completions: &mut ScannedEpisodeCompletions,
 ) -> TitleScanFinalizeOutcome {
     let PlannedTitleScanFile {
         file,
@@ -622,8 +674,7 @@ pub(crate) async fn finalize_title_scan_file(
             )
             .await
         {
-            crate::import_workflow::mark_wanted_completed(app, &title.id, Some(&episode.id), false)
-                .await;
+            episode_completions.push(&episode.id);
         }
     }
 

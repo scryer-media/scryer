@@ -722,6 +722,29 @@ pub struct IgnorePendingImportPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// A pending import a batch ignore did not ignore, with the error ignoring it
+/// alone would have returned.
+pub struct IgnorePendingImportFailurePayload {
+    /// Pending-import item ID as requested.
+    pub id: ID,
+    /// The error's message.
+    pub message: String,
+    /// The error's `code` extension.
+    pub code: Option<String>,
+    /// The error's `reason` extension, when it names one.
+    pub reason: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Result of ignoring several pending imports, each in request order.
+pub struct IgnorePendingImportsPayload {
+    /// Pending imports now ignored.
+    pub ignored: Vec<IgnorePendingImportPayload>,
+    /// Pending imports that were not ignored.
+    pub failed: Vec<IgnorePendingImportFailurePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Result of requesting cancellation for an acquisition search.
 pub struct CancelAcquisitionSearchPayload {
     /// Acquisition-search job ID.
@@ -1014,6 +1037,10 @@ pub struct TitleOptionsInput {
     pub release_numbering: MaybeUndefined<ReleaseNumberingValue>,
     /// Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
     pub monitor_selection: MaybeUndefined<MonitorSelectionInput>,
+    /// The title's own required audio languages; omission preserves them, null clears them so the title inherits its library's and then its facet's, an empty list requires no language, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`. Needs the Manage titles grant, as `setTitleRequiredAudio` does.
+    pub required_audio_languages: MaybeUndefined<Vec<String>>,
+    /// The title's own preferred audio languages, in order; omission preserves them, null or an empty list clears them so the title inherits its library's and then its facet's, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+    pub preferred_audio_languages: MaybeUndefined<Vec<String>>,
 }
 
 #[derive(InputObject, Clone)]
@@ -1179,14 +1206,6 @@ pub struct DeleteTitleInput {
 pub struct DeleteTitlePayload {
     /// Deleted title identity.
     pub id: async_graphql::ID,
-    /// Recycle entries purged during this deletion.
-    pub recycle_purged: i32,
-    /// Recycle entries preserved after revalidation.
-    pub recycle_preserved: i32,
-    /// Recycle entries held by another operation.
-    pub recycle_busy: i32,
-    /// Recycle cleanup failures; catalog deletion still succeeded.
-    pub recycle_failed: i32,
 }
 
 #[derive(InputObject)]
@@ -1457,10 +1476,13 @@ pub struct LibrarySettingsInput {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Identity returned after deleting a library.
+/// A library delete accepted to run in the background.
 pub struct DeleteLibraryPayload {
-    /// Deleted library identity.
+    /// Identity of the library being deleted.
     pub id: async_graphql::ID,
+    /// Background job that deletes the library and its titles' catalog
+    /// records. The library stays listed until the job finishes.
+    pub job_run: JobRunPayload,
 }
 
 #[derive(InputObject)]

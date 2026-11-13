@@ -1684,6 +1684,18 @@ const nl: LocaleDictionary = {
   "title.monitoredSection": "Gemonitorde {{facet}}",
   "title.searchReleasesAction": "Releases zoeken",
   "title.queueLatest": "Nieuwste in wachtrij",
+  "search.addConfigRequiredAudio": "Vereiste audiotaal",
+  "search.addConfigPreferredAudio": "Voorkeursaudiotaal",
+  "search.addConfigAudioChoose": "Talen kiezen",
+  "search.addConfigAudioRequireNone": "Geen vereisen",
+  "title.preferredAudioLanguages": "Voorkeursaudiotalen",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer herkent die audiotaal niet.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer herkent de audiotaal van een route niet.",
+  "requests.requestedAudioLanguages": "Aangevraagde audiotalen",
+  "requests.requestedRequiredAudio": "Vereist: {{languages}}",
+  "requests.requestedPreferredAudio": "Voorkeur: {{languages}}",
   "title.requiredAudioLanguages": "Vereiste audiotalen",
   "title.originalAudioLanguagePerTitle": "Oorspronkelijke taal (per titel)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1987,11 +1999,15 @@ const nl: LocaleDictionary = {
   "system.title": "Systeemstatus",
   "system.diagnosticsBundle.download": "Diagnosebundel downloaden",
   "system.diagnosticsBundle.preparing": "Diagnose voorbereiden…",
-  "system.diagnosticsBundle.helper": "Logboeken, metrics en een overzicht van de instellingen in één bestand voor de beheerder. Namen, adressen, paden en geheimen worden zo goed mogelijk verwijderd; controleer de bundel voordat je hem deelt.",
+  "system.diagnosticsBundle.helper":
+    "Logboeken, metrics en een overzicht van de instellingen in één bestand voor de beheerder. Namen, adressen, paden en geheimen worden zo goed mogelijk verwijderd; controleer de bundel voordat je hem deelt.",
   "system.diagnosticsBundle.failed": "Kan de diagnosebundel niet downloaden.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Meld je opnieuw aan om de diagnose te downloaden.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Voor het downloaden van de diagnose is de machtiging voor systeeminstellingen nodig.",
-  "system.diagnosticsBundle.refusal.failed": "De diagnosebundel kon niet worden gemaakt. Zie het serverlogboek voor details.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Meld je opnieuw aan om de diagnose te downloaden.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Voor het downloaden van de diagnose is de machtiging voor systeeminstellingen nodig.",
+  "system.diagnosticsBundle.refusal.failed":
+    "De diagnosebundel kon niet worden gemaakt. Zie het serverlogboek voor details.",
   "system.jobsTitle": "Taken",
   "system.auditTitle": "Auditlog",
   "system.auditLoaded": "Auditlog geladen.",
@@ -4599,27 +4615,18 @@ const nl: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Beslisvolgorde",
   "qualityProfile.decisionOrderInfo":
     "Als twee releases allebei aan dit profiel voldoen, loopt Scryer deze stappen van boven af na. De eerste stap die ze onderscheidt, beslist. Score beslist altijd als laatste.",
-  "qualityProfile.decisionPresets": "Voorinstellingen",
-  "qualityProfile.decisionPresetDefault": "Standaard",
-  "qualityProfile.decisionPresetLanguageFirst": "Taal eerst",
-  "qualityProfile.decisionPresetScoreOnly": "Alleen score",
   "qualityProfile.decisionGateQualityTier": "Kwaliteitsniveau",
   "qualityProfile.decisionGateQualityTierDescription":
     "De release in het niveau dat hoger staat in de kwaliteitsvoorkeur van dit profiel wint.",
-  "qualityProfile.decisionGateQualityTierSummary": "kwaliteitsniveau",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Binnen hetzelfde niveau en dezelfde releasegroep wint een nieuwere PROPER of REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK-revisie",
   "qualityProfile.decisionGatePreferredLanguage": "Voorkeurstaal",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "De release waarvan de audio hoger staat in de voorkeursaudiotalen van de bibliotheek wint.",
-  "qualityProfile.decisionGatePreferredLanguageSummary": "voorkeursaudiotaal",
   "qualityProfile.decisionGateOptionalLanguages": "Optionele talen",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "De release met meer optionele audiotalen van de bibliotheek wint.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "aantal optionele audiotalen",
   "qualityProfile.decisionGateUnknown": "Onbekende stap ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Deze versie van de webapp kent deze stap niet. Hij blijft op zijn plaats.",
@@ -4632,11 +4639,6 @@ const nl: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "{{value}} aan de beslisvolgorde toevoegen",
   "qualityProfile.decisionAvailableSteps": "Ongebruikte stappen",
   "qualityProfile.decisionAllStepsInUse": "Alle stappen zijn in gebruik.",
-  "qualityProfile.decisionSummary":
-    "Releases worden vergeleken op {{steps}} en ten slotte op score.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, daarna {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Releases worden alleen op score vergeleken.",
   "qualityProfile.decisionWarningTierAbsent":
     "Zonder de stap kwaliteitsniveau kan een release van een lager niveau een bestand van een hoger niveau vervangen, en geldt het cutoff-niveau niet. Alleen de cutoff-score stopt het zoeken naar upgrades; zonder cutoff-score is het profiel tevreden zodra er een bestand is.",
   "qualityProfile.decisionNoteTierBelowLanguage":

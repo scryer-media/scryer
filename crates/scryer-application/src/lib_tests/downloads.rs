@@ -22807,9 +22807,12 @@ async fn a_bound_download_imports_despite_a_typo_in_its_folder_name() {
     completed.client_id = "weaver-client".to_string();
     completed.category = Some("series".to_string());
     completed.parameters = vec![];
-    let result = crate::import::import::import_completed_download(&app, &user, &completed)
-        .await
-        .expect("import should run");
+    let result = {
+        let _probe = probe_agrees_with_the_name(3840, 2160);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("import should run")
+    };
     assert_eq!(
         result.decision,
         scryer_domain::ImportDecision::Imported,

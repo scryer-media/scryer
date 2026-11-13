@@ -759,6 +759,12 @@ const ru: LocaleDictionary = {
   "settings.libraryDeleted": "Библиотека удалена.",
   "settings.librarySaveFailed": "Не удалось сохранить библиотеку.",
   "settings.libraryDeleteFailed": "Не удалось удалить библиотеку.",
+  "settings.libraryDeleteQueued":
+    "Библиотека удаляется. Она останется в списке, пока не будут удалены её материалы.",
+  "settings.libraryDeleteProgressClearing":
+    "Очистка записей материалов: {{processed}} из {{total}}",
+  "settings.libraryDeleteProgressDeleting":
+    "Удаление материалов: {{processed}} из {{total}}",
   "settings.librarySettingsLoadFailed":
     "Не удалось загрузить настройки библиотеки.",
   "settings.libraryRequiredAudioLabel": "Требуемый аудиоформат",
@@ -860,6 +866,7 @@ const ru: LocaleDictionary = {
     "Файлы, для которых не удалось вычислить хеш",
   "jobs.fullHashBackfillFailuresMore": "…и ещё {{count}} не показано",
   "jobs.nextRunPrefix": "Следующий запуск: {{value}}",
+  "jobs.nothingToDo": "Нечего делать, проверено {{value}}",
   "jobs.startedAt": "Запущено {{value}}",
   "jobs.completedAt": "Завершено {{value}}",
   "jobs.failedToTrigger": "Не удалось запустить задание",
@@ -1900,6 +1907,18 @@ const ru: LocaleDictionary = {
   "title.noWantedItem": "Нет активных желаемых материалов.",
   "title.searchReleasesAction": "Искать релизы",
   "title.queueLatest": "Добавить последний релиз в очередь",
+  "search.addConfigRequiredAudio": "Обязательный язык аудио",
+  "search.addConfigPreferredAudio": "Предпочитаемый язык аудио",
+  "search.addConfigAudioChoose": "Выбрать языки",
+  "search.addConfigAudioRequireNone": "Не требовать",
+  "title.preferredAudioLanguages": "Предпочитаемые языки аудио",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer не знает этот язык аудио.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer не знает язык аудио маршрута.",
+  "requests.requestedAudioLanguages": "Запрошенные языки аудио",
+  "requests.requestedRequiredAudio": "Обязательные: {{languages}}",
+  "requests.requestedPreferredAudio": "Предпочитаемые: {{languages}}",
   "title.requiredAudioLanguages": "Требуемые языки аудио",
   "title.originalAudioLanguagePerTitle":
     "Язык оригинала (для каждого произведения)",
@@ -2198,6 +2217,21 @@ const ru: LocaleDictionary = {
   "queue.assignTitleBeforeImport":
     "Назначьте материал перед запуском ручного импорта.",
   "queue.ignore": "Игнорировать",
+  "queue.dismissImportWarning": "Скрыть предупреждение — сохранить раздачу",
+  "queue.resumeImportTracking": "Возобновить отслеживание импорта",
+  "queue.state.importDismissed": "Предупреждение импорта скрыто",
+  "activity.importFilter.dismissed": "Скрытые предупреждения",
+  "queue.importTrackingFailed": "Не удалось изменить отслеживание импорта.",
+  "queue.importDismissedSuccess":
+    "Предупреждение скрыто. Торрент, раздача и файлы не изменены. Возобновить отслеживание можно в разделе «Скрытые предупреждения».",
+  "queue.importTrackingResumed":
+    "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
+    "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
+    "Этот элемент клиента теперь относится к другой загрузке. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
+    "Эта загрузка уже импортирована, завершилась ошибкой или проигнорирована, поэтому её предупреждение больше нельзя изменить.",
   "queue.ignoreSuccess": "Загрузка проигнорирована.",
   "queue.ignoreFailed": "Не удалось проигнорировать загрузку.",
   "queue.releaseHeldSources": "Освободить удерживаемые источники",
@@ -2303,11 +2337,16 @@ const ru: LocaleDictionary = {
   "system.title": "Состояние системы",
   "system.diagnosticsBundle.download": "Скачать диагностический пакет",
   "system.diagnosticsBundle.preparing": "Подготовка диагностики…",
-  "system.diagnosticsBundle.helper": "Журналы, метрики и сводка настроек в одном файле для разработчика. Имена, адреса, пути и секреты удаляются по мере возможности; проверьте пакет перед отправкой.",
-  "system.diagnosticsBundle.failed": "Не удалось скачать диагностический пакет.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Войдите снова, чтобы скачать диагностику.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Для скачивания диагностики нужно разрешение на системные настройки.",
-  "system.diagnosticsBundle.refusal.failed": "Не удалось собрать диагностический пакет. Подробности в журнале сервера.",
+  "system.diagnosticsBundle.helper":
+    "Журналы, метрики и сводка настроек в одном файле для разработчика. Имена, адреса, пути и секреты удаляются по мере возможности; проверьте пакет перед отправкой.",
+  "system.diagnosticsBundle.failed":
+    "Не удалось скачать диагностический пакет.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Войдите снова, чтобы скачать диагностику.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Для скачивания диагностики нужно разрешение на системные настройки.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Не удалось собрать диагностический пакет. Подробности в журнале сервера.",
   "system.jobsTitle": "Задания",
   "system.auditTitle": "Аудит",
   "system.auditLoaded": "Журнал аудита загружен.",
@@ -5171,6 +5210,7 @@ const ru: LocaleDictionary = {
   "requests.approvedLease": "Хранить",
   "requests.approvedLeaseKeepForever": "Вечно, как и просили",
   "requests.approvedLeaseKeepRequested": "{{count}} дней, как и просили",
+  "requests.approvedAudioLanguages": "Языки аудио",
   "requests.approvedTags": "Метки",
   "requests.approvedTagsHelp":
     "Применяются к тайтлу при одобрении. Заполнены тем, что выдали правила; добавляйте и убирайте любой тег, определённый администратором в «Настройки › Теги».",
@@ -5251,6 +5291,10 @@ const ru: LocaleDictionary = {
     "Истина, когда запросивший попросил хранить медиа вечно",
   "settings.refReqRequestLeaseDays":
     "Сколько дней запросивший просил хранить медиа; отсутствует, когда он попросил хранить вечно",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Языки аудио, которые, по словам запросившего, должны быть у тайтла. null оставляет выбор библиотеке; пустой список означает отсутствие требования",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Предпочитаемые запросившим языки аудио по порядку. null оставляет выбор библиотеке",
   "settings.refReqSectionExternalIds":
     "— Идентификаторы поставщиков в input.request.external_ids",
   "settings.refReqExternalIdsTmdb":
@@ -5788,6 +5832,9 @@ const ru: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Протокол",
   "indexerSearch.facet.resolution": "Разрешение",
   "indexerSearch.facet.source": "Источник",
+  "indexerSearch.facet.videoCodec": "Видеокодек",
+  "indexerSearch.facet.audioCodec": "Аудиокодек",
+  "indexerSearch.facet.audioChannels": "Аудиоканалы",
   "indexerSearch.facet.audio": "Звук и HDR",
   "indexerSearch.facet.flags": "Метки",
   "indexerSearch.facet.indexer": "Индексатор",
@@ -8100,6 +8147,8 @@ const ru: LocaleDictionary = {
     "Фоновое заполнение полных хешей завершает работу.",
   "error.reason.JOB_LIBRARY_ACCESS_DENIED":
     "У вас нет доступа к этой библиотеке.",
+  "error.reason.JOB_LIBRARY_DELETION_JOBS_INVALID":
+    "Задания удаления библиотек запускаются удалением библиотеки.",
   "error.reason.JOB_LOCATION_OPERATIONS_INVALID":
     "Операции с расположением необходимо запускать через мутацию операции с расположением.",
   "error.reason.JOB_MEDIA_FILE_DELETION_JOBS_INVALID":
@@ -8167,12 +8216,16 @@ const ru: LocaleDictionary = {
     "Библиотеки по умолчанию нельзя удалить.",
   "error.reason.LIBRARY_DEFAULT_LIBRARY_NOT_FOUND":
     "Библиотека по умолчанию не найдена.",
+  "error.reason.LIBRARY_DEFAULT_MONITOR_TYPE_INVALID":
+    "Выберите тип мониторинга по умолчанию, который поддерживает эта библиотека.",
   "error.reason.LIBRARY_DELETE_TARGET_NOT_FILE":
     "Удаление каталога по пути с выбранным значением через операцию удаления отдельного файла запрещено.",
   "error.reason.LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS":
     "Удаление выбранного элемента с выбранным значением запрещено: он находится за пределами настроенных корневых папок.",
   "error.reason.LIBRARY_DELETE_TARGET_PARENT_REQUIRED":
     "Удаление выбранного элемента с выбранным значением запрещено: у него нет родительского каталога.",
+  "error.reason.LIBRARY_DELETION_ALREADY_RUNNING":
+    "Эта библиотека уже удаляется.",
   "error.reason.LIBRARY_DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY":
     "Папка назначения содержит границу другого тайтла или тайтла с неустановленной принадлежностью.",
   "error.reason.LIBRARY_DESTINATION_OCCUPIED":
@@ -8236,6 +8289,8 @@ const ru: LocaleDictionary = {
     "Файл ожидающего импорта недоступен.",
   "error.reason.LIBRARY_PENDING_IMPORT_ID_REQUIRED":
     "Требуется идентификатор ожидающего импорта.",
+  "error.reason.LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE":
+    "Слишком много ожидающих импортов для игнорирования за один раз.",
   "error.reason.LIBRARY_PENDING_IMPORT_NOT_FOUND":
     "Ожидающий импорт не найден.",
   "error.reason.LIBRARY_PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES":
@@ -11292,7 +11347,8 @@ const ru: LocaleDictionary = {
     "Вставьте корректный JSON, экспортированный из Sonarr или Radarr.",
   "settings.arrImportRefusalTooLarge":
     "Вставьте не более {{maxBytes}} байт JSON.",
-  "settings.arrImportRefusalEmpty": "Вставьте хотя бы один пользовательский формат.",
+  "settings.arrImportRefusalEmpty":
+    "Вставьте хотя бы один пользовательский формат.",
   "settings.arrImportRefusalTooMany":
     "Вставьте не более {{maxFormats}} пользовательских форматов за раз.",
   "settings.arrImportReviewFailed":
@@ -12971,6 +13027,9 @@ const ru: LocaleDictionary = {
   "jobs.builtin.TitleDeletion.name": "Удаление материалов",
   "jobs.builtin.TitleDeletion.description":
     "Удаление выбранных материалов из каталога.",
+  "jobs.builtin.LibraryDeletion.name": "Удаление библиотеки",
+  "jobs.builtin.LibraryDeletion.description":
+    "Удаление библиотеки и её материалов из каталога; файлы на диске остаются.",
   "jobs.builtin.TitleRename.name": "Переименование материалов",
   "jobs.builtin.TitleRename.description":
     "Переименование файлов выбранных материалов.",
@@ -13461,28 +13520,18 @@ const ru: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Порядок решения",
   "qualityProfile.decisionOrderInfo":
     "Когда два релиза подходят под этот профиль, Scryer проверяет эти шаги сверху вниз. Решает первый шаг, который их различает. Оценка всегда решает последней.",
-  "qualityProfile.decisionPresets": "Предустановки",
-  "qualityProfile.decisionPresetDefault": "По умолчанию",
-  "qualityProfile.decisionPresetLanguageFirst": "Сначала язык",
-  "qualityProfile.decisionPresetScoreOnly": "Только оценка",
   "qualityProfile.decisionGateQualityTier": "Уровень качества",
   "qualityProfile.decisionGateQualityTierDescription":
     "Побеждает релиз из уровня, который стоит выше в предпочтениях качества этого профиля.",
-  "qualityProfile.decisionGateQualityTierSummary": "уровню качества",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "В пределах одного уровня и одной релиз-группы побеждает более новый PROPER или REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "ревизии PROPER/REPACK",
   "qualityProfile.decisionGatePreferredLanguage": "Предпочитаемый язык",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Побеждает релиз, аудио которого стоит выше в списке предпочитаемых языков аудио библиотеки.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "предпочитаемому языку аудио",
   "qualityProfile.decisionGateOptionalLanguages": "Дополнительные языки",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Побеждает релиз, в котором больше дополнительных языков аудио библиотеки.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "числу дополнительных языков аудио",
   "qualityProfile.decisionGateUnknown": "Неизвестный шаг ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Эта версия веб-приложения не знает этот шаг. Он остаётся на своём месте.",
@@ -13494,11 +13543,6 @@ const ru: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Добавить {{value}} в порядок решения",
   "qualityProfile.decisionAvailableSteps": "Неиспользуемые шаги",
   "qualityProfile.decisionAllStepsInUse": "Все шаги используются.",
-  "qualityProfile.decisionSummary":
-    "Релизы сравниваются по {{steps}} и в конце по оценке.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, затем по {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Релизы сравниваются только по оценке.",
   "qualityProfile.decisionWarningTierAbsent":
     "Без шага «Уровень качества» релиз более низкого уровня может заменить файл более высокого уровня, а пороговый уровень не действует. Поиск обновлений останавливает только пороговая оценка; без неё профиль считается выполненным, как только есть файл.",
   "qualityProfile.decisionNoteTierBelowLanguage":

@@ -643,10 +643,11 @@ async fn verify_manual_import_subset_with_a_rejected_mapping_stays_blocked() {
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
 }
 
-/// A rejection recorded for a source that is no longer in the folder still
-/// holds the block, even when the mapping count is otherwise met.
+/// A rejection recorded for a source that is no longer in the folder was not
+/// part of a pass whose every mapping landed, so it does not hold the block.
+/// A released hold has no pass to scope it and keeps it blocking.
 #[tokio::test]
-async fn verify_manual_import_subset_keeps_a_rejection_for_a_departed_source_blocked() {
+async fn verify_manual_import_subset_ignores_a_departed_rejection_only_for_a_landed_pass() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let mut artifacts = mapped_subset_artifacts();
     artifacts.push(build_artifact_with_result(
@@ -655,10 +656,72 @@ async fn verify_manual_import_subset_keeps_a_rejection_for_a_departed_source_blo
         "Fixture.Show.S01E03.Repack.mkv",
         "rejected",
     ));
+    let (app, completed) = seeding_pack_manual_app(temp_dir.path(), artifacts);
+    let td = blocked_seeding_pack_download();
+
+    assert!(verify_manual_import(&app, &td, 2, Some(2)).await);
+    assert_eq!(
+        verify_released_hold_outcome(&app, &td, &completed, None, Some(2))
+            .await
+            .expect("released hold verification"),
+        VerificationOutcome::NotProven
+    );
+}
+
+/// The automatic pass imported two episodes and rejected a third that stays
+/// in the seeding folder. The operator then mapped only the fourth. Once that
+/// mapping landed, the earlier rejection of a file the operator left alone no
+/// longer keeps the download blocked, so it finalizes as imported and reaches
+/// cleanup.
+#[tokio::test]
+async fn manual_import_after_a_partial_automatic_pass_finalizes_past_its_rejections() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let mut artifacts = mapped_subset_artifacts();
+    artifacts.push(build_artifact_with_result(
+        "dl-1",
+        Some("ep-3"),
+        "Fixture.Show.S01E03.mkv",
+        "rejected",
+    ));
+    artifacts.push(build_artifact("dl-1", "ep-4", "Fixture.Show.S01E04.mkv"));
+    let (app, completed) = seeding_pack_manual_app(temp_dir.path(), artifacts);
+    let td = blocked_seeding_pack_download();
+
+    assert!(verify_manual_import(&app, &td, 1, Some(1)).await);
+    // Without a pass of its own the earlier rejection still blocks.
+    assert_eq!(
+        verify_released_hold_outcome(&app, &td, &completed, None, Some(1))
+            .await
+            .expect("released hold verification"),
+        VerificationOutcome::NotProven
+    );
+
+    let (terminalized, td) = reconcile_manual_import(&app, td, 1, Some(1)).await;
+    assert!(terminalized);
+    assert_eq!(td.state, TrackedDownloadState::Imported);
+    assert_eq!(td.status, TrackedDownloadStatus::Ok);
+}
+
+/// An earlier rejection is left out only when the pass landed in full: a
+/// mapping of this pass that did not land keeps it blocking.
+#[tokio::test]
+async fn manual_import_short_of_its_mappings_keeps_earlier_rejections_blocking() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let mut artifacts = mapped_subset_artifacts();
+    artifacts.push(build_artifact_with_result(
+        "dl-1",
+        Some("ep-3"),
+        "Fixture.Show.S01E03.mkv",
+        "rejected",
+    ));
+    artifacts.push(build_artifact("dl-1", "ep-4", "Fixture.Show.S01E04.mkv"));
     let (app, _) = seeding_pack_manual_app(temp_dir.path(), artifacts);
     let td = blocked_seeding_pack_download();
 
-    assert!(!verify_manual_import(&app, &td, 2, Some(2)).await);
+    assert!(!verify_manual_import(&app, &td, 1, Some(2)).await);
+    let (terminalized, td) = reconcile_manual_import(&app, td, 1, Some(2)).await;
+    assert!(!terminalized);
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
 }
 
 /// The operator's scope applies only to manual mappings: automatic

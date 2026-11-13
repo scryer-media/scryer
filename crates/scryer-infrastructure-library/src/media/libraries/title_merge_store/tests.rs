@@ -1204,3 +1204,20 @@ async fn the_merging_operations_own_verification_rows_survive_the_merge() {
         "an earlier operation's proofs retire with the source title as before"
     );
 }
+
+#[tokio::test]
+async fn a_merge_advances_the_title_folder_write_counter() {
+    let (store, datastore) = test_store().await;
+    insert_title_with_facet(&datastore, SOURCE, "library-a", &[], "movie").await;
+    insert_title_with_facet(&datastore, DESTINATION, "library-b", &[], "movie").await;
+    let plan = plan_for(&store).await;
+    let before = crate::media::titles::store::title_folder_write_generation()
+        .expect("no folder write is open");
+    store.execute_title_merge(&plan).await.unwrap();
+    let after = crate::media::titles::store::title_folder_write_generation()
+        .expect("the merge's scope has ended");
+    assert!(
+        after > before,
+        "retiring the source title changes the title set"
+    );
+}

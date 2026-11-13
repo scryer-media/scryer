@@ -521,6 +521,8 @@ pub fn submit_media_request_input_into_application(
         // Omitted means forever, which is what Scryer granted before leases
         // existed. The service validates the range.
         requested_lease_days: input.requested_lease_days.map(i64::from),
+        requested_required_audio_languages: input.requested_required_audio_languages,
+        requested_preferred_audio_languages: input.requested_preferred_audio_languages,
         external_ids: input
             .external_ids
             .into_iter()
@@ -561,6 +563,8 @@ pub fn request_rule_sample_into_application(
             .monitor_type
             .map(|value| value.as_tag_value().to_string()),
         lease_days,
+        required_audio_languages: sample.required_audio_languages,
+        preferred_audio_languages: sample.preferred_audio_languages,
     })
 }
 

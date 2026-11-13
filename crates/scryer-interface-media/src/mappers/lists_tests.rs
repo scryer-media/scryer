@@ -39,6 +39,8 @@ fn subscribe_input(scope: ListScopeValue) -> SubscribeListInput {
             use_season_folders: None,
             release_numbering: None,
             tags: vec!["fixture-tag".to_string()],
+            required_audio_languages: None,
+            preferred_audio_languages: None,
         }],
         filters: vec![filter_input(ListFilterKindValue::ReleasedOnly)],
         max_per_sync: Some(5),

@@ -210,6 +210,14 @@ pub struct ListRoute {
     pub release_numbering: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Required audio languages for new titles. `None` inherits the
+    /// library's and facet's; an empty list requires nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages, in order, for new titles. `None` inherits;
+    /// never an empty list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
 /// A per-subscription item filter, re-evaluated on every sync.

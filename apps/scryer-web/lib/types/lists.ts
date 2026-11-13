@@ -147,6 +147,10 @@ export type ListRoute = {
   useSeasonFolders: boolean | null;
   releaseNumbering: string | null;
   tags: string[];
+  /** Null inherits the library's and facet's; an empty list requires none. */
+  requiredAudioLanguages?: string[] | null;
+  /** In order; null or an empty list inherits. */
+  preferredAudioLanguages?: string[] | null;
 };
 
 export type ListFilter = {

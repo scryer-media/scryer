@@ -870,3 +870,37 @@ fn unsupported_regex_modes_and_capture_state_disable_the_format() {
         );
     }
 }
+
+#[test]
+fn regex_nesting_is_bounded_before_any_pass_recurses_through_it() {
+    let nested_groups = |depth: usize| format!("{}a{}", "(".repeat(depth), ")".repeat(depth));
+    let depth = super::onig::MAX_NESTING_DEPTH;
+
+    let allowed = translate_scored(
+        json!([title_spec("deep", &nested_groups(depth), true, false)]),
+        1,
+    );
+    assert_eq!(
+        allowed.formats[0].diagnostics,
+        vec![],
+        "the deepest allowed nesting translates"
+    );
+
+    for pattern in [
+        nested_groups(depth + 1),
+        nested_groups(4_000),
+        "(".repeat(8_000),
+        format!("{}{}", "[a".repeat(2_000), "]".repeat(2_000)),
+        format!("a{}", "{1}".repeat(2_000)),
+    ] {
+        let refused = translate_scored(json!([title_spec("deep", &pattern, true, false)]), 1);
+        let format = &refused.formats[0];
+        assert_eq!(format.status, ArrFormatStatus::Disabled);
+        assert_eq!(format.diagnostics[0].code, codes::REGEX_PARSE_FAILED);
+        assert!(
+            format.diagnostics[0].message.contains("nests deeper"),
+            "{}",
+            format.diagnostics[0].message
+        );
+    }
+}

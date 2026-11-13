@@ -220,7 +220,9 @@ pub(crate) async fn check_with_lookup(
         }
     }
 
-    maybe_resolve_title_from_completed_download(app, td, &completed).await;
+    if !maybe_resolve_title_from_completed_download(app, td, &completed).await {
+        return;
+    }
 
     match completed_download_proves_assigned_title(app, td, &completed).await {
         AssignedTitleProof::Proven => {}

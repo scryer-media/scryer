@@ -3142,3 +3142,599 @@ async fn custom_release_names_survive_provider_hydration() {
             .contains(&"Över Atlanten II".into())
     );
 }
+
+/// A movie in the default movie library, created with `patch`, against a
+/// settings store the test can read and seed directly.
+async fn audio_override_fixture(
+    name: &str,
+    patch: TitleOptionsPatch,
+) -> AppResult<(AppUseCase, User, Arc<StoredSettingsRepo>, Title)> {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, user, _) = bootstrap_with_cutoff_projection_state(
+        settings.clone(),
+        Arc::new(StoredQualityProfileRepo::default()),
+        Arc::new(MockMediaFileRepo::default()),
+    );
+    let created = app
+        .create_title_without_hydration_with_options_patch_in_library(
+            &user,
+            NewTitle {
+                name: name.to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+            scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+            patch,
+        )
+        .await?;
+    Ok((app, user, settings, created.title))
+}
+
+fn audio_codes(codes: &[&str]) -> Vec<String> {
+    crate::normalize_required_audio_requirements(codes.iter().map(|code| code.to_string()))
+}
+
+#[tokio::test]
+async fn preferred_audio_resolves_title_then_library_then_facet() {
+    let (app, _, settings, title) =
+        audio_override_fixture("Preferred Ladder", TitleOptionsPatch::default())
+            .await
+            .expect("title");
+    let resolve = || {
+        app.resolve_preferred_audio_languages(
+            Some(&title.id),
+            Some(&title.library_id),
+            Some("movie"),
+        )
+    };
+    assert_eq!(resolve().await.unwrap(), Vec::<String>::new());
+
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::PREFERRED_AUDIO_LANGUAGES_KEY,
+            "movie",
+            "[\"fr\"]",
+        )
+        .await;
+    assert_eq!(resolve().await.unwrap(), audio_codes(&["fr"]), "facet");
+
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::PREFERRED_AUDIO_LANGUAGES_KEY,
+            &title.library_id,
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(resolve().await.unwrap(), audio_codes(&["de"]), "library");
+
+    for (stored, expected) in [
+        ("[\"original\", \"ja\"]", audio_codes(&["original", "ja"])),
+        // An explicit null or an empty list on the title still inherits.
+        ("null", audio_codes(&["de"])),
+        ("[]", audio_codes(&["de"])),
+    ] {
+        settings
+            .set_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                &title.id,
+                stored,
+            )
+            .await;
+        assert_eq!(resolve().await.unwrap(), expected, "title value {stored}");
+    }
+}
+
+#[tokio::test]
+async fn adding_a_title_stores_both_audio_overrides() {
+    let (app, _, _, title) = audio_override_fixture(
+        "Dubbed Harbor",
+        TitleOptionsPatch {
+            required_audio_languages: Some(Some(vec!["en".to_string()])),
+            preferred_audio_languages: Some(Some(vec!["original".to_string(), "de".to_string()])),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("title");
+
+    assert_eq!(
+        app.load_title_required_audio_override(&title.id)
+            .await
+            .unwrap(),
+        Some(audio_codes(&["en"]))
+    );
+    assert_eq!(
+        app.load_title_preferred_audio_override(&title.id)
+            .await
+            .unwrap(),
+        Some(audio_codes(&["original", "de"]))
+    );
+}
+
+#[tokio::test]
+async fn an_add_that_reuses_a_title_leaves_its_audio_overrides_alone() {
+    let new_title = || NewTitle {
+        name: "Reused Harbor".to_string(),
+        facet: MediaFacet::Movie,
+        monitored: true,
+        external_ids: vec![ExternalId::new("tmdb".to_string(), "940117".to_string())],
+        ..Default::default()
+    };
+    let (app, user, _, anchor) =
+        audio_override_fixture("Unrelated Anchor", TitleOptionsPatch::default())
+            .await
+            .expect("title");
+    let first = app
+        .create_title_without_hydration_with_options_patch_in_library(
+            &user,
+            new_title(),
+            anchor.library_id.clone(),
+            TitleOptionsPatch {
+                preferred_audio_languages: Some(Some(vec!["fr".to_string()])),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("first add");
+    assert!(!first.reused_existing);
+
+    let second = app
+        .create_title_without_hydration_with_options_patch_in_library(
+            &user,
+            new_title(),
+            first.title.library_id.clone(),
+            TitleOptionsPatch {
+                required_audio_languages: Some(Some(vec!["en".to_string()])),
+                preferred_audio_languages: Some(Some(vec!["de".to_string()])),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("second add");
+    assert!(second.reused_existing);
+    assert_eq!(second.title.id, first.title.id);
+    assert_eq!(
+        app.load_title_required_audio_override(&first.title.id)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        app.load_title_preferred_audio_override(&first.title.id)
+            .await
+            .unwrap(),
+        Some(audio_codes(&["fr"]))
+    );
+}
+
+#[tokio::test]
+async fn adding_a_title_that_inherits_writes_no_audio_override() {
+    for patch in [
+        TitleOptionsPatch::default(),
+        TitleOptionsPatch {
+            required_audio_languages: Some(None),
+            preferred_audio_languages: Some(Some(Vec::new())),
+            ..Default::default()
+        },
+    ] {
+        let (app, _, settings, title) = audio_override_fixture("Inherit Harbor", patch)
+            .await
+            .expect("title");
+        assert_eq!(
+            settings
+                .get_scoped_value(
+                    SETTINGS_SCOPE_SYSTEM,
+                    crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                    &title.id,
+                )
+                .await,
+            None,
+            "an inheriting preferred list leaves no row"
+        );
+        assert_eq!(
+            app.load_title_required_audio_override(&title.id)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_empty_required_override_requires_nothing_rather_than_inheriting() {
+    let (app, _, _, title) = audio_override_fixture(
+        "Silent Harbor",
+        TitleOptionsPatch {
+            required_audio_languages: Some(Some(Vec::new())),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("title");
+    assert_eq!(
+        app.load_title_required_audio_override(&title.id)
+            .await
+            .unwrap(),
+        Some(Vec::new())
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_audio_language_is_refused_with_its_code() {
+    let error = audio_override_fixture(
+        "Unknown Harbor",
+        TitleOptionsPatch {
+            preferred_audio_languages: Some(Some(vec!["zzzzzz".to_string()])),
+            ..Default::default()
+        },
+    )
+    .await
+    .err()
+    .expect("an unknown code must be refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::settings::AUDIO_LANGUAGE_UNKNOWN),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn updating_audio_overrides_sets_and_clears_them() {
+    let (app, user, settings, title) =
+        audio_override_fixture("Update Harbor", TitleOptionsPatch::default())
+            .await
+            .expect("title");
+    app.set_title_audio_language_overrides(
+        &user,
+        &title.id,
+        &TitleOptionsPatch {
+            required_audio_languages: Some(Some(vec!["ja".to_string()])),
+            preferred_audio_languages: Some(Some(vec!["ja".to_string(), "en".to_string()])),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("set");
+    assert_eq!(
+        app.load_title_preferred_audio_override(&title.id)
+            .await
+            .unwrap(),
+        Some(audio_codes(&["ja", "en"]))
+    );
+
+    app.set_title_audio_language_overrides(
+        &user,
+        &title.id,
+        &TitleOptionsPatch {
+            preferred_audio_languages: Some(None),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("clear");
+    assert_eq!(
+        settings
+            .get_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                &title.id,
+            )
+            .await,
+        None,
+        "inherit removes the row"
+    );
+    assert_eq!(
+        app.load_title_required_audio_override(&title.id)
+            .await
+            .unwrap(),
+        Some(audio_codes(&["ja"])),
+        "a field the patch omits is untouched"
+    );
+}
+
+#[tokio::test]
+async fn audio_overrides_need_manage_titles() {
+    let (app, _, settings, title) =
+        audio_override_fixture("Guarded Harbor", TitleOptionsPatch::default())
+            .await
+            .expect("title");
+    let viewer = test_user_with_app_permissions("audio-viewer", AppPermissionMask::default());
+    let error = app
+        .set_title_audio_language_overrides(
+            &viewer,
+            &title.id,
+            &TitleOptionsPatch {
+                preferred_audio_languages: Some(Some(vec!["en".to_string()])),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a user without Manage Titles is refused");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        settings
+            .get_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                &title.id,
+            )
+            .await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_title_prunes_only_its_own_per_title_settings() {
+    let (app, user, settings, doomed) = audio_override_fixture(
+        "Pruned Harbor",
+        TitleOptionsPatch {
+            required_audio_languages: Some(Some(vec!["en".to_string()])),
+            preferred_audio_languages: Some(Some(vec!["fr".to_string()])),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("title");
+    let kept = app
+        .create_title_without_hydration_with_options_patch_in_library(
+            &user,
+            NewTitle {
+                name: "Kept Harbor".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+            doomed.library_id.clone(),
+            TitleOptionsPatch {
+                required_audio_languages: Some(Some(vec!["de".to_string()])),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("kept title")
+        .title;
+    let put = |key: &'static str, scope_id: String, json: &'static str| {
+        let settings = settings.clone();
+        async move {
+            settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    key,
+                    Some(scope_id),
+                    json.to_string(),
+                    "test",
+                    None,
+                )
+                .await
+                .expect("seed setting");
+        }
+    };
+    put(
+        crate::TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
+        doomed.id.clone(),
+        "\"spa\"",
+    )
+    .await;
+    // A library-scoped row, and a non-title key on the doomed id.
+    put(
+        crate::REQUIRED_AUDIO_LANGUAGES_KEY,
+        doomed.library_id.clone(),
+        "[\"ja\"]",
+    )
+    .await;
+    put(
+        crate::REQUIRED_AUDIO_LANGUAGES_KEY,
+        doomed.id.clone(),
+        "[\"it\"]",
+    )
+    .await;
+    assert!(app.any_title_preferred_audio_override().await.unwrap());
+
+    app.delete_title(&user, &doomed.id, false, None)
+        .await
+        .expect("delete title");
+
+    let scoped = |key: &'static str, scope_id: String| {
+        let settings = settings.clone();
+        async move {
+            settings
+                .get_scoped_value(SETTINGS_SCOPE_SYSTEM, key, &scope_id)
+                .await
+        }
+    };
+    for key in crate::settings::keys::TITLE_SCOPED_SETTING_KEYS {
+        assert_eq!(scoped(*key, doomed.id.clone()).await, None, "{key}");
+    }
+    assert!(
+        scoped(crate::TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, kept.id.clone())
+            .await
+            .is_some(),
+        "another title's override stays"
+    );
+    assert!(
+        scoped(
+            crate::REQUIRED_AUDIO_LANGUAGES_KEY,
+            doomed.library_id.clone()
+        )
+        .await
+        .is_some(),
+        "the library's row stays"
+    );
+    assert!(
+        scoped(crate::REQUIRED_AUDIO_LANGUAGES_KEY, doomed.id.clone())
+            .await
+            .is_some(),
+        "only the per-title keys are pruned"
+    );
+    // The deleted title held the only preferred override.
+    assert!(!app.any_title_preferred_audio_override().await.unwrap());
+}
+
+#[tokio::test]
+async fn pruning_many_deleted_titles_takes_each_of_their_rows() {
+    let (app, _, settings, kept) =
+        audio_override_fixture("Kept Reel", TitleOptionsPatch::default())
+            .await
+            .expect("title");
+    let doomed = (0..40)
+        .map(|index| format!("deleted-title-{index}"))
+        .collect::<Vec<_>>();
+    for id in doomed.iter().chain(std::iter::once(&kept.id)) {
+        settings
+            .upsert_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                Some(id.clone()),
+                "[\"fr\"]".to_string(),
+                "test",
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    app.prune_title_scoped_settings(&doomed).await;
+
+    for id in &doomed {
+        assert_eq!(
+            settings
+                .get_scoped_value(
+                    SETTINGS_SCOPE_SYSTEM,
+                    crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                    id
+                )
+                .await,
+            None
+        );
+    }
+    assert!(
+        settings
+            .get_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                &kept.id
+            )
+            .await
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn deleting_many_titles_prunes_their_settings_once_and_skips_a_failed_row() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, user, titles) = bootstrap_with_cutoff_projection_state(
+        settings.clone(),
+        Arc::new(StoredQualityProfileRepo::default()),
+        Arc::new(MockMediaFileRepo::default()),
+    );
+    let mut created = Vec::new();
+    for name in ["Prune Once Alpha", "Prune Once Beta", "Prune Once Gamma"] {
+        created.push(
+            app.create_title_without_hydration_with_options_patch_in_library(
+                &user,
+                NewTitle {
+                    name: name.to_string(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    ..Default::default()
+                },
+                scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+                TitleOptionsPatch {
+                    preferred_audio_languages: Some(Some(vec!["fr".to_string()])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("title")
+            .title,
+        );
+    }
+    // The last title's row is already gone, so its row delete fails.
+    let failed = created[2].clone();
+    titles
+        .store
+        .lock()
+        .await
+        .retain(|title| title.id != failed.id);
+
+    let outcome = app
+        .delete_titles_logically(&created, DomainEventActor::from(&user), false)
+        .await;
+
+    assert!(outcome.is_err(), "the missing row fails the delete");
+    assert_eq!(
+        settings.prune_log(),
+        vec![vec![created[0].id.clone(), created[1].id.clone()]],
+        "one prune, for the rows that went"
+    );
+    assert!(
+        settings
+            .get_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                &failed.id
+            )
+            .await
+            .is_some(),
+        "a title whose row delete failed keeps its settings"
+    );
+}
+
+#[tokio::test]
+async fn library_audio_defaults_take_the_library_value_then_the_facet() {
+    let (app, user, settings, title) =
+        audio_override_fixture("Defaults Harbor", TitleOptionsPatch::default())
+            .await
+            .expect("title");
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::REQUIRED_AUDIO_LANGUAGES_KEY,
+            "movie",
+            "[\"en\"]",
+        )
+        .await;
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::PREFERRED_AUDIO_LANGUAGES_KEY,
+            &title.library_id,
+            "[\"original\", \"de\"]",
+        )
+        .await;
+
+    let defaults = app
+        .library_audio_language_defaults(
+            &user,
+            &[title.library_id.clone(), "library-that-is-gone".to_string()],
+        )
+        .await
+        .expect("defaults");
+    let library = defaults
+        .get(&title.library_id)
+        .expect("the library is answered")
+        .as_ref()
+        .expect("readable");
+    assert_eq!(library.required, audio_codes(&["en"]), "facet fallback");
+    assert_eq!(
+        library.preferred,
+        audio_codes(&["original", "de"]),
+        "library value, with original left unresolved"
+    );
+    assert!(
+        defaults
+            .get("library-that-is-gone")
+            .is_none_or(|answer| answer.is_err()),
+        "an unknown library is never answered with defaults"
+    );
+}

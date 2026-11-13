@@ -1,5 +1,6 @@
 import {
   BACKUP_INFO_FIELDS,
+  INDEXER_SEARCH_EXTRA_RESULT_FIELDS,
   JOB_RUN_FIELDS,
   LOCATION_OPERATION_FIELDS,
   MAINTENANCE_EXCLUSION_FIELDS,
@@ -794,6 +795,21 @@ export const updateLibraryMutation = `mutation UpdateLibrary($input: UpdateLibra
 export const deleteLibraryMutation = `mutation DeleteLibrary($id: ID!) {
   deleteLibrary(id: $id) {
     id
+    jobRun {
+      id
+      jobKey
+      displayName
+      category
+      section
+      status
+      triggerSource
+      startedAt
+      completedAt
+      summaryJson
+      summaryText
+      errorText
+      progressJson
+    }
   }
 }`;
 
@@ -848,10 +864,17 @@ export const bindPendingImportMutation = `mutation BindPendingImport($input: Bin
   }
 }`;
 
-export const ignorePendingImportMutation = `mutation IgnorePendingImport($pendingImportId: ID!) {
-  ignorePendingImport(pendingImportId: $pendingImportId) {
-    id
-    status
+export const ignorePendingImportsMutation = `mutation IgnorePendingImports($pendingImportIds: [ID!]!) {
+  ignorePendingImports(pendingImportIds: $pendingImportIds) {
+    ignored {
+      id
+    }
+    failed {
+      id
+      message
+      code
+      reason
+    }
   }
 }`;
 
@@ -2046,7 +2069,17 @@ export const cancelAcquisitionSearchMutation = `mutation CancelAcquisitionSearch
 
 // Hotfix 0.17.1: starts the server-side interactive release-search job; the
 // snapshot is then polled via interactiveReleaseSearchQuery.
-export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveReleaseSearch($input: SearchReleasesInput!) {
+export const startInteractiveReleaseSearchMutation =
+  startInteractiveReleaseSearchMutationWith();
+
+/** The start document for the Indexers › Search pane. */
+export const indexerSearchStartInteractiveReleaseSearchMutation =
+  startInteractiveReleaseSearchMutationWith(INDEXER_SEARCH_EXTRA_RESULT_FIELDS);
+
+function startInteractiveReleaseSearchMutationWith(
+  extraResultFields = "",
+): string {
+  return `mutation StartInteractiveReleaseSearch($input: SearchReleasesInput!) {
   startInteractiveReleaseSearch(input: $input) {
     id
     state
@@ -2054,7 +2087,7 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
     deadlineReached
     failureReason
     failureReasonCode
-    results {${RELEASE_SEARCH_RESULT_FIELDS}
+    results {${RELEASE_SEARCH_RESULT_FIELDS}${extraResultFields}
     }
     indexers {
       indexerId
@@ -2080,10 +2113,23 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
     completedAt
   }
 }`;
+}
 
 // Fetches the following page of a query search from its `nextCursor`; the
 // returned job is then polled like a started one.
-export const continueInteractiveReleaseSearchMutation = `mutation ContinueInteractiveReleaseSearch($after: String!, $first: Int) {
+export const continueInteractiveReleaseSearchMutation =
+  continueInteractiveReleaseSearchMutationWith();
+
+/** The next-page document for the Indexers › Search pane. */
+export const indexerSearchContinueInteractiveReleaseSearchMutation =
+  continueInteractiveReleaseSearchMutationWith(
+    INDEXER_SEARCH_EXTRA_RESULT_FIELDS,
+  );
+
+function continueInteractiveReleaseSearchMutationWith(
+  extraResultFields = "",
+): string {
+  return `mutation ContinueInteractiveReleaseSearch($after: String!, $first: Int) {
   continueInteractiveReleaseSearch(after: $after, first: $first) {
     id
     state
@@ -2091,7 +2137,7 @@ export const continueInteractiveReleaseSearchMutation = `mutation ContinueIntera
     deadlineReached
     failureReason
     failureReasonCode
-    results {${RELEASE_SEARCH_RESULT_FIELDS}
+    results {${RELEASE_SEARCH_RESULT_FIELDS}${extraResultFields}
     }
     indexers {
       indexerId
@@ -2117,6 +2163,7 @@ export const continueInteractiveReleaseSearchMutation = `mutation ContinueIntera
     completedAt
   }
 }`;
+}
 
 export const cancelInteractiveReleaseSearchMutation = `mutation CancelInteractiveReleaseSearch($id: ID!) {
   cancelInteractiveReleaseSearch(id: $id) {
@@ -2691,7 +2738,7 @@ export const translateArrCustomFormatsMutation = `mutation TranslateArrCustomFor
   }
 }`;
 
-export const testRuleSetMutation =`mutation TestRuleSet($input: TestRuleSetInput!) {
+export const testRuleSetMutation = `mutation TestRuleSet($input: TestRuleSetInput!) {
   testRuleSet(input: $input) {
     score
     releaseName
@@ -3344,6 +3391,10 @@ export const releaseHeldImportSourcesMutation = `mutation ReleaseHeldImportSourc
 
 export const cancelActiveImportMutation = `mutation CancelActiveImport($streamId: ID!) {
   cancelActiveImport(streamId: $streamId)
+}`;
+
+export const setTrackedDownloadImportDismissedMutation = `mutation SetTrackedDownloadImportDismissed($input: TrackedDownloadImportTrackingInput!) {
+  setTrackedDownloadImportDismissed(input: $input)
 }`;
 
 export const ignoreTrackedDownloadMutation = `mutation IgnoreTrackedDownload($input: IgnoreTrackedDownloadInput!) {

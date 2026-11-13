@@ -1992,6 +1992,18 @@ const cs: LocaleDictionary = {
   "title.monitoredSection": "Sledované: {{facet}}",
   "title.searchReleasesAction": "Hledat vydání",
   "title.queueLatest": "Zařadit nejnovější do fronty",
+  "search.addConfigRequiredAudio": "Požadovaný jazyk zvuku",
+  "search.addConfigPreferredAudio": "Preferovaný jazyk zvuku",
+  "search.addConfigAudioChoose": "Vybrat jazyky",
+  "search.addConfigAudioRequireNone": "Nevyžadovat žádný",
+  "title.preferredAudioLanguages": "Preferované jazyky zvuku",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Tento jazyk zvuku Scryer nezná.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Jazyk zvuku u trasy Scryer nezná.",
+  "requests.requestedAudioLanguages": "Požadované jazyky zvuku",
+  "requests.requestedRequiredAudio": "Vyžadováno: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferováno: {{languages}}",
   "title.requiredAudioLanguages": "Povinné jazyky zvuku",
   "title.originalAudioLanguagePerTitle": "Původní jazyk (podle titulu)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -2377,11 +2389,16 @@ const cs: LocaleDictionary = {
   "system.title": "Stav systému",
   "system.diagnosticsBundle.download": "Stáhnout diagnostický balíček",
   "system.diagnosticsBundle.preparing": "Připravuje se diagnostika…",
-  "system.diagnosticsBundle.helper": "Protokoly, metriky a přehled nastavení v jednom souboru pro správce projektu. Jména, adresy, cesty a tajné údaje se odstraňují podle možností; před sdílením balíček zkontrolujte.",
-  "system.diagnosticsBundle.failed": "Diagnostický balíček se nepodařilo stáhnout.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Pro stažení diagnostiky se znovu přihlaste.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Stažení diagnostiky vyžaduje oprávnění k systémovým nastavením.",
-  "system.diagnosticsBundle.refusal.failed": "Diagnostický balíček se nepodařilo vytvořit. Podrobnosti najdete v protokolu serveru.",
+  "system.diagnosticsBundle.helper":
+    "Protokoly, metriky a přehled nastavení v jednom souboru pro správce projektu. Jména, adresy, cesty a tajné údaje se odstraňují podle možností; před sdílením balíček zkontrolujte.",
+  "system.diagnosticsBundle.failed":
+    "Diagnostický balíček se nepodařilo stáhnout.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Pro stažení diagnostiky se znovu přihlaste.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Stažení diagnostiky vyžaduje oprávnění k systémovým nastavením.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Diagnostický balíček se nepodařilo vytvořit. Podrobnosti najdete v protokolu serveru.",
   "system.jobsTitle": "Úlohy",
   "system.auditTitle": "Audit",
   "system.auditLoaded": "Protokol auditu načten.",
@@ -5610,6 +5627,7 @@ const cs: LocaleDictionary = {
   "requests.approvedLease": "Uchovat po dobu",
   "requests.approvedLeaseKeepForever": "Navždy, jak bylo požadováno",
   "requests.approvedLeaseKeepRequested": "Požadovaných dní: {{count}}",
+  "requests.approvedAudioLanguages": "Jazyky zvuku",
   "requests.approvedTags": "Štítky",
   "requests.approvedTagsHelp":
     "Použije se na titul při schválení. Předvyplněno tím, co vytvořila pravidla; přidejte nebo odeberte libovolný štítek, který definoval administrátor v Nastavení > Štítky.",
@@ -5689,6 +5707,10 @@ const cs: LocaleDictionary = {
     "True, pokud žadatel požádal o trvalé uchování média",
   "settings.refReqRequestLeaseDays":
     "Kolik dní žadatel požádal o uchování; chybí, pokud žádal o navždy",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Jazyky zvuku, které titul podle žadatele musí mít. null ponechává volbu na knihovně; prázdný seznam žádá žádný požadavek",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Jazyky zvuku, které žadatel upřednostňuje, v pořadí. null ponechává volbu na knihovně",
   "settings.refReqRequestList":
     "Seznam, který žádost podal; viz input.request.list níže. Chybí u ruční žádosti",
   "settings.refReqSectionExternalIds":
@@ -6334,6 +6356,9 @@ const cs: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protokol",
   "indexerSearch.facet.resolution": "Rozlišení",
   "indexerSearch.facet.source": "Zdroj",
+  "indexerSearch.facet.videoCodec": "Video kodek",
+  "indexerSearch.facet.audioCodec": "Zvukový kodek",
+  "indexerSearch.facet.audioChannels": "Zvukové kanály",
   "indexerSearch.facet.audio": "Zvuk a HDR",
   "indexerSearch.facet.flags": "Příznaky",
   "indexerSearch.facet.indexer": "Indexer",
@@ -7243,28 +7268,18 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Pořadí rozhodování",
   "qualityProfile.decisionOrderInfo":
     "Když dvě vydání splní tento profil, Scryer prochází tyto kroky shora. Rozhodne první krok, který je od sebe odliší. Skóre rozhoduje vždy jako poslední.",
-  "qualityProfile.decisionPresets": "Předvolby",
-  "qualityProfile.decisionPresetDefault": "Výchozí",
-  "qualityProfile.decisionPresetLanguageFirst": "Nejdřív jazyk",
-  "qualityProfile.decisionPresetScoreOnly": "Jen skóre",
   "qualityProfile.decisionGateQualityTier": "Úroveň kvality",
   "qualityProfile.decisionGateQualityTierDescription":
     "Vyhrává vydání v úrovni, která je v preferenci kvality tohoto profilu výše.",
-  "qualityProfile.decisionGateQualityTierSummary": "úrovně kvality",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Ve stejné úrovni a od stejné skupiny vyhrává novější PROPER nebo REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "revize PROPER/REPACK",
   "qualityProfile.decisionGatePreferredLanguage": "Preferovaný jazyk",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Vyhrává vydání, jehož zvuk je v preferovaných jazycích zvuku knihovny výše.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "preferovaného jazyka zvuku",
   "qualityProfile.decisionGateOptionalLanguages": "Volitelné jazyky",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Vyhrává vydání, které obsahuje více volitelných jazyků zvuku knihovny.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "počtu volitelných jazyků zvuku",
   "qualityProfile.decisionGateUnknown": "Neznámý krok ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Tato verze webové aplikace tento krok nezná. Zůstává na svém místě.",
@@ -7276,11 +7291,6 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Přidat {{value}} do pořadí rozhodování",
   "qualityProfile.decisionAvailableSteps": "Nepoužité kroky",
   "qualityProfile.decisionAllStepsInUse": "Všechny kroky se používají.",
-  "qualityProfile.decisionSummary":
-    "Vydání se porovnávají podle {{steps}} a nakonec podle skóre.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, poté {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Vydání se porovnávají pouze podle skóre.",
   "qualityProfile.decisionWarningTierAbsent":
     "Bez kroku úroveň kvality může vydání nižší úrovně nahradit soubor vyšší úrovně a hraniční úroveň neplatí. Hledání upgradů zastaví jen hraniční skóre; bez něj je profil spokojen, jakmile má soubor.",
   "qualityProfile.decisionNoteTierBelowLanguage":

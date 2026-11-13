@@ -1866,6 +1866,15 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
             SettingDefinitionSeed {
                 category: "media".into(),
                 scope: "system".into(),
+                key_name: "audio.preferred_languages.title_override".into(),
+                data_type: "json".into(),
+                default_value_json: "null".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
                 key_name: "download_client.routing".into(),
                 data_type: "json".into(),
                 default_value_json: "{}".into(),
@@ -2621,6 +2630,26 @@ async fn set_title_folder_path(ctx: &TestContext, title_id: &str, path: &std::pa
         .set_folder_path(title_id, &path.to_string_lossy())
         .await
         .expect("set title folder path");
+}
+
+/// Record a folder the checked write path refuses, as a catalog written before
+/// that check holds it: a library root, or a folder holding one.
+async fn seed_unchecked_title_folder_path(
+    ctx: &TestContext,
+    title_id: &str,
+    path: &std::path::Path,
+) {
+    let folder = path.to_string_lossy().into_owned();
+    let key = scryer_application::title_folder_keys::title_folder_key(&folder);
+    let updated =
+        sqlx::query("UPDATE titles SET folder_path = ?, folder_path_key = ? WHERE id = ?")
+            .bind(folder.as_str())
+            .bind(key)
+            .bind(title_id)
+            .execute(&ctx.db.pool)
+            .await
+            .expect("seed unchecked title folder path");
+    assert_eq!(updated.rows_affected(), 1, "title {title_id} exists");
 }
 
 async fn activity_kinds_for_title(ctx: &TestContext, title_id: &str) -> Vec<String> {

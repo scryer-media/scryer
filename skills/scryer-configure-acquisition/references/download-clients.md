@@ -1,9 +1,9 @@
 # Download clients
 
-Permission: **Manage system settings** for client config and tests;
-**Manage catalog settings** for routing. UI: **Integrations > Download
-clients** (`/integrations/download-clients`); per-scope routing is under
-each media area's settings, **Routing**.
+Needs the **Manage system settings** permission for client config and
+tests, and the **Manage catalog settings** permission for routing. UI:
+**Integrations > Download clients** (`/integrations/download-clients`);
+per-scope routing is under each media area's settings, **Routing**.
 
 ## Read
 

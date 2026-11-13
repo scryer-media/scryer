@@ -556,6 +556,8 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     trackedStatusMessages
     trackedMatchType
     importActions {
+      dismissImportWarning
+      resumeImportTracking
       manualImportInteractive
       manualImportDirect
       assignTitle
@@ -646,6 +648,8 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     requiredAudioLanguagesOverride
     effectiveRequiredAudioLanguages
     inheritsRequiredAudioLanguages
+    effectivePreferredAudioLanguages
+    inheritsPreferredAudioLanguages
     rootFolderId
     rootFolderPath
     renameEnabled
@@ -708,6 +712,8 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     qualityTier
     effectiveRequiredAudioLanguages
     inheritsRequiredAudioLanguages
+    effectivePreferredAudioLanguages
+    inheritsPreferredAudioLanguages
     rootFolderId
     useSeasonFolders
     useSeasonFoldersOverride
@@ -1433,7 +1439,25 @@ export const searchForSeriesMovieQuery = `query SearchReleasesForSeriesMovie($ti
 
 // Hotfix 0.17.1: server-side interactive release-search job; results stream in
 // as each indexer completes and are polled via this query.
-export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id: ID!) {
+export const interactiveReleaseSearchQuery = interactiveReleaseSearchQueryWith();
+
+/**
+ * Parsed facts only the Indexers › Search refine rail reads. GraphQL merges
+ * this second `parsedRelease` selection into the shared one, so title searches
+ * keep their leaner documents.
+ */
+export const INDEXER_SEARCH_EXTRA_RESULT_FIELDS = `
+    parsedRelease {
+      audioChannels
+      audioLanguages
+    }`;
+
+/** The poll document for the Indexers › Search pane. */
+export const indexerSearchInteractiveReleaseSearchQuery =
+  interactiveReleaseSearchQueryWith(INDEXER_SEARCH_EXTRA_RESULT_FIELDS);
+
+function interactiveReleaseSearchQueryWith(extraResultFields = ""): string {
+  return `query InteractiveReleaseSearch($id: ID!) {
   interactiveReleaseSearch(id: $id) {
     id
     state
@@ -1441,7 +1465,7 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
     deadlineReached
     failureReason
     failureReasonCode
-    results {${RELEASE_SEARCH_RESULT_FIELDS}
+    results {${RELEASE_SEARCH_RESULT_FIELDS}${extraResultFields}
     }
     indexers {
       indexerId
@@ -1467,6 +1491,7 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
     completedAt
   }
 }`;
+}
 
 export const TITLE_LIST_FIELDS = `
     id
@@ -1736,6 +1761,8 @@ export const mediaRequestAdminLibrariesQuery = `query MediaRequestAdminLibraries
     qualityProfileId
     requestQualityProfileIds
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -2436,6 +2463,7 @@ export const jobsQuery = `query Jobs {
       intervalSeconds
       initialDelaySeconds
       nextRunAt
+      lastIdleCheckAt
     }
   }
 }`;
@@ -3079,6 +3107,8 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     slug
     isDefault
     qualityProfileId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3094,6 +3124,8 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3120,6 +3152,8 @@ export const globalSearchRequesterInitQuery = `query GlobalSearchRequesterInit {
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3138,6 +3172,8 @@ export const requestableLibrariesQuery = `query RequestableLibraries {
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -4626,6 +4662,15 @@ export const searchMetadataQuery = `query SearchMetadata($query: String!, $type:
   }
 }`;
 
+/// Single-facet search for a user with a library they can request into but
+/// not view: the same results, plus the viewer's libraries that already hold
+/// each one.
+export const searchMetadataRequesterQuery = `query SearchMetadataRequester($query: String!, $type: MediaFacetValue!, $limit: Int, $language: String! = "eng", $year: Int) {
+  searchMetadata(query: $query, type: $type, limit: $limit, language: $language, year: $year) {${METADATA_SEARCH_FIELDS}
+    presentInLibraryIds
+  }
+}`;
+
 export const pendingImportTitleSearchQuery = `query PendingImportTitleSearch($pendingImportId: ID!, $query: String!, $limit: Int = 8, $language: String! = "eng", $year: Int) {
   pendingImportTitleSearch(pendingImportId: $pendingImportId, query: $query, limit: $limit, language: $language, year: $year) {${METADATA_SEARCH_FIELDS}
     existingTitleId
@@ -4726,6 +4771,23 @@ export const searchMetadataMultiQuery = `query SearchMetadataMulti($query: Strin
     series {${METADATA_SEARCH_FIELDS}
     }
     anime {${METADATA_SEARCH_FIELDS}
+    }
+  }
+}`;
+
+/// Global search for a user with a library they can request into but not
+/// view: the same results, plus the viewer's libraries that already hold each
+/// one, since the catalog search cannot see those libraries.
+export const searchMetadataMultiRequesterQuery = `query SearchMetadataMultiRequester($query: String!, $limit: Int, $language: String! = "eng") {
+  searchMetadataMulti(query: $query, limit: $limit, language: $language) {
+    movies {${METADATA_SEARCH_FIELDS}
+      presentInLibraryIds
+    }
+    series {${METADATA_SEARCH_FIELDS}
+      presentInLibraryIds
+    }
+    anime {${METADATA_SEARCH_FIELDS}
+      presentInLibraryIds
     }
   }
 }`;
@@ -5105,6 +5167,8 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     createdAt
     updatedAt
     requestedLeaseDays
+    requestedRequiredAudioLanguages
+    requestedPreferredAudioLanguages
     approvedLeaseDays
     policyTags
     lease {
@@ -5178,6 +5242,8 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     createdAt
     updatedAt
     requestedLeaseDays
+    requestedRequiredAudioLanguages
+    requestedPreferredAudioLanguages
     approvedLeaseDays
     policyTags
     lease {
@@ -5851,6 +5917,8 @@ export const LIST_SUBSCRIPTION_FIELDS = `
       useSeasonFolders
       releaseNumbering
       tags
+      requiredAudioLanguages
+      preferredAudioLanguages
     }
     filters {
       facet
@@ -6136,6 +6204,8 @@ export const listRouteOptionsQuery = `query ListRouteOptions {
     slug
     isDefault
     qualityProfileId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path

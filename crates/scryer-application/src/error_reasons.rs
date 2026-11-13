@@ -163,6 +163,8 @@ pub mod library {
     pub const NAME_TAKEN: &str = "LIBRARY_NAME_TAKEN";
     /// Default libraries cannot be deleted.
     pub const DEFAULT_LIBRARIES_CANNOT_DELETED: &str = "LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED";
+    /// The library is already being deleted by a running job.
+    pub const DELETION_ALREADY_RUNNING: &str = "LIBRARY_DELETION_ALREADY_RUNNING";
     /// Library scan session was not found.
     pub const SCAN_SESSION_NOT_FOUND: &str = "LIBRARY_SCAN_SESSION_NOT_FOUND";
     /// Library scan session is not cancelable.
@@ -217,6 +219,11 @@ pub mod library {
         "LIBRARY_PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES";
     /// Pending import id is required.
     pub const PENDING_IMPORT_ID_REQUIRED: &str = "LIBRARY_PENDING_IMPORT_ID_REQUIRED";
+    /// One bulk ignore names more distinct pending imports than it accepts.
+    /// Carries [`PENDING_IMPORT_IGNORE_MAX_IDS_FACT`] and
+    /// [`PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT`].
+    pub const PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE: &str =
+        "LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE";
     /// Pending import was not found.
     pub const PENDING_IMPORT_NOT_FOUND: &str = "LIBRARY_PENDING_IMPORT_NOT_FOUND";
     /// Pending import requires explicit episode binding.
@@ -377,6 +384,7 @@ pub mod library {
         ROOT_ID_DUPLICATED,
         NAME_TAKEN,
         DEFAULT_LIBRARIES_CANNOT_DELETED,
+        DELETION_ALREADY_RUNNING,
         SCAN_SESSION_NOT_FOUND,
         SCAN_CANCEL_UNAVAILABLE,
         ROOTS_NOT_CONFIGURED,
@@ -402,6 +410,7 @@ pub mod library {
         PENDING_IMPORT_ALREADY_BEING_RESOLVED,
         PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES,
         PENDING_IMPORT_ID_REQUIRED,
+        PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE,
         PENDING_IMPORT_NOT_FOUND,
         PENDING_IMPORT_REQUIRES_EXPLICIT_EPISODE_BINDING,
         TITLE_IDENTITY_REQUIRED,
@@ -470,12 +479,18 @@ pub mod library {
     pub const ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT: &str = "unacknowledgedRootPaths";
     /// Ids listed as removed that the edit keeps or the library does not have.
     pub const ROOT_REMOVAL_MISMATCHED_IDS_FACT: &str = "mismatchedRootIds";
+    /// The most distinct pending imports one bulk ignore accepts.
+    pub const PENDING_IMPORT_IGNORE_MAX_IDS_FACT: &str = "maxPendingImportIds";
+    /// How many distinct pending imports the refused bulk ignore named.
+    pub const PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT: &str = "requestedPendingImportIds";
 
     /// Every refusal fact key this area publishes.
     pub const ALL_FACTS: &[&str] = &[
         ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT,
         ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT,
         ROOT_REMOVAL_MISMATCHED_IDS_FACT,
+        PENDING_IMPORT_IGNORE_MAX_IDS_FACT,
+        PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT,
     ];
 
     #[cfg(test)]
@@ -3769,10 +3784,18 @@ pub mod settings {
     pub const DELAY_PROFILE_CATALOG_INVALID: &str = "SETTINGS_DELAY_PROFILE_CATALOG_INVALID";
     /// The trusted proxy policy is invalid.
     pub const TRUSTED_PROXY_POLICY_INVALID: &str = "SETTINGS_TRUSTED_PROXY_POLICY_INVALID";
+    /// A required, preferred or optional audio language list names a language
+    /// Scryer does not know.
+    pub const AUDIO_LANGUAGE_UNKNOWN: &str = "SETTINGS_AUDIO_LANGUAGE_UNKNOWN";
+    /// The extension naming the rejected code on an
+    /// [`AUDIO_LANGUAGE_UNKNOWN`] refusal, and on the list route refusal that
+    /// relays it.
+    pub const AUDIO_LANGUAGE_FACT: &str = "audioLanguage";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         DELAY_PROFILE_CATALOG_INVALID,
         TRUSTED_PROXY_POLICY_INVALID,
+        AUDIO_LANGUAGE_UNKNOWN,
         CATALOG_VIEW_COLUMNS_INVALID,
         DASHBOARD_LAYOUT_COLUMNS_OUT_OF_RANGE,
         DASHBOARD_LAYOUT_TOO_MANY_ITEMS,
@@ -4539,6 +4562,15 @@ pub mod integration {
     pub const PROXY_TIMEOUT_OUT_OF_RANGE: &str = "INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE";
     /// Download already resolved as the selected value; nothing to ignore.
     pub const DOWNLOAD_ALREADY_RESOLVED: &str = "INTEGRATION_DOWNLOAD_ALREADY_RESOLVED";
+    /// Only blocked imports can be dismissed, and only dismissed imports can be resumed.
+    pub const IMPORT_TRACKING_STATE_NOT_ELIGIBLE: &str =
+        "INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE";
+    /// The client item named in a dismiss or resume request now belongs to another download.
+    pub const IMPORT_TRACKING_DOWNLOAD_CHANGED: &str =
+        "INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED";
+    /// The download was already imported, failed or ignored, so its warning cannot change.
+    pub const IMPORT_TRACKING_ALREADY_RESOLVED: &str =
+        "INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED";
     /// Tracked download was not found.
     pub const TRACKED_DOWNLOAD_NOT_FOUND: &str = "INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND";
     /// Tracked download the selected value is busy processing.
@@ -4736,6 +4768,9 @@ pub mod integration {
         DOWNLOAD_ALREADY_RESOLVED,
         TRACKED_DOWNLOAD_NOT_FOUND,
         TRACKED_DOWNLOAD_BUSY_PROCESSING,
+        IMPORT_TRACKING_STATE_NOT_ELIGIBLE,
+        IMPORT_TRACKING_DOWNLOAD_CHANGED,
+        IMPORT_TRACKING_ALREADY_RESOLVED,
         MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE,
         MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM,
         INDEXER_CONFIG_JSON_INVALID,
@@ -5063,6 +5098,8 @@ pub mod jobs {
     pub const TITLE_DELETION_JOBS_INVALID: &str = "JOB_TITLE_DELETION_JOBS_INVALID";
     /// Title rename jobs must be started from the rename mutation.
     pub const TITLE_RENAME_JOBS_INVALID: &str = "JOB_TITLE_RENAME_JOBS_INVALID";
+    /// Library deletion jobs must be started from the library deletion mutation.
+    pub const LIBRARY_DELETION_JOBS_INVALID: &str = "JOB_LIBRARY_DELETION_JOBS_INVALID";
     /// Media file deletion jobs must be started from the media file deletion mutation.
     pub const MEDIA_FILE_DELETION_JOBS_INVALID: &str = "JOB_MEDIA_FILE_DELETION_JOBS_INVALID";
     /// Select files, seasons, or titles to refresh scores.
@@ -5143,6 +5180,7 @@ pub mod jobs {
         BACKGROUND_LIBRARY_REFRESH_TEMPORARILY_DISABLED,
         TITLE_DELETION_JOBS_INVALID,
         TITLE_RENAME_JOBS_INVALID,
+        LIBRARY_DELETION_JOBS_INVALID,
         MEDIA_FILE_DELETION_JOBS_INVALID,
         SELECT_FILES_SEASONS_TITLES_REFRESH_SCORES,
         RECYCLE_RESTORE_JOBS_INVALID,

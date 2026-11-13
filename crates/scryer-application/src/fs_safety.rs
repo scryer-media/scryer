@@ -11,7 +11,15 @@ pub(crate) fn most_specific_containing_root(path: &Path, roots: &[PathBuf]) -> O
 }
 
 pub(crate) fn resolve_available_root_for_path(path: &Path, roots: &[PathBuf]) -> AppResult<()> {
-    let root = most_specific_containing_root(path, roots).ok_or_else(|| {
+    let root = containing_root_for_path(path, roots)?;
+    ensure_root_available(&root)?;
+    Ok(())
+}
+
+/// The configured root `path` belongs to, refusing a path outside every root.
+/// Pure path arithmetic: it touches no filesystem.
+pub(crate) fn containing_root_for_path(path: &Path, roots: &[PathBuf]) -> AppResult<PathBuf> {
+    most_specific_containing_root(path, roots).ok_or_else(|| {
         AppError::validation_refused(
             crate::delete_refusal::PATH_OUTSIDE_ROOTS,
             format!(
@@ -19,9 +27,7 @@ pub(crate) fn resolve_available_root_for_path(path: &Path, roots: &[PathBuf]) ->
                 path.display()
             ),
         )
-    })?;
-    ensure_root_available(&root)?;
-    Ok(())
+    })
 }
 
 pub(crate) fn ensure_root_available(root: &Path) -> AppResult<()> {

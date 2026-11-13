@@ -203,6 +203,7 @@ impl IntoApplication<scryer_application::DownloadActivityFilter> for DownloadAct
 impl IntoApplication<scryer_application::DownloadImportFilter> for DownloadImportFilterValue {
     fn into_application(self) -> scryer_application::DownloadImportFilter {
         match self {
+            Self::Dismissed => scryer_application::DownloadImportFilter::Dismissed,
             Self::All => scryer_application::DownloadImportFilter::All,
             Self::Attention => scryer_application::DownloadImportFilter::Attention,
             Self::Importing => scryer_application::DownloadImportFilter::Importing,
@@ -391,6 +392,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::ListSync => AppJobKey::ListSync,
             Self::LifecycleActionHandling => AppJobKey::LifecycleActionHandling,
             Self::TitleDeletion => AppJobKey::TitleDeletion,
+            Self::LibraryDeletion => AppJobKey::LibraryDeletion,
             Self::TitleRename => AppJobKey::TitleRename,
             Self::MediaFileRescore => AppJobKey::MediaFileRescore,
             Self::MediaFileDeletion => AppJobKey::MediaFileDeletion,
@@ -432,6 +434,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::ListSync => Self::ListSync,
             AppJobKey::LifecycleActionHandling => Self::LifecycleActionHandling,
             AppJobKey::TitleDeletion => Self::TitleDeletion,
+            AppJobKey::LibraryDeletion => Self::LibraryDeletion,
             AppJobKey::TitleRename => Self::TitleRename,
             AppJobKey::MediaFileRescore => Self::MediaFileRescore,
             AppJobKey::MediaFileDeletion => Self::MediaFileDeletion,

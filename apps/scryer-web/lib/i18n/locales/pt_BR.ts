@@ -1315,6 +1315,18 @@ const pt_BR: LocaleDictionary = {
   "title.monitoredSection": "{{facet}} monitorados",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Baixar mais recente",
+  "search.addConfigRequiredAudio": "Idioma de áudio obrigatório",
+  "search.addConfigPreferredAudio": "Idioma de áudio preferido",
+  "search.addConfigAudioChoose": "Escolher idiomas",
+  "search.addConfigAudioRequireNone": "Não exigir nenhum",
+  "title.preferredAudioLanguages": "Idiomas de áudio preferidos",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "O Scryer não reconhece esse idioma de áudio.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "O Scryer não reconhece o idioma de áudio de uma rota.",
+  "requests.requestedAudioLanguages": "Idiomas de áudio solicitados",
+  "requests.requestedRequiredAudio": "Obrigatórios: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferidos: {{languages}}",
   "title.requiredAudioLanguages": "Idiomas de áudio obrigatórios",
   "title.originalAudioLanguagePerTitle": "Idioma original (por título)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1584,11 +1596,16 @@ const pt_BR: LocaleDictionary = {
   "system.title": "Saúde do sistema",
   "system.diagnosticsBundle.download": "Baixar pacote de diagnóstico",
   "system.diagnosticsBundle.preparing": "Preparando o diagnóstico…",
-  "system.diagnosticsBundle.helper": "Logs, métricas e um resumo das configurações em um único arquivo para o mantenedor. Nomes, endereços, caminhos e segredos são removidos na medida do possível; revise o pacote antes de compartilhá-lo.",
-  "system.diagnosticsBundle.failed": "Não foi possível baixar o pacote de diagnóstico.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Entre novamente para baixar o diagnóstico.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Baixar o diagnóstico exige a permissão de configurações do sistema.",
-  "system.diagnosticsBundle.refusal.failed": "Não foi possível gerar o pacote de diagnóstico. Consulte o log do servidor para mais detalhes.",
+  "system.diagnosticsBundle.helper":
+    "Logs, métricas e um resumo das configurações em um único arquivo para o mantenedor. Nomes, endereços, caminhos e segredos são removidos na medida do possível; revise o pacote antes de compartilhá-lo.",
+  "system.diagnosticsBundle.failed":
+    "Não foi possível baixar o pacote de diagnóstico.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Entre novamente para baixar o diagnóstico.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Baixar o diagnóstico exige a permissão de configurações do sistema.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Não foi possível gerar o pacote de diagnóstico. Consulte o log do servidor para mais detalhes.",
   "system.jobsTitle": "Empregos",
   "system.notLoaded": "Saúde do sistema não carregada.",
   "system.refreshing": "Atualizando",
@@ -3148,6 +3165,9 @@ const pt_BR: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protocolo",
   "indexerSearch.facet.resolution": "Resolução",
   "indexerSearch.facet.source": "Fonte",
+  "indexerSearch.facet.videoCodec": "Codec de vídeo",
+  "indexerSearch.facet.audioCodec": "Codec de áudio",
+  "indexerSearch.facet.audioChannels": "Canais de áudio",
   "indexerSearch.facet.audio": "Áudio e HDR",
   "indexerSearch.facet.flags": "Sinalizadores",
   "indexerSearch.facet.indexer": "Indexador",
@@ -3882,28 +3902,18 @@ const pt_BR: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Ordem de decisão",
   "qualityProfile.decisionOrderInfo":
     "Quando dois lançamentos atendem a este perfil, o Scryer verifica estas etapas de cima para baixo. Decide a primeira etapa que os diferencia. A pontuação sempre decide por último.",
-  "qualityProfile.decisionPresets": "Predefinições",
-  "qualityProfile.decisionPresetDefault": "Padrão",
-  "qualityProfile.decisionPresetLanguageFirst": "Idioma primeiro",
-  "qualityProfile.decisionPresetScoreOnly": "Só pontuação",
   "qualityProfile.decisionGateQualityTier": "Nível de qualidade",
   "qualityProfile.decisionGateQualityTierDescription":
     "Vence o lançamento no nível posicionado mais alto na preferência de qualidade deste perfil.",
-  "qualityProfile.decisionGateQualityTierSummary": "nível de qualidade",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "No mesmo nível e grupo de lançamento, vence um PROPER ou REPACK mais recente.",
-  "qualityProfile.decisionGateRevisionSummary": "revisão PROPER/REPACK",
   "qualityProfile.decisionGatePreferredLanguage": "Idioma preferido",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Vence o lançamento cujo áudio está mais alto nos idiomas de áudio preferidos da biblioteca.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "idioma de áudio preferido",
   "qualityProfile.decisionGateOptionalLanguages": "Idiomas opcionais",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Vence o lançamento que traz mais idiomas de áudio opcionais da biblioteca.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "quantidade de idiomas de áudio opcionais",
   "qualityProfile.decisionGateUnknown": "Etapa desconhecida ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Esta versão do aplicativo web não reconhece esta etapa. Ela permanece no lugar.",
@@ -3915,11 +3925,6 @@ const pt_BR: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Adicionar {{value}} à ordem de decisão",
   "qualityProfile.decisionAvailableSteps": "Etapas não usadas",
   "qualityProfile.decisionAllStepsInUse": "Todas as etapas estão em uso.",
-  "qualityProfile.decisionSummary":
-    "Os lançamentos são comparados por {{steps}} e, por fim, por pontuação.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, depois {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Os lançamentos são comparados apenas por pontuação.",
   "qualityProfile.decisionWarningTierAbsent":
     "Sem a etapa de nível de qualidade, um lançamento de nível inferior pode substituir um arquivo de nível superior, e o nível de corte não se aplica. Só a pontuação de corte interrompe a busca por atualizações; sem ela, o perfil fica satisfeito assim que tem um arquivo.",
   "qualityProfile.decisionNoteTierBelowLanguage":

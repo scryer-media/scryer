@@ -48,8 +48,7 @@
 use std::collections::HashSet;
 
 use crate::decision_pipeline::{
-    CutoffEscape, DecisionGate, DecisionPipeline, Facts, LadderOutcome, ReleaseDecidingStep,
-    SideFacts,
+    DecisionGate, DecisionPipeline, Facts, LadderOutcome, ReleaseDecidingStep, SideFacts,
 };
 
 /// What the candidate is trying to occupy.
@@ -745,18 +744,12 @@ fn queued_candidate_win(
 ) -> Option<ReleaseDecidingStep> {
     let candidate_facts = candidate.facts();
     let held = queued.facts();
-    // A recent grab that already met the cutoffs still yields to the gates an
-    // incumbent at its format cutoff yields to: a revision or a language step,
-    // when the profile compares them at all.
+    // A recent grab that already met the cutoffs yields only to what a file
+    // on disk at its cutoff yields to, by the same rule.
     if queued.history_cutoff_reached
-        && !CutoffEscape::FAMILIES.into_iter().any(|escape| {
-            crate::decision_pipeline::wins_cutoff_escape(
-                &candidate.pipeline,
-                escape,
-                &candidate_facts,
-                &held,
-            )
-        })
+        && !candidate
+            .pipeline
+            .passes_reached_cutoff(&candidate_facts, &held)
     {
         return None;
     }

@@ -3827,7 +3827,7 @@ export default function LibraryGraphView({
         {shownHover && hoverTitle.length + hoverLines.length > 0 ? (
           <div
             role="tooltip"
-            className="pointer-events-none absolute z-10 max-w-[16rem] rounded-[8px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] px-2.5 py-1.5 text-[12px] text-[var(--scry-ink2)] shadow-lg"
+            className="pointer-events-none absolute z-10 max-w-[16rem] rounded-[8px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] px-2.5 py-1.5 text-[12px] text-[var(--scry-ink2)] shadow-[var(--scry-hover-card-shadow)]"
             style={{
               left: shownHover.x + 12,
               top: shownHover.y + 12,

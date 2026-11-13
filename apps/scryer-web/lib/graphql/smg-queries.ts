@@ -26,4 +26,8 @@ export type MetadataTvdbSearchItem = {
   ratingSource?: string | null;
   ratingSources?: string[];
   externalRatings?: TitleExternalRating[];
+  /** Libraries of the result's facet that already hold it, limited to those
+   * the viewer may view, request into or manage. Only the requester search
+   * selects it. */
+  presentInLibraryIds?: string[];
 };

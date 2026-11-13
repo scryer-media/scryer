@@ -12,7 +12,10 @@ use scryer_application::{
     PendingReleasePageSort, PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus,
     PendingReleasesPageQuery, ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository,
     normalize_release_name,
-    subtitles::{ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry},
+    subtitles::{
+        ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry, SubtitleSearchBackoff,
+        SubtitleSearchBackoffKey,
+    },
 };
 use scryer_domain::{
     BlocklistEntry, DomainEventType, ExternalSubtitleSourceKind, Id, SubtitleBlocklistEntry,
@@ -22,6 +25,7 @@ use scryer_plugin_sdk::torrent::normalize_info_hash;
 
 use crate::config_store::{current_encryption_key, decrypt_optional_value, encrypt_optional_value};
 use crate::encryption::{EncryptionKey, is_encrypted};
+use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::repo_err;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
@@ -1213,52 +1217,54 @@ impl AcquisitionScopeStateRepository for WantedStore {
         last_search_at: Option<&str>,
         landed_import: bool,
     ) -> AppResult<()> {
-        // Keeps the statement well under both engines' bind limits.
+        // Keeps each statement well under both engines' bind limits.
         const MAX_COMPLETION_BATCH_EPISODES: usize = 1_000;
         if episode_ids.is_empty() {
             return Ok(());
         }
-        if episode_ids.len() > MAX_COMPLETION_BATCH_EPISODES {
-            for episode_id in episode_ids {
-                self.complete_acquisition_scope_for_title(
-                    title_id,
-                    Some(episode_id),
-                    last_search_at,
-                    landed_import,
-                )
-                .await?;
-            }
-            return Ok(());
-        }
-        // The per-episode statement applied to every episode at once.
+        // The per-episode statement applied to every episode at once, one
+        // statement per chunk, all in one transaction.
         let now = Utc::now().to_rfc3339();
-        let mut args = vec![
+        let head = vec![
             SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
             opt_timestamp_arg_for_datastore(&self.datastore, last_search_at)?,
             SqlArg::Bool(landed_import),
             timestamp_arg_for_datastore(&self.datastore, &now)?,
             SqlArg::Text(title_id.to_string()),
         ];
-        args.extend(episode_ids.iter().cloned().map(SqlArg::Text));
-        let sql = format!(
-            "UPDATE wanted_items
-                SET status = {{}},
-                    last_search_at = {{}},
-                    grabbed_release = CASE WHEN {{}} THEN NULL ELSE grabbed_release END,
-                    updated_at = {{}}
-              WHERE title_id = {{}} AND episode_id IN ({})",
-            std::iter::repeat_n("{}", episode_ids.len())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        execute_datastore_write(
+        let statements = episode_ids
+            .chunks(MAX_COMPLETION_BATCH_EPISODES)
+            .map(|chunk| {
+                let sql = format!(
+                    "UPDATE wanted_items
+                        SET status = {{}},
+                            last_search_at = {{}},
+                            grabbed_release = CASE WHEN {{}} THEN NULL ELSE grabbed_release END,
+                            updated_at = {{}}
+                      WHERE title_id = {{}} AND episode_id IN ({})",
+                    std::iter::repeat_n("{}", chunk.len())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let mut args = head.clone();
+                args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                (sql, args)
+            })
+            .collect::<Vec<_>>();
+        SqlRuntime::run_in_transaction(
             &self.datastore,
             "complete_acquisition_scopes_for_episodes",
-            &sql,
-            args,
+            move |tx| {
+                let statements = statements.clone();
+                Box::pin(async move {
+                    for (sql, args) in &statements {
+                        SqlRuntime::execute(SqlExec::Tx(tx), sql, args).await?;
+                    }
+                    Ok(())
+                })
+            },
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()> {
@@ -1602,6 +1608,56 @@ async fn execute_housekeeping_delete(
     Ok(rows_affected as u32)
 }
 
+/// Most rows one retention batch deletes, so a large backlog never holds the
+/// single SQLite writer for one long statement.
+const HOUSEKEEPING_DELETE_BATCH: i64 = 5_000;
+
+/// Ids per statement when a title id list is too long for one statement.
+const HOUSEKEEPING_TITLE_ID_CHUNK: usize = 900;
+
+/// Deletes every `table` row matching `predicate`, the same rows one
+/// unbounded `DELETE ... WHERE predicate` removes, in batches of at most
+/// [`HOUSEKEEPING_DELETE_BATCH`] keyed by `key`, one write transaction each.
+///
+/// A read asks first whether any row matches, so a prune with nothing to do
+/// takes no write transaction. `predicate` binds `args` with `{}`.
+async fn execute_housekeeping_delete_batched(
+    datastore: &StoreDatastore,
+    op_name: &'static str,
+    table: &'static str,
+    key: &'static str,
+    predicate: &str,
+    args: Vec<SqlArg>,
+) -> AppResult<u32> {
+    let probe_sql = format!("SELECT 1 AS present FROM {table} WHERE {predicate} LIMIT 1");
+    let delete_sql = format!(
+        "DELETE FROM {table}
+          WHERE {key} IN (SELECT {key} FROM {table} WHERE {predicate} LIMIT {{}})"
+    );
+    let mut delete_args = args.clone();
+    delete_args.push(SqlArg::I64(HOUSEKEEPING_DELETE_BATCH));
+    let mut deleted_total = 0u64;
+    loop {
+        if SqlRuntime::fetch_optional(datastore.read_exec(), &probe_sql, &args)
+            .await?
+            .is_none()
+        {
+            break;
+        }
+        let deleted = SqlRuntime::run_in_transaction(datastore, op_name, |tx| {
+            let sql = delete_sql.clone();
+            let args = delete_args.clone();
+            Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
+        })
+        .await?;
+        deleted_total = deleted_total.saturating_add(deleted);
+        if deleted < HOUSEKEEPING_DELETE_BATCH as u64 {
+            break;
+        }
+    }
+    Ok(deleted_total as u32)
+}
+
 async fn delete_for_title_ids_shared(
     datastore: &StoreDatastore,
     op_name: &'static str,
@@ -1612,16 +1668,34 @@ async fn delete_for_title_ids_shared(
         return Ok(0);
     }
 
-    let sql = format!(
-        "DELETE FROM {table} WHERE title_id IN ({})",
-        placeholders(title_ids.len())
-    );
-    let args = title_ids
-        .iter()
-        .cloned()
-        .map(SqlArg::Text)
-        .collect::<Vec<_>>();
-    execute_housekeeping_delete(datastore, op_name, sql, args).await
+    // One transaction as before; a list longer than one statement accepts is
+    // split across statements inside it.
+    let title_ids = title_ids.to_vec();
+    let rows_affected = SqlRuntime::run_in_transaction(datastore, op_name, move |tx| {
+        let title_ids = title_ids.clone();
+        Box::pin(async move {
+            let limit = crate::media::id_list_statements::max_binds(&SqlExec::Tx(tx));
+            let (title_ids, per_statement) = crate::media::id_list_statements::id_list_statements(
+                &title_ids,
+                1,
+                0,
+                limit,
+                HOUSEKEEPING_TITLE_ID_CHUNK,
+            );
+            let mut deleted = 0u64;
+            for chunk in title_ids.chunks(per_statement) {
+                let sql = format!(
+                    "DELETE FROM {table} WHERE title_id IN ({})",
+                    placeholders(chunk.len())
+                );
+                let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+                deleted += SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
+            }
+            Ok(deleted)
+        })
+    })
+    .await?;
+    Ok(rows_affected as u32)
 }
 
 async fn delete_media_files_by_ids_shared(
@@ -1651,11 +1725,12 @@ impl HousekeepingRepository for HousekeepingStore {
         // The newest terminal run of each job is kept whatever its age. Every
         // user-defined job shares the `custom_job` key, so those runs keep
         // one per operation type (one per script) instead of one in total.
-        let deleted = execute_housekeeping_delete(
+        let deleted = execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_stale_workflow_operations",
-            "DELETE FROM workflow_operations
-             WHERE NOT EXISTS (SELECT 1 FROM workflow_private_inputs WHERE workflow_private_inputs.run_id = workflow_operations.id AND workflow_private_inputs.input_encrypted IS NOT NULL)
+            "workflow_operations",
+            "id",
+            "NOT EXISTS (SELECT 1 FROM workflow_private_inputs WHERE workflow_private_inputs.run_id = workflow_operations.id AND workflow_private_inputs.input_encrypted IS NOT NULL)
                AND job_key IS NOT NULL
                 AND (
                     (status = 'completed' AND started_at <= {})
@@ -1686,11 +1761,12 @@ impl HousekeepingRepository for HousekeepingStore {
         )
         .await?;
         // A request receipt whose run is gone can no longer resolve a replay.
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_orphaned_workflow_private_inputs",
-            "DELETE FROM workflow_private_inputs
-             WHERE NOT EXISTS (
+            "workflow_private_inputs",
+            "run_id",
+            "NOT EXISTS (
                  SELECT 1 FROM workflow_operations
                   WHERE workflow_operations.id = workflow_private_inputs.run_id
              )",
@@ -1701,10 +1777,12 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_release_decisions_older_than",
-            "DELETE FROM release_decisions WHERE created_at < {}",
+            "release_decisions",
+            "id",
+            "created_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await
@@ -1716,11 +1794,12 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_release_attempts_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_release_attempts_older_than",
-            "DELETE FROM release_download_attempts
-              WHERE attempted_at < {}
+            "release_download_attempts",
+            "id",
+            "attempted_at < {}
                 AND outcome != 'pending'",
             vec![housekeeping_cutoff_arg(days)],
         )
@@ -1728,10 +1807,12 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_history_events_older_than",
-            "DELETE FROM history_events WHERE occurred_at < {}",
+            "history_events",
+            "id",
+            "occurred_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await
@@ -1746,9 +1827,8 @@ impl HousekeepingRepository for HousekeepingStore {
             return Ok(0);
         }
 
-        let sql = format!(
-            "DELETE FROM domain_events
-              WHERE occurred_at <= {{}}
+        let predicate = format!(
+            "occurred_at <= {{}}
                 AND event_type IN ({})",
             placeholders(event_types.len())
         );
@@ -1758,21 +1838,24 @@ impl HousekeepingRepository for HousekeepingStore {
                 .iter()
                 .map(|event_type| SqlArg::Text(event_type.as_str().to_string())),
         );
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_domain_events_older_than_for_types",
-            sql,
+            "domain_events",
+            "sequence",
+            &predicate,
             args,
         )
         .await
     }
 
     async fn delete_download_import_artifacts_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_download_import_artifacts_older_than",
-            "DELETE FROM download_import_artifacts
-              WHERE created_at < {}
+            "download_import_artifacts",
+            "id",
+            "created_at < {}
                 AND (
                     import_id IS NULL
                     OR NOT EXISTS (
@@ -1793,11 +1876,12 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_terminal_imports_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_terminal_imports_older_than",
-            "DELETE FROM imports
-              WHERE status IN ('completed', 'failed', 'skipped')
+            "imports",
+            "id",
+            "status IN ('completed', 'failed', 'skipped')
                 AND updated_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
@@ -1808,11 +1892,12 @@ impl HousekeepingRepository for HousekeepingStore {
         &self,
         days: i64,
     ) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_terminal_download_queue_commands_older_than",
-            "DELETE FROM download_queue_commands
-              WHERE action = 'delete'
+            "download_queue_commands",
+            "id",
+            "action = 'delete'
                 AND status IN ('completed', 'failed')
                 AND updated_at < {}",
             vec![housekeeping_cutoff_arg(days)],
@@ -1821,21 +1906,66 @@ impl HousekeepingRepository for HousekeepingStore {
     }
 
     async fn delete_rule_set_history_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_rule_set_history_older_than",
-            "DELETE FROM rule_set_history WHERE created_at < {}",
+            "rule_set_history",
+            "id",
+            "created_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await
     }
 
     async fn delete_maintenance_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
-        execute_housekeeping_delete(
+        execute_housekeeping_delete_batched(
             &self.datastore,
             "delete_maintenance_evaluation_runs_older_than",
-            "DELETE FROM maintenance_evaluation_runs WHERE started_at < {}",
+            "maintenance_evaluation_runs",
+            "id",
+            "started_at < {}",
             vec![housekeeping_cutoff_arg(days)],
+        )
+        .await
+    }
+
+    async fn delete_held_lifecycle_action_runs_older_than(&self, days: i64) -> AppResult<u32> {
+        // A held run whose detail carries a scoped-deletion journal may be the
+        // checkpoint an interrupted deletion resumes from, even when later
+        // holds of the same generation follow it, so journal rows stay. The
+        // newest run of each candidate generation is kept whatever it is:
+        // a newer run of the same generation must exist for a row to go.
+        execute_housekeeping_delete_batched(
+            &self.datastore,
+            "delete_held_lifecycle_action_runs_older_than",
+            "lifecycle_action_runs",
+            "id",
+            "status = {}
+                AND finished_at IS NOT NULL
+                AND finished_at < {}
+                AND detail NOT LIKE {} ESCAPE '!'
+                AND EXISTS (
+                    SELECT 1
+                      FROM lifecycle_action_runs newer
+                     WHERE newer.candidate_id = lifecycle_action_runs.candidate_id
+                       AND newer.match_generation = lifecycle_action_runs.match_generation
+                       AND (
+                           newer.started_at > lifecycle_action_runs.started_at
+                           OR (
+                               newer.started_at = lifecycle_action_runs.started_at
+                               AND newer.id > lifecycle_action_runs.id
+                           )
+                       )
+                )",
+            vec![
+                SqlArg::Text(
+                    scryer_domain::LifecycleActionRunStatus::Held
+                        .as_storage_str()
+                        .to_string(),
+                ),
+                housekeeping_cutoff_arg(days),
+                SqlArg::Text("%\"scoped!_deletion\":%".to_string()),
+            ],
         )
         .await
     }
@@ -3489,5 +3619,384 @@ impl SubtitleDownloadRepository for SubtitleDownloadStore {
         )
         .await?;
         Ok(())
+    }
+
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        media_file_ids: &[String],
+    ) -> AppResult<Vec<SubtitleSearchBackoff>> {
+        if media_file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let exec = self.datastore.read_exec();
+        let (ids, per_statement) = id_list_statements(
+            media_file_ids,
+            1,
+            0,
+            max_binds(&exec),
+            SEARCH_BACKOFF_ID_CHUNK,
+        );
+        let mut rows = Vec::new();
+        for chunk in ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT {SUBTITLE_SEARCH_BACKOFF_COLUMNS}
+                   FROM subtitle_search_backoffs
+                  WHERE media_file_id IN ({})",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                rows.push(subtitle_search_backoff_row_to_entry(&row)?);
+            }
+        }
+        Ok(rows)
+    }
+
+    async fn apply_search_backoffs(
+        &self,
+        media_file_id: &str,
+        upserts: &[SubtitleSearchBackoff],
+        cleared: &[SubtitleSearchBackoffKey],
+    ) -> AppResult<()> {
+        if upserts.is_empty() && cleared.is_empty() {
+            return Ok(());
+        }
+        let mut statements = Vec::with_capacity(upserts.len() + cleared.len());
+        for key in cleared {
+            statements.push((
+                "DELETE FROM subtitle_search_backoffs
+                  WHERE media_file_id = {} AND language = {}
+                    AND hearing_impaired = {} AND forced = {}",
+                vec![
+                    SqlArg::Text(media_file_id.to_string()),
+                    SqlArg::Text(key.language.clone()),
+                    SqlArg::Bool(key.hearing_impaired),
+                    SqlArg::Bool(key.forced),
+                ],
+            ));
+        }
+        for row in upserts
+            .iter()
+            .filter(|row| row.media_file_id == media_file_id)
+        {
+            statements.push((
+                "INSERT INTO subtitle_search_backoffs
+                 (media_file_id, language, hearing_impaired, forced, file_path, size_bytes,
+                  wanted_languages, enabled_providers, empty_searches, searched_at, retry_after)
+                 VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                 ON CONFLICT (media_file_id, language, hearing_impaired, forced) DO UPDATE SET
+                    file_path = excluded.file_path,
+                    size_bytes = excluded.size_bytes,
+                    wanted_languages = excluded.wanted_languages,
+                    enabled_providers = excluded.enabled_providers,
+                    empty_searches = excluded.empty_searches,
+                    searched_at = excluded.searched_at,
+                    retry_after = excluded.retry_after",
+                vec![
+                    SqlArg::Text(row.media_file_id.clone()),
+                    SqlArg::Text(row.language.clone()),
+                    SqlArg::Bool(row.hearing_impaired),
+                    SqlArg::Bool(row.forced),
+                    SqlArg::Text(row.file_path.clone()),
+                    SqlArg::I64(row.size_bytes),
+                    SqlArg::Text(row.wanted_languages.clone()),
+                    SqlArg::Text(row.enabled_providers.clone()),
+                    SqlArg::I32(row.empty_searches),
+                    timestamp_arg_for_datastore(&self.datastore, &row.searched_at)?,
+                    timestamp_arg_for_datastore(&self.datastore, &row.retry_after)?,
+                ],
+            ));
+        }
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "apply_subtitle_search_backoffs",
+            move |tx| {
+                let statements = statements.clone();
+                Box::pin(async move {
+                    for (sql, args) in statements {
+                        SqlRuntime::execute(SqlExec::Tx(tx), sql, &args).await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+}
+
+/// Media file ids per `IN (...)` read of the search backoff table, used only
+/// when one statement could not bind the whole list.
+const SEARCH_BACKOFF_ID_CHUNK: usize = 900;
+
+const SUBTITLE_SEARCH_BACKOFF_COLUMNS: &str =
+    "media_file_id, language, hearing_impaired, forced, file_path, size_bytes,
+    wanted_languages, enabled_providers, empty_searches, searched_at, retry_after";
+
+fn subtitle_search_backoff_row_to_entry(row: &SqlRow) -> AppResult<SubtitleSearchBackoff> {
+    Ok(SubtitleSearchBackoff {
+        media_file_id: row.text("media_file_id")?,
+        language: row.text("language")?,
+        hearing_impaired: row.bool("hearing_impaired")?,
+        forced: row.bool("forced")?,
+        file_path: row.text("file_path")?,
+        size_bytes: row.i64("size_bytes")?,
+        wanted_languages: row.text("wanted_languages")?,
+        enabled_providers: row.text("enabled_providers")?,
+        empty_searches: row.i32("empty_searches")?,
+        searched_at: required_timestamp_text(row, "searched_at")?,
+        retry_after: required_timestamp_text(row, "retry_after")?,
+    })
+}
+
+#[cfg(test)]
+mod title_id_delete_tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::delete_for_title_ids_shared;
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+    async fn seeded() -> StoreDatastore {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        let datastore = StoreDatastore::Sqlite {
+            pool,
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        };
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "CREATE TABLE title_rows (id INTEGER PRIMARY KEY, title_id TEXT NOT NULL)",
+            &[],
+        )
+        .await
+        .expect("create table");
+        for title_id in ["t-a", "t-a", "t-b", "t-c", "t-d", "t-e", "t-e"] {
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "INSERT INTO title_rows (title_id) VALUES ({})",
+                &[SqlArg::Text(title_id.to_string())],
+            )
+            .await
+            .expect("seed row");
+        }
+        datastore
+    }
+
+    async fn remaining(datastore: &StoreDatastore) -> Vec<String> {
+        SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            "SELECT title_id FROM title_rows ORDER BY id",
+            &[],
+        )
+        .await
+        .expect("read rows")
+        .iter()
+        .map(|row| row.text("title_id").expect("title_id"))
+        .collect()
+    }
+
+    /// A list longer than one statement can bind removes the same rows, and
+    /// reports the same count, as the single statement does.
+    #[tokio::test]
+    async fn a_title_id_list_past_the_bind_limit_deletes_what_one_statement_would() {
+        let ids: Vec<String> = ["t-e", "t-a", "t-e", "t-c", "t-missing"]
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+
+        let single = seeded().await;
+        let single_count = delete_for_title_ids_shared(&single, "test", "title_rows", &ids)
+            .await
+            .expect("single statement");
+
+        let chunked = seeded().await;
+        let chunked_count = {
+            let _limit = crate::media::id_list_statements::lower_max_binds_for_tests(2);
+            delete_for_title_ids_shared(&chunked, "test", "title_rows", &ids)
+                .await
+                .expect("chunked statements")
+        };
+
+        assert_eq!(single_count, 5);
+        assert_eq!(chunked_count, single_count);
+        assert_eq!(remaining(&chunked).await, remaining(&single).await);
+        assert_eq!(remaining(&single).await, vec!["t-b", "t-d"]);
+    }
+}
+
+#[cfg(test)]
+mod subtitle_search_backoff_tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::{SubtitleDownloadStore, SubtitleSearchBackoff, SubtitleSearchBackoffKey};
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+    use scryer_application::SubtitleDownloadRepository;
+
+    async fn store() -> (SubtitleDownloadStore, StoreDatastore) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("PRAGMA foreign_keys = ON")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        let datastore = StoreDatastore::Sqlite {
+            pool,
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        };
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "CREATE TABLE media_files (id TEXT PRIMARY KEY)",
+            &[],
+        )
+        .await
+        .expect("create media files");
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            include_str!(
+                "../../../../../scryer/src/db/migrations/0340_subtitle_search_backoffs.sql"
+            ),
+            &[],
+        )
+        .await
+        .expect("apply backoff migration");
+        for id in ["mf-emberfall", "mf-cinderwake"] {
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "INSERT INTO media_files (id) VALUES ({})",
+                &[SqlArg::Text(id.to_string())],
+            )
+            .await
+            .expect("seed media file");
+        }
+        (SubtitleDownloadStore::new(datastore.clone()), datastore)
+    }
+
+    fn row(media_file_id: &str, language: &str, empty_searches: i32) -> SubtitleSearchBackoff {
+        SubtitleSearchBackoff {
+            media_file_id: media_file_id.to_string(),
+            language: language.to_string(),
+            hearing_impaired: false,
+            forced: false,
+            file_path: format!("/library/{media_file_id}.mkv"),
+            size_bytes: 5,
+            wanted_languages: "eng:0:0,swe:0:0".to_string(),
+            enabled_providers: "cinderwake-subtitles".to_string(),
+            empty_searches,
+            searched_at: "2026-01-01T00:00:00+00:00".to_string(),
+            retry_after: "2026-01-02T00:00:00+00:00".to_string(),
+        }
+    }
+
+    fn sorted(mut rows: Vec<SubtitleSearchBackoff>) -> Vec<SubtitleSearchBackoff> {
+        rows.sort_by(|a, b| (&a.media_file_id, &a.language).cmp(&(&b.media_file_id, &b.language)));
+        rows
+    }
+
+    #[tokio::test]
+    async fn backoff_rows_upsert_clear_and_follow_their_media_file() {
+        let (store, datastore) = store().await;
+        let ids = vec!["mf-emberfall".to_string(), "mf-cinderwake".to_string()];
+        store
+            .apply_search_backoffs(
+                "mf-emberfall",
+                &[row("mf-emberfall", "eng", 1), row("mf-emberfall", "swe", 1)],
+                &[],
+            )
+            .await
+            .unwrap();
+        store
+            .apply_search_backoffs("mf-cinderwake", &[row("mf-cinderwake", "eng", 1)], &[])
+            .await
+            .unwrap();
+
+        // An upsert replaces the row for the same file and language.
+        store
+            .apply_search_backoffs("mf-emberfall", &[row("mf-emberfall", "eng", 2)], &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            sorted(
+                store
+                    .list_search_backoffs_for_media_files(&ids)
+                    .await
+                    .unwrap()
+            ),
+            vec![
+                row("mf-cinderwake", "eng", 1),
+                row("mf-emberfall", "eng", 2),
+                row("mf-emberfall", "swe", 1),
+            ]
+        );
+
+        // A list past the bind limit reads the same rows as one statement.
+        let one_statement = sorted(
+            store
+                .list_search_backoffs_for_media_files(&ids)
+                .await
+                .unwrap(),
+        );
+        {
+            let _limit = crate::media::id_list_statements::lower_max_binds_for_tests(1);
+            assert_eq!(
+                sorted(
+                    store
+                        .list_search_backoffs_for_media_files(&ids)
+                        .await
+                        .unwrap()
+                ),
+                one_statement
+            );
+        }
+
+        // Clearing removes only that file's language.
+        store
+            .apply_search_backoffs(
+                "mf-emberfall",
+                &[],
+                &[SubtitleSearchBackoffKey {
+                    language: "eng".to_string(),
+                    hearing_impaired: false,
+                    forced: false,
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sorted(
+                store
+                    .list_search_backoffs_for_media_files(&ids)
+                    .await
+                    .unwrap()
+            ),
+            vec![
+                row("mf-cinderwake", "eng", 1),
+                row("mf-emberfall", "swe", 1)
+            ]
+        );
+
+        // Removing the media file removes its rows and no other file's.
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "DELETE FROM media_files WHERE id = {}",
+            &[SqlArg::Text("mf-emberfall".to_string())],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store
+                .list_search_backoffs_for_media_files(&ids)
+                .await
+                .unwrap(),
+            vec![row("mf-cinderwake", "eng", 1)]
+        );
     }
 }

@@ -56,7 +56,8 @@ snapshot_app() {
   fi
   failures=0
   for endpoint in $common $specific; do
-    file=$dir/$(printf '%s' "$endpoint" | tr '/' '_').json
+    file=$(printf '%s' "$endpoint" | tr '/' '_')
+    file=$dir/$file.json
     fetch "$url" "$key" "$endpoint" "$file" || failures=$((failures + 1))
   done
   fetch "$url" "$key" "$history_query" "$dir/history_grabbed.json" || failures=$((failures + 1))

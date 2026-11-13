@@ -1,7 +1,12 @@
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { useBeforeUnload, useBlocker } from "react-router";
+import {
+  type BlockerFunction,
+  useBeforeUnload,
+  useBlocker,
+} from "react-router";
+import { isFolderBrowserHistoryStep } from "@/lib/utils/folder-browser-history";
 import {
   AudioLines,
   CalendarClock,
@@ -1004,7 +1009,16 @@ export const MediaLibrarySettingsPanel = React.memo(
         ),
       [changeRootId, savedRoots],
     );
-    const libraryNavigationBlocker = useBlocker(shouldBlockNavigation);
+    // Moving between an open folder browser's history entries stays on
+    // this page and keeps the draft, so it is never held.
+    const libraryNavigationBlocker = useBlocker(
+      React.useCallback<BlockerFunction>(
+        ({ currentLocation, nextLocation }) =>
+          shouldBlockNavigation &&
+          !isFolderBrowserHistoryStep(currentLocation, nextLocation),
+        [shouldBlockNavigation],
+      ),
+    );
 
     useBeforeUnload(
       React.useCallback(

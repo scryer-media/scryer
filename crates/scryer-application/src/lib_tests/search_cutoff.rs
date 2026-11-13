@@ -2479,19 +2479,19 @@ async fn a_season_with_a_missing_episode_has_not_reached_cutoff() {
         .await
         .expect("list media files");
     let cutoff_scope = app.cutoff_scope_for(&scope).await;
-    let analyzed = crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-        &existing_files,
-        &cutoff_scope,
-    );
-    assert_eq!(
-        analyzed, None,
-        "a season with an empty member has no cutoff quality"
-    );
-
     let context = app
-        .resolve_upgrade_context_for_title_with_category_and_quality(&title, None, analyzed)
+        .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
         .await
         .expect("resolve upgrade context");
+    assert_eq!(
+        crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
+            &existing_files,
+            &cutoff_scope,
+            &context.profile.criteria,
+        ),
+        None,
+        "a season with an empty member has no cutoff quality"
+    );
     assert!(
         !context.cutoff_reached,
         "the pack that would fill the missing episode must still be evaluated"
@@ -2521,12 +2521,8 @@ async fn a_season_with_a_missing_episode_has_not_reached_cutoff() {
         .list_media_files_for_title(&title.id)
         .await
         .expect("list media files");
-    let analyzed = crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-        &existing_files,
-        &cutoff_scope,
-    );
     let context = app
-        .resolve_upgrade_context_for_title_with_category_and_quality(&title, None, analyzed)
+        .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
         .await
         .expect("resolve upgrade context");
     assert!(context.cutoff_reached, "every member is at cutoff");

@@ -1348,3 +1348,166 @@ async fn a_stale_hydration_target_does_not_unhydrate_the_title() {
     assert!(hydrated.metadata_fetched_at.is_some());
     assert_eq!(hydrated.name, "Stale Target Hydration");
 }
+
+fn hydration_history_row(
+    event: &DomainEvent,
+) -> (
+    Option<String>,
+    String,
+    serde_json::Value,
+    String,
+    String,
+    Option<String>,
+) {
+    (
+        event.title_id.clone(),
+        event.payload.event_type().as_str().to_string(),
+        serde_json::to_value(&event.payload).expect("payload serializes"),
+        event.actor_kind.as_str().to_string(),
+        event.stream.kind().to_string(),
+        event.stream.identifier().map(str::to_string),
+    )
+}
+
+/// A bulk refresh writes the same hydration history rows as the one-commit-
+/// per-event path did: the same rows, the same payloads and the same order per
+/// title. A chunk's Started rows share one commit, and each title's Completed
+/// and TitleUpdated rows share another.
+#[tokio::test]
+async fn bulk_hydration_writes_the_same_history_rows_in_fewer_commits() {
+    const HYDRATED: i64 = 22;
+    let gateway = Arc::new(MovieTitleResolutionGateway {
+        hydration_movies: (0..HYDRATED)
+            .map(|index| {
+                let tvdb_id = 902_000 + index;
+                (
+                    tvdb_id,
+                    hydration_test_movie(tvdb_id, &format!("Emberfall {index}")),
+                )
+            })
+            .collect(),
+        ..Default::default()
+    });
+    let (app, user, _) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let events = Arc::new(MockDomainEventRepo::default());
+    let app = app.with_test_overrides(|services| services.with_domain_events(events.clone()));
+
+    let mut targets = Vec::new();
+    for index in 0..HYDRATED {
+        let title = app
+            .add_title_with_outcome(
+                &user,
+                hydration_test_title(&format!("Emberfall Placeholder {index}"), 902_000 + index),
+            )
+            .await
+            .expect("title should be created")
+            .title;
+        targets.push(crate::catalog_workflow::HydrationTarget {
+            title,
+            requested_tvdb_id: None,
+            requested_movie_ref: None,
+            sync_wanted_after_completion: false,
+            source: crate::catalog_workflow::HydrationSource::Interactive,
+        });
+    }
+    // A movie with no usable reference, placed mid-chunk so its Failed row
+    // follows other titles' Started rows.
+    let mut unreferenced = app
+        .add_title_with_outcome(&user, hydration_test_title("Cinderwake", 903_000))
+        .await
+        .expect("title should be created")
+        .title;
+    unreferenced.external_ids.clear();
+    targets.insert(
+        5,
+        crate::catalog_workflow::HydrationTarget {
+            title: unreferenced.clone(),
+            requested_tvdb_id: None,
+            requested_movie_ref: None,
+            sync_wanted_after_completion: false,
+            source: crate::catalog_workflow::HydrationSource::Interactive,
+        },
+    );
+    assert!(targets.len() > crate::catalog_workflow::HYDRATION_BULK_BATCH_SIZE);
+
+    let rows_before = events.events.lock().await.len();
+    let commits_before = events.append_commits.load(Ordering::SeqCst);
+    let outcome = app
+        .hydrate_titles_bulk(targets.clone())
+        .await
+        .expect("bulk hydration should run");
+    assert_eq!(outcome.hydrated_titles.len(), HYDRATED as usize);
+    assert!(outcome.failed_titles.contains_key(&unreferenced.id));
+    let new_rows = events.events.lock().await[rows_before..].to_vec();
+    let new_commits = events.append_commits.load(Ordering::SeqCst) - commits_before;
+
+    // The one-commit-per-event path, replayed through the single-event
+    // emitters in the order the bulk loop used to call them.
+    let legacy_events = Arc::new(MockDomainEventRepo::default());
+    let legacy =
+        app.with_test_overrides(|services| services.with_domain_events(legacy_events.clone()));
+    for chunk in targets.chunks(crate::catalog_workflow::HYDRATION_BULK_BATCH_SIZE) {
+        let mut referenced = Vec::new();
+        for target in chunk {
+            legacy
+                .emit_metadata_hydration_updated_event(
+                    &target.title,
+                    scryer_domain::MetadataHydrationState::Started,
+                    None,
+                )
+                .await;
+            if target.title.id == unreferenced.id {
+                legacy
+                    .emit_metadata_hydration_updated_event(
+                        &target.title,
+                        scryer_domain::MetadataHydrationState::Failed,
+                        Some("no movie external id found".to_string()),
+                    )
+                    .await;
+            } else {
+                referenced.push(target);
+            }
+        }
+        for target in referenced {
+            let hydrated = &outcome.hydrated_titles[&target.title.id];
+            legacy
+                .emit_metadata_hydration_updated_event(
+                    hydrated,
+                    scryer_domain::MetadataHydrationState::Completed,
+                    None,
+                )
+                .await;
+            legacy.emit_title_updated_activity(None, hydrated).await;
+        }
+    }
+    let legacy_rows = legacy_events.events.lock().await.clone();
+    let legacy_commits = legacy_events.append_commits.load(Ordering::SeqCst);
+
+    // Nothing but hydration history was written by the run.
+    assert_eq!(new_rows.len(), legacy_rows.len());
+    let mut new_by_title = HashMap::<Option<String>, Vec<_>>::new();
+    for row in &new_rows {
+        new_by_title
+            .entry(row.title_id.clone())
+            .or_default()
+            .push(hydration_history_row(row));
+    }
+    let mut legacy_by_title = HashMap::<Option<String>, Vec<_>>::new();
+    for row in &legacy_rows {
+        legacy_by_title
+            .entry(row.title_id.clone())
+            .or_default()
+            .push(hydration_history_row(row));
+    }
+    assert_eq!(new_by_title, legacy_by_title);
+    // Within every title: Started, then Completed and TitleUpdated (or Failed).
+    assert_eq!(new_by_title.len(), targets.len());
+
+    // Old: one commit per row (3 per hydrated title, 2 for the failed one).
+    assert_eq!(legacy_commits, HYDRATED as usize * 3 + 2);
+    // New: one per chunk of Started rows, one per hydrated title, one Failed.
+    let chunks = targets
+        .len()
+        .div_ceil(crate::catalog_workflow::HYDRATION_BULK_BATCH_SIZE);
+    assert_eq!(new_commits, chunks + HYDRATED as usize + 1);
+}

@@ -96,8 +96,59 @@ impl LibraryPayload {
     }
 }
 
+impl LibraryPayload {
+    /// Both inherited audio fields read one batched resolution per request.
+    async fn audio_language_defaults(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<scryer_application::LibraryAudioLanguageDefaults> {
+        if let Some(loaders) = loaders_from_ctx(ctx)
+            && let Some(outcome) = loaders
+                .library_audio_language_defaults
+                .load_one(self.id.to_string())
+                .await?
+        {
+            return outcome;
+        }
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.library_audio_language_defaults(&actor, &[self.id.to_string()])
+            .await
+            .map_err(to_gql_error)?
+            .remove(self.id.as_str())
+            .unwrap_or_else(|| {
+                Err(scryer_application::AppError::not_found_reason(
+                    scryer_application::error_reasons::settings::LIBRARY_NOT_FOUND,
+                    format!("library {}", self.id.as_str()),
+                ))
+            })
+            .map_err(to_gql_error)
+    }
+}
+
 #[ComplexObject]
 impl LibraryPayload {
+    /// Required audio languages a new title in this library inherits: the
+    /// library's own, else its facet's. An empty list requires none. The
+    /// `original` token stays unresolved. Readable by anyone who can see the
+    /// library.
+    async fn inherited_required_audio_languages(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<String>> {
+        Ok(self.audio_language_defaults(ctx).await?.required)
+    }
+
+    /// Preferred audio languages, in order, a new title in this library
+    /// inherits: the library's own, else its facet's. The `original` token
+    /// stays unresolved. Readable by anyone who can see the library.
+    async fn inherited_preferred_audio_languages(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<String>> {
+        Ok(self.audio_language_defaults(ctx).await?.preferred)
+    }
+
     /// Initial monitoring choice for new titles, readable by authorized requesters.
     async fn default_monitor_type(&self, ctx: &Context<'_>) -> GqlResult<String> {
         if let Some(loaders) = loaders_from_ctx(ctx)
@@ -154,6 +205,23 @@ impl LibraryPayload {
             .await
             .map_err(to_gql_error)?;
         Ok(from_library_settings(settings))
+    }
+}
+
+impl TitlePayload {
+    /// The title's own preferred audio languages, shared by the three fields
+    /// that read them so one request loads each title once.
+    async fn preferred_audio_override(&self, ctx: &Context<'_>) -> GqlResult<Option<Vec<String>>> {
+        if let Some(loaders) = loaders_from_ctx(ctx) {
+            return loaders
+                .preferred_audio_override
+                .load_one(self.id.to_string())
+                .await;
+        }
+        app_from_ctx(ctx)?
+            .load_title_preferred_audio_override(self.id.as_ref())
+            .await
+            .map_err(to_gql_error)
     }
 }
 
@@ -849,6 +917,42 @@ impl TitlePayload {
                 .is_none())
         })
         .await
+    }
+
+    /// Title-specific preferred audio languages, in order, or null when the library's and then the facet's are inherited.
+    /// The `original` token remains unresolved in this configuration field.
+    async fn preferred_audio_languages_override(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Option<Vec<String>>> {
+        self.preferred_audio_override(ctx).await
+    }
+
+    /// Preferred audio languages, in order, after title, library, and facet inheritance.
+    /// The `original` token remains unresolved in this configuration field.
+    async fn effective_preferred_audio_languages(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<String>> {
+        Box::pin(async move {
+            if let Some(languages) = self.preferred_audio_override(ctx).await? {
+                return Ok(languages);
+            }
+            app_from_ctx(ctx)?
+                .resolve_preferred_audio_languages(
+                    None,
+                    Some(self.library_id.as_ref()),
+                    Some(title_scope_from_facet(self.facet).as_scope_id()),
+                )
+                .await
+                .map_err(to_gql_error)
+        })
+        .await
+    }
+
+    /// Whether the title inherits its library's and then its facet's preferred audio languages.
+    async fn inherits_preferred_audio_languages(&self, ctx: &Context<'_>) -> GqlResult<bool> {
+        Ok(self.preferred_audio_override(ctx).await?.is_none())
     }
 
     /// Collections belonging to this title, or an empty list when none are available.

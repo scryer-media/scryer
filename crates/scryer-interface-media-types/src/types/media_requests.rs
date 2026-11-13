@@ -149,6 +149,13 @@ pub struct MediaRequestPayload {
     pub requested_monitor_type: Option<MonitorTypeValue>,
     /// Seasons and series movies requested under `ADVANCED` monitoring, or null.
     pub requested_monitor_selection: Option<MonitorSelectionPayload>,
+    /// Required audio languages requested for the new title, or null when it
+    /// inherits its library's and facet's. An empty list requires none. The
+    /// `original` token stays unresolved.
+    pub requested_required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages, in order, requested for the new title, or
+    /// null when it inherits. The `original` token stays unresolved.
+    pub requested_preferred_audio_languages: Option<Vec<String>>,
     /// ID of the user who resolved the request, or null while unresolved.
     pub resolved_by_user_id: Option<ID>,
     /// UTC time when the request was resolved, or null while unresolved.
@@ -268,6 +275,14 @@ pub struct SubmitMediaRequestInput {
     /// How long the requester wants the media kept, in days. Omitted means
     /// forever, which is what Scryer granted before leases existed.
     pub requested_lease_days: Option<i32>,
+    /// Required audio languages for the new title. Omitted or null inherits
+    /// the library's and facet's; an empty list requires none. An unknown code
+    /// is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+    pub requested_required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages, in order, for the new title. Omitted, null
+    /// or an empty list inherits. An unknown code is refused with
+    /// `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+    pub requested_preferred_audio_languages: Option<Vec<String>>,
 }
 
 #[derive(InputObject, Clone)]
@@ -292,6 +307,14 @@ pub struct ApproveMediaRequestInput {
     /// supplied list **replaces** the policy's tags outright; omitting it keeps
     /// them.
     pub tags: Option<Vec<String>>,
+    /// Approver override for the new title's required audio languages.
+    /// Omission grants what the requester asked for, null inherits, an empty
+    /// list requires none, and a value replaces the request's.
+    pub required_audio_languages: MaybeUndefined<Vec<String>>,
+    /// Approver override for the new title's preferred audio languages.
+    /// Omission grants what the requester asked for, null or an empty list
+    /// inherits, and a value replaces the request's.
+    pub preferred_audio_languages: MaybeUndefined<Vec<String>>,
 }
 
 #[derive(InputObject, Clone)]
@@ -307,6 +330,12 @@ pub struct UpdateMediaRequestInput {
     pub requested_monitor_selection: Option<MonitorSelectionInput>,
     /// Replacement lease in days. Omission preserves the current lease; null requests forever.
     pub requested_lease_days: MaybeUndefined<i32>,
+    /// Replacement required audio languages. Omission preserves them, null
+    /// inherits, an empty list requires none.
+    pub requested_required_audio_languages: MaybeUndefined<Vec<String>>,
+    /// Replacement preferred audio languages. Omission preserves them, null
+    /// or an empty list inherits.
+    pub requested_preferred_audio_languages: MaybeUndefined<Vec<String>>,
 }
 
 #[derive(SimpleObject, Clone)]

@@ -1,6 +1,6 @@
 use super::*;
 
-fn fixture_title(id: &str, name: &str, year: Option<i32>) -> Title {
+pub(super) fn fixture_title(id: &str, name: &str, year: Option<i32>) -> Title {
     Title {
         id: id.into(),
         library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),

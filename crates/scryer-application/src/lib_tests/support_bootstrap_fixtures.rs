@@ -76,6 +76,38 @@ impl DownloadRegistryRepository for FixtureDownloadRegistry {
     }
 }
 
+pub(crate) struct ImportTrackingSpy {
+    client: Arc<StubDownloadClient>,
+    submissions: Arc<TrackingDownloadSubmissionRepo>,
+}
+
+impl ImportTrackingSpy {
+    pub(crate) async fn assert_untouched(&self) {
+        assert!(self.client.delete_attempts.lock().await.is_empty());
+        assert!(self.client.paused_requests.lock().await.is_empty());
+        assert!(self.client.submitted_title_ids.lock().await.is_empty());
+        assert!(self.submissions.pending_cleanup.lock().await.is_empty());
+    }
+}
+
+pub(crate) fn bootstrap_import_tracking_spy() -> (AppUseCase, User, ImportTrackingSpy) {
+    let client = Arc::new(StubDownloadClient::default());
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (app, actor) = bootstrap_with_cleanup_tracking(
+        client.clone(),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    (
+        app,
+        actor,
+        ImportTrackingSpy {
+            client,
+            submissions,
+        },
+    )
+}
+
 pub(crate) fn bootstrap() -> (AppUseCase, User) {
     bootstrap_with_user_repo(Arc::new(MockUserRepo::default()))
 }
@@ -205,18 +237,25 @@ pub(super) type RecordedGrabs = Arc<std::sync::Mutex<Vec<(String, String)>>>;
 pub(super) fn bootstrap_with_grab_recorder() -> (AppUseCase, User, RecordedGrabs) {
     let tracker = Arc::new(RecordingIndexerStatsTracker::default());
     let grabs = Arc::clone(&tracker.grabs);
-    let (app, user) = bootstrap_with_services(Arc::new(MockUserRepo::default()), Some(tracker));
+    let (app, user, _) = bootstrap_with_services(Arc::new(MockUserRepo::default()), Some(tracker));
     (app, user, grabs)
 }
 
 pub(super) fn bootstrap_with_user_repo(users: Arc<MockUserRepo>) -> (AppUseCase, User) {
-    bootstrap_with_services(users, None)
+    let (app, user, _) = bootstrap_with_services(users, None);
+    (app, user)
+}
+
+/// Same app as [`bootstrap`], with its title repository handed back.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn bootstrap_with_title_repo() -> (AppUseCase, User, Arc<MockTitleRepo>) {
+    bootstrap_with_services(Arc::new(MockUserRepo::default()), None)
 }
 
 fn bootstrap_with_services(
     users: Arc<MockUserRepo>,
     indexer_stats: Option<Arc<RecordingIndexerStatsTracker>>,
-) -> (AppUseCase, User) {
+) -> (AppUseCase, User, Arc<MockTitleRepo>) {
     let titles = Arc::new(MockTitleRepo::default());
     let shows = Arc::new(MockShowRepo {
         titles: Some(titles.clone()),
@@ -283,7 +322,7 @@ fn bootstrap_with_services(
         services.with_download_registry(Arc::new(FixtureDownloadRegistry::default()))
     });
 
-    (app, admin)
+    (app, admin, titles)
 }
 
 pub(super) struct MediaRequestTestHarness {
@@ -309,6 +348,8 @@ pub(super) struct MediaRequestTestHarness {
     /// The list store, so list-originated requests can be followed back to
     /// their subscription.
     pub(super) lists: Arc<crate::lists::test_support::MemoryListStore>,
+    /// The settings store, so a test can make a write fail.
+    pub(super) settings: Arc<StoredSettingsRepo>,
 }
 
 pub(super) fn bootstrap_media_request_app() -> MediaRequestTestHarness {
@@ -367,7 +408,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
         download_client,
         download_client_configs,
         release_attempts.clone(),
-        settings,
+        settings.clone(),
         quality_profiles.clone(),
         String::new(),
     )
@@ -430,6 +471,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
         request_rule_decisions,
         lifecycle_claims,
         lists,
+        settings,
     }
 }
 
@@ -460,6 +502,8 @@ pub(super) fn media_request_input(
         origin: Default::default(),
         list_rank: None,
         admission: Default::default(),
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
     }
 }
 

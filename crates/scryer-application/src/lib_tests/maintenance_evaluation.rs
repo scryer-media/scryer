@@ -2411,6 +2411,8 @@ fn approved_request(title_id: &str, submitter: &str, seconder: &str) -> MediaReq
         origin: Default::default(),
         created_at: now,
         updated_at: now,
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
     }
 }
 

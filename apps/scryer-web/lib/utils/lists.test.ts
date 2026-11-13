@@ -1110,6 +1110,8 @@ test("inputs built from query results carry no __typename at any depth", () => {
         useSeasonFolders: null,
         releaseNumbering: null,
         tags: ["from-list"],
+        requiredAudioLanguages: [],
+        preferredAudioLanguages: ["original", "jpn"],
       },
       {
         __typename: "ListRoutePayload",
@@ -1160,6 +1162,8 @@ test("inputs built from query results carry no __typename at any depth", () => {
       useSeasonFolders: null,
       releaseNumbering: null,
       tags: ["from-list"],
+      requiredAudioLanguages: [],
+      preferredAudioLanguages: ["original", "jpn"],
     },
     {
       kind: "SERIES",
@@ -1171,6 +1175,8 @@ test("inputs built from query results carry no __typename at any depth", () => {
       useSeasonFolders: true,
       releaseNumbering: "AUTO",
       tags: [],
+      requiredAudioLanguages: null,
+      preferredAudioLanguages: null,
     },
   ]);
   assert.deepEqual(update.filters, [

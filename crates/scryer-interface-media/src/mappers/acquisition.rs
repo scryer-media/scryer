@@ -219,6 +219,8 @@ pub fn from_parsed_release(result: ParsedReleaseMetadata) -> ParsedReleasePayloa
         video_encoding: result.video_encoding,
         stereoscopy: result.stereoscopy.map(from_stereoscopy),
         audio: result.audio.map(|codec| codec.to_string()),
+        audio_channels: result.audio_channels,
+        audio_languages: result.languages_audio,
         is_dual_audio: result.is_dual_audio,
         is_atmos: result.is_atmos,
         is_dolby_vision: result.is_dolby_vision,
@@ -330,6 +332,8 @@ pub fn from_download_queue_item(item: DownloadQueueItem) -> DownloadQueueItemPay
             assign_title: actions.assign_title,
             ignore: actions.ignore,
             mark_failed: actions.mark_failed,
+            dismiss_import_warning: actions.dismiss_import_warning,
+            resume_import_tracking: actions.resume_import_tracking,
         },
         seeding_state,
         seed_ratio: seeding.seed_ratio,
@@ -710,5 +714,25 @@ mod stereo_tests {
         assert!(schema.contains("stereoscopy: ParsedStereoscopyPayload\n"));
         assert!(schema.contains("layout: StereoLayoutValue\n"));
         assert!(schema.contains("presentation: StereoPresentationValue!"));
+        assert!(schema.contains("audioChannels: String\n"));
+        assert!(schema.contains("audioLanguages: [String!]!\n"));
+    }
+
+    #[test]
+    fn audio_channels_and_languages_carry_the_parse() {
+        let mut parsed = ParsedReleaseMetadata {
+            audio_channels: Some("5.1".to_string()),
+            languages_audio: vec!["fra".to_string(), "eng".to_string()],
+            ..ParsedReleaseMetadata::default()
+        };
+        let payload = from_parsed_release(parsed.clone());
+        assert_eq!(payload.audio_channels.as_deref(), Some("5.1"));
+        assert_eq!(payload.audio_languages, vec!["fra", "eng"]);
+
+        parsed.audio_channels = None;
+        parsed.languages_audio.clear();
+        let payload = from_parsed_release(parsed);
+        assert_eq!(payload.audio_channels, None);
+        assert!(payload.audio_languages.is_empty());
     }
 }

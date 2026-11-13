@@ -12,4 +12,6 @@ export type TitleOptionUpdates = {
   fillerPolicy?: string | null;
   recapPolicy?: string | null;
   releaseNumbering?: string | null;
+  /** The title's own preferred audio ladder; null or an empty list inherits. */
+  preferredAudioLanguages?: string[] | null;
 };

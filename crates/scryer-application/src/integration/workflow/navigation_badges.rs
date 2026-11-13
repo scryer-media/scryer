@@ -29,41 +29,20 @@ impl AppUseCase {
     /// the rest, because a badge that is partly stale beats a badge that is
     /// blank.
     pub async fn refresh_navigation_badge_durable_facts(&self) {
+        let generation = self
+            .runtime
+            .integrations
+            .navigation_badge_facts
+            .library_sections_generation
+            .load(std::sync::atomic::Ordering::SeqCst);
         let previous = self.published_navigation_badge_facts().await;
         let mut durable = previous
             .as_ref()
             .map(|facts| (*facts.durable).clone())
             .unwrap_or_default();
 
-        match self.permission_candidate_library_ids(None).await {
-            Ok(library_ids) => {
-                self.clear_navigation_badge_section_failure(NavigationBadgeSection::Libraries)
-                    .await;
-                durable.candidate_library_ids = library_ids;
-            }
-            Err(error) => {
-                self.report_navigation_badge_section_failure(
-                    NavigationBadgeSection::Libraries,
-                    &error,
-                )
-                .await;
-            }
-        }
-
-        match self.pending_import_counts_by_library().await {
-            Ok(counts) => {
-                self.clear_navigation_badge_section_failure(NavigationBadgeSection::PendingImports)
-                    .await;
-                durable.pending_imports = counts;
-            }
-            Err(error) => {
-                self.report_navigation_badge_section_failure(
-                    NavigationBadgeSection::PendingImports,
-                    &error,
-                )
-                .await;
-            }
-        }
+        self.recount_navigation_badge_library_sections(&mut durable)
+            .await;
 
         match self
             .pending_media_request_counts_by_library(&durable.candidate_library_ids)
@@ -105,13 +84,16 @@ impl AppUseCase {
             }
         }
 
-        let mut published = self
-            .runtime
-            .integrations
-            .navigation_badge_facts
-            .current
-            .write()
-            .await;
+        let cache = &self.runtime.integrations.navigation_badge_facts;
+        let mut published = cache.current.write().await;
+        // A library or root change recounted the library sections after this
+        // pass read them; its numbers are the newer ones.
+        if cache.library_sections_generation.load(std::sync::atomic::Ordering::SeqCst) != generation
+            && let Some(current) = published.as_ref()
+        {
+            durable.candidate_library_ids = current.durable.candidate_library_ids.clone();
+            durable.pending_imports = current.durable.pending_imports.clone();
+        }
         let import_attention = published
             .as_ref()
             .map(|facts| facts.import_attention.clone())
@@ -120,6 +102,81 @@ impl AppUseCase {
             durable: std::sync::Arc::new(durable),
             import_attention,
         }));
+    }
+
+    /// Recount the badge sections a library or root change moves — which
+    /// libraries exist and their pending imports — and publish them at once,
+    /// so the next poll after the change answers with the rows the import page
+    /// lists instead of waiting out the refresh interval.
+    ///
+    /// Nothing is counted while no facts are published: the first request
+    /// counts everything itself.
+    pub(crate) async fn refresh_navigation_badge_library_facts(&self) {
+        let cache = &self.runtime.integrations.navigation_badge_facts;
+        let generation = cache
+            .library_sections_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let Some(previous) = self.published_navigation_badge_facts().await else {
+            return;
+        };
+        let mut durable = (*previous.durable).clone();
+        self.recount_navigation_badge_library_sections(&mut durable)
+            .await;
+
+        let mut published = cache.current.write().await;
+        // A later change counted after this one and publishes its own numbers.
+        if cache.library_sections_generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
+            return;
+        }
+        let Some(current) = published.as_ref() else {
+            return;
+        };
+        let mut next = (*current.durable).clone();
+        next.candidate_library_ids = durable.candidate_library_ids;
+        next.pending_imports = durable.pending_imports;
+        let import_attention = current.import_attention.clone();
+        published.replace(std::sync::Arc::new(crate::services::NavigationBadgeFacts {
+            durable: std::sync::Arc::new(next),
+            import_attention,
+        }));
+    }
+
+    /// Recount the library list and the pending imports per library into
+    /// `durable`. A section whose read fails keeps the value it had.
+    async fn recount_navigation_badge_library_sections(
+        &self,
+        durable: &mut crate::services::NavigationBadgeDurableFacts,
+    ) {
+        match self.permission_candidate_library_ids(None).await {
+            Ok(library_ids) => {
+                self.clear_navigation_badge_section_failure(NavigationBadgeSection::Libraries)
+                    .await;
+                durable.candidate_library_ids = library_ids;
+            }
+            Err(error) => {
+                self.report_navigation_badge_section_failure(
+                    NavigationBadgeSection::Libraries,
+                    &error,
+                )
+                .await;
+            }
+        }
+
+        match self.pending_import_counts_by_library().await {
+            Ok(counts) => {
+                self.clear_navigation_badge_section_failure(NavigationBadgeSection::PendingImports)
+                    .await;
+                durable.pending_imports = counts;
+            }
+            Err(error) => {
+                self.report_navigation_badge_section_failure(
+                    NavigationBadgeSection::PendingImports,
+                    &error,
+                )
+                .await;
+            }
+        }
     }
 
     /// Recount the import attention list from the queue read model.

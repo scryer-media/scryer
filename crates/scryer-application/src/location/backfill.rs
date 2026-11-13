@@ -488,6 +488,7 @@ impl AppUseCase {
                     break 'sweep;
                 }
 
+                let mut skipped = false;
                 match self
                     .backfill_one_media_file(
                         &candidate,
@@ -503,7 +504,10 @@ impl AppUseCase {
                         summary.bytes_hashed = summary.bytes_hashed.saturating_add(bytes);
                     }
                     Ok(None) => {}
-                    Err(BackfillOutcome::Skipped(skip)) => summary.record_skip(skip),
+                    Err(BackfillOutcome::Skipped(skip)) => {
+                        skipped = true;
+                        summary.record_skip(skip);
+                    }
                     Err(BackfillOutcome::Failed(reason)) => {
                         if cancellation.is_cancelled() {
                             summary.cancelled = true;
@@ -519,10 +523,15 @@ impl AppUseCase {
                     }
                 }
                 // Never advance past an interrupted file. Persist completed
-                // progress before yielding or starting another disk read.
+                // progress before yielding or starting another disk read. A
+                // skip read no content, so it advances the cursor in memory
+                // only: the next read file's write, or the run's last write,
+                // carries it, and an interrupted run looks at those skips again.
                 cursor = Some(candidate.id.clone());
                 summary.examined += 1;
-                self.write_full_hash_backfill_cursor(cursor.clone()).await;
+                if !skipped {
+                    self.write_full_hash_backfill_cursor(cursor.clone()).await;
+                }
 
                 // Between every two files, unconditionally. Real work gets a
                 // scheduling point even when this run is hashing nothing but

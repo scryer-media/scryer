@@ -155,6 +155,9 @@
   --scry-info-solid-hover: #0369a1;
   --scry-info-on-solid: #f0f9ff;
   --scry-bg: #ffffff;
+  --scry-hover-card-shadow:
+    0 1px 2px rgb(15 23 42 / 0.1), 0 10px 20px -6px rgb(15 23 42 / 0.18),
+    0 28px 56px -12px rgb(15 23 42 / 0.28);
   --scry-card2: #f4f6fb;
   --scry-rowHover: #eef1f8;
   --scry-hover: #eef1f8;
@@ -324,6 +327,9 @@
   --scry-info-solid-hover: #0284c7;
   --scry-info-on-solid: #082f49;
   --scry-bg: #070d1c;
+  --scry-hover-card-shadow:
+    0 2px 4px rgb(0 0 0 / 0.55), 0 12px 24px -6px rgb(0 0 0 / 0.7),
+    0 32px 64px -12px rgb(0 0 0 / 0.85);
   --scry-card2: #0a1120;
   --scry-rowHover: #0c1526;
   --scry-hover: #101a30;
@@ -597,7 +603,9 @@ body {
     border-radius 180ms ease;
 }
 
-.dark [data-slot="card"][data-ui="series-episodes"] > [data-slot="card-header"] {
+.dark
+  [data-slot="card"][data-ui="series-episodes"]
+  > [data-slot="card-header"] {
   padding-bottom: 0.9rem;
   margin-bottom: 0.9rem;
 }
@@ -640,8 +648,11 @@ body {
 [data-slot="card"][data-ui="series-episodes"]
   > [data-slot="card-header"][data-docked] {
   border-radius: 0;
-  background-color: color-mix(in srgb, var(--card) 94%, transparent);
-  backdrop-filter: blur(16px) saturate(130%);
+  border-bottom-color: var(--scry-border);
+  /* Follow the active palette's card surface so the bar reads as part of
+     the panel rather than a separate slab. */
+  background-color: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
   box-shadow:
     0 1px 0 var(--scry-border),
     0 14px 28px -18px rgba(2, 6, 23, 0.45);
@@ -650,8 +661,48 @@ body {
 .dark
   [data-slot="card"][data-ui="series-episodes"]
   > [data-slot="card-header"][data-docked] {
-  background-color: rgba(10, 15, 29, 0.94);
-  box-shadow: 0 16px 32px -18px rgba(2, 6, 23, 0.85);
+  box-shadow:
+    0 1px 0 var(--scry-border),
+    0 18px 32px -20px rgba(0, 0, 0, 0.7);
+}
+
+/* Inside the title panel the docked bar spans the whole panel, not just the
+   episodes card: it bleeds past the card padding, the card border and the
+   panel padding, and pads back by the same amount so its content stays
+   aligned with the rows. The card stops clipping while docked so the bar can
+   reach the panel edges. */
+[data-slot="title-context-scroll"]
+  [data-slot="card"][data-ui="series-episodes"]:not(.bg-transparent):has(
+    > [data-slot="card-header"][data-docked]
+  ) {
+  overflow: visible;
+}
+
+[data-slot="title-context-scroll"]
+  [data-slot="card"][data-ui="series-episodes"]
+  > [data-slot="card-header"][data-docked] {
+  --episodes-dock-bleed: calc(1rem + 1px + 1.25rem);
+  margin-inline: calc(-1 * var(--episodes-dock-bleed));
+  padding-inline: var(--episodes-dock-bleed);
+}
+
+@media (max-width: 639px) {
+  [data-slot="title-context-scroll"]
+    [data-slot="card"][data-ui="series-episodes"]
+    > [data-slot="card-header"][data-docked] {
+    --episodes-dock-bleed: calc(0.5rem + 1px + 1rem);
+    padding-inline: calc(var(--episodes-dock-bleed) + 0.25rem);
+  }
+}
+
+/* Where the panel itself scrolls, sit flush with its top edge instead of
+   below its padding, so no rows show above the bar. */
+@media (min-width: 1280px) {
+  [data-slot="title-context-scroll"]
+    [data-slot="card"][data-ui="series-episodes"]
+    > [data-slot="card-header"][data-sticky] {
+    top: -1.25rem;
+  }
 }
 
 .dark [data-slot="sidebar-inner"] {
@@ -1542,7 +1593,7 @@ body {
   background-image: linear-gradient(var(--popover), var(--popover));
   border-color: var(--border-color);
   border-radius: 0.75rem;
-  box-shadow: 0 24px 64px rgb(0 0 0 / 0.55);
+  box-shadow: var(--scry-hover-card-shadow);
   color: var(--popover-foreground);
   overflow: hidden;
 }
@@ -1553,7 +1604,7 @@ body {
   border: 1px solid
     color-mix(in srgb, var(--border-color) 88%, var(--primary) 12%);
   border-radius: 0.875rem;
-  box-shadow: 0 28px 72px rgb(0 0 0 / 0.58);
+  box-shadow: var(--scry-hover-card-shadow);
   color: var(--popover-foreground);
   max-height: calc(100vh - 1.5rem);
   overflow: hidden;
@@ -1757,4 +1808,16 @@ body {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+
+/* A row dragged by a PointerReorderHandle grabs anywhere but its controls. */
+[data-reorder-grab] {
+  cursor: grab;
+}
+[data-reorder-grab]
+  :is(button, a, input, select, textarea, label, [role="button"]) {
+  cursor: pointer;
+}
+[data-reorder-grab] :is(button, input, select, textarea):disabled {
+  cursor: not-allowed;
 }

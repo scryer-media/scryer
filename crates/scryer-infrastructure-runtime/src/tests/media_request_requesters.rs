@@ -106,6 +106,8 @@ pub(super) fn new_request(id: &str, library_id: &str, submitter: &str) -> NewMed
         requested_quality_profile_name: None,
         requested_monitor_type: None,
         requested_lease_days: None,
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
         metadata_snapshot_json: "{}".to_string(),
         external_ids: Vec::new(),
         created_by_user_id: submitter.to_string(),

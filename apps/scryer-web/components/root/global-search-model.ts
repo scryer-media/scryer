@@ -10,6 +10,11 @@ import {
 import type { MetadataTvdbSearchItem } from "../../lib/graphql/smg-queries.ts";
 import type { MetadataSearchResults } from "../../lib/hooks/use-global-search.ts";
 import { tmdbKindNamesSeries } from "../../lib/utils/metadata-result-external-ids.ts";
+import {
+  hasLibraryPermission,
+  LIBRARY_PERMISSIONS,
+  type PermissionUser,
+} from "../../lib/utils/permissions.ts";
 import type {
   Facet,
   LibraryRecord,
@@ -172,6 +177,87 @@ export function buildMetadataSearchActionState({
     actionTitle: `${actionLabel}: ${resultName}`,
     inlineActionLabel,
   };
+}
+
+/**
+ * Where a metadata result can still be requested, for a viewer who cannot
+ * browse the catalog. `presentInLibraryIds` lists the viewer's libraries of
+ * the result's facet that already hold it; a request into one of those would
+ * be refused, so the dialog offers only the rest. Once every library the
+ * viewer could request into holds it, the result is in the library. A result
+ * that carries no presence (a catalog viewer's search does not select it) is
+ * requestable everywhere, as before.
+ */
+export type MetadataResultRequestPresentation = {
+  heldInEveryRequestableLibrary: boolean;
+  requestableLibraries: LibraryRecord[];
+};
+
+export function buildMetadataResultRequestPresentation(
+  result: Pick<MetadataTvdbSearchItem, "presentInLibraryIds">,
+  requestableLibraries: LibraryRecord[],
+): MetadataResultRequestPresentation {
+  const held = new Set(result.presentInLibraryIds ?? []);
+  if (held.size === 0) {
+    return {
+      heldInEveryRequestableLibrary: false,
+      requestableLibraries,
+    };
+  }
+  const remaining = requestableLibraries.filter(
+    (library) => !held.has(library.id),
+  );
+  return {
+    heldInEveryRequestableLibrary:
+      requestableLibraries.length > 0 && remaining.length === 0,
+    requestableLibraries: remaining,
+  };
+}
+
+/**
+ * Which metadata search document a viewer runs. The catalog merge only sees
+ * libraries the viewer can View, so a viewer with at least one library they
+ * can request into but not View needs the server's per-library presence
+ * (`requester`). A viewer who can View every library they request into keeps
+ * the catalog document and asks for no presence.
+ */
+export type MetadataSearchQueryVariant = "catalog" | "requester";
+
+export function selectMetadataSearchQueryVariant(
+  user: PermissionUser | null | undefined,
+): MetadataSearchQueryVariant {
+  const requestsWithoutView =
+    user?.libraryPermissions.some(
+      (grant) =>
+        hasLibraryPermission(
+          user,
+          grant.libraryId,
+          LIBRARY_PERMISSIONS.request,
+        ) &&
+        !hasLibraryPermission(user, grant.libraryId, LIBRARY_PERMISSIONS.view),
+    ) === true;
+  return requestsWithoutView ? "requester" : "catalog";
+}
+
+/**
+ * A metadata result is in the library when the catalog merge found it in a
+ * library the viewer can View, or when every library the viewer could request
+ * it into already holds it.
+ */
+export function isMetadataResultInLibrary({
+  inCatalogMerge,
+  result,
+  requestableLibraries,
+}: {
+  inCatalogMerge: boolean;
+  result: Pick<MetadataTvdbSearchItem, "presentInLibraryIds">;
+  requestableLibraries: LibraryRecord[];
+}): boolean {
+  return (
+    inCatalogMerge ||
+    buildMetadataResultRequestPresentation(result, requestableLibraries)
+      .heldInEveryRequestableLibrary
+  );
 }
 
 export function buildCatalogSearchSections(

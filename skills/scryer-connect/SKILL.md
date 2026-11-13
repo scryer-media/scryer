@@ -120,8 +120,8 @@ HTTP 401 or 403. Use an API key in every mode.
   environment variables or in mode-600 files that `jq` reads.
 - **Confirm before changes.** Before any mutation that changes the server,
   show the operator a short summary of what will change (counts, names) and
-  wait for a clear yes. Read-only queries, validation and previews run without
-  asking.
+  wait for a clear yes. Read-only queries, validation and previews change
+  nothing on the server, so they run directly.
 - **No deletion.** These skills never delete operator files, media or Scryer
   data. If a cleanup seems needed, describe it and leave it to the operator.
 - **One metadata gateway.** Scryer uses a single central metadata service.

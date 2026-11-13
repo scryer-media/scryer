@@ -20,7 +20,7 @@ pub(super) type PausedDownloadRequests = Arc<Mutex<Vec<PausedDownloadRequest>>>;
 
 #[derive(Default)]
 pub(crate) struct MockTitleRepo {
-    pub(super) store: Arc<Mutex<Vec<Title>>>,
+    pub(crate) store: Arc<Mutex<Vec<Title>>>,
     pub(super) fail_monitoring_for: Mutex<HashSet<String>>,
     /// The title tag registry, in definition order. Mirrors the store's
     /// behaviour rather than its SQL: unique labels, a rename that rewrites
@@ -28,7 +28,16 @@ pub(crate) struct MockTitleRepo {
     pub(super) title_tag_definitions: Arc<Mutex<Vec<scryer_domain::TitleTagDefinition>>>,
     pub(super) fail_tag_reads: AtomicBool,
     pub(crate) fail_get_by_id: AtomicBool,
+    /// `(title_id, id_list_reads_allowed)`: once that many id-list reads
+    /// naming the title have succeeded, every read of it fails, whether by
+    /// id list or on its own. Lets a fault start at a later read of a job.
+    pub(super) fail_reads_of_title_after: Mutex<Option<(String, usize)>>,
     pub(super) lose_folder_claim: AtomicBool,
+    /// Keep the store's folder-write counter: every folder write, title
+    /// created with a folder and title delete advances it. Off by default,
+    /// so a repository without a counter is the default.
+    pub(crate) counts_folder_writes: AtomicBool,
+    pub(crate) folder_writes: std::sync::atomic::AtomicU64,
     /// Make every pre-flight folder check refuse, as if another title owned
     /// the folder, while the write path itself is left alone.
     pub(super) refuse_folder_checks: AtomicBool,
@@ -41,8 +50,16 @@ pub(crate) struct MockTitleRepo {
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
     /// Explicit per-title arrival signal, recorded before any injected delete barrier.
     pub(super) delete_started: Mutex<HashSet<String>>,
+    /// `(deletes_allowed, reached)`: once that many title rows are deleted,
+    /// the next delete signals `reached` and never finishes, as a process
+    /// stopped at that point would.
+    pub(super) halt_deletes_after: Mutex<Option<(usize, Arc<tokio::sync::Notify>)>>,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
+    /// Batched library-presence reads, and the library ids each one asked
+    /// about, so a test can prove one read per search and the libraries it
+    /// was scoped to.
+    pub(super) external_id_presence_reads: std::sync::Mutex<Vec<Vec<String>>>,
     /// How many times a caller asked for the whole catalog to match against.
     /// Scheduled pollers must not pay for this before they know they have
     /// somewhere to send a result.
@@ -65,6 +82,12 @@ pub(crate) struct MockTitleRepo {
     /// are checked against the configured roots the way the real store
     /// checks them.
     pub(super) library_store: std::sync::OnceLock<Arc<Mutex<Vec<Library>>>>,
+    /// Deleted titles awaiting recycle cleanup, as the store's
+    /// `title_recycle_purges` table holds them.
+    pub(super) recycle_purges: Arc<Mutex<Vec<crate::TitleRecyclePurge>>>,
+    /// Reads and writes of the recycle cleanup records.
+    pub(super) recycle_purge_reads: AtomicUsize,
+    pub(super) recycle_purge_writes: AtomicUsize,
 }
 #[derive(Default)]
 pub(crate) struct RecordingJobRunRepo {
@@ -285,6 +308,54 @@ pub(super) fn sorted_limited_job_runs(
 }
 
 impl MockTitleRepo {
+    /// Advance the folder-write counter after a write, when it is kept.
+    fn advance_folder_writes(&self) -> Option<u64> {
+        self.counts_folder_writes
+            .load(Ordering::SeqCst)
+            .then(|| self.folder_writes.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    /// [`TitleRepository::assign_title_folders`] without the counter advance.
+    async fn assign_title_folders_unadvanced(
+        &self,
+        writes: &[crate::TitleFolderWrite],
+    ) -> AppResult<()> {
+        for write in writes {
+            if let Some(error) = self.folder_path_write_failure(&write.title_id).await {
+                return Err(error);
+            }
+            if self.lose_folder_claim.load(Ordering::SeqCst)
+                && matches!(
+                    write.expected_current,
+                    crate::ExpectedTitleFolder::Exactly(_)
+                )
+            {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::folder_ownership::TITLE_FOLDER_CHANGED,
+                    "title folder changed before this write",
+                ));
+            }
+        }
+        let mut list = self.store.lock().await;
+        let planned = self.plan_folder_writes(&list, writes, None, false).await?;
+        for write in planned {
+            if let Some(title) = list.iter_mut().find(|entry| entry.id == write.title_id) {
+                title.folder_path = write.folder_path;
+            }
+        }
+        Ok(())
+    }
+
+    fn advance_folder_writes_for_created(&self, title: &Title) {
+        if title
+            .folder_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
+        {
+            self.advance_folder_writes();
+        }
+    }
+
     /// Check this repository's folder writes against `libraries`' roots.
     pub(super) fn share_library_roots(&self, libraries: MockLibraryRepo) -> Arc<MockLibraryRepo> {
         let _ = self.library_store.set(libraries.libraries.clone());
@@ -399,7 +470,7 @@ impl MockTitleRepo {
     }
 
     /// Make every `set_folder_path`/`clear_folder_path` for `title_id` fail.
-    pub(super) async fn fail_folder_path_writes_for(&self, title_id: &str, message: &str) {
+    pub(crate) async fn fail_folder_path_writes_for(&self, title_id: &str, message: &str) {
         *self.folder_path_write_error.lock().await =
             Some((title_id.to_string(), message.to_string()));
     }
@@ -779,6 +850,38 @@ impl TitleRepository for MockTitleRepo {
         Ok(existing)
     }
 
+    async fn list_existing_external_ids_in_libraries(
+        &self,
+        library_ids: &[String],
+        lookups: &[crate::TitleExternalIdPresenceLookup],
+    ) -> AppResult<HashSet<crate::TitleExternalIdPresence>> {
+        self.external_id_presence_reads
+            .lock()
+            .expect("presence read log")
+            .push(library_ids.to_vec());
+        let list = self.store.lock().await;
+        let mut present = HashSet::new();
+        for title in list
+            .iter()
+            .filter(|title| library_ids.contains(&title.library_id))
+        {
+            for lookup in lookups.iter().filter(|lookup| lookup.facet == title.facet) {
+                if title.external_ids.iter().any(|external_id| {
+                    external_id
+                        .source
+                        .eq_ignore_ascii_case(lookup.source.trim())
+                        && external_id.value.trim() == lookup.value.trim()
+                }) {
+                    present.insert(crate::TitleExternalIdPresence {
+                        library_id: title.library_id.clone(),
+                        lookup: lookup.clone(),
+                    });
+                }
+            }
+        }
+        Ok(present)
+    }
+
     async fn map_existing_external_ids_to_title_ids_in_library_and_facet(
         &self,
         library_id: &str,
@@ -963,6 +1066,14 @@ impl TitleRepository for MockTitleRepo {
 
     async fn get_by_ids(&self, ids: &[String]) -> AppResult<Vec<Title>> {
         self.matching_reads.fetch_add(1, Ordering::SeqCst);
+        if let Some((title_id, allowed)) = self.fail_reads_of_title_after.lock().await.as_mut()
+            && ids.contains(title_id)
+        {
+            if *allowed == 0 {
+                return Err(AppError::Repository("synthetic title read failure".into()));
+            }
+            *allowed -= 1;
+        }
         let list = self.store.lock().await;
         Ok(ids
             .iter()
@@ -971,7 +1082,12 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<Title>> {
-        if self.fail_get_by_id.load(Ordering::SeqCst) {
+        if self.fail_get_by_id.load(Ordering::SeqCst)
+            || matches!(
+                self.fail_reads_of_title_after.lock().await.as_ref(),
+                Some((title_id, 0)) if title_id == id
+            )
+        {
             return Err(AppError::Repository("synthetic title read failure".into()));
         }
         let list = self.store.lock().await;
@@ -1081,6 +1197,8 @@ impl TitleRepository for MockTitleRepo {
 
         self.check_created_title_folder(&list, &title).await?;
         list.push(title.clone());
+        drop(list);
+        self.advance_folder_writes_for_created(&title);
         Ok(CreateTitleOutcome {
             title,
             reused_existing: false,
@@ -1194,6 +1312,9 @@ impl TitleRepository for MockTitleRepo {
         }
 
         list.push(title.clone());
+        drop(pending_items);
+        drop(list);
+        self.advance_folder_writes_for_created(&title);
         Ok(CreateTitleOutcome {
             title,
             reused_existing: false,
@@ -1204,6 +1325,8 @@ impl TitleRepository for MockTitleRepo {
         let mut list = self.store.lock().await;
         self.check_created_title_folder(&list, &title).await?;
         list.push(title.clone());
+        drop(list);
+        self.advance_folder_writes_for_created(&title);
         Ok(title)
     }
 
@@ -1489,6 +1612,21 @@ impl TitleRepository for MockTitleRepo {
 
     async fn delete(&self, id: &str) -> AppResult<()> {
         self.delete_started.lock().await.insert(id.to_owned());
+        let halt = {
+            let mut halt = self.halt_deletes_after.lock().await;
+            match halt.as_mut() {
+                Some((0, reached)) => Some(reached.clone()),
+                Some((allowed, _)) => {
+                    *allowed -= 1;
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some(reached) = halt {
+            reached.notify_one();
+            std::future::pending::<()>().await;
+        }
         if let Some(operation_log) = self.delete_operation_log.lock().await.clone() {
             operation_log
                 .lock()
@@ -1501,35 +1639,103 @@ impl TitleRepository for MockTitleRepo {
             .position(|entry| entry.id == id)
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
         list.remove(position);
+        drop(list);
+        self.advance_folder_writes();
         Ok(())
+    }
+
+    /// The row delete and the record land together, as in the store's single
+    /// transaction: a delete that never finishes records nothing.
+    async fn delete_recording_recycle_purge(
+        &self,
+        id: &str,
+        recorded_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let library_id = self
+            .store
+            .lock()
+            .await
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.library_id.clone());
+        self.delete(id).await?;
+        if let Some(library_id) = library_id {
+            let mut purges = self.recycle_purges.lock().await;
+            if !purges.iter().any(|purge| purge.title_id == id) {
+                purges.push(crate::TitleRecyclePurge {
+                    title_id: id.to_owned(),
+                    library_id,
+                    recorded_at,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    async fn list_recycle_purges(&self, limit: usize) -> AppResult<Vec<crate::TitleRecyclePurge>> {
+        self.recycle_purge_reads.fetch_add(1, Ordering::SeqCst);
+        let mut purges = self.recycle_purges.lock().await.clone();
+        purges.sort_by(|a, b| (a.recorded_at, &a.title_id).cmp(&(b.recorded_at, &b.title_id)));
+        purges.truncate(limit);
+        Ok(purges)
+    }
+
+    /// The store's probe read, then a write only when a record is that old.
+    async fn drop_recycle_purges_recorded_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> AppResult<u32> {
+        self.recycle_purge_reads.fetch_add(1, Ordering::SeqCst);
+        let mut purges = self.recycle_purges.lock().await;
+        let mut expired = purges
+            .iter()
+            .filter(|purge| purge.recorded_at < cutoff)
+            .map(|purge| (purge.recorded_at, purge.title_id.clone()))
+            .collect::<Vec<_>>();
+        if expired.is_empty() {
+            return Ok(0);
+        }
+        self.recycle_purge_writes.fetch_add(1, Ordering::SeqCst);
+        expired.sort();
+        expired.truncate(limit);
+        purges.retain(|purge| {
+            !expired
+                .iter()
+                .any(|(_, title_id)| *title_id == purge.title_id)
+        });
+        Ok(expired.len() as u32)
+    }
+
+    async fn clear_recycle_purges(&self, title_ids: &[String]) -> AppResult<()> {
+        self.recycle_purge_writes.fetch_add(1, Ordering::SeqCst);
+        self.recycle_purges
+            .lock()
+            .await
+            .retain(|purge| !title_ids.contains(&purge.title_id));
+        Ok(())
+    }
+
+    async fn assign_title_folders_with_generation(
+        &self,
+        writes: &[crate::TitleFolderWrite],
+    ) -> (AppResult<()>, Option<u64>) {
+        if writes.is_empty() {
+            return (Ok(()), None);
+        }
+        let result = self.assign_title_folders_unadvanced(writes).await;
+        (result, self.advance_folder_writes())
+    }
+
+    fn title_folder_write_generation(&self) -> Option<u64> {
+        self.counts_folder_writes
+            .load(Ordering::SeqCst)
+            .then(|| self.folder_writes.load(Ordering::SeqCst))
     }
 
     /// The production write path, with the store's checks run in memory.
     async fn assign_title_folders(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
-        for write in writes {
-            if let Some(error) = self.folder_path_write_failure(&write.title_id).await {
-                return Err(error);
-            }
-            if self.lose_folder_claim.load(Ordering::SeqCst)
-                && matches!(
-                    write.expected_current,
-                    crate::ExpectedTitleFolder::Exactly(_)
-                )
-            {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::folder_ownership::TITLE_FOLDER_CHANGED,
-                    "title folder changed before this write",
-                ));
-            }
-        }
-        let mut list = self.store.lock().await;
-        let planned = self.plan_folder_writes(&list, writes, None, false).await?;
-        for write in planned {
-            if let Some(title) = list.iter_mut().find(|entry| entry.id == write.title_id) {
-                title.folder_path = write.folder_path;
-            }
-        }
-        Ok(())
+        self.assign_title_folders_with_generation(writes).await.0
     }
 
     async fn check_title_folder_writes(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
@@ -1557,6 +1763,8 @@ impl TitleRepository for MockTitleRepo {
             .find(|entry| entry.id == id)
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
         title.folder_path = Some(folder_path.to_string());
+        drop(list);
+        self.advance_folder_writes();
         Ok(())
     }
 
@@ -1570,6 +1778,8 @@ impl TitleRepository for MockTitleRepo {
             .find(|entry| entry.id == id)
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
         title.folder_path = None;
+        drop(list);
+        self.advance_folder_writes();
         Ok(())
     }
 

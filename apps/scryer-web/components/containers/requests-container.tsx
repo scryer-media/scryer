@@ -72,6 +72,10 @@ type ApproveRequestValues = {
   leaseDays?: number;
   leaseForever?: boolean;
   tags?: string[];
+  audioLanguages?: {
+    requiredAudioLanguages?: string[] | null;
+    preferredAudioLanguages?: string[] | null;
+  };
 };
 
 /// A manager-queue row may stand for several overlapping requests of one
@@ -624,6 +628,9 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
               leaseDays: values.leaseDays ?? null,
               leaseForever: values.leaseForever ?? null,
               tags: values.tags ?? null,
+              /// Spread, not defaulted: an omitted field grants what the
+              /// requester asked, and `null` inherits the library's.
+              ...values.audioLanguages,
             },
           })
           .toPromise();

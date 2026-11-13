@@ -56,6 +56,10 @@ export type Release = {
     videoCodec?: string | null;
     videoEncoding?: string | null;
     audio?: string | null;
+    /** Selected only by the Indexers › Search documents. */
+    audioChannels?: string | null;
+    /** ISO 639-2 audio languages named in the title; Indexers › Search only. */
+    audioLanguages?: string[];
     isDualAudio: boolean;
     isAtmos: boolean;
     isDolbyVision: boolean;

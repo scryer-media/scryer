@@ -123,6 +123,32 @@ struct BoundaryStamp {
     directory: bool,
 }
 
+/// Filesystem round trips made by boundary inspection, counted per folder in
+/// tests so a change that adds probes to the walk fails there.
+#[derive(Clone, Copy, Debug)]
+enum BoundaryProbe {
+    Lstat,
+    Open,
+    ReadDir,
+    Canonicalize,
+}
+
+#[cfg(test)]
+static BOUNDARY_PROBES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, [u32; 4]>>,
+> = std::sync::LazyLock::new(Default::default);
+
+#[cfg_attr(not(test), inline(always))]
+fn note_boundary_probe(folder: &Path, probe: BoundaryProbe) {
+    #[cfg(test)]
+    {
+        let mut probes = BOUNDARY_PROBES.lock().unwrap();
+        probes.entry(folder.to_path_buf()).or_default()[probe as usize] += 1;
+    }
+    #[cfg(not(test))]
+    let _ = (folder, probe);
+}
+
 // Size, birth time and mtime alone cannot detect sidecar rewrites that preserve
 // timestamps. Keep full inspection on platforms without a change-time stamp.
 #[cfg(not(unix))]
@@ -132,38 +158,198 @@ async fn boundary_stamps(_path: &Path, _episodic: bool) -> Option<Vec<Option<Bou
 
 #[cfg(unix)]
 async fn boundary_stamps(path: &Path, episodic: bool) -> Option<Vec<Option<BoundaryStamp>>> {
-    let names: &[&str] = if episodic {
-        &["", "tvshow.nfo", ".plexmatch"]
-    } else {
-        &["", "movie.nfo"]
-    };
-    let mut stamps = Vec::with_capacity(names.len());
-    for name in names {
-        let target = if name.is_empty() {
-            path.to_path_buf()
-        } else {
-            path.join(name)
-        };
-        match tokio::fs::symlink_metadata(target).await {
-            Ok(meta) if !meta.file_type().is_symlink() => stamps.push(Some(BoundaryStamp {
-                modified: meta.modified().ok()?,
-                created: meta.created().ok(),
-                #[cfg(unix)]
-                identity: {
-                    use std::os::unix::fs::MetadataExt;
-                    (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
-                },
-                len: meta.len(),
-                directory: meta.is_dir(),
-            })),
-            Err(error) if !name.is_empty() && error.kind() == std::io::ErrorKind::NotFound => {
-                stamps.push(None)
-            }
-            _ => return None,
-        }
+    // Re-verification has no listing of its own, so it probes every sidecar
+    // name: a sidecar created within the directory's timestamp granularity
+    // leaves the directory stamp unchanged.
+    let mut stamps = vec![lstat_boundary_stamp(path, path, false).await.ok()?];
+    for name in boundary_sidecar_names(episodic) {
+        stamps.push(
+            lstat_boundary_stamp(path, &path.join(name), true)
+                .await
+                .ok()?,
+        );
     }
     stamps.first()?.as_ref().filter(|stamp| stamp.directory)?;
     Some(stamps)
+}
+
+fn boundary_sidecar_names(episodic: bool) -> &'static [&'static str] {
+    if episodic {
+        &["tvshow.nfo", ".plexmatch"]
+    } else {
+        &["movie.nfo"]
+    }
+}
+
+#[cfg(unix)]
+fn boundary_stamp(meta: &std::fs::Metadata) -> Option<BoundaryStamp> {
+    use std::os::unix::fs::MetadataExt;
+    Some(BoundaryStamp {
+        modified: meta.modified().ok()?,
+        created: meta.created().ok(),
+        identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+        len: meta.len(),
+        directory: meta.is_dir(),
+    })
+}
+
+/// `Err` when `target` cannot be stamped: a link, a missing directory, or any
+/// failure other than a missing sidecar.
+#[cfg(unix)]
+async fn lstat_boundary_stamp(
+    folder: &Path,
+    target: &Path,
+    sidecar: bool,
+) -> Result<Option<BoundaryStamp>, ()> {
+    note_boundary_probe(folder, BoundaryProbe::Lstat);
+    match tokio::fs::symlink_metadata(target).await {
+        Ok(meta) if !meta.file_type().is_symlink() => boundary_stamp(&meta).map(Some).ok_or(()),
+        Err(error) if sidecar && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        _ => Err(()),
+    }
+}
+
+/// What a frame's own directory listing shows for one sidecar name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ListedSidecar {
+    Absent,
+    File,
+    /// Listed under its exact name but not as a regular file.
+    Other,
+    /// The listing cannot settle it: a name the filesystem may treat as the
+    /// same one (case or compatibility folding), an entry whose type could not
+    /// be read, or an incomplete listing. Probed by path as before.
+    Unresolved,
+}
+
+fn note_listed_sidecar(
+    listed: &mut [ListedSidecar],
+    names: &[&str],
+    entry: &std::ffi::OsStr,
+    kind: Option<std::fs::FileType>,
+) {
+    let Some(entry) = entry.to_str() else {
+        return;
+    };
+    for (slot, name) in listed.iter_mut().zip(names) {
+        if entry == *name {
+            *slot = match kind {
+                Some(kind) if kind.is_file() => ListedSidecar::File,
+                Some(_) => ListedSidecar::Other,
+                None => ListedSidecar::Unresolved,
+            };
+        } else if *slot == ListedSidecar::Absent && sidecar_name_may_alias(entry, name) {
+            *slot = ListedSidecar::Unresolved;
+        }
+    }
+}
+
+/// Whether a case-insensitive or normalizing filesystem could resolve the
+/// ASCII sidecar `name` to `entry`. Each character folds to at least one
+/// character, so a match is at most four bytes per sidecar character.
+fn sidecar_name_may_alias(entry: &str, name: &str) -> bool {
+    if entry.is_ascii() {
+        return entry.eq_ignore_ascii_case(name);
+    }
+    entry.len() <= name.len() * 4 && entry.nfkc().collect::<String>().to_lowercase() == name
+}
+
+/// The stamps [`boundary_stamps`] would record, taken from what the frame
+/// already holds: a sidecar the listing shows absent is not probed, and one
+/// already read is stamped from its open handle.
+#[cfg(unix)]
+async fn listed_boundary_stamps(
+    path: &Path,
+    episodic: bool,
+    directory: BoundaryStamp,
+    listed: &[ListedSidecar],
+    read_stamps: &mut [Option<SidecarStamp>],
+) -> Option<Vec<Option<BoundaryStamp>>> {
+    let names = boundary_sidecar_names(episodic);
+    let mut stamps = vec![Some(directory)];
+    for (index, name) in names.iter().enumerate() {
+        let stamp = match (listed[index], read_stamps[index].take()) {
+            (ListedSidecar::Absent, _) => Ok(None),
+            (_, Some(stamp)) => stamp,
+            // Listed but not read: its content is not evidence, so a stamp
+            // taken now still detects any later change.
+            (_, None) => lstat_boundary_stamp(path, &path.join(name), true).await,
+        };
+        stamps.push(stamp.ok()?);
+    }
+    Some(stamps)
+}
+
+/// A sidecar's stamp, or `Err` when it cannot be stamped.
+type SidecarStamp = Result<Option<BoundaryStamp>, ()>;
+
+fn listed_sidecar_stamp(stamp: ListedSidecarStamp) -> SidecarStamp {
+    match stamp {
+        ListedSidecarStamp::Missing => Ok(None),
+        ListedSidecarStamp::Linked => Err(()),
+        #[cfg(unix)]
+        ListedSidecarStamp::Metadata(meta) => boundary_stamp(&meta).map(Some).ok_or(()),
+        #[cfg(not(unix))]
+        ListedSidecarStamp::Metadata(_) => Err(()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn listed_boundary_stamps(
+    _path: &Path,
+    _episodic: bool,
+    _directory: BoundaryStamp,
+    _listed: &[ListedSidecar],
+    _read_stamps: &mut [Option<SidecarStamp>],
+) -> Option<Vec<Option<BoundaryStamp>>> {
+    None
+}
+
+// Only Unix refuses a link and stamps the metadata.
+#[cfg_attr(not(unix), allow(dead_code))]
+enum ListedSidecarStamp {
+    Missing,
+    Linked,
+    Metadata(std::fs::Metadata),
+}
+
+/// Reads a sidecar the directory listing showed as a regular file with one
+/// open and the metadata of the open handle, without a separate path probe.
+async fn read_listed_sidecar(
+    folder: &Path,
+    path: &Path,
+) -> std::io::Result<(Option<String>, ListedSidecarStamp)> {
+    use tokio::io::AsyncReadExt;
+    const MAX_BYTES: u64 = 10 * 1024 * 1024;
+    note_boundary_probe(folder, BoundaryProbe::Open);
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    // A sidecar replaced by a link after the listing is still not followed.
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    let file = match options.open(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((None, ListedSidecarStamp::Missing));
+        }
+        #[cfg(unix)]
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            return Ok((None, ListedSidecarStamp::Linked));
+        }
+        Err(error) => return Err(error),
+    };
+    let metadata = file.metadata().await?;
+    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+        return Ok((None, ListedSidecarStamp::Metadata(metadata)));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).await?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Ok((None, ListedSidecarStamp::Metadata(metadata)));
+    }
+    String::from_utf8(bytes)
+        .map(|content| (Some(content), ListedSidecarStamp::Metadata(metadata)))
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 impl DiscoveredBoundaryEvidence {
@@ -180,8 +366,9 @@ impl DiscoveredBoundaryEvidence {
             return Ok(false);
         }
         let owner = BoundaryEvidence::from_external_ids(ids);
-        let folder =
-            BoundaryEvidence::from_name(&path.file_name().unwrap_or_default().to_string_lossy());
+        let folder = BoundaryEvidence::ids_from_name(
+            &path.file_name().unwrap_or_default().to_string_lossy(),
+        );
         if self.media.conflicts_with(&owner)
             || self.media.conflicts_with(&folder)
             || folder.conflicts_with(&owner)
@@ -207,11 +394,28 @@ pub(crate) struct TitleFolderBoundaryPolicy {
 }
 
 impl TitleFolderBoundaryPolicy {
+    #[cfg(test)]
     fn contains_stored_folder(root: &Path, folder: &Path) -> bool {
         let root = crate::stored_paths::folder_path_identity_key(&path_to_stored_string(root));
+        Self::key_contains_folder(root.as_deref(), folder)
+    }
+
+    /// Whether `folder` lies strictly inside the folder whose identity key is
+    /// `root`, so a walk normalises its root once rather than once per folder.
+    fn key_contains_folder(root: Option<&str>, folder: &Path) -> bool {
         let folder = crate::stored_paths::folder_path_identity_key(&path_to_stored_string(folder));
         match (root, folder) {
-            (Some(root), Some(folder)) => root != folder && Path::new(&folder).starts_with(&root),
+            (Some(root), Some(folder)) => root != folder && Path::new(&folder).starts_with(root),
+            _ => false,
+        }
+    }
+
+    /// Whether `folder` is the folder whose identity key is `root` or lies
+    /// inside it.
+    fn key_is_or_contains_folder(root: Option<&str>, folder: &Path) -> bool {
+        let folder = crate::stored_paths::folder_path_identity_key(&path_to_stored_string(folder));
+        match (root, folder) {
+            (Some(root), Some(folder)) => root == folder || Path::new(&folder).starts_with(root),
             _ => false,
         }
     }
@@ -228,12 +432,14 @@ impl TitleFolderBoundaryPolicy {
             .titles
             .list_delete_preview_info()
             .await?;
+        let root_key = crate::stored_paths::folder_path_identity_key(&path_to_stored_string(root));
+        let root_key = root_key.as_deref();
         let stored_folders = titles
             .iter()
             .filter(|title| title.library_id == library_id)
             .filter_map(|title| title.folder_path.as_deref())
             .map(stored_path_to_path_buf)
-            .filter(|path| Self::contains_stored_folder(root, path))
+            .filter(|path| Self::key_contains_folder(root_key, path))
             .collect();
         let mut other_roots: Vec<_> = app
             .services
@@ -244,7 +450,7 @@ impl TitleFolderBoundaryPolicy {
             .into_iter()
             .flat_map(|library| library.roots)
             .map(|root| stored_path_to_path_buf(&root.path))
-            .filter(|path| Self::contains_stored_folder(root, path))
+            .filter(|path| Self::key_contains_folder(root_key, path))
             .collect();
         other_roots.extend(
             titles
@@ -252,19 +458,119 @@ impl TitleFolderBoundaryPolicy {
                 .filter(|title| title.library_id != library_id)
                 .filter_map(|title| title.folder_path)
                 .map(|path| stored_path_to_path_buf(&path))
-                .filter(|path| {
-                    Self::contains_stored_folder(root, path)
-                        || crate::stored_paths::folder_paths_match(
-                            &path_to_stored_string(root),
-                            &path_to_stored_string(path),
-                        )
-                }),
+                .filter(|path| Self::key_is_or_contains_folder(root_key, path)),
         );
         Ok(Self {
             facet: facet.clone(),
             stored_folders,
             other_roots,
         })
+    }
+}
+
+/// How one folder a boundary walk meets stands against the recorded title
+/// folders of its policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FolderOwnership {
+    /// The folder is another library's root or another library's title folder.
+    pub(crate) other_root: bool,
+    /// The folder is a recorded title folder of this library.
+    pub(crate) owned: bool,
+    /// A recorded title folder of this library lies strictly inside it.
+    pub(crate) contains_owner: bool,
+}
+
+/// The policy's folders by identity key, built once per walk, so each folder
+/// the walk meets is normalised once and looked up instead of compared with
+/// every recorded folder. It answers exactly as [`folder_paths_match`] and
+/// [`TitleFolderBoundaryPolicy::contains_stored_folder`] pair by pair do: a
+/// folder without an identity key matches nothing.
+///
+/// [`folder_paths_match`]: crate::stored_paths::folder_paths_match
+pub(crate) struct FolderOwnershipIndex {
+    other_roots: HashSet<String>,
+    stored: HashSet<String>,
+    /// Recorded folder keys grouped by their path components, since two keys
+    /// can name the same components with different spellings.
+    stored_by_components: std::collections::HashMap<PathBuf, Vec<String>>,
+    /// Every strict component prefix of a recorded folder key.
+    stored_prefixes: HashSet<PathBuf>,
+}
+
+impl FolderOwnershipIndex {
+    pub(crate) fn new(policy: &TitleFolderBoundaryPolicy) -> Self {
+        Self::new_with(policy, crate::stored_paths::folder_path_identity_key)
+    }
+
+    pub(crate) fn new_with(
+        policy: &TitleFolderBoundaryPolicy,
+        key: impl Fn(&str) -> Option<String>,
+    ) -> Self {
+        let other_roots = policy
+            .other_roots
+            .iter()
+            .filter_map(|path| key(&path_to_stored_string(path)))
+            .collect();
+        let mut stored = HashSet::new();
+        let mut stored_by_components = std::collections::HashMap::<PathBuf, Vec<String>>::new();
+        let mut stored_prefixes = HashSet::new();
+        for folder in &policy.stored_folders {
+            let Some(folder) = key(&path_to_stored_string(folder)) else {
+                continue;
+            };
+            let mut prefix = PathBuf::new();
+            stored_prefixes.insert(prefix.clone());
+            let components = Path::new(&folder).components().collect::<Vec<_>>();
+            for component in &components[..components.len().saturating_sub(1)] {
+                prefix.push(component.as_os_str());
+                stored_prefixes.insert(prefix.clone());
+            }
+            let entry = stored_by_components
+                .entry(Path::new(&folder).to_path_buf())
+                .or_default();
+            if !entry.contains(&folder) {
+                entry.push(folder.clone());
+            }
+            stored.insert(folder);
+        }
+        Self {
+            other_roots,
+            stored,
+            stored_by_components,
+            stored_prefixes,
+        }
+    }
+
+    pub(crate) fn classify(&self, path: &Path) -> FolderOwnership {
+        self.classify_with(path, crate::stored_paths::folder_path_identity_key)
+    }
+
+    pub(crate) fn classify_with(
+        &self,
+        path: &Path,
+        key: impl Fn(&str) -> Option<String>,
+    ) -> FolderOwnership {
+        let Some(folder) = key(&path_to_stored_string(path)) else {
+            return FolderOwnership::default();
+        };
+        let components = Path::new(&folder);
+        // `Path::starts_with` compares components: a recorded folder lies
+        // inside this one when this one's components are a strict prefix of
+        // its own, or the same components spelled differently.
+        let contains_owner = (components.components().next().is_some()
+            && self.stored_prefixes.contains(components))
+            || (components.components().next().is_none()
+                && !self.stored.is_empty()
+                && self.stored.iter().any(|stored| *stored != folder))
+            || self
+                .stored_by_components
+                .get(components)
+                .is_some_and(|spellings| spellings.iter().any(|stored| *stored != folder));
+        FolderOwnership {
+            other_root: self.other_roots.contains(&folder),
+            owned: self.stored.contains(&folder),
+            contains_owner,
+        }
     }
 }
 
@@ -332,20 +638,34 @@ impl BoundaryEvidence {
         }
     }
 
+    #[cfg(test)]
     fn from_name(name: &str) -> Self {
+        let mut evidence = Self::ids_from_name(name);
+        evidence.title = Self::title_from_name(name);
+        evidence
+    }
+
+    /// The external ids a name carries, without its title. Conflict checks
+    /// read only these.
+    fn ids_from_name(name: &str) -> Self {
         let (walk, conflict) =
             crate::library_filename_parser::library_title_walk_with_id_conflicts(name);
-        let title = crate::helpers::parse_usable_release_title(name)
-            .map(|parsed| crate::title_matching::canonical_lookup_key(&parsed.normalized_title))
-            .filter(|title| !title.is_empty());
         Self {
-            title,
             conflict,
             ids: walk
                 .map(|walk| [walk.imdb_id, walk.tmdb_id, walk.tvdb_id])
                 .unwrap_or_default(),
             ..Default::default()
         }
+    }
+
+    /// The title a name carries. This runs the full release parser.
+    fn title_from_name(name: &str) -> Option<String> {
+        #[cfg(test)]
+        BOUNDARY_TITLE_PARSES.with(|count| count.set(count.get() + 1));
+        crate::helpers::parse_usable_release_title(name)
+            .map(|parsed| crate::title_matching::canonical_lookup_key(&parsed.normalized_title))
+            .filter(|title| !title.is_empty())
     }
 
     fn from_external_ids(external_ids: &[scryer_domain::ExternalId]) -> Self {
@@ -384,19 +704,40 @@ impl BoundaryEvidence {
     }
 }
 
+#[cfg(test)]
 async fn boundary_sidecar_evidence(
     path: &Path,
     episodic: bool,
 ) -> std::io::Result<Option<BoundaryEvidence>> {
+    let unresolved = [ListedSidecar::Unresolved; 2];
+    listed_boundary_sidecar_evidence(path, episodic, &unresolved, &mut []).await
+}
+
+/// `listed` holds one entry per sidecar name. Each listed regular file that is
+/// read records its stamp in `read_stamps` when that slot exists.
+async fn listed_boundary_sidecar_evidence(
+    path: &Path,
+    episodic: bool,
+    listed: &[ListedSidecar],
+    read_stamps: &mut [Option<SidecarStamp>],
+) -> std::io::Result<Option<BoundaryEvidence>> {
     // Keep the existing NFO-before-plexmatch precedence, but preserve I/O
     // failures: an unreadable sidecar is not evidence that identity is absent.
-    let files: &[&str] = if episodic {
-        &["tvshow.nfo", ".plexmatch"]
-    } else {
-        &["movie.nfo"]
-    };
-    for name in files {
-        let content = match read_discovery_nfo(&path.join(name)).await {
+    for (index, name) in boundary_sidecar_names(episodic).iter().enumerate() {
+        let read = match listed[index] {
+            ListedSidecar::Absent | ListedSidecar::Other => continue,
+            ListedSidecar::Unresolved => read_discovery_nfo(&path.join(name)).await,
+            ListedSidecar::File => match read_listed_sidecar(path, &path.join(name)).await {
+                Ok((content, stamp)) => {
+                    if let Some(slot) = read_stamps.get_mut(index) {
+                        *slot = Some(listed_sidecar_stamp(stamp));
+                    }
+                    Ok(content)
+                }
+                Err(error) => Err(error),
+            },
+        };
+        let content = match read {
             Ok(Some(content)) => content,
             Ok(None) => continue,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -443,10 +784,51 @@ struct ScanBoundaryOwner<'a> {
     identity: BoundaryEvidence,
 }
 
+/// Entries kept from a frame's single directory listing for child traversal
+/// and the extras pass: directories, links, and entries whose type could not
+/// be read. Plain files are consumed by the frame's own inspection.
+struct BoundaryEntries {
+    children: Vec<BoundaryChild>,
+    next: usize,
+    error: Option<String>,
+    error_pending: bool,
+}
+
+enum BoundaryChild {
+    Typed(PathBuf, std::fs::FileType),
+    Untyped(tokio::fs::DirEntry),
+}
+
+impl BoundaryEntries {
+    async fn next_entry(
+        &mut self,
+    ) -> std::io::Result<Option<(PathBuf, std::io::Result<std::fs::FileType>)>> {
+        let index = self.next;
+        if index < self.children.len() {
+            self.next += 1;
+            return Ok(Some(match &self.children[index] {
+                BoundaryChild::Typed(path, kind) => (path.clone(), Ok(*kind)),
+                BoundaryChild::Untyped(entry) => (entry.path(), entry.file_type().await),
+            }));
+        }
+        if std::mem::take(&mut self.error_pending)
+            && let Some(error) = &self.error
+        {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        Ok(None)
+    }
+
+    fn rewind(&mut self) {
+        self.next = 0;
+        self.error_pending = self.error.is_some();
+    }
+}
+
 struct BoundaryFrame {
     reusable_evidence: Option<DiscoveredBoundaryEvidence>,
     path: PathBuf,
-    entries: tokio::fs::ReadDir,
+    entries: BoundaryEntries,
     depth: usize,
     season: bool,
     part: bool,
@@ -512,6 +894,13 @@ tokio::task_local! {
     static BOUNDARY_ENTRY_METADATA_FAILURE: PathBuf;
 }
 
+#[cfg(test)]
+thread_local! {
+    static BOUNDARY_TITLE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Parse every name, as every walk did before titles became on demand.
+    static BOUNDARY_ALL_TITLES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 async fn boundary_entry_file_type(
     entry: &tokio::fs::DirEntry,
 ) -> std::io::Result<std::fs::FileType> {
@@ -528,10 +917,13 @@ async fn boundary_entry_file_type(
 pub(crate) async fn read_discovery_nfo(path: &Path) -> std::io::Result<Option<String>> {
     use tokio::io::AsyncReadExt;
     const MAX_BYTES: u64 = 10 * 1024 * 1024;
+    let folder = path.parent().unwrap_or(path);
+    note_boundary_probe(folder, BoundaryProbe::Lstat);
     let metadata = tokio::fs::symlink_metadata(path).await?;
     if !metadata.is_file() || metadata.len() > MAX_BYTES {
         return Ok(None);
     }
+    note_boundary_probe(folder, BoundaryProbe::Open);
     let file = tokio::fs::File::open(path).await?;
     if file.metadata().await?.len() > MAX_BYTES {
         return Ok(None);
@@ -548,7 +940,7 @@ pub(crate) async fn read_discovery_nfo(path: &Path) -> std::io::Result<Option<St
 
 impl BoundaryFrame {
     fn identity_conflicts(&self) -> bool {
-        let folder = BoundaryEvidence::from_name(
+        let folder = BoundaryEvidence::ids_from_name(
             &self.path.file_name().unwrap_or_default().to_string_lossy(),
         );
         self.evidence.conflicts_with(&folder)
@@ -594,67 +986,110 @@ impl BoundaryFrame {
         {
             return false;
         }
+        // A season holds its parent's episodes whatever its files are named.
+        if self.season {
+            return true;
+        }
         let matches_owner = owner.is_some_and(|title| {
-            let folder = BoundaryEvidence::from_name(
+            let folder = BoundaryEvidence::title_from_name(
                 &self.path.file_name().unwrap_or_default().to_string_lossy(),
             );
-            folder
-                .title
-                .iter()
-                .chain(self.evidence.title.iter())
-                .any(|name| {
-                    std::iter::once(title.name)
-                        .chain(title.aliases.iter().map(String::as_str))
-                        .any(|alias| crate::title_matching::canonical_lookup_key(alias) == *name)
-                })
+            folder.iter().chain(self.evidence.title.iter()).any(|name| {
+                std::iter::once(title.name)
+                    .chain(title.aliases.iter().map(String::as_str))
+                    .any(|alias| crate::title_matching::canonical_lookup_key(alias) == *name)
+            })
         });
-        if self.matches_folder && !self.matches_parent && !self.season && !matches_owner {
+        if self.matches_folder && !self.matches_parent && !matches_owner {
             return false;
         }
-        self.season
-            || self.matches_parent
-            || matches_owner
-            || (parent.has_title_nfo && self.evidence.has_media)
+        self.matches_parent || matches_owner || (parent.has_title_nfo && self.evidence.has_media)
     }
 
+    /// `reusable` asks for evidence a later claim may reuse. Folded season and
+    /// part frames never yield it, so they are never stamped.
+    ///
+    /// `titles` asks for the names of the folder, its parent and its media
+    /// files. Only a caller that reads them asks: the release parser is the
+    /// costliest step of a walk, and a frame's ids come from the cheap id
+    /// scan either way.
+    #[allow(clippy::too_many_arguments)]
     async fn open(
         path: PathBuf,
         depth: usize,
         season: bool,
         part: bool,
         episodic: bool,
+        reusable: bool,
+        titles: bool,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> AppResult<Self> {
+        #[cfg(test)]
+        let titles = titles || BOUNDARY_ALL_TITLES.with(std::cell::Cell::get);
         let folded = season || part;
-        let stamps = boundary_stamps(&path, episodic).await;
+        let reusable = reusable && !folded;
+        // The directory is stamped before it is listed, so any entry change
+        // during or after the listing invalidates the evidence.
+        #[cfg(unix)]
+        let directory_stamp = if reusable {
+            lstat_boundary_stamp(&path, &path, false)
+                .await
+                .ok()
+                .flatten()
+                .filter(|stamp| stamp.directory)
+        } else {
+            None
+        };
+        #[cfg(not(unix))]
+        let directory_stamp: Option<BoundaryStamp> = {
+            let _ = reusable;
+            None
+        };
         let mut leaf = !folded;
-        let mut entries = tokio::fs::read_dir(&path)
+        note_boundary_probe(&path, BoundaryProbe::ReadDir);
+        let mut listing = tokio::fs::read_dir(&path)
             .await
             .map_err(|e| AppError::Repository(e.to_string()))?;
+        let sidecar_names = boundary_sidecar_names(episodic);
+        let mut listed = [ListedSidecar::Absent; 2];
+        let listed = &mut listed[..sidecar_names.len()];
+        let mut children = Vec::new();
+        let mut listing_error = None;
+        let mut listing_complete = false;
         let mut evidence = BoundaryEvidence::default();
 
-        let folder_name =
-            BoundaryEvidence::from_name(&path.file_name().unwrap_or_default().to_string_lossy())
-                .title;
+        let folder_name = titles
+            .then(|| {
+                BoundaryEvidence::title_from_name(
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                )
+            })
+            .flatten();
         let parent_name = path
             .parent()
             .and_then(Path::file_name)
-            .map(|name| BoundaryEvidence::from_name(&name.to_string_lossy()))
-            .and_then(|e| e.title);
+            .filter(|_| titles)
+            .and_then(|name| BoundaryEvidence::title_from_name(&name.to_string_lossy()));
         let mut matches_folder = false;
         let mut matches_parent = false;
         let mut inspection_error = None;
-        // Inspect immediate entries only. Reopen for child traversal so memory
-        // stays independent of directory width and extras do not depend on order.
+        // Inspect immediate entries from one listing. Only directories, links
+        // and untyped entries are kept for child traversal, so the extras pass
+        // replays them instead of listing the directory again.
         loop {
             if cancel.is_cancelled() {
                 break;
             }
-            let entry = match entries.next_entry().await {
+            let entry = match listing.next_entry().await {
                 Ok(Some(entry)) => entry,
-                Ok(None) => break,
+                Ok(None) => {
+                    listing_complete = true;
+                    break;
+                }
                 Err(error) => {
-                    inspection_error.get_or_insert_with(|| error.to_string());
+                    let error = error.to_string();
+                    inspection_error.get_or_insert_with(|| error.clone());
+                    listing_error = Some(error);
                     break;
                 }
             };
@@ -662,10 +1097,16 @@ impl BoundaryFrame {
                 Ok(kind) => kind,
                 Err(error) => {
                     inspection_error.get_or_insert_with(|| error.to_string());
+                    note_listed_sidecar(listed, sidecar_names, &entry.file_name(), None);
+                    children.push(BoundaryChild::Untyped(entry));
                     continue;
                 }
             };
             let child = entry.path();
+            note_listed_sidecar(listed, sidecar_names, &entry.file_name(), Some(kind));
+            if kind.is_dir() || kind.is_symlink() {
+                children.push(BoundaryChild::Typed(child.clone(), kind));
+            }
             leaf &= !kind.is_dir() && !kind.is_symlink();
             if kind.is_file()
                 && is_allowed_video_path(&child)
@@ -675,9 +1116,11 @@ impl BoundaryFrame {
                     .and_then(|n| n.to_str())
                     .is_some_and(is_ignored_media_extra_file_name)
             {
-                let mut file = BoundaryEvidence::from_name(
-                    &child.file_stem().unwrap_or_default().to_string_lossy(),
-                );
+                let stem = child.file_stem().unwrap_or_default().to_string_lossy();
+                let mut file = BoundaryEvidence::ids_from_name(&stem);
+                if titles {
+                    file.title = BoundaryEvidence::title_from_name(&stem);
+                }
                 file.has_media = true;
                 matches_folder |= file
                     .title
@@ -692,19 +1135,37 @@ impl BoundaryFrame {
                 evidence.merge(file);
             }
         }
-        let entries = tokio::fs::read_dir(&path).await.map_err(|error| {
-            AppError::Repository(
-                inspection_error
-                    .clone()
-                    .unwrap_or_else(|| error.to_string()),
-            )
-        })?;
+        drop(listing);
+        if !listing_complete {
+            for slot in listed.iter_mut() {
+                if *slot == ListedSidecar::Absent {
+                    *slot = ListedSidecar::Unresolved;
+                }
+            }
+        }
+        let wants_stamps = directory_stamp.is_some()
+            && leaf
+            && inspection_error.is_none()
+            && !cancel.is_cancelled();
+        let mut read_stamps: [Option<SidecarStamp>; 2] = [None, None];
+        // A sidecar read by path is stamped before it is read, so a change
+        // after the read still invalidates the evidence.
+        #[cfg(unix)]
+        if wants_stamps {
+            for (index, name) in sidecar_names.iter().enumerate() {
+                if listed[index] == ListedSidecar::Unresolved {
+                    read_stamps[index] =
+                        Some(lstat_boundary_stamp(&path, &path.join(name), true).await);
+                }
+            }
+        }
         // Disc and bonus folders fold only media presence into their title,
         // so their sidecars are not read as title identity.
         let local_identity = if part {
             None
         } else {
-            match boundary_sidecar_evidence(&path, episodic).await {
+            match listed_boundary_sidecar_evidence(&path, episodic, listed, &mut read_stamps).await
+            {
                 Ok(identity) => identity,
                 Err(error) => {
                     inspection_error.get_or_insert_with(|| error.to_string());
@@ -714,19 +1175,30 @@ impl BoundaryFrame {
         };
         let has_title_nfo = local_identity.is_some();
         let skip_extras = depth > 0 && (evidence.has_media || has_title_nfo || folded);
-        let reusable_evidence = stamps
-            .filter(|_| leaf && inspection_error.is_none() && !cancel.is_cancelled())
-            .map(|stamps| DiscoveredBoundaryEvidence {
-                path: path.clone(),
-                episodic,
-                stamps,
-                media: evidence.clone(),
-                local: local_identity.clone(),
-            });
+        let stamps = match directory_stamp {
+            Some(directory)
+                if wants_stamps && inspection_error.is_none() && !cancel.is_cancelled() =>
+            {
+                listed_boundary_stamps(&path, episodic, directory, listed, &mut read_stamps).await
+            }
+            _ => None,
+        };
+        let reusable_evidence = stamps.map(|stamps| DiscoveredBoundaryEvidence {
+            path: path.clone(),
+            episodic,
+            stamps,
+            media: evidence.clone(),
+            local: local_identity.clone(),
+        });
         Ok(Self {
             reusable_evidence,
             path,
-            entries,
+            entries: BoundaryEntries {
+                children,
+                next: 0,
+                error_pending: listing_error.is_some(),
+                error: listing_error,
+            },
             depth,
             season,
             part,
@@ -782,7 +1254,9 @@ async fn discover_title_folder_boundaries(
         .await
         .map_err(|e| AppError::Repository(e.to_string()))?;
     let episodic = policy.facet != MediaFacet::Movie;
-    let mut stack = vec![BoundaryFrame::open(root, 0, false, false, episodic, cancel).await?];
+    let ownership_index = FolderOwnershipIndex::new(&policy);
+    let mut stack =
+        vec![BoundaryFrame::open(root, 0, false, false, episodic, false, false, cancel).await?];
     let mut batch = Vec::with_capacity(batch_size.min(256));
     let mut first_io_error = None;
     while let Some(frame) = stack.last_mut() {
@@ -817,10 +1291,9 @@ async fn discover_title_folder_boundaries(
                 None
             }
         };
-        if let Some(entry) = entry {
-            let path = entry.path();
+        if let Some((path, kind)) = entry {
             let depth = frame.depth + 1;
-            let kind = match entry.file_type().await {
+            let kind = match kind {
                 Ok(kind) => kind,
                 Err(error) => {
                     frame.blocked = true;
@@ -843,25 +1316,16 @@ async fn discover_title_folder_boundaries(
             if should_skip_library_top_level_entry(&path, true) {
                 continue;
             }
-            if policy.other_roots.iter().any(|other| {
-                crate::stored_paths::folder_paths_match(
-                    &path_to_stored_string(other),
-                    &path_to_stored_string(&path),
-                )
-            }) {
+            let ownership = ownership_index.classify(&path);
+            if ownership.other_root {
                 frame.child_titles = true;
                 continue;
             }
-            let owned = policy.stored_folders.iter().any(|stored| {
-                crate::stored_paths::folder_paths_match(
-                    &path_to_stored_string(stored),
-                    &path_to_stored_string(&path),
-                )
-            });
-            let contains_owner = policy
-                .stored_folders
-                .iter()
-                .any(|stored| TitleFolderBoundaryPolicy::contains_stored_folder(&path, stored));
+            let FolderOwnership {
+                owned,
+                contains_owner,
+                ..
+            } = ownership;
             let extra = path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
                 LIBRARY_IGNORED_MEDIA_SUBDIR_NAMES.contains(&n.to_ascii_lowercase().as_str())
             });
@@ -909,7 +1373,13 @@ async fn discover_title_folder_boundaries(
                 && !part
             {
                 Some("automatic title discovery depth limit reached".to_owned())
+            } else if !kind.is_symlink() {
+                // Every walked frame is a directory reached from the root
+                // through directories, never links, so a directory entry of
+                // one resolves strictly inside the root without a probe.
+                None
             } else {
+                note_boundary_probe(&path, BoundaryProbe::Canonicalize);
                 match tokio::fs::canonicalize(&path).await {
                     Ok(resolved)
                         if resolved != resolved_root && resolved.starts_with(&resolved_root) =>
@@ -940,7 +1410,21 @@ async fn discover_title_folder_boundaries(
                         .then(|| "folder contains another recorded title boundary".into()),
                 });
             } else {
-                match BoundaryFrame::open(path.clone(), depth, season, part, episodic, cancel).await
+                // Season and part file names are folded into their parent and
+                // never compared; every other frame may become a candidate
+                // whose names decide it.
+                let titles = !season && !part;
+                match BoundaryFrame::open(
+                    path.clone(),
+                    depth,
+                    season,
+                    part,
+                    episodic,
+                    true,
+                    titles,
+                    cancel,
+                )
+                .await
                 {
                     Ok(mut child) => {
                         // A missing recorded descendant still owns its path;
@@ -963,25 +1447,8 @@ async fn discover_title_folder_boundaries(
         } else {
             if frame.deferred_extras && !frame.extras_pass && !frame.skip_extras {
                 frame.extras_pass = true;
-                match tokio::fs::read_dir(&frame.path).await {
-                    Ok(entries) => {
-                        frame.entries = entries;
-                        continue;
-                    }
-                    Err(error) => {
-                        frame.blocked = true;
-                        first_io_error
-                            .get_or_insert_with(|| format!("{}: {error}", frame.path.display()));
-                        if !frame.rejection_emitted {
-                            frame.rejection_emitted = true;
-                            batch.push(TitleFolderBoundary {
-                                evidence: None,
-                                path: frame.path.clone(),
-                                rejection: Some(format!("cannot inspect title boundary: {error}")),
-                            });
-                        }
-                    }
-                }
+                frame.entries.rewind();
+                continue;
             }
             let frame = stack.pop().unwrap();
             let Some(parent) = stack.last_mut() else {
@@ -1266,17 +1733,53 @@ async fn verify_scan_boundary(
     facet: &MediaFacet,
     owner: ScanBoundaryOwner<'_>,
 ) -> AppResult<()> {
+    // Reports on drop so refusals and errors are timed too.
+    struct VerifyTiming<'a> {
+        path: &'a Path,
+        started: std::time::Instant,
+        frames_opened: u64,
+        entries_seen: u64,
+    }
+    impl Drop for VerifyTiming<'_> {
+        fn drop(&mut self) {
+            tracing::debug!(
+                path = %self.path.display(),
+                frames_opened = self.frames_opened,
+                entries_seen = self.entries_seen,
+                elapsed_ms = self.started.elapsed().as_secs_f64() * 1000.0,
+                "scan boundary verification timing"
+            );
+        }
+    }
+    let mut timing = VerifyTiming {
+        path,
+        started: std::time::Instant::now(),
+        frames_opened: 0,
+        entries_seen: 0,
+    };
     let episodic = *facet != MediaFacet::Movie;
     let cancel = tokio_util::sync::CancellationToken::new();
-    let mut stack =
-        vec![BoundaryFrame::open(path.to_path_buf(), 0, false, false, episodic, &cancel).await?];
+    timing.frames_opened += 1;
+    let mut stack = vec![
+        BoundaryFrame::open(
+            path.to_path_buf(),
+            0,
+            false,
+            false,
+            episodic,
+            false,
+            false,
+            &cancel,
+        )
+        .await?,
+    ];
     while let Some(frame) = stack.last_mut() {
         if let Some(error) = frame.inspection_error.take() {
             return Err(AppError::Repository(error));
         }
         if frame.evidence.conflicts_with(&owner.identity)
             || frame.identity_conflicts()
-            || BoundaryEvidence::from_name(
+            || BoundaryEvidence::ids_from_name(
                 &frame.path.file_name().unwrap_or_default().to_string_lossy(),
             )
             .conflicts_with(&owner.identity)
@@ -1295,12 +1798,9 @@ async fn verify_scan_boundary(
             .next_entry()
             .await
             .map_err(|error| AppError::Repository(error.to_string()))?;
-        if let Some(entry) = entry {
-            let child = entry.path();
-            let kind = entry
-                .file_type()
-                .await
-                .map_err(|error| AppError::Repository(error.to_string()))?;
+        if let Some((child, kind)) = entry {
+            timing.entries_seen += 1;
+            let kind = kind.map_err(|error| AppError::Repository(error.to_string()))?;
             if should_skip_library_top_level_entry(&child, true)
                 || child
                     .file_name()
@@ -1327,7 +1827,16 @@ async fn verify_scan_boundary(
             }
             let season = episodic && !frame.part && conventional_season(&child);
             let part = !season && title_part_folder(&child);
-            stack.push(BoundaryFrame::open(child, depth, season, part, episodic, &cancel).await?);
+            // Names are compared only for an episodic folder below the title
+            // folder. A season's file names reach that comparison only when
+            // the season merges into such a folder, never into the title
+            // folder itself.
+            let titles = episodic && !part && (!season || depth >= 2);
+            timing.frames_opened += 1;
+            stack.push(
+                BoundaryFrame::open(child, depth, season, part, episodic, false, titles, &cancel)
+                    .await?,
+            );
         } else {
             let child = stack.pop().unwrap();
             let Some(parent) = stack.last_mut() else {
@@ -1896,6 +2405,212 @@ fn metadata_probe_marker(metadata: &std::fs::Metadata) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// The pairwise ownership answers a boundary walk used to compute for one
+    /// folder, written as the walk wrote them, with every identity key counted.
+    fn pairwise_ownership(
+        policy: &TitleFolderBoundaryPolicy,
+        path: &Path,
+        key: &dyn Fn(&str) -> Option<String>,
+    ) -> FolderOwnership {
+        let paths_match = |left: &Path, right: &Path| match (
+            key(&path_to_stored_string(left)),
+            key(&path_to_stored_string(right)),
+        ) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        };
+        let contains = |root: &Path, folder: &Path| match (
+            key(&path_to_stored_string(root)),
+            key(&path_to_stored_string(folder)),
+        ) {
+            (Some(root), Some(folder)) => root != folder && Path::new(&folder).starts_with(&root),
+            _ => false,
+        };
+        FolderOwnership {
+            other_root: policy
+                .other_roots
+                .iter()
+                .any(|other| paths_match(other, path)),
+            owned: policy
+                .stored_folders
+                .iter()
+                .any(|stored| paths_match(stored, path)),
+            contains_owner: policy
+                .stored_folders
+                .iter()
+                .any(|stored| contains(path, stored)),
+        }
+    }
+
+    fn ownership_seeds() -> (TitleFolderBoundaryPolicy, Vec<PathBuf>) {
+        let decomposed = "Cafe\u{301} Synthetic";
+        let composed = "Caf\u{e9} Synthetic";
+        let stored = [
+            "/media/Show Alpha",
+            "/media/Show Alpha/",
+            "/media/./Show Beta",
+            "/media/Nested/Outer",
+            "/media/Nested/Outer/Inner",
+            "/media/Case/Mixed Name",
+            "/media/Deep/a/b/c/d",
+            "relative/owned",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .chain([PathBuf::from("/media").join(decomposed)])
+        .collect::<Vec<_>>();
+        let other_roots = [
+            "/media-other",
+            "/media/Other Root/",
+            "/media/Other/../Elsewhere",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+        let mut entries = [
+            "/media",
+            "/media/",
+            "/media-other",
+            "/media-other/Show Alpha",
+            "/media/Show Alpha",
+            "/media/Show Alpha/",
+            "/media/Show Alpha/Season 01",
+            "/media/show alpha",
+            "/media/Show Beta",
+            "/media/./Show Beta",
+            "/media/Show Beta/.",
+            "/media/Nested",
+            "/media/Nested/Outer",
+            "/media/Nested/Outer/Inner",
+            "/media/Nested/Outer/Inner/Extras",
+            "/media/Nested/Outer-Inner",
+            "/media/Case",
+            "/media/case",
+            "/media/Case/Mixed Name",
+            "/media/Case/mixed name",
+            "/media/Deep",
+            "/media/Deep/a",
+            "/media/Deep/a/b",
+            "/media/Deep/a/b/c",
+            "/media/Deep/a/b/c/d",
+            "/media/Deep/a/b/c/d/e",
+            "/media/Deep/a/bb",
+            "/media/Other Root",
+            "/media/Elsewhere",
+            "/media/Other",
+            "relative",
+            "relative/owned",
+            "relative/owned/sub",
+            "/",
+            "",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+        entries.push(PathBuf::from("/media").join(composed));
+        entries.push(PathBuf::from("/media").join(decomposed));
+        entries.push(PathBuf::from("/media").join(composed).join("Season 01"));
+        (
+            TitleFolderBoundaryPolicy {
+                facet: MediaFacet::Series,
+                stored_folders: stored,
+                other_roots,
+            },
+            entries,
+        )
+    }
+
+    #[test]
+    fn folder_ownership_lookup_matches_the_pairwise_comparisons() {
+        let (policy, entries) = ownership_seeds();
+        for windows in [false, true] {
+            let pairwise_keys = std::cell::Cell::new(0usize);
+            let indexed_keys = std::cell::Cell::new(0usize);
+            let pairwise_key = |path: &str| {
+                pairwise_keys.set(pairwise_keys.get() + 1);
+                crate::stored_paths::folder_path_identity_key_for_platform(path, windows)
+            };
+            let indexed_key = |path: &str| {
+                indexed_keys.set(indexed_keys.get() + 1);
+                crate::stored_paths::folder_path_identity_key_for_platform(path, windows)
+            };
+            let index = FolderOwnershipIndex::new_with(&policy, indexed_key);
+            let mut answered = Vec::new();
+            for entry in &entries {
+                let expected = pairwise_ownership(&policy, entry, &pairwise_key);
+                let actual = index.classify_with(entry, indexed_key);
+                assert_eq!(actual, expected, "{entry:?} (windows keys: {windows})");
+                answered.push(actual);
+            }
+            // The seeds reach every answer, so agreement is not vacuous.
+            assert!(answered.iter().any(|answer| answer.other_root));
+            assert!(answered.iter().any(|answer| answer.owned));
+            assert!(answered.iter().any(|answer| answer.contains_owner));
+            assert!(
+                answered
+                    .iter()
+                    .any(|answer| answer.owned && answer.contains_owner)
+            );
+            assert!(
+                answered
+                    .iter()
+                    .any(|answer| *answer == FolderOwnership::default())
+            );
+            let folders = policy.stored_folders.len() + policy.other_roots.len();
+            // The pairwise form stops at the first match, so it normalises
+            // up to two keys per comparison; the lookup normalises each
+            // recorded folder once and each walked folder once.
+            let pairwise_bound =
+                entries.len() * 2 * (policy.other_roots.len() + 2 * policy.stored_folders.len());
+            eprintln!(
+                "identity keys per walk (windows keys: {windows}): pairwise {} (bound {pairwise_bound}), lookup {}",
+                pairwise_keys.get(),
+                indexed_keys.get()
+            );
+            assert!(pairwise_keys.get() <= pairwise_bound);
+            assert_eq!(indexed_keys.get(), folders + entries.len());
+            assert!(indexed_keys.get() * 10 < pairwise_keys.get());
+        }
+        // The policy load normalises its root once and answers as the pairwise
+        // comparisons it replaced.
+        for root in &entries {
+            let root_key =
+                crate::stored_paths::folder_path_identity_key(&path_to_stored_string(root));
+            for folder in entries.iter().chain(&policy.stored_folders) {
+                let contained = TitleFolderBoundaryPolicy::contains_stored_folder(root, folder);
+                assert_eq!(
+                    TitleFolderBoundaryPolicy::key_contains_folder(root_key.as_deref(), folder),
+                    contained,
+                    "{root:?} / {folder:?}"
+                );
+                assert_eq!(
+                    TitleFolderBoundaryPolicy::key_is_or_contains_folder(
+                        root_key.as_deref(),
+                        folder
+                    ),
+                    contained
+                        || crate::stored_paths::folder_paths_match(
+                            &path_to_stored_string(root),
+                            &path_to_stored_string(folder),
+                        ),
+                    "{root:?} / {folder:?}"
+                );
+            }
+        }
+        // The walk's own key function agrees with the platform it runs on.
+        let index = FolderOwnershipIndex::new(&policy);
+        for entry in &entries {
+            assert_eq!(
+                index.classify(entry),
+                pairwise_ownership(
+                    &policy,
+                    entry,
+                    &crate::stored_paths::folder_path_identity_key
+                )
+            );
+        }
+    }
 
     #[cfg(windows)]
     #[test]
@@ -2764,6 +3479,154 @@ mod tests {
         let path = root.join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"synthetic media").unwrap();
+    }
+
+    /// Discovery output and the outcome of verifying every candidate, as one
+    /// comparable transcript.
+    async fn boundary_walk_transcript(root: &Path, facet: MediaFacet) -> Vec<String> {
+        let mut transcript = Vec::new();
+        let boundaries = collect_nested_boundaries(root, discovery_policy(facet.clone())).await;
+        let mut folders = Vec::new();
+        for boundary in &boundaries {
+            transcript.push(format!("{boundary:?}"));
+            folders.push(boundary.path.clone());
+        }
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(folder) = stack.pop() {
+            for entry in std::fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path.clone());
+                    stack.push(path);
+                }
+            }
+        }
+        folders.sort();
+        folders.dedup();
+        for folder in folders {
+            let folder_name = folder.file_name().unwrap().to_string_lossy().to_string();
+            for (name, ids) in [
+                (folder_name.as_str(), vec![]),
+                ("Unrelated Fixture Name", vec![]),
+                (
+                    folder_name.as_str(),
+                    vec![scryer_domain::ExternalId::new("tvdb", "100")],
+                ),
+            ] {
+                let title = scryer_domain::NewTitle {
+                    name: name.into(),
+                    facet: facet.clone(),
+                    external_ids: ids,
+                    ..Default::default()
+                };
+                let outcome = verify_new_scan_title_boundary(&folder, &title).await;
+                transcript.push(format!(
+                    "{} as {name}: {:?}",
+                    folder.display(),
+                    outcome.map_err(|error| (error.validation_reason(), error.to_string()))
+                ));
+            }
+        }
+        transcript
+    }
+
+    /// Titles are parsed only where a decision reads them. Every boundary,
+    /// rejection, evidence value and verification outcome stays what it was
+    /// when every name was parsed.
+    #[tokio::test]
+    async fn on_demand_titles_leave_every_walk_outcome_unchanged() {
+        let series = tempfile::tempdir().unwrap();
+        for file in [
+            "Alpha Fixture {tvdb-100}/Season 01/Alpha.Fixture.S01E01.mkv",
+            "Alpha Fixture {tvdb-100}/Season 02/Alpha.Fixture.S02E01.{tvdb-999}.mkv",
+            "Alpha Fixture {tvdb-100}/Alpha.Fixture.S00E01.mkv",
+            "Beta Fixture/Season 1/Other.Sample.S01E01.mkv",
+            "Gamma Fixture/Bonus Reel/Gamma.Fixture.S00E05.mkv",
+            "Delta Fixture/Random Folder/Unrelated.Program.S01E01.mkv",
+            "Delta Fixture/Season 01/Delta.Fixture.S01E01.mkv",
+            "Shelf/Epsilon Fixture/Season 01/Epsilon.Fixture.S01E01.mkv",
+            "Shelf/Epsilon Fixture/Season 01/Nested/Epsilon.Fixture.S01E02.mkv",
+            "Zeta Fixture/Season 01/Zeta.Fixture.S01E01.mkv",
+            "Zeta Fixture/Zeta Spinoff Fixture/Season 01/Zeta.Spinoff.Fixture.S01E01.mkv",
+            "Eta Fixture/Eta.Fixture.S01E01.{tvdb-1}.mkv",
+            "Eta Fixture/Eta.Fixture.S01E02.{tvdb-2}.mkv",
+            "Theta Fixture/Disc 1/Theta.Fixture.S01E01.mkv",
+            "Iota Fixture/Iota Fixture Specials/Season 01/Iota.Fixture.S01E01.mkv",
+            "Iota Fixture/Iota Fixture Specials/Season 02/Other.Sample.S02E01.mkv",
+            "Kappa Fixture/Kappa Extras/Season 01/Kappa.Fixture.S01E01.{tvdb-7}.mkv",
+            "Kappa Fixture/Kappa.Fixture.S01E02.mkv",
+            "Lambda.Fixture.S01E01.mkv",
+        ] {
+            write_discovery_fixture(series.path(), file);
+        }
+        let movies = tempfile::tempdir().unwrap();
+        for file in [
+            "Bucket/Alpha.Fixture.2001.1080p.mkv",
+            "Bucket/Beta.Sample.Work.2004.720p.mkv",
+            "Gamma Film {tmdb-5}/Gamma.Film.2003.{tmdb-6}.mkv",
+            "Delta Film/Delta.Film.2004.mkv",
+            "Delta Film/Disc 1/Delta.Film.2004.Part1.mkv",
+            "Film Shelf/Epsilon Film/Epsilon.Film.2005.mkv",
+            "Film Shelf/Epsilon Film/Bonus/Other.Film.2006.mkv",
+            "Loose.Film.2007.mkv",
+        ] {
+            write_discovery_fixture(movies.path(), file);
+        }
+
+        for (root, facet) in [
+            (series.path(), MediaFacet::Series),
+            (series.path(), MediaFacet::Anime),
+            (movies.path(), MediaFacet::Movie),
+        ] {
+            BOUNDARY_ALL_TITLES.with(|all| all.set(true));
+            let every_name = boundary_walk_transcript(root, facet.clone()).await;
+            BOUNDARY_ALL_TITLES.with(|all| all.set(false));
+            let on_demand = boundary_walk_transcript(root, facet.clone()).await;
+            assert_eq!(every_name, on_demand, "{facet:?}");
+            assert!(every_name.iter().any(|line| line.contains("Err(")));
+            assert!(every_name.iter().any(|line| line.contains("Ok(())")));
+        }
+    }
+
+    #[tokio::test]
+    async fn season_and_part_file_names_are_not_parsed() {
+        let root = tempfile::tempdir().unwrap();
+        for file in [
+            "Show Fixture/Season 01/Show.Fixture.S01E01.mkv",
+            "Show Fixture/Season 01/Show.Fixture.S01E02.mkv",
+            "Show Fixture/Season 02/Show.Fixture.S02E01.mkv",
+            "Show Fixture/Disc 1/Show.Fixture.S03E01.mkv",
+            "Show Fixture/Show.Fixture.S00E01.mkv",
+        ] {
+            write_discovery_fixture(root.path(), file);
+        }
+        let parses = || BOUNDARY_TITLE_PARSES.with(std::cell::Cell::get);
+        let before = parses();
+        let boundaries =
+            collect_nested_boundaries(root.path(), discovery_policy(MediaFacet::Series)).await;
+        let folder = root.path().join("Show Fixture");
+        assert!(
+            boundaries
+                .iter()
+                .any(|boundary| boundary.path == folder && boundary.rejection.is_none())
+        );
+        // The candidate's own name, its parent's name and its one loose file.
+        assert_eq!(parses() - before, 3);
+
+        let before = parses();
+        let title = scryer_domain::NewTitle {
+            name: "Show Fixture".into(),
+            facet: MediaFacet::Series,
+            ..Default::default()
+        };
+        verify_new_scan_title_boundary(&folder, &title)
+            .await
+            .unwrap();
+        assert_eq!(
+            parses() - before,
+            0,
+            "verification of a title folder parses no names"
+        );
     }
 
     #[tokio::test]
@@ -3673,6 +4536,396 @@ mod tests {
         assert_eq!(
             derive_movie_probe_path(root, &title, &collections),
             Some(PathBuf::from("/Volumes/Media/Movies/Existing Movie"))
+        );
+    }
+
+    /// `[lstat, open, read_dir, canonicalize]` recorded for one folder.
+    fn probes_for(folder: &Path) -> [u32; 4] {
+        BOUNDARY_PROBES
+            .lock()
+            .unwrap()
+            .get(folder)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn probes_since(folder: &Path, before: [u32; 4]) -> [u32; 4] {
+        let after = probes_for(folder);
+        std::array::from_fn(|index| after[index] - before[index])
+    }
+
+    type BoundaryRow = (String, Option<String>, bool);
+
+    fn boundary_rows(root: &Path, rows: &[TitleFolderBoundary]) -> Vec<BoundaryRow> {
+        rows.iter()
+            .map(|row| {
+                (
+                    row.path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    row.rejection.clone(),
+                    row.evidence.is_some(),
+                )
+            })
+            .collect()
+    }
+
+    fn row(path: &str, rejection: Option<&str>, evidence: bool) -> BoundaryRow {
+        (path.into(), rejection.map(str::to_owned), evidence)
+    }
+
+    async fn scan_verify_outcome(
+        folder: &Path,
+        name: &str,
+        facet: MediaFacet,
+        ids: &[(&str, &str)],
+    ) -> Result<(), String> {
+        let title = scryer_domain::NewTitle {
+            name: name.into(),
+            facet,
+            external_ids: ids
+                .iter()
+                .map(|(source, value)| scryer_domain::ExternalId::new(*source, *value))
+                .collect(),
+            ..Default::default()
+        };
+        verify_new_scan_title_boundary(folder, &title)
+            .await
+            .map_err(|error| {
+                error
+                    .validation_reason()
+                    .map_or_else(|| "unreasoned".to_owned(), str::to_owned)
+            })
+    }
+
+    fn write_sidecar(folder: &Path, name: &str, content: &str) {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join(name), content).unwrap();
+    }
+
+    const SHOW_NFO_111: &str = "<tvshow><title>Show Beta</title><tvdbid>111</tvdbid></tvshow>";
+
+    #[tokio::test]
+    async fn boundary_walk_show_with_seasons_results_and_probes() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        write_discovery_fixture(&root, "Show Alpha/Season 01/Show.Alpha.S01E01.mkv");
+        write_discovery_fixture(&root, "Show Alpha/Season 02/Show.Alpha.S02E01.mkv");
+        let show = root.join("Show Alpha");
+        let season = show.join("Season 01");
+        let rows = collect_nested_boundaries(&root, discovery_policy(MediaFacet::Series)).await;
+        assert_eq!(
+            boundary_rows(&root, &rows),
+            vec![row("Show Alpha", None, false)]
+        );
+        let discovered = (probes_for(&show), probes_for(&season));
+        let before = (probes_for(&show), probes_for(&season));
+        assert_eq!(
+            scan_verify_outcome(&show, "Show Alpha", MediaFacet::Series, &[]).await,
+            Ok(())
+        );
+        let verified = (
+            probes_since(&show, before.0),
+            probes_since(&season, before.1),
+        );
+        // [lstat, open, read_dir, canonicalize]: the show is stamped once for
+        // reusable evidence; the folded season is listed and nothing else.
+        assert_eq!(discovered, ([1, 0, 1, 0], [0, 0, 1, 0]));
+        assert_eq!(verified, ([0, 0, 1, 0], [0, 0, 1, 0]));
+    }
+
+    #[tokio::test]
+    async fn boundary_walk_show_sidecars_results_and_probes() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let beta = root.join("Show Beta");
+        write_discovery_fixture(&root, "Show Beta/Show.Beta.S01E01.mkv");
+        write_sidecar(&beta, "tvshow.nfo", SHOW_NFO_111);
+        write_sidecar(&beta, ".plexmatch", "title: Show Beta\ntvdbid: 111\n");
+        let gamma = root.join("Show Gamma");
+        write_discovery_fixture(&root, "Show Gamma/Season 1/Show.Gamma.S01E01.mkv");
+        write_sidecar(&gamma, ".plexmatch", "title: Show Gamma\ntvdbid: 222\n");
+        let rows = collect_nested_boundaries(&root, discovery_policy(MediaFacet::Series)).await;
+        let mut rows = boundary_rows(&root, &rows);
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![row("Show Beta", None, true), row("Show Gamma", None, false)]
+        );
+        let discovered = (probes_for(&beta), probes_for(&gamma));
+        let before = (probes_for(&beta), probes_for(&gamma));
+        let conflict = Err(
+            crate::error_reasons::library::MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER.into(),
+        );
+        for (folder, name, id, expected) in [
+            (&beta, "Show Beta", "111", Ok(())),
+            (&beta, "Show Beta", "999", conflict.clone()),
+            (&gamma, "Show Gamma", "222", Ok(())),
+            (&gamma, "Show Gamma", "333", conflict.clone()),
+        ] {
+            assert_eq!(
+                scan_verify_outcome(folder, name, MediaFacet::Series, &[("tvdb", id)]).await,
+                expected,
+                "{name} {id}"
+            );
+        }
+        let verified = (
+            probes_since(&beta, before.0),
+            probes_since(&gamma, before.1),
+        );
+        // Listed sidecars are opened once each; an unread `.plexmatch` beside
+        // a usable `tvshow.nfo` is stamped only for the reusable leaf.
+        assert_eq!(discovered, ([2, 1, 1, 0], [1, 1, 1, 0]));
+        assert_eq!(verified, ([0, 2, 2, 0], [0, 2, 2, 0]));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn boundary_walk_movie_nfo_results_and_probes() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let delta = root.join("Film Delta (2001)");
+        write_discovery_fixture(&root, "Film Delta (2001)/Film.Delta.2001.mkv");
+        write_sidecar(
+            &delta,
+            "movie.nfo",
+            "<movie><uniqueid type=\"tmdb\">222</uniqueid></movie>",
+        );
+        let eta = root.join("Film Eta (2002)");
+        write_discovery_fixture(&root, "Film Eta (2002)/Film.Eta.2002.mkv");
+        let rows = collect_nested_boundaries(&root, discovery_policy(MediaFacet::Movie)).await;
+        let mut sorted = boundary_rows(&root, &rows);
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec![
+                row("Film Delta (2001)", None, true),
+                row("Film Eta (2002)", None, true)
+            ]
+        );
+        let discovered = (probes_for(&delta), probes_for(&eta));
+        let evidence = |folder: &Path| {
+            rows.iter()
+                .find(|row| row.path == folder)
+                .and_then(|row| row.evidence.clone())
+                .unwrap()
+        };
+        let before = (probes_for(&delta), probes_for(&eta));
+        let tmdb = |value: &str| vec![scryer_domain::ExternalId::new("tmdb", value)];
+        assert!(
+            evidence(&delta)
+                .verify(&delta, &MediaFacet::Movie, &tmdb("222"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            evidence(&delta)
+                .verify(&delta, &MediaFacet::Movie, &tmdb("333"))
+                .await
+                .is_err()
+        );
+        assert!(
+            evidence(&eta)
+                .verify(&eta, &MediaFacet::Movie, &tmdb("333"))
+                .await
+                .unwrap()
+        );
+        let verified = (probes_since(&delta, before.0), probes_since(&eta, before.1));
+        assert_eq!(discovered, ([1, 1, 1, 0], [1, 0, 1, 0]));
+        // Evidence re-verification still stamps the directory and every
+        // sidecar name: two checks of one folder, one of the other.
+        assert_eq!(verified, ([4, 0, 0, 0], [2, 0, 0, 0]));
+    }
+
+    #[tokio::test]
+    async fn boundary_walk_nested_child_title_still_refuses() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        write_discovery_fixture(&root, "Show Epsilon/Show.Epsilon.S01E01.mkv");
+        write_discovery_fixture(&root, "Show Epsilon/Other Zeta/Other.Zeta.S01E01.mkv");
+        let rows = collect_nested_boundaries(&root, discovery_policy(MediaFacet::Series)).await;
+        assert_eq!(
+            boundary_rows(&root, &rows),
+            vec![
+                row("Show Epsilon/Other Zeta", None, true),
+                row(
+                    "Show Epsilon",
+                    Some(
+                        "folder contains another title boundary or an unreadable branch; select individual title folders"
+                    ),
+                    false
+                ),
+            ]
+        );
+        assert_eq!(
+            scan_verify_outcome(
+                &root.join("Show Epsilon"),
+                "Show Epsilon",
+                MediaFacet::Series,
+                &[]
+            )
+            .await,
+            Err(crate::error_reasons::library::DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY.into())
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn boundary_evidence_sidecar_added_changed_removed_invalidates() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let nfo = |id: &str| format!("<movie><uniqueid type=\"tmdb\">{id}</uniqueid></movie>");
+        for name in ["Film Added", "Film Changed", "Film Removed", "Film Kept"] {
+            write_discovery_fixture(
+                &root,
+                &format!("{name}/{}.2003.mkv", name.replace(' ', ".")),
+            );
+        }
+        for name in ["Film Changed", "Film Removed", "Film Kept"] {
+            write_sidecar(&root.join(name), "movie.nfo", &nfo("123"));
+        }
+        let rows = collect_nested_boundaries(&root, discovery_policy(MediaFacet::Movie)).await;
+        let evidence = |name: &str| {
+            rows.iter()
+                .find(|row| row.path == root.join(name))
+                .and_then(|row| row.evidence.clone())
+                .unwrap()
+        };
+        let (added, changed, removed, kept) = (
+            evidence("Film Added"),
+            evidence("Film Changed"),
+            evidence("Film Removed"),
+            evidence("Film Kept"),
+        );
+        write_sidecar(&root.join("Film Added"), "movie.nfo", &nfo("123"));
+        let changed_nfo = root.join("Film Changed/movie.nfo");
+        let modified = std::fs::metadata(&changed_nfo).unwrap().modified().unwrap();
+        std::fs::write(&changed_nfo, nfo("456")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&changed_nfo)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        std::fs::remove_file(root.join("Film Removed/movie.nfo")).unwrap();
+        let ids = vec![scryer_domain::ExternalId::new("tmdb", "123")];
+        for (name, evidence, expected) in [
+            ("Film Added", &added, false),
+            ("Film Changed", &changed, false),
+            ("Film Removed", &removed, false),
+            ("Film Kept", &kept, true),
+        ] {
+            assert_eq!(
+                evidence
+                    .verify(&root.join(name), &MediaFacet::Movie, &ids)
+                    .await
+                    .unwrap(),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn boundary_walk_symlinks_results() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write_discovery_fixture(outside.path(), "Season 1/Show.Theta.S01E01.mkv");
+        write_discovery_fixture(&root, "Show Theta/Show.Theta.S02E01.mkv");
+        std::os::unix::fs::symlink(
+            outside.path().join("Season 1"),
+            root.join("Show Theta/Season 1"),
+        )
+        .unwrap();
+        write_discovery_fixture(&root, "Show Iota/Show.Iota.S01E01.mkv");
+        std::fs::write(outside.path().join("iota.nfo"), SHOW_NFO_111).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("iota.nfo"),
+            root.join("Show Iota/tvshow.nfo"),
+        )
+        .unwrap();
+        let rows = collect_nested_boundaries(&root, discovery_policy(MediaFacet::Series)).await;
+        let mut rows = boundary_rows(&root, &rows);
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                row(
+                    "Show Iota",
+                    Some(
+                        "folder contains another title boundary or an unreadable branch; select individual title folders"
+                    ),
+                    false
+                ),
+                row(
+                    "Show Iota/tvshow.nfo",
+                    Some("linked folder requires explicit ownership resolution before scanning"),
+                    false
+                ),
+                row(
+                    "Show Theta",
+                    Some(
+                        "folder contains another title boundary or an unreadable branch; select individual title folders"
+                    ),
+                    false
+                ),
+                row(
+                    "Show Theta/Season 1",
+                    Some("linked folder requires explicit ownership resolution before scanning"),
+                    false
+                ),
+            ]
+        );
+        let linked = Err(crate::error_reasons::library::LINKED_FOLDER_REQUIRES_EXPLICIT_OWNERSHIP_RESOLUTION_BEFORE_SCANNING.into());
+        assert_eq!(
+            scan_verify_outcome(
+                &root.join("Show Theta"),
+                "Show Theta",
+                MediaFacet::Series,
+                &[]
+            )
+            .await,
+            linked
+        );
+        assert_eq!(
+            scan_verify_outcome(
+                &root.join("Show Iota"),
+                "Show Iota",
+                MediaFacet::Series,
+                &[("tvdb", "999")]
+            )
+            .await,
+            linked
+        );
+    }
+
+    #[tokio::test]
+    async fn boundary_walk_case_variant_sidecar_follows_the_filesystem() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let kappa = root.join("Show Kappa");
+        write_discovery_fixture(&root, "Show Kappa/Show.Kappa.S01E01.mkv");
+        write_sidecar(&kappa, "TVSHOW.NFO", SHOW_NFO_111);
+        let resolves = std::fs::symlink_metadata(kappa.join("tvshow.nfo")).is_ok();
+        let rows = collect_nested_boundaries(&root, discovery_policy(MediaFacet::Series)).await;
+        assert_eq!(
+            boundary_rows(&root, &rows),
+            vec![row("Show Kappa", None, true)]
+        );
+        assert_eq!(
+            scan_verify_outcome(&kappa, "Show Kappa", MediaFacet::Series, &[("tvdb", "999")]).await,
+            if resolves {
+                Err(
+                    crate::error_reasons::library::MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER
+                        .into(),
+                )
+            } else {
+                Ok(())
+            }
         );
     }
 }

@@ -75,6 +75,11 @@ pub trait ListSubscriptionRepository: Send + Sync {
     /// are not paused past it, oldest due first. `limit` bounds one tick.
     async fn list_due(&self, now: DateTime<Utc>, limit: usize) -> AppResult<Vec<ListSubscription>>;
 
+    /// Whether [`Self::list_due`] at `now` would return any subscription.
+    async fn has_due(&self, now: DateTime<Utc>) -> AppResult<bool> {
+        Ok(!self.list_due(now, 1).await?.is_empty())
+    }
+
     /// Writes the outcome of one sync: state, timestamps, fingerprint, counts.
     /// It leaves `updated_at` alone: that stamp marks the last settings edit,
     /// and a sync that moved it would make every list look edited since its

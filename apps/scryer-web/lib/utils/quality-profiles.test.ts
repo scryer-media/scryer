@@ -332,19 +332,13 @@ test("a catalog entry without a decision order falls back to its PROPER/REPACK s
   assert.deepEqual(plain?.criteria.decision_pipeline, [
     "QUALITY_TIER",
     "REVISION",
-    "PREFERRED_LANGUAGE",
-    "OPTIONAL_LANGUAGES",
   ]);
   const ignoring = normalizeQualityProfileEntry({
     id: "imported",
     name: "Imported",
     criteria: { quality_tiers: ["1080P"], ignore_proper_repack: true },
   });
-  assert.deepEqual(ignoring?.criteria.decision_pipeline, [
-    "QUALITY_TIER",
-    "PREFERRED_LANGUAGE",
-    "OPTIONAL_LANGUAGES",
-  ]);
+  assert.deepEqual(ignoring?.criteria.decision_pipeline, ["QUALITY_TIER"]);
   assert.equal(ignoring?.criteria.ignore_proper_repack, true);
 });
 

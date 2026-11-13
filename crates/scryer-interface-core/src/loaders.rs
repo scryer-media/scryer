@@ -24,9 +24,9 @@ use async_graphql::dataloader::{DataLoader, Loader};
 use scryer_application::{
     AcquisitionScopeState, AppUseCase, CollectionEpisodeProgressSummary,
     CollectionMediaSizeSummary, EpisodeMediaAvailability, EpisodeMediaSizeSummary,
-    PrimaryCollectionSummary, RequestQualityProfileSettings, TitleEpisodeProgressSummary,
-    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary,
-    TitleRatingSummary,
+    LibraryAudioLanguageDefaults, PrimaryCollectionSummary, RequestQualityProfileSettings,
+    TitleEpisodeProgressSummary, TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary,
+    TitleQualitySummary, TitleRatingSummary,
 };
 use scryer_domain::{Collection, Episode, Library, SeriesMovieLink, Title, User};
 
@@ -185,6 +185,24 @@ loader!(
     }
 );
 
+// One batch per request for every library a query lists; each library's
+// outcome is kept per key, as above.
+loader!(
+    LibraryAudioLanguageDefaultsLoader,
+    String,
+    Result<LibraryAudioLanguageDefaults, GqlError>,
+    |ctx, keys| {
+        Ok(ctx
+            .app
+            .library_audio_language_defaults(&ctx.actor, keys)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .map(|(library_id, outcome)| (library_id, outcome.map_err(to_gql_error)))
+            .collect())
+    }
+);
+
 loader!(CollectionLoader, String, Collection, |ctx, keys| {
     let collections = ctx
         .app
@@ -252,6 +270,18 @@ loader!(
     |ctx, keys| {
         ctx.app
             .load_title_required_audio_overrides(keys)
+            .await
+            .map_err(to_gql_error)
+    }
+);
+
+loader!(
+    PreferredAudioOverrideLoader,
+    String,
+    Vec<String>,
+    |ctx, keys| {
+        ctx.app
+            .load_title_preferred_audio_overrides(keys)
             .await
             .map_err(to_gql_error)
     }
@@ -617,14 +647,19 @@ pub struct RequestLoaders {
     pub title_for_management: DataLoader<TitleForManagementLoader>,
     pub library: DataLoader<LibraryLoader>,
     pub request_quality_profile_settings: DataLoader<RequestQualityProfileSettingsLoader>,
+<<<<<<< HEAD
     pub default_monitor_type: DataLoader<DefaultMonitorTypeLoader>,
     pub title_quality_profile_id: DataLoader<TitleQualityProfileIdLoader>,
+=======
+    pub library_audio_language_defaults: DataLoader<LibraryAudioLanguageDefaultsLoader>,
+>>>>>>> release-0.22.3
     pub collection: DataLoader<CollectionLoader>,
     pub episode: DataLoader<EpisodeLoader>,
     pub media_files_for_title: DataLoader<MediaFilesForTitleLoader>,
     pub collections_for_title: DataLoader<CollectionsForTitleLoader>,
     pub episodes_for_collection: DataLoader<EpisodesForCollectionLoader>,
     pub required_audio_override: DataLoader<RequiredAudioOverrideLoader>,
+    pub preferred_audio_override: DataLoader<PreferredAudioOverrideLoader>,
     pub title_metadata_language_override: DataLoader<TitleMetadataLanguageOverrideLoader>,
     pub library_metadata_language_override: DataLoader<LibraryMetadataLanguageOverrideLoader>,
     pub library_use_season_folders_override: DataLoader<LibraryUseSeasonFoldersOverrideLoader>,
@@ -667,14 +702,19 @@ impl RequestLoaders {
             title_for_management: dl!(TitleForManagementLoader),
             library: dl!(LibraryLoader),
             request_quality_profile_settings: dl!(RequestQualityProfileSettingsLoader),
+<<<<<<< HEAD
             default_monitor_type: dl!(DefaultMonitorTypeLoader),
             title_quality_profile_id: dl!(TitleQualityProfileIdLoader),
+=======
+            library_audio_language_defaults: dl!(LibraryAudioLanguageDefaultsLoader),
+>>>>>>> release-0.22.3
             collection: dl!(CollectionLoader),
             episode: dl!(EpisodeLoader),
             media_files_for_title: dl!(MediaFilesForTitleLoader),
             collections_for_title: dl!(CollectionsForTitleLoader),
             episodes_for_collection: dl!(EpisodesForCollectionLoader),
             required_audio_override: dl!(RequiredAudioOverrideLoader),
+            preferred_audio_override: dl!(PreferredAudioOverrideLoader),
             title_metadata_language_override: dl!(TitleMetadataLanguageOverrideLoader),
             library_metadata_language_override: dl!(LibraryMetadataLanguageOverrideLoader),
             library_use_season_folders_override: dl!(LibraryUseSeasonFoldersOverrideLoader),

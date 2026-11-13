@@ -3953,6 +3953,108 @@ file = "postgres/migrations/0336_query_audit_indexes.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 337
+description = "title delete indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0337_title_delete_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0337_title_delete_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 338
+description = "payload blob tables"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0338_payload_blob_tables.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0338_payload_blob_tables.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 339
+description = "lifecycle action run retention indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0339_lifecycle_action_run_retention_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0339_lifecycle_action_run_retention_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 340
+description = "subtitle search backoffs"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0340_subtitle_search_backoffs.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0340_subtitle_search_backoffs.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 341
+description = "title recycle purges"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0341_title_recycle_purges.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0341_title_recycle_purges.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 342
+description = "requested audio languages"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0342_requested_audio_languages.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0342_requested_audio_languages.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

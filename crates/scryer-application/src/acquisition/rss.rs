@@ -3277,16 +3277,12 @@ impl AppUseCase {
         // Catalog rows belong to the title visit, shared across all scopes.
         let existing_files = reads.primary_file_cutoffs(self).await.unwrap_or_default();
         let cutoff_scope = self.cutoff_scope_for(&subject.submission_scope).await;
-        let analyzed_cutoff_quality =
-            crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-                &existing_files,
-                &cutoff_scope,
-            );
         let upgrade_context = match self
-            .resolve_upgrade_context_for_title_with_category_and_quality(
+            .resolve_upgrade_context_for_scope(
                 title,
                 Some(subject.owner_facet.as_str()),
-                analyzed_cutoff_quality,
+                &existing_files,
+                &cutoff_scope,
             )
             .await
         {

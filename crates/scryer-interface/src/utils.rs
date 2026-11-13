@@ -20,6 +20,9 @@ pub(crate) struct ResolvedTitleOptionsInput {
     pub recap_policy: Option<Option<String>>,
     pub release_numbering: Option<Option<String>>,
     pub monitor_selection: Option<Option<scryer_domain::MonitorSelection>>,
+    /// Stored in the title's settings rather than on its row; validated.
+    pub required_audio_languages: Option<Option<Vec<String>>>,
+    pub preferred_audio_languages: Option<Option<Vec<String>>>,
 }
 
 impl ResolvedTitleOptionsInput {
@@ -38,6 +41,8 @@ impl ResolvedTitleOptionsInput {
             recap_policy: self.recap_policy.clone(),
             release_numbering: self.release_numbering.clone(),
             monitor_selection: self.monitor_selection.clone(),
+            required_audio_languages: self.required_audio_languages.clone(),
+            preferred_audio_languages: self.preferred_audio_languages.clone(),
         }
     }
 }

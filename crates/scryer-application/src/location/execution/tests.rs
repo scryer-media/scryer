@@ -2666,3 +2666,812 @@ fn a_shared_inode_with_different_lengths_is_compared_by_content() {
         SharedInode::Distinct
     );
 }
+
+/// A catalog holding real media rows, so "is another row already at this
+/// path" is answered from the rows the reconcile has written so far. With
+/// `lists_rows` off it answers each question by itself, the way a catalog
+/// without a title listing does.
+#[derive(Default)]
+struct RowCatalog {
+    lists_rows: bool,
+    rows: Mutex<Vec<(String, String)>>,
+    writes: Mutex<Vec<String>>,
+    row_reads: Mutex<usize>,
+    grouped_writes: Mutex<usize>,
+}
+
+impl RowCatalog {
+    fn new(lists_rows: bool, rows: &[(&str, &str)]) -> Self {
+        Self {
+            lists_rows,
+            rows: Mutex::new(
+                rows.iter()
+                    .map(|(id, path)| (id.to_string(), path.to_string()))
+                    .collect(),
+            ),
+            ..Self::default()
+        }
+    }
+}
+
+#[async_trait]
+impl RootMoveCatalog for RowCatalog {
+    async fn has_other_media_at_path(
+        &self,
+        _title_id: &str,
+        path: &str,
+        excluding_id: &str,
+    ) -> AppResult<bool> {
+        *self.row_reads.lock().unwrap() += 1;
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(id, row_path)| id != excluding_id && row_path == path))
+    }
+
+    async fn media_file_paths_for_title(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        if !self.lists_rows {
+            return Ok(None);
+        }
+        *self.row_reads.lock().unwrap() += 1;
+        Ok(Some(self.rows.lock().unwrap().clone()))
+    }
+
+    async fn title_placement(&self, _title_id: &str) -> AppResult<Option<TitlePlacementSnapshot>> {
+        Ok(None)
+    }
+
+    async fn set_media_file_path(&self, media_file_id: &str, stored_path: &str) -> AppResult<()> {
+        for (id, path) in self.rows.lock().unwrap().iter_mut() {
+            if id == media_file_id {
+                *path = stored_path.to_string();
+            }
+        }
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("media:{media_file_id}={stored_path}"));
+        Ok(())
+    }
+
+    async fn set_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        *self.grouped_writes.lock().unwrap() += 1;
+        for (media_file_id, stored_path) in paths {
+            self.set_media_file_path(media_file_id, stored_path).await?;
+        }
+        Ok(())
+    }
+
+    async fn delete_media_file(&self, media_file_id: &str) -> AppResult<()> {
+        self.rows
+            .lock()
+            .unwrap()
+            .retain(|(id, _)| id != media_file_id);
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("delete-media:{media_file_id}"));
+        Ok(())
+    }
+
+    async fn set_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("folder:{title_id}={stored_path}"));
+        Ok(())
+    }
+
+    async fn check_title_folder_path(&self, _title_id: &str, _stored_path: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("root:{title_id}={root_folder_id}"));
+        Ok(())
+    }
+
+    async fn set_title_library_and_root(
+        &self,
+        title_id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+        _converted_facet: Option<&scryer_domain::MediaFacet>,
+        _drop_tag_prefixes: &[String],
+    ) -> AppResult<()> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("library:{title_id}={library_id}/{root_folder_id}"));
+        Ok(())
+    }
+}
+
+/// Reconciling a title judges each identical copy against the catalog as the
+/// writes before it left it, and writes the same rows in the same order
+/// whether the catalog answers from one listing of the title or one question
+/// at a time.
+#[tokio::test]
+async fn reconcile_writes_the_same_rows_from_one_listing_as_from_per_file_reads() {
+    use crate::location::resolution::{FileResolution, ResolutionDisposition, file_version};
+
+    async fn run(lists_rows: bool) -> (Vec<String>, Vec<(String, String)>, usize, usize) {
+        let temp = tempfile::tempdir().unwrap();
+        let source_root = temp.path().join("a");
+        let destination_root = temp.path().join("b");
+        let mut plan = single_title_plan(&source_root, &destination_root, "unused.mkv", 4);
+        let source_folder = source_root.join("Movie");
+        let destination_folder = destination_root.join("Movie");
+        let stored = |path: PathBuf| path_to_stored_string(&path);
+        let occupied = stored(destination_folder.join("occupied.mkv"));
+        let shared = stored(destination_folder.join("shared.mkv"));
+        // (media file, source name, resolved destination, disposition)
+        let p2 = stored(source_folder.join("two.mkv"));
+        let specs: Vec<(&str, String, String, ResolutionDisposition)> = vec![
+            (
+                "mf-1",
+                stored(source_folder.join("one.mkv")),
+                stored(destination_folder.join("one.mkv")),
+                ResolutionDisposition::Placed,
+            ),
+            // Another row already sits at this destination: the copy goes.
+            (
+                "mf-2",
+                p2.clone(),
+                occupied.clone(),
+                ResolutionDisposition::Identical,
+            ),
+            // Nothing sits here yet: the row is repointed.
+            (
+                "mf-3",
+                stored(source_folder.join("three.mkv")),
+                shared.clone(),
+                ResolutionDisposition::Identical,
+            ),
+            // The row before it now sits here: this copy goes.
+            (
+                "mf-4",
+                stored(source_folder.join("four.mkv")),
+                shared.clone(),
+                ResolutionDisposition::Identical,
+            ),
+            // Only the removed row sat here: the row is repointed.
+            (
+                "mf-5",
+                stored(source_folder.join("five.mkv")),
+                p2.clone(),
+                ResolutionDisposition::Identical,
+            ),
+            (
+                "mf-6",
+                stored(source_folder.join("six.mkv")),
+                stored(destination_folder.join("six.mkv")),
+                ResolutionDisposition::Placed,
+            ),
+        ];
+        let store = InMemoryLocationOperationStore::new();
+        let mut files = Vec::new();
+        for (media_file_id, source, destination, _) in &specs {
+            write_file(&stored_path_to_path_buf(source), b"same");
+            write_file(&stored_path_to_path_buf(destination), b"same");
+            files.push(RootMoveFileExecution {
+                media_file_id: Some(media_file_id.to_string()),
+                source_path: source.clone(),
+                destination_path: destination.clone(),
+                size_bytes: 4,
+                source_content: None,
+            });
+        }
+        for (_, source, destination, disposition) in &specs {
+            store
+                .save_file_resolution(&FileResolution {
+                    operation_id: "op-1".to_string(),
+                    title_id: "title-1".to_string(),
+                    source_path: source.clone(),
+                    original_destination: destination.clone(),
+                    destination_path: destination.clone(),
+                    disposition: disposition.clone(),
+                    completed: true,
+                    source_version: Some(
+                        file_version(&stored_path_to_path_buf(source))
+                            .await
+                            .unwrap(),
+                    ),
+                    destination_version: Some(
+                        file_version(&stored_path_to_path_buf(destination))
+                            .await
+                            .unwrap(),
+                    ),
+                    identity_hash: None,
+                    warning: None,
+                    reason_code: None,
+                })
+                .await
+                .unwrap();
+        }
+        plan.titles[0].files = files;
+        let initial: Vec<(&str, &str)> = std::iter::once(("mf-other", occupied.as_str()))
+            .chain(
+                specs
+                    .iter()
+                    .map(|(id, source, _, _)| (*id, source.as_str())),
+            )
+            .collect();
+        let catalog = RowCatalog::new(lists_rows, &initial);
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+        let operation = queued_operation(
+            "op-1",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        reconciler
+            .reconcile_title(&operation, &plan.titles[0].to_planned_title())
+            .await
+            .expect("reconcile");
+        // Paths are relative to each run's own temp directory.
+        let root = path_to_stored_string(temp.path());
+        let strip = |value: &str| value.replace(&root, "<tmp>");
+        let writes = catalog
+            .writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|write| strip(write))
+            .collect();
+        let rows = catalog
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, path)| (id.clone(), strip(path)))
+            .collect();
+        let reads = *catalog.row_reads.lock().unwrap();
+        let grouped = *catalog.grouped_writes.lock().unwrap();
+        (writes, rows, reads, grouped)
+    }
+
+    let (old_writes, old_rows, old_reads, _) = run(false).await;
+    let (new_writes, new_rows, new_reads, new_grouped) = run(true).await;
+    assert_eq!(new_writes, old_writes);
+    assert_eq!(new_rows, old_rows);
+    assert!(old_writes.contains(&"delete-media:mf-2".to_string()));
+    assert!(old_writes.contains(&"delete-media:mf-4".to_string()));
+    assert!(
+        old_writes
+            .iter()
+            .any(|write| write == "media:mf-5=<tmp>/a/Movie/two.mkv"),
+        "{old_writes:?}"
+    );
+    assert_eq!(old_reads, 4, "one question per identical copy");
+    assert_eq!(new_reads, 1, "one listing for the title");
+    assert!(new_grouped >= 1, "consecutive path writes go out together");
+}
+
+// ── Cleanup after a recorded copy ────────────────────────────────────────────
+
+/// One title whose media files are each copied across filesystems (forced) and
+/// proven at `depth`, then recorded the way the runner records them. With
+/// `with_row` the copy goes through the resolver, which leaves the completed
+/// resolution row holding both files' versions; without it no row exists and
+/// cleanup has nothing tying the proof to the files.
+async fn copied_files_awaiting_cleanup(
+    temp: &Path,
+    depth: VerificationDepth,
+    with_row: bool,
+    names: &[&str],
+) -> (
+    RootMoveExecutionPlan,
+    Arc<InMemoryLocationOperationStore>,
+    LocationOperation,
+    Vec<VerifiedFile>,
+) {
+    let mut plan = single_title_plan(&temp.join("a"), &temp.join("b"), names[0], 0);
+    let template = plan.titles[0].files[0].clone();
+    plan.titles[0].files = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let source = stored_path_to_path_buf(&template.source_path).with_file_name(name);
+            let destination =
+                stored_path_to_path_buf(&template.destination_path).with_file_name(name);
+            RootMoveFileExecution {
+                media_file_id: Some(format!("mf-{}", index + 1)),
+                source_path: path_to_stored_string(&source),
+                destination_path: path_to_stored_string(&destination),
+                size_bytes: THREE_SAMPLE_WINDOWS as u64,
+                source_content: None,
+            }
+        })
+        .collect();
+    for file in &plan.titles[0].files {
+        write_pattern_file(&file.source(), THREE_SAMPLE_WINDOWS);
+    }
+    let store = Arc::new(InMemoryLocationOperationStore::new());
+    let operation = queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        depth,
+    );
+    store.insert_operation(operation.clone());
+    let mover = RootMoveFileMover::without_permissions().forcing_copies();
+    let mover = if with_row {
+        mover.with_resolver(Arc::new(
+            crate::location::resolution::ConflictResolver::new(
+                store.clone(),
+                BTreeMap::from([("title-1".to_string(), "Movies".to_string())]),
+            ),
+        ))
+    } else {
+        mover
+    };
+    let work = plan.to_work_plan();
+    let mut copies = Vec::new();
+    for file in &work.titles[0].files {
+        let verified = mover
+            .move_file(FileMoveRequest {
+                operation_id: "op-1",
+                title: &work.titles[0],
+                file,
+                depth,
+                progress: &crate::location::verify::CopyProgress::none(),
+            })
+            .await
+            .expect("copy");
+        assert!(verified.permits_source_removal());
+        assert!(verified.hashes.is_some(), "a copy streams its hashes");
+        copies.push(verified);
+    }
+    (plan, store, operation, copies)
+}
+
+async fn record_copy(
+    store: &InMemoryLocationOperationStore,
+    verified: &VerifiedFile,
+    media_file_id: &str,
+    outcome: crate::location::model::FileVerificationOutcome,
+) {
+    store
+        .record_location_file_verification(&crate::location::model::FileVerificationRecord {
+            operation_id: "op-1".into(),
+            title_id: "title-1".into(),
+            media_file_id: Some(media_file_id.into()),
+            source_path: path_to_stored_string(&verified.source_path),
+            destination_path: path_to_stored_string(&verified.destination_path),
+            hashes: verified.hashes.clone(),
+            depth: verified.depth,
+            outcome,
+            detail: None,
+            verified_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+}
+
+fn whole_reads(path: &Path) -> usize {
+    crate::location::verify::whole_file_reads::count(path)
+}
+
+/// Rewrites one byte in the unsampled middle: the length stays, the version
+/// moves, and only a whole-file read could see the content change.
+fn rewrite_middle(path: &Path) {
+    let mut bytes = std::fs::read(path).unwrap();
+    let middle = crate::fs_integrity::IMPORT_CONTENT_PROOF_SAMPLE_BYTES + 17;
+    bytes[middle] ^= 0xff;
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// A copy proven at copy time, with a resolution row recording both files'
+/// versions, is cleaned up on the version check and the quick check alone:
+/// neither file is read end to end at cleanup, at either depth, and the source
+/// is still removed.
+#[tokio::test]
+async fn cleanup_after_a_recorded_copy_reads_no_file_whole_at_either_depth() {
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        let temp = tempfile::tempdir().unwrap();
+        let (plan, store, operation, copies) =
+            copied_files_awaiting_cleanup(temp.path(), depth, true, &["Emberfall.mkv"]).await;
+        record_copy(
+            &store,
+            &copies[0],
+            "mf-1",
+            crate::location::model::FileVerificationOutcome::Verified,
+        )
+        .await;
+        let file = plan.titles[0].files[0].clone();
+        let row = store.file_resolutions("op-1", "title-1").await.unwrap();
+        assert_eq!(row.len(), 1);
+        assert!(row[0].completed);
+        assert!(row[0].source_version.is_some() && row[0].destination_version.is_some());
+        let (source_reads, destination_reads) = (
+            whole_reads(&file.source()),
+            whole_reads(&file.destination()),
+        );
+
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        reconciler
+            .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+            .await
+            .expect("cleanup");
+
+        assert_eq!(
+            whole_reads(&file.source()) - source_reads,
+            0,
+            "{depth:?}: the source is not re-hashed at cleanup"
+        );
+        assert_eq!(
+            whole_reads(&file.destination()) - destination_reads,
+            0,
+            "{depth:?}: the destination is not read back again at cleanup"
+        );
+        assert!(!file.source().exists(), "{depth:?}: the source is removed");
+        assert_eq!(
+            std::fs::read(file.destination()).unwrap().len(),
+            THREE_SAMPLE_WINDOWS
+        );
+        assert!(recycler.recycled().is_empty());
+    }
+}
+
+/// Without a resolution row, cleanup keeps re-reading the source and proving
+/// the destination again at the recorded depth, and that re-read is what
+/// decides: a change in the unsampled middle of the source keeps it.
+#[tokio::test]
+async fn cleanup_without_a_resolution_row_still_rereads_and_decides() {
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        for changed in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let (plan, store, operation, copies) =
+                copied_files_awaiting_cleanup(temp.path(), depth, false, &["Cinderwake.mkv"]).await;
+            record_copy(
+                &store,
+                &copies[0],
+                "mf-1",
+                crate::location::model::FileVerificationOutcome::Verified,
+            )
+            .await;
+            assert!(
+                store
+                    .file_resolutions("op-1", "title-1")
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let file = plan.titles[0].files[0].clone();
+            if changed {
+                rewrite_middle(&file.source());
+            }
+            let (source_reads, destination_reads) = (
+                whole_reads(&file.source()),
+                whole_reads(&file.destination()),
+            );
+
+            let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+            let recycler = RecordingRecycler::default();
+            let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+            let result = reconciler
+                .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+                .await;
+
+            assert_eq!(
+                whole_reads(&file.source()) - source_reads,
+                1,
+                "{depth:?}: the source is re-hashed"
+            );
+            let expected_destination_reads = usize::from(depth == VerificationDepth::Full);
+            assert_eq!(
+                whole_reads(&file.destination()) - destination_reads,
+                expected_destination_reads,
+                "{depth:?}: the destination is proven again at the recorded depth"
+            );
+            if changed {
+                let error = result.expect_err("a changed source is kept");
+                assert_eq!(
+                    error.validation_reason(),
+                    Some(crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP)
+                );
+                assert!(file.source().exists(), "{depth:?}: the source is preserved");
+            } else {
+                result.expect("cleanup");
+                assert!(!file.source().exists(), "{depth:?}: the source is removed");
+            }
+            assert!(recycler.recycled().is_empty());
+        }
+    }
+}
+
+/// With a recorded proof, a source or destination that changed after the copy
+/// keeps the source, through the version check, without reading either file
+/// whole. A change the versions cannot see (a row re-stamped to the changed
+/// file's version) still meets the quick check, which keeps the source too.
+#[tokio::test]
+async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        for changed in ["source", "destination", "destination_restamped"] {
+            let temp = tempfile::tempdir().unwrap();
+            let (plan, store, operation, copies) =
+                copied_files_awaiting_cleanup(temp.path(), depth, true, &["Ashgrove.mkv"]).await;
+            record_copy(
+                &store,
+                &copies[0],
+                "mf-1",
+                crate::location::model::FileVerificationOutcome::Verified,
+            )
+            .await;
+            let file = plan.titles[0].files[0].clone();
+            let original = std::fs::read(file.source()).unwrap();
+            let expected_reason = match changed {
+                "source" => {
+                    rewrite_middle(&file.source());
+                    crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP
+                }
+                "destination" => {
+                    rewrite_middle(&file.destination());
+                    crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP
+                }
+                _ => {
+                    // Inside the sampled head, then the row re-stamped with
+                    // the rewritten destination's version, as a filesystem
+                    // whose version cannot see the rewrite would have left it.
+                    let mut bytes = std::fs::read(file.destination()).unwrap();
+                    bytes[7] ^= 0xff;
+                    std::fs::write(file.destination(), bytes).unwrap();
+                    let mut row = store
+                        .file_resolutions("op-1", "title-1")
+                        .await
+                        .unwrap()
+                        .remove(0);
+                    row.destination_version = Some(
+                        crate::location::resolution::file_version(&file.destination())
+                            .await
+                            .unwrap(),
+                    );
+                    store.save_file_resolution(&row).await.unwrap();
+                    assert!(row.proof_is_current().await);
+                    crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP
+                }
+            };
+            let (source_reads, destination_reads) = (
+                whole_reads(&file.source()),
+                whole_reads(&file.destination()),
+            );
+
+            let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+            let recycler = RecordingRecycler::default();
+            let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+            let error = reconciler
+                .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+                .await
+                .expect_err("a changed copy keeps the source");
+
+            assert_eq!(
+                error.validation_reason(),
+                Some(expected_reason),
+                "{depth:?}/{changed}"
+            );
+            assert!(
+                file.source().exists(),
+                "{depth:?}/{changed}: source preserved"
+            );
+            if changed != "source" {
+                assert_eq!(std::fs::read(file.source()).unwrap(), original);
+            }
+            assert_eq!(whole_reads(&file.source()), source_reads);
+            assert_eq!(whole_reads(&file.destination()), destination_reads);
+            assert!(recycler.recycled().is_empty());
+        }
+    }
+}
+
+/// For unchanged files, cleanup removes and keeps exactly the same sources
+/// whether it decides from the recorded proof or from a full re-read: a
+/// verified copy's source goes, a copy recorded as a mismatch and a copy with
+/// no record keep theirs, and the destinations are untouched either way.
+#[tokio::test]
+async fn cleanup_removes_and_keeps_the_same_sources_with_or_without_a_recorded_proof() {
+    async fn run(depth: VerificationDepth, with_row: bool) -> (bool, Vec<(String, bool, usize)>) {
+        let temp = tempfile::tempdir().unwrap();
+        let names = ["Emberfall.mkv", "Cinderwake.mkv", "Ashgrove.mkv"];
+        let (plan, store, operation, copies) =
+            copied_files_awaiting_cleanup(temp.path(), depth, with_row, &names).await;
+        record_copy(
+            &store,
+            &copies[0],
+            "mf-1",
+            crate::location::model::FileVerificationOutcome::Verified,
+        )
+        .await;
+        record_copy(
+            &store,
+            &copies[1],
+            "mf-2",
+            crate::location::model::FileVerificationOutcome::Mismatch,
+        )
+        .await;
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let ok = reconciler
+            .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+            .await
+            .is_ok();
+        assert!(recycler.recycled().is_empty());
+        let files = plan.titles[0]
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.destination()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    file.source().exists(),
+                    std::fs::read(file.destination()).unwrap().len(),
+                )
+            })
+            .collect();
+        (ok, files)
+    }
+
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        let old = run(depth, false).await;
+        let new = run(depth, true).await;
+        assert_eq!(new, old, "{depth:?}");
+        assert!(new.0, "{depth:?}: cleanup succeeds");
+        assert_eq!(
+            new.1,
+            vec![
+                ("Emberfall.mkv".to_string(), false, THREE_SAMPLE_WINDOWS),
+                ("Cinderwake.mkv".to_string(), true, THREE_SAMPLE_WINDOWS),
+                ("Ashgrove.mkv".to_string(), true, THREE_SAMPLE_WINDOWS),
+            ],
+            "{depth:?}"
+        );
+    }
+}
+
+/// At full depth a copy whose streamed hash disagrees with the full hash the
+/// catalog already holds for the source, while the source still carries the
+/// signature that hash was recorded against, is a mismatch: the source keeps
+/// its place, the resolution row is not completed, and the catalog's stored
+/// hash is left as it was, so a retry planned from the catalog over the same
+/// files is refused the same way. A stored hash that agrees passes, a quick
+/// copy is not compared against it, and both persist the streamed hash once.
+#[tokio::test]
+async fn a_full_copy_that_disagrees_with_the_stored_full_hash_keeps_the_source() {
+    for (depth, stored_matches, expect_verified) in [
+        (VerificationDepth::Full, false, false),
+        (VerificationDepth::Full, true, true),
+        (VerificationDepth::Quick, false, true),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut plan = single_title_plan(
+            &temp.path().join("a"),
+            &temp.path().join("b"),
+            "Emberfall.mkv",
+            THREE_SAMPLE_WINDOWS as u64,
+        );
+        let source = plan.titles[0].files[0].source();
+        write_pattern_file(&source, THREE_SAMPLE_WINDOWS);
+        let original = std::fs::read(&source).unwrap();
+        let actual = crate::location::verify::hash_existing_file(&source)
+            .await
+            .unwrap();
+        let signature = crate::file_source_signature::file_source_signature_from_metadata(
+            &std::fs::symlink_metadata(&source).unwrap(),
+        )
+        .unwrap();
+        let stored_hash = if stored_matches {
+            actual.full_blake3.clone()
+        } else {
+            "0".repeat(actual.full_blake3.len())
+        };
+        let store = Arc::new(InMemoryLocationOperationStore::new());
+        store.insert_operation(queued_operation(
+            "op-1",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            depth,
+        ));
+        let catalog = Arc::new(FakeCatalog::with_title("title-1", placement_for(&plan)));
+        let hash_writes = |catalog: &FakeCatalog| -> Vec<String> {
+            catalog
+                .writes()
+                .into_iter()
+                .filter_map(|write| write.strip_prefix("hashes:mf-1=").map(str::to_string))
+                .collect()
+        };
+
+        // A refused copy is retried; a passing one is not.
+        let attempts = if expect_verified { 1 } else { 2 };
+        let mut refusals = Vec::new();
+        for attempt in 0..attempts {
+            // Each attempt is planned from what the catalog holds now: the
+            // last hash persisted for the media file, else the one it had.
+            let planned_hash = hash_writes(&catalog)
+                .last()
+                .cloned()
+                .unwrap_or_else(|| stored_hash.clone());
+            plan.titles[0].files[0].source_content =
+                Some(crate::location::model::KnownSourceContent {
+                    full_blake3: planned_hash,
+                    size_bytes: THREE_SAMPLE_WINDOWS as u64,
+                    signature_scheme: signature.scheme.clone(),
+                    signature_value: signature.value.clone(),
+                });
+            let mover = RootMoveFileMover::without_permissions()
+                .forcing_copies()
+                .with_catalog(catalog.clone())
+                .with_resolver(Arc::new(
+                    crate::location::resolution::ConflictResolver::new(
+                        store.clone(),
+                        BTreeMap::from([("title-1".to_string(), "Movies".to_string())]),
+                    ),
+                ));
+            let work = plan.to_work_plan();
+            let verified = mover
+                .move_file(FileMoveRequest {
+                    operation_id: "op-1",
+                    title: &work.titles[0],
+                    file: &work.titles[0].files[0],
+                    depth,
+                    progress: &crate::location::verify::CopyProgress::none(),
+                })
+                .await
+                .expect("copy");
+
+            assert_eq!(
+                verified.permits_source_removal(),
+                expect_verified,
+                "{depth:?}, stored hash matches: {stored_matches}, attempt {attempt}"
+            );
+            let rows = store.file_resolutions("op-1", "title-1").await.unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].completed, expect_verified);
+            assert_eq!(
+                std::fs::read(&source).unwrap(),
+                original,
+                "the copy never touches the source"
+            );
+            if expect_verified {
+                assert_eq!(
+                    hash_writes(&catalog),
+                    vec![actual.full_blake3.clone()],
+                    "{depth:?}: a passing copy persists its streamed hash once"
+                );
+            } else {
+                assert_eq!(
+                    verified.outcome,
+                    crate::location::model::FileVerificationOutcome::Mismatch
+                );
+                assert!(
+                    hash_writes(&catalog).is_empty(),
+                    "attempt {attempt}: a refused copy leaves the stored hash as it was"
+                );
+                refusals.push(verified.outcome);
+            }
+        }
+        if !expect_verified {
+            // Each refusal is a verification mismatch, which the runner
+            // reports under the content-mismatch reason code.
+            assert_eq!(
+                refusals,
+                vec![crate::location::model::FileVerificationOutcome::Mismatch; 2],
+                "the retry is refused for the same reason"
+            );
+        }
+    }
+}
