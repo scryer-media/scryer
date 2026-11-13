@@ -544,11 +544,17 @@ impl MetadataQueries {
             return Ok(Vec::new());
         }
 
+        // Availability and playback links are read only when the query
+        // selects them.
+        let selection = ctx.look_ahead();
+        let wants_availability = selection.field("mediaAvailability").exists();
+        let wants_playback_links = selection.field("playbackLinks").exists();
+
         // A movie event is keyed by its title, not an episode, so it has no
         // episode availability to look up.
         let mut episode_ids = episodes
             .iter()
-            .filter(|episode| episode.title_facet != "movie")
+            .filter(|episode| wants_availability && episode.title_facet != "movie")
             .map(|episode| episode.id.clone())
             .collect::<Vec<_>>();
         episode_ids.sort_unstable();
@@ -563,6 +569,7 @@ impl MetadataQueries {
 
         let playback_entities = episodes
             .iter()
+            .filter(|_| wants_playback_links)
             .map(|episode| {
                 if episode.title_facet == "movie" {
                     (

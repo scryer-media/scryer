@@ -1520,6 +1520,36 @@ impl TitleRepository for TitleStore {
         catalog_owned_title_records_from_rows(rows)
     }
 
+    /// Served by `idx_titles_library_name` (`library_id, lower(name), id`),
+    /// which covers the filter, the order and the id.
+    async fn list_title_ids_for_libraries(
+        &self,
+        library_ids: &[String],
+        limit: Option<usize>,
+    ) -> AppResult<Vec<String>> {
+        if library_ids.is_empty() || limit == Some(0) {
+            return Ok(Vec::new());
+        }
+        let mut sql = format!(
+            "SELECT id FROM titles WHERE library_id IN ({}) ORDER BY LOWER(name), id",
+            vec!["{}"; library_ids.len()].join(", ")
+        );
+        let mut args = library_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        if let Some(limit) = limit {
+            sql.push_str(" LIMIT {}");
+            args.push(SqlArg::I64(i64::try_from(limit).unwrap_or(i64::MAX)));
+        }
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| row.text("id"))
+            .collect()
+    }
+
     async fn list_for_libraries_without_external_ids(
         &self,
         facet: Option<MediaFacet>,

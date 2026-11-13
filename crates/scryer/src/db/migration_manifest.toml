@@ -899,10 +899,6 @@ file = "postgres/migrations/0159_manual_import_release_evidence.sql"
 engine = "postgres"
 scope = "all"
 
-# 0157 is quarantined (see storage/migrations/known_bad.rs): it is recorded as
-# applied but never executed. 0160 is its non-destructive replacement and runs on
-# every database, including those that already ran 0157.
-
 [[migration]]
 version = 160
 description = "single title folder ownership (non-destructive replacement for 0157)"
@@ -2036,6 +2032,7 @@ scope = "all"
 kind = "sql"
 file = "postgres/migrations/0224_media_request_policy.sql"
 engine = "postgres"
+scope = "all"
 
 [[migration]]
 version = 225
@@ -2046,6 +2043,7 @@ checksum_algo = "blake3"
 kind = "sql"
 file = "migrations/0225_tracked_rule_packs.sql"
 engine = "sqlite"
+scope = "all"
 
 [[migration.steps]]
 kind = "sql"
@@ -3373,7 +3371,6 @@ file = "postgres/migrations/0303_lifecycle_claims_one_operator_keep.sql"
 engine = "postgres"
 scope = "all"
 
-
 [[migration]]
 version = 304
 description = "rules disabled unless experimental"
@@ -4056,11 +4053,12 @@ engine = "postgres"
 scope = "all"
 
 [[baseline]]
-through_version = 254
-file = "baselines/0254_baseline.sql"
+through_version = 341
+file = "baselines/0341_baseline.sql"
 engine = "sqlite"
 
 [[baseline]]
-through_version = 254
-file = "postgres/baselines/0254_baseline.sql"
+through_version = 341
+file = "postgres/baselines/0341_baseline.sql"
 engine = "postgres"
+

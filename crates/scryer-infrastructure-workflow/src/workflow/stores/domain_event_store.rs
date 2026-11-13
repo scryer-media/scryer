@@ -3,7 +3,7 @@ use super::*;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AppError, AppResult, DashboardActivityStats, DomainEventRepository,
+    AppError, AppResult, DashboardActivityStats, DomainEventRepository, TitleHistoryTitleScope,
     UnfinishedLibraryScanSession,
 };
 use scryer_domain::{
@@ -230,14 +230,14 @@ impl DomainEventRepository for DomainEventStore {
     async fn count_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<TitleHistoryTitleScope<'_>>,
         include_titleless: bool,
         download_id: Option<&str>,
     ) -> AppResult<i64> {
         let (where_sql, args) = build_title_history_filter_sql(
             &self.datastore,
             event_types,
-            title_ids,
+            title_scope,
             include_titleless,
             download_id,
         );
@@ -254,7 +254,7 @@ impl DomainEventRepository for DomainEventStore {
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<TitleHistoryTitleScope<'_>>,
         include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
@@ -264,7 +264,7 @@ impl DomainEventRepository for DomainEventStore {
         let (where_sql, mut args) = build_title_history_filter_sql(
             &self.datastore,
             event_types,
-            title_ids,
+            title_scope,
             include_titleless,
             download_id,
         );
@@ -635,7 +635,7 @@ mod title_history_filter_tests {
             let page = store
                 .list_title_history_page_events(
                     filter,
-                    Some(&["title-1".into()]),
+                    Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
                     false,
                     None,
                     50,
@@ -774,7 +774,14 @@ mod title_history_filter_tests {
         assert_eq!(grabs[0].event_id, "event-untitled-grab");
 
         let title_scoped = store
-            .list_title_history_page_events(None, Some(&["title-1".into()]), false, None, 50, 0)
+            .list_title_history_page_events(
+                None,
+                Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
+                false,
+                None,
+                50,
+                0,
+            )
             .await
             .expect("title-scoped page should load");
         assert_eq!(
@@ -785,7 +792,12 @@ mod title_history_filter_tests {
         assert_eq!(title_scoped[0].event_id, "event-1");
         assert_eq!(
             store
-                .count_title_history_page_events(None, Some(&["title-1".into()]), false, None)
+                .count_title_history_page_events(
+                    None,
+                    Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
+                    false,
+                    None
+                )
                 .await
                 .expect("title-scoped count should load"),
             1
@@ -795,13 +807,25 @@ mod title_history_filter_tests {
         // the title list is the caller's library authorization rather than a
         // title the user chose, so the untitled grab comes back alongside.
         let authorization_scoped = store
-            .list_title_history_page_events(None, Some(&["title-1".into()]), true, None, 50, 0)
+            .list_title_history_page_events(
+                None,
+                Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
+                true,
+                None,
+                50,
+                0,
+            )
             .await
             .expect("authorization-scoped page should load");
         assert_eq!(authorization_scoped.len(), 2, "{authorization_scoped:?}");
         assert_eq!(
             store
-                .count_title_history_page_events(None, Some(&["title-1".into()]), true, None)
+                .count_title_history_page_events(
+                    None,
+                    Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
+                    true,
+                    None
+                )
                 .await
                 .expect("authorization-scoped count should load"),
             2

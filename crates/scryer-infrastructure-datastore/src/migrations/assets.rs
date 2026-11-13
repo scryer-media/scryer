@@ -610,9 +610,9 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scryer/src/db")
     }
 
-    fn source_postgres_0254_baseline_sql() -> String {
-        fs::read_to_string(source_db_root().join("postgres/baselines/0254_baseline.sql"))
-            .expect("read PostgreSQL 0254 baseline")
+    fn source_postgres_0341_baseline_sql() -> String {
+        fs::read_to_string(source_db_root().join("postgres/baselines/0341_baseline.sql"))
+            .expect("read PostgreSQL 0341 baseline")
     }
 
     #[test]
@@ -705,27 +705,27 @@ mod tests {
     fn source_bundle_registers_latest_migration_and_engine_baselines() {
         let bundle =
             compile_source_bundle(&source_db_root()).expect("compile source migration bundle");
-        assert!(bundle.catalog.find_migration(254).is_some());
+        assert!(bundle.catalog.find_migration(341).is_some());
         assert_eq!(bundle.catalog.baselines.len(), 2);
         for (engine, file) in [
-            (EngineScope::Sqlite, "baselines/0254_baseline.sql"),
+            (EngineScope::Sqlite, "baselines/0341_baseline.sql"),
             (
                 EngineScope::Postgres,
-                "postgres/baselines/0254_baseline.sql",
+                "postgres/baselines/0341_baseline.sql",
             ),
         ] {
             assert!(
                 bundle
                     .catalog
-                    .latest_baseline_at_or_below(254, engine)
+                    .latest_baseline_at_or_below(341, engine)
                     .is_some_and(|baseline| baseline.file == file)
             );
         }
     }
 
     #[test]
-    fn postgres_0254_baseline_keeps_expected_index_coverage() {
-        let sql = source_postgres_0254_baseline_sql();
+    fn postgres_0341_baseline_keeps_expected_index_coverage() {
+        let sql = source_postgres_0341_baseline_sql();
         let index_statement_count = sql
             .lines()
             .filter(|line| {
@@ -734,8 +734,8 @@ mod tests {
             })
             .count();
         assert_eq!(
-            index_statement_count, 301,
-            "PostgreSQL 0254 baseline should preserve the audited index set"
+            index_statement_count, 357,
+            "PostgreSQL 0341 baseline should preserve the audited index set"
         );
 
         for index_name in [
@@ -751,7 +751,7 @@ mod tests {
         ] {
             assert!(
                 sql.contains(index_name),
-                "expected PostgreSQL 0254 baseline to include {index_name}"
+                "expected PostgreSQL 0341 baseline to include {index_name}"
             );
         }
     }
@@ -762,8 +762,8 @@ mod tests {
             source_db_root().join("postgres/migrations/0198_seed_canonical_defaults.sql"),
         )
         .expect("PostgreSQL 0198 seed migration should be readable");
-        let sqlite = fs::read_to_string(source_db_root().join("baselines/0254_baseline.sql"))
-            .expect("SQLite 0254 baseline should be readable");
+        let sqlite = fs::read_to_string(source_db_root().join("baselines/0341_baseline.sql"))
+            .expect("SQLite 0341 baseline should be readable");
 
         for seed in [
             "anime_default_library",
@@ -969,21 +969,21 @@ mod tests {
     }
 
     #[test]
-    fn postgres_0254_baseline_keeps_title_aware_unmatched_items_schema() {
-        let sql = source_postgres_0254_baseline_sql();
+    fn postgres_0341_baseline_keeps_title_aware_unmatched_items_schema() {
+        let sql = source_postgres_0341_baseline_sql();
         assert!(
             sql.contains("title_id text"),
-            "PostgreSQL 0254 baseline must include library_scan_unmatched_items.title_id"
+            "PostgreSQL 0341 baseline must include library_scan_unmatched_items.title_id"
         );
         assert!(
             sql.contains("idx_library_scan_unmatched_items_facet_title_status_updated"),
-            "PostgreSQL 0254 baseline must preserve the title-aware unmatched-items index"
+            "PostgreSQL 0341 baseline must preserve the title-aware unmatched-items index"
         );
     }
 
     #[test]
-    fn postgres_0254_baseline_keeps_runtime_title_image_columns() {
-        let sql = source_postgres_0254_baseline_sql();
+    fn postgres_0341_baseline_keeps_runtime_title_image_columns() {
+        let sql = source_postgres_0341_baseline_sql();
         for expected in [
             "poster_local_path text",
             "background_local_path text",
@@ -992,7 +992,7 @@ mod tests {
         ] {
             assert!(
                 sql.contains(expected),
-                "expected PostgreSQL 0254 baseline to include {expected}"
+                "expected PostgreSQL 0341 baseline to include {expected}"
             );
         }
     }

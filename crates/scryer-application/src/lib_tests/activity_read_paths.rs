@@ -464,3 +464,147 @@ async fn activity_visibility_with_prefetched_libraries_follows_each_title() {
         );
     }
 }
+
+fn manager_of(name: &str, library_ids: &[&str]) -> User {
+    let mut mask = LibraryPermissionMask::VIEW;
+    mask.insert(LibraryPermissionMask::MANAGE_TITLES);
+    let mut user = test_user_with_app_permissions(name, AppPermissionMask::NONE);
+    user.authorization.libraries = library_ids
+        .iter()
+        .map(|library_id| (library_id.to_string(), mask.normalized_for_storage()))
+        .collect();
+    user
+}
+
+/// The library scope read in the history query returns, for every filter
+/// shape, the page the read that first lists every title in scope returns:
+/// a library with many titles, a library with exactly one, an empty one, a
+/// search, chosen titles, and each request-history rule.
+#[tokio::test]
+async fn library_scoped_history_matches_the_listed_title_read() {
+    let fixture = seed_history().await;
+    let app = &fixture.app;
+    let movies = fixture.emberfall.library_id.clone();
+    let series = seed_title(
+        app,
+        "title-glimmerfen",
+        "Glimmerfen",
+        MediaFacet::Series,
+        9201,
+    )
+    .await;
+    let series_library = series.library_id.clone();
+    let anime_library = scryer_domain::default_library_id_for_facet(&MediaFacet::Anime);
+    assert_ne!(series_library, movies);
+    for n in 0..40 {
+        let event = match n % 3 {
+            0 => new_title_domain_event(&fixture.admin, &series, analyzed(&series, n, vec![])),
+            1 => new_global_domain_event(
+                &fixture.admin,
+                requested(&series, 5_000 + n, &series_library, 9201),
+            ),
+            _ => new_title_domain_event(
+                &fixture.admin,
+                &series,
+                analyzed(&series, n, vec![format!("ep-glimmerfen-{n}")]),
+            ),
+        };
+        app.append_domain_event(event)
+            .await
+            .expect("append series event");
+    }
+
+    let actors = [
+        fixture.admin.clone(),
+        manager_of("movies-and-series", &[&movies, &series_library]),
+        // One title in scope: request history joins when no types are named.
+        manager_of("series-only", &[&series_library]),
+    ];
+    let library_choices = [
+        None,
+        Some(vec![movies.clone()]),
+        Some(vec![series_library.clone()]),
+        Some(vec![anime_library.clone()]),
+        Some(vec![movies.clone(), series_library.clone()]),
+        Some(Vec::new()),
+    ];
+    let title_choices = [
+        (None, None),
+        (None, Some("e".to_string())),
+        (None, Some("no-such-title".to_string())),
+        (
+            Some(vec![fixture.emberfall.id.clone(), series.id.clone()]),
+            None,
+        ),
+        (
+            Some(vec![fixture.cinderwake.id.clone(), series.id.clone()]),
+            Some("w".to_string()),
+        ),
+    ];
+    let without_requested = crate::supported_title_history_event_types()
+        .iter()
+        .copied()
+        .filter(|event_type| *event_type != TitleHistoryEventType::Requested)
+        .collect::<Vec<_>>();
+    let event_type_choices = [
+        None,
+        Some(crate::supported_title_history_event_types().to_vec()),
+        Some(without_requested),
+    ];
+
+    let mut compared = 0usize;
+    let mut non_empty = 0usize;
+    for (actor_index, actor) in actors.iter().enumerate() {
+        for library_ids in &library_choices {
+            for (title_ids, title_search) in &title_choices {
+                for event_types in &event_type_choices {
+                    for group_by_event in [true, false] {
+                        for (limit, offset, include_total) in [
+                            (1, 0, true),
+                            (7, 3, false),
+                            (25, 1_000, false),
+                            (5_000, 0, true),
+                        ] {
+                            let filter = TitleHistoryFilter {
+                                event_types: event_types.clone(),
+                                title_ids: title_ids.clone(),
+                                library_ids: library_ids.clone(),
+                                title_search: title_search.clone(),
+                                group_by_event,
+                                limit,
+                                offset,
+                                ..TitleHistoryFilter::default()
+                            };
+                            let shape = |page: AppResult<TitleHistoryPage>| {
+                                page.map(|page| (page_shape(&page), page.total_count))
+                                    .map_err(|error| format!("{error:?}"))
+                            };
+                            let scoped = shape(
+                                app.list_title_history_page(actor, &filter, include_total)
+                                    .await,
+                            );
+                            let listed = shape(
+                                app.list_title_history_page_with_title_ids(
+                                    actor,
+                                    &filter,
+                                    include_total,
+                                )
+                                .await,
+                            );
+                            assert_eq!(
+                                scoped, listed,
+                                "actor {actor_index}: {filter:?} include_total={include_total}"
+                            );
+                            compared += 1;
+                            if scoped.is_ok_and(|(records, _)| !records.is_empty()) {
+                                non_empty += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(compared > 1_000, "{compared}");
+    assert!(non_empty > compared / 4, "{non_empty} of {compared}");
+}

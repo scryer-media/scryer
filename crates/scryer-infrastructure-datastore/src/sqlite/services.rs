@@ -172,6 +172,10 @@ impl SqliteServices {
                 .min_connections(1)
                 .idle_timeout(None)
                 .max_lifetime(None)
+                // An acquire that times out while it is checking the only
+                // connection drops that connection, and the database with it.
+                // Tests that jump the paused clock would trip the default.
+                .acquire_timeout(std::time::Duration::from_secs(24 * 60 * 60))
         } else {
             sqlx::sqlite::SqlitePoolOptions::new()
                 .max_connections(sqlite_max_connections_from_env())
